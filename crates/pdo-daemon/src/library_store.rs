@@ -1008,14 +1008,17 @@ mod tests {
 
     #[test]
     fn a_legacy_entry_with_port_sides_still_reads() {
-        // PDO-17: a library file written before carries `side` on its ports. It
-        // reads without error and the key is gone from what the entry serves.
+        // PDO-17: a library file written before carries `side` and `repeated` on
+        // its ports. It reads without error and both keys are gone from what the
+        // entry serves.
         let legacy = "name: Typed Reviewer\ntype: agent\ninputs:\n- name: code\n  repeated: false\n  side: left\noutputs:\n- name: review\n  repeated: true\n  side: bottom\n  port_type: markdown\nprompt: You review.\n";
         let entry = parse_entry(legacy).expect("a legacy entry parses");
         assert_eq!(entry.outputs[0].name, "review");
         let served = serde_json::to_value(&entry).unwrap();
         assert!(served["inputs"][0].get("side").is_none());
         assert!(served["outputs"][0].get("side").is_none());
+        assert!(served["inputs"][0].get("repeated").is_none());
+        assert!(served["outputs"][0].get("repeated").is_none());
     }
 
     fn with_temp_home<F: FnOnce()>(f: F) {
@@ -1066,7 +1069,6 @@ mod tests {
             node_type: pipeline::NodeType::Agent,
             inputs: vec![pipeline::Port {
                 name: "in".to_string(),
-                repeated: false,
                 port_type: pipeline::PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -1076,7 +1078,6 @@ mod tests {
             }],
             outputs: vec![pipeline::Port {
                 name: "out".to_string(),
-                repeated: false,
                 port_type: pipeline::PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -1253,7 +1254,6 @@ mod tests {
             inputs: vec![
                 pipeline::Port {
                     name: "plan".to_string(),
-                    repeated: false,
                     port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1263,7 +1263,6 @@ mod tests {
                 },
                 pipeline::Port {
                     name: "reviews".to_string(),
-                    repeated: true,
                     port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1274,7 +1273,6 @@ mod tests {
             ],
             outputs: vec![pipeline::Port {
                 name: "summary".to_string(),
-                repeated: false,
                 when: None,
                 port_type: pipeline::PortType::Markdown,
                 frontmatter: Some({
@@ -1840,7 +1838,6 @@ mod tests {
             inputs: vec![
                 pipeline::Port {
                     name: "task".to_string(),
-                    repeated: false,
                     port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1850,7 +1847,6 @@ mod tests {
                 },
                 pipeline::Port {
                     name: "reviews".to_string(),
-                    repeated: true,
                     port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1861,7 +1857,6 @@ mod tests {
             ],
             outputs: vec![pipeline::Port {
                 name: "review".to_string(),
-                repeated: false,
                 port_type: pipeline::PortType::Markdown,
                 frontmatter: Some({
                     let mut m = HashMap::new();
@@ -1934,7 +1929,6 @@ mod tests {
                 effort: None,
                 inputs: vec![pipeline::Port {
                     name: "in".to_string(),
-                    repeated: false,
                     port_type: pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1944,7 +1938,6 @@ mod tests {
                 }],
                 outputs: vec![pipeline::Port {
                     name: "result".to_string(),
-                    repeated: false,
                     port_type: pipeline::PortType::Markdown,
                     frontmatter: Some({
                         let mut m = HashMap::new();

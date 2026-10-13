@@ -48,7 +48,6 @@ mod tests {
             node_type: NodeType::Switch,
             inputs: vec![Port {
                 name: "in".into(),
-                repeated: false,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -72,7 +71,6 @@ mod tests {
     fn port_with_when(name: &str, when_yaml: &str) -> Port {
         Port {
             name: name.into(),
-            repeated: false,
             port_type: PortType::Markdown,
             frontmatter: None,
             when: Some(yaml(when_yaml)),
@@ -85,7 +83,6 @@ mod tests {
     fn default_port() -> Port {
         Port {
             name: "default".into(),
-            repeated: false,
             port_type: PortType::Markdown,
             frontmatter: None,
             when: None,

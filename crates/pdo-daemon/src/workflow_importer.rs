@@ -469,7 +469,6 @@ impl Importer {
 
         let mut out_port = Port {
             name: "out".into(),
-            repeated: false,
             port_type: crate::pipeline::PortType::Markdown,
             frontmatter: None,
             when: None,
@@ -865,7 +864,6 @@ impl Importer {
 fn plain_port(name: &str) -> Port {
     Port {
         name: name.to_string(),
-        repeated: false,
         port_type: crate::pipeline::PortType::Markdown,
         frontmatter: None,
         when: None,

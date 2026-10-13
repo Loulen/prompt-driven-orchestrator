@@ -16878,9 +16878,12 @@ async fn run_snapshot_for_overwrite(
                 .into_response(),
         )
     };
-    let events = load_events(&state.db, run_id)
-        .await
-        .map_err(|e| refuse(StatusCode::INTERNAL_SERVER_ERROR, format!("load events: {e}")))?;
+    let events = load_events(&state.db, run_id).await.map_err(|e| {
+        refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("load events: {e}"),
+        )
+    })?;
     let Some(run_state) = event_log::project(&events) else {
         return Err(refuse(StatusCode::NOT_FOUND, "run not found".to_string()));
     };
@@ -16910,8 +16913,7 @@ async fn get_run_pipeline_overwrite_preview(
     State(state): State<Arc<AppState>>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
-    let (run_state, _snapshot, template) = match run_snapshot_for_overwrite(&state, &run_id).await
-    {
+    let (run_state, _snapshot, template) = match run_snapshot_for_overwrite(&state, &run_id).await {
         Ok(found) => found,
         Err(response) => return *response,
     };
@@ -17002,7 +17004,10 @@ async fn overwrite_default_pipeline(
     // fingerprint so the next overwrite from this Run does not warn about its own
     // write as a colleague's change.
     if let Some(fingerprint) = pipeline_source_fingerprint(&template) {
-        let _ = std::fs::write(run_source_fingerprint_path(&repo_root, &run_id), fingerprint);
+        let _ = std::fs::write(
+            run_source_fingerprint_path(&repo_root, &run_id),
+            fingerprint,
+        );
     }
     // Self-writes are muted on the watcher: announce the change ourselves so an
     // open tab of the shared Pipeline reloads.
@@ -18234,7 +18239,7 @@ async fn node_io(
 
     // An archived run reads its pipeline + artifacts from the durable store, a live
     // run from its worktree. `node_io_resolver::resolve` needs a real parsed
-    // `PipelineDef` — it reads port_type/repeated, which the projection lacks.
+    // `PipelineDef` — it reads port_type, which the projection lacks.
     let yaml_path = archived_or_live_pipeline_yaml(&state, &run_state, &run_id);
     let pipeline = match std::fs::read_to_string(&yaml_path)
         .ok()
@@ -23683,7 +23688,8 @@ fn copy_pipeline_to_run(
     // overwrite warning can say whether a colleague changed it since. Best
     // effort: a missing fingerprint only makes that line "unknown".
     if let Some(fingerprint) = pipeline_source_fingerprint(pipeline_path) {
-        if let Err(e) = std::fs::write(run_source_fingerprint_path(repo_root, run_id), fingerprint) {
+        if let Err(e) = std::fs::write(run_source_fingerprint_path(repo_root, run_id), fingerprint)
+        {
             warn!("run {run_id}: could not record the pipeline launch fingerprint: {e}");
         }
     }
@@ -36460,7 +36466,11 @@ mod tests {
         assert_ne!(first, after_prompt, "a prompt edit changes the fingerprint");
 
         let yaml = std::fs::read_to_string(&template).unwrap();
-        std::fs::write(&template, yaml.replace("version: \"1.0\"", "version: \"2.0\"")).unwrap();
+        std::fs::write(
+            &template,
+            yaml.replace("version: \"1.0\"", "version: \"2.0\""),
+        )
+        .unwrap();
         assert_ne!(
             after_prompt,
             pipeline_source_fingerprint(&template).unwrap(),
@@ -40518,7 +40528,7 @@ edges:
         std::fs::write(
             &pipeline_path,
             format!(
-                "name: io-test-pipe\nnodes:\n{START_END_YAML}  - id: planner\n    name: planner\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: plan\n  - id: implementer\n    name: implementer\n    type: agent\n    isolated_worktree: true\n    inputs:\n      - name: plan\n    outputs:\n      - name: summary\nedges:\n  - source: {{ node: planner, port: plan }}\n    target: {{ node: implementer, port: plan }}\n"
+                "name: io-test-pipe\nnodes:\n{START_END_YAML}  - id: planner\n    name: planner\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: plan\n  - id: implementer\n    name: implementer\n    type: agent\n    isolated_worktree: true\n    inputs:\n      - name: plan\n    outputs:\n      - name: summary\n        repeated: true\nedges:\n  - source: {{ node: planner, port: plan }}\n    target: {{ node: implementer, port: plan }}\n"
             ),
         )
         .unwrap();
@@ -40661,6 +40671,10 @@ edges:
         let outputs = io["outputs"].as_array().unwrap();
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0]["port"], "summary");
+        // PDO-17: the seed's legacy output `repeated: true` is dropped — an output
+        // never accumulates, it is one file per iteration.
+        assert_eq!(outputs[0]["repeated"], false);
+        assert_eq!(outputs[0]["files"].as_array().unwrap().len(), 1);
         assert_eq!(outputs[0]["files"][0]["exists"], true);
         // Frontmatter parsed
         let fm = &outputs[0]["files"][0]["frontmatter"];

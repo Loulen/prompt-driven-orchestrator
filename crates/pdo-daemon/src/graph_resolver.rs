@@ -398,7 +398,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -411,7 +410,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -442,7 +440,6 @@ mod tests {
             inputs: vec![
                 Port {
                     name: "in".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -452,7 +449,6 @@ mod tests {
                 },
                 Port {
                     name: "break".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -464,7 +460,6 @@ mod tests {
             outputs: vec![
                 Port {
                     name: "body".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -474,7 +469,6 @@ mod tests {
                 },
                 Port {
                     name: "done".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,

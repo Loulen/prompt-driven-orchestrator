@@ -6,12 +6,12 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   function makeFullPipeline(extraNodes: NodeDef[], edges: EdgeDef[] = []): PipelineDef {
     const start: NodeDef = {
       id: "start", name: "Start", type: "start",
-      inputs: [], outputs: [{ name: "user_prompt", repeated: false }],
+      inputs: [], outputs: [{ name: "user_prompt" }],
       interactive: false, view: { x: 0, y: 0 },
     };
     const end: NodeDef = {
       id: "end", name: "End", type: "end",
-      inputs: [{ name: "result", repeated: false }], outputs: [],
+      inputs: [{ name: "result" }], outputs: [],
       interactive: false, view: { x: 400, y: 0 },
     };
     return {
@@ -31,12 +31,12 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes a bounded loops: region block (ADR-0011 / #148)", () => {
     const impl: NodeDef = {
       id: "impl", name: "implementer", type: "agent",
-      inputs: [], outputs: [{ name: "code", repeated: false }],
+      inputs: [], outputs: [{ name: "code" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const rev: NodeDef = {
       id: "rev", name: "reviewer", type: "agent",
-      inputs: [], outputs: [{ name: "review", repeated: false }],
+      inputs: [], outputs: [{ name: "review" }],
       interactive: false, view: { x: 300, y: 0 },
     };
     const pipeline = makeFullPipeline([impl, rev]);
@@ -55,7 +55,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes a collection loops: region with its over: field (#269)", () => {
     const worker: NodeDef = {
       id: "worker", name: "worker", type: "agent",
-      inputs: [], outputs: [{ name: "out", repeated: false }],
+      inputs: [], outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const pipeline = makeFullPipeline([worker]);
@@ -103,7 +103,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("emits a per-node model override when set (#296)", () => {
     const impl: NodeDef = {
       id: "impl", name: "implementer", type: "agent",
-      inputs: [], outputs: [{ name: "code", repeated: false }],
+      inputs: [], outputs: [{ name: "code" }],
       interactive: false, view: { x: 200, y: 0 }, model: "opus",
     };
     const yaml = serializePipeline(makeFullPipeline([impl]));
@@ -113,7 +113,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("omits model when unset — the byte-identical / no-diverge default (#296)", () => {
     const impl: NodeDef = {
       id: "impl", name: "implementer", type: "agent",
-      inputs: [], outputs: [{ name: "code", repeated: false }],
+      inputs: [], outputs: [{ name: "code" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     expect(serializePipeline(makeFullPipeline([impl]))).not.toContain("model:");
@@ -125,7 +125,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     // only reading the emitted YAML proves it persists.
     const impl: NodeDef = {
       id: "impl", name: "implementer", type: "agent",
-      inputs: [], outputs: [{ name: "code", repeated: false }],
+      inputs: [], outputs: [{ name: "code" }],
       interactive: false, view: { x: 200, y: 0 }, model: "opus", effort: "low",
     };
     const yaml = serializePipeline(makeFullPipeline([impl]));
@@ -136,7 +136,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("emits an unknown effort level verbatim (#424, free-text wire)", () => {
     const impl: NodeDef = {
       id: "impl", name: "implementer", type: "agent",
-      inputs: [], outputs: [{ name: "code", repeated: false }],
+      inputs: [], outputs: [{ name: "code" }],
       interactive: false, view: { x: 200, y: 0 }, effort: "turbo",
     };
     expect(serializePipeline(makeFullPipeline([impl]))).toContain("effort: turbo");
@@ -148,7 +148,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("folds model/effort under harnesses.claude for an unpinned node (#550)", () => {
     const impl: NodeDef = {
       id: "impl", name: "implementer", type: "agent",
-      inputs: [], outputs: [{ name: "code", repeated: false }],
+      inputs: [], outputs: [{ name: "code" }],
       interactive: false, view: { x: 200, y: 0 }, model: "opus", effort: "low",
     };
     const yaml = serializePipeline(makeFullPipeline([impl]));
@@ -162,7 +162,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("emits pin_harness and folds model under the PINNED harness (#550)", () => {
     const impl: NodeDef = {
       id: "impl", name: "implementer", type: "agent",
-      inputs: [], outputs: [{ name: "code", repeated: false }],
+      inputs: [], outputs: [{ name: "code" }],
       interactive: false, view: { x: 200, y: 0 },
       pin_harness: "opencode", model: "openrouter/foo",
     };
@@ -175,7 +175,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     // Editing on the resolved harness (claude) must not clobber opencode's entry.
     const impl: NodeDef = {
       id: "impl", name: "implementer", type: "agent",
-      inputs: [], outputs: [{ name: "code", repeated: false }],
+      inputs: [], outputs: [{ name: "code" }],
       interactive: false, view: { x: 200, y: 0 },
       model: "opus", // resolved = claude (no pin)
       harnesses: { opencode: { model: "openrouter/bar" } },
@@ -188,7 +188,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("omits harnesses entirely for a plain node (#550, no-diverge default)", () => {
     const impl: NodeDef = {
       id: "impl", name: "implementer", type: "agent",
-      inputs: [], outputs: [{ name: "code", repeated: false }],
+      inputs: [], outputs: [{ name: "code" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(makeFullPipeline([impl]));
@@ -203,7 +203,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     for (const effort of [undefined, null, ""]) {
       const impl: NodeDef = {
         id: "impl", name: "implementer", type: "agent",
-        inputs: [], outputs: [{ name: "code", repeated: false }],
+        inputs: [], outputs: [{ name: "code" }],
         interactive: false, view: { x: 200, y: 0 }, effort,
       };
       expect(serializePipeline(makeFullPipeline([impl]))).not.toContain("effort:");
@@ -213,9 +213,9 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes output port with frontmatter at correct indentation", () => {
     const reviewer: NodeDef = {
       id: "reviewer", name: "reviewer", type: "agent",
-      inputs: [{ name: "code", repeated: false }],
+      inputs: [{ name: "code" }],
       outputs: [{
-        name: "review", repeated: false, 
+        name: "review", 
         frontmatter: {
           verdict: { type: "enum", allowed: ["PASS", "FAIL"] },
         },
@@ -241,7 +241,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     const plain: NodeDef = {
       id: "plain", name: "plain", type: "agent",
       inputs: [],
-      outputs: [{ name: "out", repeated: false }],
+      outputs: [{ name: "out" }],
       interactive: false,
     };
     // A node without the toggle serializes byte-identically to its pre-#723
@@ -263,7 +263,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
       id: "reviewer", name: "reviewer", type: "agent",
       inputs: [],
       outputs: [{
-        name: "review", repeated: false, 
+        name: "review", 
         instructions: "Summarize the risks.\nName the owner.",
       }],
       interactive: false,
@@ -280,8 +280,8 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes an edge when clause at correct indentation", () => {
     const gate: NodeDef = {
       id: "gate", name: "gate", type: "agent",
-      inputs: [{ name: "in", repeated: false }],
-      outputs: [{ name: "out", repeated: false }],
+      inputs: [{ name: "in" }],
+      outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -309,8 +309,8 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes a manual edge's mode and waypoints (shareable routing, #154)", () => {
     const gate: NodeDef = {
       id: "gate", name: "gate", type: "agent",
-      inputs: [{ name: "in", repeated: false }],
-      outputs: [{ name: "out", repeated: false }],
+      inputs: [{ name: "in" }],
+      outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -337,8 +337,8 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("omits routing fields for an auto edge (no waypoints stored, #154)", () => {
     const gate: NodeDef = {
       id: "gate", name: "gate", type: "agent",
-      inputs: [{ name: "in", repeated: false }],
-      outputs: [{ name: "out", repeated: false }],
+      inputs: [{ name: "in" }],
+      outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -358,7 +358,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes an edge's target_side so the drop-position anchor survives reload (#168)", () => {
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",
-      inputs: [], outputs: [{ name: "out", repeated: false }],
+      inputs: [], outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -376,7 +376,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("omits target_side for a left-anchored (legacy) edge (#168)", () => {
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",
-      inputs: [], outputs: [{ name: "out", repeated: false }],
+      inputs: [], outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -393,7 +393,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes both per-edge anchors, rounded, so the wiring survives reload (#844)", () => {
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",
-      inputs: [], outputs: [{ name: "out", repeated: false }],
+      inputs: [], outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -418,7 +418,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("keeps an anchor without offset without one: the side's middle (PDO-17)", () => {
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",
-      inputs: [], outputs: [{ name: "out", repeated: false }],
+      inputs: [], outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -434,8 +434,8 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(yaml).not.toContain("offset");
   });
 
-  it("writes no side on any port (PDO-17)", () => {
-    const stale = { name: "out", repeated: false, side: "bottom" } as unknown as PortDef;
+  it("writes neither side nor repeated on any port (PDO-17)", () => {
+    const stale = { name: "out", repeated: true, side: "bottom" } as unknown as PortDef;
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",
       inputs: [stale], outputs: [stale],
@@ -443,12 +443,31 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     };
     const yaml = serializePipeline(makeFullPipeline([impl]));
     expect(yaml).not.toContain("side:");
+    expect(yaml).not.toContain("repeated");
+  });
+
+  it("keeps the accumulation flag on the edge (PDO-17)", () => {
+    const impl: NodeDef = {
+      id: "impl", name: "impl", type: "agent",
+      inputs: [], outputs: [{ name: "out" }],
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const yaml = serializePipeline(
+      makeFullPipeline([impl], [
+        {
+          source: { node: "start", port: "user_prompt" },
+          target: { node: "impl", port: "user_prompt" },
+          repeated: true,
+        },
+      ]),
+    );
+    expect(yaml).toMatch(/repeated: true/);
   });
 
   it("omits the anchors on an edge that was never wired by hand (#844)", () => {
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",
-      inputs: [], outputs: [{ name: "out", repeated: false }],
+      inputs: [], outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -468,7 +487,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes an edge's label layout and draw order (#845)", () => {
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",
-      inputs: [], outputs: [{ name: "out", repeated: false }],
+      inputs: [], outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -495,7 +514,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("omits every #845 label field an edge never set", () => {
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",
-      inputs: [], outputs: [{ name: "out", repeated: false }],
+      inputs: [], outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -524,7 +543,7 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes show_output_labels: true — the toggle has no constant default to fall back on", () => {
     const impl: NodeDef = {
       id: "impl", name: "impl", type: "agent",
-      inputs: [], outputs: [{ name: "out", repeated: false }],
+      inputs: [], outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -545,9 +564,9 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes multi-field frontmatter with all fields at same depth", () => {
     const node: NodeDef = {
       id: "multi", name: "multi", type: "agent",
-      inputs: [{ name: "in", repeated: false }],
+      inputs: [{ name: "in" }],
       outputs: [{
-        name: "out", repeated: false,
+        name: "out", 
         frontmatter: {
           verdict: { type: "enum", allowed: ["PASS", "FAIL"] },
           score: { type: "int" },
@@ -575,8 +594,8 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
   it("serializes a deeply nested edge when clause with in-predicate correctly", () => {
     const gate: NodeDef = {
       id: "gate", name: "gate", type: "agent",
-      inputs: [{ name: "in", repeated: false }],
-      outputs: [{ name: "out", repeated: false }],
+      inputs: [{ name: "in" }],
+      outputs: [{ name: "out" }],
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(
@@ -608,12 +627,12 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
       nodes: [
         {
           id: "start", name: "Start", type: "start",
-          inputs: [], outputs: [{ name: "user_prompt", repeated: false }],
+          inputs: [], outputs: [{ name: "user_prompt" }],
           interactive: false, view: { x: 0, y: 0 },
         },
         {
           id: "end", name: "End", type: "end",
-          inputs: [{ name: "result", repeated: false }], outputs: [],
+          inputs: [{ name: "result" }], outputs: [],
           interactive: false, view: { x: 400, y: 0 },
         },
       ],
@@ -661,14 +680,14 @@ describe("serializePipeline persists edge when/else (ADR-0011)", () => {
       nodes: [
         {
           id: "reviewer", name: "reviewer", type: "agent",
-          inputs: [{ name: "task", repeated: false }],
-          outputs: [{ name: "verdict", repeated: false }],
+          inputs: [{ name: "task" }],
+          outputs: [{ name: "verdict" }],
           interactive: false, view: { x: 0, y: 0 },
         },
         {
           id: "impl", name: "impl", type: "agent",
-          inputs: [{ name: "review", repeated: false }],
-          outputs: [{ name: "diff", repeated: false }],
+          inputs: [{ name: "review" }],
+          outputs: [{ name: "diff" }],
           interactive: false, view: { x: 200, y: 0 },
         },
       ],
@@ -786,11 +805,11 @@ describe("serializePipeline persists port_type", () => {
       name: "Tester",
       type: "agent",
       inputs: [
-        { name: "screens", repeated: false, port_type: "image_list" },
+        { name: "screens", port_type: "image_list" },
       ],
       outputs: [
-        { name: "screens-fixed", repeated: false, port_type: "image_list" },
-        { name: "report", repeated: false },
+        { name: "screens-fixed", port_type: "image_list" },
+        { name: "report" },
       ],
       interactive: false,
       view: { x: 200, y: 0 },
@@ -827,8 +846,8 @@ describe("serializePipeline persists port_type", () => {
       type: "agent",
       inputs: [],
       outputs: [
-        { name: "report", repeated: false, port_type: "html" },
-        { name: "notes", repeated: false },
+        { name: "report", port_type: "html" },
+        { name: "notes" },
       ],
       interactive: false,
       view: { x: 0, y: 0 },
@@ -854,7 +873,7 @@ describe("exportNodeAsYaml (#345)", () => {
       name: "Reviewer",
       type: "agent",
       inputs: [],
-      outputs: [{ name: "review", repeated: false }],
+      outputs: [{ name: "review" }],
       interactive: false,
       view: { x: 42, y: 99 },
       ...overrides,
@@ -942,11 +961,12 @@ describe("exportNodeAsYaml (#345)", () => {
     expect(exportNodeAsYaml(node({ interactive: false }), "p")).not.toContain("interactive:");
   });
 
-  it("never emits a port side (PDO-17)", () => {
-    // A stale in-memory port still carrying the retired key is not written back.
-    const stale = { name: "review", repeated: false, side: "top" } as unknown as PortDef;
+  it("never emits a port side nor repeated (PDO-17)", () => {
+    // A stale in-memory port still carrying the retired keys is not written back.
+    const stale = { name: "review", repeated: true, side: "top" } as unknown as PortDef;
     const yaml = exportNodeAsYaml(node({ inputs: [stale], outputs: [stale] }), "p");
     expect(yaml).not.toContain("side:");
+    expect(yaml).not.toContain("repeated");
   });
 
   it("emits an empty prompt as an explicit empty string", () => {
@@ -962,7 +982,7 @@ describe("exportNodeAsYaml (#345)", () => {
     const yaml = exportNodeAsYaml(
       node({
         outputs: [{
-          name: "review", repeated: false, 
+          name: "review", 
           frontmatter: { approved: { type: "bool", allowed: null } },
         }],
       }),
@@ -977,8 +997,6 @@ describe("exportNodeAsYaml (#345)", () => {
       node({
         outputs: [{
           name: "review",
-          repeated: false,
-          
           instructions: "Return a concise verdict.",
         }],
       }),
@@ -1003,8 +1021,8 @@ describe("serializePipeline strips null frontmatter keys (#457)", () => {
       name: "fm-test", version: "1.0", variables: {},
       nodes: [{
         id: "reviewer", name: "reviewer", type: "agent",
-        inputs: [{ name: "code", repeated: false, frontmatter }],
-        outputs: [{ name: "review", repeated: false, frontmatter }],
+        inputs: [{ name: "code", frontmatter }],
+        outputs: [{ name: "review", frontmatter }],
         interactive: false, view: { x: 0, y: 0 },
       }],
       edges: [],

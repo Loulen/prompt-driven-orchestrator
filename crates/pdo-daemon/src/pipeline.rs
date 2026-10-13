@@ -135,8 +135,6 @@ impl std::fmt::Display for PortSide {
 pub(crate) struct Port {
     pub name: String,
     #[serde(default)]
-    pub repeated: bool,
-    #[serde(default)]
     pub port_type: PortType,
     #[serde(default)]
     pub frontmatter: Option<HashMap<String, FrontmatterFieldDecl>>,
@@ -934,23 +932,65 @@ pub(crate) fn fold_flat_model_effort_into_harnesses(node_map: &mut serde_yaml::M
     changed
 }
 
-/// Convert the legacy per-port `side` (pre-PDO-17) into edge layout, then drop it
-/// from every port. A port has no side any more: where a wire leaves and lands
-/// belongs to the edge (#844). So that a legacy pipeline renders unchanged:
+/// Convert the legacy per-port `side` and `repeated` (pre-PDO-17) out of the
+/// ports. A port has neither any more: where a wire leaves and lands belongs to
+/// the edge (#844), and so does accumulation (`EdgeDef::repeated`, #149). So that
+/// a legacy pipeline renders unchanged:
 ///
 /// - an edge with no `source_anchor` whose primary carried output declares a side
 ///   other than `right` gets `source_anchor: {side}` — no `offset`, i.e. the
 ///   side's middle, where the per-output dot used to sit;
 /// - an edge with neither `target_anchor` nor `target_side` that lands on an End
 ///   whose `result` declares a side other than `left` gets that `target_side`;
-/// - `side` is then removed from every input and output port.
+/// - `side` and `repeated` are then removed from every input and output port. An
+///   output's `repeated` had no effect left (the edge carries accumulation); the
+///   migrator moves a declared input's `repeated` onto its edge before this runs.
 ///
 /// An edge that already carries an anchor is left as is. Works on the raw YAML of
 /// a whole pipeline, and is shared by [`parse_pipeline`] and the pipeline migrator
 /// so a persisted rewrite and an in-memory parse agree (precedent:
 /// [`fold_flat_model_effort_into_harnesses`]). Returns `true` iff the document
 /// changed; a second run is a no-op.
-pub(crate) fn convert_legacy_port_sides(doc: &mut serde_yaml::Value) -> bool {
+pub(crate) fn convert_legacy_ports(doc: &mut serde_yaml::Value) -> bool {
+    let sides_changed = convert_legacy_port_sides(doc);
+    let repeated_changed = strip_port_keys(doc, &["repeated"]);
+    sides_changed | repeated_changed
+}
+
+/// Removes `keys` from every input and output port of `doc`. Returns `true` iff
+/// one was present.
+fn strip_port_keys(doc: &mut serde_yaml::Value, keys: &[&str]) -> bool {
+    let mut changed = false;
+    let Some(nodes) = doc
+        .get_mut("nodes")
+        .and_then(serde_yaml::Value::as_sequence_mut)
+    else {
+        return false;
+    };
+    for node in nodes.iter_mut() {
+        for direction in ["inputs", "outputs"] {
+            let Some(ports) = node
+                .get_mut(direction)
+                .and_then(serde_yaml::Value::as_sequence_mut)
+            else {
+                continue;
+            };
+            for port in ports
+                .iter_mut()
+                .filter_map(serde_yaml::Value::as_mapping_mut)
+            {
+                for key in keys {
+                    changed |= port.remove(*key).is_some();
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// The `side` half of [`convert_legacy_ports`]: edge layout from the declared
+/// port sides, then `side` goes from every port.
+fn convert_legacy_port_sides(doc: &mut serde_yaml::Value) -> bool {
     let side_key = serde_yaml::Value::String("side".into());
     let declared_side = |port: &serde_yaml::Value| -> Option<String> {
         port.get("side")
@@ -1067,25 +1107,7 @@ pub(crate) fn convert_legacy_port_sides(doc: &mut serde_yaml::Value) -> bool {
         }
     }
 
-    if let Some(nodes) = doc
-        .get_mut("nodes")
-        .and_then(serde_yaml::Value::as_sequence_mut)
-    {
-        for node in nodes.iter_mut() {
-            for key in ["inputs", "outputs"] {
-                if let Some(ports) = node
-                    .get_mut(key)
-                    .and_then(serde_yaml::Value::as_sequence_mut)
-                {
-                    for port in ports.iter_mut() {
-                        if let Some(m) = port.as_mapping_mut() {
-                            m.remove(&side_key);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    strip_port_keys(doc, &["side"]);
     true
 }
 
@@ -1112,7 +1134,7 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
             diagnostics.extend(normalize_node_value(node_val)?);
         }
     }
-    convert_legacy_port_sides(&mut raw);
+    convert_legacy_ports(&mut raw);
 
     let mut pipeline: PipelineDef = serde_yaml::from_value(raw.clone())?;
 
@@ -1129,7 +1151,6 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                 if !has_default {
                     node.outputs.push(Port {
                         name: "default".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -3258,12 +3279,71 @@ edges:
     }
 
     #[test]
-    fn convert_legacy_port_sides_is_idempotent() {
+    fn convert_legacy_ports_is_idempotent() {
         let mut doc: serde_yaml::Value =
             serde_yaml::from_str(&legacy_sided_pipeline("top", "")).unwrap();
-        assert!(convert_legacy_port_sides(&mut doc));
+        assert!(convert_legacy_ports(&mut doc));
         let once = doc.clone();
-        assert!(!convert_legacy_port_sides(&mut doc));
+        assert!(!convert_legacy_ports(&mut doc));
+        assert_eq!(doc, once);
+    }
+
+    /// A pipeline whose only legacy trait is a port `repeated` (pre-PDO-17), on
+    /// an output and on the End's `result`; the edge carries its own `repeated`.
+    const LEGACY_REPEATED_PORTS: &str = r#"
+name: legacy-repeated
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: aBcD1234
+    name: worker
+    type: agent
+    outputs:
+      - name: plan
+        repeated: true
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+        repeated: false
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: aBcD1234, port: in }
+  - source: { node: aBcD1234, port: plan }
+    target: { node: end, port: result }
+    repeated: true
+"#;
+
+    #[test]
+    fn a_legacy_port_repeated_is_dropped_and_the_edge_keeps_its_own() {
+        let result = parse_pipeline(LEGACY_REPEATED_PORTS).unwrap();
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let doc: serde_yaml::Value = serde_yaml::from_str(&serialized).unwrap();
+        for node in doc["nodes"].as_sequence().unwrap() {
+            for key in ["inputs", "outputs"] {
+                for port in node[key].as_sequence().into_iter().flatten() {
+                    assert!(port.get("repeated").is_none(), "{serialized}");
+                }
+            }
+        }
+        assert!(result.pipeline.edges[1].repeated);
+        assert_eq!(doc["edges"][1]["repeated"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn convert_legacy_ports_strips_port_repeated_once() {
+        let mut doc: serde_yaml::Value = serde_yaml::from_str(LEGACY_REPEATED_PORTS).unwrap();
+        assert!(convert_legacy_ports(&mut doc));
+        assert!(doc["nodes"][1]["outputs"][0].get("repeated").is_none());
+        assert!(doc["nodes"][2]["inputs"][0].get("repeated").is_none());
+        assert_eq!(doc["edges"][1]["repeated"].as_bool(), Some(true));
+        let once = doc.clone();
+        assert!(!convert_legacy_ports(&mut doc));
         assert_eq!(doc, once);
     }
 
@@ -3332,7 +3412,6 @@ nodes:
         assert_eq!(mg.isolated_worktree, Some(true));
         assert_eq!(mg.inputs.len(), 1);
         assert_eq!(mg.inputs[0].name, "branches");
-        assert!(mg.inputs[0].repeated);
         assert_eq!(mg.outputs.len(), 1);
         assert_eq!(mg.outputs[0].name, "merged");
         assert!(
@@ -3548,7 +3627,6 @@ skills:
             inputs: vec![],
             outputs: vec![Port {
                 name: "out".into(),
-                repeated: false,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,

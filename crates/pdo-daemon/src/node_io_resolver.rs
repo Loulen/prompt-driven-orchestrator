@@ -144,6 +144,8 @@ pub(crate) fn resolve(
     // `.pdo/artifacts/`). Inherited regardless of its mtime.
     let tracked = git_tracked_paths(artifacts_dir, node_id, iter);
 
+    // An output never accumulates (PDO-17): accumulation belongs to the edge, so
+    // an output is one file per iteration and its `repeated` is always false.
     let mut outputs: Vec<PortIO> = Vec::new();
     for output_port in &node.outputs {
         match output_port.port_type {
@@ -154,7 +156,7 @@ pub(crate) fn resolve(
                 mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
-                    repeated: output_port.repeated,
+                    repeated: false,
                     port_type: output_port.port_type,
                     files,
                 });
@@ -170,7 +172,7 @@ pub(crate) fn resolve(
                 mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
-                    repeated: output_port.repeated,
+                    repeated: false,
                     port_type: output_port.port_type,
                     files,
                 });
@@ -187,7 +189,7 @@ pub(crate) fn resolve(
                 mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
-                    repeated: output_port.repeated,
+                    repeated: false,
                     port_type: output_port.port_type,
                     files,
                 });
@@ -497,7 +499,6 @@ mod tests {
                     node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "task".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -507,7 +508,6 @@ mod tests {
                     }],
                     outputs: vec![Port {
                         name: "plan".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -533,7 +533,6 @@ mod tests {
                     node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "plan".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -543,7 +542,6 @@ mod tests {
                     }],
                     outputs: vec![Port {
                         name: "summary".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -698,7 +696,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "review".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -724,7 +721,6 @@ mod tests {
                     node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "reviews".into(),
-                        repeated: true,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -734,7 +730,6 @@ mod tests {
                     }],
                     outputs: vec![Port {
                         name: "code".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -924,7 +919,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "out".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -951,7 +945,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "out".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -977,7 +970,6 @@ mod tests {
                     node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "docs".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -1068,7 +1060,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "plan".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -1156,7 +1147,6 @@ mod tests {
             outputs: if has_out {
                 vec![Port {
                     name: "plan".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1241,7 +1231,6 @@ mod tests {
                 .map(|o| {
                     vec![Port {
                         name: o.into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -1328,7 +1317,6 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![Port {
                     name: "report".into(),
-                    repeated: false,
                     port_type: PortType::Html,
                     frontmatter: None,
                     when: None,

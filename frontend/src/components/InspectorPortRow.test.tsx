@@ -9,7 +9,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 
 describe("InspectorPortRow — I1 hairline layout", () => {
   const baseProps = {
-    port: { name: "in", repeated: false },
+    port: { name: "in" },
     onUpdate: vi.fn(),
     onRemove: vi.fn(),
   };
@@ -29,35 +29,19 @@ describe("InspectorPortRow — I1 hairline layout", () => {
     expect(row.className).not.toContain("border-b");
   });
 
-  it("renders the repeated control as a toggle switch", () => {
+  it("has no rpt toggle: accumulation belongs to the edge (PDO-17)", () => {
     render(<InspectorPortRow {...baseProps} />, { wrapper: Wrapper });
-    const toggle = screen.getByRole("switch", { name: /repeated/i });
-    expect(toggle).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByLabelText("repeated")).toBeNull();
+    expect(screen.queryByText("rpt")).toBeNull();
   });
 
-  it("repeated toggle is off when port.repeated=false", () => {
+  it("shows only the dot, the name and the delete button", () => {
     render(<InspectorPortRow {...baseProps} />, { wrapper: Wrapper });
-    const toggle = screen.getByRole("switch", { name: /repeated/i });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-  });
-
-  it("repeated toggle is on when port.repeated=true", () => {
-    render(
-      <InspectorPortRow
-        {...baseProps}
-        port={{ ...baseProps.port, repeated: true }}
-      />,
-      { wrapper: Wrapper },
-    );
-    const toggle = screen.getByRole("switch", { name: /repeated/i });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-  });
-
-  it("clicking the repeated toggle calls onUpdate", () => {
-    const onUpdate = vi.fn();
-    render(<InspectorPortRow {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
-    fireEvent.click(screen.getByRole("switch", { name: /repeated/i }));
-    expect(onUpdate).toHaveBeenCalledWith({ repeated: true });
+    const row = screen.getByTestId("inspector-port-in");
+    expect(row.querySelectorAll("button")).toHaveLength(1);
+    expect(screen.getByLabelText("Delete port")).toBeInTheDocument();
+    expect(row.querySelectorAll("input")).toHaveLength(1);
   });
 
   it("name input fires onUpdate on change", () => {

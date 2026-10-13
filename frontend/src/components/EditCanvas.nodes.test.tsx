@@ -394,7 +394,7 @@ function endNode(): NodeDef {
     id: "end",
     name: "End",
     type: "end",
-    inputs: [{ name: "result", repeated: false }],
+    inputs: [{ name: "result" }],
     outputs: [],
     interactive: false,
   };
@@ -410,7 +410,7 @@ function pipelineToEnd(edge: Partial<PipelineDef["edges"][number]>): PipelineDef
         name: "src",
         type: "agent",
         inputs: [],
-        outputs: [{ name: "plan", repeated: false }],
+        outputs: [{ name: "plan" }],
         interactive: false,
       },
       endNode(),

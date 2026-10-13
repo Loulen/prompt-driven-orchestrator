@@ -402,6 +402,63 @@ mod tests {
     }
 
     #[test]
+    fn a_repeated_edge_still_accumulates_once_the_output_flag_is_gone() {
+        // PDO-17: `repeated` leaves the output port (the legacy flag is dropped at
+        // parse) but stays on the edge, and the edge alone still pools every
+        // COMPLETED iteration of its source.
+        let yaml = r#"
+name: accumulate
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: reviewer
+    name: Reviewer
+    type: agent
+    outputs:
+      - name: review
+        repeated: true
+  - id: impl
+    name: Implementer
+    type: agent
+    outputs:
+      - name: code
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: reviewer, port: in }
+  - source: { node: reviewer, port: review }
+    target: { node: impl, port: reviews }
+    repeated: true
+  - source: { node: impl, port: code }
+    target: { node: end, port: result }
+"#;
+        let pipeline = crate::pipeline::parse_pipeline(yaml).unwrap().pipeline;
+        let reviewer = pipeline.nodes.iter().find(|n| n.id == "reviewer").unwrap();
+        let serialized = serde_yaml::to_string(&reviewer.outputs).unwrap();
+        assert!(!serialized.contains("repeated"), "{serialized}");
+        assert!(pipeline.edges[1].repeated);
+
+        let state = state_with(vec![node_with_iterations(
+            "reviewer",
+            &[
+                (1, NodeStatus::Completed),
+                (2, NodeStatus::Failed),
+                (3, NodeStatus::Completed),
+            ],
+        )]);
+        let resolved = resolved_repeated_iters(&pipeline, &state, "impl");
+        assert_eq!(resolved.get("reviewer"), Some(&vec![1, 3]));
+    }
+
+    #[test]
     fn resolved_repeated_iters_empty_pool_when_source_has_no_completed_iter() {
         // #353 D6: a repeated source that has not completed any iteration yet
         // maps to an empty Vec — the pool is empty, not a raw glob.

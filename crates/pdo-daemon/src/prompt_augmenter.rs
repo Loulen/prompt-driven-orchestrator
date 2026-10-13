@@ -1281,7 +1281,6 @@ mod tests {
                 node_type: NodeType::Agent,
                 inputs: vec![Port {
                     name: "task".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1291,7 +1290,6 @@ mod tests {
                 }],
                 outputs: vec![Port {
                     name: "plan".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1801,7 +1799,6 @@ mod tests {
             node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: "plan".into(),
-                repeated: false,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -1811,7 +1808,6 @@ mod tests {
             }],
             outputs: vec![Port {
                 name: "summary".into(),
-                repeated: false,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -2174,7 +2170,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "plan".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -2201,7 +2196,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "context".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -2228,7 +2222,6 @@ mod tests {
                     inputs: vec![
                         Port {
                             name: "plan".into(),
-                            repeated: false,
                             port_type: PortType::Markdown,
                             frontmatter: None,
                             when: None,
@@ -2238,7 +2231,6 @@ mod tests {
                         },
                         Port {
                             name: "context".into(),
-                            repeated: false,
                             port_type: PortType::Markdown,
                             frontmatter: None,
                             when: None,
@@ -2249,7 +2241,6 @@ mod tests {
                     ],
                     outputs: vec![Port {
                         name: "summary".into(),
-                        repeated: false,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -2340,7 +2331,6 @@ mod tests {
                 node_type: NodeType::Agent,
                 inputs: vec![Port {
                     name: "code".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -2350,7 +2340,6 @@ mod tests {
                 }],
                 outputs: vec![Port {
                     name: "review".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: Some(
                         [(
@@ -2692,7 +2681,6 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![Port {
                     name: "screenshot".into(),
-                    repeated: false,
                     port_type: PortType::Image,
                     frontmatter: None,
                     when: None,
@@ -2750,7 +2738,6 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![Port {
                     name: "photos".into(),
-                    repeated: false,
                     port_type: PortType::ImageList,
                     frontmatter: None,
                     when: None,
@@ -2803,7 +2790,6 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![Port {
                     name: "img".into(),
-                    repeated: false,
                     port_type: PortType::Image,
                     frontmatter: None,
                     when: None,

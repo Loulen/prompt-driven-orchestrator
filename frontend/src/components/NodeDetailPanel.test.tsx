@@ -965,6 +965,66 @@ describe("NodeDetailPanel", () => {
     });
   });
 
+  // PDO-17: accumulation belongs to the edge. An output shows the one file of
+  // the iteration displayed — no « repeated » badge, no « N files » — even if
+  // a stale payload still flags it; an input keeps the flag the edge gives it.
+  describe("Repeated rendering (PDO-17)", () => {
+    it("renders an output as a single document, never as a repeated list", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [
+          {
+            port: "verdict",
+            repeated: true,
+            port_type: "markdown",
+            files: [
+              { path: "reviewer/iter-3/verdict/output.md", exists: true, size: 2150, frontmatter: null },
+              { path: "reviewer/iter-2/verdict/output.md", exists: true, size: 2150, frontmatter: null },
+            ],
+          },
+        ],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.queryByText("repeated")).not.toBeInTheDocument();
+      expect(screen.queryByText("2 files")).not.toBeInTheDocument();
+      expect(screen.getByText("reviewer/iter-3/verdict/output.md")).toBeInTheDocument();
+    });
+
+    it("keeps the repeated badge and file count on a pooled input", async () => {
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [
+          {
+            port: "reviews",
+            repeated: true,
+            port_type: "markdown",
+            files: [
+              { path: "reviewer/iter-1/review/output.md", exists: true, size: 100, frontmatter: null },
+              { path: "reviewer/iter-2/review/output.md", exists: true, size: 100, frontmatter: null },
+            ],
+          },
+        ],
+        outputs: [],
+      });
+
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+      await act(async () => {});
+      expect(screen.getByText("repeated")).toBeInTheDocument();
+      expect(screen.getByText("2 files")).toBeInTheDocument();
+    });
+  });
+
   describe("Image port thumbnails", () => {
     it("shows image thumbnails for image port type", async () => {
       fetchNodeIOMock.mockResolvedValue({

@@ -91,6 +91,9 @@ mod hot_reload_conflict;
 #[path = "libassist.rs"]
 mod libassist;
 
+#[path = "legacy_port_repeated.rs"]
+mod legacy_port_repeated;
+
 #[path = "legacy_port_side.rs"]
 mod legacy_port_side;
 

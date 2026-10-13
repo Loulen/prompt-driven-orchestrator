@@ -9,8 +9,8 @@ function marker(type: "start" | "end"): NodeDef {
     name: type === "start" ? "Start" : "End",
     type,
     interactive: false,
-    inputs: type === "end" ? [{ name: "result", repeated: false }] : [],
-    outputs: type === "start" ? [{ name: "user_prompt", repeated: false }] : [],
+    inputs: type === "end" ? [{ name: "result" }] : [],
+    outputs: type === "start" ? [{ name: "user_prompt" }] : [],
   };
 }
 

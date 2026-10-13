@@ -13,21 +13,17 @@ function design(): NodeDef {
     id: "design",
     name: "design",
     type: "agent",
-    inputs: [{ name: "brief", repeated: false }],
+    inputs: [{ name: "brief" }],
     outputs: [
       {
         name: "out",
-        repeated: false,
-        
         frontmatter: { has_design_work: { type: "bool" } },
       },
       {
         name: "spec",
-        repeated: false,
-        
         frontmatter: { ready: { type: "bool" } },
       },
-      { name: "notes", repeated: false },
+      { name: "notes" },
     ],
     interactive: false,
     view: { x: 0, y: 0 },
@@ -40,7 +36,7 @@ function orchestrator(): NodeDef {
     name: "orchestrator",
     type: "agent",
     inputs: [],
-    outputs: [{ name: "out", repeated: false }],
+    outputs: [{ name: "out" }],
     interactive: false,
     view: { x: 300, y: 0 },
   };

@@ -62,8 +62,8 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
     id: "default",
     name: "Default",
     type: "agent",
-    inputs: [{ name: "in", repeated: false }],
-    outputs: [{ name: "out", repeated: false }],
+    inputs: [{ name: "in" }],
+    outputs: [{ name: "out" }],
     interactive: false,
     view: { x: 100, y: 100 },
     ...overrides,
@@ -742,10 +742,10 @@ describe("edge selection (ADR-0011 edge detail panel, #147)", () => {
 describe("start/end markers are structural (#684)", () => {
   function markerPipeline(): PipelineDef {
     const start = makeNode({ id: "start", name: "Start", type: "start", inputs: [],
-      outputs: [{ name: "user_prompt", repeated: false }] });
+      outputs: [{ name: "user_prompt" }] });
     const worker = makeNode({ id: "work1234", name: "worker" });
     const end = makeNode({ id: "end", name: "End", type: "end", outputs: [],
-      inputs: [{ name: "result", repeated: false }] });
+      inputs: [{ name: "result" }] });
     const edges: EdgeDef[] = [
       { source: { node: "start", port: "user_prompt" }, target: { node: "work1234", port: "in" } },
       { source: { node: "work1234", port: "out" }, target: { node: "end", port: "result" } },
@@ -823,8 +823,6 @@ describe("duplicateNode", () => {
       id: "orig1234",
       outputs: [{
         name: "review",
-        repeated: false,
-        
         instructions: "Return a concise verdict.",
       }],
     });
@@ -1012,12 +1010,12 @@ describe("serializePipeline (via save) emits structural node fields", () => {
       type: "loop" as unknown as NodeDef["type"],
       max_iter: 3,
       inputs: [
-        { name: "in", repeated: false },
-        { name: "break", repeated: false },
+        { name: "in" },
+        { name: "break" },
       ],
       outputs: [
-        { name: "body", repeated: false },
-        { name: "done", repeated: false },
+        { name: "body" },
+        { name: "done" },
       ],
     };
     seedTabWithPipeline(makePipeline([loopNode]));
@@ -1036,12 +1034,12 @@ describe("serializePipeline (via save) emits structural node fields", () => {
       type: "loop" as unknown as NodeDef["type"],
       max_iter: "$rounds",
       inputs: [
-        { name: "in", repeated: false },
-        { name: "break", repeated: false },
+        { name: "in" },
+        { name: "break" },
       ],
       outputs: [
-        { name: "body", repeated: false },
-        { name: "done", repeated: false },
+        { name: "body" },
+        { name: "done" },
       ],
     };
     seedTabWithPipeline(makePipeline([loopNode]));
@@ -1057,7 +1055,7 @@ describe("serializePipeline (via save) emits structural node fields", () => {
   // rather than asserting on a fixture. The asymmetry it protects against: reads
   // are opaque (a generic spread), WRITES are enumerated, so a field appears to
   // work perfectly in the UI and dies at the serializer boundary. That is exactly
-  // how `EdgeDef.repeated` is lost today.
+  // how `EdgeDef.repeated` was lost until PDO-17.
   it("round-trips a per-node effort set through updateNode (#424)", async () => {
     seedTabWithPipeline(makePipeline([makeNode({ id: "impl", name: "implementer" })]));
 
@@ -1473,7 +1471,7 @@ describe("updateNode propagates port changes to edges", () => {
   it("renames edge source port when an output port is renamed", () => {
     const nodeA = makeNode({
       id: "aaaaaaaa",
-      outputs: [{ name: "screenshots", repeated: false }],
+      outputs: [{ name: "screenshots" }],
     });
     const nodeB = makeNode({ id: "bbbbbbbb" });
     const edge: EdgeDef = {
@@ -1483,7 +1481,7 @@ describe("updateNode propagates port changes to edges", () => {
     seedTabWithPipeline(makePipeline([nodeA, nodeB], [edge]));
 
     useEditStore.getState().updateNode("aaaaaaaa", {
-      outputs: [{ name: "screen", repeated: false }],
+      outputs: [{ name: "screen" }],
     });
 
     const tab = useEditStore.getState().openTabs[0];
@@ -1498,8 +1496,8 @@ describe("updateNode propagates port changes to edges", () => {
     const nodeA = makeNode({
       id: "aaaaaaaa",
       outputs: [
-        { name: "out", repeated: false },
-        { name: "screenshots", repeated: false },
+        { name: "out" },
+        { name: "screenshots" },
       ],
     });
     const nodeB = makeNode({ id: "bbbbbbbb" });
@@ -1512,8 +1510,8 @@ describe("updateNode propagates port changes to edges", () => {
 
     useEditStore.getState().updateNode("aaaaaaaa", {
       outputs: [
-        { name: "out", repeated: false },
-        { name: "screens", repeated: false },
+        { name: "out" },
+        { name: "screens" },
       ],
     });
 
@@ -1528,8 +1526,8 @@ describe("updateNode propagates port changes to edges", () => {
     const nodeA = makeNode({
       id: "aaaaaaaa",
       outputs: [
-        { name: "out", repeated: false },
-        { name: "screenshots", repeated: false },
+        { name: "out" },
+        { name: "screenshots" },
       ],
     });
     const nodeB = makeNode({ id: "bbbbbbbb" });
@@ -1541,7 +1539,7 @@ describe("updateNode propagates port changes to edges", () => {
     seedTabWithPipeline(makePipeline([nodeA, nodeB], [edge]));
 
     useEditStore.getState().updateNode("aaaaaaaa", {
-      outputs: [{ name: "out", repeated: false }],
+      outputs: [{ name: "out" }],
     });
 
     const kept = useEditStore.getState().openTabs[0].pipeline.edges;
@@ -1556,7 +1554,7 @@ describe("updateNode propagates port changes to edges", () => {
     const nodeA = makeNode({ id: "aaaaaaaa" });
     const nodeB = makeNode({
       id: "bbbbbbbb",
-      inputs: [{ name: "data", repeated: false }],
+      inputs: [{ name: "data" }],
     });
     const edge: EdgeDef = {
       source: { node: "aaaaaaaa", port: "out" },
@@ -1565,7 +1563,7 @@ describe("updateNode propagates port changes to edges", () => {
     seedTabWithPipeline(makePipeline([nodeA, nodeB], [edge]));
 
     useEditStore.getState().updateNode("bbbbbbbb", {
-      inputs: [{ name: "payload", repeated: false }],
+      inputs: [{ name: "payload" }],
     });
 
     const tab = useEditStore.getState().openTabs[0];
@@ -1577,8 +1575,8 @@ describe("updateNode propagates port changes to edges", () => {
     const nodeA = makeNode({
       id: "aaaaaaaa",
       outputs: [
-        { name: "out", repeated: false },
-        { name: "screenshots", repeated: false },
+        { name: "out" },
+        { name: "screenshots" },
       ],
     });
     const nodeB = makeNode({ id: "bbbbbbbb" });
@@ -1589,7 +1587,7 @@ describe("updateNode propagates port changes to edges", () => {
     seedTabWithPipeline(makePipeline([nodeA, nodeB], edges));
 
     useEditStore.getState().updateNode("aaaaaaaa", {
-      outputs: [{ name: "out", repeated: false }],
+      outputs: [{ name: "out" }],
     });
 
     const tab = useEditStore.getState().openTabs[0];
@@ -1602,8 +1600,8 @@ describe("updateNode propagates port changes to edges", () => {
     const nodeB = makeNode({
       id: "bbbbbbbb",
       inputs: [
-        { name: "in", repeated: false },
-        { name: "extra", repeated: false },
+        { name: "in" },
+        { name: "extra" },
       ],
     });
     const edges: EdgeDef[] = [
@@ -1613,7 +1611,7 @@ describe("updateNode propagates port changes to edges", () => {
     seedTabWithPipeline(makePipeline([nodeA, nodeB], edges));
 
     useEditStore.getState().updateNode("bbbbbbbb", {
-      inputs: [{ name: "in", repeated: false }],
+      inputs: [{ name: "in" }],
     });
 
     const tab = useEditStore.getState().openTabs[0];
@@ -1624,11 +1622,11 @@ describe("updateNode propagates port changes to edges", () => {
   it("does not affect edges on other nodes", () => {
     const nodeA = makeNode({
       id: "aaaaaaaa",
-      outputs: [{ name: "out", repeated: false }],
+      outputs: [{ name: "out" }],
     });
     const nodeB = makeNode({
       id: "bbbbbbbb",
-      outputs: [{ name: "out", repeated: false }],
+      outputs: [{ name: "out" }],
     });
     const nodeC = makeNode({ id: "cccccccc" });
     const edges: EdgeDef[] = [
@@ -1638,7 +1636,7 @@ describe("updateNode propagates port changes to edges", () => {
     seedTabWithPipeline(makePipeline([nodeA, nodeB, nodeC], edges));
 
     useEditStore.getState().updateNode("aaaaaaaa", {
-      outputs: [{ name: "result", repeated: false }],
+      outputs: [{ name: "result" }],
     });
 
     const tab = useEditStore.getState().openTabs[0];
@@ -1657,8 +1655,8 @@ describe("updateNode propagates port changes to edges", () => {
     const node = makeNode({
       id: "aaaaaaaa",
       outputs: [
-        { name: "alpha", repeated: false },
-        { name: "beta", repeated: false },
+        { name: "alpha" },
+        { name: "beta" },
       ],
     });
     const nodeB = makeNode({ id: "bbbbbbbb" });
@@ -1671,8 +1669,8 @@ describe("updateNode propagates port changes to edges", () => {
     // Swap order: [beta, alpha] — same names, different indices
     useEditStore.getState().updateNode("aaaaaaaa", {
       outputs: [
-        { name: "beta", repeated: false },
-        { name: "alpha", repeated: false },
+        { name: "beta" },
+        { name: "alpha" },
       ],
     });
 
@@ -1927,8 +1925,6 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
       id: "writer01",
       outputs: [{
         name: "result",
-        repeated: false,
-        
         instructions: "Write the original summary.",
       }],
     });

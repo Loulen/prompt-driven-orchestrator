@@ -1,11 +1,35 @@
 import { useEffect, useState } from "react";
 import type { NodeStatus } from "../types";
 
-/** The timing of one iteration of a node: what its Total duration is read from. */
+/** The timing of one iteration of a node: what its durations are read from. */
 export interface IterationTiming {
   status: NodeStatus;
   started_at: string | null;
   completed_at: string | null;
+  /**
+   * #980: the iteration's **closed** Attentes déclarées, in ms, as the daemon
+   * projects them (`IterationInfo.waited_ms`, the rule Stats -> Performance
+   * uses). Absent on an older daemon: no closed wait.
+   */
+  waited_ms?: number;
+  /** #980: when the declared wait still open on this iteration began, if any. */
+  open_wait_since?: string | null;
+}
+
+/** The three Modes de durée of one iteration, in ms: Total = Active + Waiting. */
+export interface IterationDurations {
+  total: number;
+  active: number;
+  waiting: number;
+}
+
+/**
+ * Whether an `awaiting.cause` is an Attente déclarée, the same rule as the
+ * daemon's: `declared` and `completion_not_released` are; `children_pending`
+ * (an orchestrator at work on its children) and `child_awaiting` are not.
+ */
+export function isDeclaredWaitCause(cause: string | null | undefined): boolean {
+  return cause === "declared" || cause === "completion_not_released";
 }
 
 /**
@@ -35,6 +59,29 @@ export function iterationTotalMs(timing: IterationTiming, now: number): number |
 }
 
 /**
+ * Total, Active and Waiting of an iteration at `now` (#980). Waiting = the
+ * closed waits (`waited_ms`) + the wait still open (`now - open_wait_since`);
+ * Active = Total - Waiting. While a wait is open, Total keeps growing and Active
+ * stays put: both grow with `now`, so their difference does not. Waiting is
+ * capped at Total (a clock skew must not make Active negative, nor break
+ * Total = Active + Waiting). `null` when there is no Total.
+ */
+export function iterationDurations(
+  timing: IterationTiming,
+  now: number,
+): IterationDurations | null {
+  const total = iterationTotalMs(timing, now);
+  if (total == null) return null;
+  let waiting = Math.max(0, timing.waited_ms ?? 0);
+  if (timing.open_wait_since) {
+    const since = Date.parse(timing.open_wait_since);
+    if (!Number.isNaN(since)) waiting += Math.max(0, now - since);
+  }
+  waiting = Math.min(waiting, total);
+  return { total, active: total - waiting, waiting };
+}
+
+/**
  * `Date.now()`, refreshed every second while `ticking`. Modeled on
  * `useRunDuration`: no interval at all once the iteration is over. The value is
  * read at mount, so a caller switching iterations remounts (`key`) to start fresh.
@@ -49,10 +96,13 @@ export function useNow(ticking: boolean): number {
   return now;
 }
 
-/** Live Total duration of an iteration: ticks while it runs, frozen at its end. */
-export function useIterationTotalMs(timing: IterationTiming): number | null {
+/**
+ * Live durations of an iteration: tick every second while it runs (an open wait
+ * included: Total keeps going, Active is frozen), fixed once it ends.
+ */
+export function useIterationDurations(timing: IterationTiming): IterationDurations | null {
   const ticking =
     !!timing.started_at && timing.completed_at == null && iterationIsLive(timing.status);
   const now = useNow(ticking);
-  return iterationTotalMs(timing, now);
+  return iterationDurations(timing, now);
 }

@@ -574,6 +574,13 @@ pub struct IterationInfo {
     pub interactive: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub completion_released: bool,
+    /// #980: the **closed** Attentes déclarées of this iteration, in
+    /// milliseconds ([`DeclaredWaitLedger`], the rule Stats -> Performance
+    /// subtracts). An open wait is not counted: the UI adds it from
+    /// `awaiting.since`. Additive on the wire: absent when `0`, so an iteration
+    /// that never waited serializes byte-identically.
+    #[serde(default, skip_serializing_if = "is_zero_ms")]
+    pub waited_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -957,6 +964,10 @@ pub struct RepoPin {
 
 /// serde `skip_serializing_if` helper: a `read_only == false` pin serialises
 /// byte-identically to a pre-ADR-0047 pin (no `read_only` key).
+fn is_zero_ms(ms: &i64) -> bool {
+    *ms == 0
+}
+
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -1584,6 +1595,116 @@ fn upsert_iteration(iterations: &mut Vec<IterationInfo>, new: IterationInfo) {
     }
 }
 
+// --- Declared wait rule (#810, ADR-0069; shared since #980) -------------------
+
+/// The cause a `NodeAwaitingUser` carries. `declared_wait` writes `cause`; the
+/// orchestrator binding's marker writes `reason` (ADR-0064) — read both keys.
+/// `None` = an event with no cause at all: **ignored**, never a wait. Only a
+/// pre-#810 spawn event could be in that shape (the primitive no longer writes
+/// one), and counting it as a wait would subtract time nobody waited.
+fn declared_wait_cause(payload: Option<&serde_json::Value>) -> Option<&str> {
+    payload
+        .and_then(|p| p.get("cause").or_else(|| p.get("reason")))
+        .and_then(|v| v.as_str())
+}
+
+/// Does this cause open a declared wait? `children_pending` does not: an
+/// orchestrator parked on `pdo run wait` is working, not waiting on a human
+/// (CONTEXT.md § Durée active). Nor does `child_awaiting`, which is derived at
+/// read and never written to the log.
+fn opens_declared_wait(cause: &str) -> bool {
+    cause == AWAITING_CAUSE_DECLARED || cause == AWAITING_CAUSE_COMPLETION_NOT_RELEASED
+}
+
+fn wait_millis(opened_at: &str, closed_at: &str) -> Option<f64> {
+    let start = chrono::DateTime::parse_from_rfc3339(opened_at).ok()?;
+    let end = chrono::DateTime::parse_from_rfc3339(closed_at).ok()?;
+    Some((end - start).num_milliseconds() as f64)
+}
+
+/// The **Attente déclarée** rule, written once: Stats -> Performance subtracts
+/// it from the wall-clock and the projection exposes it per iteration
+/// ([`IterationInfo::waited_ms`]), so both always agree.
+///
+/// Fed the events of one Run in order, it accumulates per execution
+/// `(node_id, iter)` the **closed** declared waits, in milliseconds:
+/// - an interval opens on a `NodeAwaitingUser` of cause `declared` or
+///   `completion_not_released` (`children_pending` excluded);
+/// - it closes on the FIRST `NodeResumed`, `NodeCompletionReleased` or terminal
+///   event of the same key. A repeated `NodeAwaitingUser` with no lift in
+///   between does not reopen it (a refreshed question is the same wait);
+/// - an interval still open contributes nothing (the UI adds the open wait
+///   itself, from `awaiting.since`);
+/// - a `NodeStarted` on a key **resets** it: a stopped-then-restarted attempt
+///   runs at the same `(node, iter)`, and the wait of the attempt that was
+///   thrown away is not the wait of the one that succeeded.
+#[derive(Debug, Default)]
+pub(crate) struct DeclaredWaitLedger {
+    open: HashMap<(String, i64), String>,
+    waited: HashMap<(String, i64), f64>,
+}
+
+impl DeclaredWaitLedger {
+    pub(crate) fn observe(&mut self, event: &Event) {
+        let Some(node_id) = event.node_id.clone() else {
+            return;
+        };
+        let key = (node_id, event.iter.unwrap_or(1));
+        match event.kind {
+            EventKind::NodeStarted => {
+                self.open.remove(&key);
+                self.waited.remove(&key);
+            }
+            EventKind::NodeAwaitingUser => {
+                let Some(cause) = declared_wait_cause(event.payload.as_ref()) else {
+                    return;
+                };
+                if !opens_declared_wait(cause) {
+                    return;
+                }
+                self.open.entry(key).or_insert_with(|| event.ts.clone());
+            }
+            EventKind::NodeResumed
+            | EventKind::NodeCompletionReleased
+            | EventKind::NodeCompleted
+            | EventKind::NodeAutoCompleted
+            | EventKind::NodeFailed
+            | EventKind::NodeStopped
+            | EventKind::NodeInterrupted
+            | EventKind::NodeStale => {
+                if let Some(opened_at) = self.open.remove(&key) {
+                    if let Some(millis) = wait_millis(&opened_at, &event.ts) {
+                        *self.waited.entry(key).or_insert(0.0) += millis.max(0.0);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The closed declared wait of one execution, in milliseconds (`0` when none).
+    pub(crate) fn waited_ms(&self, node_id: &str, iter: i64) -> f64 {
+        self.waited
+            .get(&(node_id.to_string(), iter))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    pub(crate) fn into_waits(self) -> HashMap<(String, i64), f64> {
+        self.waited
+    }
+}
+
+/// The closed declared wait of every execution `(node_id, iter)` of one Run, in
+/// milliseconds — see [`DeclaredWaitLedger`] for the rule.
+pub(crate) fn declared_waits(events: &[Event]) -> HashMap<(String, i64), f64> {
+    let mut ledger = DeclaredWaitLedger::default();
+    for event in events {
+        ledger.observe(event);
+    }
+    ledger.into_waits()
+}
+
 pub(crate) fn project(events: &[Event]) -> Option<RunState> {
     if events.is_empty() {
         return None;
@@ -1591,8 +1712,10 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
 
     let run_id = events[0].run_id.clone();
     let mut state = RunState::new(run_id, String::new());
+    let mut waits = DeclaredWaitLedger::default();
 
     for event in events {
+        waits.observe(event);
         match event.kind {
             EventKind::RunStarted
             | EventKind::RunCompleted
@@ -1671,6 +1794,14 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
     // #328: a log with no RunStarted is an invalid fragment (e.g. a late event
     // appended after a forget) — never surface it as a phantom Running run.
     state.started_at.as_ref()?;
+
+    // #980: each iteration carries its closed declared waits (same rule as
+    // Stats -> Performance), so the UI can derive the Active duration.
+    for node in state.nodes.values_mut() {
+        for iteration in &mut node.iterations {
+            iteration.waited_ms = waits.waited_ms(&node.node_id, iteration.iter).round() as i64;
+        }
+    }
 
     finalize(&mut state);
 
@@ -2240,6 +2371,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false),
                     completion_released: false,
+                    waited_ms: 0,
                 };
                 let node = state
                     .nodes
@@ -2406,6 +2538,7 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                                 completed_at: Some(event.ts.clone()),
                                 interactive: false,
                                 completion_released: false,
+                                waited_ms: 0,
                             }],
                             frontmatter_retries: 0,
                             frontmatter_violations: Vec::new(),
@@ -2734,6 +2867,7 @@ fn apply_switch_event(state: &mut RunState, event: &Event) {
                     completed_at: Some(event.ts.clone()),
                     interactive: false,
                     completion_released: false,
+                    waited_ms: 0,
                 },
             );
         }
@@ -7070,6 +7204,7 @@ mod tests {
                     completed_at: None,
                     interactive: false,
                     completion_released: false,
+                    waited_ms: 0,
                 })
                 .collect(),
             frontmatter_retries: 0,
@@ -8243,5 +8378,178 @@ mod tests {
         );
         assert!(state.nodes.is_empty(), "misrouted kind must be a no-op");
         assert_eq!(state.status, RunStatus::Running);
+    }
+
+    /// #980: `IterationInfo::waited_ms`, the closed declared waits of each
+    /// iteration, projected with the rule Stats -> Performance uses.
+    mod waited_ms {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        fn at(kind: EventKind, iter: i64, minute: u32) -> Event {
+            make_event_ts(
+                kind,
+                Some("n"),
+                Some(iter),
+                &format!("2026-01-01T00:{minute:02}:00.000Z"),
+            )
+        }
+
+        fn awaiting(iter: i64, minute: u32, cause: &str) -> Event {
+            let mut event = at(EventKind::NodeAwaitingUser, iter, minute);
+            event.payload = Some(serde_json::json!({ "cause": cause }));
+            event
+        }
+
+        fn project_node(body: Vec<Event>) -> NodeState {
+            let mut events = vec![make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "test" }),
+            )];
+            events.extend(body);
+            project(&events).unwrap().nodes["n"].clone()
+        }
+
+        fn waited(node: &NodeState, iter: i64) -> i64 {
+            node.iterations
+                .iter()
+                .find(|i| i.iter == iter)
+                .expect("iteration projected")
+                .waited_ms
+        }
+
+        const MINUTE: i64 = 60_000;
+
+        #[test]
+        fn a_single_declared_wait_is_counted() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 2, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 5),
+                at(EventKind::NodeCompleted, 1, 9),
+            ]);
+            assert_eq!(waited(&node, 1), 3 * MINUTE);
+        }
+
+        #[test]
+        fn several_waits_add_up() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 3),
+                awaiting(1, 4, AWAITING_CAUSE_DECLARED),
+                // A refreshed question is the same wait, never a reopening.
+                awaiting(1, 5, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 8),
+                at(EventKind::NodeCompleted, 1, 10),
+            ]);
+            assert_eq!(waited(&node, 1), 6 * MINUTE);
+        }
+
+        #[test]
+        fn completion_not_released_counts_until_the_release() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 2, AWAITING_CAUSE_COMPLETION_NOT_RELEASED),
+                at(EventKind::NodeCompletionReleased, 1, 6),
+                at(EventKind::NodeCompleted, 1, 7),
+            ]);
+            assert_eq!(waited(&node, 1), 4 * MINUTE);
+        }
+
+        #[test]
+        fn a_wait_closed_by_a_terminal_event_counts() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 2, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeStopped, 1, 7),
+            ]);
+            assert_eq!(waited(&node, 1), 5 * MINUTE);
+        }
+
+        #[test]
+        fn children_pending_is_not_a_wait() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, "children_pending"),
+                at(EventKind::NodeResumed, 1, 8),
+                at(EventKind::NodeCompleted, 1, 9),
+            ]);
+            assert_eq!(waited(&node, 1), 0);
+        }
+
+        #[test]
+        fn each_iteration_has_its_own_waits() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 3),
+                at(EventKind::NodeCompleted, 1, 4),
+                at(EventKind::NodeStarted, 2, 5),
+                awaiting(2, 6, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 2, 7),
+                at(EventKind::NodeCompleted, 2, 8),
+            ]);
+            assert_eq!(waited(&node, 1), 2 * MINUTE);
+            assert_eq!(waited(&node, 2), MINUTE);
+        }
+
+        #[test]
+        fn a_restart_on_the_same_iteration_resets_its_waits() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 4),
+                at(EventKind::NodeStopped, 1, 5),
+                at(EventKind::NodeStarted, 1, 6),
+                at(EventKind::NodeCompleted, 1, 9),
+            ]);
+            assert_eq!(waited(&node, 1), 0);
+        }
+
+        #[test]
+        fn an_open_wait_is_not_counted() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 2),
+                awaiting(1, 3, AWAITING_CAUSE_DECLARED),
+            ]);
+            assert_eq!(node.status, NodeStatus::AwaitingUser);
+            assert_eq!(waited(&node, 1), MINUTE);
+        }
+
+        #[test]
+        fn waited_ms_is_on_the_wire_only_when_there_was_a_wait() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 2),
+                at(EventKind::NodeStarted, 2, 3),
+            ]);
+            let waited = serde_json::to_value(&node.iterations[0]).unwrap();
+            assert_eq!(waited["waited_ms"], MINUTE);
+            let never_waited = serde_json::to_value(&node.iterations[1]).unwrap();
+            assert!(never_waited.get("waited_ms").is_none());
+            let legacy: IterationInfo = serde_json::from_value(serde_json::json!({
+                "iter": 1, "status": "running", "started_at": null, "completed_at": null
+            }))
+            .unwrap();
+            assert_eq!(legacy.waited_ms, 0);
+        }
+
+        #[test]
+        fn the_projection_agrees_with_the_shared_rule() {
+            let events = vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 4),
+                at(EventKind::NodeCompleted, 1, 6),
+            ];
+            let node = project_node(events.clone());
+            let rule = declared_waits(&events);
+            assert_eq!(waited(&node, 1) as f64, rule[&("n".to_string(), 1)]);
+        }
     }
 }

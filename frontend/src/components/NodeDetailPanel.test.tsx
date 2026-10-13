@@ -3254,3 +3254,223 @@ describe("iteration duration (#979)", () => {
     });
   });
 });
+
+// #980: the duration switches between the Total and Active Modes de durée; the
+// tooltip breaks the iteration down into Total · Active · Waiting.
+describe("iteration duration modes (#980)", () => {
+  function renderPanel(overrides?: Partial<NodeState>) {
+    return render(
+      <TooltipProvider>
+        <NodeDetailPanel node={makeNode(overrides)} runId="run-1" />
+      </TooltipProvider>,
+    );
+  }
+
+  // Radix renders the content twice (visible + its accessible copy): read the first.
+  const byTestId = (tooltip: HTMLElement, id: string) => within(tooltip).getAllByTestId(id)[0];
+
+  async function openTooltip() {
+    await act(async () => {
+      // Blur first: a click closes the tooltip and focus alone would not reopen it.
+      screen.getByTestId("iteration-duration").blur();
+      screen.getByTestId("iteration-duration").focus();
+    });
+    return screen.findByTestId("tooltip-content");
+  }
+
+  // 12m 4s in total, 3m 33s of it waited (closed waits).
+  const finished: Partial<NodeState> = {
+    status: "completed",
+    started_at: "2026-01-01T00:00:00Z",
+    completed_at: "2026-01-01T00:12:04Z",
+    iterations: [
+      {
+        iter: 1,
+        status: "completed",
+        started_at: "2026-01-01T00:00:00Z",
+        completed_at: "2026-01-01T00:12:04Z",
+        waited_ms: 213_000,
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+  afterEach(() => {
+    localStorage.clear();
+  });
+
+  it("shows Total by default and switches to Active on click", () => {
+    renderPanel(finished);
+    const label = screen.getByTestId("iteration-duration");
+    expect(label).toHaveTextContent("12m 4s total");
+    expect(label).toHaveAccessibleName("12m 4s total. Click to show active time");
+    fireEvent.click(label);
+    expect(label).toHaveTextContent("8m 31s active");
+    expect(label).toHaveAccessibleName("8m 31s active. Click to show total time");
+    // Off the default, the unit takes the accent color.
+    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-acc-app");
+    fireEvent.click(label);
+    expect(label).toHaveTextContent("12m 4s total");
+    expect(screen.getByTestId("iteration-duration-unit")).not.toHaveClass("text-acc-app");
+  });
+
+  it("is a native button, so Enter and Space switch it too", () => {
+    renderPanel(finished);
+    const label = screen.getByTestId("iteration-duration");
+    expect(label.tagName).toBe("BUTTON");
+    expect(label).toHaveAttribute("type", "button");
+  });
+
+  it("persists the mode across nodes and reloads", () => {
+    const first = renderPanel(finished);
+    fireEvent.click(screen.getByTestId("iteration-duration"));
+    expect(localStorage.getItem("pdo.ui.nodeDurationMode")).toBe('"active"');
+    first.unmount();
+    // Another node, a fresh mount (a reload reads the same store).
+    renderPanel({ ...finished, node_id: "other" });
+    expect(screen.getByTestId("iteration-duration")).toHaveTextContent("8m 31s active");
+  });
+
+  it("the tooltip breaks the duration down, the current mode marked", async () => {
+    renderPanel(finished);
+    let tooltip = await openTooltip();
+    expect(byTestId(tooltip, "iteration-breakdown-total")).toHaveTextContent(
+      "▸Total12m 4s",
+    );
+    expect(byTestId(tooltip, "iteration-breakdown-active")).toHaveTextContent(
+      "Active8m 31s",
+    );
+    expect(byTestId(tooltip, "iteration-breakdown-waiting")).toHaveTextContent(
+      "Waiting3m 33s",
+    );
+    expect(byTestId(tooltip, "iteration-breakdown-total")).toHaveAttribute(
+      "data-current",
+    );
+    expect(tooltip).toHaveTextContent("Click to show active time");
+    expect(within(tooltip).queryAllByTestId("iteration-active-paused")[0] ?? null).toBeNull();
+
+    fireEvent.click(screen.getByTestId("iteration-duration"));
+    tooltip = await openTooltip();
+    expect(byTestId(tooltip, "iteration-breakdown-active")).toHaveAttribute(
+      "data-current",
+    );
+    expect(byTestId(tooltip, "iteration-breakdown-total")).not.toHaveAttribute(
+      "data-current",
+    );
+    expect(tooltip).toHaveTextContent("Click to show total time");
+  });
+
+  describe("during an open declared wait", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(new Date("2026-01-01T00:12:06Z"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // Started 12m 6s ago; one closed wait of 1m; waiting again since 00:08:49.
+    const awaiting: Partial<NodeState> = {
+      status: "awaiting_user",
+      started_at: "2026-01-01T00:00:00Z",
+      completed_at: null,
+      awaiting: { cause: "declared", message: "?", since: "2026-01-01T00:08:49Z" },
+      iterations: [
+        {
+          iter: 1,
+          status: "awaiting_user",
+          started_at: "2026-01-01T00:00:00Z",
+          completed_at: null,
+          waited_ms: 60_000,
+        },
+      ],
+    };
+
+    it("Active is frozen while Total keeps going", () => {
+      localStorage.setItem("pdo.ui.nodeDurationMode", JSON.stringify("active"));
+      renderPanel(awaiting);
+      const label = screen.getByTestId("iteration-duration");
+      expect(label).toHaveTextContent("7m 49s active");
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(label).toHaveTextContent("7m 49s active");
+      fireEvent.click(label);
+      expect(label).toHaveTextContent("12m 11s total");
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(label).toHaveTextContent("12m 12s total");
+    });
+
+    it("the tooltip counts the open wait and says Active is paused", async () => {
+      localStorage.setItem("pdo.ui.nodeDurationMode", JSON.stringify("active"));
+      renderPanel(awaiting);
+      const tooltip = await openTooltip();
+      expect(byTestId(tooltip, "iteration-breakdown-total")).toHaveTextContent(
+        "Total12m 6s",
+      );
+      expect(byTestId(tooltip, "iteration-breakdown-active")).toHaveTextContent(
+        "▸Active7m 49s",
+      );
+      expect(byTestId(tooltip, "iteration-breakdown-waiting")).toHaveTextContent(
+        "Waiting4m 17s",
+      );
+      expect(byTestId(tooltip, "iteration-active-paused")).toHaveTextContent(
+        "Active paused: waiting for you",
+      );
+    });
+
+    it("an orchestrator parked on its children is not waiting: Active keeps going", () => {
+      localStorage.setItem("pdo.ui.nodeDurationMode", JSON.stringify("active"));
+      renderPanel({
+        ...awaiting,
+        awaiting: { cause: "children_pending", message: null, since: "2026-01-01T00:08:49Z" },
+      });
+      // Only the closed 1m wait is subtracted.
+      expect(screen.getByTestId("iteration-duration")).toHaveTextContent("11m 6s active");
+    });
+  });
+
+  describe("in the iteration menu", () => {
+    const looped: Partial<NodeState> = {
+      iter: 2,
+      status: "completed",
+      started_at: "2026-01-01T01:00:00Z",
+      completed_at: "2026-01-01T01:12:04Z",
+      iterations: [
+        {
+          iter: 1,
+          status: "completed",
+          started_at: "2026-01-01T00:00:00Z",
+          completed_at: "2026-01-01T00:11:45Z",
+          waited_ms: 45_000,
+        },
+        {
+          iter: 2,
+          status: "completed",
+          started_at: "2026-01-01T01:00:00Z",
+          completed_at: "2026-01-01T01:12:04Z",
+          waited_ms: 213_000,
+        },
+      ],
+    };
+
+    it("lists durations in Total by default", async () => {
+      renderPanel(looped);
+      fireEvent.click(screen.getByText(/iter 2/));
+      expect(await screen.findByTestId("iter-option-1")).toHaveTextContent("11m 45s total");
+      expect(screen.getByTestId("iter-option-2")).toHaveTextContent("12m 4s total");
+    });
+
+    it("follows the mode on screen", async () => {
+      renderPanel(looped);
+      fireEvent.click(screen.getByTestId("iteration-duration"));
+      fireEvent.click(screen.getByText(/iter 2/));
+      expect(await screen.findByTestId("iter-option-1")).toHaveTextContent("11m 0s active");
+      expect(screen.getByTestId("iter-option-2")).toHaveTextContent("8m 31s active");
+    });
+  });
+});

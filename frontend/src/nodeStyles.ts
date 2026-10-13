@@ -37,18 +37,6 @@ export const STATUS_TEXT: Record<NodeStatus, string> = {
   interrupted: "text-st-interrupted",
 };
 
-export const STATUS_DOT: Record<NodeStatus, string> = {
-  pending: "bg-st-pending",
-  running: "bg-st-running",
-  awaiting_user: "bg-st-await",
-  completed: "bg-st-done",
-  skipped: "bg-st-skipped",
-  failed: "bg-st-failed",
-  stopped: "bg-st-stopped",
-  stale: "bg-st-stale",
-  interrupted: "bg-st-interrupted",
-};
-
 export const SELECTION_RING_STYLE = {
   boxShadow: "0 0 0 2px var(--color-bg-1), 0 0 0 3.5px var(--color-acc)",
 };

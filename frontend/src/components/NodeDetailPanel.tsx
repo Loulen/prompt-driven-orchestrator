@@ -43,7 +43,9 @@ import CopyButton from "./CopyButton";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import TmuxTerminal from "./TmuxTerminal";
 import { Tooltip } from "./ui/tooltip";
-import { STATUS_BG, STATUS_BORDER, STATUS_DOT, STATUS_TEXT } from "../nodeStyles";
+import { STATUS_BG, STATUS_BORDER, STATUS_TEXT } from "../nodeStyles";
+import StatusIcon from "./StatusIcon";
+import { statusSpec } from "../lib/statusTable";
 import { useTerminalOverlayStore } from "../stores/terminalOverlayStore";
 import { formatCostAmount, nodeCostTitle } from "../lib/costLabel";
 import { nodeReviewTarget, reviewUrl } from "../lib/runRefs";
@@ -59,18 +61,6 @@ import {
   countChildren,
   useRunChildren,
 } from "../lib/orchestration";
-
-const STATUS_LABELS: Record<NodeStatus, string> = {
-  pending: "Pending",
-  running: "Running",
-  awaiting_user: "Awaiting User",
-  completed: "Completed",
-  skipped: "Skipped",
-  failed: "Failed",
-  stopped: "Stopped",
-  stale: "Stale",
-  interrupted: "Interrupted",
-};
 
 interface Props {
   node: NodeState;
@@ -728,11 +718,8 @@ export default function NodeDetailPanel({
 
   const toolbarIdentity = expanded ? (
     <span className="flex items-center gap-1.5" data-testid="term-identity">
-      <span
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[node.status]}${
-          node.status === "running" ? " animate-pulse" : ""
-        }`}
-      />
+      {/* PDO-22: the status badge just after names it — the glyph is decorative. */}
+      <StatusIcon status={node.status} reason={node.failure_reason} decorative testId="term-identity-icon" />
       <span
         className="text-fg"
         style={{ fontSize: "12px", fontWeight: 500 }}
@@ -749,7 +736,7 @@ export default function NodeDetailPanel({
         data-testid="term-identity-status"
         data-status={node.status}
       >
-        {STATUS_LABELS[node.status] ?? node.status}
+        {statusSpec(node.status).label}
       </span>
     </span>
   ) : undefined;
@@ -815,10 +802,12 @@ export default function NodeDetailPanel({
             {nodeName ?? node.node_id}
           </span>
           <span
-            className="rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3"
+            className="flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3"
             style={{ fontSize: "10px", fontWeight: 500 }}
+            data-testid="node-status-badge"
           >
-            {STATUS_LABELS[node.status] ?? node.status}
+            <StatusIcon status={node.status} reason={node.failure_reason} size="xs" decorative />
+            {statusSpec(node.status).label}
           </span>
           {/* #616/ADR-0046: the harness this node's session was FROZEN on, next to
               the id — so the Run view shows what actually ran (distinct from the
@@ -1677,18 +1666,6 @@ function PromptSection({
   );
 }
 
-const STATUS_DOTS: Record<NodeStatus, string> = {
-  pending: "bg-st-pending",
-  running: "bg-st-running",
-  awaiting_user: "bg-st-await",
-  completed: "bg-st-done",
-  skipped: "bg-st-skipped",
-  failed: "bg-st-failed",
-  stopped: "bg-st-stopped",
-  stale: "bg-st-stale",
-  interrupted: "bg-st-interrupted",
-};
-
 function IterSelector({
   iterations,
   selectedIter,
@@ -1698,12 +1675,16 @@ function IterSelector({
   selectedIter: number;
   onSelect: (iter: number) => void;
 }) {
+  const selectedStatus = iterations.find((it) => it.iter === selectedIter)?.status;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         className="flex cursor-pointer items-center gap-0.5 rounded px-1 py-0.5 font-mono text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
         style={{ fontSize: "10px" }}
       >
+        {selectedStatus && (
+          <StatusIcon status={selectedStatus} size="xs" testId="iter-selector-status" className="mr-0.5" />
+        )}
         iter {selectedIter}
         <ChevronDown size={10} className="text-fg-4" />
       </DropdownMenuTrigger>
@@ -1722,9 +1703,7 @@ function IterSelector({
             onClick={() => onSelect(it.iter)}
             data-testid={`iter-option-${it.iter}`}
           >
-            <span
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOTS[it.status]}`}
-            />
+            <StatusIcon status={it.status} size="xs" testId={`iter-option-${it.iter}-status`} />
             <span className="font-mono">iter {it.iter}</span>
             <span
               className="ml-auto font-mono text-fg-4"

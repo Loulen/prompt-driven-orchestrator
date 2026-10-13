@@ -10,6 +10,12 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.121.0
+**Update et What's new depuis Settings** (#983, story PDO-14) : dans Settings › Version &
+update, Update et What's new ferment d'abord Settings (via la garde de brouillon), puis affichent
+la confirmation de mise à jour ou le Changelog seuls à l'écran. Les fermer ramène sur l'app sans
+rouvrir Settings.
+
 ## 1.120.0
 Carte Start du canvas d'un Run sans images d'input (#977, PDO-18) : les miniatures et la
 lightbox restent dans l'inspecteur du Start.

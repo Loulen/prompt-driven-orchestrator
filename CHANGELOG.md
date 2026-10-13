@@ -10,6 +10,14 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.121.0
+**Panneau de node : bascule durée Total / Active et ventilation des attentes** (#980, spec #978).
+Un clic (ou Entrée / Espace) sur la durée de la ligne méta bascule entre `total` et `active` ;
+le choix est mémorisé (`pdo.ui.nodeDurationMode`) et s'applique aussi au menu des itérations.
+Active se fige pendant une attente déclarée (point ambre). Le tooltip ventile Total / Active /
+Waiting, avec une somme exacte à la seconde affichée ; Active peut de ce fait différer d'1 s de
+Stats -> Performance, qui arrondit chaque valeur séparément.
+
 ## 1.120.0
 **Panneau de node : durée Total de l'itération sélectionnée** (#979, spec #978).
 La ligne méta affiche `iter N · <durée> total · <coût>` à la place de `started … · ended …` ;

@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, act, within, waitFor } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useEffect } from "react";
 
 globalThis.ResizeObserver = class {
@@ -224,7 +224,7 @@ describe("NodeDetailPanel", () => {
       ["derived", true, 2, "~$2.00†"],
       [null, false, 3, "~$3.00"],
       ["derived", false, null, "—"],
-    ] as const)("renders %s cost beside the end time", (form, partial, usd, text) => {
+    ] as const)("renders %s cost beside the duration", (form, partial, usd, text) => {
       render(
         <NodeDetailPanel
           node={makeNode({
@@ -244,7 +244,9 @@ describe("NodeDetailPanel", () => {
       );
       const chip = screen.getByTestId("node-cost");
       expect(chip).toHaveTextContent(text);
-      expect(chip.parentElement).toHaveTextContent(/ended .* · /);
+      // #979: the cost follows the Total duration, which replaced `ended …`.
+      expect(chip.parentElement).toHaveTextContent(/1m 0s total · /);
+      expect(chip.parentElement).not.toHaveTextContent(/ended|started/);
       if (usd === null) expect(chip).not.toHaveTextContent("$0");
     });
 
@@ -3069,5 +3071,186 @@ describe("NodeDetailPanel file import (#971)", () => {
     });
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+  });
+});
+
+// #979: the meta line shows the Total duration of the SELECTED iteration; its
+// start and end times moved to a tooltip; the IterSelector menu lists durations.
+describe("iteration duration (#979)", () => {
+  const localTime = (iso: string) =>
+    new Date(iso).toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+
+  function renderPanel(overrides?: Partial<NodeState>) {
+    return render(
+      <TooltipProvider>
+        <NodeDetailPanel node={makeNode(overrides)} runId="run-1" />
+      </TooltipProvider>,
+    );
+  }
+
+  async function openTooltip() {
+    await act(async () => {
+      screen.getByTestId("iteration-duration").focus();
+    });
+    return screen.findByTestId("tooltip-content");
+  }
+
+  it("shows a finished node's Total duration, frozen, with no start/end on the line", () => {
+    renderPanel({
+      status: "completed",
+      started_at: "2026-01-01T00:00:00Z",
+      completed_at: "2026-01-01T00:12:04Z",
+    });
+    const label = screen.getByTestId("iteration-duration");
+    expect(label).toHaveTextContent("12m 4s total");
+    expect(label.parentElement).not.toHaveTextContent(/started|ended/);
+    // Terminal iteration: no state dot.
+    expect(screen.queryByTestId("iteration-duration-dot")).toBeNull();
+  });
+
+  it("a running node's duration grows every second, with a pulsing dot", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:45Z"));
+      renderPanel({ status: "running", started_at: "2026-01-01T00:00:00Z" });
+      const label = screen.getByTestId("iteration-duration");
+      expect(label).toHaveTextContent("45s total");
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(label).toHaveTextContent("46s total");
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+      expect(label).toHaveTextContent("1m 1s total");
+      expect(screen.getByTestId("iteration-duration-dot")).toHaveClass(
+        "bg-st-running",
+        "animate-pulse",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an awaiting iteration keeps counting, with a steady amber dot", () => {
+    renderPanel({
+      status: "awaiting_user",
+      started_at: "2026-01-01T00:00:00Z",
+      awaiting: { cause: "declared", message: "?", since: "2026-01-01T00:01:00Z" },
+    });
+    const dot = screen.getByTestId("iteration-duration-dot");
+    expect(dot).toHaveClass("bg-st-await");
+    expect(dot).not.toHaveClass("animate-pulse");
+  });
+
+  it("the tooltip opens on keyboard focus with the start time and `running`", async () => {
+    renderPanel({ status: "running", started_at: "2026-01-01T00:00:00Z" });
+    const tooltip = await openTooltip();
+    expect(tooltip).toHaveTextContent(`Started${localTime("2026-01-01T00:00:00Z")}`);
+    expect(tooltip).toHaveTextContent("Endedrunning");
+  });
+
+  it("the tooltip of a finished node shows its end time", async () => {
+    renderPanel({
+      status: "completed",
+      started_at: "2026-01-01T00:00:00Z",
+      completed_at: "2026-01-01T00:12:04Z",
+    });
+    const tooltip = await openTooltip();
+    expect(tooltip).toHaveTextContent(`Ended${localTime("2026-01-01T00:12:04Z")}`);
+    expect(tooltip).not.toHaveTextContent("running");
+  });
+
+  it("shows no duration for a node that never started", () => {
+    renderPanel({
+      status: "skipped",
+      started_at: null,
+      cost: {
+        usd: 3.13,
+        form: "derived",
+        partial: false,
+        executions: 1,
+        readable_executions: 1,
+        unavailable_reasons: [],
+      },
+    });
+    expect(screen.queryByTestId("iteration-duration")).toBeNull();
+    // `iter N · cost`: the cost stays.
+    expect(screen.getByTestId("node-cost").parentElement).toHaveTextContent(
+      /^iter 1 · ~\$3\.13$/,
+    );
+  });
+
+  it("leaves no dangling separator when a stopped iteration has no end time", () => {
+    renderPanel({ status: "interrupted", started_at: "2026-01-01T00:00:00Z" });
+    expect(screen.queryByTestId("iteration-duration")).toBeNull();
+    expect(screen.getByText("iter 1").parentElement).toHaveTextContent(/^iter 1$/);
+  });
+
+  describe("on a looped node", () => {
+    const looped: Partial<NodeState> = {
+      iter: 3,
+      status: "running",
+      started_at: "2026-01-01T01:00:00Z",
+      completed_at: null,
+      iterations: [
+        {
+          iter: 1,
+          status: "completed",
+          started_at: "2026-01-01T00:00:00Z",
+          completed_at: "2026-01-01T00:11:45Z",
+        },
+        {
+          iter: 2,
+          status: "failed",
+          started_at: "2026-01-01T00:20:00Z",
+          completed_at: "2026-01-01T00:23:21Z",
+        },
+        // The current iteration's entry without times: the node carries them.
+        { iter: 3, status: "running", started_at: null, completed_at: null },
+      ],
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(new Date("2026-01-01T01:12:04Z"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("the line shows the current iteration by default", () => {
+      renderPanel(looped);
+      expect(screen.getByTestId("iteration-duration")).toHaveTextContent("12m 4s total");
+    });
+
+    it("the menu lists one duration per iteration", async () => {
+      renderPanel(looped);
+      fireEvent.click(screen.getByText(/iter 3/));
+      expect(await screen.findByTestId("iter-option-1")).toHaveTextContent("11m 45s total");
+      expect(screen.getByTestId("iter-option-2")).toHaveTextContent("3m 21s total");
+      expect(screen.getByTestId("iter-option-3")).toHaveTextContent("12m 4s total");
+      // The time range the menu used to show is gone.
+      expect(screen.getByTestId("iter-option-1")).not.toHaveTextContent(
+        localTime("2026-01-01T00:00:00Z"),
+      );
+    });
+
+    it("selecting an earlier iteration updates the duration and the tooltip", async () => {
+      renderPanel(looped);
+      fireEvent.click(screen.getByText(/iter 3/));
+      fireEvent.click(await screen.findByTestId("iter-option-2"));
+      await act(async () => {});
+      const label = screen.getByTestId("iteration-duration");
+      expect(label).toHaveTextContent("3m 21s total");
+      expect(screen.queryByTestId("iteration-duration-dot")).toBeNull();
+      const tooltip = await openTooltip();
+      expect(tooltip).toHaveTextContent(`Started${localTime("2026-01-01T00:20:00Z")}`);
+      expect(tooltip).toHaveTextContent(`Ended${localTime("2026-01-01T00:23:21Z")}`);
+    });
   });
 });

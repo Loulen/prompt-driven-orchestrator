@@ -85,10 +85,12 @@ export function statusSpec(status: StatusKey | string): StatusSpec {
 }
 
 /** The tooltip text: the label, plus the reason when there is one
- *  (« Failed: exit 1 », #503 / #588). */
+ *  (« Failed: exit 1 », #503 / #588). A reason that already opens with the
+ *  label (the daemon writes « Halted: verdict was FAIL ») is not prefixed twice. */
 export function statusTitle(status: StatusKey | string, reason?: string | null): string {
   const { label } = statusSpec(status);
-  return reason ? `${label}: ${reason}` : label;
+  if (!reason) return label;
+  return reason.toLowerCase().startsWith(`${label.toLowerCase()}:`) ? reason : `${label}: ${reason}`;
 }
 
 /** A Run list entry's key: the derived `stalled` flag (#180) overrides the

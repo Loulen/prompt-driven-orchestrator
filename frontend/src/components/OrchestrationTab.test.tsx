@@ -119,4 +119,23 @@ describe("OrchestrationTab child Status icons (#999)", () => {
     expect(icons[4]).toHaveAccessibleName("Paused");
     expect(icons.filter((i) => i.getAttribute("data-status") === "completed")).toHaveLength(1);
   });
+
+  it("puts the child's reason in the tooltip, like the run list and Run info", () => {
+    const children = [
+      child("fail", { status: "failed", failure_reason: "exit 1" }),
+      child("halt", { status: "halted", failure_reason: "Halted: verdict was FAIL" }),
+      child("wait", { status: "awaiting_user", awaiting_reason: "which repo?" }),
+    ];
+    render(
+      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive={false} nodeAwaiting={false} onOpenChild={() => {}} />,
+    );
+    const icons = screen.getAllByTestId("orchestration-child-status");
+    expect(icons.map((i) => i.getAttribute("title"))).toEqual([
+      "Failed: exit 1",
+      "Halted: verdict was FAIL",
+      "Awaiting you: which repo?",
+    ]);
+    // The accessible name stays the bare label.
+    expect(icons[0]).toHaveAccessibleName("Failed");
+  });
 });

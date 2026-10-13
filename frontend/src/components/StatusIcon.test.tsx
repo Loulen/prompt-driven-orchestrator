@@ -95,6 +95,10 @@ describe("STATUS_TABLE (PDO-22)", () => {
     expect(statusTitle("failed", "exit 1")).toBe("Failed: exit 1");
     expect(statusTitle("completed")).toBe("Completed");
     expect(statusTitle("completed", null)).toBe("Completed");
+    // The daemon already prefixes a halt reason (« Halted: verdict was FAIL »).
+    expect(statusTitle("halted", "Halted: verdict was FAIL")).toBe("Halted: verdict was FAIL");
+    expect(statusTitle("halted", "halted: verdict was FAIL")).toBe("halted: verdict was FAIL");
+    expect(statusTitle("failed", "Halted: x")).toBe("Failed: Halted: x");
   });
 });
 
@@ -143,6 +147,13 @@ describe("StatusIcon", () => {
       expect(container.querySelector("svg")).toHaveAttribute("width", String(px));
       unmount();
     }
+  });
+
+  it("pins the glyph to its box with a size-* class, so a host's svg sizing rule cannot inflate it", () => {
+    // Menu items carry `[&_svg:not([class*='size-'])]:size-4` (16 px): the
+    // glyph must match the `size-` exclusion (#999, iteration selector).
+    render(<StatusIcon status="failed" size="xs" testId="icon" />);
+    expect(screen.getByTestId("icon").querySelector("svg")!.getAttribute("class")).toMatch(/(^|\s)size-full(\s|$)/);
   });
 
   it("falls back to pending for an unknown status", () => {

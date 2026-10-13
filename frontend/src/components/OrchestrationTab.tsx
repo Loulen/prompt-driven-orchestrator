@@ -139,7 +139,11 @@ function ChildRow({
       }`}
     >
       <div className="flex items-center gap-1.5">
-        <StatusIcon status={runStatusKey(child)} testId="orchestration-child-status" />
+        <StatusIcon
+          status={runStatusKey(child)}
+          reason={child.failure_reason ?? child.awaiting_reason}
+          testId="orchestration-child-status"
+        />
         <button
           type="button"
           data-testid="orchestration-child-title"

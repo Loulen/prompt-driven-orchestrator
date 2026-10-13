@@ -41,7 +41,9 @@ export default function StatusIcon({ status, reason, size = "sm", decorative = f
         size={px}
         strokeWidth={2.25}
         aria-hidden="true"
-        className={spin ? "motion-safe:animate-[spin_2.4s_linear_infinite]" : undefined}
+        // A `size-*` class pins the glyph to its box: hosts such as a menu item
+        // (`[&_svg:not([class*='size-'])]:size-4`) would otherwise blow it up to 16 px.
+        className={`size-full${spin ? " motion-safe:animate-[spin_2.4s_linear_infinite]" : ""}`}
       />
     </span>
   );

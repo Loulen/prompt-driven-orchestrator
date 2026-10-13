@@ -10,20 +10,30 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.121.0
-**Panneau de node : bascule durée Total / Active et ventilation des attentes** (#980, spec #978).
-Un clic (ou Entrée / Espace) sur la durée de la ligne méta bascule entre `total` et `active` ;
+## 1.122.0
+**Panneau de node : durée de l'itération, bascule Total / Active** (spec #978, story PDO-16),
+validé en recette.
+
+- Bascule Total / Active (#980) : un clic (ou Entrée / Espace) sur la durée de la ligne méta bascule entre `total` et `active` ;
 le choix est mémorisé (`pdo.ui.nodeDurationMode`) et s'applique aussi au menu des itérations.
 Active se fige pendant une attente déclarée (point ambre). Le tooltip ventile Total / Active /
 Waiting, avec une somme exacte à la seconde affichée ; Active peut de ce fait différer d'1 s de
-Stats -> Performance, qui arrondit chaque valeur séparément.
+Stats -> Performance, qui arrondit chaque valeur séparément (écart accepté en recette).
 
-## 1.120.0
-**Panneau de node : durée Total de l'itération sélectionnée** (#979, spec #978).
-La ligne méta affiche `iter N · <durée> total · <coût>` à la place de `started … · ended …` ;
+- Durée Total (#979) : la ligne méta affiche `iter N · <durée> total · <coût>` à la place de `started … · ended …` ;
 la durée défile tant que l'itération tourne. Début et fin passent dans un tooltip (survol ou
 focus clavier). La ligne suit l'itération choisie dans le sélecteur, dont le menu affiche une
 durée par itération.
+
+## 1.121.0
+**Update et What's new depuis Settings** (#983, story PDO-14) : dans Settings › Version &
+update, Update et What's new ferment d'abord Settings (via la garde de brouillon), puis affichent
+la confirmation de mise à jour ou le Changelog seuls à l'écran. Les fermer ramène sur l'app sans
+rouvrir Settings.
+
+## 1.120.0
+Carte Start du canvas d'un Run sans images d'input (#977, PDO-18) : les miniatures et la
+lightbox restent dans l'inspecteur du Start.
 
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les

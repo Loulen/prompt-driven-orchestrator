@@ -430,7 +430,6 @@ function MasterList<T extends AbsorbableRow>({
                 (selectable ? (
                   <SelectControl
                     selected={checked}
-                    dotClass={null}
                     label={`Select ${row.name}`}
                     testId="stats-row-select"
                     onSelect={(event) =>
@@ -515,7 +514,6 @@ function tableSelection(
     control: !selection ? null : selectable ? (
       <SelectControl
         selected={checked}
-        dotClass={null}
         label={`Select ${name}`}
         testId="stats-row-select"
         onSelect={(event) => selection.toggle(id, event.shiftKey, order)}

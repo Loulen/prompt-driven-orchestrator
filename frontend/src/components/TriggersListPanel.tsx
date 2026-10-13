@@ -10,6 +10,7 @@ import { handleSelectionKeydown } from "../lib/selectionKeys";
 import { type BulkItem, type BulkOutcome } from "../lib/bulk";
 import ProjectEditModal from "./ProjectEditModal";
 import SelectControl from "./SelectControl";
+import { triggerStatusKey } from "../lib/statusTable";
 import BulkActionBar from "./BulkActionBar";
 import BulkActionModal from "./BulkActionModal";
 
@@ -33,48 +34,11 @@ interface Props {
   onProjectsChanged?: () => void;
 }
 
-/**
- * Map a Trigger's `last_outcome` to a status-dot color (reuses the run status
- * tokens). No outcome yet ⇒ a neutral "pending" dot.
- */
-function outcomeDot(outcome: string | null | undefined): string {
-  switch (outcome) {
-    case "fired":
-      return "bg-st-done";
-    case "error":
-      return "bg-st-failed";
-    case "skipped-overlap":
-    case "guard-exit-nonzero":
-      return "bg-st-paused";
-    case "guard-error":
-      return "bg-st-blocked";
-    default:
-      return "bg-st-archived";
-  }
-}
-
-/** The `border-*` sibling of {@link outcomeDot} — the dot "goes hollow" in its
- *  own colour on hover (#577). */
-function outcomeRing(outcome: string | null | undefined): string {
-  switch (outcome) {
-    case "fired":
-      return "border-st-done";
-    case "error":
-      return "border-st-failed";
-    case "skipped-overlap":
-    case "guard-exit-nonzero":
-      return "border-st-paused";
-    case "guard-error":
-      return "border-st-blocked";
-    default:
-      return "border-st-archived";
-  }
-}
-
-function lastOutcomeTooltip(t: Trigger): string {
-  if (!t.last_outcome) return "never fired";
-  const when = t.last_fired_at ?? "—";
-  return `last run: ${when}, result: ${t.last_outcome}`;
+/** The reason half of the Status icon tooltip (« Fired: last run … »); a
+ *  Trigger that never fired has nothing to add to its « Never fired » label. */
+function lastOutcomeReason(t: Trigger): string | undefined {
+  if (!t.last_outcome) return undefined;
+  return `last run ${t.last_fired_at ?? "—"}`;
 }
 
 type TriggerBulkKind = "enable" | "disable" | "delete";
@@ -162,7 +126,6 @@ export default function TriggersListPanel({
   function renderTriggerRow(t: Trigger) {
     const isSelected = t.id === selectedTriggerId;
     const rowSelected = selSet.has(t.id);
-    const dot = outcomeDot(t.last_outcome);
     return (
       <button
         key={t.id}
@@ -181,9 +144,9 @@ export default function TriggersListPanel({
       >
         <SelectControl
           selected={rowSelected}
-          dotClass={dot}
-          ringClass={outcomeRing(t.last_outcome)}
-          dotTitle={lastOutcomeTooltip(t)}
+          status={triggerStatusKey(t.last_outcome)}
+          statusReason={lastOutcomeReason(t)}
+          selecting={selSet.size > 0}
           dotTestId="trigger-status-dot"
           label={rowSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
           onSelect={(e) => {

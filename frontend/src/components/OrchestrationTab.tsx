@@ -4,6 +4,8 @@ import { ExternalLink, GitFork } from "lucide-react";
 import type { RunStatus } from "../types";
 import { isLiveRun } from "../types";
 import { formatDuration } from "../lib/runDuration";
+import { type StatusKey } from "../lib/statusTable";
+import StatusIcon from "./StatusIcon";
 import { formatCostAmount } from "../lib/costLabel";
 import {
   childCostKnown,
@@ -33,8 +35,8 @@ function runStatusDot(status: RunStatus): string {
 }
 
 /**
- * The green / red / orange / blue counters (« compteurs d'enfants », #723/#783):
- * a coloured dot with the number beside it. ONE component for the canvas node,
+ * The child counters (« compteurs d'enfants », #723/#783): a Status icon
+ * (completed / failed / stalled / running, PDO-22) with the number beside it. ONE component for the canvas node,
  * the tab header and the run list's parent rows, so the surfaces can never
  * disagree; a zero counter is omitted, and the whole cluster is omitted when
  * there is no child at all (nodes that never orchestrated stay clean).
@@ -60,10 +62,9 @@ export function ChildCountPills({
   clickHint?: string;
 }) {
   if (totalChildren(counts) === 0) return null;
-  const dot = size === "xs" ? 6 : 7;
   const fs = size === "xs" ? 9.5 : 10.5;
   const hint = onClick && clickHint ? ` — ${clickHint}` : "";
-  const item = (n: number, bg: string, label: string, id: string) =>
+  const item = (n: number, status: StatusKey, label: string, id: string) =>
     n > 0 ? (
       <span
         key={id}
@@ -72,17 +73,17 @@ export function ChildCountPills({
         className="inline-flex items-center gap-1 font-mono text-fg-2"
         style={{ fontSize: fs, lineHeight: 1 }}
       >
-        <span className={`inline-block rounded-full ${bg}`} style={{ width: dot, height: dot }} />
+        <StatusIcon status={status} size="xs" decorative />
         {n}
       </span>
     ) : null;
   const label = `${counts.finished} finished, ${counts.failed} failed, ${counts.stale} stale, ${counts.running} running child runs`;
   const body = (
     <>
-      {item(counts.finished, "bg-st-done", "finished", "finished")}
-      {item(counts.failed, "bg-st-failed", "failed", "failed")}
-      {item(counts.stale, "bg-st-stale", "stale", "stale")}
-      {item(counts.running, "bg-st-running", "running", "running")}
+      {item(counts.finished, "completed", "finished", "finished")}
+      {item(counts.failed, "failed", "failed", "failed")}
+      {item(counts.stale, "stalled", "stale", "stale")}
+      {item(counts.running, "running", "running", "running")}
     </>
   );
   if (onClick) {

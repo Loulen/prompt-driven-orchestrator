@@ -3,32 +3,76 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import SelectControl from "./SelectControl";
 
 describe("SelectControl", () => {
-  it("renders the resting status dot with its colour, pulse, tooltip and test id", () => {
+  it("renders the resting Status icon with its label, reason and test id", () => {
     render(
       <SelectControl
         selected={false}
-        dotClass="bg-st-running"
-        pulse
-        dotTitle="still merging"
+        status="running"
+        statusReason="still merging"
         dotTestId="run-status-dot"
         label="Select run"
         onSelect={() => {}}
+        testId="ctrl"
       />,
     );
     const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-running");
-    expect(dot.className).toContain("animate-pulse");
-    expect(dot).toHaveAttribute("title", "still merging");
-    // not selected ⇒ no check glyph
+    expect(dot).toHaveAttribute("role", "img");
+    expect(dot).toHaveAttribute("aria-label", "Running");
+    expect(dot).toHaveAttribute("title", "Running: still merging");
+    // Shown at rest, hidden on row hover (the empty square takes its place).
+    expect(dot.className).toContain("group-hover:hidden");
+    expect(screen.getByTestId("select-square").className).toContain("group-hover:block");
+    expect(screen.getByTestId("select-square").className).toContain("rounded-[2.5px]");
+    // The status stays readable while the glyph is hidden: it rides the control's tooltip.
+    expect(screen.getByTestId("ctrl")).toHaveAttribute("title", "Select run · Running: still merging");
+    // not selected ⇒ no check
     expect(screen.queryByTestId("select-check")).not.toBeInTheDocument();
   });
 
-  it("shows a check (and no status dot) when selected", () => {
+  it("keeps the glyph a sibling of the checkbox so screen readers announce the status", () => {
+    render(<SelectControl selected={false} status="failed" label="Select run" onSelect={() => {}} testId="ctrl" />);
+    const img = screen.getByRole("img", { name: "Failed" });
+    expect(screen.getByTestId("ctrl").contains(img)).toBe(false);
+    expect(screen.getByRole("checkbox", { name: "Select run" })).toBeInTheDocument();
+  });
+
+  it("shows a filled accent square with a check when selected, the glyph only for assistive tech", () => {
     render(
-      <SelectControl selected dotClass="bg-st-done" dotTestId="run-status-dot" label="Deselect run" onSelect={() => {}} />,
+      <SelectControl selected status="completed" dotTestId="run-status-dot" label="Deselect run" onSelect={() => {}} testId="ctrl" />,
     );
-    expect(screen.getByTestId("select-check")).toBeInTheDocument();
-    expect(screen.queryByTestId("run-status-dot")).not.toBeInTheDocument();
+    const check = screen.getByTestId("select-check");
+    expect(check.className).toContain("bg-acc");
+    expect(check.className).toContain("rounded-[2.5px]");
+    expect(check.className).not.toContain("rounded-full");
+    expect(screen.getByTestId("run-status-dot").className).toContain("sr-only");
+    expect(screen.getByTestId("ctrl")).toHaveAttribute("title", "Deselect run · Completed");
+    expect(screen.getByTestId("ctrl")).toHaveAttribute("data-select-mode", "square");
+  });
+
+  it("keeps an unchecked row a visible empty square while the list is in selection mode", () => {
+    render(
+      <SelectControl
+        selected={false}
+        selecting
+        status="failed"
+        statusReason="exit 1"
+        dotTestId="run-status-dot"
+        label="Select run"
+        onSelect={() => {}}
+        testId="ctrl"
+      />,
+    );
+    const square = screen.getByTestId("select-square");
+    expect(square.className).toMatch(/(^|\s)block(\s|$)/);
+    expect(square.className).not.toContain("hidden");
+    expect(screen.getByTestId("run-status-dot").className).toContain("sr-only");
+    expect(screen.getByTestId("ctrl")).toHaveAttribute("title", "Select run · Failed: exit 1");
+  });
+
+  it("has an empty slot at rest for a row with no status", () => {
+    render(<SelectControl selected={false} label="Select pipeline" onSelect={() => {}} testId="ctrl" />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByTestId("ctrl")).toHaveAttribute("title", "Select pipeline");
   });
 
   it("exposes an accessible checkbox reflecting the selected state", () => {

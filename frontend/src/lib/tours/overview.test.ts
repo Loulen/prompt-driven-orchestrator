@@ -148,7 +148,8 @@ const EMPTY_APP: TourAppState = {
   libraryPipelineIds: [],
   runCount: 0,
   runs: [],
-  latestRun: null,
+  launchedRunId: null,
+  myRun: null,
   activeRunId: null,
 };
 
@@ -195,7 +196,8 @@ class FakeApp {
     ...EMPTY_APP,
     runCount: 2,
     runs: [summary({ id: "run-other", name: "other", pipeline: "mine", status: "running" }), summary()],
-    latestRun: { id: "run-other", name: "other", nodes: [] },
+    launchedRunId: "run-other",
+    myRun: { id: "run-other", name: "other", nodes: [] },
   };
   readonly baseline: TourAppState = { ...this.app };
   private dom = new Set<string>([CANVAS, LEFT, RIGHT, RUNS_TAB, RUNS_TAB_OPEN, TRIGGERS_TAB, PIPELINES_TAB, NEW_RUN, RUN_ROW, RUN_SELECT, t("open-settings"), t("open-stats")]);

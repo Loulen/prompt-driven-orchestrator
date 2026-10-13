@@ -8,8 +8,8 @@ function makeNode(overrides: Partial<NodeDef> = {}): NodeDef {
     id: "n1",
     name: "Reviewer",
     type: "agent",
-    inputs: [{ name: "code", repeated: false, side: "left" }],
-    outputs: [{ name: "review", repeated: false, side: "right" }],
+    inputs: [{ name: "code", repeated: false }],
+    outputs: [{ name: "review", repeated: false }],
     interactive: false,
     view: { x: 100, y: 100 },
     ...overrides,
@@ -20,8 +20,8 @@ function makeEntry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
     name: "Reviewer",
     type: "agent",
-    inputs: [{ name: "code", repeated: false, side: "left" }],
-    outputs: [{ name: "review", repeated: false, side: "right" }],
+    inputs: [{ name: "code", repeated: false }],
+    outputs: [{ name: "review", repeated: false }],
     interactive: false,
     prompt: "You review code.",
     ...overrides,
@@ -148,8 +148,8 @@ describe("computeSyncState", () => {
   it("returns diverged when port count differs", () => {
     const node = makeNode({
       inputs: [
-        { name: "code", repeated: false, side: "left" },
-        { name: "extra", repeated: false, side: "left" },
+        { name: "code", repeated: false },
+        { name: "extra", repeated: false },
       ],
     });
     const entries = [makeEntry()];
@@ -158,7 +158,7 @@ describe("computeSyncState", () => {
 
   it("returns diverged when port name differs", () => {
     const node = makeNode({
-      inputs: [{ name: "source", repeated: false, side: "left" }],
+      inputs: [{ name: "source", repeated: false }],
     });
     const entries = [makeEntry()];
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
@@ -166,7 +166,7 @@ describe("computeSyncState", () => {
 
   it("returns diverged when port repeated flag differs", () => {
     const node = makeNode({
-      inputs: [{ name: "code", repeated: true, side: "left" }],
+      inputs: [{ name: "code", repeated: true }],
     });
     const entries = [makeEntry()];
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
@@ -184,14 +184,14 @@ describe("computeSyncState", () => {
         {
           name: "review",
           repeated: false,
-          side: "right",
+          
           frontmatter: { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } },
         },
       ],
     });
     const entries = [
       makeEntry({
-        outputs: [{ name: "review", repeated: false, side: "right" }],
+        outputs: [{ name: "review", repeated: false }],
       }),
     ];
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
@@ -201,13 +201,13 @@ describe("computeSyncState", () => {
     const fm = { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } };
     const node = makeNode({
       outputs: [
-        { name: "review", repeated: false, side: "right", frontmatter: fm },
+        { name: "review", repeated: false, frontmatter: fm },
       ],
     });
     const entries = [
       makeEntry({
         outputs: [
-          { name: "review", repeated: false, side: "right", frontmatter: fm },
+          { name: "review", repeated: false, frontmatter: fm },
         ],
       }),
     ];
@@ -220,14 +220,14 @@ describe("computeSyncState", () => {
         {
           name: "pass",
           repeated: false,
-          side: "right",
+          
           when: { verdict: { eq: "PASS" } },
         },
       ],
     });
     const entries = [
       makeEntry({
-        outputs: [{ name: "pass", repeated: false, side: "right" }],
+        outputs: [{ name: "pass", repeated: false }],
       }),
     ];
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");

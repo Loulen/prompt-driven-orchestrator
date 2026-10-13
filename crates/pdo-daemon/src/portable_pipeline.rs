@@ -224,7 +224,6 @@ mod tests {
         let port = |name: &str| Port {
             name: name.into(),
             repeated: false,
-            side: None,
             port_type: Default::default(),
             frontmatter: None,
             when: None,

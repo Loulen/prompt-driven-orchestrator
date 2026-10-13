@@ -319,7 +319,6 @@ mod tests {
         Port {
             name: name.into(),
             repeated: false,
-            side: None,
             port_type: PortType::Markdown,
             frontmatter: None,
             when: None,
@@ -333,7 +332,6 @@ mod tests {
         Port {
             name: name.into(),
             repeated: true,
-            side: None,
             port_type: PortType::Markdown,
             frontmatter: None,
             when: None,
@@ -347,7 +345,6 @@ mod tests {
         Port {
             name: name.into(),
             repeated: false,
-            side: None,
             port_type: PortType::Markdown,
             frontmatter: Some(schema),
             when: None,
@@ -683,7 +680,6 @@ mod tests {
         Port {
             name: name.into(),
             repeated: false,
-            side: None,
             port_type: PortType::Image,
             frontmatter: None,
             when: None,
@@ -697,7 +693,6 @@ mod tests {
         Port {
             name: name.into(),
             repeated: false,
-            side: None,
             port_type: PortType::ImageList,
             frontmatter: None,
             when: None,
@@ -812,7 +807,6 @@ mod tests {
         Port {
             name: name.into(),
             repeated: false,
-            side: None,
             port_type: PortType::Html,
             frontmatter: None,
             when: None,

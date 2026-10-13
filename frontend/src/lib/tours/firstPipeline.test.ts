@@ -124,8 +124,8 @@ class FakeApp {
           type: "agent",
           interactive: false,
           isolated_worktree: true,
-          inputs: [{ name: "in", repeated: false, side: "left" }],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          inputs: [{ name: "in", repeated: false }],
+          outputs: [{ name: "out", repeated: false }],
         },
       ];
     });
@@ -303,7 +303,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "add-image-port": () => {
       // `handleAddOutput` names it `out-2` (the first free `out-N`).
       fake.updateAgent(1, {
-        outputs: [...fake.agents()[1].outputs, { name: "out-2", repeated: false, side: "right" }],
+        outputs: [...fake.agents()[1].outputs, { name: "out-2", repeated: false }],
       });
       fake.show(shotSlot);
     },

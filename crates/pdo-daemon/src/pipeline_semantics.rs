@@ -39,7 +39,7 @@ use serde::Serialize;
 
 use crate::pipeline::{
     EdgeDef, EdgeEndpoint, EdgeSource, FrontmatterFieldDecl, LoopKind, LoopRegion, NodeDef,
-    NodeType, PipelineDef, Port, PortSide, PortType, VariableDef, VariableType,
+    NodeType, PipelineDef, Port, PortType, VariableDef, VariableType,
 };
 
 /// Fields excluded from the projection, per serializer scope, spelled exactly as
@@ -236,9 +236,6 @@ impl<'a> NodeProjection<'a> {
 struct PortProjection<'a> {
     name: &'a str,
     repeated: bool,
-    /// Semantic, like on the frontend (#355 D5): the node-library star already
-    /// treats port side as identity, so the pipeline diff must agree.
-    side: Option<&'a PortSide>,
     port_type: &'a PortType,
     frontmatter: Option<BTreeMap<&'a str, &'a FrontmatterFieldDecl>>,
     when: Option<serde_json::Value>,
@@ -255,7 +252,6 @@ impl<'a> PortProjection<'a> {
         let Port {
             name,
             repeated,
-            side,
             port_type,
             frontmatter,
             when,
@@ -266,7 +262,6 @@ impl<'a> PortProjection<'a> {
         Self {
             name,
             repeated: *repeated,
-            side: side.as_ref(),
             port_type,
             frontmatter: frontmatter
                 .as_ref()
@@ -567,7 +562,7 @@ mod tests {
     #[test]
     fn formatting_noise_does_not_change_the_projection() {
         // Same document: key order swapped, flow vs block style, quoting changed,
-        // and the port `side` defaults left to the parser on one side only.
+        // and a legacy port `side` on one side only (the parse drops it, PDO-17).
         let block = "name: p\nversion: \"1.0\"\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n        side: bottom\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n        side: left\n";
         let flow = "version: '1.0'\nname: 'p'\nnodes: [{type: start, id: start, name: Start, outputs: [{name: user_prompt, side: bottom}]}, {id: end, type: end, name: End, inputs: [{name: result}]}]\n";
         assert_eq!(canonical(block), canonical(flow));

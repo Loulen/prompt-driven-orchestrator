@@ -1,5 +1,4 @@
 import type { PortDef } from "../types";
-import SidePicker from "./SidePicker";
 import { Tooltip } from "./ui/tooltip";
 
 interface InspectorPortRowProps {
@@ -31,10 +30,6 @@ export default function InspectorPortRow({
         onChange={(e) => onUpdate({ name: e.target.value })}
         className="min-w-0 flex-1 bg-transparent text-fg outline-none"
         style={{ fontSize: "11px" }}
-      />
-      <SidePicker
-        value={port.side ?? "left"}
-        onChange={(s) => onUpdate({ side: s })}
       />
       <Tooltip content="When on, reads all iter-N/<port>.md files (glob) for accumulating histories across loop iterations.">
         <button

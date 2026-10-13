@@ -54,8 +54,8 @@ export default function LibraryDropdown({
         id: newId,
         name: result.spec.name,
         type: result.spec.type as NodeType,
-        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
-        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
+        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p)),
+        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p)),
         interactive: result.spec.interactive,
         // #296/#345: the library is now model-aware — restore the per-node model.
         model: result.spec.model ?? null,

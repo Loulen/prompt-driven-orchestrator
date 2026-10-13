@@ -952,7 +952,6 @@ export interface EdgeTriggerStatus {
 
 export interface PortBrief {
   name: string;
-  side: PortSide;
   description?: string | null;
 }
 
@@ -1457,7 +1456,6 @@ export type PortType = "markdown" | "image" | "image_list" | "html";
 export interface PortDef {
   name: string;
   repeated: boolean;
-  side?: PortSide;
   port_type?: PortType;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
@@ -1596,14 +1594,16 @@ export interface EdgeWaypoint {
  * coarse choice `target_side` already carried; `offset` is the distance ALONG
  * that side, in flow px, measured from the side's start (left→right on
  * `top`/`bottom`, top→bottom on `left`/`right`) and kept at least 10px clear of
- * the corners. An absent anchor means the side's middle — the pre-#844 geometry.
+ * the corners. An absent anchor means the side's middle — the pre-#844 geometry —
+ * and so does an anchor without `offset` (PDO-17): that is what the loader turns
+ * a legacy port `side` into, since the file does not know the card's size.
  *
  * Layout, like `mode`/`waypoints`/`target_side`: persisted in the pipeline file,
  * excluded from the semantic diff (`lib/layoutFields.ts`).
  */
 export interface EdgeAnchor {
   side: PortSide;
-  offset: number;
+  offset?: number;
 }
 
 /**

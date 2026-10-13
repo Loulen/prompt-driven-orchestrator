@@ -264,7 +264,7 @@ describe("pipelinesEquivalent", () => {
             {
               name: "out",
               repeated: false,
-              side: "right",
+              
               frontmatter: { status: { type: "string" }, score: { type: "int" } },
             },
           ],
@@ -278,7 +278,7 @@ describe("pipelinesEquivalent", () => {
             {
               name: "out",
               repeated: false,
-              side: "right",
+              
               frontmatter: { score: { type: "int" }, status: { type: "string" } },
             },
           ],
@@ -299,7 +299,7 @@ describe("pipelinesEquivalent", () => {
             {
               name: "in",
               repeated: false,
-              side: "left",
+              
               port_type: "markdown",
               frontmatter: null,
             },
@@ -308,7 +308,7 @@ describe("pipelinesEquivalent", () => {
       ],
     });
     const b = def({
-      nodes: [node("a", { inputs: [{ name: "in", repeated: false, side: "left" }] })],
+      nodes: [node("a", { inputs: [{ name: "in", repeated: false }] })],
     });
     expect(pipelinesEquivalent(a, b)).toBe(true);
   });
@@ -317,12 +317,12 @@ describe("pipelinesEquivalent", () => {
     const a = def({
       nodes: [
         node("a", {
-          inputs: [{ name: "in", repeated: false, side: "left", port_type: "image" }],
+          inputs: [{ name: "in", repeated: false, port_type: "image" }],
         }),
       ],
     });
     const b = def({
-      nodes: [node("a", { inputs: [{ name: "in", repeated: false, side: "left" }] })],
+      nodes: [node("a", { inputs: [{ name: "in", repeated: false }] })],
     });
     expect(pipelinesEquivalent(a, b)).toBe(false);
   });

@@ -498,7 +498,6 @@ mod tests {
                     inputs: vec![Port {
                         name: "task".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -509,7 +508,6 @@ mod tests {
                     outputs: vec![Port {
                         name: "plan".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -536,7 +534,6 @@ mod tests {
                     inputs: vec![Port {
                         name: "plan".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -547,7 +544,6 @@ mod tests {
                     outputs: vec![Port {
                         name: "summary".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -703,7 +699,6 @@ mod tests {
                     outputs: vec![Port {
                         name: "review".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -730,7 +725,6 @@ mod tests {
                     inputs: vec![Port {
                         name: "reviews".into(),
                         repeated: true,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -741,7 +735,6 @@ mod tests {
                     outputs: vec![Port {
                         name: "code".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -932,7 +925,6 @@ mod tests {
                     outputs: vec![Port {
                         name: "out".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -960,7 +952,6 @@ mod tests {
                     outputs: vec![Port {
                         name: "out".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -987,7 +978,6 @@ mod tests {
                     inputs: vec![Port {
                         name: "docs".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -1079,7 +1069,6 @@ mod tests {
                     outputs: vec![Port {
                         name: "plan".into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -1168,7 +1157,6 @@ mod tests {
                 vec![Port {
                     name: "plan".into(),
                     repeated: false,
-                    side: None,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1254,7 +1242,6 @@ mod tests {
                     vec![Port {
                         name: o.into(),
                         repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -1342,7 +1329,6 @@ mod tests {
                 outputs: vec![Port {
                     name: "report".into(),
                     repeated: false,
-                    side: None,
                     port_type: PortType::Html,
                     frontmatter: None,
                     when: None,

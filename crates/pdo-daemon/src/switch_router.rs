@@ -32,7 +32,7 @@ pub(crate) fn route<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::{NodeDef, NodeType, Port, PortSide, PortType};
+    use crate::pipeline::{NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
 
     fn yaml(s: &str) -> serde_yaml::Value {
@@ -49,7 +49,6 @@ mod tests {
             inputs: vec![Port {
                 name: "in".into(),
                 repeated: false,
-                side: Some(PortSide::Left),
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -74,7 +73,6 @@ mod tests {
         Port {
             name: name.into(),
             repeated: false,
-            side: Some(PortSide::Right),
             port_type: PortType::Markdown,
             frontmatter: None,
             when: Some(yaml(when_yaml)),
@@ -88,7 +86,6 @@ mod tests {
         Port {
             name: "default".into(),
             repeated: false,
-            side: Some(PortSide::Right),
             port_type: PortType::Markdown,
             frontmatter: None,
             when: None,

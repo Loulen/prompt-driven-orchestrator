@@ -9,7 +9,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 
 describe("InspectorPortRow — I1 hairline layout", () => {
   const baseProps = {
-    port: { name: "in", repeated: false, side: "left" as const },
+    port: { name: "in", repeated: false },
     onUpdate: vi.fn(),
     onRemove: vi.fn(),
   };
@@ -67,11 +67,15 @@ describe("InspectorPortRow — I1 hairline layout", () => {
     expect(onUpdate).toHaveBeenCalledWith({ name: "review" });
   });
 
-  it("side picker fires onUpdate with new side", () => {
-    const onUpdate = vi.fn();
-    render(<InspectorPortRow {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
-    fireEvent.click(screen.getByTitle("top"));
-    expect(onUpdate).toHaveBeenCalledWith({ side: "top" });
+  it("has no side picker: a port has no side (PDO-17)", () => {
+    render(<InspectorPortRow {...baseProps} />, { wrapper: Wrapper });
+    for (const side of ["left", "top", "right", "bottom"]) {
+      expect(screen.queryByTitle(side)).toBeNull();
+    }
+    expect(screen.queryByTitle("Handle side")).toBeNull();
+    for (const label of ["L", "T", "R", "B"]) {
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
+    }
   });
 
   it("delete button fires onRemove", () => {

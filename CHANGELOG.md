@@ -10,6 +10,13 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.120.0
+**Panneau de node : durée Total de l'itération sélectionnée** (#979, spec #978).
+La ligne méta affiche `iter N · <durée> total · <coût>` à la place de `started … · ended …` ;
+la durée défile tant que l'itération tourne. Début et fin passent dans un tooltip (survol ou
+focus clavier). La ligne suit l'itération choisie dans le sélecteur, dont le menu affiche une
+durée par itération.
+
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les
 icônes de survol, bouton d'édition d'un Run réduit au crayon, menus Éditer / Save et modale

@@ -42,10 +42,13 @@ import ImageLightbox from "./ImageLightbox";
 import CopyButton from "./CopyButton";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import TmuxTerminal from "./TmuxTerminal";
-import { Tooltip } from "./ui/tooltip";
+import { Tooltip, TooltipProvider } from "./ui/tooltip";
 import { STATUS_BG, STATUS_BORDER, STATUS_DOT, STATUS_TEXT } from "../nodeStyles";
 import { useTerminalOverlayStore } from "../stores/terminalOverlayStore";
 import { formatCostAmount, nodeCostTitle } from "../lib/costLabel";
+import { formatDuration } from "../lib/runDuration";
+import { iterationIsLive, useIterationTotalMs } from "../lib/iterationDuration";
+import type { IterationTiming } from "../lib/iterationDuration";
 import { nodeReviewTarget, reviewUrl } from "../lib/runRefs";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 import {
@@ -589,6 +592,24 @@ export default function NodeDetailPanel({
   const selectedIterStatus =
     node.iterations?.find((i) => i.iter === selectedIter)?.status ?? node.status;
   const selectedIteration = node.iterations?.find((i) => i.iter === selectedIter);
+  // #979: the current iteration's entry may lack its times (a pre-#616 daemon,
+  // a projection racing the node-level fields): the node carries them for it.
+  const iterationsWithTiming = useMemo(
+    () =>
+      (node.iterations ?? []).map((it) =>
+        it.iter === node.iter && !it.started_at
+          ? { ...it, started_at: node.started_at, completed_at: node.completed_at }
+          : it,
+      ),
+    [node.iterations, node.iter, node.started_at, node.completed_at],
+  );
+  const selectedTiming: IterationTiming = iterationsWithTiming.find(
+    (i) => i.iter === selectedIter,
+  ) ?? {
+    status: selectedIterStatus,
+    started_at: selectedIter === node.iter ? node.started_at : null,
+    completed_at: selectedIter === node.iter ? node.completed_at : null,
+  };
   const completionReleased = selectedIteration?.completion_released === true;
   const isReleasing =
     releaseVerdict?.iter === selectedIter && releaseVerdict.kind === "pending";
@@ -844,19 +865,16 @@ export default function NodeDetailPanel({
         >
           {hasMultipleIters ? (
             <IterSelector
-              iterations={node.iterations}
+              iterations={iterationsWithTiming}
               selectedIter={selectedIter}
               onSelect={setSelectedIter}
             />
           ) : (
             <span>iter {node.iter}</span>
           )}
-          {node.started_at && (
-            <span> · started {formatTime(node.started_at)}</span>
-          )}
-          {node.completed_at && (
-            <span> · ended {formatTime(node.completed_at)}</span>
-          )}
+          {/* #979: the Total duration of the SELECTED iteration replaces
+              `started … · ended …`; the times moved to its tooltip. */}
+          <IterationDurationLabel key={selectedIter} timing={selectedTiming} />
           {node.cost && (
             <span data-testid="node-cost" title={nodeCostTitle(node.cost)}>
               {" · "}
@@ -1689,6 +1707,88 @@ const STATUS_DOTS: Record<NodeStatus, string> = {
   interrupted: "bg-st-interrupted",
 };
 
+/** Local times of an iteration, `running` standing in for an end not reached yet. */
+function IterationTimesTooltip({ timing }: { timing: IterationTiming }) {
+  const ended = timing.completed_at
+    ? formatTime(timing.completed_at)
+    : iterationIsLive(timing.status)
+      ? "running"
+      : "—";
+  return (
+    <div
+      className="grid grid-cols-[auto_auto] gap-x-3 font-mono"
+      style={{ fontSize: "10px" }}
+      data-testid="iteration-times"
+    >
+      <span className="text-fg-3">Started</span>
+      <span className="text-right">
+        {timing.started_at ? formatTime(timing.started_at) : "—"}
+      </span>
+      <span className="text-fg-3">Ended</span>
+      <span className="text-right">{ended}</span>
+    </div>
+  );
+}
+
+/**
+ * The meta line's duration (#979, design B1): `● 12m 4s total`. A `<button>` so
+ * the tooltip opens on keyboard focus; the dotted unit reads as a defined term.
+ * `onClick` is the seam #980 plugs the Total / Active switch into. Renders
+ * nothing, separator included, when there is no duration to show.
+ */
+function IterationDurationLabel({
+  timing,
+  onClick,
+}: {
+  timing: IterationTiming;
+  onClick?: () => void;
+}) {
+  const totalMs = useIterationTotalMs(timing);
+  const duration = formatDuration(totalMs);
+  if (duration == null) return null;
+  const dot =
+    timing.status === "running"
+      ? "bg-st-running animate-pulse"
+      : timing.status === "awaiting_user"
+        ? "bg-st-await"
+        : null;
+  return (
+    // A local provider: the panel also renders outside the App's (tests, stories).
+    <TooltipProvider>
+      <span> · </span>
+      <Tooltip content={<IterationTimesTooltip timing={timing} />}>
+        <button
+          type="button"
+          onClick={onClick}
+          data-testid="iteration-duration"
+          className={`group flex items-center gap-1 rounded px-1 py-0.5 font-mono text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2 ${
+            onClick ? "cursor-pointer" : "cursor-default"
+          }`}
+          style={{ fontSize: "10px" }}
+        >
+          {dot && (
+            <span
+              aria-hidden
+              data-testid="iteration-duration-dot"
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`}
+            />
+          )}
+          <span>{duration}</span>{" "}
+          <span className="text-fg-4 underline decoration-fg-4 decoration-dotted underline-offset-2 group-hover:decoration-fg-3">
+            total
+          </span>
+        </button>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+/** An iteration's duration in the IterSelector menu; ticks while it runs. */
+function IterOptionDuration({ timing }: { timing: IterationTiming }) {
+  const duration = formatDuration(useIterationTotalMs(timing));
+  return duration == null ? null : <>{duration} total</>;
+}
+
 function IterSelector({
   iterations,
   selectedIter,
@@ -1730,8 +1830,7 @@ function IterSelector({
               className="ml-auto font-mono text-fg-4"
               style={{ fontSize: "10px" }}
             >
-              {it.started_at ? formatTime(it.started_at) : ""}
-              {it.completed_at ? ` – ${formatTime(it.completed_at)}` : ""}
+              <IterOptionDuration timing={it} />
             </span>
           </DropdownMenuItem>
         ))}

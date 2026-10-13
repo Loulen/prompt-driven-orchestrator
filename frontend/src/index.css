@@ -207,34 +207,36 @@
   --color-on-acc-warn: #fff7ed;
 
   /* PDO status. Done, failed and awaiting are pulled apart for deutan and
-     protan vision (#998): teal, deep red and a brighter amber, measured as an
-     OKLab distance under Machado simulation (severity 1). The amber is
-     amber-700 darkened to #a94e08 so it still holds AA on bg-0. Done is no
+     protan vision (#998): teal, deep red and a burnt amber, measured as an
+     OKLab distance under Machado simulation (severity 1). Each one holds AA
+     as text on its own -bg tint over every surface, not just on white, so
+     the amber and the teal sit darker than amber-700 / teal-700. Done is no
      longer the accent green: the accent stays #03714f, the status moved away.
-     Stale and interrupted each get their own brown, apart from awaiting. */
+     Stale gets a faded brown and interrupted a dark amber, each apart from
+     awaiting and from failed. */
   --color-st-running: #1d4ed8;
   --color-st-running-bg: rgba(29, 78, 216, 0.10);
-  --color-st-await: #a94e08;
-  --color-st-await-bg: rgba(169, 78, 8, 0.10);
-  --color-st-await-border: rgba(169, 78, 8, 0.30);
-  --color-st-done: #0f766e;
-  --color-st-done-bg: rgba(15, 118, 110, 0.10);
-  --color-st-done-hl: rgba(15, 118, 110, 0.24);
+  --color-st-await: #9f4500;
+  --color-st-await-bg: rgba(159, 69, 0, 0.10);
+  --color-st-await-border: rgba(159, 69, 0, 0.30);
+  --color-st-done: #006b64;
+  --color-st-done-bg: rgba(0, 107, 100, 0.10);
+  --color-st-done-hl: rgba(0, 107, 100, 0.24);
   --color-st-blocked: #9a3412;
   --color-st-blocked-bg: rgba(154, 52, 18, 0.10);
-  --color-st-failed: #991b1b;
-  --color-st-failed-bg: rgba(153, 27, 27, 0.10);
-  --color-st-failed-hl: rgba(153, 27, 27, 0.24);
-  --color-st-failed-border: rgba(153, 27, 27, 0.30);
+  --color-st-failed: #7f1d1d;
+  --color-st-failed-bg: rgba(127, 29, 29, 0.10);
+  --color-st-failed-hl: rgba(127, 29, 29, 0.24);
+  --color-st-failed-border: rgba(127, 29, 29, 0.30);
   --color-st-skipped: #475569;
   --color-st-skipped-bg: rgba(71, 85, 105, 0.10);
   --color-st-archived: #4b5563;
   --color-st-stopped: #565e6c;
   --color-st-stopped-bg: rgba(86, 94, 108, 0.10);
-  --color-st-stale: #854d0e;
-  --color-st-stale-bg: rgba(133, 77, 14, 0.10);
-  --color-st-interrupted: #78350f;
-  --color-st-interrupted-bg: rgba(120, 53, 15, 0.10);
+  --color-st-stale: #7b573f;
+  --color-st-stale-bg: rgba(123, 87, 63, 0.10);
+  --color-st-interrupted: #7b410f;
+  --color-st-interrupted-bg: rgba(123, 65, 15, 0.10);
   --color-st-paused: #9a3412;
   --color-st-paused-bg: rgba(154, 52, 18, 0.10);
   --color-st-pending: #767e8c;

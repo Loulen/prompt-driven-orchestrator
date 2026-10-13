@@ -109,9 +109,41 @@ function worstRatio(palette: Record<string, string>, token: string): number {
   return Math.min(...SURFACES.map((surface) => contrastRatio(palette[token], palette[surface])));
 }
 
+/** `rgba(r, g, b, a)` laid over an opaque hex surface, as the browser paints it. */
+function composite(rgba: string, surface: string): string {
+  const match = rgba.match(/^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$/);
+  if (!match) throw new Error(`not an rgba colour: ${rgba}`);
+  const alpha = Number(match[4]);
+  const under = [1, 3, 5].map((i) => parseInt(surface.slice(i, i + 2), 16));
+  return `#${[1, 2, 3]
+    .map((i, k) => Math.round(Number(match[i]) * alpha + under[k] * (1 - alpha)))
+    .map((channel) => channel.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+/**
+ * A status pill paints `text-st-X` on `bg-st-X-bg`, a translucent tint of the
+ * same hue laid on whatever surface holds the pill (#998). The tint darkens the
+ * ground under the words, so the plain-surface check above is not enough.
+ */
+function worstOnOwnTint(palette: Record<string, string>, token: string): number {
+  const tint = palette[`${token}-bg`];
+  return Math.min(
+    ...SURFACES.map((surface) => contrastRatio(palette[token], composite(tint, palette[surface]))),
+  );
+}
+
 describe("light palette (#759)", () => {
   it("holds AA (4.5:1) for every colour that carries text", () => {
     const failures = TEXT.map((token) => [token, worstRatio(light, token)] as const)
+      .filter(([, ratio]) => ratio < AA_TEXT)
+      .map(([token, ratio]) => `${token}: ${ratio.toFixed(2)}`);
+    expect(failures).toEqual([]);
+  });
+
+  it("holds AA (4.5:1) for status text on its own tint, over every surface (#998)", () => {
+    const failures = TEXT.filter((token) => token.startsWith("st-") && `${token}-bg` in light)
+      .map((token) => [token, worstOnOwnTint(light, token)] as const)
       .filter(([, ratio]) => ratio < AA_TEXT)
       .map(([token, ratio]) => `${token}: ${ratio.toFixed(2)}`);
     expect(failures).toEqual([]);

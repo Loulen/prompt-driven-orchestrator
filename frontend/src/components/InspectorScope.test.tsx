@@ -34,8 +34,8 @@ describe("Inspector amber accent scope", () => {
 
     it("keeps the inspector amber in the light theme too", () => {
       const light = indexCss.slice(indexCss.indexOf(':root[data-theme="light"]'));
-      expect(light).toMatch(/--color-st-await-bg:\s*rgba\(169,\s*78,\s*8/);
-      expect(light).toMatch(/--color-st-await-border:\s*rgba\(169,\s*78,\s*8/);
+      expect(light).toMatch(/--color-st-await-bg:\s*rgba\(159,\s*69,\s*0/);
+      expect(light).toMatch(/--color-st-await-border:\s*rgba\(159,\s*69,\s*0/);
     });
 
     it("defines .panel-r with --color-primary-foreground for legible text on amber", () => {

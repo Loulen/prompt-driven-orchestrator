@@ -72,8 +72,8 @@ export default function AgentProfilesPanel({
           Runs already started are untouched — their combination was frozen at spawn.
         </p>
         <div className="mt-auto flex justify-end gap-2 pt-4">
-          <button onClick={() => setDeleting(null)} className="rounded border border-line px-3 py-1 text-fg-3">Cancel</button>
-          <button onClick={confirmDelete} className="rounded bg-st-failed px-3 py-1 text-white">Delete anyway</button>
+          <button onClick={() => setDeleting(null)} className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg">Cancel</button>
+          <button onClick={confirmDelete} className="cursor-pointer rounded-md bg-st-failed px-3 py-1 text-white transition-[filter] hover:brightness-110">Delete anyway</button>
         </div>
       </div>
     );
@@ -99,7 +99,7 @@ export default function AgentProfilesPanel({
                 setError(null);
                 setEditing(profile);
               }}
-              className="mr-3 text-fg-4 hover:text-fg"
+              className="mr-2 cursor-pointer rounded p-1 text-fg-4 transition-colors hover:bg-bg-5 hover:text-fg"
             >
               <Pencil size={11} />
             </button>
@@ -108,7 +108,7 @@ export default function AgentProfilesPanel({
               aria-label={`Delete ${profile.name}`}
               disabled={profile.id === "default"}
               onClick={() => void inspectDelete(profile)}
-              className="text-fg-4 disabled:opacity-25"
+              className="cursor-pointer rounded p-1 text-fg-4 transition-colors enabled:hover:bg-bg-5 enabled:hover:text-st-failed disabled:cursor-not-allowed disabled:opacity-25"
             >
               <Trash2 size={12} />
             </button>
@@ -121,7 +121,7 @@ export default function AgentProfilesPanel({
           setError(null);
           setEditing("new");
         }}
-        className="mt-2 self-start rounded border border-line px-2 py-1 text-fg-2"
+        className="mt-2 self-start cursor-pointer rounded-md border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
         data-testid="agent-profile-new"
       >
         <Plus size={11} className="mr-1 inline" /> New profile

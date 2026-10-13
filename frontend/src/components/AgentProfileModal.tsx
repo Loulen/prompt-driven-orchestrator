@@ -156,7 +156,7 @@ export default function AgentProfileModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded border border-line px-2 py-1 text-fg-3"
+            className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
             data-testid="agent-profile-cancel"
           >
             Cancel
@@ -165,7 +165,7 @@ export default function AgentProfileModal({
             type="button"
             disabled={!canSave}
             onClick={() => void save()}
-            className="rounded bg-acc px-2 py-1 text-bg-1 disabled:opacity-40"
+            className="cursor-pointer rounded-md bg-acc px-2 py-1 text-bg-1 transition-colors enabled:hover:bg-acc-dim disabled:cursor-not-allowed disabled:opacity-40"
             data-testid="agent-profile-save"
           >
             {profile ? "Save profile" : "Create"}

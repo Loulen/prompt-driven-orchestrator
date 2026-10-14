@@ -131,7 +131,7 @@ An interactive node waits for your answer before it goes on: its agent asks, you
 </td>
 <td width="50%">
   <!-- scene: interactive-orchestrator -->
-  <a href="docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/interactive-orchestrator.jpg"><source srcset="docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="docs/assets/readme/interactive-orchestrator.jpg" alt="A node asks a question and waits for you, gets the answer typed in its terminal, then launches two child runs nested under it in the run tree" width="100%" /></picture></a>
+  <a href="docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/interactive-orchestrator.jpg"><source srcset="docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="docs/assets/readme/interactive-orchestrator.jpg" alt="A node asks a question and waits for you, gets the answer clicked in its conversation, then launches two child runs nested under it in the run tree" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

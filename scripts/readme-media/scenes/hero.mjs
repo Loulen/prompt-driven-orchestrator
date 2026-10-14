@@ -27,7 +27,9 @@ import { sleep } from "../lib/demo-instance.mjs";
 import { DEMO_TASK, nodeState, openRun, startDemoRun, stopDemoRun, waitPane, waitRunPassed } from "./_live.mjs";
 
 const VIEWPORT = { width: 1280, height: 760 };
-const LAYOUT = { "pdo.layout.run": { left: 15, center: 42, right: 43 } };
+/** The hero films the agent's live terminal: the inspector, which opens on the
+ *  conversation by default, starts on its Terminal tab (`pdo.nodePanelView`). */
+const LAYOUT = { "pdo.layout.run": { left: 15, center: 42, right: 43 }, "pdo.nodePanelView": "terminal" };
 /** Claude Code is up: its status line names the model (lib/credentials.mjs). */
 const CLAUDE_UP = /Opus 5\.5 · claude-opus-5-5/;
 /** A variant A run of its own, so the two runs never share a rail row. */

@@ -131,7 +131,7 @@ Un nœud interactive attend votre réponse avant de continuer : son agent pose l
 </td>
 <td width="50%">
   <!-- scene: interactive-orchestrator -->
-  <a href="../../docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/interactive-orchestrator.jpg"><source srcset="../../docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="../../docs/assets/readme/interactive-orchestrator.jpg" alt="Un nœud pose une question et vous attend, reçoit la réponse tapée dans son terminal, puis lance deux runs enfants rangés sous lui dans l'arbre de runs" width="100%" /></picture></a>
+  <a href="../../docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/interactive-orchestrator.jpg"><source srcset="../../docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="../../docs/assets/readme/interactive-orchestrator.jpg" alt="Un nœud pose une question et vous attend, reçoit la réponse cliquée dans sa conversation, puis lance deux runs enfants rangés sous lui dans l'arbre de runs" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

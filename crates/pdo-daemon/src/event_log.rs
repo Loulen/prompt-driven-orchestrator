@@ -681,12 +681,22 @@ pub struct AwaitingInfo {
     /// The awaiting child run, for the `child_awaiting` overlay only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_run_id: Option<String>,
+    /// The answers the agent offered (`pdo wait-user --option …`), shown as
+    /// choices above « Reply »; empty for every other wait.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// Several of [`Self::options`] may be picked together (`--multi`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi: bool,
 }
 
 /// Cause slugs of [`AwaitingInfo`].
 pub(crate) const AWAITING_CAUSE_DECLARED: &str = "declared";
 pub(crate) const AWAITING_CAUSE_COMPLETION_NOT_RELEASED: &str = "completion_not_released";
 pub(crate) const AWAITING_CAUSE_CHILD_AWAITING: &str = "child_awaiting";
+/// An interactive node's agent ended its turn (« Reply », its `Stop` hook): the
+/// next move is its human's. Never replaces a wait already declared.
+pub(crate) const AWAITING_CAUSE_TURN_ENDED: &str = "turn_ended";
 
 /// The two Run-branch tips one delivery moved between (#654 / ADR-0060).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2452,11 +2462,26 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         .and_then(|v| v.as_str())
                         .filter(|s| !s.trim().is_empty())
                         .map(str::to_string);
+                    let options = payload
+                        .and_then(|p| p.get("options"))
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|o| o.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let multi = payload
+                        .and_then(|p| p.get("multi"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     node.awaiting = Some(AwaitingInfo {
                         cause,
                         message,
                         since: event.ts.clone(),
                         child_run_id: None,
+                        options,
+                        multi,
                     });
                 }
             }

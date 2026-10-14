@@ -119,6 +119,8 @@ fn effective_awaiting(
                             message: Some(child_awaiting_reason(&child_name)),
                             since: since.unwrap_or_else(crate::event_log::now_iso),
                             child_run_id: Some(child_id),
+                            options: Vec::new(),
+                            multi: false,
                         });
                     }
                 }

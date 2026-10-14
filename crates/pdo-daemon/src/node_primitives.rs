@@ -87,8 +87,8 @@ pub(crate) struct StartNodeSpawn {
     tmux_cmd_override: Option<String>,
     tail: StartNodeTail,
     sandbox: Option<StartNodeSandbox>,
-    /// Arm the turn-end `Stop` hook (already ANDed with `!is_script`).
-    inject_hook: bool,
+    /// The turn-end hooks to arm (already ANDed with `!is_script`).
+    hooks: tmux_session_manager::TurnEndHooks,
 }
 
 /// Owned mirror of [`tmux_session_manager::SessionTail`] — the borrowing enum
@@ -170,7 +170,7 @@ impl StartNodeSpawn {
             self.tmux_cmd_override.as_deref(),
             tail,
             sandbox_wrap.as_ref(),
-            self.inject_hook,
+            self.hooks,
         )
     }
 }
@@ -600,7 +600,11 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         tail,
         sandbox,
         // Gated by `!is_script`: a script node runs bash, so it carries no hook.
-        inject_hook: params.inject_hook && !is_script,
+        // An interactive node also declares its wait at every turn end (« Reply »).
+        hooks: tmux_session_manager::TurnEndHooks {
+            autocomplete: params.inject_hook && !is_script,
+            await_user: node.interactive && !is_script,
+        },
     };
 
     // #588/#810 / ADR-0069 §1: NO `NodeAwaitingUser` at spawn, interactive or
@@ -1257,7 +1261,7 @@ mod tests {
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
         assert!(
-            result.spawn.unwrap().inject_hook,
+            result.spawn.unwrap().hooks.autocomplete,
             "an agent node must arm the Stop hook when the setting is on"
         );
     }
@@ -1377,7 +1381,7 @@ mod tests {
         let result = start_node(&params);
         assert_eq!(result.outcome, PrimitiveOutcome::Executed);
         assert!(
-            !result.spawn.unwrap().inject_hook,
+            !result.spawn.unwrap().hooks.autocomplete,
             "a script node must never arm the Stop hook"
         );
     }

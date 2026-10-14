@@ -1167,6 +1167,7 @@ fn awaiting_cause(payload: Option<&Value>) -> Option<&str> {
 fn opens_declared_wait(cause: &str) -> bool {
     cause == crate::event_log::AWAITING_CAUSE_DECLARED
         || cause == crate::event_log::AWAITING_CAUSE_COMPLETION_NOT_RELEASED
+        || cause == crate::event_log::AWAITING_CAUSE_TURN_ENDED
 }
 
 /// The declared wait of every execution `(node_id, iter)` of one Run, in

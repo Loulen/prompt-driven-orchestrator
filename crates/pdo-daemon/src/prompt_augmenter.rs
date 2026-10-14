@@ -883,7 +883,9 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
          pdo wait-user --message \"<your question, under 100 characters>\"\n\
          ```\n\
          The run turns awaiting-user with your question on its banner; the wait \
-         lifts by itself when the user answers in the PDO terminal. The command \
+         lifts by itself when the user answers. When the answer is a pick among \
+         a few choices, add `--option \"<choice>\"` per choice (and `--multi` if \
+         several may be picked): the user gets them as buttons. The command \
          returns at once — never block or poll for the answer.\n\n",
     );
 

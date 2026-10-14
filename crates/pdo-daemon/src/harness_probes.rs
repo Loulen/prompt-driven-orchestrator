@@ -576,6 +576,13 @@ pub(crate) trait HarnessProbes: Sync {
         false
     }
 
+    /// The node's conversation in this transcript `text`, for the panel's
+    /// Conversation view. `None` (the default) means no reader: the panel falls
+    /// back to the terminal, never to another harness's parse.
+    fn conversation(&self, _text: &str) -> Option<Vec<crate::stale_detector::ConversationEntry>> {
+        None
+    }
+
     /// Whether the captured `pane` shows this harness's usage-limit menu.
     ///
     /// The default is `false` (no anchor ⇒ the wording is proper to another
@@ -723,6 +730,10 @@ impl HarnessProbes for ClaudeProbes {
 
     fn classify_turn_ended(&self, tail: &str) -> bool {
         crate::stale_detector::parse_turn_state(tail) == crate::stale_detector::TurnState::TurnEnded
+    }
+
+    fn conversation(&self, text: &str) -> Option<Vec<crate::stale_detector::ConversationEntry>> {
+        Some(crate::stale_detector::parse_conversation(text))
     }
 
     fn detect_usage_limit(&self, pane: &str) -> bool {
@@ -1140,6 +1151,20 @@ pub(crate) fn turn_ended(harness: &str, tail: &str) -> bool {
     resolved(harness).classify_turn_ended(tail)
 }
 
+/// `harness`'s conversation in this transcript `text`, dispatched to its
+/// implementation (ADR-0051). `None` when PDO has no reader for `harness`.
+pub(crate) fn conversation(
+    harness: &str,
+    text: &str,
+) -> Option<Vec<crate::stale_detector::ConversationEntry>> {
+    resolved(harness).conversation(text)
+}
+
+/// Whether PDO can read `harness`'s conversation at all (an empty probe answers).
+pub(crate) fn can_read_conversation(harness: &str) -> bool {
+    resolved(harness).conversation("").is_some()
+}
+
 /// Whether `harness`'s usage-limit menu is showing in this `pane`, dispatched to
 /// its implementation (ADR-0051). A harness with no anchor answers `false`.
 pub(crate) fn usage_limit_shown(harness: &str, pane: &str) -> bool {
@@ -1230,12 +1255,35 @@ const PI_TURN_END_INJECTION: TurnEndInjection = TurnEndInjection {
 ///
 /// One switch governs every harness: the caller checks `autocomplete_turn_end` once,
 /// then asks here what the harness takes — no `pi`-specific setting.
-pub(crate) fn turn_end_injection(harness: &str) -> Option<TurnEndInjection> {
+///
+/// `hooks.await_user` (an interactive node, « Reply ») is honoured on the claude
+/// `Stop` hook only: the claude file then declares the wait at turn end, alone or
+/// after the auto-completion attempt. `pi` takes its extension for
+/// auto-completion and nothing for the wait — its agents declare it themselves
+/// (`pdo wait-user`), the harness-neutral path of ADR-0069.
+pub(crate) fn turn_end_injection(
+    harness: &str,
+    hooks: crate::tmux_session_manager::TurnEndHooks,
+) -> Option<TurnEndInjection> {
+    let claude = || {
+        let body = match (hooks.autocomplete, hooks.await_user) {
+            (true, false) => crate::tmux_session_manager::STOP_HOOK_SETTINGS_JSON,
+            (false, true) => crate::tmux_session_manager::TURN_END_WAIT_HOOK_SETTINGS_JSON,
+            (true, true) => crate::tmux_session_manager::STOP_THEN_WAIT_HOOK_SETTINGS_JSON,
+            (false, false) => return None,
+        };
+        Some(TurnEndInjection {
+            body,
+            ..CLAUDE_TURN_END_INJECTION
+        })
+    };
     match probes_for(harness) {
-        None => Some(CLAUDE_TURN_END_INJECTION),
+        None => claude(),
         Some(p) => match p.turn_end_substrate() {
-            Some(TurnEndSubstrate::ClaudeTranscript) => Some(CLAUDE_TURN_END_INJECTION),
-            Some(TurnEndSubstrate::PiAgentSettled) => Some(PI_TURN_END_INJECTION),
+            Some(TurnEndSubstrate::ClaudeTranscript) => claude(),
+            Some(TurnEndSubstrate::PiAgentSettled) => {
+                hooks.autocomplete.then_some(PI_TURN_END_INJECTION)
+            }
             Some(TurnEndSubstrate::CopilotEventJournal) | None => None,
         },
     }
@@ -1670,18 +1718,24 @@ mod tests {
         assert!(resolve_transcript(PI, &store, wd, Some("missing")).is_none());
     }
 
+    const AUTO: crate::tmux_session_manager::TurnEndHooks =
+        crate::tmux_session_manager::TurnEndHooks {
+            autocomplete: true,
+            await_user: false,
+        };
+
     #[test]
     fn turn_end_injection_is_read_off_the_substrate_never_the_name() {
         // #707: claude takes its Stop-hook JSON, pi its agent_settled extension,
         // copilot nothing (no hole, journal substrate), a data-declared harness the
         // claude file (pre-#705 behaviour: hole ⇒ file).
-        let claude = turn_end_injection(CLAUDE).expect("claude is injected");
+        let claude = turn_end_injection(CLAUDE, AUTO).expect("claude is injected");
         assert_eq!(claude.suffix, ".settings.json");
         assert_eq!(
             claude.body,
             crate::tmux_session_manager::STOP_HOOK_SETTINGS_JSON
         );
-        let pi = turn_end_injection(PI).expect("pi is injected");
+        let pi = turn_end_injection(PI, AUTO).expect("pi is injected");
         assert_eq!(pi.suffix, ".turn-end.ts");
         assert_eq!(pi.body, crate::pi_session::TURN_END_EXTENSION_TS);
         assert!(pi.body.contains("agent_settled"));
@@ -1689,15 +1743,60 @@ mod tests {
             claude.suffix, pi.suffix,
             "distinct files, idempotent rewrites"
         );
-        assert_eq!(turn_end_injection(COPILOT), None);
+        assert_eq!(turn_end_injection(COPILOT, AUTO), None);
         // `opencode` and a user's descriptor have no probes: the hole-means-file
         // pre-#705 behaviour (inert for opencode, whose templates carry no hole).
-        assert_eq!(turn_end_injection(OPENCODE), Some(claude));
+        assert_eq!(turn_end_injection(OPENCODE, AUTO), Some(claude));
         assert_eq!(
-            turn_end_injection("my-claude-wrapper"),
+            turn_end_injection("my-claude-wrapper", AUTO),
             Some(claude),
             "a data-declared harness keeps the claude hook"
         );
+    }
+
+    #[test]
+    fn an_interactive_node_takes_the_wait_hook_on_claude_only() {
+        use crate::tmux_session_manager::{
+            TurnEndHooks, STOP_THEN_WAIT_HOOK_SETTINGS_JSON, TURN_END_WAIT_HOOK_SETTINGS_JSON,
+        };
+        let wait = TurnEndHooks {
+            autocomplete: false,
+            await_user: true,
+        };
+        let both = TurnEndHooks {
+            autocomplete: true,
+            await_user: true,
+        };
+        let claude = turn_end_injection(CLAUDE, wait).expect("claude carries the wait hook");
+        assert_eq!(claude.suffix, ".settings.json");
+        assert_eq!(claude.body, TURN_END_WAIT_HOOK_SETTINGS_JSON);
+        assert_eq!(
+            turn_end_injection(CLAUDE, both).unwrap().body,
+            STOP_THEN_WAIT_HOOK_SETTINGS_JSON
+        );
+        assert_eq!(turn_end_injection(CLAUDE, TurnEndHooks::default()), None);
+        // pi declares its own wait: the wait alone injects nothing there.
+        assert_eq!(turn_end_injection(PI, wait), None);
+        assert_eq!(
+            turn_end_injection(PI, both).unwrap().body,
+            crate::pi_session::TURN_END_EXTENSION_TS
+        );
+        for json in [
+            TURN_END_WAIT_HOOK_SETTINGS_JSON,
+            STOP_THEN_WAIT_HOOK_SETTINGS_JSON,
+        ] {
+            let v: serde_json::Value = serde_json::from_str(json).expect("valid settings JSON");
+            let cmd = v["hooks"]["Stop"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap();
+            assert!(
+                cmd.contains("pdo wait-user --turn-end") && cmd.ends_with("; exit 0"),
+                "{cmd}"
+            );
+            let ask = &v["hooks"]["PreToolUse"][0];
+            assert_eq!(ask["matcher"], "AskUserQuestion");
+            assert_eq!(ask["hooks"][0]["command"], "pdo ask-user");
+        }
     }
 
     #[test]

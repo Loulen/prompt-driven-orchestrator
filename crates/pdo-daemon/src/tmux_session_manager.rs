@@ -357,6 +357,44 @@ fn wrap_with_env(
 /// exports `wrap_with_env` set, so no env has to be threaded into the JSON.
 pub(crate) const STOP_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"pdo complete --auto; exit 0"}]}]}}"#;
 
+/// The settings injected via `--settings` on an **interactive** node (« Reply »):
+/// every turn end declares the wait on the user, cause `turn_ended` — in an
+/// interactive node, an agent that hands its turn back is waiting for its human
+/// by construction. `pdo wait-user --turn-end` never replaces a wait already
+/// declared (the agent's own question, a refused completion), and the `; exit 0`
+/// keeps the hook from ever forcing the turn on (same rule as the `Stop` hook of
+/// [`STOP_HOOK_SETTINGS_JSON`]). Output is silenced: the user reads the banner,
+/// not the hook.
+///
+/// It also carries the `PreToolUse` hook on `AskUserQuestion` (ADR-0081): the
+/// agent's own question tool is answered from the node panel through
+/// `pdo ask-user`. Its 24 h timeout is the longest a question waits for the
+/// panel; past it, or on any failure of the hook, Claude's menu shows in the
+/// terminal as it always did.
+pub(crate) const TURN_END_WAIT_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"pdo wait-user --turn-end >/dev/null 2>&1; exit 0"}]}],"PreToolUse":[{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"pdo ask-user","timeout":86400}]}]}}"#;
+
+/// Both turn-end hooks on one interactive node with auto-completion on, as ONE
+/// command: Claude runs a `Stop` event's hooks in parallel, so the order lives in
+/// the shell. A granted completion ends there; a refusal (exit 3 — completion not
+/// released, outputs missing) falls through to the wait.
+pub(crate) const STOP_THEN_WAIT_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"pdo complete --auto || pdo wait-user --turn-end >/dev/null 2>&1; exit 0"}]}],"PreToolUse":[{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"pdo ask-user","timeout":86400}]}]}}"#;
+
+/// Which turn-end hooks a session carries: auto-completion (#433, ADR-0043, the
+/// `autocomplete_turn_end` setting) and the wait on the user of an interactive
+/// node (« Reply »). A `script` node carries neither.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TurnEndHooks {
+    pub autocomplete: bool,
+    pub await_user: bool,
+}
+
+impl TurnEndHooks {
+    /// Whether anything must be injected at all.
+    pub fn any(self) -> bool {
+        self.autocomplete || self.await_user
+    }
+}
+
 /// The settings injected via `--settings` to arm the library assistant's
 /// `UserPromptSubmit` hook (#594, ADR-0051 §3).
 ///
@@ -762,7 +800,7 @@ pub fn spawn(
     tmux_cmd_override: Option<&str>,
     tail: SessionTail<'_>,
     sandbox: Option<&SandboxWrap<'_>>,
-    inject_hook: bool,
+    hooks: TurnEndHooks,
 ) -> Result<()> {
     let prompt_dir = working_dir.join(".pdo").join("prompts");
     std::fs::create_dir_all(&prompt_dir)?;
@@ -793,8 +831,8 @@ pub fn spawn(
     // `autocomplete_turn_end`) governs all of them; off ⇒ no file, and the token
     // (`--settings` / `-e`) drops at render.
     let settings_path = match &tail {
-        SessionTail::Agent { harness, .. } if inject_hook && harness.has_settings_hole() => {
-            match crate::harness_probes::turn_end_injection(&harness.name) {
+        SessionTail::Agent { harness, .. } if hooks.any() && harness.has_settings_hole() => {
+            match crate::harness_probes::turn_end_injection(&harness.name, hooks) {
                 Some(injection) => {
                     let p = prompt_dir.join(format!("{node_id}-iter-{iter}{}", injection.suffix));
                     std::fs::write(&p, injection.body)?;
@@ -1015,7 +1053,7 @@ pub fn resume(
     session_id: Option<&str>,
     tmux_cmd_override: Option<&str>,
     sandbox: Option<&SandboxWrap<'_>>,
-    inject_hook: bool,
+    hooks: TurnEndHooks,
 ) -> Result<()> {
     // #433 / ADR-0043 (D7): a resumed session must re-carry the `Stop` hook.
     // Re-write the settings file (idempotent; same path `spawn` used) and
@@ -1028,8 +1066,8 @@ pub fn resume(
     // file is the one its substrate takes (`harness_probes::turn_end_injection`) —
     // a resumed `pi` node re-arms its `agent_settled` extension (ADR-0043 D7: the
     // primary substrate must survive a resume), never the claude JSON.
-    let settings_path = if inject_hook && descriptor.has_settings_hole() {
-        match crate::harness_probes::turn_end_injection(&descriptor.name) {
+    let settings_path = if hooks.any() && descriptor.has_settings_hole() {
+        match crate::harness_probes::turn_end_injection(&descriptor.name, hooks) {
             Some(injection) => {
                 let prompt_dir = working_dir.join(".pdo").join("prompts");
                 std::fs::create_dir_all(&prompt_dir)?;
@@ -1149,6 +1187,22 @@ fn paste_text(socket: &str, session_name: &str, text: &str) {
     let _ = tmux(socket)
         .args(["send-keys", "-t", session_name, "Enter"])
         .output();
+}
+
+/// Paste a **user's** reply into a harness session as one bracketed paste and
+/// submit it (« Reply » in the node panel): verbatim, **no** runtime prefix —
+/// the words are the user's, written on their gesture, so the Steering counter
+/// counts the turn as theirs (#792). `false` when tmux refused the buffer, the
+/// paste or the Enter.
+pub fn paste_user_message(socket: &str, session_name: &str, text: &str) -> bool {
+    if !paste_without_enter(socket, session_name, text) {
+        return false;
+    }
+    tmux(socket)
+        .args(["send-keys", "-t", session_name, "Enter"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// Paste `text` verbatim into a session's input as one bracketed paste and
@@ -3824,7 +3878,10 @@ mod tests {
                 session_id: None,
             },
             None,
-            inject_hook,
+            TurnEndHooks {
+                autocomplete: inject_hook,
+                await_user: false,
+            },
         );
         let prompts = wd.path().join(".pdo").join("prompts");
         let settings_json = prompts.join("n-iter-1.settings.json");

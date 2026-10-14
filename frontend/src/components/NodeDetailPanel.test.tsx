@@ -36,6 +36,14 @@ const previewProvisioningMock = vi.fn().mockResolvedValue({
 const markNodeDoneMock = vi.fn().mockResolvedValue({ kind: "completed" });
 const releaseNodeCompletionMock = vi.fn().mockResolvedValue({ kind: "released" });
 const fetchArtifactMock = vi.fn();
+const sendNodeReplyMock = vi.fn().mockResolvedValue({ ok: true });
+const answerNodeQuestionMock = vi.fn().mockResolvedValue({ ok: true });
+const fetchNodeConversationMock = vi.fn().mockResolvedValue({
+  iter: 1,
+  harness: "claude",
+  supported: true,
+  entries: [],
+});
 
 vi.mock("../api", () => ({
   fetchPrompt: (...args: unknown[]) => fetchPromptMock(...args),
@@ -51,8 +59,18 @@ vi.mock("../api", () => ({
   previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
   startNode: (...args: unknown[]) => startNodeMock(...args),
   attachSession: vi.fn(),
+  sendNodeReply: (...args: unknown[]) => sendNodeReplyMock(...args),
+  fetchNodeConversation: (...args: unknown[]) => fetchNodeConversationMock(...args),
+  answerNodeQuestion: (...args: unknown[]) => answerNodeQuestionMock(...args),
+  ApiError: class ApiError extends Error {},
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
+
+// Most suites here drive the terminal: pin the per-browser view to it. The
+// Conversation view's own suite flips it back.
+beforeEach(() => {
+  localStorage.setItem("pdo.nodePanelView", "terminal");
+});
 
 function MockTmuxTerminal({
   session,
@@ -2008,6 +2026,322 @@ describe("NodeDetailPanel", () => {
   // gesture, and must never blink out. Before this issue `markNodeDone` was mocked
   // as a bare `vi.fn()` resolving `undefined`, so not one of these paths had ever
   // been exercised.
+  describe("conversation view", () => {
+    beforeEach(() => {
+      localStorage.removeItem("pdo.nodePanelView");
+      fetchNodeConversationMock.mockReset().mockResolvedValue({
+        iter: 1,
+        harness: "claude",
+        supported: true,
+        entries: [
+          { kind: "brief", text: "# PDO Runtime Preamble" },
+          { kind: "agent", text: "Reading the repo.", ts: null },
+          {
+            kind: "activity",
+            steps: [
+              { tool: "Bash", detail: "List files" },
+              { tool: "Read", detail: "README.md" },
+            ],
+            ts: null,
+          },
+          { kind: "agent", text: "**Strip** or card?", ts: null },
+          { kind: "user", text: "Card", ts: null, runtime: false },
+          { kind: "user", text: "[pdo-runtime] output missing", ts: null, runtime: true },
+        ],
+      });
+    });
+
+    const renderLive = () =>
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
+        </TooltipProvider>,
+      );
+
+    it("is the default: the conversation replaces the terminal", async () => {
+      renderLive();
+      expect(await screen.findAllByTestId("conversation-agent")).toHaveLength(2);
+      expect(screen.queryByTestId("tmux-terminal")).toBeNull();
+      expect(screen.getByTestId("node-view-conversation")).toHaveAttribute("aria-selected", "true");
+      expect(fetchNodeConversationMock).toHaveBeenCalledWith("run-1", "test-node", 1);
+      // The agent speaks markdown; the user's own words stay as typed.
+      expect(screen.getByText("Strip").tagName).toBe("STRONG");
+      expect(screen.getByTestId("conversation-user")).toHaveTextContent("Card");
+      expect(screen.getByTestId("conversation-runtime")).toHaveTextContent("PDO: output missing");
+      expect(screen.getByTestId("node-reply-box")).toBeInTheDocument();
+    });
+
+    it("folds the tool calls and PDO's instructions until opened", async () => {
+      renderLive();
+      const activity = await screen.findByTestId("conversation-activity");
+      expect(activity).toHaveTextContent("Bash · List files");
+      expect(activity).toHaveTextContent("+1");
+      expect(within(activity).queryByText(/README.md/)).toBeNull();
+      fireEvent.click(within(activity).getByRole("button"));
+      expect(within(activity).getByText(/README.md/)).toBeInTheDocument();
+
+      const brief = screen.getByTestId("conversation-brief");
+      expect(within(brief).queryByText(/Runtime Preamble/)).toBeNull();
+      fireEvent.click(within(brief).getByRole("button"));
+      expect(within(brief).getByText(/Runtime Preamble/)).toBeInTheDocument();
+    });
+
+    it("switches to the terminal and remembers it in this browser", async () => {
+      const { unmount } = renderLive();
+      await screen.findAllByTestId("conversation-agent");
+      fireEvent.click(screen.getByTestId("node-view-terminal"));
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.queryByTestId("conversation-view")).toBeNull();
+      expect(localStorage.getItem("pdo.nodePanelView")).toBe("terminal");
+      unmount();
+      renderLive();
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+
+    const questions = [
+      {
+        question: "What kind of product is it?",
+        header: "Product",
+        multiSelect: false,
+        options: [
+          { label: "Web app", description: "In a browser" },
+          { label: "Mobile app", description: "iOS / Android" },
+        ],
+      },
+      {
+        question: "Who reads the docs?",
+        header: "Audience",
+        multiSelect: true,
+        options: [{ label: "Developers" }, { label: "Investors" }],
+      },
+    ];
+    const withQuestion = (
+      answered: boolean,
+      answers: Record<string, string> | null = null,
+      held = true,
+    ) =>
+      fetchNodeConversationMock.mockResolvedValue({
+        iter: 1,
+        harness: "claude",
+        supported: true,
+        entries: [
+          {
+            kind: "question",
+            tool_use_id: "toolu_q1",
+            questions,
+            answered,
+            answers,
+            ts: null,
+            held,
+          },
+        ],
+      });
+
+    it("answers the agent's own questions from the card", async () => {
+      answerNodeQuestionMock.mockClear();
+      withQuestion(false);
+      renderLive();
+      const card = await screen.findByTestId("conversation-question");
+      expect(card).toHaveAttribute("data-open", "true");
+      expect(card).toHaveTextContent("YOUR INPUT NEEDED");
+      const submit = within(card).getByTestId("conversation-question-submit");
+      expect(submit).toBeDisabled();
+
+      const [webApp, mobile, devs, investors] = within(card).getAllByTestId(
+        "conversation-question-option",
+      );
+      // Single choice: a second pick replaces the first.
+      fireEvent.click(webApp);
+      fireEvent.click(mobile);
+      expect(webApp).toHaveAttribute("aria-pressed", "false");
+      expect(mobile).toHaveAttribute("aria-pressed", "true");
+      // Multi choice: picks add up, and the user's own words follow them.
+      fireEvent.click(devs);
+      fireEvent.click(investors);
+      fireEvent.change(within(card).getAllByTestId("conversation-question-other")[1], {
+        target: { value: "and my co-founder" },
+      });
+      expect(submit).toBeEnabled();
+      fireEvent.click(submit);
+      expect(answerNodeQuestionMock).toHaveBeenCalledWith("run-1", "test-node", 1, "toolu_q1", {
+        "What kind of product is it?": "Mobile app",
+        "Who reads the docs?": "Developers, Investors, and my co-founder",
+      });
+      await waitFor(() => expect(card).toHaveTextContent(/Sent/));
+      expect(within(card).queryByTestId("conversation-question-submit")).toBeNull();
+    });
+
+    it("sends a question no hook holds to the terminal, never offering a submit", async () => {
+      withQuestion(false, null, false);
+      renderLive();
+      const card = await screen.findByTestId("conversation-question");
+      expect(card).not.toHaveAttribute("data-open");
+      expect(within(card).queryByTestId("conversation-question-submit")).toBeNull();
+      expect(card).toHaveTextContent("Web app · Mobile app");
+      fireEvent.click(within(card).getByRole("button", { name: "Open the terminal" }));
+      expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
+    });
+
+    it("shows what was answered once the tool returned", async () => {
+      withQuestion(true, { "What kind of product is it?": "Web app" });
+      renderLive();
+      const card = await screen.findByTestId("conversation-question");
+      expect(card).not.toHaveAttribute("data-open");
+      expect(within(card).queryByTestId("conversation-question-option")).toBeNull();
+      const [product, audience] = within(card).getAllByTestId("conversation-question-item");
+      expect(product).toHaveTextContent("Web app");
+      expect(audience).toHaveTextContent("Answered");
+    });
+
+    it("falls back to the terminal on a harness PDO cannot read", async () => {
+      fetchNodeConversationMock.mockResolvedValue({
+        iter: 1,
+        harness: "opencode",
+        supported: false,
+        entries: [],
+      });
+      renderLive();
+      expect(await screen.findByTestId("tmux-terminal")).toBeInTheDocument();
+      expect(screen.queryByTestId("node-view-switch")).toBeNull();
+    });
+  });
+
+  describe("reply box", () => {
+    beforeEach(() => {
+      sendNodeReplyMock.mockReset().mockResolvedValue({ ok: true });
+    });
+
+    const renderPanel = (node: NodeState, isArchived = false) =>
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={node} runId="run-1" isArchived={isArchived} />
+        </TooltipProvider>,
+      );
+
+    it("sends the text to the node's current iteration and clears on success", async () => {
+      renderPanel(makeNode({ status: "running", iter: 2 }));
+      const input = screen.getByTestId("node-reply-input");
+      expect(screen.getByTestId("node-reply-send")).toBeDisabled();
+
+      fireEvent.change(input, { target: { value: "Add acceptance criteria to section 3" } });
+      fireEvent.click(screen.getByTestId("node-reply-send"));
+
+      expect(sendNodeReplyMock).toHaveBeenCalledWith(
+        "run-1",
+        "test-node",
+        2,
+        "Add acceptance criteria to section 3",
+      );
+      await waitFor(() => expect(input).toHaveValue(""));
+      expect(screen.getByTestId("node-reply-status")).toHaveTextContent(/Sent/);
+    });
+
+    it("sends on Ctrl+Enter, never on a bare Enter", () => {
+      renderPanel(makeNode({ status: "running" }));
+      const input = screen.getByTestId("node-reply-input");
+      fireEvent.change(input, { target: { value: "line one" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(sendNodeReplyMock).not.toHaveBeenCalled();
+      fireEvent.keyDown(input, { key: "Enter", ctrlKey: true });
+      expect(sendNodeReplyMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the text and says why when the daemon refuses", async () => {
+      sendNodeReplyMock.mockRejectedValueOnce(new Error("node has no live session; nothing written"));
+      renderPanel(makeNode({ status: "running" }));
+      const input = screen.getByTestId("node-reply-input");
+      fireEvent.change(input, { target: { value: "hello" } });
+      fireEvent.click(screen.getByTestId("node-reply-send"));
+      await waitFor(() =>
+        expect(screen.getByTestId("node-reply-status")).toHaveTextContent(/no live session/),
+      );
+      expect(input).toHaveValue("hello");
+    });
+
+    it("asks for attention while the agent waits for an answer", () => {
+      renderPanel(
+        makeNode({
+          status: "awaiting_user",
+          awaiting: { cause: "declared", message: "Strip or card?", since: "2026-09-12T10:00:00Z" },
+        }),
+      );
+      expect(screen.getByTestId("node-reply-box")).toHaveAttribute("data-awaiting", "true");
+      expect(screen.getByTestId("node-reply-input")).toHaveAttribute(
+        "placeholder",
+        "Answer the agent…",
+      );
+    });
+
+    const waitingWith = (awaiting: NodeState["awaiting"]) =>
+      makeNode({ status: "awaiting_user", awaiting });
+
+    it("sends an offered option with one click", async () => {
+      renderPanel(
+        waitingWith({
+          cause: "declared",
+          message: "Strip or card?",
+          since: "2026-09-12T10:00:00Z",
+          options: ["Strip", "Card"],
+        }),
+      );
+      const options = screen.getAllByTestId("node-reply-option");
+      expect(options.map((o) => o.textContent)).toEqual(["Strip", "Card"]);
+      expect(screen.queryByTestId("node-reply-options-send")).toBeNull();
+      fireEvent.click(options[1]);
+      expect(sendNodeReplyMock).toHaveBeenCalledWith("run-1", "test-node", 1, "Card");
+      await waitFor(() =>
+        expect(screen.getByTestId("node-reply-status")).toHaveTextContent(/Sent/),
+      );
+    });
+
+    it("lets several options be picked, then sends them together", () => {
+      renderPanel(
+        waitingWith({
+          cause: "declared",
+          message: "What should v1 accept?",
+          since: "2026-09-12T10:00:00Z",
+          options: ["PDF invoices", "Images", "Email"],
+          multi: true,
+        }),
+      );
+      const [pdf, images] = screen.getAllByTestId("node-reply-option");
+      const sendPicked = screen.getByTestId("node-reply-options-send");
+      expect(sendPicked).toBeDisabled();
+      fireEvent.click(pdf);
+      fireEvent.click(images);
+      expect(pdf).toHaveAttribute("aria-pressed", "true");
+      expect(sendNodeReplyMock).not.toHaveBeenCalled();
+      expect(sendPicked).toHaveTextContent("Send 2 selected");
+      fireEvent.click(sendPicked);
+      expect(sendNodeReplyMock).toHaveBeenCalledWith(
+        "run-1",
+        "test-node",
+        1,
+        "PDF invoices, Images",
+      );
+    });
+
+    it("asks for attention when the agent's turn ended, with no options to show", () => {
+      renderPanel(waitingWith({ cause: "turn_ended", since: "2026-09-12T10:00:00Z" }));
+      expect(screen.getByTestId("node-reply-box")).toHaveAttribute("data-awaiting", "true");
+      expect(screen.queryByTestId("node-reply-options")).toBeNull();
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
+        "The agent finished its turn and waits for you",
+      );
+      expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(
+        /above the reply box/,
+      );
+    });
+
+    it("is absent where no message can reach the agent", () => {
+      const { unmount } = renderPanel(makeNode({ status: "completed" }));
+      expect(screen.queryByTestId("node-reply-box")).toBeNull();
+      unmount();
+      renderPanel(makeNode({ status: "running" }), true);
+      expect(screen.queryByTestId("node-reply-box")).toBeNull();
+    });
+  });
+
   describe("declared wait banner (#588 / ADR-0069)", () => {
     const awaitingNode = (awaiting: NodeState["awaiting"], over?: Partial<NodeState>) =>
       makeNode({
@@ -2026,7 +2360,7 @@ describe("NodeDetailPanel", () => {
         ...over,
       });
 
-    it("shows the agent's question verbatim with the Enter hint (A1)", () => {
+    it("shows the agent's question verbatim and points at the reply box (A1)", () => {
       render(
         <TooltipProvider>
           <NodeDetailPanel
@@ -2047,14 +2381,15 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("awaiting-banner-message")).toHaveTextContent(
         "Which layout: strip or card?",
       );
-      expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(/press Enter/);
+      expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(/reply box below/);
       expect(screen.getByTestId("awaiting-banner-since")).toHaveTextContent(/waiting/);
       // The completion buttons stay the only other interactive marker.
       expect(screen.getByTestId("release-completion-btn")).not.toHaveAttribute("data-primary");
     });
 
-    // #870: a spectator's Enter reaches nothing until it takes control.
-    it("tells a spectator to take control to reply, and the pilot to reply below", () => {
+    // #870: a spectator's Enter reaches nothing until it takes control — but
+    // the reply box does, so both are pointed at it.
+    it("points pilot and spectator at the reply box, the spectator at taking control too", () => {
       render(
         <TooltipProvider>
           <NodeDetailPanel
@@ -2068,19 +2403,18 @@ describe("NodeDetailPanel", () => {
         </TooltipProvider>,
       );
       const hint = () => screen.getByTestId("awaiting-banner-hint");
-      expect(hint()).toHaveTextContent(/Reply in the terminal below/);
-      expect(hint()).not.toHaveTextContent(/take control to reply/);
+      expect(hint()).toHaveTextContent(/Answer in the reply box below, or in the terminal/);
+      expect(hint()).not.toHaveTextContent(/take control/);
 
       fireEvent.click(screen.getByTestId("mock-become-spectator"));
-      expect(hint()).toHaveTextContent(/take control to reply/);
-      expect(hint()).not.toHaveTextContent(/Reply in the terminal below/);
+      expect(hint()).toHaveTextContent(/reply box below — or take control of the terminal/);
       expect(screen.getByTestId("awaiting-banner")).toHaveAttribute(
         "data-terminal-spectating",
         "true",
       );
 
       fireEvent.click(screen.getByTestId("mock-become-pilot"));
-      expect(hint()).toHaveTextContent(/Reply in the terminal below/);
+      expect(hint()).toHaveTextContent(/Answer in the reply box below, or in the terminal/);
     });
 
     it("tells a spectator to take control on a completion that is not released", () => {
@@ -2098,7 +2432,7 @@ describe("NodeDetailPanel", () => {
       );
       fireEvent.click(screen.getByTestId("mock-become-spectator"));
       expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(
-        /take control to reply/,
+        /Reply below, or take control of the terminal/,
       );
     });
 

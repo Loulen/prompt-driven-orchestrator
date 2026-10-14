@@ -11,6 +11,9 @@ import {
   GitCompareArrows,
   LockOpen,
   LoaderCircle,
+  SendHorizontal,
+  MessagesSquare,
+  SquareTerminal,
 } from "lucide-react";
 import type {
   AwaitingInfo,
@@ -19,7 +22,18 @@ import type {
   NodeStatus,
   ScopedProvisioningRules,
 } from "../types";
-import { artifactUrl, fetchArtifact } from "../api";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  ApiError,
+  artifactUrl,
+  fetchArtifact,
+  answerNodeQuestion,
+  fetchNodeConversation,
+  sendNodeReply,
+  type AgentQuestion,
+  type ConversationEntry,
+} from "../api";
 import type { PortIO, FileInfo } from "../api";
 import type { PortType } from "../types";
 import { useNodeRun } from "../hooks/useNodeRun";
@@ -328,6 +342,622 @@ function useWaitingLabel(since: string | undefined): string | null {
  * - `children_pending`: the orchestrator gave its turn back (ADR-0064).
  * `data-cause` is the assertion surface, the copy may move.
  */
+const REMARK_PLUGINS = [remarkGfm];
+
+/** How the panel shows a node's session: the conversation read from its
+ *  transcript (the default — for whoever does not live in a TUI), or the raw
+ *  terminal. Remembered per browser. */
+type NodeView = "conversation" | "terminal";
+const NODE_VIEW_KEY = "pdo.nodePanelView";
+
+function readNodeView(): NodeView {
+  try {
+    return localStorage.getItem(NODE_VIEW_KEY) === "terminal" ? "terminal" : "conversation";
+  } catch {
+    return "conversation";
+  }
+}
+
+function useNodeView(): [NodeView, (v: NodeView) => void] {
+  const [view, setView] = useState<NodeView>(readNodeView);
+  const choose = (v: NodeView) => {
+    setView(v);
+    try {
+      localStorage.setItem(NODE_VIEW_KEY, v);
+    } catch {
+      // Per-browser convenience only.
+    }
+  };
+  return [view, choose];
+}
+
+function NodeViewSwitch({ view, onChange }: { view: NodeView; onChange: (v: NodeView) => void }) {
+  const item = (v: NodeView, label: string, Icon: typeof MessagesSquare) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={view === v}
+      onClick={() => onChange(v)}
+      data-testid={`node-view-${v}`}
+      className={`flex cursor-pointer items-center gap-1.5 rounded px-2 py-0.5 transition-colors ${
+        view === v ? "bg-bg-4 text-fg" : "text-fg-3 hover:text-fg-2"
+      }`}
+      style={{ fontSize: "11px", fontWeight: 500 }}
+    >
+      <Icon size={12} />
+      {label}
+    </button>
+  );
+  return (
+    <div
+      role="tablist"
+      aria-label="Session view"
+      className="flex shrink-0 items-center gap-1 border-b border-line px-2 py-1"
+      data-testid="node-view-switch"
+    >
+      {item("conversation", "Conversation", MessagesSquare)}
+      {item("terminal", "Terminal", SquareTerminal)}
+    </div>
+  );
+}
+
+/** How often the Conversation view re-reads a live node's transcript. */
+const CONVERSATION_POLL_MS = 3000;
+
+function ActivityRow({ steps }: { steps: { tool: string; detail: string | null }[] }) {
+  const [open, setOpen] = useState(false);
+  const first = steps[0];
+  const summary = first.detail ? `${first.tool} · ${first.detail}` : first.tool;
+  return (
+    <div className="rounded-md border border-line bg-bg-2" data-testid="conversation-activity">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-fg-3 hover:text-fg-2"
+        style={{ fontSize: "11px" }}
+      >
+        <CheckCircle size={12} className="shrink-0 text-st-done" />
+        <span className="min-w-0 flex-1 truncate">{summary}</span>
+        {steps.length > 1 && <span className="shrink-0">+{steps.length - 1}</span>}
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+      </button>
+      {open && (
+        <ul className="border-t border-line px-2.5 py-1.5 text-fg-3" style={{ fontSize: "11px" }}>
+          {steps.map((s, i) => (
+            <li key={i} className="truncate">
+              <span className="text-fg-2">{s.tool}</span>
+              {s.detail ? ` · ${s.detail}` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function BriefRow({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-md border border-dashed border-line" data-testid="conversation-brief">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-fg-3 hover:text-fg-2"
+        style={{ fontSize: "11px" }}
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        Instructions PDO gave the agent
+      </button>
+      {open && (
+        <pre
+          className="max-h-[40vh] overflow-auto whitespace-pre-wrap border-t border-line px-2.5 py-2 text-fg-3"
+          style={{ fontSize: "10.5px" }}
+        >
+          {text}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** One question's answer as sent: the picked labels, then the user's own words. */
+function questionAnswer(picked: string[], other: string): string {
+  return [...picked, other.trim()].filter((s) => s !== "").join(", ");
+}
+
+/** The agent's own question tool, as a card (ADR-0081): every question with its
+ *  options as choices and a free « Other », one Submit for all. Answerable while
+ *  the session is live and the tool has not returned; then it shows what was
+ *  answered. */
+function QuestionCard({
+  entry,
+  runId,
+  nodeId,
+  iter,
+  live,
+  onOpenTerminal,
+}: {
+  entry: Extract<ConversationEntry, { kind: "question" }>;
+  runId: string;
+  nodeId: string;
+  iter: number;
+  live: boolean;
+  onOpenTerminal: () => void;
+}) {
+  const questions: AgentQuestion[] = Array.isArray(entry.questions) ? entry.questions : [];
+  const [picked, setPicked] = useState<string[][]>(() => questions.map(() => []));
+  const [other, setOther] = useState<string[]>(() => questions.map(() => ""));
+  const [state, setState] = useState<
+    { kind: "idle" } | { kind: "sending" } | { kind: "sent" } | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+  const pending = !entry.answered && live && state.kind !== "sent";
+  // Only a question a PDO hook holds can be answered here; any other waits in
+  // the agent's terminal menu.
+  const open = pending && entry.held === true;
+  const inTerminal = pending && entry.held !== true;
+  const complete = questions.every((_, i) => questionAnswer(picked[i] ?? [], other[i] ?? "") !== "");
+
+  const toggle = (qi: number, label: string, multi: boolean) =>
+    setPicked((all) =>
+      all.map((p, i) => {
+        if (i !== qi) return p;
+        if (p.includes(label)) return p.filter((l) => l !== label);
+        return multi ? [...p, label] : [label];
+      }),
+    );
+
+  const submit = async () => {
+    const answers: Record<string, string> = {};
+    questions.forEach((q, i) => {
+      answers[q.question] = questionAnswer(picked[i] ?? [], other[i] ?? "");
+    });
+    setState({ kind: "sending" });
+    try {
+      await answerNodeQuestion(runId, nodeId, iter, entry.tool_use_id, answers);
+      setState({ kind: "sent" });
+    } catch (cause) {
+      const message =
+        cause instanceof ApiError || cause instanceof Error ? cause.message : "Answer failed";
+      setState({ kind: "failed", message });
+    }
+  };
+
+  return (
+    <div
+      className={`flex flex-col gap-3 rounded-lg border px-3 py-3 ${
+        open ? "border-st-await/40 bg-st-await-bg" : "border-line bg-bg-2"
+      }`}
+      data-testid="conversation-question"
+      data-open={open || undefined}
+    >
+      {open && (
+        <span
+          className="self-start rounded border border-st-await/40 px-1.5 py-0.5 text-st-await"
+          style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.04em" }}
+        >
+          YOUR INPUT NEEDED
+        </span>
+      )}
+      {questions.map((q, qi) => {
+        const answer = entry.answers?.[q.question];
+        return (
+          <div key={qi} className="flex flex-col gap-1.5" data-testid="conversation-question-item">
+            <div className="text-fg" style={{ fontSize: "12px", fontWeight: 500 }}>
+              {q.header && <span className="mr-1.5 text-fg-3">{q.header} ·</span>}
+              {q.question}
+            </div>
+            {open ? (
+              <>
+                <div className="flex flex-wrap gap-1.5">
+                  {(q.options ?? []).map((o) => {
+                    const on = (picked[qi] ?? []).includes(o.label);
+                    return (
+                      <button
+                        key={o.label}
+                        type="button"
+                        title={o.description}
+                        aria-pressed={on}
+                        onClick={() => toggle(qi, o.label, q.multiSelect === true)}
+                        data-testid="conversation-question-option"
+                        className={`flex cursor-pointer flex-col items-start rounded-md border px-2.5 py-1 text-left transition-colors ${
+                          on
+                            ? "border-acc bg-acc/15 text-acc"
+                            : "border-line-strong bg-bg-3 text-fg-2 hover:border-fg-4 hover:text-fg"
+                        }`}
+                        style={{ fontSize: "11.5px", fontWeight: 500 }}
+                      >
+                        <span className="flex items-center gap-1">
+                          {on && <CheckCircle size={12} />}
+                          {o.label}
+                        </span>
+                        {o.description && (
+                          <span className="text-fg-4" style={{ fontSize: "10.5px", fontWeight: 400 }}>
+                            {o.description}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                <input
+                  value={other[qi] ?? ""}
+                  onChange={(e) =>
+                    setOther((all) => all.map((v, i) => (i === qi ? e.target.value : v)))
+                  }
+                  placeholder={q.options?.length ? "Other, or add a note…" : "Your answer…"}
+                  aria-label={`Answer to: ${q.question}`}
+                  data-testid="conversation-question-other"
+                  className="rounded-md border border-line-strong bg-bg-0 px-2 py-1 text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+                  style={{ fontSize: "11.5px" }}
+                />
+              </>
+            ) : (
+              <div className="text-fg-2" style={{ fontSize: "11.5px" }}>
+                {answer ? (
+                  <>
+                    <CheckCircle size={12} className="mr-1 inline text-st-done" />
+                    {answer}
+                  </>
+                ) : entry.answered || state.kind === "sent" ? (
+                  <span className="text-fg-4">Answered</span>
+                ) : inTerminal ? (
+                  <span className="text-fg-4">
+                    {(q.options ?? []).map((o) => o.label).join(" · ")}
+                  </span>
+                ) : (
+                  <span className="text-fg-4">Not answered</span>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {open && (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={!complete || state.kind === "sending"}
+            data-testid="conversation-question-submit"
+            className="cursor-pointer rounded-md bg-acc px-3 py-1.5 text-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ fontSize: "11.5px", fontWeight: 600 }}
+          >
+            {state.kind === "sending" ? "Sending…" : "Submit answers"}
+          </button>
+          <span
+            className={state.kind === "failed" ? "text-st-failed" : "text-fg-4"}
+            style={{ fontSize: "10.5px" }}
+            role={state.kind === "failed" ? "alert" : undefined}
+          >
+            {state.kind === "failed" ? state.message : "Answer every question, then submit."}
+          </span>
+        </div>
+      )}
+      {inTerminal && (
+        <div className="flex items-center gap-2" data-testid="conversation-question-in-terminal">
+          <span className="text-fg-3" style={{ fontSize: "11px" }}>
+            This question waits in the agent's terminal menu: answer it there.
+          </span>
+          <button
+            type="button"
+            onClick={onOpenTerminal}
+            className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 hover:text-fg"
+            style={{ fontSize: "11px", fontWeight: 500 }}
+          >
+            Open the terminal
+          </button>
+        </div>
+      )}
+      {state.kind === "sent" && !entry.answered && (
+        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          Sent — the agent continues with your answers.
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ConversationEntryView({
+  entry,
+  runId,
+  nodeId,
+  iter,
+  live,
+  onOpenTerminal,
+}: {
+  entry: ConversationEntry;
+  runId: string;
+  nodeId: string;
+  iter: number;
+  live: boolean;
+  onOpenTerminal: () => void;
+}) {
+  switch (entry.kind) {
+    case "question":
+      return (
+        <QuestionCard
+          entry={entry}
+          runId={runId}
+          nodeId={nodeId}
+          iter={iter}
+          live={live}
+          onOpenTerminal={onOpenTerminal}
+        />
+      );
+    case "brief":
+      return <BriefRow text={entry.text} />;
+    case "activity":
+      return <ActivityRow steps={entry.steps} />;
+    case "user":
+      return entry.runtime ? (
+        <div className="text-center text-fg-4" style={{ fontSize: "10.5px" }} data-testid="conversation-runtime">
+          PDO: {entry.text.replace(/^\[pdo-runtime\]\s*/, "")}
+        </div>
+      ) : (
+        <div className="flex justify-end" data-testid="conversation-user">
+          <div
+            className="max-w-[85%] whitespace-pre-wrap rounded-lg rounded-br-sm bg-acc/15 px-3 py-1.5 text-fg"
+            style={{ fontSize: "12px", lineHeight: 1.5 }}
+          >
+            {entry.text}
+          </div>
+        </div>
+      );
+    case "agent":
+      return (
+        <div
+          className="artifact-markdown max-w-[95%] rounded-lg rounded-bl-sm border border-line bg-bg-2 px-3 py-1.5 text-fg [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
+          style={{ fontSize: "12px", lineHeight: 1.5 }}
+          data-testid="conversation-agent"
+        >
+          <Markdown remarkPlugins={REMARK_PLUGINS}>{entry.text}</Markdown>
+        </div>
+      );
+  }
+}
+
+/** The node's conversation, read from its transcript: re-read every few seconds
+ *  while the session is live, once otherwise. Follows the bottom unless the
+ *  user scrolled up. `onUnsupported` fires when PDO has no transcript reader for
+ *  the node's harness, so the panel can show the terminal instead. */
+function ConversationView({
+  runId,
+  nodeId,
+  iter,
+  live,
+  onUnsupported,
+  onOpenTerminal,
+}: {
+  runId: string;
+  nodeId: string;
+  iter: number;
+  live: boolean;
+  onUnsupported: () => void;
+  onOpenTerminal: () => void;
+}) {
+  const [entries, setEntries] = useState<ConversationEntry[] | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pinned = useRef(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const read = async () => {
+      try {
+        const res = await fetchNodeConversation(runId, nodeId, iter);
+        if (cancelled) return;
+        if (!res.supported) {
+          onUnsupported();
+          return;
+        }
+        setEntries(res.entries);
+      } catch {
+        // Keep what is on screen.
+      }
+    };
+    void read();
+    if (!live) return () => void (cancelled = true);
+    const timer = setInterval(() => void read(), CONVERSATION_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [runId, nodeId, iter, live, onUnsupported]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && pinned.current) el.scrollTop = el.scrollHeight;
+  }, [entries]);
+
+  return (
+    <div
+      ref={scrollRef}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      }}
+      className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto bg-bg-0 px-3 py-3"
+      data-testid="conversation-view"
+    >
+      {entries === null ? (
+        <span className="m-auto text-fg-4" style={{ fontSize: "11px" }}>
+          Loading the conversation…
+        </span>
+      ) : entries.length === 0 ? (
+        <span className="m-auto text-fg-4" style={{ fontSize: "11px" }}>
+          The agent has not said anything yet.
+        </span>
+      ) : (
+        entries.map((entry, i) => (
+          <ConversationEntryView
+            key={entry.kind === "question" ? entry.tool_use_id : i}
+            entry={entry}
+            runId={runId}
+            nodeId={nodeId}
+            iter={iter}
+            live={live}
+            onOpenTerminal={onOpenTerminal}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+/** « Reply » (node panel): talk to the node's agent without driving its
+ *  terminal — the way in for whoever does not live in a TUI. The text is sent
+ *  and submitted as the user's own turn; an agent mid-turn queues it. It works
+ *  from a spectating browser too: the reply goes through the daemon, not the
+ *  PTY, so it never contends for control of the terminal. */
+function ReplyBox({
+  runId,
+  nodeId,
+  iter,
+  awaiting,
+  options = [],
+  multi = false,
+}: {
+  runId: string;
+  nodeId: string;
+  iter: number;
+  /** The agent waits for an answer: the box asks for attention. */
+  awaiting: boolean;
+  /** The answers the agent offered, one click each (`multi`: pick, then send). */
+  options?: string[];
+  multi?: boolean;
+}) {
+  const [text, setText] = useState("");
+  const [state, setState] = useState<
+    { kind: "idle" } | { kind: "sending" } | { kind: "sent" } | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+  const sending = state.kind === "sending";
+  const canSend = text.trim() !== "" && !sending;
+
+  // Picks belong to the question that offered them: a new set of choices is a
+  // new question, so its picks start empty.
+  const optionsKey = options.join("\u0000");
+  const [picks, setPicks] = useState<{ key: string; picked: string[] }>({ key: "", picked: [] });
+  const picked = picks.key === optionsKey ? picks.picked : [];
+  const setPicked = (next: (current: string[]) => string[]) =>
+    setPicks({ key: optionsKey, picked: next(picked) });
+
+  const deliver = async (reply: string, clearText: boolean) => {
+    setState({ kind: "sending" });
+    try {
+      await sendNodeReply(runId, nodeId, iter, reply);
+      if (clearText) setText("");
+      setPicked(() => []);
+      setState({ kind: "sent" });
+    } catch (cause) {
+      const message =
+        cause instanceof ApiError || cause instanceof Error ? cause.message : "Reply failed";
+      setState({ kind: "failed", message });
+    }
+  };
+  const send = () => (canSend ? deliver(text, true) : Promise.resolve());
+
+  return (
+    <div
+      className={`flex flex-col gap-1 border-b px-3 py-2 ${
+        awaiting ? "border-st-await/30 bg-st-await-bg" : "border-line"
+      }`}
+      data-testid="node-reply-box"
+      data-awaiting={awaiting || undefined}
+    >
+      {options.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5" data-testid="node-reply-options">
+          {options.map((option) => {
+            const on = picked.includes(option);
+            return (
+              <button
+                key={option}
+                type="button"
+                disabled={sending}
+                aria-pressed={multi ? on : undefined}
+                data-testid="node-reply-option"
+                onClick={() => {
+                  if (!multi) {
+                    void deliver(option, false);
+                    return;
+                  }
+                  setPicked((p) => (on ? p.filter((x) => x !== option) : [...p, option]));
+                }}
+                className={`flex cursor-pointer items-center gap-1 rounded-md border px-2.5 py-1 transition-colors disabled:cursor-wait disabled:opacity-60 ${
+                  on
+                    ? "border-acc bg-acc/15 text-acc"
+                    : "border-line-strong bg-bg-3 text-fg-2 hover:border-fg-4 hover:text-fg"
+                }`}
+                style={{ fontSize: "11.5px", fontWeight: 500 }}
+              >
+                {on && <CheckCircle size={12} />}
+                {option}
+              </button>
+            );
+          })}
+          {multi && (
+            <button
+              type="button"
+              disabled={picked.length === 0 || sending}
+              onClick={() => void deliver(picked.join(", "), false)}
+              data-testid="node-reply-options-send"
+              className="cursor-pointer rounded-md border border-acc/40 bg-acc/15 px-2.5 py-1 text-acc transition-colors hover:bg-acc/25 disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ fontSize: "11.5px", fontWeight: 500 }}
+            >
+              Send {picked.length > 0 ? `${picked.length} selected` : "selection"}
+            </button>
+          )}
+        </div>
+      )}
+      <div className="flex items-end gap-1.5">
+        <textarea
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            if (state.kind !== "sending") setState({ kind: "idle" });
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          rows={awaiting ? 3 : 2}
+          placeholder={awaiting ? "Answer the agent…" : "Message the agent…"}
+          aria-label="Reply to the agent"
+          data-testid="node-reply-input"
+          className="min-h-0 flex-1 resize-y rounded-md border border-line-strong bg-bg-0 px-2 py-1.5 text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+          style={{ fontSize: "12px" }}
+        />
+        <button
+          type="button"
+          onClick={() => void send()}
+          disabled={!canSend}
+          title="Send to the agent (Ctrl+Enter)"
+          data-testid="node-reply-send"
+          className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-acc/40 bg-acc/15 px-3 py-1.5 text-acc transition-colors hover:bg-acc/25 disabled:cursor-not-allowed disabled:opacity-50"
+          style={{ fontSize: "11.5px", fontWeight: 500 }}
+        >
+          {sending ? <LoaderCircle size={12} className="animate-spin" /> : <SendHorizontal size={12} />}
+          Send
+        </button>
+      </div>
+      <span
+        className={state.kind === "failed" ? "text-st-failed" : "text-fg-4"}
+        style={{ fontSize: "10.5px" }}
+        data-testid="node-reply-status"
+        role={state.kind === "failed" ? "alert" : undefined}
+      >
+        {state.kind === "failed"
+          ? state.message
+          : state.kind === "sent"
+            ? "Sent — the agent reads it as soon as it finishes what it is doing."
+            : "Ctrl+Enter to send. The agent receives it as your message."}
+      </span>
+    </div>
+  );
+}
+
 function AwaitingBanner({
   awaiting,
   terminalLive,
@@ -376,8 +1006,8 @@ function AwaitingBanner({
     hint = !terminalLive
       ? "This pane is a snapshot — reopen the session to keep talking, or use the buttons."
       : terminalSpectating
-        ? "Not done yet? Another browser has control — take control to reply in the terminal."
-        : "Not done yet? Reply in the terminal and press Enter — the agent keeps working.";
+        ? "Not done yet? Reply below, or take control of the terminal."
+        : "Not done yet? Reply below — the agent keeps working.";
   } else if (cause === "child_awaiting") {
     title = "A child run is waiting for you";
     const childId = awaiting?.child_run_id ?? null;
@@ -401,6 +1031,12 @@ function AwaitingBanner({
         )}
       </span>
     );
+  } else if (cause === "turn_ended") {
+    title = "The agent finished its turn and waits for you";
+    body = null;
+    hint = !terminalLive
+      ? "This pane is a snapshot — reopen the session to reply, or use the buttons below."
+      : "Read its message above the reply box and answer there.";
   } else if (cause === "children_pending") {
     title = "Waiting for child runs";
     body = "This node gave its turn back and completes once every child run is terminal.";
@@ -411,10 +1047,10 @@ function AwaitingBanner({
     hint = !terminalLive
       ? "This pane is a snapshot — reopen the session to reply, or use the buttons below."
       : terminalSpectating
-        ? "Another browser has control of the terminal below — take control to reply, then press Enter to resume."
+        ? "Answer in the reply box below — or take control of the terminal to type there."
         : awaiting?.message
-        ? "Reply in the terminal below and press Enter to resume."
-        : "Open the terminal below to see what it asked, reply and press Enter to resume.";
+        ? "Answer in the reply box below, or in the terminal."
+        : "Read the question in the terminal, then answer in the reply box below.";
   }
   return (
     <div
@@ -510,6 +1146,10 @@ export default function NodeDetailPanel({
   const [terminalLive, setTerminalLive] = useState<boolean | null>(null);
   // #870: whether this browser only watches the inline terminal.
   const [terminalSpectating, setTerminalSpectating] = useState(false);
+  const [nodeView, setNodeView] = useNodeView();
+  // The node's harness has no transcript PDO can read: the terminal it is.
+  const [conversationUnsupported, setConversationUnsupported] = useState(false);
+  const markConversationUnsupported = useCallback(() => setConversationUnsupported(true), []);
   // #723 — an orchestrator NodeRun splits its lower pane into I/O | Orchestration.
   // I/O stays the default; the choice is per mounted node (remount = back to I/O).
   const [detailTab, setDetailTab] = useState<"io" | "orchestration">(initialDetailTab);
@@ -603,6 +1243,12 @@ export default function NodeDetailPanel({
   // `running` (a derived child wait, FP #793 finding 1).
   const nodeAwaitsOnLatestIter =
     selectedIter === node.iter && node.status === "awaiting_user" && node.awaiting != null;
+  // « Reply » speaks to the live session of the latest iteration only — the
+  // one a message can still reach.
+  const canReply =
+    !isArchived &&
+    selectedIter === node.iter &&
+    (node.status === "running" || node.status === "awaiting_user");
   const releaseIsPrimary =
     canReleaseCompletion &&
     !completionReleased &&
@@ -643,6 +1289,7 @@ export default function NodeDetailPanel({
   // xterm instance and its WebSocket survive the round trip; the existing
   // ResizeObserver resizes the grid both ways.
   const expanded = terminalView === "expanded";
+  const showConversation = nodeView === "conversation" && !conversationUnsupported && !expanded;
   const terminalFrameRef = useRef<HTMLDivElement>(null);
   // Closing on the backdrop needs the press AND the release there: a selection
   // started in the terminal and released over the backdrop must not close it.
@@ -1213,7 +1860,19 @@ export default function NodeDetailPanel({
               backdropPressed.current = false;
             }}
           >
-            {showTerminal ? (
+            {showTerminal && !expanded && !conversationUnsupported && (
+              <NodeViewSwitch view={nodeView} onChange={setNodeView} />
+            )}
+            {showTerminal && showConversation ? (
+              <ConversationView
+                runId={runId}
+                nodeId={node.node_id}
+                iter={selectedIter}
+                live={selectedIterStatus === "running" || selectedIterStatus === "awaiting_user"}
+                onUnsupported={markConversationUnsupported}
+                onOpenTerminal={() => setNodeView("terminal")}
+              />
+            ) : showTerminal ? (
               <TmuxTerminal
                 session={sessionName}
                 expanded={expanded}
@@ -1284,6 +1943,19 @@ export default function NodeDetailPanel({
             className="flex h-full flex-col overflow-auto"
             data-testid="details-pane"
           >
+            {canReply && (
+              <ReplyBox
+                runId={runId}
+                nodeId={node.node_id}
+                iter={node.iter}
+                awaiting={
+                  nodeAwaitsOnLatestIter &&
+                  (node.awaiting?.cause === "declared" || node.awaiting?.cause === "turn_ended")
+                }
+                options={nodeAwaitsOnLatestIter ? node.awaiting?.options : undefined}
+                multi={node.awaiting?.multi === true}
+              />
+            )}
             {/* Actions */}
             <div className="flex flex-col gap-1.5 px-3 py-2">
               {/* #749: the shortcut to the Review page with this node's delivery

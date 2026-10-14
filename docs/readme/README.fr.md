@@ -124,7 +124,7 @@ Coût, durée et taux d'échec par modèle et par nœud, tirés de vos propres r
 
 ### Nœuds interactive et orchestrator
 
-Un nœud interactive attend votre réponse avant de continuer : son agent pose la question, vous répondez dans son terminal. Un nœud orchestrator lance des runs enfants de pipelines depuis sa propre session : des pipelines de pipelines. Les enfants se rangent sous leur parent dans l'arbre de runs.
+Un nœud interactive attend votre réponse avant de continuer : son agent pose la question, vous répondez depuis sa conversation — sans terminal — ou dans son terminal. Un nœud orchestrator lance des runs enfants de pipelines depuis sa propre session : des pipelines de pipelines. Les enfants se rangent sous leur parent dans l'arbre de runs.
 
 [Docs →](../../docs/features.md#interactive-and-orchestrator-nodes)
 

@@ -124,7 +124,7 @@ Cost, duration and failure rate per model and per node, from your own runs. See 
 
 ### Interactive & orchestrator nodes
 
-An interactive node waits for your answer before it goes on: its agent asks, you reply in its terminal. An orchestrator node launches child runs of pipelines from its own session, so pipelines run pipelines. Children nest under their parent in the run tree.
+An interactive node waits for your answer before it goes on: its agent asks, you reply from its conversation — no terminal needed — or in its terminal. An orchestrator node launches child runs of pipelines from its own session, so pipelines run pipelines. Children nest under their parent in the run tree.
 
 [Docs →](docs/features.md#interactive-and-orchestrator-nodes)
 

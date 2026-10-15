@@ -1,4 +1,5 @@
 import {
+  act,
   render,
   screen,
   fireEvent,
@@ -6,7 +7,9 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { initColourBlindStatus, setColourBlindStatus } from "../hooks/useColourBlindStatus";
+import { COLOUR_BLIND_STATUS_HELP } from "../lib/statusPalette";
 
 const fetchSettingsMock = vi.fn();
 const updateSettingsMock = vi.fn();
@@ -1576,6 +1579,93 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
   });
 });
 
+describe("SettingsSurface — Accessibility / colour-blind status colours (#1005)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    localStorage.clear();
+    act(() => initColourBlindStatus());
+  });
+
+  afterEach(() => {
+    act(() => setColourBlindStatus(false));
+    localStorage.clear();
+  });
+
+  it("sits right after Interface, with the device-local badge and no permanent help", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const body = await screen.findByTestId("settings-section-body-accessibility");
+    expect(screen.getByTestId("settings-section-body-interface").nextElementSibling).toBe(body);
+    expect(screen.getByTestId("settings-section-accessibility-device-local")).toHaveTextContent(
+      "Device-local · saved immediately",
+    );
+    expect(body).toHaveTextContent("How PDO is shown in this browser. Saved on this device only.");
+    // The detail is not printed in the section — only for assistive tech (sr-only).
+    const help = document.getElementById("setting-colour-blind-status-help")!;
+    expect(help).toHaveClass("sr-only");
+    expect(help).toHaveTextContent(COLOUR_BLIND_STATUS_HELP);
+  });
+
+  it("is off by default and describes itself to a screen reader", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const toggle = await screen.findByRole("switch", { name: "Colour-blind friendly status colours" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveAttribute("aria-describedby", "setting-colour-blind-status-help");
+    expect(document.documentElement.hasAttribute("data-status-palette")).toBe(false);
+  });
+
+  it("shows the detail on hover of the Info icon", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const info = await screen.findByTestId("setting-colour-blind-status-info");
+    fireEvent.focus(info);
+    expect(
+      (await screen.findAllByTestId("tooltip-content")).some((el) =>
+        el.textContent?.includes("Status shapes do not change."),
+      ),
+    ).toBe(true);
+  });
+
+  it("applies and stores at the click, WITHOUT the Save button", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const toggle = await screen.findByTestId("setting-colour-blind-status");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(localStorage.getItem("pdo.ui.colourBlindStatus")).toBe("true");
+    expect(document.documentElement.getAttribute("data-status-palette")).toBe("colour-blind");
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+    // A click on the label toggles too.
+    fireEvent.click(screen.getByText("Colour-blind friendly status colours"));
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(localStorage.getItem("pdo.ui.colourBlindStatus")).toBe("false");
+    expect(document.documentElement.hasAttribute("data-status-palette")).toBe(false);
+  });
+
+  it("follows a switch made in another tab", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const toggle = await screen.findByTestId("setting-colour-blind-status");
+    act(() => {
+      localStorage.setItem("pdo.ui.colourBlindStatus", "true");
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "pdo.ui.colourBlindStatus", newValue: "true" }),
+      );
+    });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("stays reachable when GET /settings fails", async () => {
+    fetchSettingsMock.mockRejectedValue(new Error("500"));
+    render(<SettingsSurface open onClose={() => {}} />);
+    const toggle = await screen.findByTestId("setting-colour-blind-status");
+    fireEvent.click(toggle);
+    expect(localStorage.getItem("pdo.ui.colourBlindStatus")).toBe("true");
+  });
+});
+
 describe("relativiseToHome (#432)", () => {
   // The pure half of "an explorer pick becomes an entry": `onPick` yields an ABSOLUTE
   // path, an entry is RELATIVE to `$HOME`. Returning `null` (instead of guessing) is what
@@ -2213,9 +2303,11 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       )
         .getAllByRole("button")
         .map((button) => button.textContent);
-    // #823 added Tutorials as General's fifth section, #891 Stats absorptions.
+    // #823 added Tutorials as General's fifth section, #891 Stats absorptions,
+    // #1005 Accessibility right after Interface.
     expect(entries()).toEqual([
       "Interface",
+      "Accessibility",
       "Runtime limits",
       "Runs",
       "Version & update",

@@ -899,6 +899,10 @@ L'icône `i` ouvre **Pipeline info**, la **seule** surface des métadonnées d'u
 
 Le point ne peut pas être **tout** le signal (#503) : un Run non vert projette la **raison** de son événement terminal, qui titre le point dans la liste et s'affiche dans le panneau du Run — le premier endroit où l'on arrive en cliquant un point rouge.
 
+**Status icon** *(terme, Notion PDO-22)* : le glyphe qui dit le statut d'un Run, d'un nœud ou d'un Trigger, partout où il s'affiche (listes, panneaux, sélecteur d'itération, enfants, canvas). Sa **forme** porte le statut ; la couleur ne fait que le renforcer, pour rester lisible avec un daltonisme et dans les deux thèmes. Il porte toujours son libellé (tooltip et nom accessible). Une **seule** correspondance statut -> glyphe vaut pour toutes les surfaces. La forme est toujours active ; seule la **palette** des statuts est réglable (voir *Palette daltonienne*). _Éviter_ : « pastille de couleur », « point vert / rouge » pour nommer un statut (dire le statut lui-même).
+
+**Palette daltonienne** *(terme, Notion PDO-22)* : la palette de statuts écartée pour un daltonisme rouge-vert (deutan, protan), dans les deux thèmes. C'est une **option**, désactivée par défaut, qui ne remplace jamais la palette par défaut ; elle ne touche que la couleur, pas la forme du Status icon. Préférence **du navigateur** (comme le thème) : commune à tous ses onglets et Projets, jamais côté daemon. Libellé UI : « Colour-blind friendly status colours », dans Settings › General › Accessibility. _Éviter_ : « mode daltonien » pour la forme du Status icon, qui n'est pas optionnelle.
+
 ### Cleanup vs archive
 
 Le bouton « Cleanup » sur un Run terminé supprime la branche et les worktrees, **après copie** des sorties vers le *Blackboard archivé* (ADR-0020) — c'est ce qui rend un Run `archived` consultable (canvas en lecture seule + outputs). **L'event log n'est pas touché** : le Run reste interrogeable post-mortem. Pas d'auto-cleanup, jamais. Le seul reclaim du Blackboard archivé est le `forget`.

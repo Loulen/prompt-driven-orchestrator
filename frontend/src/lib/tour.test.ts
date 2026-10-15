@@ -35,7 +35,8 @@ const EMPTY_APP: TourAppState = {
   libraryPipelineIds: [],
   runCount: 0,
   runs: [],
-  latestRun: null,
+  launchedRunId: null,
+  myRun: null,
   activeRunId: null,
 };
 

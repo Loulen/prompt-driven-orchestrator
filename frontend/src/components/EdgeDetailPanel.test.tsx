@@ -10,12 +10,10 @@ function reviewer(): NodeDef {
     id: "reviewer",
     name: "reviewer",
     type: "agent",
-    inputs: [{ name: "task", repeated: false, side: "left" }],
+    inputs: [{ name: "task" }],
     outputs: [
       {
         name: "verdict",
-        repeated: false,
-        side: "right",
         frontmatter: {
           verdict: { type: "enum", allowed: ["PASS", "FAIL", "NEEDS_WORK"] },
           is_blocking: { type: "bool" },
@@ -32,8 +30,8 @@ function impl(): NodeDef {
     id: "impl",
     name: "implementer",
     type: "agent",
-    inputs: [{ name: "review", repeated: false, side: "left" }],
-    outputs: [{ name: "diff", repeated: false, side: "right" }],
+    inputs: [{ name: "review" }],
+    outputs: [{ name: "diff" }],
     interactive: false,
     view: { x: 200, y: 0 },
   };

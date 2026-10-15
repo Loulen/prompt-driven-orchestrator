@@ -11,7 +11,7 @@
  * title, two sentences at most, a block for every free input, and — the correction
  * the user made in person — "Interactive" NEVER claims to open a terminal.
  */
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import {
   canAdvance,
   confirmStep,
@@ -22,16 +22,30 @@ import {
   startTour,
   stepBody,
   stepNote,
+  copyBlockOf,
+  recapIntroOf,
   type TourAppState,
   type TourObservation,
   type TourStep,
 } from "../tour";
 import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
-import { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
+import { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID, tutorialPipelineName } from "./firstPipeline";
 import { carriedPorts, defaultConditionPort, withCarriedPorts } from "../edgePorts";
 import { requalifyWhen, rowsToWhen } from "../whenClause";
 
 const STEPS = FIRST_PIPELINE_TOUR.steps;
+
+/** This browser's identité de tour, pinned for every test (#987). */
+const ME = "k3x9";
+const MY_PIPELINE = `${TUTORIAL_PIPELINE_ID}-${ME}`;
+/** A neighbour's pipeline on the same shared instance. */
+const THEIR_PIPELINE = `${TUTORIAL_PIPELINE_ID}-zzzz`;
+
+beforeEach(() => {
+  localStorage.clear();
+  localStorage.setItem("pdo.tour.identity", ME);
+});
+
 
 // ---- the simulator --------------------------------------------------------
 
@@ -51,7 +65,8 @@ class FakeApp {
     libraryPipelineIds: [],
     runCount: 0,
     runs: [],
-    latestRun: null,
+    launchedRunId: null,
+    myRun: null,
     activeRunId: null,
   };
   /** Frozen at construction: what "this tour caused it" is measured against. */
@@ -98,9 +113,9 @@ class FakeApp {
   createPipeline() {
     this.app = {
       ...this.app,
-      pipelineId: TUTORIAL_PIPELINE_ID,
+      pipelineId: MY_PIPELINE,
       pipeline: {
-        name: TUTORIAL_PIPELINE_ID,
+        name: MY_PIPELINE,
         variables: {},
         // The daemon's scaffold: a start and an end marker, no edges.
         nodes: [
@@ -124,8 +139,8 @@ class FakeApp {
           type: "agent",
           interactive: false,
           isolated_worktree: true,
-          inputs: [{ name: "in", repeated: false, side: "left" }],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          inputs: [{ name: "in" }],
+          outputs: [{ name: "out" }],
         },
       ];
     });
@@ -199,17 +214,17 @@ class FakeApp {
     this.app = {
       ...this.app,
       dirty: false,
-      libraryPipelineIds: [...this.app.libraryPipelineIds, TUTORIAL_PIPELINE_ID],
+      libraryPipelineIds: [...this.app.libraryPipelineIds, MY_PIPELINE],
     };
   }
 
   /** What confirming the trash does: the row and its dialog go, and so does the
    *  entry the last step watches. */
   deleteFromLibrary() {
-    this.hide(DELETE_CONFIRM, `[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`);
+    this.hide(DELETE_CONFIRM, `[data-testid="library-row-${MY_PIPELINE}"]`);
     this.app = {
       ...this.app,
-      libraryPipelineIds: this.app.libraryPipelineIds.filter((id) => id !== TUTORIAL_PIPELINE_ID),
+      libraryPipelineIds: this.app.libraryPipelineIds.filter((id) => id !== MY_PIPELINE),
     };
   }
 
@@ -226,7 +241,7 @@ const ADD_MENU = '[data-testid="add-menu-node"]';
 /** The delete confirmation's own box — see the last step's re-aim (#825). */
 const DELETE_CONFIRM = '[data-testid="confirm-delete-modal"]';
 const OUTPUTS_SECTION = '[data-testid="outputs-section"]';
-const LIBRARY_ROW = `[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`;
+const LIBRARY_ROW = `[data-testid="library-row-${MY_PIPELINE}"]`;
 
 /**
  * What the user does at each step, keyed by step id. The keys are checked against
@@ -245,7 +260,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "pipelines-tab": () => fake.show('[data-testid="new-pipeline-button"]'),
     "new-pipeline": () =>
       fake.show('[data-testid="new-pipeline-dialog"]', '[data-testid="new-pipeline-create"]'),
-    "name-pipeline": () => fake.type('[data-testid="new-pipeline-name"]', TUTORIAL_PIPELINE_ID),
+    "name-pipeline": () => fake.type('[data-testid="new-pipeline-name"]', MY_PIPELINE),
     "create-pipeline": () => {
       fake.hide('[data-testid="new-pipeline-dialog"]', '[data-testid="new-pipeline-create"]');
       fake.createPipeline();
@@ -268,7 +283,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "implementer-prompt": () => fake.type(PROMPT_INPUT, "Implement what the user asked for."),
     "implementer-out": () =>
       fake.updateAgent(0, {
-        outputs: [{ name: "out", repeated: false, instructions: "Test results and a diagram" }],
+        outputs: [{ name: "out", instructions: "Test results and a diagram" }],
       }),
     "open-add-menu-2": () => fake.show(ADD_MENU),
     "choose-node-2": () => {
@@ -287,14 +302,13 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "tester-prompt": () => fake.type(PROMPT_INPUT, "Review the change and test it."),
     "tester-out": () =>
       fake.updateAgent(1, {
-        outputs: [{ name: "out", repeated: false, instructions: "A short verdict" }],
+        outputs: [{ name: "out", instructions: "A short verdict" }],
       }),
     "tester-verdict": () =>
       fake.updateAgent(1, {
         outputs: [
           {
             name: "out",
-            repeated: false,
             instructions: "A short verdict",
             frontmatter: { verdict: { type: "enum", allowed: ["pass", "fail"] } },
           },
@@ -303,7 +317,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "add-image-port": () => {
       // `handleAddOutput` names it `out-2` (the first free `out-N`).
       fake.updateAgent(1, {
-        outputs: [...fake.agents()[1].outputs, { name: "out-2", repeated: false, side: "right" }],
+        outputs: [...fake.agents()[1].outputs, { name: "out-2" }],
       });
       fake.show(shotSlot);
     },
@@ -311,7 +325,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
       fake.updateAgent(1, {
         outputs: [
           fake.agents()[1].outputs[0],
-          { name: "image_list", repeated: false, port_type: "image_list" },
+          { name: "image_list", port_type: "image_list" },
         ],
       }),
     "image-port-expected": () =>
@@ -320,7 +334,6 @@ function gestures(fake: FakeApp): Record<string, () => void> {
           fake.agents()[1].outputs[0],
           {
             name: "image_list",
-            repeated: false,
             port_type: "image_list",
             instructions: "Annotated screenshot of the feature",
           },
@@ -341,7 +354,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "end-condition": () => fake.writeCondition(2, "verdict", "pass"),
     save: () => {
       fake.save();
-      fake.show(`[data-testid="library-row-${TUTORIAL_PIPELINE_ID}"]`);
+      fake.show(`[data-testid="library-row-${MY_PIPELINE}"]`);
     },
     // #974: Validate opens the modal; saving it closes the modal and the tab
     // bar's indicator turns to the globe.
@@ -530,13 +543,13 @@ describe("the accidents a reader can have", () => {
     expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
 
     // The dialog says what the daemon said, and stays open.
-    fake.type('[data-testid="new-pipeline-error"]', `A pipeline named ${TUTORIAL_PIPELINE_ID} already exists.`);
+    fake.type('[data-testid="new-pipeline-error"]', `A pipeline named ${MY_PIPELINE} already exists.`);
     run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock + 200);
 
     expect(run.phase).toBe("failed");
     expect(run.failure?.kind).toBe("refused");
     expect(run.failure?.reason).toContain("already exists");
-    expect(run.failure?.hint).toContain(TUTORIAL_PIPELINE_ID);
+    expect(run.failure?.hint).toContain(MY_PIPELINE);
   });
 });
 
@@ -900,5 +913,58 @@ describe("the Validate step", () => {
 
   it("can be skipped by a reader who keeps a test pipeline", () => {
     expect(step.skippable).toBe(true);
+  });
+});
+
+/**
+ * #987 — two people build *First pipeline* on one instance. Each pastes a name
+ * suffixed with their own identité de tour, so neither Create is refused, and the
+ * last step only ever touches the pipeline this browser built.
+ */
+describe("playing it next to somebody else", () => {
+  it("suggests a pipeline name suffixed with this browser's identity", () => {
+    const step = STEPS.find((s) => s.id === "name-pipeline")!;
+    expect(copyBlockOf(step)).toBe(MY_PIPELINE);
+    expect(tutorialPipelineName()).toBe(MY_PIPELINE);
+    expect(stepBody(step, new FakeApp().obs())).toBe(
+      "Paste the name below into the field. The name becomes the YAML file in your Library; the four characters at the end are this browser's, so it never collides with someone else's.",
+    );
+  });
+
+  it("gives two identities two different names", () => {
+    const step = STEPS.find((s) => s.id === "name-pipeline")!;
+    const mine = copyBlockOf(step);
+    localStorage.setItem("pdo.tour.identity", "zzzz");
+    expect(copyBlockOf(step)).toBe(THEIR_PIPELINE);
+    expect(copyBlockOf(step)).not.toBe(mine);
+  });
+
+  it("names the suffixed pipeline in the recap", () => {
+    expect(recapIntroOf(FIRST_PIPELINE_TOUR, new FakeApp().app)).toBe(
+      `You built ${MY_PIPELINE} and saved it to your Library. Here is what it does:`,
+    );
+  });
+
+  it("names the suffixed pipeline when the name is refused", () => {
+    const step = STEPS.find((s) => s.id === "create-pipeline")!;
+    expect(typeof step.refusalHint === "function" ? step.refusalHint() : step.refusalHint).toContain(MY_PIPELINE);
+  });
+
+  it("aims the last step at this browser's row, and deleting it leaves the neighbour's alone", () => {
+    const fake = new FakeApp();
+    fake.app = { ...fake.app, libraryPipelineIds: [THEIR_PIPELINE] };
+    fake.show(`[data-testid="library-row-${THEIR_PIPELINE}"]`);
+    const script = gestures(fake);
+    for (const s of STEPS) script[s.id]();
+
+    const step = STEPS.find((s) => s.id === "keep-or-delete")!;
+    expect(step.target(fake.obs())).toEqual([LIBRARY_ROW]);
+    expect(fake.app.libraryPipelineIds).toEqual([THEIR_PIPELINE, MY_PIPELINE]);
+    expect(step.done!(fake.obs())).toBe(false);
+
+    fake.show(DELETE_CONFIRM);
+    fake.deleteFromLibrary();
+    expect(step.done!(fake.obs())).toBe(true);
+    expect(fake.app.libraryPipelineIds).toEqual([THEIR_PIPELINE]);
   });
 });

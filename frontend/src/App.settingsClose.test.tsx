@@ -229,6 +229,15 @@ vi.mock("./api", () => {
         last_attempt: null,
       }),
       applyUpdate: vi.fn().mockResolvedValue({}),
+      // #983: « What's new » mounts the Changelog, which fetches its notes on open.
+      fetchUpdateChangelog: vi.fn().mockResolvedValue({
+        installed_version: "9.9.9-test",
+        latest_version: "9.9.10-test",
+        missed_versions: ["9.9.10-test"],
+        source: "releases",
+        fallback_reason: null,
+        markdown: "## v9.9.10-test\n\n- A change.\n",
+      }),
       fetchUpdateAttemptLog: vi.fn().mockResolvedValue(""),
       checkForUpdateNow: vi.fn().mockResolvedValue({}),
       fetchLibrary: vi.fn().mockResolvedValue([]),
@@ -280,6 +289,8 @@ vi.mock("./api", () => {
         symlink: [],
       }),
       fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
+      // #983: Save & close on the dirty guard writes the draft, then leaves.
+      updateSettings: vi.fn().mockImplementation(() => fetchSettingsMock()),
       fetchSandboxProfiles: vi.fn().mockResolvedValue({
         profiles: [virtualProfile("full"), virtualProfile("minimal")],
         home: "/home/user",
@@ -671,5 +682,195 @@ describe("App — Assistant and Info toolbar buttons are exclusive (#938)", () =
     await waitFor(() =>
       expect(document.querySelector('[data-line="3"]')).toHaveClass("bg-st-failed/20"),
     );
+  }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// #983 (story PDO-14) — « Sortie vers une modale de l'app ». Update and What's new
+// open modals mounted by App, at the surface's z-index and before it in the tree:
+// left open, Settings covered them. They now leave Settings first, through the
+// dirty guard every other exit takes. Only the real App shows which one is on
+// screen, hence this harness.
+// ---------------------------------------------------------------------------
+
+describe("App — Update and What's new leave Settings first (#983)", () => {
+  let restoreUpdateStatus: () => void = () => {};
+
+  beforeEach(async () => {
+    localStorage.setItem("pdo.tour.offered", "1");
+    // A newer release is known: « What's new » only renders next to a latest version.
+    const { fetchUpdateStatus } = await import("./api");
+    const base = await fetchUpdateStatus();
+    vi.mocked(fetchUpdateStatus).mockResolvedValue({
+      ...base,
+      latest_version: "9.9.10-test",
+      newer_available: true,
+      install_method: "script",
+    });
+    restoreUpdateStatus = () => vi.mocked(fetchUpdateStatus).mockResolvedValue(base);
+  });
+
+  afterEach(() => restoreUpdateStatus());
+
+  async function updateButton() {
+    const button = await screen.findByTestId("setting-version-update-button");
+    await waitFor(() => expect(button).toBeEnabled());
+    return button;
+  }
+
+  async function makeDraft(user: ReturnType<typeof userEvent.setup>) {
+    const cap = await screen.findByTestId("setting-session-cap");
+    await user.clear(cap);
+    await user.type(cap, "7");
+    return cap;
+  }
+
+  it("Update closes Settings, then shows the update confirm alone", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+
+    await user.click(await updateButton());
+
+    await expectClosed();
+    expect(await screen.findByTestId("update-confirm")).toBeInTheDocument();
+  }, 20_000);
+
+  it("What's new closes Settings, then shows the Changelog alone", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+
+    await user.click(await screen.findByTestId("setting-version-whats-new"));
+
+    await expectClosed();
+    expect(await screen.findByTestId("changelog-modal")).toBeInTheDocument();
+  }, 20_000);
+
+  it("cancelling the confirm returns to the app, Settings stays closed", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    await user.click(await updateButton());
+    await screen.findByTestId("update-confirm");
+
+    await user.click(screen.getByTestId("update-confirm-cancel"));
+
+    await waitFor(() => expect(screen.queryByTestId("update-confirm")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("changelog-modal")).not.toBeInTheDocument();
+    // Reopening lands back on General, where Version & update lives.
+    await openSettings(user);
+    expect(screen.getByTestId("setting-version-update-button")).toBeInTheDocument();
+  }, 20_000);
+
+  it("closing the Changelog returns to the app, Settings stays closed", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    await user.click(await screen.findByTestId("setting-version-whats-new"));
+    await screen.findByTestId("changelog-modal");
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByTestId("changelog-modal")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+  }, 20_000);
+
+  it.each([
+    ["Update", "setting-version-update-button"],
+    ["What's new", "setting-version-whats-new"],
+  ])("with a draft, keeping editing after %s leaves Settings open, no modal", async (_, testId) => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    await updateButton();
+    const cap = await makeDraft(user);
+
+    await user.click(screen.getByTestId(testId));
+    expect(await screen.findByTestId("settings-confirm-close")).toBeInTheDocument();
+    await user.click(screen.getByTestId("settings-confirm-keep"));
+
+    expect(screen.queryByTestId("settings-confirm-close")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-surface")).toBeInTheDocument();
+    expect(cap).toHaveValue(7);
+    expect(screen.queryByTestId("update-confirm")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("changelog-modal")).not.toBeInTheDocument();
+  }, 20_000);
+
+  it.each([
+    ["Update", "setting-version-update-button", "update-confirm"],
+    ["What's new", "setting-version-whats-new", "changelog-modal"],
+  ])("with a draft, discarding after %s closes Settings, then shows the modal", async (_, testId, modal) => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    await updateButton();
+    await makeDraft(user);
+
+    await user.click(screen.getByTestId(testId));
+    await user.click(await screen.findByTestId("settings-confirm-discard"));
+
+    await expectClosed();
+    expect(await screen.findByTestId(modal)).toBeInTheDocument();
+  }, 20_000);
+
+  it("with a draft, Save & close after Update saves it, closes Settings, then shows the confirm", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    await makeDraft(user);
+    await user.click(await updateButton());
+
+    await user.click(await screen.findByTestId("settings-confirm-save-close"));
+
+    await expectClosed();
+    expect(await screen.findByTestId("update-confirm")).toBeInTheDocument();
+    const { updateSettings } = await import("./api");
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({ session_cap: 7 }));
+  }, 20_000);
+
+  it("Escape on the guard drops the parked modal: a later plain close opens nothing", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    await makeDraft(user);
+    await user.click(await updateButton());
+    await screen.findByTestId("settings-confirm-close");
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("settings-confirm-close")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-surface")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("settings-cancel"));
+    await user.click(await screen.findByTestId("settings-confirm-discard"));
+    await expectClosed();
+    expect(screen.queryByTestId("update-confirm")).not.toBeInTheDocument();
+  }, 20_000);
+
+  it("the Changelog's own Update still stacks the confirm over it", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    await user.click(await screen.findByTestId("setting-version-whats-new"));
+    await screen.findByTestId("changelog-modal");
+
+    await user.click(await screen.findByTestId("changelog-update"));
+
+    expect(await screen.findByTestId("update-confirm")).toBeInTheDocument();
+    expect(screen.getByTestId("changelog-modal")).toBeInTheDocument();
+  }, 20_000);
+
+  it("the Changelog's « Version & update » still reopens Settings", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    await user.click(await screen.findByTestId("setting-version-whats-new"));
+    await screen.findByTestId("changelog-modal");
+
+    await user.click(screen.getByTestId("changelog-open-settings"));
+
+    expect(await screen.findByTestId("settings-surface")).toBeInTheDocument();
+    expect(screen.queryByTestId("changelog-modal")).not.toBeInTheDocument();
   }, 20_000);
 });

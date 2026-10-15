@@ -12,10 +12,11 @@
  * Launch, the unbounded wait and what it says when the node ends badly, and the
  * recap that names what the tour actually observed.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canAdvance,
   confirmStep,
+  copyBlockOf,
   currentStep,
   needsConfirm,
   observeTour,
@@ -29,10 +30,12 @@ import {
   type TourObservation,
   type TourRun,
   type TourRunNode,
+  type TourRunSummary,
   type TourStep,
 } from "../tour";
 import {
   FIRST_RUN_TOUR,
+  firstRunName,
   TUTORIAL_PROJECT_NAME,
   TUTORIAL_PROMPT,
   TUTORIAL_REPO_PATH,
@@ -42,6 +45,15 @@ import {
 import { CARD_HEIGHT, CARD_WIDTH } from "../nodePlacement";
 
 const TOUR = FIRST_RUN_TOUR;
+
+/** This browser's identité de tour, pinned for every test (#987). */
+const ME = "k3x9";
+const MY_RUN_NAME = `my-first-run-${ME}`;
+
+beforeEach(() => {
+  localStorage.clear();
+  localStorage.setItem("pdo.tour.identity", ME);
+});
 const STEPS = TOUR.steps;
 
 const t = (id: string) => `[data-testid="${id}"]`;
@@ -90,7 +102,8 @@ const EMPTY_APP: TourAppState = {
   libraryPipelineIds: [],
   runCount: 0,
   runs: [],
-  latestRun: null,
+  launchedRunId: null,
+  myRun: null,
   activeRunId: null,
 };
 
@@ -104,10 +117,16 @@ const EMPTY_APP: TourAppState = {
  *
  * It starts with **two Runs already in the list**: this instance is not empty, so
  * a last step that merely asked "is there a Run?" would be satisfied before the
- * user pressed anything.
+ * user pressed anything. And the instance is **shared** (#987): {@link
+ * foreignLaunch} is a neighbour's Launch, which puts a newer Run at the head of
+ * the list without being this browser's.
  */
 class FakeApp {
-  app: TourAppState = { ...EMPTY_APP, runCount: 2, latestRun: { id: "r-old", name: "older", nodes: [] } };
+  app: TourAppState = {
+    ...EMPTY_APP,
+    runCount: 2,
+    runs: [summary("r-old", "older"), summary("r-older", "oldest")],
+  };
   /** Frozen at construction — what "did this tour cause it?" is measured against. */
   readonly baseline: TourAppState = { ...this.app };
   private dom = new Set<string>([RUNS_TAB, NEW_RUN]);
@@ -201,17 +220,31 @@ class FakeApp {
     this.hide(SKILLS_FOLDER, skillOption("pdo-orchestrate"), skillOption("pdo-interactive"));
   }
 
-  /** A launch the daemon accepted: the modal closes itself, the Run is in the list. */
-  launch(name = "my-first-run") {
+  /** A launch the daemon accepted: the modal closes itself, the form hands the
+   *  id it received to the app, and the Run is in the list. */
+  launch(name = MY_RUN_NAME, id = "r-new") {
     this.hide(NAME_INPUT, AUTO_NAME, REPO_INPUT, BROWSE, PIPELINE_TRIGGER, AGENT_TRIGGER, SKILLS_TRIGGER, PROMPT_INPUT, LAUNCH);
     this.app = {
       ...this.app,
       runCount: this.app.runCount + 1,
+      runs: [summary(id, name), ...this.app.runs],
+      launchedRunId: id,
       // The list entry only. Its nodes arrive with the detail, which the UI
       // fetches when the Run is opened — which is what step 10 asks for.
-      latestRun: { id: "r-new", name, nodes: [] },
+      myRun: { id, name, nodes: [] },
     };
-    this.show(runRow("r-new"));
+    this.show(runRow(id));
+  }
+
+  /** Somebody else's Launch on the same instance (#987): a newer Run heads the
+   *  list, and nothing this browser holds changes. */
+  foreignLaunch(name = "my-first-run-zzzz", id = "r-foreign") {
+    this.app = {
+      ...this.app,
+      runCount: this.app.runCount + 1,
+      runs: [summary(id, name), ...this.app.runs],
+    };
+    this.show(runRow(id));
   }
 
   /** A launch the daemon refused: the modal stays, with its error line showing. */
@@ -227,10 +260,10 @@ class FakeApp {
     this.show(NODE_CARD);
     this.app = {
       ...this.app,
-      activeRunId: this.app.latestRun?.id ?? null,
-      latestRun: this.app.latestRun
+      activeRunId: this.app.myRun?.id ?? null,
+      myRun: this.app.myRun
         ? {
-            ...this.app.latestRun,
+            ...this.app.myRun,
             nodes: [{ id: NODE_ID, name: NODE_ID, type: "agent", status: "running", released: false }],
           }
         : null,
@@ -260,23 +293,27 @@ class FakeApp {
   }
 
   private patchNode(patch: Partial<TourRunNode>) {
-    const run = this.app.latestRun;
+    const run = this.app.myRun;
     if (!run) return;
     this.app = {
       ...this.app,
-      latestRun: { ...run, nodes: run.nodes.map((n) => ({ ...n, ...patch })) },
+      myRun: { ...run, nodes: run.nodes.map((n) => ({ ...n, ...patch })) },
     };
   }
 }
 
 const runRow = (id: string) => `[data-run-row="${id}"]`;
 
+function summary(id: string, name: string): TourRunSummary {
+  return { id, name, pipeline: TUTORIAL_RUN_PIPELINE_ID, status: "running" };
+}
+
 /** What the user does at each step. Keys are checked against the definition, so a
  *  new step with no gesture fails loudly instead of being walked past. */
 function gestures(fake: FakeApp): Record<string, () => void> {
   return {
     "open-new-run": () => fake.openModal(),
-    "name-run": () => fake.type(NAME_INPUT, "my-first-run"),
+    "name-run": () => fake.type(NAME_INPUT, MY_RUN_NAME),
     "browse-repo": () => fake.openExplorer(),
     "pick-repo": () => fake.pickRepo(TUTORIAL_REPO_PATH, true),
     "pick-pipeline": () => {
@@ -592,7 +629,8 @@ describe("the Launch step", () => {
 
   /**
    * On an instance that already has Runs, "a Run exists" is true before the user
-   * touches anything. The condition is against the count the tour STARTED with.
+   * touches anything. The condition is the id THIS browser's Launch received,
+   * against the one the tour started with.
    */
   it("advances on a Run this tour caused, not on any Run at all", () => {
     const fake = new FakeApp();
@@ -602,6 +640,31 @@ describe("the Launch step", () => {
 
     fake.launch();
     expect(step.done!(fake.obs())).toBe(true);
+  });
+
+  /** #987: on a shared instance a neighbour's Launch adds a Run too — one more
+   *  Run in the list is not yours. */
+  it("does not advance on another browser's Launch", () => {
+    const fake = new FakeApp();
+    const step = stepById("launch");
+    fake.foreignLaunch();
+    expect(fake.app.runCount).toBe(3);
+    expect(step.done!(fake.obs())).toBe(false);
+  });
+
+  /** A replay of the tour starts from a browser that already launched once: its
+   *  baseline holds that id, and only a NEW Launch moves the step on. */
+  it("advances on a new id, not on the one an earlier Launch left behind", () => {
+    const fake = new FakeApp();
+    fake.launch("first-try", "r-earlier");
+    const replay = new FakeApp();
+    replay.app = { ...fake.app };
+    Object.assign(replay, { baseline: { ...fake.app } });
+    const step = stepById("launch");
+    expect(step.done!(replay.obs())).toBe(false);
+
+    replay.launch();
+    expect(step.done!(replay.obs())).toBe(true);
   });
 
   it("stops the tour on a refusal, quoting the daemon verbatim", () => {
@@ -700,7 +763,7 @@ describe("finding the Run, and opening its node", () => {
     const fake = new FakeApp();
     fake.launch();
     const run = at(fake, "find-run");
-    expect(stepBody(stepById("find-run"), fake.obs())).toContain("Click your Run");
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain(`Click ${MY_RUN_NAME} in the list on the left.`);
     expect(canAdvance(TOUR, run, fake.obs())).toBe(false);
     // …and no dead `Next` in the way of the instruction: the footer keeps the
     // waiting line the design drew, until there is something to confirm.
@@ -776,14 +839,63 @@ describe("finding the Run, and opening its node", () => {
     expect(needsConfirm(TOUR, run, fake.obs())).toBe(false);
   });
 
+  /**
+   * #987: a neighbour launched a second after you, so THEIR Run heads the list.
+   * The frame goes to yours wherever it sits, and the card never claims a « top
+   * row » it cannot see.
+   */
+  it("follows the Run this browser launched, even with a newer foreign Run on top", () => {
+    const fake = new FakeApp();
+    const step = stepById("find-run");
+    fake.launch();
+    fake.foreignLaunch();
+    expect(fake.app.runs[0].id).toBe("r-foreign");
+
+    expect(fake.app.myRun?.id).toBe("r-new");
+    expect(step.target(fake.obs())).toEqual([runRow("r-new")]);
+    const asked = stepBody(step, fake.obs());
+    expect(asked).toBe(
+      `Click ${MY_RUN_NAME} in the list on the left. Every Run is a row here; the dot is its status, blue while it runs.`,
+    );
+    expect(asked).not.toMatch(/top/i);
+
+    fake.openRun();
+    expect(step.done!(fake.obs())).toBe(true);
+    const opened = stepBody(step, fake.obs());
+    expect(opened).toBe(
+      `Your Run, ${MY_RUN_NAME}, is lit in the list on the left, and Launch already opened its tab. Every Run is a row here; the dot is its status, blue while it runs.`,
+    );
+  });
+
+  /** A foreign Run being open on the canvas is not yours being open. */
+  it("does not count a foreign Run's tab as yours", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.foreignLaunch();
+    fake.app = { ...fake.app, activeRunId: "r-foreign" };
+    expect(stepById("find-run").done!(fake.obs())).toBe(false);
+  });
+
+  it("names the Run by what the reader typed, suffixed or not", () => {
+    const fake = new FakeApp();
+    fake.launch("release-check");
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain("Click release-check in the list");
+  });
+
+  it("says « your Run » while this browser has launched nothing", () => {
+    const fake = new FakeApp();
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain("Click your Run in the list on the left.");
+    expect(stepById("find-run").target(fake.obs())).toEqual([]);
+  });
+
   it("names the node the Run actually has, rather than assuming one", () => {
     const fake = new FakeApp();
     fake.launch();
     fake.openRun();
     fake.app = {
       ...fake.app,
-      latestRun: {
-        ...fake.app.latestRun!,
+      myRun: {
+        ...fake.app.myRun!,
         nodes: [{ id: "n1", name: "reviewer", type: "agent", status: "running", released: false }],
       },
     };
@@ -1017,7 +1129,16 @@ describe("the recap", () => {
     expect(first.text).toContain(TUTORIAL_REPO_PATH);
   });
 
-  it("falls back to a neutral label when the list has not caught up", () => {
+  /** #987: the recap reads YOUR Run, never the head of the list. */
+  it("never names the Run somebody else launched after you", () => {
+    const fake = new FakeApp();
+    fake.launch();
+    fake.foreignLaunch("their-run");
+    const [first] = recapOf(TOUR, fake.app);
+    expect(first.label).toBe(MY_RUN_NAME);
+  });
+
+  it("falls back to a neutral label when this browser has launched nothing", () => {
     const [first] = recapOf(TOUR, EMPTY_APP);
     expect(first.label).toBe("your Run");
   });
@@ -1113,6 +1234,17 @@ describe("the definition holds the copy rules", () => {
       if (free.includes(step.id)) expect(step.confirm === true || !step.done, step.id).toBe(true);
     }
     expect(stepById("talk-to-agent").copyBlock).toBe(TUTORIAL_TERMINAL_LINE);
+  });
+
+  /** #987: the name to paste carries this browser's identité de tour, and the
+   *  card says why in the one place the suffix is pasted. */
+  it("suggests a Run name suffixed with this browser's identity", () => {
+    const step = stepById("name-run");
+    expect(copyBlockOf(step)).toBe(MY_RUN_NAME);
+    expect(firstRunName()).toBe(MY_RUN_NAME);
+    expect(stepBody(step, new FakeApp().obs())).toBe(
+      "Untick Auto-generated by manager, then paste the name. A name you chose is easier to find in the list; the four characters at the end are this browser's, so yours stays apart from other people's on a shared instance.",
+    );
   });
 
   /**

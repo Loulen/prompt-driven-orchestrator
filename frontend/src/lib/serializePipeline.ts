@@ -19,14 +19,14 @@
  * reject the save and nothing persisted. Change an emit rule here only against
  * the Rust reader.
  *
- * The two per-port emitters are DELIBERATELY divergent — do not unify them, see
- * the comment on `portToYamlObject`.
+ * The two per-port emitters differ on `when` — see the comment on
+ * `portToYamlObject`.
  */
 import type {
   PipelineDef,
   NodeDef,
   PortDef,
-  PortSide,
+  EdgeAnchor,
   FrontmatterFieldDecl,
 } from "../types";
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
@@ -148,8 +148,6 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     if (n.inputs.length > 0)
       node.inputs = n.inputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
-        if (port.repeated) p.repeated = true;
-        if (port.side) p.side = port.side;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
@@ -158,8 +156,6 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     if (n.outputs.length > 0)
       node.outputs = n.outputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
-        if (port.repeated) p.repeated = true;
-        if (port.side) p.side = port.side;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
@@ -180,6 +176,10 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     // Switch node's output ports.
     if (e.when && Object.keys(e.when).length > 0) edge.when = e.when;
     if (e.else === true) edge.else = true;
+    // Loop accumulation (#149): the edge is the only place it lives now that a
+    // port has no `repeated` (PDO-17), and no UI sets it — a save from the editor
+    // must not erase what the YAML declares.
+    if (e.repeated === true) edge.repeated = true;
     // Routing (#154): only manually-pinned edges persist their route. Auto
     // edges recompute deterministically, so they store no `mode`/`waypoints` —
     // emitting them would be noise. A `manual` mode without waypoints is also
@@ -200,18 +200,10 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     // geometry), so an untouched edge round-trips byte for byte. The offset is
     // rounded on persist — sub-pixel handle centres are what turn a straight wire
     // into a three-segment path with two phantom handles.
-    if (e.source_anchor) {
-      edge.source_anchor = {
-        side: e.source_anchor.side,
-        offset: Math.round(e.source_anchor.offset),
-      };
-    }
-    if (e.target_anchor) {
-      edge.target_anchor = {
-        side: e.target_anchor.side,
-        offset: Math.round(e.target_anchor.offset),
-      };
-    }
+    // An anchor without `offset` (a converted legacy port side, PDO-17) is the
+    // side's middle and keeps no offset.
+    if (e.source_anchor) edge.source_anchor = anchorToYamlObject(e.source_anchor);
+    if (e.target_anchor) edge.target_anchor = anchorToYamlObject(e.target_anchor);
     // Labels and draw order (#845). Layout again, and again emitted only when
     // NON-DEFAULT, so a pipeline nobody re-decorated saves back byte-identical:
     //  - `show_output_labels` has no constant default (it is derived from the
@@ -269,22 +261,21 @@ export function serializePipeline(p: PipelineDef): string {
   return yamlStringify(pipelineToYamlObject(p));
 }
 
+// The offset is rounded on persist (#844); an anchor without one stays without.
+function anchorToYamlObject(anchor: EdgeAnchor): Record<string, unknown> {
+  return anchor.offset == null
+    ? { side: anchor.side }
+    : { side: anchor.side, offset: Math.round(anchor.offset) };
+}
+
 // Serialize one authored port to the node-library YAML shape (#345), mirroring
 // `pipelineToYamlObject`'s per-port emit: `name` always; the rest only when
-// non-default so a plain port stays a clean `- name: x`. `side` is omitted when
-// it equals the direction's default (left for inputs, right for outputs) — the
-// value the daemon/`libraryPortToPortDef` re-fill on import, so it round-trips
-// by absence.
-// NOT a duplicate of the inline per-port emit in `pipelineToYamlObject` above:
-// that one emits `side` whenever set and `when` on outputs only; this one omits
-// `side` when it equals the direction default (the value the daemon refills on
-// import, so it round-trips by absence) and emits `when` on both directions.
-// Unifying them strips `side:` from every pipeline file and flips every library
-// star to `diverged`. #355 makes `side` SEMANTIC.
-function portToYamlObject(port: PortDef, defaultSide: PortSide): Record<string, unknown> {
+// non-default so a plain port stays a clean `- name: x`. A port has no side
+// nor `repeated` (PDO-17). NOT a duplicate of the inline per-port emit in
+// `pipelineToYamlObject` above: that one emits `when` on outputs only, this one
+// on both directions.
+function portToYamlObject(port: PortDef): Record<string, unknown> {
   const p: Record<string, unknown> = { name: port.name };
-  if (port.repeated) p.repeated = true;
-  if (port.side && port.side !== defaultSide) p.side = port.side;
   if (port.port_type && port.port_type !== "markdown") p.port_type = port.port_type;
   if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
   if (port.when) p.when = port.when;
@@ -369,10 +360,10 @@ export function exportNodeAsYaml(node: NodeDef, prompt: string): string {
   // requires; regular nodes never set it, so its presence is the signal.
   if (node.max_iter !== undefined && node.max_iter !== null) obj.max_iter = node.max_iter;
   if (node.inputs.length > 0) {
-    obj.inputs = node.inputs.map((p) => portToYamlObject(p, "left"));
+    obj.inputs = node.inputs.map(portToYamlObject);
   }
   if (node.outputs.length > 0) {
-    obj.outputs = node.outputs.map((p) => portToYamlObject(p, "right"));
+    obj.outputs = node.outputs.map(portToYamlObject);
   }
   return `${yamlStringify(obj)}\n${promptToBlockScalar(prompt)}`;
 }

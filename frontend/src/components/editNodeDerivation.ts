@@ -85,13 +85,8 @@ export function deriveEditNodes(
         isolated: runState?.nodes?.[n.id]?.isolated_worktree ?? isNodeIsolated(n),
         status,
         reached: markerReached(n.type, runState),
-        // Input images uploaded with the run surface on the start marker only
-        // (issue #145). They come from the projected run state, so template
-        // editing (no run state) leaves the start node image-free.
-        inputImages:
-          n.type === "start" ? (runState?.start_node?.input_images ?? []) : undefined,
-        inputs: n.inputs.map((p) => ({ name: p.name, side: p.side ?? "left", description: p.description })),
-        outputs: n.outputs.map((p) => ({ name: p.name, side: p.side ?? "right", description: p.description })),
+        inputs: n.inputs.map((p) => ({ name: p.name, description: p.description })),
+        outputs: n.outputs.map((p) => ({ name: p.name, description: p.description })),
         interactive: n.interactive,
         agentMode:
           n.agent_choice?.mode === "profile"
@@ -476,56 +471,44 @@ function resolveTargetHandle(
  * as opposed to the persisted `target_side`.
  *
  * They differ exactly where the target keeps a DECLARED handle: `target_side` is
- * a lands-by-drop notion (#168) and such a node never has one, so the persisted
- * value reads back as the `left` default while the handle sits wherever the port
- * declares. Routing to `left` there lays
- * the perpendicular landing leg on a border the wire does not touch.
+ * a lands-by-drop notion (#168) and such a node never has one, so its handle
+ * sits on the left whatever the persisted value says (a port has no side,
+ * PDO-17).
  */
 export function resolveTargetGeometrySide(
   target: PipelineDef["nodes"][number],
   targetSide: PortSide,
 ): PortSide {
   if (landsByDrop(target.type)) return targetSide;
-  return target.inputs[0]?.side ?? "left";
+  return "left";
 }
 
 /**
  * The side an incoming edge lands on, read from what the file persists.
  *
  * The anchor comes first: a drop always writes one, while `target_side` is
- * written only when it is not `left` — so a left drop on an End declared `top`
- * lives in `target_anchor` alone. Absent both, a work node lands on the legacy
- * `left`, and the End marker on its `result`'s DECLARED side: that is where every
- * End edge saved before #840 landed, so an existing pipeline reopens unchanged
- * (the fallback trap of a rim/anchor rework, cf. `resolveSourceSide`).
+ * written only when it is not `left` — so a left drop on an End lives in
+ * `target_anchor` alone. Absent both, the edge lands on `left`. A legacy End
+ * whose `result` declared another side reaches here already converted: the
+ * daemon's loader turned that side into `target_side` (PDO-17).
  */
 export function resolveTargetSide(
-  target: PipelineDef["nodes"][number] | undefined,
   edge: PipelineDef["edges"][number],
 ): PortSide {
-  const persisted = edge.target_anchor?.side ?? edge.target_side;
-  if (persisted) return persisted;
-  if (target?.type === "end") return target.inputs[0]?.side ?? "left";
-  return "left";
+  return edge.target_anchor?.side ?? edge.target_side ?? "left";
 }
 
 /**
- * The side a wire leaves its source by. A drawn edge (#844) says so itself in
- * `source_anchor`. An edge drawn before #844 has no anchor: it left from its
- * output's DECLARED side — where the per-output dot used to sit — so that is the
- * fallback, `right` only when the port declares none. Falling straight back to
- * `right` sent every legacy `side: bottom|left|top` output out the wrong border,
- * back through its own card and into the target from the opposite side (#844 FP
- * iter-2, blocking).
+ * The side a wire leaves its source by: its `source_anchor` (#844), else
+ * `right`. A legacy output declared `side: bottom|left|top` reaches here already
+ * converted: the daemon's loader turned that side into a `source_anchor` without
+ * offset, the side's middle (PDO-17) — it replaces the #844 fallback on the
+ * port's declared side.
  */
 export function resolveSourceSide(
-  source: PipelineDef["nodes"][number] | undefined,
   edge: PipelineDef["edges"][number],
 ): PortSide {
-  if (edge.source_anchor) return edge.source_anchor.side;
-  const port = primaryPort(edge.source);
-  const declared = source?.outputs.find((p) => p.name === port) ?? source?.outputs[0];
-  return declared?.side ?? "right";
+  return edge.source_anchor?.side ?? "right";
 }
 
 export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
@@ -544,14 +527,11 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
 
   return pipeline.edges.map((e, i) => {
     const isEndEdge = endNodeId != null && e.target.node === endNodeId;
-    const sourceSide = resolveSourceSide(
-      pipeline.nodes.find((n) => n.id === e.source.node),
-      e,
-    );
+    const sourceSide = resolveSourceSide(e);
     const targetNode = pipeline.nodes.find((n) => n.id === e.target.node);
     // The persisted landing side (#168, #844). Only meaningful for a target that
     // lands by drop; declared/structural handles ignore it.
-    const targetSide: PortSide = resolveTargetSide(targetNode, e);
+    const targetSide: PortSide = resolveTargetSide(e);
     const targetHandle = targetNode
       ? resolveTargetHandle(targetNode, e.target.port, targetSide)
       : e.target.port || null;
@@ -604,7 +584,7 @@ export function deriveEditEdges(pipeline: PipelineDef): Edge<EditEdgeData>[] {
       // is no per-output handle any more. xyflow needs the binding for
       // connectivity and for its own geometry only; the drawn departure POINT
       // comes from `source_anchor` inside the edge component. An edge drawn
-      // before #844 has no anchor and leaves by its output's declared side.
+      // before #844 has no anchor and leaves by the right side.
       sourceHandle: rimHandleId(sourceSide),
       targetHandle,
       type: "orthogonal",

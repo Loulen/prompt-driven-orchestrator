@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, Copy, Download, ExternalLink, FileText, RefreshCw, TriangleAlert } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, FileText, Info, RefreshCw, TriangleAlert } from "lucide-react";
 import FullWindowShell, { type ShellDrawer } from "./FullWindowShell";
 import { announceSettingsChanged, useSettings } from "../hooks/useSettings";
 import { useUpdateStatus } from "../hooks/useUpdateStatus";
@@ -36,6 +36,9 @@ import ModelPicker from "./ModelPicker";
 import SessionCounter from "./SessionCounter";
 import HarnessSelect from "./HarnessSelect";
 import ThemeSelect from "./ThemeSelect";
+import { Tooltip, TooltipProvider } from "./ui/tooltip";
+import { useColourBlindStatus } from "../hooks/useColourBlindStatus";
+import { COLOUR_BLIND_STATUS_HELP } from "../lib/statusPalette";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../lib/uiPrefs";
 import { useWiringStore } from "../stores/wiringStore";
 import GridSizePicker from "./GridSizePicker";
@@ -95,9 +98,12 @@ interface Props {
   initialPosition?: SettingsPosition;
   /** Diagnostics › Price table links to Stats › Cost › Pricing details (one surface at a time). */
   onOpenStats?: (intent: StatsOpenIntent) => void;
-  /** #698: Version & update › « What's new » opens the changelog modal over the surface. */
+  /** #698: Version & update › « What's new ». Fired AFTER this surface has closed (#983). */
   onOpenChangelog?: () => void;
-  /** #699: Version & update › « Update » — the host owns the confirm and the waiting flow. */
+  /**
+   * #699: Version & update › « Update » — the host owns the confirm and the waiting flow.
+   * Fired AFTER this surface has closed (#983).
+   */
   onRequestUpdate?: () => void;
   /** #823: Tutorials › Start / Replay. Fired AFTER this surface has closed. */
   onStartTour?: (tourId: string) => void;
@@ -293,8 +299,11 @@ export default function SettingsSurface({
   const [confirmClose, setConfirmClose] = useState(false);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** #823 — a Tutorials Start waiting for this surface to actually close. */
-  const pendingTour = useRef<(() => void) | null>(null);
+  /**
+   * #823 / #983 — an action waiting for this surface to actually close: a Tutorials
+   * Start, or an app-level modal (update confirm, Changelog) it would otherwise cover.
+   */
+  const pendingExit = useRef<(() => void) | null>(null);
 
   useEffect(
     () => () => {
@@ -477,11 +486,12 @@ export default function SettingsSurface({
     setConfirmClose(false);
     setSaveState({ status: "idle" });
     onClose();
-    // #823: a tour parked by `startTourAfterClose` runs once the surface is
+    // #823 / #983: an action parked by `exitThen` runs once the surface is
     // actually gone — a Projecteur aiming at the app under a full-window
-    // Settings would point at nothing.
-    const parked = pendingTour.current;
-    pendingTour.current = null;
+    // Settings would point at nothing, and an app-level modal would open
+    // underneath it (same z-index, rendered before it).
+    const parked = pendingExit.current;
+    pendingExit.current = null;
     parked?.();
   };
 
@@ -492,21 +502,29 @@ export default function SettingsSurface({
   };
 
   /**
-   * #823 — Tutorials › Start / Replay. The tour goes through the SAME dirty guard
-   * as every other exit: a half-edited instance form is not something to drop
-   * because the reader clicked "Replay". Cancelling the confirm cancels the tour
-   * too, which is why the parked action is cleared on the way out either way.
+   * #823 / #983 — leave Settings, then run `action`: Tutorials › Start / Replay,
+   * Version & update › Update / What's new (« Sortie vers une modale de l'app »).
+   * The exit goes through the SAME dirty guard as every other one: a half-edited
+   * instance form is not something to drop because the reader clicked "Replay" or
+   * "Update". Cancelling the confirm cancels the action too, which is why the
+   * parked action is cleared on the way out either way.
    */
-  const startTourAfterClose = (run: () => void) => {
-    pendingTour.current = run;
+  const exitThen = (action: () => void) => {
+    pendingExit.current = action;
     requestClose();
+  };
+
+  /** Keep editing, Escape on the confirm, a failed Save & close: stay, drop the parked action. */
+  const stay = () => {
+    setConfirmClose(false);
+    pendingExit.current = null;
   };
 
   // Escape order: tooltip (Radix, before us) → skill bank if open → confirm-close if dirty
   // → close.
   const onEscape = () => {
     if (confirmClose) {
-      setConfirmClose(false);
+      stay();
       return;
     }
     if (drawer) {
@@ -670,9 +688,10 @@ export default function SettingsSurface({
             {item.id === "general" && (
               <>
                 <InterfaceSection section={item.sections[0]} />
+                <AccessibilitySection section={item.sections[1]} />
                 {values && settings ? (
                   <>
-                    <Section section={item.sections[1]}>
+                    <Section section={item.sections[2]}>
                       <SettingRow
                         id="session-cap"
                         label="Concurrent session cap"
@@ -740,7 +759,7 @@ export default function SettingsSurface({
                         unit=" MB"
                       />
                     </Section>
-                    <Section section={item.sections[2]}>
+                    <Section section={item.sections[3]}>
                       {/* Default Run auto-naming (#338). On by default — the pre-#338
                           behaviour. */}
                       <CheckboxRow
@@ -811,22 +830,24 @@ export default function SettingsSurface({
                 ) : (
                   loading
                 )}
+                {/* #983 — Update and What's new open app-level modals: close first,
+                    or the surface covers them. */}
                 <VersionUpdateSection
-                  onRequestUpdate={onRequestUpdate}
-                  section={item.sections[3]}
+                  onRequestUpdate={onRequestUpdate && (() => exitThen(onRequestUpdate))}
+                  section={item.sections[4]}
                   active={open}
-                  onOpenChangelog={onOpenChangelog}
+                  onOpenChangelog={onOpenChangelog && (() => exitThen(onOpenChangelog))}
                 />
                 {/* #823 — guided tours. Every entry closes this surface first:
                     a tour points at the app, which is underneath it. */}
-                <Section section={item.sections[4]}>
+                <Section section={item.sections[5]}>
                   <TutorialsSection
-                    onStartTour={(tourId) => startTourAfterClose(() => onStartTour?.(tourId))}
-                    onStartFullTour={() => startTourAfterClose(() => onStartFullTour?.())}
+                    onStartTour={(tourId) => exitThen(() => onStartTour?.(tourId))}
+                    onStartFullTour={() => exitThen(() => onStartFullTour?.())}
                   />
                 </Section>
                 {/* #891 — Stats absorptions: saves as you go, whatever `GET /settings` said. */}
-                <Section section={item.sections[5]}>
+                <Section section={item.sections[6]}>
                   <StatsAbsorptionsPanel active={open} />
                 </Section>
               </>
@@ -1178,16 +1199,12 @@ export default function SettingsSurface({
         <ConfirmCloseDialog
           rollup={rollup}
           saving={saveState.status === "saving"}
-          onKeep={() => {
-            setConfirmClose(false);
-            // Staying also cancels a tour parked by Tutorials (#823).
-            pendingTour.current = null;
-          }}
+          onKeep={stay}
           onDiscard={closeNow}
           onSaveAndClose={async () => {
             const ok = await handleSave();
             if (ok) closeNow();
-            else setConfirmClose(false);
+            else stay();
           }}
         />
       )}
@@ -1377,6 +1394,64 @@ function Section({ section, children }: { section: SettingsSection; children: Re
       </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * Settings › General › Accessibility (#1005). Device-local like the Interface
+ * controls: the switch writes localStorage and repaints `<html>` at the click,
+ * outside the form's Save and the dirty set; other open tabs follow through the
+ * `storage` event (`useColourBlindStatus`). No permanent description — the
+ * detail rides a tooltip on the Info icon, and `aria-describedby` for a screen
+ * reader, which a Radix tooltip only wires while it is open.
+ */
+function AccessibilitySection({ section }: { section: SettingsSection }) {
+  const { enabled, setEnabled } = useColourBlindStatus();
+  return (
+    <Section section={section}>
+      <div className="flex items-center gap-2.5">
+        <button
+          type="button"
+          role="switch"
+          id="setting-colour-blind-status"
+          aria-checked={enabled}
+          aria-describedby="setting-colour-blind-status-help"
+          data-testid="setting-colour-blind-status"
+          onClick={() => setEnabled(!enabled)}
+          className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
+            enabled ? "bg-acc" : "bg-fg-5"
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
+              enabled ? "left-3" : "left-0.5"
+            }`}
+          />
+        </button>
+        <label
+          htmlFor="setting-colour-blind-status"
+          className="cursor-pointer font-medium text-fg-2"
+          style={{ fontSize: "11.5px" }}
+        >
+          Colour-blind friendly status colours
+        </label>
+        <TooltipProvider>
+          <Tooltip content={COLOUR_BLIND_STATUS_HELP} side="right">
+            <button
+              type="button"
+              aria-label="About colour-blind friendly status colours"
+              data-testid="setting-colour-blind-status-info"
+              className="grid cursor-help place-items-center text-fg-4 hover:text-fg-2"
+            >
+              <Info size={12} />
+            </button>
+          </Tooltip>
+        </TooltipProvider>
+        <span id="setting-colour-blind-status-help" className="sr-only">
+          {COLOUR_BLIND_STATUS_HELP}
+        </span>
+      </div>
+    </Section>
   );
 }
 

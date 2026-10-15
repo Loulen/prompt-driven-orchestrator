@@ -938,8 +938,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
-                    side: None,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -952,8 +950,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
-                    side: None,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -983,8 +979,6 @@ mod tests {
             node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: port_name.into(),
-                repeated: true,
-                side: None,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -994,8 +988,6 @@ mod tests {
             }],
             outputs: vec![Port {
                 name: "out".into(),
-                repeated: false,
-                side: None,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -1056,6 +1048,7 @@ mod tests {
                 completed_at: None,
                 interactive: false,
                 completion_released: false,
+                waited_ms: 0,
             }],
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -1087,6 +1080,7 @@ mod tests {
                 completed_at: Some("t1".into()),
                 interactive: false,
                 completion_released: false,
+                waited_ms: 0,
             }],
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),
@@ -1784,6 +1778,7 @@ mod tests {
                     completed_at: None,
                     interactive: false,
                     completion_released: false,
+                    waited_ms: 0,
                 })
                 .collect(),
             frontmatter_retries: 0,

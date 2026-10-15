@@ -26,10 +26,20 @@ fn looks_like_nanoid(id: &str) -> bool {
     id.len() == NANOID_LEN && id.bytes().all(|b| NANOID_ALPHABET.contains(&b))
 }
 
-fn port_missing_side(ports: &[serde_yaml::Value]) -> bool {
-    ports.iter().any(|p| {
-        p.as_mapping()
-            .is_some_and(|m| !m.contains_key(serde_yaml::Value::String("side".into())))
+/// Whether any input or output of `node` still declares a legacy port key
+/// (pre-PDO-17): a `side`, which [`pipeline::convert_legacy_ports`] turns into
+/// edge anchors, or a `repeated`, whose accumulation belongs to the edge. Both
+/// keys go.
+fn node_has_legacy_port_key(node: &serde_yaml::Value) -> bool {
+    ["inputs", "outputs"].iter().any(|key| {
+        node.get(*key)
+            .and_then(|v| v.as_sequence())
+            .is_some_and(|ports| {
+                ports.iter().any(|p| {
+                    p.as_mapping()
+                        .is_some_and(|m| m.contains_key("side") || m.contains_key("repeated"))
+                })
+            })
     })
 }
 
@@ -92,6 +102,12 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
         if node.get("model").is_some() || node.get("effort").is_some() {
             return true;
         }
+        // A port that still declares a `side` or a `repeated` (any node,
+        // structural included): the side converts into edge anchors, and both
+        // keys go (PDO-17).
+        if node_has_legacy_port_key(node) {
+            return true;
+        }
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if matches!(node_type, "start" | "end" | "switch" | "loop") {
             continue;
@@ -116,11 +132,6 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
                 .is_some_and(|s| !s.is_empty())
         {
             return true;
-        }
-        if let Some(outputs) = node.get("outputs").and_then(|v| v.as_sequence()) {
-            if port_missing_side(outputs) {
-                return true;
-            }
         }
     }
     false
@@ -326,16 +337,7 @@ pub(crate) fn migrate_pipeline_yaml(
 
     // Strip declared inputs from regular nodes (they are emergent), moving any
     // `repeated: true` onto the matching incoming edge so accumulation survives.
-    // Before side backfill, so dropped inputs are never backfilled.
     drop_declared_inputs(&mut doc);
-
-    let nodes_for_side = doc.get_mut("nodes").and_then(|n| n.as_sequence_mut());
-    if let Some(nodes_for_side) = nodes_for_side {
-        for node in nodes_for_side.iter_mut() {
-            backfill_port_sides(node, "inputs", "left");
-            backfill_port_sides(node, "outputs", "right");
-        }
-    }
 
     inject_start_end_nodes(&mut doc);
 
@@ -348,6 +350,13 @@ pub(crate) fn migrate_pipeline_yaml(
             }
         }
     }
+
+    // The same conversion the parse runs (PDO-17): a legacy port `side` becomes
+    // an edge anchor, then the key goes, and so does a port `repeated`. Last, so
+    // the edges it reads already carry the rewritten ids and the dissolved
+    // switch/loop wiring, and a declared input's `repeated` has already moved
+    // onto its edge (`drop_declared_inputs`).
+    pipeline::convert_legacy_ports(&mut doc);
 
     let yaml_text =
         serde_yaml::to_string(&doc).map_err(|e| format!("YAML serialize error: {e}"))?;
@@ -730,24 +739,6 @@ fn drop_declared_inputs(doc: &mut serde_yaml::Value) {
                 if let Some(m) = node.as_mapping_mut() {
                     m.remove(serde_yaml::Value::String("inputs".into()));
                 }
-            }
-        }
-    }
-}
-
-fn backfill_port_sides(node: &mut serde_yaml::Value, key: &str, default_side: &str) {
-    let ports = match node.get_mut(key).and_then(|v| v.as_sequence_mut()) {
-        Some(seq) => seq,
-        None => return,
-    };
-    let side_key = serde_yaml::Value::String("side".into());
-    for port in ports.iter_mut() {
-        if let Some(m) = port.as_mapping_mut() {
-            if !m.contains_key(&side_key) {
-                m.insert(
-                    side_key.clone(),
-                    serde_yaml::Value::String(default_side.into()),
-                );
             }
         }
     }
@@ -1620,7 +1611,6 @@ nodes:
     isolated_worktree: true
     outputs:
       - name: code
-        side: right
     view: { x: 100, y: 160 }
   - id: end
     name: End
@@ -1936,9 +1926,8 @@ edges: []
     }
 
     #[test]
-    fn backfills_output_port_side_defaults() {
-        // Output ports get a default `side: right`; declared inputs are dropped, so
-        // there are no input sides to backfill.
+    fn migration_writes_no_port_side() {
+        // A port has no side (PDO-17): the migration no longer backfills one.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -1971,14 +1960,97 @@ edges: []
                 || worker["inputs"].as_sequence().is_some_and(|s| s.is_empty()),
             "declared inputs are dropped (emergent)"
         );
-        assert_eq!(outputs[0]["side"].as_str().unwrap(), "right");
-        assert_eq!(outputs[1]["side"].as_str().unwrap(), "right");
+        assert_eq!(outputs.len(), 2);
+        assert!(outputs.iter().all(|p| p.get("side").is_none()));
+    }
+
+    /// A canonical pipeline whose only legacy trait is the per-port `side`.
+    const LEGACY_PORT_SIDES_YAML: &str = r#"
+name: test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+        side: right
+  - id: aBcD1234
+    name: worker
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: plan
+        side: bottom
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+        side: top
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: aBcD1234, port: in }
+  - source: { node: aBcD1234, port: plan }
+    target: { node: end, port: result }
+  - source: { node: aBcD1234, port: plan }
+    target: { node: end, port: result }
+    source_anchor: { side: left, offset: 20 }
+    target_anchor: { side: right, offset: 10 }
+"#;
+
+    #[test]
+    fn legacy_port_side_migrates_onto_the_edges() {
+        // PDO-17: a port that still declares `side` needs migration; the side
+        // becomes an edge anchor (no offset) or an End `target_side`, then goes.
+        let result =
+            migrate_pipeline_yaml(LEGACY_PORT_SIDES_YAML, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(result.migrated);
+
+        let doc: serde_yaml::Value = serde_yaml::from_str(&result.yaml_text).unwrap();
+        for node in doc["nodes"].as_sequence().unwrap() {
+            for key in ["inputs", "outputs"] {
+                for port in node[key].as_sequence().into_iter().flatten() {
+                    assert!(port.get("side").is_none(), "{}", result.yaml_text);
+                }
+            }
+        }
+        let edges = doc["edges"].as_sequence().unwrap();
+        // `side: right` on start produces nothing.
+        assert!(edges[0].get("source_anchor").is_none());
+        assert!(edges[0].get("target_side").is_none());
+        // The unanchored edge takes the output side (middle) and the End side.
+        assert_eq!(edges[1]["source_anchor"]["side"].as_str(), Some("bottom"));
+        assert!(edges[1]["source_anchor"].get("offset").is_none());
+        assert_eq!(edges[1]["target_side"].as_str(), Some("top"));
+        // The anchored edge is intact.
+        assert_eq!(edges[2]["source_anchor"]["side"].as_str(), Some("left"));
+        assert_eq!(edges[2]["source_anchor"]["offset"].as_i64(), Some(20));
+        assert!(edges[2].get("target_side").is_none());
+        assert_eq!(edges[2]["target_anchor"]["side"].as_str(), Some("right"));
+
+        // A second migration changes nothing.
+        let again = migrate_pipeline_yaml(&result.yaml_text, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(!again.migrated);
+        assert_eq!(again.yaml_text, result.yaml_text);
     }
 
     #[test]
-    fn preserves_existing_output_port_side() {
-        // An explicit output `side` is never overwritten; declared inputs are
-        // dropped regardless.
+    fn a_port_without_side_needs_no_migration() {
+        // The guard is inverted (PDO-17): an output without `side` is the clean
+        // shape, a port that still carries one is the legacy shape.
+        let doc: serde_yaml::Value = serde_yaml::from_str(LEGACY_PORT_SIDES_YAML).unwrap();
+        assert!(needs_migration(&doc));
+        let mut converted = doc.clone();
+        pipeline::convert_legacy_ports(&mut converted);
+        assert!(!needs_migration(&converted));
+    }
+
+    #[test]
+    fn an_output_repeated_needs_migration_and_goes() {
+        // PDO-17: an output's `repeated` had no effect left (the edge carries
+        // accumulation). It flags the pipeline for migration, the key goes, the
+        // edge keeps its own `repeated`, and a second pass is a no-op.
         let yaml = r#"
 name: test
 version: "1.0"
@@ -1988,22 +2060,38 @@ nodes:
     type: start
     outputs:
       - name: user_prompt
-  - id: end
-    name: End
-    type: end
-    inputs:
-      - name: result
   - id: aBcD1234
     name: worker
     type: agent
     isolated_worktree: false
     outputs:
       - name: plan
-        side: top
-edges: []
+        repeated: true
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: aBcD1234, port: in }
+  - source: { node: aBcD1234, port: plan }
+    target: { node: end, port: result }
+    repeated: true
 "#;
+        let doc: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        assert!(needs_migration(&doc));
+
         let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
-        assert!(!result.migrated);
+        assert!(result.migrated);
+        let migrated: serde_yaml::Value = serde_yaml::from_str(&result.yaml_text).unwrap();
+        assert!(!needs_migration(&migrated));
+        assert!(migrated["nodes"][1]["outputs"][0].get("repeated").is_none());
+        assert_eq!(migrated["edges"][1]["repeated"].as_bool(), Some(true));
+
+        let again = migrate_pipeline_yaml(&result.yaml_text, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(!again.migrated);
+        assert_eq!(again.yaml_text, result.yaml_text);
     }
 
     #[test]

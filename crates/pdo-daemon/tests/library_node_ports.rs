@@ -1,6 +1,10 @@
 //! Layer 3a — POST a library node with fully-typed ports (frontmatter schemas,
-//! instructions, when clauses, repeated flag, side) → GET /library → assert every field
-//! round-trips through the daemon and on-disk YAML.  Regression test for #71.
+//! instructions, when clauses) → GET /library → assert every field round-trips
+//! through the daemon and on-disk YAML.  Regression test for #71.
+//!
+//! The payload still carries the legacy port `side` and `repeated` an old library
+//! entry has (e.g. `typed-reviewer`): a port has neither any more (PDO-17), so
+//! both keys are accepted and dropped.
 
 use crate::common::TestDaemon;
 
@@ -27,7 +31,7 @@ async fn library_node_preserves_all_port_fields() {
         "outputs": [
             {
                 "name": "review",
-                "repeated": false,
+                "repeated": true,
                 "side": "right",
                 "frontmatter": {
                     "verdict": {
@@ -79,17 +83,24 @@ async fn library_node_preserves_all_port_fields() {
     let inputs = entry["inputs"].as_array().unwrap();
     assert_eq!(inputs.len(), 2);
     assert_eq!(inputs[0]["name"], "code");
-    assert_eq!(inputs[0]["repeated"], false);
-    assert_eq!(inputs[0]["side"], "left");
+    assert!(
+        inputs[0].get("side").is_none(),
+        "PDO-17: a port has no side"
+    );
+    assert!(
+        inputs[0].get("repeated").is_none(),
+        "PDO-17: a port has no accumulation flag"
+    );
     assert_eq!(inputs[1]["name"], "reviews");
-    assert_eq!(inputs[1]["repeated"], true);
-    assert_eq!(inputs[1]["side"], "top");
+    assert!(inputs[1].get("side").is_none());
+    assert!(inputs[1].get("repeated").is_none());
 
     let outputs = entry["outputs"].as_array().unwrap();
     assert_eq!(outputs.len(), 1);
     let output = &outputs[0];
     assert_eq!(output["name"], "review");
-    assert_eq!(output["side"], "right");
+    assert!(output.get("side").is_none());
+    assert!(output.get("repeated").is_none());
 
     let frontmatter = &output["frontmatter"];
     assert!(!frontmatter.is_null(), "frontmatter should be present");
@@ -131,6 +142,8 @@ async fn library_node_preserves_all_port_fields() {
     let spec = &instantiated["spec"];
     let inst_outputs = spec["outputs"].as_array().unwrap();
     let inst_output = &inst_outputs[0];
+    assert!(inst_output.get("side").is_none());
+    assert!(inst_output.get("repeated").is_none());
     assert!(
         !inst_output["frontmatter"].is_null(),
         "instantiated output should have frontmatter"

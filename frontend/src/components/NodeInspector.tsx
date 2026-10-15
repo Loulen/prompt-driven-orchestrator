@@ -232,7 +232,7 @@ export default function NodeInspector({
     while (ports.some((p) => p.name === name)) {
       name = `out-${++counter}`;
     }
-    ports.push({ name, repeated: false, side: "right" });
+    ports.push({ name });
     updateNode(node!.id, { outputs: ports });
   }
 
@@ -916,16 +916,12 @@ function StarButton({
       type: node.type,
       inputs: node.inputs.map((p) => ({
         name: p.name,
-        repeated: p.repeated,
-        side: p.side,
         ...(p.port_type && p.port_type !== "markdown" ? { port_type: p.port_type } : {}),
         ...(p.frontmatter ? { frontmatter: p.frontmatter } : {}),
         ...(p.when ? { when: p.when } : {}),
       })),
       outputs: node.outputs.map((p) => ({
         name: p.name,
-        repeated: p.repeated,
-        side: p.side,
         ...(p.port_type && p.port_type !== "markdown" ? { port_type: p.port_type } : {}),
         ...(p.frontmatter ? { frontmatter: p.frontmatter } : {}),
         ...(p.when ? { when: p.when } : {}),
@@ -976,8 +972,8 @@ function StarButton({
       updateNodeFn({
         name: result.spec.name,
         type: result.spec.type as NodeType,
-        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p, "left")),
-        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p, "right")),
+        inputs: result.spec.inputs.map((p) => libraryPortToPortDef(p)),
+        outputs: result.spec.outputs.map((p) => libraryPortToPortDef(p)),
         interactive: result.spec.interactive,
         // #296/#345: reset the per-node model from the library entry too.
         model: result.spec.model ?? null,

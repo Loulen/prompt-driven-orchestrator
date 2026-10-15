@@ -296,7 +296,10 @@ export default function App() {
   // #825 adds the selected Run's detail, for the same reason and on the same
   // terms: the reading steps need a node's status and its completion guard, and
   // the inspector is already polling both.
-  const tour = useTour(runs, selectedRun);
+  // #987 adds the id this browser's last Launch received: on a shared instance
+  // « your Run » is the one your Launch created, not the head of the list.
+  const [launchedRunId, setLaunchedRunId] = useState<string | null>(null);
+  const tour = useTour(runs, selectedRun, launchedRunId);
   const [tourOffered, setTourOffered] = useState(loadTourOffered);
   const showWelcome = shouldOfferWelcome({
     offered: tourOffered,
@@ -813,8 +816,12 @@ export default function App() {
       // #552: a Projet mutation (name/harness/members) — refresh the Projet list
       // so the Runs and Triggers regrouping is live across clients. The Runs /
       // Triggers rows themselves are unchanged, so only the Projet list refetches.
+      // #992: deleting a Projet also rewrites the validations that named it
+      // (« All +1 » back to « All », a Projet-only one back to test), so the
+      // Pipelines list, which carries them, refetches too.
       if (msg.type === "project_changed") {
         refreshProjects();
+        loadPipelines();
         return;
       }
       // #974: a Pipeline's validation changed (another tab or client) — the
@@ -1202,6 +1209,7 @@ export default function App() {
         open={newRunModalOpen}
         onClose={handleCloseNewRunModal}
         onCreated={(runId) => {
+          setLaunchedRunId(runId);
           handleCloseNewRunModal();
           handleRunCreated(runId);
         }}

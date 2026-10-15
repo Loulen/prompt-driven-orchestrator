@@ -19,6 +19,7 @@
  */
 
 import type { PipelineDef } from "../types";
+import type { StatusKey } from "./statusTable";
 
 /**
  * One node of the Run a tour is following (#825), narrowed to the two facts the
@@ -89,17 +90,27 @@ export interface TourAppState {
   /** How many Runs this instance has (the welcome-modal rule reads it too). */
   runCount: number;
   /**
-   * The newest Run in the list, or `null` on a Run-less instance (#824). The
-   * *First run* tour ends on a recap of the Run the user just launched, and the
-   * modal that held its name is closed by then — so the name has to come from the
-   * list, which the UI has loaded anyway (ADR-0071 §3).
+   * The id the New Run form received from the daemon the last time THIS browser
+   * pressed Launch, or `null` before any (#987). On a shared instance the newest
+   * Run of the list may be a neighbour's, launched a second after yours; the id
+   * your own Launch got back is the one fact that says which Run is yours
+   * (CONTEXT.md § « Identité de tour »).
+   */
+  launchedRunId: string | null;
+  /**
+   * **Your Run** (#987, « monRun » of the PDO-20 grilling): the Run whose id
+   * {@link launchedRunId} holds, or `null` before this browser launched one. Never
+   * the head of the list — that used to be read as « the Run the tour just
+   * caused », and a neighbour's Launch then validated your step and stole your
+   * recap. Its name comes from the list once the list has caught up with the
+   * Launch, the id until then.
    *
    * `nodes` is empty until the user opens that Run: the detail is fetched by the
    * inspector, for the inspector. That is not a gap the tour has to paper over —
    * the step that asks the user to open the Run is precisely the one before the
    * steps that read its nodes (#825).
    */
-  latestRun: TourRunView | null;
+  myRun: TourRunView | null;
   /** Every Run the list holds, newest first (#911) — the same list the left panel
    *  renders, read rather than fetched (ADR-0071 §3). */
   runs: TourRunSummary[];
@@ -189,8 +200,14 @@ export interface TourStep {
   waitingFor: string;
   /** One extra sentence on the failure card, in the user's terms. */
   failureHint?: string;
-  /** A block to paste, rendered with a Copy button. Any free input gets one. */
-  copyBlock?: string;
+  /**
+   * A block to paste, rendered with a Copy button. Any free input gets one.
+   *
+   * A function when the block carries this browser's identité de tour (#987):
+   * `my-first-run-k3x9` is only known once the identity has been read, which a
+   * module constant cannot wait for. Resolve it with {@link copyBlockOf}.
+   */
+  copyBlock?: string | (() => string);
   /**
    * Free input: the step shows `Next` (enabled once `done` holds) instead of
    * advancing on its own, so the user owns the moment they move on (story 14).
@@ -264,12 +281,13 @@ export interface TourStep {
   refused?: (o: TourObservation) => string | null;
   /** Headline of the refusal card, e.g. "The Run could not be launched". */
   refusalTitle?: string;
-  /** One sentence under the quoted reason, in the user's terms. */
-  refusalHint?: string;
+  /** One sentence under the quoted reason, in the user's terms. A function for
+   *  the same reason as {@link TourStep.copyBlock}: it may name a suffixed object. */
+  refusalHint?: string | (() => string);
   /**
    * A small picture inside the card, under the body — for the one step whose
    * subject cannot be shown by lighting the app (#911, after the human test): the
-   * status dot has three colours and the tour's Run only ever wears one. Data,
+   * Status icon has a shape per status and the tour's Run only ever wears one. Data,
    * not markup, so the popover renders it without knowing which step asked.
    */
   illustration?: TourIllustration;
@@ -308,21 +326,17 @@ export interface TourAside {
 }
 
 /**
- * A card illustration (#911). One shape so far — a mock list whose rows lead
- * with a status dot, drawn with the app's own colour classes so the picture and
- * the real list cannot disagree.
+ * A card illustration (#911). One shape so far — a mock legend whose rows lead
+ * with a Status icon (PDO-22, #1000), drawn from the app's own `STATUS_TABLE` so
+ * the picture and the real list cannot disagree.
  */
 export interface TourIllustration {
   kind: "rows";
   rows: {
-    /** The row's name, e.g. a Run name. */
+    /** The status whose glyph leads the row: `completed`, `running`… */
+    status: StatusKey;
+    /** What the glyph means, in the reader's words — "waits for you". */
     label: string;
-    /** What the dot means, in the reader's words — "waits for you". */
-    detail: string;
-    /** The dot's colour class, the app's own: `bg-st-await`, `bg-st-done`… */
-    dotClass: string;
-    /** Pulse the dot, as the real list does for a live row. */
-    pulse?: boolean;
   }[];
 }
 
@@ -481,6 +495,12 @@ export function stepAsides(step: TourStep, o: TourObservation): TourAside[] {
   if (!step.asides) return [];
   if (step.done && !step.done(o)) return [];
   return step.asides(o);
+}
+
+/** The step's block to paste, resolved — `null` when it has none. */
+export function copyBlockOf(step: TourStep): string | null {
+  const block = typeof step.copyBlock === "function" ? step.copyBlock() : step.copyBlock;
+  return block || null;
 }
 
 /** Resolve the two end-card fields, which a tour may make depend on what it saw. */
@@ -666,7 +686,7 @@ export function observeTour(tour: TourDef, run: TourRun, o: TourObservation, now
         total: tour.steps.length,
         kind: "refused",
         waitingFor: step.waitingFor,
-        hint: step.refusalHint,
+        hint: typeof step.refusalHint === "function" ? step.refusalHint() : step.refusalHint,
         reason: refusal,
         title: step.refusalTitle,
       },

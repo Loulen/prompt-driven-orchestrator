@@ -91,35 +91,44 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     expect(edges[0].data?.targetAnchor).toEqual({ side: "top", offset: 36 });
   });
 
+  it("leaves an un-anchored edge by the right side (PDO-17)", () => {
+    // A port has no side: a legacy output side reaches the client already
+    // converted into a `source_anchor` by the daemon's loader, so an edge
+    // without one leaves rightwards.
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), node("dst", "agent", [], ["code"])],
+      [{ source: { node: "src", port: "plan" }, target: { node: "dst", port: "plan" } }],
+    );
+    const edges = deriveEditEdges(p);
+    expect(edges[0].sourceHandle).toBe("rim-right");
+    expect(edges[0].data?.sourceSide).toBe("right");
+    expect(edges[0].data?.sourceAnchor).toBeNull();
+  });
+
   it.each<[PortSide]>([["bottom"], ["left"], ["top"]])(
-    "leaves an un-anchored edge by its output's declared %s side, not rightwards (#844 FP iter-2)",
+    "leaves by a converted legacy anchor without offset on the %s side",
     (side) => {
-      // A pipeline saved before #844 has no `source_anchor`. Its wires left from
-      // the output dot, which sat on the port's declared side. Defaulting them
-      // to the right rim sent every one out the wrong border, back across its
-      // own card and into the target from the opposite side.
-      const src: NodeDef = {
-        ...node("src", "agent", [], []),
-        outputs: [
-          { name: "other", repeated: false, side: "right" },
-          { name: "plan", repeated: false, side },
-        ],
-      };
       const p = pipeline(
-        [src, node("dst", "agent", [], ["code"])],
-        [{ source: { node: "src", port: "plan" }, target: { node: "dst", port: "plan" } }],
+        [node("src", "agent", [], ["plan"]), node("dst", "agent", [], ["code"])],
+        [
+          {
+            source: { node: "src", port: "plan" },
+            target: { node: "dst", port: "plan" },
+            source_anchor: { side },
+          },
+        ],
       );
       const edges = deriveEditEdges(p);
       expect(edges[0].sourceHandle).toBe(`rim-${side}`);
       expect(edges[0].data?.sourceSide).toBe(side);
-      expect(edges[0].data?.sourceAnchor).toBeNull();
+      expect(edges[0].data?.sourceAnchor).toEqual({ side });
     },
   );
 
-  it("lets a drawn anchor win over the output's declared side", () => {
+  it("leaves by a drawn anchor", () => {
     const src: NodeDef = {
       ...node("src", "agent", [], []),
-      outputs: [{ name: "plan", repeated: false, side: "bottom" }],
+      outputs: [{ name: "plan" }],
     };
     const edges = deriveEditEdges(
       pipeline(
@@ -148,18 +157,25 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     expect(edges[0].targetHandle).toBe("__anchor:left");
   });
 
-  it("routes a legacy (un-anchored) End edge to `result`'s declared side (#844, #840)", () => {
-    // An End edge saved before #840 carries no anchor and no `target_side`: it
-    // must reopen on the side it always landed on — the one `result` declares —
-    // not on the `left` that absence reads back as. Routing to `left` laid the
-    // perpendicular landing leg across a border the wire never touched.
-    const end = node("end", "end", ["result"], []);
-    end.inputs[0].side = "top";
+  it("routes an un-anchored End edge to its `target_side` (#840, PDO-17)", () => {
+    // A legacy End edge reaches the client with `result`'s declared side
+    // already converted into `target_side` by the daemon's loader.
     const p = pipeline(
-      [node("src", "agent", [], ["plan"]), end],
-      [{ source: { node: "src", port: "plan" }, target: { node: "end", port: "result" } }],
+      [node("src", "agent", [], ["plan"]), node("end", "end", ["result"], [])],
+      [
+        {
+          source: { node: "src", port: "plan" },
+          target: { node: "end", port: "result" },
+          target_side: "top",
+        },
+      ],
     );
     expect(deriveEditEdges(p)[0].data?.targetSide).toBe("top");
+    const bare = pipeline(
+      [node("src", "agent", [], ["plan"]), node("end", "end", ["result"], [])],
+      [{ source: { node: "src", port: "plan" }, target: { node: "end", port: "result" } }],
+    );
+    expect(deriveEditEdges(bare)[0].data?.targetSide).toBe("left");
   });
 
   it("still routes an emergent target to its persisted side", () => {
@@ -226,7 +242,7 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
       name: id,
       type,
       // The vestigial declared `in` (side left) that real pipelines still carry.
-      inputs: [{ name: "in", repeated: false, side: "left" as const }],
+      inputs: [{ name: "in" }],
       outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
       interactive: false,
     };
@@ -242,7 +258,7 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
           name: "src",
           type: "agent",
           inputs: [],
-          outputs: [{ name: "plan", repeated: false, side: "right" as const }],
+          outputs: [{ name: "plan" }],
           interactive: false,
         },
         workNode("dst", "agent", ["code"]),

@@ -2,7 +2,14 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Check, Circle, Copy, LoaderCircle, X } from "lucide-react";
 import { placePopover, type PopoverSide } from "../../lib/tourPlacement";
 import type { TourRect } from "../../hooks/useTour";
-import type { TourChecklistItem, TourDef, TourIllustration, TourStep } from "../../lib/tour";
+import {
+  copyBlockOf,
+  type TourChecklistItem,
+  type TourDef,
+  type TourIllustration,
+  type TourStep,
+} from "../../lib/tour";
+import StatusIcon from "../StatusIcon";
 
 /**
  * The instruction card of a running tour (#823).
@@ -78,6 +85,7 @@ export default function TourPopover({
   // the badge resets by itself when the tour moves on — no effect to reconcile it.
   const [copiedStep, setCopiedStep] = useState<string | null>(null);
   const copied = copiedStep === step.id;
+  const copyBlock = copyBlockOf(step);
   // The spinner row belongs to the wait, not to the step: once the condition is
   // met there is nothing left to wait for, and a spinner that kept turning under
   // a satisfied checklist would be the card contradicting itself.
@@ -98,8 +106,8 @@ export default function TourPopover({
   }, [hole, step.id, body, note, checklist]);
 
   const copy = () => {
-    if (!step.copyBlock) return;
-    void navigator.clipboard?.writeText(step.copyBlock).catch(() => {});
+    if (!copyBlock) return;
+    void navigator.clipboard?.writeText(copyBlock).catch(() => {});
     setCopiedStep(step.id);
   };
 
@@ -197,14 +205,14 @@ export default function TourPopover({
         </p>
       )}
 
-      {step.copyBlock && (
+      {copyBlock && (
         <div className="flex items-start gap-1.5 rounded border border-line bg-bg-3 p-1.5">
           <pre
             className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-fg-2"
             style={{ fontSize: "10px", lineHeight: 1.5 }}
             data-testid="tour-copy-block"
           >
-            {step.copyBlock}
+            {copyBlock}
           </pre>
           <button
             type="button"
@@ -285,9 +293,9 @@ export default function TourPopover({
 }
 
 /**
- * A step's picture (#911): a mock of the Runs list, one row per status, with
- * the dot colours the real list uses. Framed like a small panel so it reads as
- * « what it looks like », not as rows of the real list.
+ * A step's picture (#911): a legend of the Status icon (PDO-22, #1000), one row
+ * per status, each glyph the one the real list and canvas draw. Framed like a
+ * small panel so it reads as « what it looks like », not as rows of the real list.
  */
 function Illustration({ illustration }: { illustration: TourIllustration }) {
   return (
@@ -298,19 +306,14 @@ function Illustration({ illustration }: { illustration: TourIllustration }) {
     >
       {illustration.rows.map((row) => (
         <li
-          key={row.label}
+          key={row.status}
           data-testid="tour-illustration-row"
           className="flex items-center gap-2 border-b border-line-soft px-2 py-1 last:border-b-0"
           style={{ fontSize: "10.5px" }}
         >
-          <span
-            data-testid="tour-illustration-dot"
-            className={`block h-2 w-2 shrink-0 rounded-full ${row.dotClass} ${row.pulse ? "animate-pulse" : ""}`}
-          />
-          <span className="min-w-0 flex-1 truncate font-medium text-fg-2">{row.label}</span>
-          <span className="shrink-0 text-fg-4" style={{ fontSize: "9.5px" }}>
-            {row.detail}
-          </span>
+          {/* The label right after says it in words: the glyph is not announced twice. */}
+          <StatusIcon status={row.status} size="sm" decorative testId="tour-illustration-icon" />
+          <span className="min-w-0 flex-1 truncate text-fg-2">{row.label}</span>
         </li>
       ))}
     </ul>

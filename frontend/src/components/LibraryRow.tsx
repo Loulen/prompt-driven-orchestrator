@@ -45,6 +45,8 @@ interface Props {
    * tests / non-selectable contexts stay byte-for-byte as before).
    */
   checked?: boolean;
+  /** The list is in selection mode: the select ring stays visible. */
+  selecting?: boolean;
   onToggleSelect?: (e: MouseEvent) => void;
   /** #974: the validation indicator, bottom-right under the hover actions. */
   indicator?: ReactNode;
@@ -75,6 +77,7 @@ export default function LibraryRow({
   deleteTitle,
   testId,
   checked = false,
+  selecting = false,
   onToggleSelect,
   modified,
   indicator,
@@ -84,6 +87,7 @@ export default function LibraryRow({
       {onToggleSelect && (
         <SelectControl
           selected={checked}
+          selecting={selecting}
           label={checked ? `Deselect ${name}` : `Select ${name}`}
           onSelect={onToggleSelect}
         />

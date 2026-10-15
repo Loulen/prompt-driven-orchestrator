@@ -10,6 +10,91 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.126.0
+**Tours jouables à plusieurs sur une instance partagée** (#986, #987, story PDO-20), validé en
+recette.
+
+- **First run et First pipeline jouables à plusieurs** (#987) : chaque navigateur nomme son Run
+(`my-first-run-<id>`) et sa pipeline (`tutorial-implement-test-<id>`) avec son identité de tour.
+« Find your Run » et « Keep it, or delete it » désignent la ligne de ce navigateur, et le
+lancement ou la suppression faits par un autre joueur ne font plus avancer le tour.
+
+- Identité de tour, Overview jouable à plusieurs (#986) : chaque navigateur tire une
+identité de tour (`[0-9a-z]{4}`), et le tour *Overview* prépare et range son propre Run
+(`tour-overview-<id>`) et son propre Trigger (`tutorial-example-trigger-<id>`), sans toucher
+à ceux des autres. Le Trigger hérité sans suffixe est rangé ; le Run hérité reste en place.
+
+## 1.125.0
+**Pipeline validé pour tous et mis en tête pour des Projets** (#992, spec #989, story PDO-15),
+validé en recette.
+
+- La validation `all` accepte une liste optionnelle de Projets (`{"kind":"all","project_ids":[…]}`,
+  absente = vide), sans migration. Ces Projets voient le Pipeline en tête, dans « Project
+  pipelines », plutôt qu'en « Global pipelines ». Supprimer un Projet laisse un `all` en `all`.
+- Modale « Validate » : cases des Projets actives sous « All projects », Projets triés par nom.
+  Indicateur globe + « All +N ».
+- L'événement `project_changed` est relayé au front : la suppression ou la création d'un Projet
+  se reflète sans rechargement.
+- Menu des Pipelines : plus de colonne « instance ».
+
+## 1.124.0
+**Status icon lisible sans la couleur, palette daltonienne en option** (specs #996 et #1004,
+story PDO-22), validé en recette.
+
+- Status icon (#997, #999, #1000) : la forme du glyphe porte le statut dans les listes de Runs et
+de Triggers, les panneaux de Run et de nœud (Run info, terminal, sélecteur d'itération, enfants
+d'un orchestrateur), sur les nœuds du canvas et dans l'étape « The status icon » du tour Overview.
+- Sélection ronde (#1005) : le contrôle de sélection des listes reste rond (anneau de la couleur
+du statut au survol, rond d'accent coché une fois sélectionné).
+- Palette daltonienne en option (#998, #1005) : la palette par défaut reste celle de la 1.119.1
+(interrupted et stale distincts d'awaiting). La palette lisible en deutan/protan, avec une
+variante sombre, est l'option « Colour-blind friendly status colours » de Settings › General ›
+Accessibility, stockée dans le navigateur et appliquée avant le premier rendu.
+
+## 1.123.1
+Feedback de survol uniforme sur les actions des profils agentiques et de staging (#994, spec
+#984, story PDO-5), validé en recette : « + New profile » en bouton secondaire bordé, curseur main et teinte au survol sur
+Edit, Delete, la modale et la confirmation ; aucun survol sur un bouton désactivé.
+
+## 1.123.0
+**Ports nettoyés** (spec #981, story PDO-17), validé en recette.
+
+**Plus de côté (L/T/R/B) sur les ports** (#991, spec #981). Le routage appartient à l'edge : au
+chargement, l'ancien `side` d'un output devient une `source_anchor` sans offset (milieu du côté),
+et celui du `result` d'un End un `target_side`. Le fichier n'est réécrit qu'à la sauvegarde ;
+lancer `pdo migrate` sur `~/.pdo/pipelines` et `~/.pdo/library` pour convertir le reste.
+
+**Plus de « rpt » sur les ports de sortie** (#993, spec #981). Un output n'a plus de flag
+d'accumulation : le toggle disparaît de l'inspecteur et le panneau de run affiche toujours un
+output comme un document unique. L'accumulation reste portée par l'edge (`repeated` sur l'edge,
+badge `rpt` sur l'input poolé). Au chargement, le `repeated` d'un output est ignoré ; le fichier
+n'est réécrit qu'à la sauvegarde, lancer `pdo migrate` pour convertir le reste.
+
+## 1.122.0
+**Panneau de node : durée de l'itération, bascule Total / Active** (spec #978, story PDO-16),
+validé en recette.
+
+- Bascule Total / Active (#980) : un clic (ou Entrée / Espace) sur la durée de la ligne méta bascule entre `total` et `active` ;
+le choix est mémorisé (`pdo.ui.nodeDurationMode`) et s'applique aussi au menu des itérations.
+Active se fige pendant une attente déclarée (point ambre). Le tooltip ventile Total / Active /
+Waiting, avec une somme exacte à la seconde affichée ; Active peut de ce fait différer d'1 s de
+Stats -> Performance, qui arrondit chaque valeur séparément (écart accepté en recette).
+
+- Durée Total (#979) : la ligne méta affiche `iter N · <durée> total · <coût>` à la place de `started … · ended …` ;
+la durée défile tant que l'itération tourne. Début et fin passent dans un tooltip (survol ou
+focus clavier). La ligne suit l'itération choisie dans le sélecteur, dont le menu affiche une
+durée par itération.
+
+## 1.121.0
+**Update et What's new depuis Settings** (#983, story PDO-14) : dans Settings › Version &
+update, Update et What's new ferment d'abord Settings (via la garde de brouillon), puis affichent
+la confirmation de mise à jour ou le Changelog seuls à l'écran. Les fermer ramène sur l'app sans
+rouvrir Settings.
+
+## 1.120.0
+Carte Start du canvas d'un Run sans images d'input (#977, PDO-18) : les miniatures et la
+lightbox restent dans l'inspecteur du Start.
+
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les
 icônes de survol, bouton d'édition d'un Run réduit au crayon, menus Éditer / Save et modale

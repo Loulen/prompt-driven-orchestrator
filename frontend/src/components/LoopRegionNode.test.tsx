@@ -25,7 +25,7 @@ function makeNode(id: string): NodeDef {
     name: id,
     type: "agent",
     inputs: [],
-    outputs: [{ name: "out", repeated: false, side: "right" }],
+    outputs: [{ name: "out" }],
     interactive: false,
   };
 }

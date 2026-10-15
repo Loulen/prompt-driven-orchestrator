@@ -18,9 +18,20 @@ import type { EdgeDef, NodeDef, PipelineDef } from "../../types";
 import type { TourAppState, TourDef, TourObservation, TourStep } from "../tour";
 import { carriedPorts, carries } from "../edgePorts";
 import { splitFieldKey } from "../whenClause";
+import { withTourIdentity } from "../tourMemory";
 
-/** The name the tour asks the user to paste for the pipeline itself. */
+/** The pipeline's name, before this browser's identité de tour. */
 export const TUTORIAL_PIPELINE_ID = "tutorial-implement-test";
+
+/**
+ * The name the tour asks the user to paste for the pipeline itself:
+ * `tutorial-implement-test-k3x9` (#987). Two people building it on one instance
+ * would otherwise both ask for the same YAML file, and the second Create would
+ * be refused.
+ */
+export function tutorialPipelineName(): string {
+  return withTourIdentity(TUTORIAL_PIPELINE_ID);
+}
 
 const IMPLEMENTER_PROMPT = `Implement what the user asked for, then run the project's tests.
 Write the test results and a mermaid diagram of your change into your output file.`;
@@ -274,7 +285,7 @@ const STEPS: TourStep[] = [
   {
     id: "name-pipeline",
     title: "Name the pipeline",
-    body: "Paste the name below into the field. The name becomes the YAML file in your Library.",
+    body: "Paste the name below into the field. The name becomes the YAML file in your Library; the four characters at the end are this browser's, so it never collides with someone else's.",
     // Strictly the field (#837). Lighting the whole dialog put an enabled
     // `Create` inside the hole, five centimetres from `Next`, and a reader who
     // clicked it — the natural gesture — closed the dialog under a step whose
@@ -284,7 +295,7 @@ const STEPS: TourStep[] = [
     target: () => [NEW_PIPELINE_NAME],
     waitingFor: "the Name field of the New Pipeline dialog",
     failureHint: "The dialog was closed before the name was entered.",
-    copyBlock: TUTORIAL_PIPELINE_ID,
+    copyBlock: tutorialPipelineName,
     // Enter in the field creates the pipeline too, and that closes the dialog.
     // The step then has nothing left to confirm: it slides on to `Create it`,
     // which is entered satisfied and says so.
@@ -309,7 +320,8 @@ const STEPS: TourStep[] = [
     // go on doing nothing (#825, FP iteration 2).
     refused: (o) => o.text(NEW_PIPELINE_ERROR),
     refusalTitle: "The pipeline could not be created",
-    refusalHint: `You may already have a ${TUTORIAL_PIPELINE_ID} from a previous run of this tour — open it from the Pipelines list, or delete it and start the tour again.`,
+    refusalHint: () =>
+      `You may already have a ${tutorialPipelineName()} from a previous run of this tour — open it from the Pipelines list, or delete it and start the tour again.`,
     done: pipelineCreated,
   },
   {
@@ -629,7 +641,8 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
   blurb: "Two agents in a loop: an implementer and a tester that hands back a verdict.",
   minutes: 8,
   steps: STEPS,
-  recapIntro: `You built ${TUTORIAL_PIPELINE_ID} and saved it to your Library. Here is what it does:`,
+  recapIntro: () =>
+    `You built ${tutorialPipelineName()} and saved it to your Library. Here is what it does:`,
   recap: [
     {
       label: "implementer",

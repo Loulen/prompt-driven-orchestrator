@@ -800,8 +800,6 @@ mod tests {
             node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: "task".into(),
-                repeated: false,
-                side: None,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -811,8 +809,6 @@ mod tests {
             }],
             outputs: vec![Port {
                 name: "out".into(),
-                repeated: false,
-                side: None,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -1136,6 +1132,7 @@ mod tests {
                 completed_at,
                 interactive: false,
                 completion_released: false,
+                waited_ms: 0,
             }],
             frontmatter_retries: 0,
             frontmatter_violations: Vec::new(),

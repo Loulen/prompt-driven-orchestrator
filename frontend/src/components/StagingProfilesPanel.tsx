@@ -388,7 +388,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
               type="button"
               onClick={() => setCreating(true)}
               data-testid="staging-profile-new"
-              className="mt-1 flex items-center gap-1.5 self-start rounded-md px-1 py-1 text-fg-3 transition-colors hover:text-fg"
+              className="mt-1 flex cursor-pointer items-center gap-1.5 self-start rounded-md border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
               style={{ fontSize: "11px" }}
             >
               <Plus size={12} /> New profile

@@ -3,7 +3,9 @@ import { FlaskConical, Folders, Globe } from "lucide-react";
 import { ApiError, setPipelineValidation } from "../api";
 import type { PipelineValidation, Project } from "../types";
 import {
+  namedProjectIds,
   validationFromChoice,
+  validationLabel,
   validationSummary,
   validationTooltip,
 } from "../lib/pipelineValidation";
@@ -17,8 +19,9 @@ import { Tooltip, TooltipProvider } from "./ui/tooltip";
  */
 
 /**
- * Icon + number: a globe and « All » for every Projet, the folders glyph and the
- * Projet count otherwise, a flask and 0 for a test Pipeline. Hovering lists the
+ * Icon + number: a globe and « All » for every Projet (« All +N » when also listed
+ * first for N Projets, #992), the folders glyph and the Projet count otherwise, a
+ * flask and 0 for a test Pipeline. Hovering lists the
  * Projets. Never a « validated » badge — the launch form says it by its sections.
  */
 export function ValidationIndicator({
@@ -41,7 +44,7 @@ export function ValidationIndicator({
         <span
           data-testid={testId}
           data-validation={summary.all ? "all" : summary.count > 0 ? "projects" : "none"}
-          data-count={summary.all ? undefined : summary.count}
+          data-count={summary.all && summary.count === 0 ? undefined : summary.count}
           aria-label={tooltip}
           role="img"
           className={`inline-flex shrink-0 items-center gap-0.5 font-sans ${
@@ -50,7 +53,7 @@ export function ValidationIndicator({
           style={{ fontSize: "10px" }}
         >
           <Icon size={11} aria-hidden />
-          <span>{summary.all ? "All" : summary.count}</span>
+          <span>{validationLabel(summary)}</span>
         </span>
       </Tooltip>
     </TooltipProvider>
@@ -59,7 +62,10 @@ export function ValidationIndicator({
 
 /**
  * The Validate modal: Projets to tick, plus « All projects (current and future) ».
- * Unticking everything makes the Pipeline a test Pipeline again. Saves on its own
+ * Under « All », the ticked Projets are the ones it is listed first for (#992);
+ * without it, the only ones it is offered to. The boxes stay active either way and
+ * toggling « All » keeps them. Unticking everything makes the Pipeline a test
+ * Pipeline again. Saves on its own
  * (the validation is instance data, not part of the YAML the Save button writes).
  */
 export function ValidatePipelineModal({
@@ -89,7 +95,7 @@ export function ValidatePipelineModal({
     if (!open) return;
     /* eslint-disable react-hooks/set-state-in-effect -- one-shot seed per open */
     setAll(validation.kind === "all");
-    setTicked(validation.kind === "projects" ? validation.project_ids : []);
+    setTicked(namedProjectIds(validation));
     setError(null);
     setSaving(false);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -128,12 +134,17 @@ export function ValidatePipelineModal({
     }
   };
 
+  const firstFor = namedProjectIds(chosen)
+    .map((id) => projects.find((p) => p.id === id)?.name)
+    .filter((n): n is string => n != null);
   const verdict =
     chosen.kind === "all"
-      ? "Offered to every project, including the ones created later."
+      ? firstFor.length > 0
+        ? `Offered to every project, listed first for ${firstFor.join(", ")}.`
+        : "Offered to every project, including the ones created later."
       : chosen.kind === "none"
         ? "Nothing ticked: a test pipeline, offered only behind « Show test pipelines »."
-        : `Offered to ${chosen.project_ids.length} project${chosen.project_ids.length > 1 ? "s" : ""}.`;
+        : `Offered to ${chosen.project_ids.length} project${chosen.project_ids.length > 1 ? "s" : ""} only.`;
 
   return (
     <div
@@ -154,7 +165,7 @@ export function ValidatePipelineModal({
           Validate <span className="font-mono">{pipelineName}</span>
         </h3>
         <p className="mt-1 shrink-0 text-fg-3">
-          Choose the projects whose New Run and Trigger forms offer this pipeline.
+          Choose the projects whose New Run and Trigger forms offer this pipeline, or list it first.
         </p>
 
         <div className="mt-3 min-h-0 overflow-y-auto rounded-md border border-line bg-bg-1 p-1">
@@ -173,33 +184,43 @@ export function ValidatePipelineModal({
             <span>All projects (current and future)</span>
           </label>
           <div className="my-1 h-px bg-line" />
+          <div
+            className="flex items-baseline gap-1.5 px-2 pt-1 pb-0.5"
+            data-testid="validate-projects-heading"
+          >
+            <span className="tracking-wider text-fg-4 uppercase" style={{ fontSize: "9.5px" }}>
+              {all ? "Listed first for" : "Only offered to"}
+            </span>
+            <span className="text-fg-5" style={{ fontSize: "10px" }}>
+              · {all ? "already offered to every project" : "hidden from every other project"}
+            </span>
+          </div>
           {projects.length === 0 ? (
             <p className="px-2 py-1.5 text-fg-4" data-testid="validate-no-project" style={{ fontSize: "11px" }}>
               No project yet. Name a repository group in the Runs list to create one.
             </p>
           ) : (
-            projects.map((project) => (
-              <label
-                key={project.id}
-                className={`flex items-center gap-2 rounded px-2 py-1.5 ${
-                  all ? "cursor-not-allowed text-fg-4" : "cursor-pointer text-fg-2 hover:bg-bg-3"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  // « All » covers every Projet: the boxes read ticked and wait.
-                  checked={all || ticked.includes(project.id)}
-                  disabled={all}
-                  onChange={() => toggle(project.id)}
-                  data-testid={`validate-project-${project.id}`}
-                  className="accent-acc"
-                />
-                <span className="truncate">{project.name}</span>
-                <span className="ml-auto shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
-                  {project.members.length} repo{project.members.length === 1 ? "" : "s"}
-                </span>
-              </label>
-            ))
+            // #992: by name, as in the design (the API returns creation order).
+            [...projects]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((project) => (
+                <label
+                  key={project.id}
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 hover:bg-bg-3"
+                >
+                  <input
+                    type="checkbox"
+                    checked={ticked.includes(project.id)}
+                    onChange={() => toggle(project.id)}
+                    data-testid={`validate-project-${project.id}`}
+                    className="accent-acc"
+                  />
+                  <span className="truncate">{project.name}</span>
+                  <span className="ml-auto shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
+                    {project.members.length} repo{project.members.length === 1 ? "" : "s"}
+                  </span>
+                </label>
+              ))
           )}
         </div>
 

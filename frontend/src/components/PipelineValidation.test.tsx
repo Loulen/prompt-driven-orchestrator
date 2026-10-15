@@ -60,6 +60,27 @@ describe("ValidationIndicator", () => {
     );
   });
 
+  it("shows a globe and « All +N » when also listed first, naming the Projets on hover", async () => {
+    render(
+      <ValidationIndicator
+        validation={{ kind: "all", project_ids: ["prj-alpha", "prj-ghost"] }}
+        projects={[alpha, bravo]}
+      />,
+    );
+    const indicator = screen.getByTestId("validation-indicator");
+    expect(indicator).toHaveAttribute("data-validation", "all");
+    expect(indicator).toHaveAttribute("data-count", "1");
+    expect(indicator).toHaveTextContent("All +1");
+    expect(indicator.querySelector("svg.lucide-globe")).not.toBeNull();
+    expect(indicator).toHaveAccessibleName(
+      "Validated for all projects · listed first for: Alpha",
+    );
+    await userEvent.hover(indicator);
+    expect(await screen.findByTestId("tooltip-content")).toHaveTextContent(
+      "listed first for: Alpha",
+    );
+  });
+
   it("reads 0 on a test pipeline, and does not count a Projet that is gone", () => {
     const { rerender } = render(
       <ValidationIndicator validation={{ kind: "none" }} projects={[alpha]} />,
@@ -106,7 +127,7 @@ describe("ValidatePipelineModal", () => {
     const { onSaved, onClose } = renderModal();
 
     fireEvent.click(screen.getByTestId("validate-project-prj-bravo"));
-    expect(screen.getByTestId("validate-verdict")).toHaveTextContent("1 project");
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent("Offered to 1 project only.");
     fireEvent.click(screen.getByTestId("validate-save"));
 
     await waitFor(() =>
@@ -119,7 +140,7 @@ describe("ValidatePipelineModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("offers « All projects (current and future) », which covers every box", async () => {
+  it("offers « All projects (current and future) », leaving the boxes active", async () => {
     vi.mocked(api.setPipelineValidation).mockResolvedValue({
       ok: true,
       id: "my-pipe",
@@ -131,8 +152,12 @@ describe("ValidatePipelineModal", () => {
       "All projects (current and future)",
     );
     fireEvent.click(screen.getByTestId("validate-all"));
-    expect(screen.getByTestId("validate-project-prj-alpha")).toBeChecked();
-    expect(screen.getByTestId("validate-project-prj-alpha")).toBeDisabled();
+    // #992: « All » no longer ticks nor disables the Projets' boxes.
+    expect(screen.getByTestId("validate-project-prj-alpha")).not.toBeChecked();
+    expect(screen.getByTestId("validate-project-prj-alpha")).toBeEnabled();
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent(
+      "Offered to every project, including the ones created later.",
+    );
     fireEvent.click(screen.getByTestId("validate-save"));
 
     await waitFor(() =>
@@ -170,6 +195,85 @@ describe("ValidatePipelineModal", () => {
   it("starts from what is stored, « All » included", () => {
     renderModal({ kind: "all" });
     expect(screen.getByTestId("validate-all")).toBeChecked();
+  });
+
+  // --- #992 (PDO-15) — validated for all, listed first for Projets ---
+
+  it("validates for all and lists first for the ticked Projets", async () => {
+    vi.mocked(api.setPipelineValidation).mockResolvedValue({
+      ok: true,
+      id: "my-pipe",
+      validation: { kind: "all", project_ids: ["prj-alpha"] },
+    });
+    const { onSaved } = renderModal();
+
+    fireEvent.click(screen.getByTestId("validate-all"));
+    fireEvent.click(screen.getByTestId("validate-project-prj-alpha"));
+    expect(screen.getByTestId("validate-project-prj-alpha")).toBeChecked();
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent(
+      "Offered to every project, listed first for Alpha.",
+    );
+    fireEvent.click(screen.getByTestId("validate-save"));
+
+    await waitFor(() =>
+      expect(api.setPipelineValidation).toHaveBeenCalledWith("my-pipe", {
+        kind: "all",
+        project_ids: ["prj-alpha"],
+      }),
+    );
+    await waitFor(() =>
+      expect(onSaved).toHaveBeenCalledWith({ kind: "all", project_ids: ["prj-alpha"] }),
+    );
+  });
+
+  it("titles the Projets after « All »: listed first for, or only offered to", () => {
+    renderModal();
+    const heading = screen.getByTestId("validate-projects-heading");
+    expect(heading).toHaveTextContent("Only offered to");
+    expect(heading).toHaveTextContent("hidden from every other project");
+
+    fireEvent.click(screen.getByTestId("validate-all"));
+    expect(heading).toHaveTextContent("Listed first for");
+    expect(heading).toHaveTextContent("already offered to every project");
+  });
+
+  it("keeps the ticked boxes when « All » is toggled", () => {
+    renderModal({ kind: "projects", project_ids: ["prj-bravo"] });
+    expect(screen.getByTestId("validate-project-prj-bravo")).toBeChecked();
+
+    fireEvent.click(screen.getByTestId("validate-all"));
+    expect(screen.getByTestId("validate-project-prj-bravo")).toBeChecked();
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent("listed first for Bravo");
+
+    fireEvent.click(screen.getByTestId("validate-all"));
+    expect(screen.getByTestId("validate-project-prj-bravo")).toBeChecked();
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent("Offered to 1 project only.");
+  });
+
+  it("lists the Projets by name, whatever the API order (#992)", () => {
+    render(
+      <ValidatePipelineModal
+        open
+        pipelineId="my-pipe"
+        pipelineName="my pipe"
+        validation={{ kind: "none" }}
+        projects={[bravo, alpha]}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    const boxes = screen
+      .getAllByRole("checkbox")
+      .map((b) => b.getAttribute("data-testid"))
+      .filter((id) => id !== "validate-all");
+    expect(boxes).toEqual(["validate-project-prj-alpha", "validate-project-prj-bravo"]);
+  });
+
+  it("starts from a stored « All + Projets »", () => {
+    renderModal({ kind: "all", project_ids: ["prj-alpha"] });
+    expect(screen.getByTestId("validate-all")).toBeChecked();
+    expect(screen.getByTestId("validate-project-prj-alpha")).toBeChecked();
+    expect(screen.getByTestId("validate-project-prj-bravo")).not.toBeChecked();
   });
 });
 

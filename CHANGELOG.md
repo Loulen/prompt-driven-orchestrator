@@ -10,6 +10,19 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.124.0
+**Pipeline validé pour tous et mis en tête pour des Projets** (#992, spec #989, story PDO-15),
+validé en recette.
+
+- La validation `all` accepte une liste optionnelle de Projets (`{"kind":"all","project_ids":[…]}`,
+  absente = vide), sans migration. Ces Projets voient le Pipeline en tête, dans « Project
+  pipelines », plutôt qu'en « Global pipelines ». Supprimer un Projet laisse un `all` en `all`.
+- Modale « Validate » : cases des Projets actives sous « All projects », Projets triés par nom.
+  Indicateur globe + « All +N ».
+- L'événement `project_changed` est relayé au front : la suppression ou la création d'un Projet
+  se reflète sans rechargement.
+- Menu des Pipelines : plus de colonne « instance ».
+
 ## 1.123.1
 Feedback de survol uniforme sur les actions des profils agentiques et de staging (#994, spec
 #984, story PDO-5), validé en recette : « + New profile » en bouton secondaire bordé, curseur main et teinte au survol sur

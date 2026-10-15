@@ -168,7 +168,7 @@ function pipelineOptions(): Array<{ id: string; name: string }> {
     screen.getByTestId("pipeline-select-menu").querySelectorAll("[data-pipeline-id]"),
   ).map((row) => ({
     id: row.getAttribute("data-pipeline-id") ?? "",
-    name: row.textContent?.replace(/(instance|repo|user|library)$/, "") ?? "",
+    name: row.textContent ?? "",
   }));
 }
 
@@ -306,13 +306,12 @@ describe("NewRunModal — pipeline filter", () => {
     ]);
     // Typing filters immediately: the field already has the caret.
     expect(screen.getByTestId("pipeline-select-filter")).toHaveFocus();
-    // Each row states its scope — the information grouping would have carried,
-    // without the reordering grouping would have cost.
+    // #992: the rows no longer carry a scope column — the name alone.
     expect(screen.getByTestId("pipeline-select-option-grill-and-spec")).toHaveTextContent(
-      "repo",
+      /^grill-and-spec$/,
     );
     expect(screen.getByTestId("pipeline-select-option-review-loop")).toHaveTextContent(
-      "instance",
+      /^review-loop$/,
     );
   });
 
@@ -652,6 +651,75 @@ describe("NewRunModal — pipeline sections (#974)", () => {
     expect(sectionIds("project")).toEqual(["alpha-only"]);
     expect(sectionIds("global")).toEqual(["common", "legacy"]);
     expect(screen.getByTestId("pipeline-select-show-tests")).toBeInTheDocument();
+  });
+});
+
+/**
+ * PDO-15 (#992): a Pipeline validated for every Projet AND listing one is shown once,
+ * in that Projet's section; elsewhere it stays in « Global pipelines ».
+ */
+describe("NewRunModal — validated for all, listed first for a Projet (#992)", () => {
+  const alpha = { id: "prj-alpha", name: "Alpha", members: ["/repos/alpha"] };
+  const bravo = { id: "prj-bravo", name: "Bravo", members: ["/repos/bravo"] };
+  const list = [
+    makePipeline({ id: "common", name: "common", scope: "instance", validation: { kind: "all" } }),
+    makePipeline({
+      id: "grill",
+      name: "grill",
+      scope: "instance",
+      validation: { kind: "all", project_ids: ["prj-alpha"] },
+    }),
+    makePipeline({
+      id: "zeta-alpha",
+      name: "zeta-alpha",
+      scope: "instance",
+      validation: { kind: "projects", project_ids: ["prj-alpha"] },
+    }),
+  ];
+
+  function sectionIds(key: string): string[] {
+    const section = screen.queryByTestId(`pipeline-select-section-${key}`);
+    if (!section) return [];
+    return Array.from(section.querySelectorAll("[data-pipeline-id]")).map(
+      (row) => row.getAttribute("data-pipeline-id") ?? "",
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetchProjects).mockResolvedValue([alpha, bravo]);
+    vi.mocked(fetchPipelines).mockResolvedValue(list);
+  });
+
+  afterEach(() => {
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+  });
+
+  it("lists it once, in the Projet's section, for a repository of that Projet", async () => {
+    renderModal();
+    await enterValidRepo("/repos/alpha");
+    await openPipelineMenu();
+    expect(sectionIds("project")).toEqual(["grill", "zeta-alpha"]);
+    expect(sectionIds("global")).toEqual(["common"]);
+  });
+
+  it("keeps it in « Global pipelines » for another Projet, in Trigger mode too", async () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    await enterValidRepo("/repos/bravo");
+    await openPipelineMenu();
+    expect(sectionIds("project")).toEqual([]);
+    expect(sectionIds("global")).toEqual(["common", "grill"]);
+  });
+
+  it("shows no scope column on the menu rows", async () => {
+    renderModal();
+    await enterValidRepo("/repos/alpha");
+    await openPipelineMenu();
+    for (const row of screen
+      .getByTestId("pipeline-select-menu")
+      .querySelectorAll("[data-pipeline-id]")) {
+      expect(row.textContent).not.toMatch(/instance/);
+    }
   });
 });
 

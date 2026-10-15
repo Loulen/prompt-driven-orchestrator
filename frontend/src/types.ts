@@ -1450,9 +1450,10 @@ export interface PipelineListEntry {
 /**
  * #974 — a Pipeline's validation: every Projet (current and future), none (a
  * *Pipeline de test*), or these Projets. Stored by the instance, never in the YAML.
+ * #992 (PDO-15): `all` may also list Projets it is listed first for; absent = none.
  */
 export type PipelineValidation =
-  | { kind: "all" }
+  | { kind: "all"; project_ids?: string[] }
   | { kind: "none" }
   | { kind: "projects"; project_ids: string[] };
 

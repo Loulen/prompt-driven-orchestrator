@@ -16,7 +16,7 @@ Un **Pipeline** est un DAG nommé, à **orchestration déterministe**, qui décr
 - **Graphe modifiable pendant l'exécution** : la topologie n'est pas immuable. En mode *Éditer pour ce Run*, l'utilisateur peut éditer le graphe pendant qu'un Run tourne (ADR-0007, ADR-0080) et le scheduler se réajuste au prochain tick. Les nœuds en cours d'exécution restent immutables (cf. *Édition pendant un Run*).
 - **Multiples pipelines plutôt qu'embranchements** : pour gérer des trade-offs coût/complexité (ex. *quick-fix* vs *feature-with-adversarial-review*), on définit plusieurs pipelines distincts. Pas un seul pipeline avec des branches.
 
-- **Pipeline validé** : Pipeline rendu disponible au lancement pour un ou plusieurs **Projets**, ou pour **tous les Projets** (actuels et futurs). Un Pipeline que PDO crée, duplique ou importe naît **non validé** — c'est un **Pipeline de test** : il n'est proposé au lancement (New Run, Trigger) que derrière « Afficher les Pipelines de test ». Un Pipeline sans validation enregistrée vaut « tous les Projets ». La validation est une donnée de l'instance, pas du YAML : un export n'emporte pas ses Projets. _Éviter_ : « favori », « accès rapide », « publié » (pas de modèle draft/published).
+- **Pipeline validé** : Pipeline rendu disponible au lancement pour un ou plusieurs **Projets**, pour **tous les Projets** (actuels et futurs), ou **les deux** : validé pour tous et aussi pour certains Projets, il est proposé partout et **en tête** chez ces Projets (c'est ainsi qu'on dit qu'un Pipeline générique convient bien à un Projet). Un Pipeline que PDO crée, duplique ou importe naît **non validé** — c'est un **Pipeline de test** : il n'est proposé au lancement (New Run, Trigger) que derrière « Afficher les Pipelines de test ». Un Pipeline sans validation enregistrée vaut « tous les Projets ». La validation est une donnée de l'instance, pas du YAML : un export n'emporte pas ses Projets. _Éviter_ : « favori », « accès rapide », « publié » (pas de modèle draft/published).
 
 Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-router), TPM workflow (orchestrateur LLM qui décide quand spawner).
 
@@ -571,7 +571,7 @@ Un **Projet** est un regroupement **nommé** de dépôts qui se travaillent ense
 
 - **Un chemin appartient à au plus un Projet**, et le Projet d'un Run est celui qui possède son **dépôt primaire**. Un secondaire membre d'un autre Projet n'y change rien : c'est un contexte read-only, pas une appartenance (ADR-0042).
 - **Matérialisé à la demande, jamais seedé** : tant qu'aucun nom n'est donné ni aucun réglage attaché, il n'existe pas de Projet — les listes se groupent sur le libellé dérivé du chemin. Nommer un en-tête de groupe est ce qui crée l'entité.
-- **Pipelines validés** : un Projet propose au lancement les Pipelines validés pour lui, avant les Pipelines validés pour tous les Projets (cf. *Pipeline validé*).
+- **Pipelines validés** : un Projet propose au lancement les Pipelines validés pour lui (y compris ceux validés aussi pour tous), avant les autres Pipelines validés pour tous les Projets (cf. *Pipeline validé*).
 - **Réglages portés** : le harnais agentique, dont il est le tier intermédiaire (ADR-0046), et ses skills sélectionnés (cf. *Banque de skills*).
 
 _Éviter_ : « projet » pour un dépôt seul (c'est le *repo cible*) ou pour le `projects/` d'un home stagé.

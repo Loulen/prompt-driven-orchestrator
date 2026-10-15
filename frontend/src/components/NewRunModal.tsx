@@ -2168,12 +2168,6 @@ function PipelineSelect({
             </span>
           ))}
         </span>
-        <span
-          className="ml-auto shrink-0 pl-3 font-sans text-fg-4"
-          style={{ fontSize: "10px" }}
-        >
-          {pipeline.scope}
-        </span>
       </DropdownMenuItem>
     );
   };

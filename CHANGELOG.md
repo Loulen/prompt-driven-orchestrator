@@ -10,7 +10,9 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## Non publié (spec #981, PDO-17)
+## 1.123.0
+**Ports nettoyés** (spec #981, story PDO-17), validé en recette.
+
 **Plus de côté (L/T/R/B) sur les ports** (#991, spec #981). Le routage appartient à l'edge : au
 chargement, l'ancien `side` d'un output devient une `source_anchor` sans offset (milieu du côté),
 et celui du `result` d'un End un `target_side`. Le fichier n'est réécrit qu'à la sauvegarde ;

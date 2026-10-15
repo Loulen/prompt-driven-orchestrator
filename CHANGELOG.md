@@ -10,6 +10,20 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.124.0
+**Status icon lisible sans la couleur, palette daltonienne en option** (specs #996 et #1004,
+story PDO-22), validé en recette.
+
+- Status icon (#997, #999, #1000) : la forme du glyphe porte le statut dans les listes de Runs et
+de Triggers, les panneaux de Run et de nœud (Run info, terminal, sélecteur d'itération, enfants
+d'un orchestrateur), sur les nœuds du canvas et dans l'étape « The status icon » du tour Overview.
+- Sélection ronde (#1005) : le contrôle de sélection des listes reste rond (anneau de la couleur
+du statut au survol, rond d'accent coché une fois sélectionné).
+- Palette daltonienne en option (#998, #1005) : la palette par défaut reste celle de la 1.119.1
+(interrupted et stale distincts d'awaiting). La palette lisible en deutan/protan, avec une
+variante sombre, est l'option « Colour-blind friendly status colours » de Settings › General ›
+Accessibility, stockée dans le navigateur et appliquée avant le premier rendu.
+
 ## 1.123.1
 Feedback de survol uniforme sur les actions des profils agentiques et de staging (#994, spec
 #984, story PDO-5), validé en recette : « + New profile » en bouton secondaire bordé, curseur main et teinte au survol sur

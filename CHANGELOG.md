@@ -10,6 +10,11 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.123.1
+Feedback de survol uniforme sur les actions des profils agentiques et de staging (#994, spec
+#984, story PDO-5), validé en recette : « + New profile » en bouton secondaire bordé, curseur main et teinte au survol sur
+Edit, Delete, la modale et la confirmation ; aucun survol sur un bouton désactivé.
+
 ## 1.123.0
 **Ports nettoyés** (spec #981, story PDO-17), validé en recette.
 

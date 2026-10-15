@@ -10,6 +10,14 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.123.0
+**Sélection ronde et palette daltonienne en option** (#1005, spec #1004, story PDO-22) : le
+contrôle de sélection des listes redevient rond (anneau de la couleur du statut au survol, rond
+d'accent coché une fois sélectionné). La palette par défaut revient à celle de la 1.119.1
+(interrupted et stale restent distincts d'awaiting) ; la palette daltonienne, avec une variante
+sombre, devient l'option « Colour-blind friendly status colours » de Settings › General ›
+Accessibility, stockée dans le navigateur et appliquée avant le premier rendu.
+
 ## 1.122.0
 **Status icon dans les panneaux de Run et de nœud** (#999, spec #996, story PDO-22) : Run info,
 toolbar du terminal, sélecteur d'itération et enfants d'un orchestrateur portent le glyphe du

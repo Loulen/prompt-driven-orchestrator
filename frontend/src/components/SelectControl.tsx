@@ -1,24 +1,24 @@
 import type { MouseEvent } from "react";
 import { Check } from "lucide-react";
 import StatusIcon from "./StatusIcon";
-import { statusTitle, type StatusKey } from "../lib/statusTable";
+import { statusSpec, statusTitle, type StatusKey } from "../lib/statusTable";
 
 interface Props {
   /** Whether this row is checked (in the selection set). */
   selected: boolean;
   /**
-   * The row's status, shown at rest as its Status icon. Omit/null for a row with
-   * no status (a Library pipeline, a group header) — the slot is empty at rest
-   * and only the hover square fades in, keeping the leading slot identical in
-   * shape across tabs.
+   * The row's status, shown at rest as its Status icon and lending its colour to
+   * the hover ring. Omit/null for a row with no status (a Library pipeline, a
+   * group header) — the slot is empty at rest and only a neutral ring fades in,
+   * keeping the leading slot identical in shape across tabs.
    */
   status?: StatusKey | null;
   /** Added to the status tooltip (e.g. a run's failure or awaiting reason). */
   statusReason?: string | null;
   /**
-   * The list is in selection mode (at least one row checked): every control
-   * stays a square until the selection is cleared, and the row's status moves
-   * into the control's tooltip.
+   * The list is in selection mode (at least one row checked): every unchecked
+   * control stays a ring in its status colour until the selection is cleared,
+   * and the row's status moves into the control's tooltip.
    */
   selecting?: boolean;
   /** Accessible name + tooltip for the control itself. */
@@ -32,17 +32,17 @@ interface Props {
 }
 
 /**
- * The leading select control shared by every left-panel row (#577, PDO-22 #997).
- * The round is reserved for the status, the square for the selection: at rest
- * the slot shows the row's Status icon; on row hover it gives way to an empty
- * square; once checked it is a filled accent square with a check — never a
- * round check that could pass for « completed ». While the list is in selection
- * mode, every unchecked row shows the empty square too.
+ * The leading select control shared by every left-panel row (#577, PDO-22 #997,
+ * round again since #1005 — the 1.119.1 shape). At rest the slot shows the row's
+ * Status icon; on row hover it gives way to a hollow 14 px ring in the status
+ * colour (neutral `fg-3` for a row with no status), so the status stays readable
+ * by its colour; once checked it is a filled 16 px accent round with a check.
+ * While the list is in selection mode, every unchecked row shows its ring too.
  *
  * The Status icon is a SIBLING of the checkbox (a checkbox's children are
  * presentational), so a screen reader still announces it; it stays in the DOM
- * (visually hidden) while the square shows. The checkbox overlays the whole
- * cell, so clicking the glyph selects the row; its tooltip carries the status
+ * (visually hidden) while the ring shows. The checkbox overlays the whole cell,
+ * so clicking the glyph selects the row; its tooltip carries the status
  * (« Select x · Failed: reason ») since hovering the row hides the glyph.
  */
 export default function SelectControl({
@@ -55,8 +55,9 @@ export default function SelectControl({
   dotTestId,
   testId,
 }: Props) {
-  const squareMode = selected || selecting;
+  const ringMode = selected || selecting;
   const title = status ? `${label} · ${statusTitle(status, statusReason)}` : label;
+  const ringColor = status ? `border-current ${statusSpec(status).colorClass}` : "border-fg-3";
   return (
     <span className="relative grid h-4 w-4 shrink-0 place-items-center">
       {status && (
@@ -64,7 +65,7 @@ export default function SelectControl({
           status={status}
           reason={statusReason}
           testId={dotTestId}
-          className={squareMode ? "sr-only" : "group-hover:hidden"}
+          className={ringMode ? "sr-only" : "group-hover:hidden"}
         />
       )}
       <span
@@ -73,7 +74,7 @@ export default function SelectControl({
         aria-label={label}
         title={title}
         data-testid={testId}
-        data-select-mode={squareMode ? "square" : "glyph"}
+        data-select-mode={ringMode ? "ring" : "glyph"}
         onClick={(e) => {
           e.stopPropagation();
           onSelect(e);
@@ -82,16 +83,16 @@ export default function SelectControl({
       >
         {selected ? (
           <span
-            className="grid h-3 w-3 place-items-center rounded-[2.5px] bg-acc text-on-acc"
+            className="grid h-4 w-4 place-items-center rounded-full bg-acc text-on-acc"
             data-testid="select-check"
           >
-            <Check size={9} strokeWidth={3.5} />
+            <Check size={11} strokeWidth={3} />
           </span>
         ) : (
           <span
             aria-hidden="true"
-            data-testid="select-square"
-            className={`h-3 w-3 rounded-[2.5px] border-[1.5px] border-fg-3 ${
+            data-testid="select-ring"
+            className={`h-3.5 w-3.5 rounded-full border-2 ${ringColor} ${
               selecting ? "block" : "hidden group-hover:block"
             }`}
           />

@@ -120,7 +120,7 @@ Features validated while crossing the tour:
   changes nothing, and the progress reads *n / N* with the way out in the card's corner.
 - No step advances on a timer: leaving the screen alone never moves the tour on.
 - Hovering the tour Run's row on the status-icon card does **not** make the card jump: the lit
-  area keeps its place while the glyph turns into the empty select square.
+  area keeps its place while the glyph turns into the select ring in its status colour.
 - The panel a gesture opened is **not dimmed**: its tabs switch and it scrolls, yet typing into
   one of its fields, ticking a box or pressing one of its buttons changes nothing. Once the tour
   has moved past that step, the panel is editable again.

@@ -1,8 +1,9 @@
 // PDO-22 (#996/#997) — the ONE status table: status -> glyph, colour, label, spin.
 // Every surface that shows a status renders it through `StatusIcon`, which reads
 // this table; the SHAPE carries the status (deutan/protan users cannot rely on
-// the colour), the colour only reinforces it. The round glyphs are reserved for
-// statuses; a row's selection is a square (`SelectControl`).
+// the colour), the colour only reinforces it. A row's selection is round too
+// (#1005, the 1.119.1 shape): a hollow ring in the status colour, then an
+// accent round with a check (`SelectControl`).
 import {
   Archive,
   Circle,

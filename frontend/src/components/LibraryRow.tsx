@@ -45,7 +45,7 @@ interface Props {
    * tests / non-selectable contexts stay byte-for-byte as before).
    */
   checked?: boolean;
-  /** The list is in selection mode: the empty select square stays visible. */
+  /** The list is in selection mode: the select ring stays visible. */
   selecting?: boolean;
   onToggleSelect?: (e: MouseEvent) => void;
   /** #974: the validation indicator, bottom-right under the hover actions. */

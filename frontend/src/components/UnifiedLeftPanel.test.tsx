@@ -519,7 +519,7 @@ describe("UnifiedLeftPanel run status icon", () => {
       "title",
       "Failed: merge conflict on ship: 20 conflicting file(s)",
     );
-    // Hovering the row swaps the glyph for the square: the reason rides along.
+    // Hovering the row swaps the glyph for the ring: the reason rides along.
     expect(screen.getByTestId("run-select-control")).toHaveAttribute(
       "title",
       expect.stringContaining("Failed: merge conflict on ship"),
@@ -556,8 +556,12 @@ describe("UnifiedLeftPanel run status icon", () => {
     const controls = () => screen.getAllByTestId("run-select-control");
     expect(controls().map((c) => c.getAttribute("data-select-mode"))).toEqual(["glyph", "glyph"]);
     fireEvent.click(screen.getByRole("checkbox", { name: "Select B" }));
-    // Every control is a square now — the checked one filled, the other empty.
-    expect(controls().map((c) => c.getAttribute("data-select-mode"))).toEqual(["square", "square"]);
+    // Every control is a ring now — the checked one a filled accent round, the
+    // other a hollow ring in its status colour (#1005).
+    expect(controls().map((c) => c.getAttribute("data-select-mode"))).toEqual(["ring", "ring"]);
+    const ring = screen.getByTestId("select-ring");
+    expect(ring.className).toContain("rounded-full");
+    expect(ring.className).toContain("text-st-done");
     expect(screen.getByTestId("select-check")).toBeInTheDocument();
     // The checked row's status moves into its control's tooltip.
     expect(screen.getByRole("checkbox", { name: "Deselect B" })).toHaveAttribute("title", "Deselect B · Failed: exit 1");

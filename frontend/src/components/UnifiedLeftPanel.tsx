@@ -374,8 +374,8 @@ export default function UnifiedLeftPanel({
             selects nor opens the run. */}
         <div className="flex w-4 shrink-0 flex-col items-center gap-1">
         {/* #577 / PDO-22 — the Status icon doubles as the select control: it
-            gives way to an empty square on hover and becomes a filled accent
-            square when selected. #503: the glyph still carries the failure
+            gives way to a ring in its status colour on hover and becomes a filled
+            accent round with a check when selected (#1005). #503: the glyph still carries the failure
             reason so a failed Run has something to say; #588: an awaiting glyph
             carries the awaiting reason (the agent's question, or « child run
             <name> is awaiting you »). */}

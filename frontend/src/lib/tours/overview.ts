@@ -22,6 +22,11 @@
  * teardown removes the Trigger at any exit; the pipeline and the Run stay the
  * user's, as after *First run*.
  *
+ * The Run and the Trigger belong to this browser's **identité de tour** (#986,
+ * ADR-0071 §5): both are named with its suffix, and the tour only reuses and tidies
+ * up its own — two people playing *Overview* on one instance never share a Run nor
+ * remove each other's Trigger. The repository and the pipeline stay common.
+ *
  * Copy rules inherited from the other tours: title is an imperative, body is two
  * sentences at most, and the other tours are pointed to in one sentence, never a
  * button.
@@ -42,6 +47,7 @@ import {
 } from "../../api";
 import { useEditStore } from "../../stores/editStore";
 import type { NodeDef } from "../../types";
+import { withTourIdentity } from "../tourMemory";
 import type {
   TourAppState,
   TourDef,
@@ -55,15 +61,34 @@ import { prepareRepo, TUTORIAL_REPO_PATH } from "./firstRun";
 /** The pipeline the tour's Run executes. A normal Library pipeline, kept after the tour. */
 export const TUTORIAL_OVERVIEW_PIPELINE_ID = "tutorial-overview";
 
-/** The name the tour gives its Run, so the list says what the row is. */
+/**
+ * The base of the name the tour gives its Run, so the list says what the row is.
+ * The Run itself carries the identité de tour: {@link overviewRunName}.
+ */
 export const OVERVIEW_RUN_NAME = "tour-overview";
+
+/** This browser's Run name, e.g. `tour-overview-k3x9` — the only Run the tour reuses. */
+export function overviewRunName(): string {
+  return withTourIdentity(OVERVIEW_RUN_NAME);
+}
 
 /** The Run's prompt — fixed, and what the Start step shows the reader. */
 export const OVERVIEW_PROMPT =
   "Show me around PDO: implement a tiny change, then review it and hand back a verdict.";
 
-/** The Trigger the tour installs to be shown, and removes on the way out. */
+/**
+ * The base of the example Trigger's name — and the whole name of the Trigger the
+ * tour installed before it had an identity, which the teardown removes too.
+ */
 export const EXAMPLE_TRIGGER_NAME = "tutorial-example-trigger";
+
+/**
+ * This browser's example Trigger, e.g. `tutorial-example-trigger-k3x9`: installed
+ * to be shown, removed on the way out — never someone else's.
+ */
+export function exampleTriggerName(): string {
+  return withTourIdentity(EXAMPLE_TRIGGER_NAME);
+}
 
 /** Every 15 minutes — a schedule anyone can read at a glance. */
 const EXAMPLE_TRIGGER_CRON = "*/15 * * * *";
@@ -336,14 +361,16 @@ async function preparePipelineStep(): Promise<void> {
 }
 
 /**
- * The example Trigger, active, picked up by its name when a previous pass left
- * it behind (a tab closed mid-tour skips the teardown). A picked-up Trigger is
- * put back in the shape the tour shows — active, guard `false` — because it is the
- * tour's object, not the user's.
+ * This browser's example Trigger, active, picked up by its name when a previous
+ * pass left it behind (a tab closed mid-tour skips the teardown). A picked-up
+ * Trigger is put back in the shape the tour shows — active, guard `false` — because
+ * it is the tour's object, not the user's. Another identity's Trigger is not ours
+ * to pick up: it is left alone, and this browser gets its own.
  */
 export async function prepareExampleTrigger(): Promise<void> {
   await Promise.all([repoReady(), pipelineReady()]);
-  const existing = (await fetchTriggers()).find((t) => t.name === EXAMPLE_TRIGGER_NAME);
+  const name = exampleTriggerName();
+  const existing = (await fetchTriggers()).find((t) => t.name === name);
   if (existing) {
     if (!existing.enabled || (existing.guard_command ?? "").trim() !== EXAMPLE_TRIGGER_GUARD) {
       await updateTrigger(existing.id, { enabled: true, guard_command: EXAMPLE_TRIGGER_GUARD });
@@ -352,7 +379,7 @@ export async function prepareExampleTrigger(): Promise<void> {
     return;
   }
   const created = await createTrigger({
-    name: EXAMPLE_TRIGGER_NAME,
+    name,
     pipeline_id: TUTORIAL_OVERVIEW_PIPELINE_ID,
     cron: EXAMPLE_TRIGGER_CRON,
     input_template: EXAMPLE_TRIGGER_INPUT,
@@ -419,17 +446,23 @@ async function waitForCompleted(runId: string, signal?: AbortSignal): Promise<vo
 }
 
 /**
- * The Run the tour visits (spec #910, design Q8): the newest `tutorial-overview`
- * Run that is `completed` and not archived — so replaying the tour does not stack
- * identical Runs — else a fresh one, waited for until `completed`.
+ * The Run the tour visits (spec #910, design Q8): the newest Run of this identité
+ * de tour (`tour-overview-<id>`, #986) that is `completed` and not archived — so
+ * replaying the tour does not stack identical Runs — else a fresh one, waited for
+ * until `completed`.
  *
  * One still `running` (a previous pass closed before it finished) is waited for
- * rather than doubled.
+ * rather than doubled. Another identity's Run, however recent, and a `tour-overview`
+ * Run left from before identities are never taken: archiving it would end someone
+ * else's tour, or find it already archived.
  */
 export async function prepareCompletedRun(signal?: AbortSignal): Promise<void> {
   prepared.runId = null;
+  const name = overviewRunName();
   const runs = await fetchRuns();
-  const ours = runs.filter((r) => r.pipeline_name === TUTORIAL_OVERVIEW_PIPELINE_ID && !r.triggered_by);
+  const ours = runs.filter(
+    (r) => r.pipeline_name === TUTORIAL_OVERVIEW_PIPELINE_ID && !r.triggered_by && r.name === name,
+  );
   const reusable = ours.find((r) => r.status === "completed") ?? ours.find((r) => r.status === "running");
   let runId = reusable?.run_id ?? null;
   if (!runId) {
@@ -441,7 +474,7 @@ export async function prepareCompletedRun(signal?: AbortSignal): Promise<void> {
       input: OVERVIEW_PROMPT,
       variables: {},
       target_repo: TUTORIAL_REPO_PATH,
-      name: OVERVIEW_RUN_NAME,
+      name,
       auto_name: false,
       // No sandbox: two bash scripts that echo and write their outputs need no
       // container, and an instance without Docker must still play the tour.
@@ -456,14 +489,16 @@ export async function prepareCompletedRun(signal?: AbortSignal): Promise<void> {
 // ---- teardown ---------------------------------------------------------------
 
 /**
- * Remove the example Trigger — every one of that name, so a Trigger a previous
- * pass left behind goes too. A 404 is a success (`deleteTrigger` says so).
+ * Remove this browser's example Trigger — every one of its name, so a Trigger a
+ * previous pass left behind goes too — and the unsuffixed one the tour installed
+ * before identities existed, which belongs to nobody now. Another identity's
+ * Trigger stays: its tour may still be showing it. A 404 is a success
+ * (`deleteTrigger` says so).
  */
 export async function removeExampleTrigger(): Promise<void> {
+  const names = new Set([exampleTriggerName(), EXAMPLE_TRIGGER_NAME]);
   const triggers = await fetchTriggers();
-  await Promise.all(
-    triggers.filter((t) => t.name === EXAMPLE_TRIGGER_NAME).map((t) => deleteTrigger(t.id)),
-  );
+  await Promise.all(triggers.filter((t) => names.has(t.name)).map((t) => deleteTrigger(t.id)));
   prepared.triggerId = null;
 }
 
@@ -670,8 +705,8 @@ const STEPS: TourStep[] = [
     title: "Open your Run",
     body: (o) =>
       runIsOpen(o.app)
-        ? `${OVERVIEW_RUN_NAME} is open. Every Run is a row in this list; clicking one opens it on the canvas.`
-        : `Click ${OVERVIEW_RUN_NAME} in the list. The tour just ran it for you: a real Run of the ${TUTORIAL_OVERVIEW_PIPELINE_ID} pipeline, already finished.`,
+        ? `${overviewRunName()} is open. Every Run is a row in this list; clicking one opens it on the canvas.`
+        : `Click ${overviewRunName()} in the list. The tour just ran it for you: a real Run of the ${TUTORIAL_OVERVIEW_PIPELINE_ID} pipeline, already finished.`,
     // The row only exists on the Runs tab: a reader who is elsewhere is sent there.
     target: (o) => {
       const id = overviewRunId();
@@ -929,7 +964,7 @@ const STEPS: TourStep[] = [
     title: "Open the Triggers tab",
     body: (o) =>
       o.present(TRIGGERS_LIST)
-        ? `This is ${EXAMPLE_TRIGGER_NAME}, set up for the tour: every 15 minutes it would launch ${TUTORIAL_OVERVIEW_PIPELINE_ID}, but its guard always says no. A Trigger launches a pipeline on a schedule, when its guard agrees.`
+        ? `This is ${exampleTriggerName()}, set up for the tour: every 15 minutes it would launch ${TUTORIAL_OVERVIEW_PIPELINE_ID}, but its guard always says no. A Trigger launches a pipeline on a schedule, when its guard agrees.`
         : "Click Triggers. A Trigger launches a pipeline on a schedule, when a condition holds.",
     // Re-aims onto the example row once the list is up, the way `open-output`
     // re-aims onto the file it opened.
@@ -1003,17 +1038,27 @@ export const OVERVIEW_TOUR: TourDef = {
         failureTitle: "The tour's pipeline could not be created",
         run: preparePipelineStep,
       },
+      // Getters: the names carry the identité de tour, read when the card shows
+      // them rather than when this module loads.
       {
         id: "trigger",
-        pending: `Example Trigger ${EXAMPLE_TRIGGER_NAME}…`,
-        ready: `Example Trigger ${EXAMPLE_TRIGGER_NAME} active (it never fires a Run)`,
+        get pending() {
+          return `Example Trigger ${exampleTriggerName()}…`;
+        },
+        get ready() {
+          return `Example Trigger ${exampleTriggerName()} active (it never fires a Run)`;
+        },
         failureTitle: "The example Trigger could not be created",
         run: prepareExampleTrigger,
       },
       {
         id: "run",
-        pending: `Run ${OVERVIEW_RUN_NAME} running…`,
-        ready: `Run ${OVERVIEW_RUN_NAME} completed`,
+        get pending() {
+          return `Run ${overviewRunName()} running…`;
+        },
+        get ready() {
+          return `Run ${overviewRunName()} completed`;
+        },
         failureTitle: "The tour's Run did not complete",
         run: prepareCompletedRun,
       },
@@ -1022,7 +1067,9 @@ export const OVERVIEW_TOUR: TourDef = {
   teardown: [
     {
       id: "example-trigger",
-      failureTitle: `The example Trigger ${EXAMPLE_TRIGGER_NAME} could not be removed`,
+      get failureTitle() {
+        return `The example Trigger ${exampleTriggerName()} could not be removed`;
+      },
       run: removeExampleTrigger,
     },
   ],
@@ -1032,12 +1079,12 @@ export const OVERVIEW_TOUR: TourDef = {
     { label: "Nodes", text: "an input in, outputs out, a terminal of their own; usually agents, scripts here" },
     { label: "Edges", text: "conditions on the source's outputs, like `verdict eq pass`" },
     {
-      label: OVERVIEW_RUN_NAME,
+      label: overviewRunName(),
       text: isArchived(app)
         ? "archived: its worktree is gone, its outputs stay"
         : "still in your list, with its worktree — archive it when you are done",
     },
-    { label: EXAMPLE_TRIGGER_NAME, text: "removed now that the tour is over" },
+    { label: exampleTriggerName(), text: "removed now that the tour is over" },
   ],
   outro: {
     closing:

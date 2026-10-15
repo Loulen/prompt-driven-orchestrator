@@ -2,7 +2,13 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Check, Circle, Copy, LoaderCircle, X } from "lucide-react";
 import { placePopover, type PopoverSide } from "../../lib/tourPlacement";
 import type { TourRect } from "../../hooks/useTour";
-import type { TourChecklistItem, TourDef, TourIllustration, TourStep } from "../../lib/tour";
+import {
+  copyBlockOf,
+  type TourChecklistItem,
+  type TourDef,
+  type TourIllustration,
+  type TourStep,
+} from "../../lib/tour";
 import StatusIcon from "../StatusIcon";
 
 /**
@@ -79,6 +85,7 @@ export default function TourPopover({
   // the badge resets by itself when the tour moves on — no effect to reconcile it.
   const [copiedStep, setCopiedStep] = useState<string | null>(null);
   const copied = copiedStep === step.id;
+  const copyBlock = copyBlockOf(step);
   // The spinner row belongs to the wait, not to the step: once the condition is
   // met there is nothing left to wait for, and a spinner that kept turning under
   // a satisfied checklist would be the card contradicting itself.
@@ -99,8 +106,8 @@ export default function TourPopover({
   }, [hole, step.id, body, note, checklist]);
 
   const copy = () => {
-    if (!step.copyBlock) return;
-    void navigator.clipboard?.writeText(step.copyBlock).catch(() => {});
+    if (!copyBlock) return;
+    void navigator.clipboard?.writeText(copyBlock).catch(() => {});
     setCopiedStep(step.id);
   };
 
@@ -198,14 +205,14 @@ export default function TourPopover({
         </p>
       )}
 
-      {step.copyBlock && (
+      {copyBlock && (
         <div className="flex items-start gap-1.5 rounded border border-line bg-bg-3 p-1.5">
           <pre
             className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-fg-2"
             style={{ fontSize: "10px", lineHeight: 1.5 }}
             data-testid="tour-copy-block"
           >
-            {step.copyBlock}
+            {copyBlock}
           </pre>
           <button
             type="button"

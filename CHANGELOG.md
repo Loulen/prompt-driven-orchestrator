@@ -10,6 +10,20 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.126.0
+**Tours jouables à plusieurs sur une instance partagée** (#986, #987, story PDO-20), validé en
+recette.
+
+- **First run et First pipeline jouables à plusieurs** (#987) : chaque navigateur nomme son Run
+(`my-first-run-<id>`) et sa pipeline (`tutorial-implement-test-<id>`) avec son identité de tour.
+« Find your Run » et « Keep it, or delete it » désignent la ligne de ce navigateur, et le
+lancement ou la suppression faits par un autre joueur ne font plus avancer le tour.
+
+- Identité de tour, Overview jouable à plusieurs (#986) : chaque navigateur tire une
+identité de tour (`[0-9a-z]{4}`), et le tour *Overview* prépare et range son propre Run
+(`tour-overview-<id>`) et son propre Trigger (`tutorial-example-trigger-<id>`), sans toucher
+à ceux des autres. Le Trigger hérité sans suffixe est rangé ; le Run hérité reste en place.
+
 ## 1.125.0
 **Pipeline validé pour tous et mis en tête pour des Projets** (#992, spec #989, story PDO-15),
 validé en recette.

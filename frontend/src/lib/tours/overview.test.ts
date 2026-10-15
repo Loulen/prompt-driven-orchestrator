@@ -8,6 +8,9 @@
  * gestures that must NOT advance before the state says so, the targets that
  * re-aim — and the preparations: idempotent (the Run reused or relaunched, the
  * Trigger picked up by its name), refused on a Run that did not complete.
+ *
+ * Two identités de tour share the instance (#986): this browser is `aaaa`, a
+ * neighbour is `bbbb`. The tour must only reuse and tidy up the `aaaa` objects.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -70,6 +73,14 @@ vi.mock("../../api", async () => {
 });
 
 const api = await import("../../api");
+
+/** This browser's identité de tour, and a neighbour's on the same instance. */
+const ME = "aaaa";
+const OTHER = "bbbb";
+const MY_RUN = `${OVERVIEW_RUN_NAME}-${ME}`;
+const OTHER_RUN = `${OVERVIEW_RUN_NAME}-${OTHER}`;
+const MY_TRIGGER = `${EXAMPLE_TRIGGER_NAME}-${ME}`;
+const OTHER_TRIGGER = `${EXAMPLE_TRIGGER_NAME}-${OTHER}`;
 
 const TOUR = OVERVIEW_TOUR;
 const STEPS = TOUR.steps;
@@ -137,12 +148,13 @@ const EMPTY_APP: TourAppState = {
   libraryPipelineIds: [],
   runCount: 0,
   runs: [],
-  latestRun: null,
+  launchedRunId: null,
+  myRun: null,
   activeRunId: null,
 };
 
 function summary(over: Partial<TourRunSummary> = {}): TourRunSummary {
-  return { id: RUN_ID, name: OVERVIEW_RUN_NAME, pipeline: TUTORIAL_OVERVIEW_PIPELINE_ID, status: "completed", ...over };
+  return { id: RUN_ID, name: MY_RUN, pipeline: TUTORIAL_OVERVIEW_PIPELINE_ID, status: "completed", ...over };
 }
 
 function listEntry(over: Partial<RunListEntry> = {}): RunListEntry {
@@ -151,13 +163,13 @@ function listEntry(over: Partial<RunListEntry> = {}): RunListEntry {
     pipeline_name: TUTORIAL_OVERVIEW_PIPELINE_ID,
     status: "completed",
     started_at: null,
-    name: OVERVIEW_RUN_NAME,
+    name: MY_RUN,
     ...over,
   } as RunListEntry;
 }
 
 function runState(over: Partial<RunState> = {}): RunState {
-  return { run_id: RUN_ID, status: "completed", name: OVERVIEW_RUN_NAME, ...over } as RunState;
+  return { run_id: RUN_ID, status: "completed", name: MY_RUN, ...over } as RunState;
 }
 
 /** Make the preparations answer with the tour's Run and Trigger, as a real pass would. */
@@ -166,7 +178,7 @@ async function prepare(): Promise<void> {
   vi.mocked(api.fetchRun).mockResolvedValueOnce(runState());
   await prepareCompletedRun();
   vi.mocked(api.fetchTriggers).mockResolvedValueOnce([
-    { id: TRIGGER_ID, name: EXAMPLE_TRIGGER_NAME, enabled: true, guard_command: "false" } as Trigger,
+    { id: TRIGGER_ID, name: MY_TRIGGER, enabled: true, guard_command: "false" } as Trigger,
   ]);
   await prepareExampleTrigger();
 }
@@ -184,7 +196,8 @@ class FakeApp {
     ...EMPTY_APP,
     runCount: 2,
     runs: [summary({ id: "run-other", name: "other", pipeline: "mine", status: "running" }), summary()],
-    latestRun: { id: "run-other", name: "other", nodes: [] },
+    launchedRunId: "run-other",
+    myRun: { id: "run-other", name: "other", nodes: [] },
   };
   readonly baseline: TourAppState = { ...this.app };
   private dom = new Set<string>([CANVAS, LEFT, RIGHT, RUNS_TAB, RUNS_TAB_OPEN, TRIGGERS_TAB, PIPELINES_TAB, NEW_RUN, RUN_ROW, RUN_SELECT, t("open-settings"), t("open-stats")]);
@@ -330,6 +343,8 @@ function walk(fake: FakeApp): { run: TourRun; visited: string[] } {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  localStorage.clear();
+  localStorage.setItem("pdo.tour.identity", ME);
   await prepare();
 });
 
@@ -617,7 +632,7 @@ describe("gestures advance only on the observed state", () => {
     expect(step.target(fake.obs())).toEqual([TRIGGERS_TAB]);
     fake.openTriggers();
     expect(step.target(fake.obs())).toEqual([TRIGGER_ROW]);
-    expect(stepBody(step, fake.obs())).toContain(EXAMPLE_TRIGGER_NAME);
+    expect(stepBody(step, fake.obs())).toContain(MY_TRIGGER);
   });
 
   it("re-aims the Pipelines step onto tutorial-overview, with one sentence for First pipeline", () => {
@@ -738,9 +753,21 @@ describe("the copy", () => {
 
   it("recaps what happened to the Run", () => {
     const fake = new FakeApp();
-    expect(recapOf(TOUR, fake.app).find((b) => b.label === OVERVIEW_RUN_NAME)?.text).toMatch(/still in your list/);
+    expect(recapOf(TOUR, fake.app).find((b) => b.label === MY_RUN)?.text).toMatch(/still in your list/);
     fake.confirmArchive();
-    expect(recapOf(TOUR, fake.app).find((b) => b.label === OVERVIEW_RUN_NAME)?.text).toMatch(/archived/);
+    expect(recapOf(TOUR, fake.app).find((b) => b.label === MY_RUN)?.text).toMatch(/archived/);
+  });
+
+  it("names this browser's Run and Trigger, with their real names, in the recap", () => {
+    const labels = recapOf(TOUR, new FakeApp().app).map((b) => b.label);
+    expect(labels).toContain(MY_RUN);
+    expect(labels).toContain(MY_TRIGGER);
+  });
+
+  it("names this browser's Run in the open-run step", () => {
+    const fake = new FakeApp();
+    const body = stepBody(stepById("open-run"), fake.obs());
+    expect(body).toContain(`Click ${MY_RUN} in the list.`);
   });
 });
 
@@ -828,7 +855,7 @@ describe("the Run the preparation waits for", () => {
     vi.useRealTimers();
   });
 
-  it("reuses the newest completed, unarchived tutorial-overview Run", async () => {
+  it("reuses the newest completed, unarchived Run of this identité de tour", async () => {
     vi.mocked(api.fetchRuns).mockResolvedValueOnce([
       listEntry({ run_id: "run-archived", status: "archived" }),
       listEntry({ run_id: "run-mine", pipeline_name: "mine" }),
@@ -841,6 +868,53 @@ describe("the Run the preparation waits for", () => {
 
     expect(api.createRun).not.toHaveBeenCalled();
     expect(overviewRunId()).toBe("run-done");
+  });
+
+  it("ignores a newer Run of another identité de tour and the unsuffixed Run of before", async () => {
+    vi.mocked(api.fetchRuns).mockResolvedValueOnce([
+      listEntry({ run_id: "run-neighbour", name: OTHER_RUN }),
+      listEntry({ run_id: "run-legacy", name: OVERVIEW_RUN_NAME }),
+    ]);
+    vi.mocked(api.fetchRun).mockResolvedValueOnce(runState({ run_id: "run-new", status: "completed" }));
+
+    await prepareCompletedRun();
+
+    expect(api.createRun).toHaveBeenCalledWith(expect.objectContaining({ name: MY_RUN }));
+    const read = vi.mocked(api.fetchRun).mock.calls.map((c) => c[0]);
+    expect(read).not.toContain("run-neighbour");
+    expect(read).not.toContain("run-legacy");
+    expect(overviewRunId()).toBe("run-new");
+  });
+
+  it("takes its own Run back even when another identity's is newer", async () => {
+    vi.mocked(api.fetchRuns).mockResolvedValueOnce([
+      listEntry({ run_id: "run-neighbour", name: OTHER_RUN }),
+      listEntry({ run_id: "run-mine" }),
+    ]);
+    vi.mocked(api.fetchRun).mockResolvedValueOnce(runState({ run_id: "run-mine" }));
+
+    await prepareCompletedRun();
+
+    expect(api.createRun).not.toHaveBeenCalled();
+    expect(overviewRunId()).toBe("run-mine");
+  });
+
+  it("gives two identities two Runs: each browser launches and visits its own", async () => {
+    vi.mocked(api.fetchRuns).mockResolvedValueOnce([]);
+    vi.mocked(api.createRun).mockResolvedValueOnce({ run_id: "run-a" } as never);
+    vi.mocked(api.fetchRun).mockResolvedValueOnce(runState({ run_id: "run-a", name: MY_RUN }));
+    await prepareCompletedRun();
+    expect(overviewRunId()).toBe("run-a");
+
+    // The neighbour's browser, a moment later: run-a is in the list, and not theirs.
+    localStorage.setItem("pdo.tour.identity", OTHER);
+    vi.mocked(api.fetchRuns).mockResolvedValueOnce([listEntry({ run_id: "run-a", name: MY_RUN })]);
+    vi.mocked(api.createRun).mockResolvedValueOnce({ run_id: "run-b" } as never);
+    vi.mocked(api.fetchRun).mockResolvedValueOnce(runState({ run_id: "run-b", name: OTHER_RUN }));
+    await prepareCompletedRun();
+
+    expect(vi.mocked(api.createRun).mock.calls.map((c) => c[0].name)).toEqual([MY_RUN, OTHER_RUN]);
+    expect(overviewRunId()).toBe("run-b");
   });
 
   it("launches a new Run once the last one was archived, and answers when it completes", async () => {
@@ -865,7 +939,7 @@ describe("the Run the preparation waits for", () => {
         pipeline_id: TUTORIAL_OVERVIEW_PIPELINE_ID,
         input: OVERVIEW_PROMPT,
         target_repo: TUTORIAL_REPO_PATH,
-        name: OVERVIEW_RUN_NAME,
+        name: MY_RUN,
         auto_name: false,
       }),
     );
@@ -922,7 +996,7 @@ describe("the example Trigger", () => {
 
     expect(api.createTrigger).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: EXAMPLE_TRIGGER_NAME,
+        name: MY_TRIGGER,
         pipeline_id: TUTORIAL_OVERVIEW_PIPELINE_ID,
         target_repo: TUTORIAL_REPO_PATH,
         cron: "*/15 * * * *",
@@ -936,7 +1010,7 @@ describe("the example Trigger", () => {
 
   it("is picked up by its name when a previous pass left it behind", async () => {
     vi.mocked(api.fetchTriggers).mockResolvedValueOnce([
-      { id: "trg-left", name: EXAMPLE_TRIGGER_NAME, enabled: true, guard_command: "false" } as Trigger,
+      { id: "trg-left", name: MY_TRIGGER, enabled: true, guard_command: "false" } as Trigger,
     ]);
     await prepareExampleTrigger();
     expect(api.createTrigger).not.toHaveBeenCalled();
@@ -944,23 +1018,51 @@ describe("the example Trigger", () => {
     expect(exampleTriggerId()).toBe("trg-left");
   });
 
+  it("never picks up another identity's Trigger nor the unsuffixed one: this browser gets its own", async () => {
+    vi.mocked(api.fetchTriggers).mockResolvedValueOnce([
+      { id: "trg-neighbour", name: OTHER_TRIGGER, enabled: true, guard_command: "false" } as Trigger,
+      { id: "trg-legacy", name: EXAMPLE_TRIGGER_NAME, enabled: true, guard_command: "false" } as Trigger,
+    ]);
+    await prepareExampleTrigger();
+    expect(api.updateTrigger).not.toHaveBeenCalled();
+    expect(api.createTrigger).toHaveBeenCalledWith(expect.objectContaining({ name: MY_TRIGGER }));
+    expect(exampleTriggerId()).toBe("trg-new");
+  });
+
   it("is put back active and harmless when it was left paused or edited", async () => {
     vi.mocked(api.fetchTriggers).mockResolvedValueOnce([
-      { id: "trg-left", name: EXAMPLE_TRIGGER_NAME, enabled: false, guard_command: "true" } as Trigger,
+      { id: "trg-left", name: MY_TRIGGER, enabled: false, guard_command: "true" } as Trigger,
     ]);
     await prepareExampleTrigger();
     expect(api.updateTrigger).toHaveBeenCalledWith("trg-left", { enabled: true, guard_command: "false" });
   });
 
-  it("is removed by the teardown — every Trigger of that name, and only those", async () => {
+  it("is removed by the teardown — this identity's and the unsuffixed one of before, never another's", async () => {
     vi.mocked(api.fetchTriggers).mockResolvedValueOnce([
-      { id: "a", name: EXAMPLE_TRIGGER_NAME } as Trigger,
+      { id: "a", name: MY_TRIGGER } as Trigger,
       { id: "b", name: "nightly" } as Trigger,
-      { id: "c", name: EXAMPLE_TRIGGER_NAME } as Trigger,
+      { id: "c", name: MY_TRIGGER } as Trigger,
+      { id: "d", name: OTHER_TRIGGER } as Trigger,
+      { id: "e", name: EXAMPLE_TRIGGER_NAME } as Trigger,
     ]);
     await removeExampleTrigger();
-    expect(vi.mocked(api.deleteTrigger).mock.calls.map((c) => c[0])).toEqual(["a", "c"]);
+    expect(vi.mocked(api.deleteTrigger).mock.calls.map((c) => c[0])).toEqual(["a", "c", "e"]);
     expect(exampleTriggerId()).toBeNull();
+  });
+
+  it("is removed for each identity by its own teardown only", async () => {
+    const triggers = [
+      { id: "a", name: MY_TRIGGER } as Trigger,
+      { id: "b", name: OTHER_TRIGGER } as Trigger,
+    ];
+    vi.mocked(api.fetchTriggers).mockResolvedValueOnce(triggers);
+    await removeExampleTrigger();
+    expect(vi.mocked(api.deleteTrigger).mock.calls.map((c) => c[0])).toEqual(["a"]);
+
+    localStorage.setItem("pdo.tour.identity", OTHER);
+    vi.mocked(api.fetchTriggers).mockResolvedValueOnce([triggers[1]]);
+    await removeExampleTrigger();
+    expect(vi.mocked(api.deleteTrigger).mock.calls.map((c) => c[0])).toEqual(["a", "b"]);
   });
 
   it("is the tour's only teardown: the pipeline and the Run stay", () => {
@@ -976,5 +1078,16 @@ describe("the intro card", () => {
       expect(item.failureTitle.length, item.id).toBeGreaterThan(0);
       expect(item.ready, item.id).not.toBe(item.pending);
     }
+  });
+
+  it("suffixes only the Trigger and the Run, the objects of this identité de tour", () => {
+    const ready = Object.fromEntries(TOUR.intro!.prepare.map((p) => [p.id, p.ready]));
+    expect(ready.trigger).toBe(`Example Trigger ${MY_TRIGGER} active (it never fires a Run)`);
+    expect(ready.run).toBe(`Run ${MY_RUN} completed`);
+    expect(ready.repo).toBe(`Training repository ${TUTORIAL_REPO_PATH} ready`);
+    expect(ready.pipeline).toBe(`Pipeline ${TUTORIAL_OVERVIEW_PIPELINE_ID} in the Library`);
+    expect(TOUR.intro!.footnote).toBe(
+      "Nothing here touches your own repositories. The example Trigger is removed when the tour ends; the pipeline and the Run stay yours.",
+    );
   });
 });

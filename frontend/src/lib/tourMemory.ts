@@ -82,7 +82,9 @@ export function markTourDone(tourId: string, at: Date = new Date()): Record<stri
 }
 
 /** Settings › Tutorials › « Reset tutorial memory »: forget the checkmarks AND the
- *  welcome prompt, so the next load proposes the modal again on a Run-less instance. */
+ *  welcome prompt, so the next load proposes the modal again on a Run-less instance.
+ *  The {@link tourIdentity} stays: forgetting it would orphan every object the
+ *  tours already gave this browser (ADR-0071 §5). */
 export function resetTourMemory(): void {
   try {
     localStorage.removeItem(OFFERED_KEY);
@@ -90,6 +92,68 @@ export function resetTourMemory(): void {
   } catch {
     // nothing to forget if the store is unreadable
   }
+}
+
+// ---- identité de tour (CONTEXT.md, ADR-0071 §5) ----------------------------
+
+/**
+ * This browser's **identité de tour**: four base36 characters, drawn once. PDO has
+ * no notion of a user, and an instance is shared (the Dojo plays the tours in a
+ * group), so the identity is the tours' only « self »: every object a tour puts on
+ * the instance, or has the reader paste, carries it as a name suffix, and a tour
+ * only reuses and tidies up its own.
+ */
+const IDENTITY_KEY = "pdo.tour.identity";
+
+/** The identity's shape — anything else in the store is redrawn, never trusted. */
+export const TOUR_IDENTITY_FORMAT = /^[0-9a-z]{4}$/;
+
+const BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+/**
+ * The identity drawn when the store could not keep it (private mode, quota): held
+ * for the session, so the tour's objects do not change names under the reader.
+ */
+let sessionIdentity: string | null = null;
+
+/**
+ * Draw a fresh identity. `crypto.getRandomValues`, not `randomUUID`: a shared
+ * instance is often served over plain http on a LAN, where `randomUUID` does not
+ * exist. The modulo bias over 36 is irrelevant for four characters of a name.
+ */
+export function drawTourIdentity(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(4));
+  return Array.from(bytes, (b) => BASE36[b % BASE36.length]).join("");
+}
+
+/**
+ * This browser's identity — read from the store, or drawn once and kept there.
+ * Stable across reloads; a cleared store or another browser draws a new one, and
+ * the old objects stay behind as orphans (the price ADR-0071 §5 accepts).
+ */
+export function tourIdentity(): string {
+  try {
+    const stored = localStorage.getItem(IDENTITY_KEY);
+    if (stored && TOUR_IDENTITY_FORMAT.test(stored)) return stored;
+  } catch {
+    // unreadable store → the session's identity below
+  }
+  sessionIdentity ??= drawTourIdentity();
+  try {
+    localStorage.setItem(IDENTITY_KEY, sessionIdentity);
+  } catch {
+    // quota / disabled / private mode → in-memory only for this session
+  }
+  return sessionIdentity;
+}
+
+/**
+ * A name that belongs to this browser: `base-<id>`, e.g. `tour-overview-k3x9`.
+ * Every tour names what it puts or has pasted through here, so they all suffix
+ * the same way.
+ */
+export function withTourIdentity(base: string, identity: string = tourIdentity()): string {
+  return `${base}-${identity}`;
 }
 
 export interface WelcomeInput {

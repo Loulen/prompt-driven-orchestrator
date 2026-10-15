@@ -272,11 +272,15 @@ function runNodes(detail: TourRunDetailInput): TourRunNode[] {
 export function readTourAppState(
   runs: TourRunsInput,
   detail: TourRunDetailInput | null = null,
+  launchedRunId: string | null = null,
 ): TourAppState {
   const s = useEditStore.getState();
   const tab = s.openTabs.find((t) => t.id === s.activeTabId) ?? null;
-  // `GET /runs` answers newest-first, so `[0]` is the Run a tour just caused.
-  const newest = runs[0] ?? null;
+  // Your Run is the one your Launch got back (#987), never `runs[0]`: on a shared
+  // instance the head of the list is whoever launched last.
+  const mine = launchedRunId
+    ? (Array.from(runs).find((r) => r.run_id === launchedRunId) ?? null)
+    : null;
   return {
     pipelineId: tab?.id ?? null,
     pipeline: tab?.pipeline ?? null,
@@ -295,14 +299,17 @@ export function readTourAppState(
       pipeline: r.pipeline_name ?? "",
       status: r.status ?? "",
     })),
-    latestRun: newest
+    launchedRunId,
+    myRun: launchedRunId
       ? {
-          id: newest.run_id,
-          name: newest.name?.trim() || newest.run_id,
+          id: launchedRunId,
+          // The list refreshes a beat after the Launch answered: until it has,
+          // the id is the only name there is.
+          name: mine?.name?.trim() || launchedRunId,
           // Only the detail OF THAT Run: the inspector may well be showing
           // another one, and a tour reading a stranger's nodes would advance on
           // somebody else's progress.
-          nodes: detail?.run_id === newest.run_id ? runNodes(detail) : [],
+          nodes: detail?.run_id === launchedRunId ? runNodes(detail) : [],
         }
       : null,
     activeRunId: tab?.runId ?? null,
@@ -312,10 +319,11 @@ export function readTourAppState(
 function observation(
   runs: TourRunsInput,
   detail: TourRunDetailInput | null,
+  launchedRunId: string | null,
   baseline: TourAppState,
 ): TourObservation {
   return {
-    app: readTourAppState(runs, detail),
+    app: readTourAppState(runs, detail, launchedRunId),
     baseline,
     present: (selector) => {
       try {
@@ -386,6 +394,7 @@ const NO_ASIDES: TourAsideView[] = [];
 export function useTour(
   runs: TourRunsInput,
   runDetail: TourRunDetailInput | null = null,
+  launchedRunId: string | null = null,
 ): TourController {
   const [tour, setTour] = useState<TourDef | null>(null);
   const [run, setRun] = useState<TourRun | null>(null);
@@ -412,6 +421,7 @@ export function useTour(
   const tourRef = useRef<TourDef | null>(null);
   const runsRef = useRef<TourRunsInput>(runs);
   const runDetailRef = useRef<TourRunDetailInput | null>(runDetail);
+  const launchedRunIdRef = useRef<string | null>(launchedRunId);
   /** What the read-only guard protects right now (#911), refreshed by the pump. */
   const guardRef = useRef<ReadOnlyScope | null>(null);
   /** The last aim scrolled to — step and selectors both (see the pump's scroll block). */
@@ -440,13 +450,18 @@ export function useTour(
   useEffect(() => {
     runDetailRef.current = runDetail;
   }, [runDetail]);
+  useEffect(() => {
+    launchedRunIdRef.current = launchedRunId;
+  }, [launchedRunId]);
 
   const observe = useCallback(
     () =>
       observation(
         runsRef.current,
         runDetailRef.current,
-        baselineRef.current ?? readTourAppState(runsRef.current, runDetailRef.current),
+        launchedRunIdRef.current,
+        baselineRef.current ??
+          readTourAppState(runsRef.current, runDetailRef.current, launchedRunIdRef.current),
       ),
     [],
   );
@@ -518,9 +533,16 @@ export function useTour(
     // the first step asks for. Settings closes itself for the same reason; this
     // is that rule for the surfaces that cannot see a tour coming.
     dismissTransientOverlays();
-    const baseline = readTourAppState(runsRef.current, runDetailRef.current);
+    const baseline = readTourAppState(
+      runsRef.current,
+      runDetailRef.current,
+      launchedRunIdRef.current,
+    );
     baselineRef.current = baseline;
-    const first = startTour(next, observation(runsRef.current, runDetailRef.current, baseline));
+    const first = startTour(
+      next,
+      observation(runsRef.current, runDetailRef.current, launchedRunIdRef.current, baseline),
+    );
     scrolledFor.current = null;
     tourRef.current = next;
     runRef.current = first;

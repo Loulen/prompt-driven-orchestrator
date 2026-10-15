@@ -37,8 +37,8 @@ function makeEntry(name: string, prompt = "Some prompt"): LibraryEntry {
   return {
     name,
     type: "agent",
-    inputs: [{ name: "in", repeated: false }],
-    outputs: [{ name: "out", repeated: false }],
+    inputs: [{ name: "in" }],
+    outputs: [{ name: "out" }],
     interactive: false,
     prompt,
   };

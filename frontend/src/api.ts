@@ -2098,7 +2098,6 @@ export function importPipelineDocument(
 
 export interface LibraryPort {
   name: string;
-  repeated: boolean;
   port_type?: PortType;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
@@ -2108,7 +2107,6 @@ export interface LibraryPort {
 export function libraryPortToPortDef(port: LibraryPort): PortDef {
   return {
     name: port.name,
-    repeated: port.repeated,
     ...(port.port_type ? { port_type: port.port_type } : {}),
     ...(port.frontmatter ? { frontmatter: port.frontmatter } : {}),
     ...(port.when ? { when: port.when } : {}),

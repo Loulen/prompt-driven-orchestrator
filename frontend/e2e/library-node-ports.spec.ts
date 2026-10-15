@@ -7,6 +7,8 @@ import { openPipelineForEdit } from "./helpers";
 // Layer 3b — Library node round-trip preserves inputs/outputs (#71).
 // Verifies: configure a node with 2 inputs + 1 typed output, save to library,
 // reload UI, drag back from library → ports + frontmatter schemas preserved.
+// The seed still carries the legacy port `repeated` (PDO-17): a port has no
+// accumulation flag any more, so the key loads, is dropped, and never comes back.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -39,6 +41,7 @@ nodes:
         repeated: true
     outputs:
       - name: review
+        repeated: true
         frontmatter:
           verdict:
             type: enum
@@ -117,12 +120,13 @@ test("save node to library preserves ports and frontmatter schema", async ({
   expect(inputs).toHaveLength(2);
   expect(inputs[0].name).toBe("code");
   expect(inputs[1].name).toBe("context");
-  expect(inputs[1].repeated).toBe(true);
+  expect(inputs[1].repeated).toBeUndefined();
 
   // Assert output frontmatter preserved
   const outputs = entry!.outputs as Array<Record<string, unknown>>;
   expect(outputs).toHaveLength(1);
   expect(outputs[0].name).toBe("review");
+  expect(outputs[0].repeated).toBeUndefined();
   const fm = outputs[0].frontmatter as Record<
     string,
     Record<string, unknown>
@@ -136,7 +140,8 @@ test("save node to library preserves ports and frontmatter schema", async ({
 test("instantiating from library restores ports and frontmatter", async ({
   baseURL,
 }) => {
-  // First ensure the library entry exists (from previous test or create via API)
+  // First ensure the library entry exists (from previous test or create via API).
+  // The payload is an old entry's shape, legacy `repeated` included (PDO-17).
   const checkResp = await fetch(`${baseURL}/library`);
   const entries = (await checkResp.json()) as Array<Record<string, unknown>>;
   if (!entries.find((e) => e.name === "reviewer")) {
@@ -153,7 +158,7 @@ test("instantiating from library restores ports and frontmatter", async ({
         outputs: [
           {
             name: "review",
-            repeated: false,
+            repeated: true,
             frontmatter: {
               verdict: { type: "enum", allowed: ["PASS", "FAIL"] },
               score: { type: "int" },
@@ -188,5 +193,6 @@ test("instantiating from library restores ports and frontmatter", async ({
 
   const inputs = spec.inputs as Array<Record<string, unknown>>;
   expect(inputs).toHaveLength(2);
-  expect(inputs[1].repeated).toBe(true);
+  expect(inputs[1].repeated).toBeUndefined();
+  expect(outputs[0].repeated).toBeUndefined();
 });

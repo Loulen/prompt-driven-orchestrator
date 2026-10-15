@@ -124,8 +124,8 @@ class FakeApp {
           type: "agent",
           interactive: false,
           isolated_worktree: true,
-          inputs: [{ name: "in", repeated: false }],
-          outputs: [{ name: "out", repeated: false }],
+          inputs: [{ name: "in" }],
+          outputs: [{ name: "out" }],
         },
       ];
     });
@@ -268,7 +268,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "implementer-prompt": () => fake.type(PROMPT_INPUT, "Implement what the user asked for."),
     "implementer-out": () =>
       fake.updateAgent(0, {
-        outputs: [{ name: "out", repeated: false, instructions: "Test results and a diagram" }],
+        outputs: [{ name: "out", instructions: "Test results and a diagram" }],
       }),
     "open-add-menu-2": () => fake.show(ADD_MENU),
     "choose-node-2": () => {
@@ -287,14 +287,13 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "tester-prompt": () => fake.type(PROMPT_INPUT, "Review the change and test it."),
     "tester-out": () =>
       fake.updateAgent(1, {
-        outputs: [{ name: "out", repeated: false, instructions: "A short verdict" }],
+        outputs: [{ name: "out", instructions: "A short verdict" }],
       }),
     "tester-verdict": () =>
       fake.updateAgent(1, {
         outputs: [
           {
             name: "out",
-            repeated: false,
             instructions: "A short verdict",
             frontmatter: { verdict: { type: "enum", allowed: ["pass", "fail"] } },
           },
@@ -303,7 +302,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
     "add-image-port": () => {
       // `handleAddOutput` names it `out-2` (the first free `out-N`).
       fake.updateAgent(1, {
-        outputs: [...fake.agents()[1].outputs, { name: "out-2", repeated: false }],
+        outputs: [...fake.agents()[1].outputs, { name: "out-2" }],
       });
       fake.show(shotSlot);
     },
@@ -311,7 +310,7 @@ function gestures(fake: FakeApp): Record<string, () => void> {
       fake.updateAgent(1, {
         outputs: [
           fake.agents()[1].outputs[0],
-          { name: "image_list", repeated: false, port_type: "image_list" },
+          { name: "image_list", port_type: "image_list" },
         ],
       }),
     "image-port-expected": () =>
@@ -320,7 +319,6 @@ function gestures(fake: FakeApp): Record<string, () => void> {
           fake.agents()[1].outputs[0],
           {
             name: "image_list",
-            repeated: false,
             port_type: "image_list",
             instructions: "Annotated screenshot of the feature",
           },

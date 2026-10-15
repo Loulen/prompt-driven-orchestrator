@@ -80,7 +80,7 @@ describe("OutputPortCard — O3 tab-head card", () => {
         <OutputPortCard {...baseProps} />
         <OutputPortCard
           {...baseProps}
-          port={{ name: "err", repeated: false }}
+          port={{ name: "err" }}
         />
       </Wrapper>,
     );

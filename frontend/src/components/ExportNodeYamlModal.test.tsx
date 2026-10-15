@@ -9,7 +9,7 @@ function node(overrides: Partial<NodeDef> = {}): NodeDef {
     name: "Writer",
     type: "agent",
     inputs: [],
-    outputs: [{ name: "adr", repeated: false }],
+    outputs: [{ name: "adr" }],
     interactive: false,
     view: { x: 0, y: 0 },
     ...overrides,

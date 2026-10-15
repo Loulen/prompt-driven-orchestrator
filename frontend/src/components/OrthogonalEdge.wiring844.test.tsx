@@ -93,7 +93,7 @@ function pipeline(edge: Partial<PipelineDef["edges"][number]> = {}): PipelineDef
     grid_size: "L",
     variables: {},
     nodes: [
-      { id: "src", name: "src", type: "agent", inputs: [], outputs: [{ name: "out", repeated: false }], interactive: false },
+      { id: "src", name: "src", type: "agent", inputs: [], outputs: [{ name: "out" }], interactive: false },
       { id: "tgt", name: "tgt", type: "agent", inputs: [], outputs: [], interactive: false },
     ],
     edges: [

@@ -10,6 +10,13 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.121.0
+**Plus de « rpt » sur les ports de sortie** (#993, spec #981). Un output n'a plus de flag
+d'accumulation : le toggle disparaît de l'inspecteur et le panneau de run affiche toujours un
+output comme un document unique. L'accumulation reste portée par l'edge (`repeated` sur l'edge,
+badge `rpt` sur l'input poolé). Au chargement, le `repeated` d'un output est ignoré ; le fichier
+n'est réécrit qu'à la sauvegarde, lancer `pdo migrate` pour convertir le reste.
+
 ## 1.120.0
 **Plus de côté (L/T/R/B) sur les ports** (#991, spec #981). Le routage appartient à l'edge : au
 chargement, l'ancien `side` d'un output devient une `source_anchor` sans offset (milieu du côté),

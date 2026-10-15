@@ -1813,6 +1813,9 @@ function PortRow({
 }) {
   const firstFile = port.files[0];
   const anyExists = port.files.some((f) => f.exists);
+  // Accumulation belongs to the edge (PDO-17): only an input pools files across
+  // iterations. An output always shows the one file of the iteration displayed.
+  const repeated = kind === "input" && port.repeated;
   // #796: every file on disk predates the execution shown — the port carries a
   // previous session's result (same-iter re-spawn, or a child run whose branch
   // brought a previous run's artifacts in). Shown, but never as THIS result.
@@ -1839,14 +1842,14 @@ function PortRow({
   let dotClass = "bg-fg-5";
   if (inheritedOnly) {
     dotClass = "bg-fg-5";
-  } else if (anyExists && port.repeated && port.files.length > 1) {
+  } else if (anyExists && repeated && port.files.length > 1) {
     dotClass = "bg-st-running";
   } else if (anyExists) {
     dotClass = "bg-st-done";
   }
 
   let displayPath = firstFile?.path ?? "";
-  if (port.files.length > 1 && (port.repeated || isImage)) {
+  if (port.files.length > 1 && (repeated || isImage)) {
     displayPath = `${port.files.length} files`;
   }
 
@@ -1865,7 +1868,7 @@ function PortRow({
   // the prompt (`_input/<file>`). A single (non-repeated) port otherwise has
   // exactly one file, so anything past the first here IS an attachment.
   const attachmentFiles =
-    !isImage && !port.repeated && port.files.length > 1
+    !isImage && !repeated && port.files.length > 1
       ? port.files.slice(1).filter((f) => f.exists && !isImageFile(f.path))
       : [];
 
@@ -1885,7 +1888,7 @@ function PortRow({
           <span className="font-mono text-fg" style={{ fontSize: "11.5px" }}>
             {port.port}
           </span>
-          {port.repeated && (
+          {repeated && (
             <span
               className="rounded border border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-4"
               style={{ fontSize: "9px" }}

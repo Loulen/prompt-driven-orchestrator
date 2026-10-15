@@ -27,7 +27,7 @@ function target(): NodeDef {
     name: "orchestrator",
     type: "agent",
     inputs: [],
-    outputs: [{ name: "out", repeated: false }],
+    outputs: [{ name: "out" }],
     interactive: false,
     view: { x: 300, y: 0 },
   };

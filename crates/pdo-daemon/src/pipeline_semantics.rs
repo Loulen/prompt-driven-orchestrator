@@ -235,7 +235,6 @@ impl<'a> NodeProjection<'a> {
 #[derive(Serialize)]
 struct PortProjection<'a> {
     name: &'a str,
-    repeated: bool,
     port_type: &'a PortType,
     frontmatter: Option<BTreeMap<&'a str, &'a FrontmatterFieldDecl>>,
     when: Option<serde_json::Value>,
@@ -251,7 +250,6 @@ impl<'a> PortProjection<'a> {
     fn of(port: &'a Port) -> Self {
         let Port {
             name,
-            repeated,
             port_type,
             frontmatter,
             when,
@@ -261,7 +259,6 @@ impl<'a> PortProjection<'a> {
         } = port;
         Self {
             name,
-            repeated: *repeated,
             port_type,
             frontmatter: frontmatter
                 .as_ref()
@@ -282,8 +279,8 @@ struct EdgeProjection<'a> {
     reason: Option<&'a str>,
     when: Option<serde_json::Value>,
     is_else: bool,
-    /// Loop accumulation ("read all laps") — behavioural, so semantic, even though
-    /// the frontend serializer currently drops it.
+    /// Loop accumulation ("read all laps") — behavioural, so semantic. The only
+    /// place it lives since a port has no `repeated` (PDO-17).
     repeated: bool,
 }
 

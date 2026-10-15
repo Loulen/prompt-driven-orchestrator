@@ -107,9 +107,9 @@ describe("declaredOutputs / inDeclarationOrder", () => {
     type: "agent",
     inputs: [],
     outputs: [
-      { name: "out", repeated: false },
-      { name: "spec", repeated: false },
-      { name: "notes", repeated: false },
+      { name: "out" },
+      { name: "spec" },
+      { name: "notes" },
     ],
     interactive: false,
   };

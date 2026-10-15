@@ -26,17 +26,18 @@ fn looks_like_nanoid(id: &str) -> bool {
     id.len() == NANOID_LEN && id.bytes().all(|b| NANOID_ALPHABET.contains(&b))
 }
 
-/// Whether any input or output of `node` still declares the legacy port `side`
-/// (pre-PDO-17), which [`pipeline::convert_legacy_port_sides`] turns into edge
-/// anchors and removes.
-fn node_has_port_side(node: &serde_yaml::Value) -> bool {
+/// Whether any input or output of `node` still declares a legacy port key
+/// (pre-PDO-17): a `side`, which [`pipeline::convert_legacy_ports`] turns into
+/// edge anchors, or a `repeated`, whose accumulation belongs to the edge. Both
+/// keys go.
+fn node_has_legacy_port_key(node: &serde_yaml::Value) -> bool {
     ["inputs", "outputs"].iter().any(|key| {
         node.get(*key)
             .and_then(|v| v.as_sequence())
             .is_some_and(|ports| {
                 ports.iter().any(|p| {
                     p.as_mapping()
-                        .is_some_and(|m| m.contains_key(serde_yaml::Value::String("side".into())))
+                        .is_some_and(|m| m.contains_key("side") || m.contains_key("repeated"))
                 })
             })
     })
@@ -101,9 +102,10 @@ fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
         if node.get("model").is_some() || node.get("effort").is_some() {
             return true;
         }
-        // A port that still declares a `side` (any node, structural included):
-        // the side converts into edge anchors and the key goes (PDO-17).
-        if node_has_port_side(node) {
+        // A port that still declares a `side` or a `repeated` (any node,
+        // structural included): the side converts into edge anchors, and both
+        // keys go (PDO-17).
+        if node_has_legacy_port_key(node) {
             return true;
         }
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -350,9 +352,11 @@ pub(crate) fn migrate_pipeline_yaml(
     }
 
     // The same conversion the parse runs (PDO-17): a legacy port `side` becomes
-    // an edge anchor, then the key goes. Last, so the edges it reads already
-    // carry the rewritten ids and the dissolved switch/loop wiring.
-    pipeline::convert_legacy_port_sides(&mut doc);
+    // an edge anchor, then the key goes, and so does a port `repeated`. Last, so
+    // the edges it reads already carry the rewritten ids and the dissolved
+    // switch/loop wiring, and a declared input's `repeated` has already moved
+    // onto its edge (`drop_declared_inputs`).
+    pipeline::convert_legacy_ports(&mut doc);
 
     let yaml_text =
         serde_yaml::to_string(&doc).map_err(|e| format!("YAML serialize error: {e}"))?;
@@ -2038,8 +2042,56 @@ edges:
         let doc: serde_yaml::Value = serde_yaml::from_str(LEGACY_PORT_SIDES_YAML).unwrap();
         assert!(needs_migration(&doc));
         let mut converted = doc.clone();
-        pipeline::convert_legacy_port_sides(&mut converted);
+        pipeline::convert_legacy_ports(&mut converted);
         assert!(!needs_migration(&converted));
+    }
+
+    #[test]
+    fn an_output_repeated_needs_migration_and_goes() {
+        // PDO-17: an output's `repeated` had no effect left (the edge carries
+        // accumulation). It flags the pipeline for migration, the key goes, the
+        // edge keeps its own `repeated`, and a second pass is a no-op.
+        let yaml = r#"
+name: test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: aBcD1234
+    name: worker
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: plan
+        repeated: true
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: aBcD1234, port: in }
+  - source: { node: aBcD1234, port: plan }
+    target: { node: end, port: result }
+    repeated: true
+"#;
+        let doc: serde_yaml::Value = serde_yaml::from_str(yaml).unwrap();
+        assert!(needs_migration(&doc));
+
+        let result = migrate_pipeline_yaml(yaml, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(result.migrated);
+        let migrated: serde_yaml::Value = serde_yaml::from_str(&result.yaml_text).unwrap();
+        assert!(!needs_migration(&migrated));
+        assert!(migrated["nodes"][1]["outputs"][0].get("repeated").is_none());
+        assert_eq!(migrated["edges"][1]["repeated"].as_bool(), Some(true));
+
+        let again = migrate_pipeline_yaml(&result.yaml_text, Path::new("/tmp/test.yaml")).unwrap();
+        assert!(!again.migrated);
+        assert_eq!(again.yaml_text, result.yaml_text);
     }
 
     #[test]

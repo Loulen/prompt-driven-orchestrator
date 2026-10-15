@@ -3137,7 +3137,6 @@ mod tests {
                 node_type: NodeType::Switch,
                 inputs: vec![Port {
                     name: "in".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -3147,7 +3146,6 @@ mod tests {
                 }],
                 outputs: vec![Port {
                     name: "pass".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: Some(serde_yaml::from_str("iter: { lt: \"$max_iter_review\" }").unwrap()),
@@ -3203,7 +3201,6 @@ mod tests {
                 node_type: NodeType::Agent,
                 inputs: vec![Port {
                     name: "in".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,

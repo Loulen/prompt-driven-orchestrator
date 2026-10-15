@@ -1567,7 +1567,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1580,7 +1579,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1610,7 +1608,6 @@ mod tests {
             node_type: NodeType::End,
             inputs: vec![Port {
                 name: "result".into(),
-                repeated: false,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -2976,7 +2973,6 @@ mod tests {
             node_type: NodeType::Switch,
             inputs: vec![Port {
                 name: "in".into(),
-                repeated: false,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -3000,7 +2996,6 @@ mod tests {
     fn switch_port(name: &str, when_yaml: &str) -> Port {
         Port {
             name: name.into(),
-            repeated: false,
             port_type: PortType::Markdown,
             frontmatter: None,
             when: Some(serde_yaml::from_str(when_yaml).unwrap()),
@@ -3013,7 +3008,6 @@ mod tests {
     fn switch_default_port() -> Port {
         Port {
             name: "default".into(),
-            repeated: false,
             port_type: PortType::Markdown,
             frontmatter: None,
             when: None,
@@ -3682,7 +3676,6 @@ mod tests {
             inputs: vec![
                 Port {
                     name: "in".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -3692,7 +3685,6 @@ mod tests {
                 },
                 Port {
                     name: "break".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -3704,7 +3696,6 @@ mod tests {
             outputs: vec![
                 Port {
                     name: "body".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -3714,7 +3705,6 @@ mod tests {
                 },
                 Port {
                     name: "done".into(),
-                    repeated: false,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -4240,7 +4230,6 @@ mod tests {
             inputs: vec![],
             outputs: vec![Port {
                 name: "user_prompt".into(),
-                repeated: false,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,

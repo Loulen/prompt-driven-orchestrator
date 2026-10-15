@@ -50,7 +50,7 @@ nodes:
     inputs:                       # emergent for work nodes — usually omit; named by edges
       - { name: in }
     outputs:
-      - name: out                 # no side on a port: the edge places its wire
+      - name: out                 # no side, no `repeated` on a port: both belong to the edge
         port_type: markdown       # markdown (default) | image | image_list | html
         frontmatter:              # optional typed frontmatter the node must emit
           Verdict:
@@ -106,6 +106,8 @@ edges:
     target: { node: review, port: in }
     source_anchor: { side: bottom }  # optional; which side the wire leaves by (default right)
     target_side: top              # optional; which side the arrow lands on (default left)
+    repeated: true                # optional; the target reads one artifact per completed
+                                  # iteration of the source (loop accumulation), not the latest
 
   # One edge may CARRY SEVERAL outputs of the same source node (ADR-0073). It is
   # still one edge: it fires once and drops one input per carried port on the

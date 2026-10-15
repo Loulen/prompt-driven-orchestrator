@@ -128,7 +128,7 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
   it("leaves by a drawn anchor", () => {
     const src: NodeDef = {
       ...node("src", "agent", [], []),
-      outputs: [{ name: "plan", repeated: false }],
+      outputs: [{ name: "plan" }],
     };
     const edges = deriveEditEdges(
       pipeline(
@@ -242,7 +242,7 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
       name: id,
       type,
       // The vestigial declared `in` (side left) that real pipelines still carry.
-      inputs: [{ name: "in", repeated: false }],
+      inputs: [{ name: "in" }],
       outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
       interactive: false,
     };
@@ -258,7 +258,7 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
           name: "src",
           type: "agent",
           inputs: [],
-          outputs: [{ name: "plan", repeated: false }],
+          outputs: [{ name: "plan" }],
           interactive: false,
         },
         workNode("dst", "agent", ["code"]),

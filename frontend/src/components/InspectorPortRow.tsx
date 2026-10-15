@@ -1,5 +1,4 @@
 import type { PortDef } from "../types";
-import { Tooltip } from "./ui/tooltip";
 
 interface InspectorPortRowProps {
   port: PortDef;
@@ -31,33 +30,6 @@ export default function InspectorPortRow({
         className="min-w-0 flex-1 bg-transparent text-fg outline-none"
         style={{ fontSize: "11px" }}
       />
-      <Tooltip content="When on, reads all iter-N/<port>.md files (glob) for accumulating histories across loop iterations.">
-        <button
-          role="switch"
-          aria-checked={port.repeated}
-          aria-label="repeated"
-          onClick={() => onUpdate({ repeated: !port.repeated })}
-          className="flex cursor-pointer items-center gap-1"
-        >
-          <span
-            className={`transition-colors ${port.repeated ? "text-acc" : "text-fg-4"}`}
-            style={{ fontSize: "9px" }}
-          >
-            rpt
-          </span>
-          <span
-            className={`relative inline-block h-4 w-7 rounded-full transition-colors ${
-              port.repeated ? "bg-acc" : "bg-bg-5"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-fg transition-transform ${
-                port.repeated ? "translate-x-3" : "translate-x-0"
-              }`}
-            />
-          </span>
-        </button>
-      </Tooltip>
       <button
         onClick={onRemove}
         aria-label="Delete port"

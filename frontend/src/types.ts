@@ -1455,7 +1455,6 @@ export type PortType = "markdown" | "image" | "image_list" | "html";
 
 export interface PortDef {
   name: string;
-  repeated: boolean;
   port_type?: PortType;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;

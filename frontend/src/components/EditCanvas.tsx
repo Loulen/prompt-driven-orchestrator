@@ -986,7 +986,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           id, name, type, interactive: false, view,
           isolated_worktree: false,
           inputs: [],
-          outputs: [{ name: "out", repeated: false }],
+          outputs: [{ name: "out" }],
         };
         break;
       default:
@@ -995,8 +995,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           // #653/ADR-0060: a new Agent is isolated. The safe placement is the
           // default, and sharing the Run worktree is an explicit opt-out.
           isolated_worktree: true,
-          inputs: [{ name: "in", repeated: false }],
-          outputs: [{ name: "out", repeated: false }],
+          inputs: [{ name: "in" }],
+          outputs: [{ name: "out" }],
         };
     }
     addNodeToStore(newNode);

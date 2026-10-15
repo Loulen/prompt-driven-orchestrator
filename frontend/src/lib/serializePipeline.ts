@@ -148,7 +148,6 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     if (n.inputs.length > 0)
       node.inputs = n.inputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
-        if (port.repeated) p.repeated = true;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
@@ -157,7 +156,6 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     if (n.outputs.length > 0)
       node.outputs = n.outputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
-        if (port.repeated) p.repeated = true;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
@@ -178,6 +176,10 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
     // Switch node's output ports.
     if (e.when && Object.keys(e.when).length > 0) edge.when = e.when;
     if (e.else === true) edge.else = true;
+    // Loop accumulation (#149): the edge is the only place it lives now that a
+    // port has no `repeated` (PDO-17), and no UI sets it — a save from the editor
+    // must not erase what the YAML declares.
+    if (e.repeated === true) edge.repeated = true;
     // Routing (#154): only manually-pinned edges persist their route. Auto
     // edges recompute deterministically, so they store no `mode`/`waypoints` —
     // emitting them would be noise. A `manual` mode without waypoints is also
@@ -269,11 +271,11 @@ function anchorToYamlObject(anchor: EdgeAnchor): Record<string, unknown> {
 // Serialize one authored port to the node-library YAML shape (#345), mirroring
 // `pipelineToYamlObject`'s per-port emit: `name` always; the rest only when
 // non-default so a plain port stays a clean `- name: x`. A port has no side
-// (PDO-17). NOT a duplicate of the inline per-port emit in `pipelineToYamlObject`
-// above: that one emits `when` on outputs only, this one on both directions.
+// nor `repeated` (PDO-17). NOT a duplicate of the inline per-port emit in
+// `pipelineToYamlObject` above: that one emits `when` on outputs only, this one
+// on both directions.
 function portToYamlObject(port: PortDef): Record<string, unknown> {
   const p: Record<string, unknown> = { name: port.name };
-  if (port.repeated) p.repeated = true;
   if (port.port_type && port.port_type !== "markdown") p.port_type = port.port_type;
   if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
   if (port.when) p.when = port.when;

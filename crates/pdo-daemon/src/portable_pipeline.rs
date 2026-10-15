@@ -223,7 +223,6 @@ mod tests {
     fn pipeline() -> PipelineDef {
         let port = |name: &str| Port {
             name: name.into(),
-            repeated: false,
             port_type: Default::default(),
             frontmatter: None,
             when: None,

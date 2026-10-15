@@ -14,9 +14,9 @@ import type { EdgeDef, NodeDef, PipelineDef } from "../types";
 // Edge order: 0 start->impl, 1 impl->rev, 2 rev->impl (the back-edge).
 function reviewLoop(): PipelineDef {
   const nodes: NodeDef[] = [
-    { id: "start", name: "start", type: "start", inputs: [], outputs: [{ name: "user_prompt", repeated: false, side: "right" }], interactive: false },
-    { id: "impl", name: "impl", type: "agent", inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }], interactive: false },
-    { id: "rev", name: "rev", type: "agent", inputs: [], outputs: [{ name: "review", repeated: false, side: "right" }], interactive: false },
+    { id: "start", name: "start", type: "start", inputs: [], outputs: [{ name: "user_prompt" }], interactive: false },
+    { id: "impl", name: "impl", type: "agent", inputs: [], outputs: [{ name: "code" }], interactive: false },
+    { id: "rev", name: "rev", type: "agent", inputs: [], outputs: [{ name: "review" }], interactive: false },
   ];
   const edges: EdgeDef[] = [
     { source: { node: "start", port: "user_prompt" }, target: { node: "impl", port: "task" } },
@@ -48,9 +48,9 @@ describe("regionsDestroyedByEdgeRemoval (#150)", () => {
   it("deleting a non-last cycle edge keeps a region with two cycles", () => {
     // impl <-> rev AND impl -> rev -> mid -> impl: two cycles close the region.
     const nodes: NodeDef[] = [
-      { id: "impl", name: "impl", type: "agent", inputs: [], outputs: [{ name: "code", repeated: false, side: "right" }], interactive: false },
-      { id: "rev", name: "rev", type: "agent", inputs: [], outputs: [{ name: "review", repeated: false, side: "right" }, { name: "extra", repeated: false, side: "right" }], interactive: false },
-      { id: "mid", name: "mid", type: "agent", inputs: [], outputs: [{ name: "more", repeated: false, side: "right" }], interactive: false },
+      { id: "impl", name: "impl", type: "agent", inputs: [], outputs: [{ name: "code" }], interactive: false },
+      { id: "rev", name: "rev", type: "agent", inputs: [], outputs: [{ name: "review" }, { name: "extra" }], interactive: false },
+      { id: "mid", name: "mid", type: "agent", inputs: [], outputs: [{ name: "more" }], interactive: false },
     ];
     const edges: EdgeDef[] = [
       { source: { node: "impl", port: "code" }, target: { node: "rev", port: "code" } }, // 0
@@ -182,8 +182,6 @@ function listNode(id: string, port: string): NodeDef {
     outputs: [
       {
         name: port,
-        repeated: false,
-        side: "right",
         frontmatter: { [port]: { type: "list" } },
       },
     ],
@@ -197,7 +195,7 @@ function plainNode(id: string, type: NodeDef["type"] = "agent"): NodeDef {
     name: id,
     type,
     inputs: [],
-    outputs: [{ name: "out", repeated: false, side: "right" }],
+    outputs: [{ name: "out" }],
     interactive: false,
   };
 }

@@ -10,36 +10,49 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.123.1
+Feedback de survol uniforme sur les actions des profils agentiques et de staging (#994, spec
+#984, story PDO-5), validé en recette : « + New profile » en bouton secondaire bordé, curseur main et teinte au survol sur
+Edit, Delete, la modale et la confirmation ; aucun survol sur un bouton désactivé.
+
 ## 1.123.0
-**Sélection ronde et palette daltonienne en option** (#1005, spec #1004, story PDO-22) : le
-contrôle de sélection des listes redevient rond (anneau de la couleur du statut au survol, rond
-d'accent coché une fois sélectionné). La palette par défaut revient à celle de la 1.119.1
-(interrupted et stale restent distincts d'awaiting) ; la palette daltonienne, avec une variante
-sombre, devient l'option « Colour-blind friendly status colours » de Settings › General ›
-Accessibility, stockée dans le navigateur et appliquée avant le premier rendu.
+**Ports nettoyés** (spec #981, story PDO-17), validé en recette.
+
+**Plus de côté (L/T/R/B) sur les ports** (#991, spec #981). Le routage appartient à l'edge : au
+chargement, l'ancien `side` d'un output devient une `source_anchor` sans offset (milieu du côté),
+et celui du `result` d'un End un `target_side`. Le fichier n'est réécrit qu'à la sauvegarde ;
+lancer `pdo migrate` sur `~/.pdo/pipelines` et `~/.pdo/library` pour convertir le reste.
+
+**Plus de « rpt » sur les ports de sortie** (#993, spec #981). Un output n'a plus de flag
+d'accumulation : le toggle disparaît de l'inspecteur et le panneau de run affiche toujours un
+output comme un document unique. L'accumulation reste portée par l'edge (`repeated` sur l'edge,
+badge `rpt` sur l'input poolé). Au chargement, le `repeated` d'un output est ignoré ; le fichier
+n'est réécrit qu'à la sauvegarde, lancer `pdo migrate` pour convertir le reste.
 
 ## 1.122.0
-**Status icon dans les panneaux de Run et de nœud** (#999, spec #996, story PDO-22) : Run info,
-toolbar du terminal, sélecteur d'itération et enfants d'un orchestrateur portent le glyphe du
-statut (tooltip avec la raison, nom accessible réduit au libellé) ; les compteurs d'enfants
-passent en glyphes.
+**Panneau de node : durée de l'itération, bascule Total / Active** (spec #978, story PDO-16),
+validé en recette.
+
+- Bascule Total / Active (#980) : un clic (ou Entrée / Espace) sur la durée de la ligne méta bascule entre `total` et `active` ;
+le choix est mémorisé (`pdo.ui.nodeDurationMode`) et s'applique aussi au menu des itérations.
+Active se fige pendant une attente déclarée (point ambre). Le tooltip ventile Total / Active /
+Waiting, avec une somme exacte à la seconde affichée ; Active peut de ce fait différer d'1 s de
+Stats -> Performance, qui arrondit chaque valeur séparément (écart accepté en recette).
+
+- Durée Total (#979) : la ligne méta affiche `iter N · <durée> total · <coût>` à la place de `started … · ended …` ;
+la durée défile tant que l'itération tourne. Début et fin passent dans un tooltip (survol ou
+focus clavier). La ligne suit l'itération choisie dans le sélecteur, dont le menu affiche une
+durée par itération.
 
 ## 1.121.0
-**Status icon sur les nœuds du canvas et dans le tour guidé** (#1000, spec #996, story PDO-22) :
-chaque nœud qui a un statut porte son glyphe dans le coin haut droit (aucun sur pending ni sur
-une template de bibliothèque) ; l'étape « The status icon » du tour Overview décrit les formes.
-
-## 1.120.1
-**Palette des statuts lisible en deutan/protan** (#998, spec #996, story PDO-22) : en thème clair,
-completed (`#006b64`), failed (`#7f1d1d`) et awaiting (`#9f4500`) s'écartent sous simulation
-deutan et protan ; interrupted (`#7b410f`) et stale (`#7b573f`) ne reprennent plus la teinte
-d'awaiting. En sombre, seul interrupted change (`#fcd34d`). Les teintes s'écartent du design
-validé pour tenir l'AA du texte sur sa propre teinte (verrouillé par `themePalette.test.ts`).
+**Update et What's new depuis Settings** (#983, story PDO-14) : dans Settings › Version &
+update, Update et What's new ferment d'abord Settings (via la garde de brouillon), puis affichent
+la confirmation de mise à jour ou le Changelog seuls à l'écran. Les fermer ramène sur l'app sans
+rouvrir Settings.
 
 ## 1.120.0
-**Status icon dans les listes de Runs et de Triggers** (#997, spec #996, story PDO-22) : la
-forme du glyphe porte le statut (lisible sans distinguer les couleurs), sélection d'une ligne
-en carré, mode sélection jusqu'à Clear ou Échap.
+Carte Start du canvas d'un Run sans images d'input (#977, PDO-18) : les miniatures et la
+lightbox restent dans l'inspecteur du Start.
 
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les

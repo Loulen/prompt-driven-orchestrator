@@ -32,8 +32,6 @@ const WAYPOINT: Complete<EdgeWaypoint> = { x: 1, y: 2 };
 
 const INPUT: Complete<PortDef> = {
   name: "in",
-  repeated: true,
-  side: "left",
   port_type: "image",
   frontmatter: FRONTMATTER,
   when: { verdict: "PASS" },
@@ -42,8 +40,6 @@ const INPUT: Complete<PortDef> = {
 };
 const OUTPUT: Complete<PortDef> = {
   name: "out",
-  repeated: true,
-  side: "right",
   port_type: "html",
   frontmatter: FRONTMATTER,
   when: { verdict: "PASS" },
@@ -65,7 +61,7 @@ const NODE: Complete<NodeDef> = {
   // in CI) — but naming the field here proves NOTHING about emission: the
   // set-equality below only compares "emitted" against "classified", so a field
   // that is neither would leave the two sets equal and the suite green. That is
-  // exactly how `EdgeDef.repeated` slipped through. The real proof lives in
+  // exactly how `EdgeDef.repeated` once slipped through. The real proof lives in
   // `serializePipeline.test.ts` (the key lands in the YAML object) and in
   // `editStore.test.ts` (edit → spread → serializer → save payload).
   effort: "low",
@@ -163,8 +159,8 @@ describe("serializer field-partition exhaustiveness guard (#355)", () => {
   // Sanity: assert the leaf scopes most prone to under-population are actually
   // maximal, so the set-equality above can't pass on an accidentally-thin fixture.
   it("fixture is maximal at edge/output-port scope", () => {
-    expect(sortedKeys(edge)).toHaveLength(13);
-    expect(sortedKeys(output)).toHaveLength(7);
+    expect(sortedKeys(edge)).toHaveLength(14);
+    expect(sortedKeys(output)).toHaveLength(5);
   });
 });
 

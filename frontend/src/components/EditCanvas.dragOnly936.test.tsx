@@ -44,7 +44,7 @@ const PIPELINE: PipelineDef = {
       type: "agent",
       interactive: false,
       inputs: [],
-      outputs: [{ name: "draft", repeated: false, side: "right" }],
+      outputs: [{ name: "draft" }],
       view: { x: 0, y: 0 },
     },
     {
@@ -53,7 +53,7 @@ const PIPELINE: PipelineDef = {
       type: "agent",
       interactive: false,
       inputs: [],
-      outputs: [{ name: "review", repeated: false, side: "right" }],
+      outputs: [{ name: "review" }],
       view: { x: 400, y: 0 },
     },
   ],

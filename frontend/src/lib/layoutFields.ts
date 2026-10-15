@@ -58,12 +58,12 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   // NodeProjection already says — it changes the node's completion contract,
   // its prompt at spawn and its skills.
   node: ["id", "name", "type", "interactive", "agent_choice", "skills", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "orchestrator", "inputs", "outputs"] satisfies (keyof NodeDef)[],
-  // `side` is SEMANTIC today (emitted, not stripped) — deliberate, see #355 D5:
-  // the node-library star already treats port side as identity, so the pipeline
-  // diff must agree or the two stars contradict each other on the same edit.
-  inputPort: ["name", "repeated", "side", "port_type", "frontmatter"] satisfies (keyof PortDef)[],
-  outputPort: ["name", "repeated", "side", "port_type", "frontmatter", "when", "instructions"] satisfies (keyof PortDef)[],
-  edge: ["source", "target", "when", "else"] satisfies (keyof EdgeDef)[],
+  // A port has no side (PDO-17): where a wire leaves and lands is the edge's
+  // layout (`source_anchor`/`target_anchor`/`target_side`). Nor an accumulation
+  // flag: `repeated` belongs to the edge.
+  inputPort: ["name", "port_type", "frontmatter"] satisfies (keyof PortDef)[],
+  outputPort: ["name", "port_type", "frontmatter", "when", "instructions"] satisfies (keyof PortDef)[],
+  edge: ["source", "target", "when", "else", "repeated"] satisfies (keyof EdgeDef)[],
   loopRegion: ["id", "kind", "members", "max_iter", "over"] satisfies (keyof LoopRegion)[],
   note: [], // the whole `notes` block is layout — no semantic note field
 };

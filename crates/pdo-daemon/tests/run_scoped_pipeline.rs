@@ -329,7 +329,10 @@ async fn save_for_run_leaves_the_shared_pipeline_and_other_runs_untouched() {
     const EDITED: &str = "You are an EDITED planner, for this run only.\n";
     save_for_run(&daemon, &edited_run, EDITED).await;
 
-    assert_eq!(run_prompt(&daemon, &edited_run).await.as_deref(), Some(EDITED));
+    assert_eq!(
+        run_prompt(&daemon, &edited_run).await.as_deref(),
+        Some(EDITED)
+    );
     assert_eq!(
         shared_prompt(&daemon).await.as_deref(),
         Some(PROMPT_CONTENT),
@@ -415,7 +418,12 @@ async fn overwrite_preview_lists_triggers_and_detects_a_change_since_launch() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 201, "trigger create: {}", resp.text().await.unwrap_or_default());
+    assert_eq!(
+        resp.status(),
+        201,
+        "trigger create: {}",
+        resp.text().await.unwrap_or_default()
+    );
     let preview = overwrite_preview(&daemon, &run_id).await;
     let triggers = preview["triggers"].as_array().unwrap();
     assert_eq!(triggers.len(), 1);

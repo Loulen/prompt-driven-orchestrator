@@ -1,4 +1,4 @@
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import { TooltipProvider } from "./ui/tooltip";
@@ -31,17 +31,15 @@ interface MarkerOpts {
   nodeType: NodeType;
   reached?: boolean;
   status?: NodeStatus;
-  inputImages?: string[];
 }
 
-function markerProps({ nodeType, reached = false, status = "pending", inputImages }: MarkerOpts) {
+function markerProps({ nodeType, reached = false, status = "pending" }: MarkerOpts) {
   const data = {
     label: nodeType,
     nodeId: nodeType,
     nodeType,
     status,
     reached,
-    inputImages,
     inputs: nodeType === "end" ? [{ name: "in", side: "left" as const }] : [],
     outputs: nodeType === "start" ? [{ name: "out", side: "right" as const }] : [],
     interactive: false,
@@ -275,32 +273,30 @@ describe("EditNode script node card (#248)", () => {
   });
 });
 
-describe("EditNode Start marker — input images on the canvas (issue #145)", () => {
-  it("renders one image chip per uploaded image, tagged by filename", () => {
-    render(
-      <EditNode {...markerProps({ nodeType: "start", inputImages: ["ui-bug.png", "trace.png"] })} />,
-      { wrapper: Wrapper },
-    );
-    const strip = screen.getByTestId("start-node-images");
-    const chips = within(strip).getAllByTestId("start-node-image-chip");
-    expect(chips).toHaveLength(2);
-    expect(strip.textContent).toContain("ui-bug.png");
-    expect(strip.textContent).toContain("trace.png");
-  });
-
-  it("renders no image strip when the run has no input images", () => {
-    render(<EditNode {...markerProps({ nodeType: "start", inputImages: [] })} />, {
-      wrapper: Wrapper,
-    });
-    expect(screen.queryByTestId("start-node-images")).toBeNull();
-  });
-
-  it("renders no image strip on a non-start node even if images are passed", () => {
-    render(
-      <EditNode {...markerProps({ nodeType: "end", inputImages: ["ui-bug.png"] })} />,
+describe("EditNode Start marker — no input images on the canvas (PDO-18, #977)", () => {
+  // The run's input images live in the StartInspector only: the canvas card
+  // stays « ▷ Start », even if stale data still carried the filenames.
+  it("renders no image strip nor filename on a start marker of a run with images", () => {
+    const props = markerProps({ nodeType: "start", reached: true, status: "completed" });
+    const { container } = render(
+      <EditNode {...props} data={{ ...props.data, inputImages: ["ui-bug.png", "trace.png"] }} />,
       { wrapper: Wrapper },
     );
     expect(screen.queryByTestId("start-node-images")).toBeNull();
+    expect(screen.queryByTestId("start-node-image-chip")).toBeNull();
+    expect(container.textContent).not.toContain("ui-bug.png");
+    expect(container.textContent).not.toContain("trace.png");
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("renders the same start card with or without input images", () => {
+    const props = markerProps({ nodeType: "start" });
+    const bare = render(<EditNode {...props} />, { wrapper: Wrapper }).container.innerHTML;
+    const withImages = render(
+      <EditNode {...props} data={{ ...props.data, inputImages: ["ui-bug.png"] }} />,
+      { wrapper: Wrapper },
+    ).container.innerHTML;
+    expect(withImages).toBe(bare);
   });
 });
 
@@ -389,21 +385,18 @@ describe("EditNode rim drag-source (#844)", () => {
 
 const SIDES: PortSide[] = ["top", "right", "bottom", "left"];
 
-function endNode(declaredSide: PortSide = "left"): NodeDef {
+function endNode(): NodeDef {
   return {
     id: "end",
     name: "End",
     type: "end",
-    inputs: [{ name: "result", repeated: false, side: declaredSide }],
+    inputs: [{ name: "result" }],
     outputs: [],
     interactive: false,
   };
 }
 
-function pipelineToEnd(
-  edge: Partial<PipelineDef["edges"][number]>,
-  declaredSide: PortSide = "left",
-): PipelineDef {
+function pipelineToEnd(edge: Partial<PipelineDef["edges"][number]>): PipelineDef {
   return {
     name: "p",
     variables: {},
@@ -413,10 +406,10 @@ function pipelineToEnd(
         name: "src",
         type: "agent",
         inputs: [],
-        outputs: [{ name: "plan", repeated: false, side: "right" }],
+        outputs: [{ name: "plan" }],
         interactive: false,
       },
-      endNode(declaredSide),
+      endNode(),
     ],
     edges: [
       {
@@ -449,22 +442,22 @@ describe("End marker accepts an incoming edge on any of its four borders (#840)"
     expect(edge.data?.targetAnchor).toEqual(anchor);
   });
 
-  it("lets the saved anchor win over the declared side when the drop was on the left", () => {
+  it("lets the saved anchor win over `target_side` when the drop was on the left", () => {
     // `target_side: left` is never written (it is the default), so a left drop on
-    // an End declared `top` survives only through its anchor.
+    // an End whose edges otherwise land on `top` survives only through its anchor.
     const [edge] = deriveEditEdges(
-      pipelineToEnd({ target_anchor: { side: "left", offset: 20 } }, "top"),
+      pipelineToEnd({ target_anchor: { side: "left", offset: 20 }, target_side: "top" }),
     );
     expect(edge.targetHandle).toBe("__anchor:left");
     expect(edge.data?.targetSide).toBe("left");
   });
 
-  it.each(SIDES)("keeps a legacy End edge (no anchor) on its declared %s side", (declared) => {
-    // Pipelines saved before this fix carry no anchor on their End edges: they
-    // reopen exactly where they used to land, on `result`'s declared side.
-    const [edge] = deriveEditEdges(pipelineToEnd({}, declared));
-    expect(edge.targetHandle).toBe(`__anchor:${declared}`);
-    expect(edge.data?.targetSide).toBe(declared);
+  it.each(SIDES)("lands an un-anchored End edge on its `target_side` %s", (side) => {
+    // A legacy End edge reaches the client with its `result`'s declared side
+    // already converted into `target_side` by the daemon's loader (PDO-17).
+    const [edge] = deriveEditEdges(pipelineToEnd(side === "left" ? {} : { target_side: side }));
+    expect(edge.targetHandle).toBe(`__anchor:${side}`);
+    expect(edge.data?.targetSide).toBe(side);
   });
 
   it("keeps carrying the declared `result` port", () => {

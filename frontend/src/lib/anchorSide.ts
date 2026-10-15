@@ -148,14 +148,16 @@ export function sideLength(rect: AnchorRect, side: PortSide): number {
 }
 
 /** The absolute flow point of an anchor on `rect`; a null anchor is the middle of
- *  the fallback `side`. */
+ *  the fallback `side`, and an anchor without `offset` the middle of its own side
+ *  (a converted legacy port side, PDO-17). */
 export function anchorPoint(
   rect: AnchorRect,
   anchor: EdgeAnchor | null | undefined,
   side: PortSide,
 ): Point {
   const s = anchor?.side ?? side;
-  const along = anchor ? clampOffset(anchor.offset, rect, s) : sideLength(rect, s) / 2;
+  const along =
+    anchor?.offset != null ? clampOffset(anchor.offset, rect, s) : sideLength(rect, s) / 2;
   switch (s) {
     case "top":
       return { x: rect.x + along, y: rect.y };

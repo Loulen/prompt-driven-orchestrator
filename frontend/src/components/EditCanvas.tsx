@@ -101,9 +101,6 @@ interface EditNodeData {
   status: NodeStatus;
   // True only for start/end markers on a completed run — see `markerReached`.
   reached?: boolean;
-  // Filenames of images uploaded with the run's input. Only the start marker
-  // surfaces these (issue #145); undefined/empty on every other node.
-  inputImages?: string[];
   // Compact badge when this node is the single member of a loop region: a
   // collection (`⇉ ...`, #151) or a single-member bounded loop (`↻ ...`, #173).
   // Absent on non-member nodes and on multi-member regions (boxed instead).
@@ -145,21 +142,12 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
     : data.nodeType === "start" ? "text-acc"
     : data.nodeType === "end" ? "text-st-blocked"
     : "text-fg-3";
-  // Images uploaded with the run's input ride along on the Start marker only
-  // (issue #145). The canvas shows a compact, filename-tagged strip; the full
-  // thumbnails live in the StartInspector.
-  const inputImages =
-    data.nodeType === "start" ? (data.inputImages ?? []) : [];
 
   // Work nodes and the End marker (#840) anchor incoming edges by drop
   // position, on any border. Keyed on node TYPE so a work node carrying a
   // vestigial declared `in` still anchors by drop (#175) rather than being
   // mistaken for a fixed-side declared port.
   const emergent = landsByDrop(data.nodeType);
-  // A declared port's body handle arrives from its own declared side (#175 AC3),
-  // not a hardcoded left. Moot for a lands-by-drop body (edges bind to the
-  // per-side anchor handles below), but kept consistent.
-  const bodyHandleSide = data.inputs[0]?.side ?? "left";
 
   return (
     <NodeCard
@@ -185,12 +173,12 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           on the node body. A single invisible target handle covers the card and
           carries the drop highlight. A lands-by-drop node (work nodes, End since
           #840) renders it id-less and binds incoming edges to the per-side
-          anchors below; any other declared input keeps its handle id and its
-          declared-side `position`. */}
+          anchors below; any other declared input keeps its handle id and lands
+          on the left (a port has no side, PDO-17). */}
       <Handle
         id={emergent ? undefined : data.inputs[0]?.name}
         type="target"
-        position={SIDE_TO_POSITION[bodyHandleSide]}
+        position={SIDE_TO_POSITION.left}
         isConnectable={isConnectable}
         isConnectableStart={false}
         className={`emergent-body-target${isDropTarget ? " is-drop" : ""}`}
@@ -272,32 +260,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
       {data.childCounts && totalChildren(data.childCounts) > 0 && (
         <div className="mt-1.5 flex items-center gap-2 pl-[22px]" data-testid="node-child-pills-row">
           <ChildCountPills counts={data.childCounts} size="xs" testId="node-child-pills" />
-        </div>
-      )}
-      {inputImages.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5" data-testid="start-node-images">
-          {inputImages.map((name) => (
-            <div
-              key={name}
-              data-testid="start-node-image-chip"
-              title={name}
-              className="relative h-[34px] w-[46px] overflow-hidden rounded border border-line-strong bg-bg-1"
-            >
-              <div
-                className="absolute inset-0"
-                style={{
-                  backgroundImage:
-                    "repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 5px, transparent 5px 10px)",
-                }}
-              />
-              <div
-                className="absolute inset-x-0 bottom-0 truncate bg-bg-0/70 px-1 font-mono text-fg-4"
-                style={{ fontSize: "7.5px" }}
-              >
-                {name}
-              </div>
-            </div>
-          ))}
         </div>
       )}
       {/* #844: the rim is the drag-source — no output dot any more. Rendered LAST
@@ -990,7 +952,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           id, name, type, interactive: false, view,
           isolated_worktree: false,
           inputs: [],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          outputs: [{ name: "out" }],
         };
         break;
       default:
@@ -999,8 +961,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           // #653/ADR-0060: a new Agent is isolated. The safe placement is the
           // default, and sharing the Run worktree is an explicit opt-out.
           isolated_worktree: true,
-          inputs: [{ name: "in", repeated: false, side: "left" }],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          inputs: [{ name: "in" }],
+          outputs: [{ name: "out" }],
         };
     }
     addNodeToStore(newNode);

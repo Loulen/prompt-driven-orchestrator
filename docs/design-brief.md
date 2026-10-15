@@ -120,7 +120,7 @@ Body, vertical scroll, sections:
 - "Open" link next to each path → renders the markdown content in an inline preview (modal or sheet).
 
 **Outputs** (collapsible section):
-- For each output port: port name + the path the agent must write.
+- For each output port: port name + the path the agent must write. An output is always one file per iteration (never a list): path, size and the open arrow.
 - If the file exists: show a small green checkmark, file size, and "Open" link to preview.
 - If missing: gray placeholder.
 - For ports with declared frontmatter schema: show the schema, and if the file exists, show parsed frontmatter values inline (e.g. `verdict: PASS`).
@@ -204,8 +204,8 @@ The right panel adapts to the selection:
 - Section "Workspace": a radio pair between `Isolated worktree` ("a sub-worktree of the Node's own") and `Run worktree` ("shared with the whole Run"), with the resolved working directory printed underneath in monospace. Isolated is the default for an `agent`, the Run worktree for a `script`. Absent on Start/End.
 - Section "Behavior": toggle `interactive` (with help text: "When true, this node pauses after spawning and waits for the user to interact via terminal and click 'Mark complete' in run mode.").
 - Section "Prompt": a large textarea (≥10 rows, monospace, markdown) bound to the node's external prompt file (e.g. `prompts/<node-id>.md`). Auto-saved.
-- Section "Inputs": list of input ports. Each row: port name (editable), `repeated` toggle (with tooltip: "When true, this port reads all artifacts matching `iter-*/<port>.md` instead of just the latest."). "+ Add input port" button.
-- Section "Outputs": list of output ports. Each row: port name (editable), expandable "frontmatter schema" subsection (key-value pairs of field name → enum/string/int with allowed values for enum). "+ Add output port" button.
+- Section "Inputs": the inputs derived from the incoming edges (a work node declares none). Each row: input name, `pooled · N` when several edges share the name, and an `rpt` badge when an edge carries `repeated: true` (it then reads one artifact per completed iteration of its source instead of just the latest). Accumulation is an edge property set in the YAML; no UI toggles it.
+- Section "Outputs": list of output ports. Each row: a dot, the port name (editable) and a delete button — no side picker, no `repeated` toggle (an output has neither: the edge places the wire and carries accumulation). Expanding a row shows its type and its "frontmatter schema" (key-value pairs of field name → enum/string/int with allowed values for enum). "+ Add output port" button.
 
 **If an Edge is selected:**
 - Section "Source": dropdown `node` + dropdown `port` (constrained to source node's outputs).

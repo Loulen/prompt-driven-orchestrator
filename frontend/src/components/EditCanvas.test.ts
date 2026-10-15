@@ -21,8 +21,8 @@ function makePipeline(): PipelineDef {
         id: "impl",
         name: "implementer",
         type: "agent",
-        inputs: [{ name: "in", repeated: false, side: "left" }],
-        outputs: [{ name: "out", repeated: false, side: "right" }],
+        inputs: [{ name: "in" }],
+        outputs: [{ name: "out" }],
         interactive: false,
         view: { x: 100, y: 100 },
       },
@@ -30,10 +30,10 @@ function makePipeline(): PipelineDef {
         id: "sw1",
         name: "gate",
         type: "agent",
-        inputs: [{ name: "in", repeated: false, side: "left" }],
+        inputs: [{ name: "in" }],
         outputs: [
-          { name: "branch", repeated: false, side: "right" },
-          { name: "out", repeated: false, side: "right" },
+          { name: "branch" },
+          { name: "out" },
         ],
         interactive: false,
         view: { x: 200, y: 100 },
@@ -42,8 +42,8 @@ function makePipeline(): PipelineDef {
         id: "fe1",
         name: "fixer",
         type: "agent",
-        inputs: [{ name: "in", repeated: false, side: "left" }],
-        outputs: [{ name: "fix", repeated: false, side: "right" }],
+        inputs: [{ name: "in" }],
+        outputs: [{ name: "fix" }],
         interactive: false,
         view: { x: 400, y: 100 },
       },
@@ -51,8 +51,8 @@ function makePipeline(): PipelineDef {
         id: "m1",
         name: "gather",
         type: "agent",
-        inputs: [{ name: "branches", repeated: true, side: "left" }],
-        outputs: [{ name: "merged", repeated: false, side: "right" }],
+        inputs: [{ name: "branches" }],
+        outputs: [{ name: "merged" }],
         interactive: false,
         view: { x: 500, y: 100 },
       },
@@ -201,7 +201,7 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
           name: "start",
           type: "start",
           inputs: [],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          outputs: [{ name: "out" }],
           interactive: false,
           view: { x: 0, y: 0 },
         },
@@ -209,8 +209,8 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
           id: "work",
           name: "implementer",
           type: "agent",
-          inputs: [{ name: "in", repeated: false, side: "left" }],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          inputs: [{ name: "in" }],
+          outputs: [{ name: "out" }],
           interactive: false,
           view: { x: 200, y: 0 },
         },
@@ -218,7 +218,7 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
           id: "end",
           name: "end",
           type: "end",
-          inputs: [{ name: "in", repeated: false, side: "left" }],
+          inputs: [{ name: "in" }],
           outputs: [],
           interactive: false,
           view: { x: 400, y: 0 },
@@ -269,15 +269,9 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
     expect(r.end).toBe(false);
   });
 
-  // issue #145 — input images uploaded with the run ride along on the start node.
-  function startDataWith(run: RunState | null) {
-    const nodes = deriveEditNodes(makeStartEndPipeline(), run);
-    return nodes.find((n) => n.id === "start")?.data as {
-      inputImages?: string[];
-    };
-  }
-
-  it("wires the run's input images onto the start node data", () => {
+  // PDO-18 (#977) — input images stay in the StartInspector: the derivation
+  // no longer hands them to the start node of the canvas.
+  it("does not expose the run's input images on the start node data", () => {
     const run: RunState = {
       ...makeRunState({}),
       start_node: {
@@ -287,24 +281,8 @@ describe("deriveEditNodes — start/end green-on-complete flag (issue #105, inli
         input_images: ["ui-bug.png", "trace.png"],
       },
     };
-    expect(startDataWith(run).inputImages).toEqual(["ui-bug.png", "trace.png"]);
-  });
-
-  it("leaves the start node with no input images when the run has none", () => {
-    const run: RunState = {
-      ...makeRunState({}),
-      start_node: {
-        input_path: "_input/output.md",
-        started_at: "2026-01-01T00:00:00.000Z",
-        target_node_ids: ["work"],
-        input_images: [],
-      },
-    };
-    expect(startDataWith(run).inputImages ?? []).toEqual([]);
-  });
-
-  it("leaves the start node with no input images when editing a template (no run state)", () => {
-    expect(startDataWith(null).inputImages ?? []).toEqual([]);
+    const start = deriveEditNodes(makeStartEndPipeline(), run).find((n) => n.id === "start");
+    expect(start?.data).not.toHaveProperty("inputImages");
   });
 });
 
@@ -339,8 +317,8 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
           id: "classifier",
           name: "classifier",
           type: "agent",
-          inputs: [{ name: "task", repeated: false, side: "left" }],
-          outputs: [{ name: "triage", repeated: false, side: "right" }],
+          inputs: [{ name: "task" }],
+          outputs: [{ name: "triage" }],
           interactive: false,
           view: { x: 0, y: 0 },
         },
@@ -348,8 +326,8 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
           id: "hotfix",
           name: "hotfix",
           type: "agent",
-          inputs: [{ name: "triage", repeated: false, side: "left" }],
-          outputs: [{ name: "patch", repeated: false, side: "right" }],
+          inputs: [{ name: "triage" }],
+          outputs: [{ name: "patch" }],
           interactive: false,
           view: { x: 200, y: 0 },
         },
@@ -357,8 +335,8 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
           id: "backlog",
           name: "backlog",
           type: "agent",
-          inputs: [{ name: "triage", repeated: false, side: "left" }],
-          outputs: [{ name: "note", repeated: false, side: "right" }],
+          inputs: [{ name: "triage" }],
+          outputs: [{ name: "note" }],
           interactive: false,
           view: { x: 200, y: 200 },
         },
@@ -407,7 +385,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
           name: "a",
           type: "agent",
           inputs: [],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          outputs: [{ name: "out" }],
           interactive: false,
           view: { x: 0, y: 0 },
         },
@@ -415,7 +393,7 @@ describe("deriveEditEdges — condition pills always visible at midpoint (issue 
           id: "b",
           name: "b",
           type: "agent",
-          inputs: [{ name: "in", repeated: false, side: "left" }],
+          inputs: [{ name: "in" }],
           outputs: [],
           interactive: false,
           view: { x: 200, y: 0 },
@@ -446,7 +424,7 @@ describe("deriveEditEdges — incoming edge anchor side (issue #168)", () => {
           name: "src",
           type: "agent",
           inputs: [],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          outputs: [{ name: "out" }],
           interactive: false,
           view: { x: 0, y: 0 },
         },
@@ -456,7 +434,7 @@ describe("deriveEditEdges — incoming edge anchor side (issue #168)", () => {
           // Emergent: no declared inputs, so the arrow lands on the body (#149).
           type: "agent",
           inputs: [],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          outputs: [{ name: "out" }],
           interactive: false,
           view: { x: 200, y: 0 },
         },
@@ -499,7 +477,7 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
           name: "Start",
           type: "start",
           inputs: [],
-          outputs: [{ name: "user_prompt", repeated: false, side: "right" }],
+          outputs: [{ name: "user_prompt" }],
           interactive: false,
           view: { x: 0, y: 200 },
         },
@@ -508,7 +486,7 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
           name: "implementer",
           type: "agent",
           inputs: [],
-          outputs: [{ name: "code", repeated: false, side: "right" }],
+          outputs: [{ name: "code" }],
           interactive: false,
           view: { x: 280, y: 200 },
         },
@@ -517,7 +495,7 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
           name: "reviewer",
           type: "agent",
           inputs: [],
-          outputs: [{ name: "review", repeated: false, side: "right" }],
+          outputs: [{ name: "review" }],
           interactive: false,
           view: { x: 560, y: 200 },
         },
@@ -525,7 +503,7 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
           id: "end",
           name: "End",
           type: "end",
-          inputs: [{ name: "result", repeated: false, side: "left" }],
+          inputs: [{ name: "result" }],
           outputs: [],
           interactive: false,
           view: { x: 880, y: 200 },
@@ -612,7 +590,7 @@ describe("buildLoopRegionNodes — box behind, chrome above (#167 / #455)", () =
           name: "implementer",
           type: "agent",
           inputs: [],
-          outputs: [{ name: "code", repeated: false, side: "right" }],
+          outputs: [{ name: "code" }],
           interactive: false,
           view: { x: 280, y: 200 },
         },
@@ -621,7 +599,7 @@ describe("buildLoopRegionNodes — box behind, chrome above (#167 / #455)", () =
           name: "reviewer",
           type: "agent",
           inputs: [],
-          outputs: [{ name: "review", repeated: false, side: "right" }],
+          outputs: [{ name: "review" }],
           interactive: false,
           view: { x: 560, y: 200 },
         },

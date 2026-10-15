@@ -19,10 +19,15 @@ describe("SelectControl", () => {
     expect(dot).toHaveAttribute("role", "img");
     expect(dot).toHaveAttribute("aria-label", "Running");
     expect(dot).toHaveAttribute("title", "Running: still merging");
-    // Shown at rest, hidden on row hover (the empty square takes its place).
+    // Shown at rest, hidden on row hover (a ring in the status colour takes its place).
     expect(dot.className).toContain("group-hover:hidden");
-    expect(screen.getByTestId("select-square").className).toContain("group-hover:block");
-    expect(screen.getByTestId("select-square").className).toContain("rounded-[2.5px]");
+    const ring = screen.getByTestId("select-ring");
+    expect(ring.className).toContain("group-hover:block");
+    expect(ring.className).toContain("rounded-full");
+    expect(ring.className).toContain("h-3.5");
+    expect(ring.className).toContain("border-2");
+    expect(ring.className).toContain("border-current");
+    expect(ring.className).toContain("text-st-running");
     // The status stays readable while the glyph is hidden: it rides the control's tooltip.
     expect(screen.getByTestId("ctrl")).toHaveAttribute("title", "Select run · Running: still merging");
     // not selected ⇒ no check
@@ -36,20 +41,21 @@ describe("SelectControl", () => {
     expect(screen.getByRole("checkbox", { name: "Select run" })).toBeInTheDocument();
   });
 
-  it("shows a filled accent square with a check when selected, the glyph only for assistive tech", () => {
+  it("shows a filled accent round with a check when selected, the glyph only for assistive tech", () => {
     render(
       <SelectControl selected status="completed" dotTestId="run-status-dot" label="Deselect run" onSelect={() => {}} testId="ctrl" />,
     );
     const check = screen.getByTestId("select-check");
     expect(check.className).toContain("bg-acc");
-    expect(check.className).toContain("rounded-[2.5px]");
-    expect(check.className).not.toContain("rounded-full");
+    expect(check.className).toContain("rounded-full");
+    expect(check.className).toContain("h-4");
+    expect(check.className).toContain("text-on-acc");
     expect(screen.getByTestId("run-status-dot").className).toContain("sr-only");
     expect(screen.getByTestId("ctrl")).toHaveAttribute("title", "Deselect run · Completed");
-    expect(screen.getByTestId("ctrl")).toHaveAttribute("data-select-mode", "square");
+    expect(screen.getByTestId("ctrl")).toHaveAttribute("data-select-mode", "ring");
   });
 
-  it("keeps an unchecked row a visible empty square while the list is in selection mode", () => {
+  it("keeps an unchecked row a visible ring in its status colour while the list is in selection mode", () => {
     render(
       <SelectControl
         selected={false}
@@ -62,9 +68,11 @@ describe("SelectControl", () => {
         testId="ctrl"
       />,
     );
-    const square = screen.getByTestId("select-square");
-    expect(square.className).toMatch(/(^|\s)block(\s|$)/);
-    expect(square.className).not.toContain("hidden");
+    const ring = screen.getByTestId("select-ring");
+    expect(ring.className).toMatch(/(^|\s)block(\s|$)/);
+    expect(ring.className).not.toContain("hidden");
+    expect(ring.className).toContain("rounded-full");
+    expect(ring.className).toContain("text-st-failed");
     expect(screen.getByTestId("run-status-dot").className).toContain("sr-only");
     expect(screen.getByTestId("ctrl")).toHaveAttribute("title", "Select run · Failed: exit 1");
   });
@@ -73,6 +81,10 @@ describe("SelectControl", () => {
     render(<SelectControl selected={false} label="Select pipeline" onSelect={() => {}} testId="ctrl" />);
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.getByTestId("ctrl")).toHaveAttribute("title", "Select pipeline");
+    // Its hover ring is neutral: there is no status colour to lend.
+    const ring = screen.getByTestId("select-ring");
+    expect(ring.className).toContain("border-fg-3");
+    expect(ring.className).not.toContain("border-current");
   });
 
   it("exposes an accessible checkbox reflecting the selected state", () => {

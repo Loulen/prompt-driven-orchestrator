@@ -9,6 +9,7 @@ export type SettingsCategoryId = "general" | "agents" | "sandbox" | "diagnostics
 
 export type SettingsSectionId =
   | "interface"
+  | "accessibility"
   | "runtime-limits"
   | "runs"
   | "version-update"
@@ -58,6 +59,14 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         id: "interface",
         label: "Interface",
         description: "How this browser talks to PDO. Saved on this device only.",
+      },
+      {
+        // #1005: how PDO is SHOWN here (the colour-blind status palette). Lives in
+        // this browser's localStorage, like the theme — no field of the form.
+        id: "accessibility",
+        label: "Accessibility",
+        description: "How PDO is shown in this browser. Saved on this device only.",
+        deviceLocal: true,
       },
       {
         id: "runtime-limits",

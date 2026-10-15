@@ -6,10 +6,13 @@
     <title>Prompt Driven Orchestrator</title>
     <!-- Theme guard (#759): stamps the resolved theme on <html> before the
          bundle loads, so the page never paints one theme and flips to the
-         other. Deliberately duplicates the rule in `src/lib/theme.ts` — a
-         module import would be too late; `src/noFlashTheme.test.ts` runs THIS
-         script and asserts the two agree. Keep it dependency-free and total:
-         a throwing store must not blank the page. -->
+         other. Since #1005 it also stamps the colour-blind status palette
+         when this browser opted in. Deliberately duplicates the rules in
+         `src/lib/theme.ts` and `src/lib/statusPalette.ts` — a module import
+         would be too late; `src/noFlashTheme.test.ts` and
+         `src/noFlashStatusPalette.test.ts` run THIS script and assert they
+         agree. Keep it dependency-free and total: a throwing store must not
+         blank the page. -->
     <script>
       try {
         var stored = null;
@@ -34,6 +37,14 @@
               : "dark";
         document.documentElement.setAttribute("data-theme", theme);
         document.documentElement.style.colorScheme = theme;
+      } catch (e) {}
+      // Colour-blind status palette (#1005): same rule as
+      // src/lib/statusPalette.ts — only a stored "true" stamps the attribute;
+      // nothing stored, anything else, or a throwing store leaves the default.
+      try {
+        if (localStorage.getItem("pdo.ui.colourBlindStatus") === "true") {
+          document.documentElement.setAttribute("data-status-palette", "colour-blind");
+        }
       } catch (e) {}
     </script>
   </head>

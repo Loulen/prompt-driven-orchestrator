@@ -13,6 +13,8 @@ import type { LibraryPipelineEntry } from "../api";
 import { fetchPipelineDocument, fetchPipelineSkillsSidecar, fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar, openLibraryAssistant, startRunManager, stopRunManager } from "../api";
 import type { RunState, PipelineDef } from "../types";
 import { isLiveRun } from "../types";
+import StatusIcon from "./StatusIcon";
+import { statusSpec } from "../lib/statusTable";
 import { shortAge } from "../lib/branchSelect";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
 import { formatEstCost } from "../lib/costLabel";
@@ -78,16 +80,6 @@ interface Props {
    *  Manager (the existing programmatic entry, #690 story 18). */
   onOpenSettings?: () => void;
 }
-
-const STATUS_DOT: Record<string, string> = {
-  running: "bg-st-running animate-pulse",
-  awaiting_user: "bg-st-await",
-  completed: "bg-st-done",
-  failed: "bg-st-failed",
-  halted: "bg-st-blocked",
-  archived: "bg-st-archived",
-  pending: "bg-st-pending",
-};
 
 export default function PipelineInfoPanel({
   run,
@@ -681,11 +673,17 @@ function InfoTab({
     <>
       <div className="border-b border-line px-3 py-3" style={{ fontSize: "11.5px" }}>
         <div className="flex items-center gap-2">
-          <span
-            className={`h-2 w-2 shrink-0 rounded-full ${
-              STATUS_DOT[run?.status ?? ""] ?? "bg-st-pending"
-            }`}
-          />
+          {/* PDO-22: the Run's Status icon — the list's glyph. A Run names its
+              status in text just below, so the glyph is hidden from assistive
+              tech there; a template (no Run) has no status at all. */}
+          {run && (
+            <StatusIcon
+              status={run.status}
+              reason={run.failure_reason ?? run.awaiting_reason}
+              decorative
+              testId="info-panel-status-icon"
+            />
+          )}
           <div className="min-w-0 flex-1">
             <div className="font-medium text-fg" data-testid="info-panel-name">
               {pipelineName}
@@ -694,7 +692,16 @@ function InfoTab({
               className="mt-0.5 font-mono text-fg-4"
               style={{ fontSize: "10px" }}
             >
-              {run ? `run ${run.run_id.slice(-8)} · ${pipeline?.version ?? "v1"}` : `template · ${pipeline?.version ?? "v1"}`}
+              {run ? (
+                <>
+                  <span data-testid="info-panel-status" className={statusSpec(run.status).colorClass}>
+                    {statusSpec(run.status).label}
+                  </span>
+                  {` · run ${run.run_id.slice(-8)} · ${pipeline?.version ?? "v1"}`}
+                </>
+              ) : (
+                `template · ${pipeline?.version ?? "v1"}`
+              )}
             </div>
           </div>
           {/* Sandbox badge (#410): shown for any sandboxed Run (full/minimal). An

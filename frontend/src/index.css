@@ -80,12 +80,16 @@
   --color-st-archived: #6b7280;
   --color-st-stopped: #9ca3af;
   --color-st-stopped-bg: rgba(156, 163, 175, 0.14);
-  --color-st-stale: #d97706;
-  --color-st-stale-bg: rgba(217, 119, 6, 0.14);
-  /* Interrupted (#598 / ADR-0049): an infra incident, recoverable — a warm amber
-     distinct from failed (red). "La session est morte, pas le travail." */
-  --color-st-interrupted: #f59e0b;
-  --color-st-interrupted-bg: rgba(245, 158, 11, 0.14);
+  /* Stale (#1005): a warm grey. Its old #d97706 sat next to awaiting's amber,
+     and a status you must act on cannot look like one you can ignore. */
+  --color-st-stale: #a8a29e;
+  --color-st-stale-bg: rgba(168, 162, 158, 0.14);
+  /* Interrupted (#598 / ADR-0049): an infra incident, recoverable — a pale amber
+     distinct from failed (red) and from awaiting (#998: it shared awaiting's
+     #f59e0b, so the two read as one under any colour vision). "La session est
+     morte, pas le travail." */
+  --color-st-interrupted: #fcd34d;
+  --color-st-interrupted-bg: rgba(252, 211, 77, 0.14);
   --color-st-paused: #f97316;
   --color-st-paused-bg: rgba(249, 115, 22, 0.14);
   --color-st-pending: #4b5563;
@@ -210,7 +214,10 @@
   --color-on-acc-warn: #fff7ed;
   --color-acc-app: #03714f;
 
-  /* PDO status */
+  /* PDO status — the 1.119.1 set (#1005): done is the accent green, as it
+     always was. Stale (a warm grey) and interrupted (a dark amber) are kept
+     apart from awaiting, which they used to share. The colour-blind set lives
+     in its own block below, behind the Accessibility option. */
   --color-st-running: #1d4ed8;
   --color-st-running-bg: rgba(29, 78, 216, 0.10);
   --color-st-await: #8f4506;
@@ -230,10 +237,10 @@
   --color-st-archived: #4b5563;
   --color-st-stopped: #565e6c;
   --color-st-stopped-bg: rgba(86, 94, 108, 0.10);
-  --color-st-stale: #8f4506;
-  --color-st-stale-bg: rgba(143, 69, 6, 0.10);
-  --color-st-interrupted: #8f4506;
-  --color-st-interrupted-bg: rgba(143, 69, 6, 0.10);
+  --color-st-stale: #57534e;
+  --color-st-stale-bg: rgba(87, 83, 78, 0.10);
+  --color-st-interrupted: #713f12;
+  --color-st-interrupted-bg: rgba(113, 63, 18, 0.10);
   --color-st-paused: #9a3412;
   --color-st-paused-bg: rgba(154, 52, 18, 0.10);
   --color-st-pending: #767e8c;
@@ -259,6 +266,60 @@
      over a white app reads as a power cut rather than a spotlight. */
   --color-tour-dim: rgba(20, 24, 31, 0.45);
   --color-tour-dim-soft: rgba(20, 24, 31, 0.32);
+}
+
+/* ---------------------------------------------------------------------------
+ * Colour-blind friendly status colours (#1005, Settings › General ›
+ * Accessibility). An opt-in, per browser: `data-status-palette="colour-blind"`
+ * is stamped on <html> by the inline guard in `index.html` before first paint,
+ * then by `lib/statusPalette.ts` at the switch and on a `storage` event.
+ *
+ * Done, failed and awaiting are pulled apart for deutan and protan vision,
+ * measured as an OKLab distance under Machado simulation (severity 1). Only the
+ * status hues move: the glyphs, the accent and running stay put. Everything
+ * painted through `st-*` follows — Status icons, NodeCard borders and tints,
+ * the destructive button, the Diff tab, the Inspector's amber scope.
+ *
+ * Two attributes in each selector, so the override outranks both the base
+ * palette and the light-theme block whatever their order.
+ * ------------------------------------------------------------------------- */
+
+/* Dark: teal-200 / rose-400 / yellow-400 (variant A of the PDO-22 design). */
+:root[data-status-palette="colour-blind"]:not([data-theme="light"]) {
+  --color-st-await: #facc15;
+  --color-st-await-bg: rgba(250, 204, 21, 0.14);
+  --color-st-await-border: rgba(250, 204, 21, 0.34);
+  --color-st-done: #99f6e4;
+  --color-st-done-bg: rgba(153, 246, 228, 0.14);
+  --color-st-done-hl: rgba(153, 246, 228, 0.28);
+  --color-st-failed: #fb7185;
+  --color-st-failed-bg: rgba(251, 113, 133, 0.14);
+  --color-st-failed-hl: rgba(251, 113, 133, 0.28);
+  --color-st-failed-border: rgba(251, 113, 133, 0.34);
+  --color-st-stale: #d4c4a8;
+  --color-st-stale-bg: rgba(212, 196, 168, 0.14);
+  --color-st-interrupted: #fb923c;
+  --color-st-interrupted-bg: rgba(251, 146, 60, 0.14);
+}
+
+/* Light (#998): teal, deep red and a burnt amber. Each holds AA as text on its
+   own -bg tint over every surface, not just on white, so the amber and the teal
+   sit darker than amber-700 / teal-700. Done leaves the accent green here. */
+:root[data-theme="light"][data-status-palette="colour-blind"] {
+  --color-st-await: #9f4500;
+  --color-st-await-bg: rgba(159, 69, 0, 0.10);
+  --color-st-await-border: rgba(159, 69, 0, 0.30);
+  --color-st-done: #006b64;
+  --color-st-done-bg: rgba(0, 107, 100, 0.10);
+  --color-st-done-hl: rgba(0, 107, 100, 0.24);
+  --color-st-failed: #7f1d1d;
+  --color-st-failed-bg: rgba(127, 29, 29, 0.10);
+  --color-st-failed-hl: rgba(127, 29, 29, 0.24);
+  --color-st-failed-border: rgba(127, 29, 29, 0.30);
+  --color-st-stale: #7b573f;
+  --color-st-stale-bg: rgba(123, 87, 63, 0.10);
+  --color-st-interrupted: #7b410f;
+  --color-st-interrupted-bg: rgba(123, 65, 15, 0.10);
 }
 
 *,

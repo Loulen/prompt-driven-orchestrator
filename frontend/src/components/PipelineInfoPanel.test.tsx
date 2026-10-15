@@ -932,3 +932,33 @@ describe("PipelineInfoPanel — the Source block (#803)", () => {
     expect(fetchSourceDrift).not.toHaveBeenCalled();
   });
 });
+
+// PDO-22 (#999): the Run info shows the list's Status icon, named by the text
+// label after it (so the glyph itself is hidden from assistive tech).
+describe("PipelineInfoPanel — Run Status icon (#999)", () => {
+  it.each([
+    ["completed", "Completed"],
+    ["skipped", "Skipped"],
+    ["paused", "Paused"],
+    ["halted", "Halted"],
+    ["archived", "Archived"],
+  ] as const)("renders %s with its own glyph and label", (status, label) => {
+    renderPanel(makeRun({ status }));
+    const icon = screen.getByTestId("info-panel-status-icon");
+    expect(icon).toHaveAttribute("data-status", status);
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(icon).toHaveAttribute("title", label);
+    expect(screen.getByTestId("info-panel-status")).toHaveTextContent(label);
+  });
+
+  it("puts the failure reason in the glyph's tooltip", () => {
+    renderPanel(makeRun({ status: "failed", failure_reason: "exit 1" }));
+    expect(screen.getByTestId("info-panel-status-icon")).toHaveAttribute("title", "Failed: exit 1");
+  });
+
+  it("shows no status for a template", () => {
+    renderPanel(null);
+    expect(screen.queryByTestId("info-panel-status-icon")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("info-panel-status")).not.toBeInTheDocument();
+  });
+});

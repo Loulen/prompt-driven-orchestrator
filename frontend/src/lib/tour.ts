@@ -19,6 +19,7 @@
  */
 
 import type { PipelineDef } from "../types";
+import type { StatusKey } from "./statusTable";
 
 /**
  * One node of the Run a tour is following (#825), narrowed to the two facts the
@@ -269,7 +270,7 @@ export interface TourStep {
   /**
    * A small picture inside the card, under the body — for the one step whose
    * subject cannot be shown by lighting the app (#911, after the human test): the
-   * status dot has three colours and the tour's Run only ever wears one. Data,
+   * Status icon has a shape per status and the tour's Run only ever wears one. Data,
    * not markup, so the popover renders it without knowing which step asked.
    */
   illustration?: TourIllustration;
@@ -308,21 +309,17 @@ export interface TourAside {
 }
 
 /**
- * A card illustration (#911). One shape so far — a mock list whose rows lead
- * with a status dot, drawn with the app's own colour classes so the picture and
- * the real list cannot disagree.
+ * A card illustration (#911). One shape so far — a mock legend whose rows lead
+ * with a Status icon (PDO-22, #1000), drawn from the app's own `STATUS_TABLE` so
+ * the picture and the real list cannot disagree.
  */
 export interface TourIllustration {
   kind: "rows";
   rows: {
-    /** The row's name, e.g. a Run name. */
+    /** The status whose glyph leads the row: `completed`, `running`… */
+    status: StatusKey;
+    /** What the glyph means, in the reader's words — "waits for you". */
     label: string;
-    /** What the dot means, in the reader's words — "waits for you". */
-    detail: string;
-    /** The dot's colour class, the app's own: `bg-st-await`, `bg-st-done`… */
-    dotClass: string;
-    /** Pulse the dot, as the real list does for a live row. */
-    pulse?: boolean;
   }[];
 }
 

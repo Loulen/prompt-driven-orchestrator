@@ -228,7 +228,8 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
       const user = userEvent.setup();
       render(<StatsModal open onClose={() => {}} />);
       await waitFor(() => expect(fetchStatsOverviewMock).toHaveBeenCalledTimes(1));
-      expect(screen.getByTestId("stats-charts-stub")).toBeInTheDocument();
+      // The data lands after the fetch call resolves: wait for it, not just the call.
+      expect(await screen.findByTestId("stats-charts-stub")).toBeInTheDocument();
       const before = screen.getByTestId("stats-computed-at").textContent;
 
       await user.click(screen.getByTestId("stats-refresh"));

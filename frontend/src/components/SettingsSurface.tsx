@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, Copy, Download, ExternalLink, FileText, RefreshCw, TriangleAlert } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, FileText, Info, RefreshCw, TriangleAlert } from "lucide-react";
 import FullWindowShell, { type ShellDrawer } from "./FullWindowShell";
 import { announceSettingsChanged, useSettings } from "../hooks/useSettings";
 import { useUpdateStatus } from "../hooks/useUpdateStatus";
@@ -36,6 +36,9 @@ import ModelPicker from "./ModelPicker";
 import SessionCounter from "./SessionCounter";
 import HarnessSelect from "./HarnessSelect";
 import ThemeSelect from "./ThemeSelect";
+import { Tooltip, TooltipProvider } from "./ui/tooltip";
+import { useColourBlindStatus } from "../hooks/useColourBlindStatus";
+import { COLOUR_BLIND_STATUS_HELP } from "../lib/statusPalette";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../lib/uiPrefs";
 import { useWiringStore } from "../stores/wiringStore";
 import GridSizePicker from "./GridSizePicker";
@@ -685,9 +688,10 @@ export default function SettingsSurface({
             {item.id === "general" && (
               <>
                 <InterfaceSection section={item.sections[0]} />
+                <AccessibilitySection section={item.sections[1]} />
                 {values && settings ? (
                   <>
-                    <Section section={item.sections[1]}>
+                    <Section section={item.sections[2]}>
                       <SettingRow
                         id="session-cap"
                         label="Concurrent session cap"
@@ -755,7 +759,7 @@ export default function SettingsSurface({
                         unit=" MB"
                       />
                     </Section>
-                    <Section section={item.sections[2]}>
+                    <Section section={item.sections[3]}>
                       {/* Default Run auto-naming (#338). On by default — the pre-#338
                           behaviour. */}
                       <CheckboxRow
@@ -830,20 +834,20 @@ export default function SettingsSurface({
                     or the surface covers them. */}
                 <VersionUpdateSection
                   onRequestUpdate={onRequestUpdate && (() => exitThen(onRequestUpdate))}
-                  section={item.sections[3]}
+                  section={item.sections[4]}
                   active={open}
                   onOpenChangelog={onOpenChangelog && (() => exitThen(onOpenChangelog))}
                 />
                 {/* #823 — guided tours. Every entry closes this surface first:
                     a tour points at the app, which is underneath it. */}
-                <Section section={item.sections[4]}>
+                <Section section={item.sections[5]}>
                   <TutorialsSection
                     onStartTour={(tourId) => exitThen(() => onStartTour?.(tourId))}
                     onStartFullTour={() => exitThen(() => onStartFullTour?.())}
                   />
                 </Section>
                 {/* #891 — Stats absorptions: saves as you go, whatever `GET /settings` said. */}
-                <Section section={item.sections[5]}>
+                <Section section={item.sections[6]}>
                   <StatsAbsorptionsPanel active={open} />
                 </Section>
               </>
@@ -1390,6 +1394,64 @@ function Section({ section, children }: { section: SettingsSection; children: Re
       </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * Settings › General › Accessibility (#1005). Device-local like the Interface
+ * controls: the switch writes localStorage and repaints `<html>` at the click,
+ * outside the form's Save and the dirty set; other open tabs follow through the
+ * `storage` event (`useColourBlindStatus`). No permanent description — the
+ * detail rides a tooltip on the Info icon, and `aria-describedby` for a screen
+ * reader, which a Radix tooltip only wires while it is open.
+ */
+function AccessibilitySection({ section }: { section: SettingsSection }) {
+  const { enabled, setEnabled } = useColourBlindStatus();
+  return (
+    <Section section={section}>
+      <div className="flex items-center gap-2.5">
+        <button
+          type="button"
+          role="switch"
+          id="setting-colour-blind-status"
+          aria-checked={enabled}
+          aria-describedby="setting-colour-blind-status-help"
+          data-testid="setting-colour-blind-status"
+          onClick={() => setEnabled(!enabled)}
+          className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
+            enabled ? "bg-acc" : "bg-fg-5"
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
+              enabled ? "left-3" : "left-0.5"
+            }`}
+          />
+        </button>
+        <label
+          htmlFor="setting-colour-blind-status"
+          className="cursor-pointer font-medium text-fg-2"
+          style={{ fontSize: "11.5px" }}
+        >
+          Colour-blind friendly status colours
+        </label>
+        <TooltipProvider>
+          <Tooltip content={COLOUR_BLIND_STATUS_HELP} side="right">
+            <button
+              type="button"
+              aria-label="About colour-blind friendly status colours"
+              data-testid="setting-colour-blind-status-info"
+              className="grid cursor-help place-items-center text-fg-4 hover:text-fg-2"
+            >
+              <Info size={12} />
+            </button>
+          </Tooltip>
+        </TooltipProvider>
+        <span id="setting-colour-blind-status-help" className="sr-only">
+          {COLOUR_BLIND_STATUS_HELP}
+        </span>
+      </div>
+    </Section>
   );
 }
 

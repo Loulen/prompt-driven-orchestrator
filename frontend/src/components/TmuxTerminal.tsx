@@ -34,6 +34,7 @@ import { useTheme } from "../hooks/useTheme";
 import { reconnectDelay } from "../hooks/useDaemonSocket";
 import { useFileDropTarget } from "../hooks/useFileDropTarget";
 import { DropOverlay } from "./SkillFileDropZone";
+import StatusIcon from "./StatusIcon";
 
 /** Which node iteration's frozen pane to read when the live session is gone (#617). */
 export interface PaneSource {
@@ -726,8 +727,12 @@ export default function TmuxTerminal({
             {toolbarIdentity}
             <span className="mx-1 h-3 w-px bg-line-strong" aria-hidden />
           </>
+        ) : status !== undefined ? (
+          // PDO-22: a node's terminal shows the iteration's Status icon — the
+          // list's glyph; the label beside it is the connection, not the status.
+          <StatusIcon status={status} testId="term-status-icon" />
         ) : (
-          <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+          <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} data-testid="term-connection-dot" />
         )}
         <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
           {session}

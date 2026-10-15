@@ -638,13 +638,24 @@ describe("gestures advance only on the observed state", () => {
     for (const target of targets) expect(target).not.toContain("run-status-dot");
   });
 
-  it("draws the three status colours inside the status-dot card, with the app's own classes", () => {
+  it("teaches the Status icon by its shapes, no longer by its colours (PDO-22, #1000)", () => {
+    const step = stepById("status-dots");
+    const obs = new FakeApp().obs();
+    expect(step.title).toBe("The status icon");
+    expect(stepBody(step, obs)).toBe(
+      "Its shape tells you where the Run is: a check means finished, a turning circle means running, a question mark means it waits for you. Hover it for details.",
+    );
+    expect(stepBody(step, obs)).not.toMatch(/green|orange|blue/i);
+  });
+
+  it("draws the four status glyphs with their meaning inside the status-icon card", () => {
     const illustration = stepById("status-dots").illustration!;
     expect(illustration.kind).toBe("rows");
-    expect(illustration.rows.map((r) => [r.dotClass, r.detail])).toEqual([
-      ["bg-st-await", "waits for you"],
-      ["bg-st-running", "running"],
-      ["bg-st-done", "finished"],
+    expect(illustration.rows.map((r) => [r.status, r.label])).toEqual([
+      ["completed", "finished"],
+      ["running", "running"],
+      ["awaiting_user", "waits for you"],
+      ["failed", "failed"],
     ]);
   });
 

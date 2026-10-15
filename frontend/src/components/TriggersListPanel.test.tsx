@@ -75,14 +75,33 @@ describe("TriggersListPanel", () => {
     expect(screen.getByText("daily at 09:00")).toBeInTheDocument();
   });
 
-  it("renders a status dot reflecting the last outcome", () => {
+  it("renders the last outcome as a Status icon (fired = check)", () => {
     renderPanel([trigger({ last_outcome: "fired" })]);
-    expect(document.querySelector(".bg-st-done")).toBeInTheDocument();
+    const dot = screen.getByTestId("trigger-status-dot");
+    expect(dot).toHaveAttribute("role", "img");
+    expect(dot).toHaveAttribute("aria-label", "Fired");
+    expect(dot).toHaveAttribute("data-status", "fired");
+    expect(dot.className).toContain("text-st-done");
   });
 
-  it("shows an error dot when the last outcome was an error", () => {
+  it("follows the spec mapping for every outcome", () => {
+    const cases: [string | null, string][] = [
+      ["error", "error"],
+      ["skipped-overlap", "skipped-overlap"],
+      ["guard-exit-nonzero", "guard-exit-nonzero"],
+      ["guard-error", "guard-error"],
+      [null, "never"],
+    ];
+    for (const [outcome, key] of cases) {
+      const { unmount } = renderPanel([trigger({ last_outcome: outcome })]);
+      expect(screen.getByTestId("trigger-status-dot")).toHaveAttribute("data-status", key);
+      unmount();
+    }
+  });
+
+  it("shows an error glyph when the last outcome was an error", () => {
     renderPanel([trigger({ last_outcome: "error" })]);
-    expect(document.querySelector(".bg-st-failed")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Error" }).className).toContain("text-st-failed");
   });
 
   it("renders a disabled trigger visibly inactive (greyed)", () => {
@@ -128,7 +147,7 @@ describe("TriggersListPanel", () => {
       trigger({ last_outcome: "fired", last_fired_at: "2026-06-06T09:00:00.000Z" }),
     ]);
     const dot = screen.getByTestId("trigger-status-dot");
-    expect(dot).toHaveAttribute("title", expect.stringContaining("fired"));
+    expect(dot).toHaveAttribute("title", "Fired: last run 2026-06-06T09:00:00.000Z");
   });
 });
 

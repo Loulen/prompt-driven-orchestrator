@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import type { PipelineListEntry, RunListEntry, Trigger } from "../types";
@@ -428,68 +428,86 @@ describe("UnifiedLeftPanel run display labels", () => {
   });
 });
 
-// The run row's status dot. These assertions used to live on `RunsListPanel`,
-// a component nothing but its own test imported — so they guarded markup the
-// app never mounted. Deleted with it (#503); the live surface is this panel.
-describe("UnifiedLeftPanel run status dot", () => {
+// The run row's Status icon (PDO-22 #997; was a colour dot). These assertions
+// used to live on `RunsListPanel`, a component nothing but its own test imported
+// — so they guarded markup the app never mounted. Deleted with it (#503); the
+// live surface is this panel.
+describe("UnifiedLeftPanel run status icon", () => {
   const run = (over: Partial<RunListEntry>): RunListEntry[] => [
     { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, ...over },
   ];
+  const glyphOf = (el: HTMLElement) => el.querySelector("svg")!.innerHTML;
 
-  it("maps every status to its own dot colour", () => {
+  it("gives every status its own glyph and label", () => {
     // `archived` excluded: its row lives in the folded Archived section (#136),
-    // covered there. Every other status renders inline.
-    const expected: Partial<Record<RunListEntry["status"], string>> = {
-      running: "bg-st-running",
-      awaiting_user: "bg-st-await",
-      completed: "bg-st-done",
-      failed: "bg-st-failed",
-      skipped: "bg-st-skipped",
-      halted: "bg-st-blocked",
-      paused: "bg-st-paused",
-    };
-    for (const [status, cls] of Object.entries(expected)) {
-      const { unmount } = renderPanel({
-        runs: run({ status: status as RunListEntry["status"] }),
-      });
-      expect(screen.getByTestId("run-status-dot").className).toContain(cls);
+    // covered there. Every other status renders inline, plus a stalled run.
+    const cases: [Partial<RunListEntry>, string][] = [
+      [{ status: "running" }, "Running"],
+      [{ status: "awaiting_user" }, "Awaiting you"],
+      [{ status: "completed" }, "Completed"],
+      [{ status: "failed" }, "Failed"],
+      [{ status: "skipped" }, "Skipped"],
+      [{ status: "halted" }, "Halted"],
+      [{ status: "paused" }, "Paused"],
+      [{ status: "running", stalled: true }, "Stalled"],
+    ];
+    const glyphs = new Set<string>();
+    for (const [over, label] of cases) {
+      const { unmount } = renderPanel({ runs: run(over) });
+      const dot = screen.getByTestId("run-status-dot");
+      expect(dot).toHaveAttribute("role", "img");
+      expect(dot).toHaveAttribute("aria-label", label);
+      glyphs.add(glyphOf(dot));
       unmount();
     }
+    // Eight statuses, eight shapes: none reads as another without colour.
+    expect(glyphs.size).toBe(cases.length);
   });
 
-  it("renders a skipped (graceful no-op) run with its own slate dot (#245)", () => {
+  it("announces each row's status to a screen reader", () => {
+    renderPanel({
+      runs: [
+        { run_id: "a", pipeline_name: "p", status: "completed", started_at: null },
+        { run_id: "b", pipeline_name: "p", status: "failed", started_at: null },
+      ],
+    });
+    expect(screen.getByRole("img", { name: "Completed" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Failed" })).toBeInTheDocument();
+  });
+
+  it("renders a skipped (graceful no-op) run with its own glyph (#245)", () => {
     renderPanel({ runs: run({ status: "skipped" }) });
     const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-skipped");
     // A skipped run is terminal: it must not read as failed/running.
-    expect(dot.className).not.toContain("bg-st-failed");
-    expect(dot.className).not.toContain("bg-st-running");
+    expect(dot).toHaveAttribute("aria-label", "Skipped");
+    expect(dot.className).toContain("text-st-skipped");
   });
 
-  it("renders a stalled run with an amber, steady dot (#180)", () => {
-    // A stalled run keeps status "running" but must surface amber and NOT pulse.
-    // Per ADR-0032 the daemon no longer has a `Stale` producer, so `stalled` only
-    // ever comes back true for a historical Run — which is precisely why the amber
-    // surface stays in place. Do NOT "repair" this dot by rebranching a producer.
+  it("renders a stalled run with the steady stalled glyph (#180)", () => {
+    // A stalled run keeps status "running" but must surface as stalled and NOT
+    // turn. Per ADR-0032 the daemon no longer has a `Stale` producer, so
+    // `stalled` only ever comes back true for a historical Run — which is
+    // precisely why the stalled surface stays in place. Do NOT "repair" this
+    // glyph by rebranching a producer.
     renderPanel({ runs: run({ status: "running", stalled: true }) });
     const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-stale");
-    expect(dot.className).not.toContain("animate-pulse");
-    // It must not fall through to the active-running blue dot.
-    expect(dot.className).not.toContain("bg-st-running");
+    expect(dot).toHaveAttribute("aria-label", "Stalled");
+    expect(dot.className).toContain("text-st-stale");
+    expect(dot.innerHTML).not.toContain("animate");
   });
 
-  it("renders a genuinely-running (not stalled) run blue and pulsing", () => {
+  it("renders a genuinely-running (not stalled) run with the slowly turning glyph", () => {
     renderPanel({ runs: run({ status: "running", stalled: false }) });
     const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-running");
-    expect(dot.className).toContain("animate-pulse");
-    expect(dot.className).not.toContain("bg-st-stale");
+    expect(dot).toHaveAttribute("aria-label", "Running");
+    expect(dot.className).toContain("text-st-running");
+    expect(dot.querySelector("svg")!.getAttribute("class")).toContain("motion-safe:animate-");
+    expect(dot.className).not.toContain("animate-pulse");
   });
 
   // #503: the dot was the whole failure signal — a Run that had actually shipped
   // read the same as one that had not, with no text anywhere behind it.
-  it("hangs the failure reason off the status dot", () => {
+  it("hangs the failure reason off the status icon", () => {
     renderPanel({
       runs: run({
         pipeline_name: "shipped-but-filed-failed",
@@ -499,12 +517,17 @@ describe("UnifiedLeftPanel run status dot", () => {
     });
     expect(screen.getByTestId("run-status-dot")).toHaveAttribute(
       "title",
-      "merge conflict on ship: 20 conflicting file(s)",
+      "Failed: merge conflict on ship: 20 conflicting file(s)",
+    );
+    // Hovering the row swaps the glyph for the ring: the reason rides along.
+    expect(screen.getByTestId("run-select-control")).toHaveAttribute(
+      "title",
+      expect.stringContaining("Failed: merge conflict on ship"),
     );
   });
 
-  // #588: an amber dot says why — the agent's question, or the awaiting child.
-  it("hangs the awaiting reason off an amber dot", () => {
+  // #588: an awaiting glyph says why — the agent's question, or the awaiting child.
+  it("hangs the awaiting reason off an awaiting glyph", () => {
     renderPanel({
       runs: run({
         status: "awaiting_user",
@@ -513,13 +536,37 @@ describe("UnifiedLeftPanel run status dot", () => {
     });
     expect(screen.getByTestId("run-status-dot")).toHaveAttribute(
       "title",
-      "child run grill-588 is awaiting you",
+      "Awaiting you: child run grill-588 is awaiting you",
     );
   });
 
-  it("leaves the dot untitled when there is nothing to explain", () => {
+  it("titles the glyph with its label alone when there is nothing to explain", () => {
     renderPanel({ runs: run({ status: "completed" }) });
-    expect(screen.getByTestId("run-status-dot")).not.toHaveAttribute("title");
+    expect(screen.getByTestId("run-status-dot")).toHaveAttribute("title", "Completed");
+  });
+
+  it("enters selection mode once a row is checked, until the selection is cleared", () => {
+    useSelectionStore.getState().clearAll();
+    renderPanel({
+      runs: [
+        { run_id: "a", pipeline_name: "p", status: "completed", started_at: null, name: "A" },
+        { run_id: "b", pipeline_name: "p", status: "failed", started_at: null, name: "B", failure_reason: "exit 1" },
+      ],
+    });
+    const controls = () => screen.getAllByTestId("run-select-control");
+    expect(controls().map((c) => c.getAttribute("data-select-mode"))).toEqual(["glyph", "glyph"]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select B" }));
+    // Every control is a ring now — the checked one a filled accent round, the
+    // other a hollow ring in its status colour (#1005).
+    expect(controls().map((c) => c.getAttribute("data-select-mode"))).toEqual(["ring", "ring"]);
+    const ring = screen.getByTestId("select-ring");
+    expect(ring.className).toContain("rounded-full");
+    expect(ring.className).toContain("text-st-done");
+    expect(screen.getByTestId("select-check")).toBeInTheDocument();
+    // The checked row's status moves into its control's tooltip.
+    expect(screen.getByRole("checkbox", { name: "Deselect B" })).toHaveAttribute("title", "Deselect B · Failed: exit 1");
+    act(() => useSelectionStore.getState().clearAll());
+    expect(controls().map((c) => c.getAttribute("data-select-mode"))).toEqual(["glyph", "glyph"]);
   });
 });
 
@@ -1909,7 +1956,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     const pills = within(row("epic")).getByTestId("run-child-pills");
     expect(within(pills).getByTestId("run-child-pills-stale")).toHaveTextContent("1");
     expect(within(pills).queryByTestId("run-child-pills-running")).not.toBeInTheDocument();
-    expect(within(pills).getByTestId("run-child-pills-stale").querySelector(".bg-st-stale")).not.toBeNull();
+    expect(within(pills).getByTestId("run-child-pills-stale").querySelector('[data-status="stalled"]')).not.toBeNull();
   });
 
   it("the chevron collapses / expands the subtree without selecting the run", () => {

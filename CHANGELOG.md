@@ -10,18 +10,42 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 1.121.0
+## Non publié (spec #981, PDO-17)
+**Plus de côté (L/T/R/B) sur les ports** (#991, spec #981). Le routage appartient à l'edge : au
+chargement, l'ancien `side` d'un output devient une `source_anchor` sans offset (milieu du côté),
+et celui du `result` d'un End un `target_side`. Le fichier n'est réécrit qu'à la sauvegarde ;
+lancer `pdo migrate` sur `~/.pdo/pipelines` et `~/.pdo/library` pour convertir le reste.
+
 **Plus de « rpt » sur les ports de sortie** (#993, spec #981). Un output n'a plus de flag
 d'accumulation : le toggle disparaît de l'inspecteur et le panneau de run affiche toujours un
 output comme un document unique. L'accumulation reste portée par l'edge (`repeated` sur l'edge,
 badge `rpt` sur l'input poolé). Au chargement, le `repeated` d'un output est ignoré ; le fichier
 n'est réécrit qu'à la sauvegarde, lancer `pdo migrate` pour convertir le reste.
 
+## 1.122.0
+**Panneau de node : durée de l'itération, bascule Total / Active** (spec #978, story PDO-16),
+validé en recette.
+
+- Bascule Total / Active (#980) : un clic (ou Entrée / Espace) sur la durée de la ligne méta bascule entre `total` et `active` ;
+le choix est mémorisé (`pdo.ui.nodeDurationMode`) et s'applique aussi au menu des itérations.
+Active se fige pendant une attente déclarée (point ambre). Le tooltip ventile Total / Active /
+Waiting, avec une somme exacte à la seconde affichée ; Active peut de ce fait différer d'1 s de
+Stats -> Performance, qui arrondit chaque valeur séparément (écart accepté en recette).
+
+- Durée Total (#979) : la ligne méta affiche `iter N · <durée> total · <coût>` à la place de `started … · ended …` ;
+la durée défile tant que l'itération tourne. Début et fin passent dans un tooltip (survol ou
+focus clavier). La ligne suit l'itération choisie dans le sélecteur, dont le menu affiche une
+durée par itération.
+
+## 1.121.0
+**Update et What's new depuis Settings** (#983, story PDO-14) : dans Settings › Version &
+update, Update et What's new ferment d'abord Settings (via la garde de brouillon), puis affichent
+la confirmation de mise à jour ou le Changelog seuls à l'écran. Les fermer ramène sur l'app sans
+rouvrir Settings.
+
 ## 1.120.0
-**Plus de côté (L/T/R/B) sur les ports** (#991, spec #981). Le routage appartient à l'edge : au
-chargement, l'ancien `side` d'un output devient une `source_anchor` sans offset (milieu du côté),
-et celui du `result` d'un End un `target_side`. Le fichier n'est réécrit qu'à la sauvegarde ;
-lancer `pdo migrate` sur `~/.pdo/pipelines` et `~/.pdo/library` pour convertir le reste.
+Carte Start du canvas d'un Run sans images d'input (#977, PDO-18) : les miniatures et la
+lightbox restent dans l'inspecteur du Start.
 
 ## 1.119.1
 Retours du test humain de la spec #970 : indicateur de validation d'un Pipeline sous les

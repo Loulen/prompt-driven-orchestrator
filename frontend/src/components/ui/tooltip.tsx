@@ -36,8 +36,12 @@ function rendersText(node: ReactNode): boolean {
   });
 }
 
-function withAccessibleName(children: ReactNode, content: string): ReactNode {
-  if (!content.trim() || !isValidElement(children)) return children;
+function withAccessibleName(children: ReactNode, content: ReactNode): ReactNode {
+  // Only a plain-text tooltip can lend a name; rich content (#979's Started /
+  // Ended grid) sits on triggers that name themselves.
+  if (typeof content !== "string" || !content.trim() || !isValidElement(children)) {
+    return children;
+  }
 
   const el = children as ReactElement<Record<string, unknown>>;
   const props = el.props;
@@ -69,7 +73,8 @@ export function Tooltip({
   side = "bottom",
   disabled,
 }: {
-  content: string;
+  /** Plain text (multi-line via `\n`) or, for a structured tooltip, a node. */
+  content: ReactNode;
   children: ReactNode;
   delay?: number;
   side?: "top" | "bottom" | "left" | "right";

@@ -806,6 +806,12 @@ export interface IterationInfo {
   completed_at: string | null;
   interactive?: boolean;
   completion_released?: boolean;
+  /**
+   * #980: the iteration's closed Attentes déclarées, in ms (the rule Stats ->
+   * Performance uses). An open wait is not counted: read it from
+   * `NodeState.awaiting.since`. Absent on a pre-#980 daemon.
+   */
+  waited_ms?: number;
 }
 
 /**

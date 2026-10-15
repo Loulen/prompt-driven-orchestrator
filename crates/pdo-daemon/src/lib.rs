@@ -35706,6 +35706,7 @@ mod tests {
                             completed_at: None,
                             interactive: false,
                             completion_released: false,
+                            waited_ms: 0,
                         })
                         .collect(),
                     frontmatter_retries: 0,

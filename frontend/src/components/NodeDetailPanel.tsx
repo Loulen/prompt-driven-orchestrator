@@ -42,10 +42,19 @@ import ImageLightbox from "./ImageLightbox";
 import CopyButton from "./CopyButton";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import TmuxTerminal from "./TmuxTerminal";
-import { Tooltip } from "./ui/tooltip";
+import { Tooltip, TooltipProvider } from "./ui/tooltip";
 import { STATUS_BG, STATUS_BORDER, STATUS_DOT, STATUS_TEXT } from "../nodeStyles";
 import { useTerminalOverlayStore } from "../stores/terminalOverlayStore";
 import { formatCostAmount, nodeCostTitle } from "../lib/costLabel";
+import { formatDuration } from "../lib/runDuration";
+import {
+  isDeclaredWaitCause,
+  iterationIsLive,
+  useIterationDurations,
+} from "../lib/iterationDuration";
+import type { IterationDurations, IterationTiming } from "../lib/iterationDuration";
+import { loadNodeDurationMode, saveNodeDurationMode } from "../lib/uiPrefs";
+import type { NodeDurationMode } from "../lib/uiPrefs";
 import { nodeReviewTarget, reviewUrl } from "../lib/runRefs";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 import {
@@ -589,6 +598,39 @@ export default function NodeDetailPanel({
   const selectedIterStatus =
     node.iterations?.find((i) => i.iter === selectedIter)?.status ?? node.status;
   const selectedIteration = node.iterations?.find((i) => i.iter === selectedIter);
+  // #980: the declared wait still open, if any — it belongs to the node's
+  // current iteration. `children_pending` is an orchestrator at work, not a wait.
+  const openWaitSince =
+    node.awaiting && isDeclaredWaitCause(node.awaiting.cause) ? node.awaiting.since : null;
+  // #979: the current iteration's entry may lack its times (a pre-#616 daemon,
+  // a projection racing the node-level fields): the node carries them for it.
+  const iterationsWithTiming = useMemo(
+    () =>
+      (node.iterations ?? []).map((it) => {
+        if (it.iter !== node.iter) return it;
+        const timed = it.started_at
+          ? it
+          : { ...it, started_at: node.started_at, completed_at: node.completed_at };
+        return iterationIsLive(it.status) ? { ...timed, open_wait_since: openWaitSince } : timed;
+      }),
+    [node.iterations, node.iter, node.started_at, node.completed_at, openWaitSince],
+  );
+  const selectedTiming: IterationTiming = iterationsWithTiming.find(
+    (i) => i.iter === selectedIter,
+  ) ?? {
+    status: selectedIterStatus,
+    started_at: selectedIter === node.iter ? node.started_at : null,
+    completed_at: selectedIter === node.iter ? node.completed_at : null,
+    open_wait_since:
+      selectedIter === node.iter && iterationIsLive(selectedIterStatus) ? openWaitSince : null,
+  };
+  // #980: the Mode de durée on screen — one global, persisted preference.
+  const [durationMode, setDurationMode] = useState<NodeDurationMode>(loadNodeDurationMode);
+  const toggleDurationMode = useCallback(() => {
+    const next: NodeDurationMode = durationMode === "total" ? "active" : "total";
+    setDurationMode(next);
+    saveNodeDurationMode(next);
+  }, [durationMode]);
   const completionReleased = selectedIteration?.completion_released === true;
   const isReleasing =
     releaseVerdict?.iter === selectedIter && releaseVerdict.kind === "pending";
@@ -844,19 +886,23 @@ export default function NodeDetailPanel({
         >
           {hasMultipleIters ? (
             <IterSelector
-              iterations={node.iterations}
+              iterations={iterationsWithTiming}
               selectedIter={selectedIter}
               onSelect={setSelectedIter}
+              durationMode={durationMode}
             />
           ) : (
             <span>iter {node.iter}</span>
           )}
-          {node.started_at && (
-            <span> · started {formatTime(node.started_at)}</span>
-          )}
-          {node.completed_at && (
-            <span> · ended {formatTime(node.completed_at)}</span>
-          )}
+          {/* #979: the duration of the SELECTED iteration replaces
+              `started … · ended …`; the times moved to its tooltip. #980: a
+              click switches it between Total and Active. */}
+          <IterationDurationLabel
+            key={selectedIter}
+            timing={selectedTiming}
+            mode={durationMode}
+            onToggle={toggleDurationMode}
+          />
           {node.cost && (
             <span data-testid="node-cost" title={nodeCostTitle(node.cost)}>
               {" · "}
@@ -1689,14 +1735,174 @@ const STATUS_DOTS: Record<NodeStatus, string> = {
   interrupted: "bg-st-interrupted",
 };
 
+const DURATION_MODE_LABEL: Record<keyof IterationDurations, string> = {
+  total: "Total",
+  active: "Active",
+  waiting: "Waiting",
+};
+
+function otherDurationMode(mode: NodeDurationMode): NodeDurationMode {
+  return mode === "total" ? "active" : "total";
+}
+
+/**
+ * The duration tooltip (#979, #980): the iteration's local times (`running`
+ * standing in for an end not reached yet), then its Total · Active · Waiting
+ * breakdown with the mode on screen marked, then the click hint.
+ */
+function IterationDurationTooltip({
+  timing,
+  durations,
+  mode,
+}: {
+  timing: IterationTiming;
+  durations: IterationDurations;
+  mode: NodeDurationMode;
+}) {
+  const ended = timing.completed_at
+    ? formatTime(timing.completed_at)
+    : iterationIsLive(timing.status)
+      ? "running"
+      : "—";
+  const waitOpen = !!timing.open_wait_since && timing.status === "awaiting_user";
+  return (
+    <div className="font-mono" style={{ fontSize: "10px" }}>
+      <div className="grid grid-cols-[auto_auto] gap-x-3" data-testid="iteration-times">
+        <span className="text-fg-3">Started</span>
+        <span className="text-right">
+          {timing.started_at ? formatTime(timing.started_at) : "—"}
+        </span>
+        <span className="text-fg-3">Ended</span>
+        <span className="text-right">{ended}</span>
+      </div>
+      <div
+        className="mt-1 grid grid-cols-[auto_auto] gap-x-3 border-t border-line pt-1"
+        data-testid="iteration-breakdown"
+      >
+        {(["total", "active", "waiting"] as const).map((key) => {
+          const current = key === mode;
+          return (
+            <div
+              key={key}
+              className={`col-span-2 grid grid-cols-subgrid ${current ? "text-fg" : "text-fg-3"}`}
+              data-testid={`iteration-breakdown-${key}`}
+              data-current={current || undefined}
+            >
+              <span>
+                <span aria-hidden className="inline-block w-2.5">
+                  {current ? "▸" : ""}
+                </span>
+                {DURATION_MODE_LABEL[key]}
+              </span>
+              <span className="text-right">{formatDuration(durations[key])}</span>
+            </div>
+          );
+        })}
+      </div>
+      {waitOpen && (
+        <div className="mt-1 text-fg-3" data-testid="iteration-active-paused">
+          Active paused: waiting for you
+        </div>
+      )}
+      <div className="mt-1 text-fg-3">Click to show {otherDurationMode(mode)} time</div>
+    </div>
+  );
+}
+
+/**
+ * The meta line's duration (#979, design B1): `● 12m 4s total`. A `<button>` so
+ * the tooltip opens on keyboard focus; the dotted unit reads as a defined term.
+ * A click (or Enter / Space) switches the Mode de durée (#980); the unit turns
+ * accent-colored off the default: the app green (`acc-app`), not the
+ * Inspector's amber, which would blend with the awaiting dot. Renders nothing,
+ * separator included, when there is no duration to show.
+ */
+function IterationDurationLabel({
+  timing,
+  mode,
+  onToggle,
+}: {
+  timing: IterationTiming;
+  mode: NodeDurationMode;
+  onToggle: () => void;
+}) {
+  const durations = useIterationDurations(timing);
+  if (durations == null) return null;
+  const duration = formatDuration(durations[mode]);
+  const dot =
+    timing.status === "running"
+      ? "bg-st-running animate-pulse"
+      : timing.status === "awaiting_user"
+        ? "bg-st-await"
+        : null;
+  const unitColor =
+    mode === "active"
+      ? "text-acc-app decoration-acc-app"
+      : "text-fg-4 decoration-fg-4 group-hover:decoration-fg-3";
+  return (
+    // A local provider: the panel also renders outside the App's (tests, stories).
+    <TooltipProvider>
+      <span> · </span>
+      <Tooltip
+        content={
+          <IterationDurationTooltip timing={timing} durations={durations} mode={mode} />
+        }
+      >
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={`${duration} ${mode}. Click to show ${otherDurationMode(mode)} time`}
+          data-testid="iteration-duration"
+          data-mode={mode}
+          className="group flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 font-mono text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+          style={{ fontSize: "10px" }}
+        >
+          {dot && (
+            <span
+              aria-hidden
+              data-testid="iteration-duration-dot"
+              className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`}
+            />
+          )}
+          <span>{duration}</span>{" "}
+          <span
+            className={`underline decoration-dotted underline-offset-2 ${unitColor}`}
+            data-testid="iteration-duration-unit"
+          >
+            {mode}
+          </span>
+        </button>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+/** An iteration's duration in the IterSelector menu, in the mode on screen; ticks while it runs. */
+function IterOptionDuration({
+  timing,
+  mode,
+}: {
+  timing: IterationTiming;
+  mode: NodeDurationMode;
+}) {
+  const durations = useIterationDurations(timing);
+  return durations == null ? null : (
+    <>
+      {formatDuration(durations[mode])} {mode}
+    </>
+  );
+}
+
 function IterSelector({
   iterations,
   selectedIter,
   onSelect,
+  durationMode,
 }: {
-  iterations: IterationInfo[];
+  iterations: (IterationInfo & IterationTiming)[];
   selectedIter: number;
   onSelect: (iter: number) => void;
+  durationMode: NodeDurationMode;
 }) {
   return (
     <DropdownMenu>
@@ -1730,8 +1936,7 @@ function IterSelector({
               className="ml-auto font-mono text-fg-4"
               style={{ fontSize: "10px" }}
             >
-              {it.started_at ? formatTime(it.started_at) : ""}
-              {it.completed_at ? ` – ${formatTime(it.completed_at)}` : ""}
+              <IterOptionDuration timing={it} mode={durationMode} />
             </span>
           </DropdownMenuItem>
         ))}

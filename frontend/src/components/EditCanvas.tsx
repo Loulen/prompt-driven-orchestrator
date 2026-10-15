@@ -101,9 +101,6 @@ interface EditNodeData {
   status: NodeStatus;
   // True only for start/end markers on a completed run — see `markerReached`.
   reached?: boolean;
-  // Filenames of images uploaded with the run's input. Only the start marker
-  // surfaces these (issue #145); undefined/empty on every other node.
-  inputImages?: string[];
   // Compact badge when this node is the single member of a loop region: a
   // collection (`⇉ ...`, #151) or a single-member bounded loop (`↻ ...`, #173).
   // Absent on non-member nodes and on multi-member regions (boxed instead).
@@ -145,11 +142,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
     : data.nodeType === "start" ? "text-acc"
     : data.nodeType === "end" ? "text-st-blocked"
     : "text-fg-3";
-  // Images uploaded with the run's input ride along on the Start marker only
-  // (issue #145). The canvas shows a compact, filename-tagged strip; the full
-  // thumbnails live in the StartInspector.
-  const inputImages =
-    data.nodeType === "start" ? (data.inputImages ?? []) : [];
 
   // Work nodes and the End marker (#840) anchor incoming edges by drop
   // position, on any border. Keyed on node TYPE so a work node carrying a
@@ -268,32 +260,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
       {data.childCounts && totalChildren(data.childCounts) > 0 && (
         <div className="mt-1.5 flex items-center gap-2 pl-[22px]" data-testid="node-child-pills-row">
           <ChildCountPills counts={data.childCounts} size="xs" testId="node-child-pills" />
-        </div>
-      )}
-      {inputImages.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5" data-testid="start-node-images">
-          {inputImages.map((name) => (
-            <div
-              key={name}
-              data-testid="start-node-image-chip"
-              title={name}
-              className="relative h-[34px] w-[46px] overflow-hidden rounded border border-line-strong bg-bg-1"
-            >
-              <div
-                className="absolute inset-0"
-                style={{
-                  backgroundImage:
-                    "repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 5px, transparent 5px 10px)",
-                }}
-              />
-              <div
-                className="absolute inset-x-0 bottom-0 truncate bg-bg-0/70 px-1 font-mono text-fg-4"
-                style={{ fontSize: "7.5px" }}
-              >
-                {name}
-              </div>
-            </div>
-          ))}
         </div>
       )}
       {/* #844: the rim is the drag-source — no output dot any more. Rendered LAST

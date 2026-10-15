@@ -1,4 +1,4 @@
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
 import { TooltipProvider } from "./ui/tooltip";
@@ -31,17 +31,15 @@ interface MarkerOpts {
   nodeType: NodeType;
   reached?: boolean;
   status?: NodeStatus;
-  inputImages?: string[];
 }
 
-function markerProps({ nodeType, reached = false, status = "pending", inputImages }: MarkerOpts) {
+function markerProps({ nodeType, reached = false, status = "pending" }: MarkerOpts) {
   const data = {
     label: nodeType,
     nodeId: nodeType,
     nodeType,
     status,
     reached,
-    inputImages,
     inputs: nodeType === "end" ? [{ name: "in", side: "left" as const }] : [],
     outputs: nodeType === "start" ? [{ name: "out", side: "right" as const }] : [],
     interactive: false,
@@ -275,32 +273,30 @@ describe("EditNode script node card (#248)", () => {
   });
 });
 
-describe("EditNode Start marker — input images on the canvas (issue #145)", () => {
-  it("renders one image chip per uploaded image, tagged by filename", () => {
-    render(
-      <EditNode {...markerProps({ nodeType: "start", inputImages: ["ui-bug.png", "trace.png"] })} />,
-      { wrapper: Wrapper },
-    );
-    const strip = screen.getByTestId("start-node-images");
-    const chips = within(strip).getAllByTestId("start-node-image-chip");
-    expect(chips).toHaveLength(2);
-    expect(strip.textContent).toContain("ui-bug.png");
-    expect(strip.textContent).toContain("trace.png");
-  });
-
-  it("renders no image strip when the run has no input images", () => {
-    render(<EditNode {...markerProps({ nodeType: "start", inputImages: [] })} />, {
-      wrapper: Wrapper,
-    });
-    expect(screen.queryByTestId("start-node-images")).toBeNull();
-  });
-
-  it("renders no image strip on a non-start node even if images are passed", () => {
-    render(
-      <EditNode {...markerProps({ nodeType: "end", inputImages: ["ui-bug.png"] })} />,
+describe("EditNode Start marker — no input images on the canvas (PDO-18, #977)", () => {
+  // The run's input images live in the StartInspector only: the canvas card
+  // stays « ▷ Start », even if stale data still carried the filenames.
+  it("renders no image strip nor filename on a start marker of a run with images", () => {
+    const props = markerProps({ nodeType: "start", reached: true, status: "completed" });
+    const { container } = render(
+      <EditNode {...props} data={{ ...props.data, inputImages: ["ui-bug.png", "trace.png"] }} />,
       { wrapper: Wrapper },
     );
     expect(screen.queryByTestId("start-node-images")).toBeNull();
+    expect(screen.queryByTestId("start-node-image-chip")).toBeNull();
+    expect(container.textContent).not.toContain("ui-bug.png");
+    expect(container.textContent).not.toContain("trace.png");
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("renders the same start card with or without input images", () => {
+    const props = markerProps({ nodeType: "start" });
+    const bare = render(<EditNode {...props} />, { wrapper: Wrapper }).container.innerHTML;
+    const withImages = render(
+      <EditNode {...props} data={{ ...props.data, inputImages: ["ui-bug.png"] }} />,
+      { wrapper: Wrapper },
+    ).container.innerHTML;
+    expect(withImages).toBe(bare);
   });
 });
 

@@ -199,7 +199,22 @@ pub enum Commands {
         /// (capped at 100 characters).
         #[arg(long)]
         message: Option<String>,
+        /// An answer the user can pick with one click (repeat the flag, up to
+        /// 8). The pick reaches you as the user's message.
+        #[arg(long = "option")]
+        options: Vec<String>,
+        /// The user may pick several of the options together.
+        #[arg(long)]
+        multi: bool,
+        /// Sent by an interactive node's turn-end hook, never by an agent.
+        #[arg(long, hide = true)]
+        turn_end: bool,
     },
+    /// The `PreToolUse` hook on `AskUserQuestion` of an interactive node (ADR-0081):
+    /// reads the hook input on stdin, waits for the user's answers from the node
+    /// panel and hands them to the tool. Never typed by an agent.
+    #[command(hide = true)]
+    AskUser,
     /// Graceful no-op: there is legitimately nothing to do, so end the run as
     /// `skipped` instead of `failed`. Use when the input/pool is empty, NOT for
     /// genuine errors — reserve `fail` for those.
@@ -535,6 +550,16 @@ struct AppState {
     /// by the declaration and by the lift; in-memory only — a daemon restart
     /// forgets it, and the next keystroke re-arms it.
     pty_typed: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// « Reply » (ADR-0081): answers given in the node panel to the agent's own
+    /// question tool (`AskUserQuestion`), keyed `run/node/tool_use_id`, until the
+    /// `pdo ask-user` hook holding that question picks them up. In-memory: after
+    /// a restart the hook keeps polling, and the next answer lands here.
+    question_answers: std::sync::Mutex<std::collections::HashMap<String, serde_json::Value>>,
+    /// When a `pdo ask-user` hook last polled for each question (same keys): a
+    /// question is answerable from the panel only while its hook is holding it.
+    /// A question asked by a session without the hook (launched before it, or a
+    /// hook that failed) shows read-only: its answer goes in the terminal menu.
+    question_holders: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
     /// #867 / ADR-0075: who pilots each tmux session shown by several postes
     /// (browsers). In-memory presence: a restart drops every socket anyway.
     shared_terminals: shared_terminal::SharedTerminalRegistry,
@@ -1176,7 +1201,12 @@ pub const EXIT_WAIT_TIMEOUT: u8 = 2;
 /// `pdo wait-user [--message]` — declare the wait (#588 / ADR-0069 §1). Exit `0`
 /// declared or legal no-op · `3` refused by name (script node, no live session:
 /// still your turn, nothing terminal happened) · `1` daemon unreachable.
-pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
+pub fn run_wait_user(
+    message: Option<String>,
+    options: Vec<String>,
+    multi: bool,
+    turn_end: bool,
+) -> std::process::ExitCode {
     let (rid, nid) = match (cli_run_id(), cli_node_id()) {
         (Ok(r), Ok(n)) => (r, n),
         (Err(e), _) | (_, Err(e)) => {
@@ -1192,7 +1222,13 @@ pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
         .filter(|m| !m.is_empty());
     let resp = match reqwest::blocking::Client::new()
         .post(format!("{url}/runs/{rid}/nodes/{nid}/wait-user"))
-        .json(&serde_json::json!({ "iter": iter, "message": message }))
+        .json(&serde_json::json!({
+            "iter": iter,
+            "message": message,
+            "options": options,
+            "multi": multi,
+            "turn_end": turn_end,
+        }))
         .send()
     {
         Ok(r) => r,
@@ -1215,8 +1251,9 @@ pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
             "now awaiting the user"
         };
         eprintln!(
-            "Node {nid} is {what}.{}\nThe wait lifts when the user answers in the PDO terminal \
-             (Enter) or releases completion. Keep the conversation going; never block on it.",
+            "Node {nid} is {what}.{}\nThe wait lifts when the user answers (Reply in the node \
+             panel, or Enter in the PDO terminal) or releases completion. Keep the conversation \
+             going; never block on it.",
             message
                 .as_deref()
                 .map(|m| format!(" Banner: “{m}”"))
@@ -1241,6 +1278,84 @@ pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
          Do NOT run `pdo fail`."
     );
     std::process::ExitCode::from(EXIT_REFUSED_RECOVERABLE)
+}
+
+/// `pdo ask-user` — the `PreToolUse` hook on an interactive node's
+/// `AskUserQuestion` (ADR-0081). Declares the wait with the first question on
+/// the banner, then long-polls the daemon until the user answers from the node
+/// panel, and prints the hook decision that hands the answers to the tool
+/// (`updatedInput.answers`: the tool then runs without its terminal menu).
+///
+/// Every failure is silent and exits `0` with no output — a bad input, no node
+/// identity: the hook then decides nothing and Claude's own menu shows in the
+/// terminal, the path a user without the panel always had. An unreachable
+/// daemon is retried: the question stays open until the hook's timeout, whose
+/// expiry falls back to that same menu.
+pub fn run_ask_user() -> std::process::ExitCode {
+    use std::io::Read;
+    let ok = std::process::ExitCode::SUCCESS;
+    let mut raw = String::new();
+    if std::io::stdin().read_to_string(&mut raw).is_err() {
+        return ok;
+    }
+    let Ok(input) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return ok;
+    };
+    let (Some(tool_use_id), Some(tool_input)) = (
+        input.get("tool_use_id").and_then(|v| v.as_str()),
+        input.get("tool_input").filter(|v| v.is_object()),
+    ) else {
+        return ok;
+    };
+    let (Ok(rid), Ok(nid)) = (cli_run_id(), cli_node_id()) else {
+        return ok;
+    };
+    let url = cli_daemon_url();
+    let iter = cli_node_iter();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(
+            CHILDREN_WAIT_SERVER_MAX_SECS + 15,
+        ))
+        .build()
+        .expect("reqwest client");
+    let first_question = tool_input
+        .pointer("/questions/0/question")
+        .and_then(|v| v.as_str())
+        .map(declared_wait::truncate_message);
+    let _ = client
+        .post(format!("{url}/runs/{rid}/nodes/{nid}/wait-user"))
+        .json(&serde_json::json!({ "iter": iter, "message": first_question }))
+        .send();
+    let answer_url = format!("{url}/runs/{rid}/nodes/{nid}/questions/{tool_use_id}/answer");
+    loop {
+        let resp = client
+            .get(&answer_url)
+            .query(&[("timeout_secs", CHILDREN_WAIT_SERVER_MAX_SECS.to_string())])
+            .send();
+        match resp {
+            Ok(r) if r.status() == reqwest::StatusCode::OK => {
+                let body: serde_json::Value = r.json().unwrap_or(serde_json::Value::Null);
+                let Some(answers) = body.get("answers").filter(|a| a.is_object()) else {
+                    continue;
+                };
+                let mut updated = tool_input.clone();
+                updated["answers"] = answers.clone();
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "allow",
+                            "updatedInput": updated,
+                        }
+                    })
+                );
+                return ok;
+            }
+            Ok(r) if r.status() == reqwest::StatusCode::NO_CONTENT => {}
+            _ => std::thread::sleep(std::time::Duration::from_secs(2)),
+        }
+    }
 }
 
 /// The daemon caps one long-poll at this many seconds; the CLI loops.
@@ -3474,6 +3589,8 @@ pub async fn serve_with_config(
         reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+        question_answers: std::sync::Mutex::new(std::collections::HashMap::new()),
+        question_holders: std::sync::Mutex::new(std::collections::HashMap::new()),
         shared_terminals: Default::default(),
         panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(
             config.panic_on_stale_sweep,
@@ -5253,6 +5370,7 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/runs/{run_id}/nodes/{node_id}/terminal-text",
             post(node_terminal_text),
         )
+        .route("/runs/{run_id}/nodes/{node_id}/reply", post(node_reply))
         .route(
             "/runs/{run_id}/nodes/{node_id}/children/wait",
             get(node_children_wait),
@@ -5260,6 +5378,14 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/{run_id}/nodes/{node_id}/fail", post(node_fail))
         .route("/runs/{run_id}/nodes/{node_id}/skip", post(node_skip))
         .route("/runs/{run_id}/nodes/{node_id}/pane", get(node_pane))
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/conversation",
+            get(node_conversation),
+        )
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/questions/{tool_use_id}/answer",
+            post(node_question_answer).get(node_question_answer_wait),
+        )
         .route("/runs/{run_id}/nodes/{node_id}/prompt", get(node_prompt))
         .route("/runs/{run_id}/nodes/{node_id}/io", get(node_io))
         .route("/runs/{run_id}/diff", get(run_diff))
@@ -11391,7 +11517,7 @@ async fn spawn_manager_session(
         sandbox_wrap.as_ref(),
         // The manager is an infra session, not a pipeline node — it never calls
         // `pdo complete`, so it gets no turn-end `Stop` hook.
-        false,
+        tmux_session_manager::TurnEndHooks::default(),
     ) {
         error!("failed to spawn manager tmux session: {e}");
     } else {
@@ -17776,8 +17902,14 @@ pub(crate) async fn reattach_node_session(
     if !descriptor.can_resume() {
         return ReattachOutcome::CannotResume;
     }
-    // Re-resolve turn-end auto-completion FRESH.
-    let inject_hook = stored_autocomplete_turn_end(&state.db).await;
+    // Re-resolve turn-end auto-completion FRESH; the interactive wait hook follows
+    // the toggle frozen at launch (ADR-0007), like everything else resumed.
+    let hooks = tmux_session_manager::TurnEndHooks {
+        autocomplete: stored_autocomplete_turn_end(&state.db).await,
+        await_user: find_launch_node_started_payload(events, node_id, iter)
+            .and_then(|p| p.get("interactive").and_then(|v| v.as_bool()))
+            .unwrap_or(false),
+    };
 
     // A resurrection IS a (re)spawn: pass the admission gate and leave a
     // `NodeStarted` trace, holding the lock across check-and-reserve then dropping it
@@ -17850,13 +17982,237 @@ pub(crate) async fn reattach_node_session(
         launch_session_id.as_deref(),
         state.tmux_cmd_override.as_deref(),
         sandbox_wrap.as_ref(),
-        inject_hook,
+        hooks,
     ) {
         return ReattachOutcome::ResumeFailed {
             error: e.to_string(),
         };
     }
     ReattachOutcome::Resumed
+}
+
+#[derive(Deserialize)]
+struct OptionalIterQuery {
+    #[serde(default)]
+    iter: Option<i64>,
+}
+
+/// The transcript file of `(run, node, iter)` under `harness`, resolved like the
+/// stale sweep does for a live node: the Run's sandbox-aware store root, the
+/// node's frozen isolation, its pinned session id. `None` when the harness keeps
+/// none PDO can read, or when it is not written yet.
+fn node_transcript_path(
+    state: &AppState,
+    events: &[event_log::Event],
+    run_state: &event_log::RunState,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+    harness: &str,
+) -> Option<PathBuf> {
+    let repo_root = effective_repo_root(state, run_state);
+    let working_dir = if node_run_isolation(events, run_state, node_id, iter) {
+        sub_worktree_path(&repo_root, run_id, node_id, iter)
+    } else {
+        worktree_dir_for_run(&repo_root, run_id)
+    };
+    let (home_root, sandbox_root) = sandbox_run::sandbox_home_roots(state).ok()?;
+    let sandboxed = !run_state.sandbox.is_off();
+    let claude_root = sandbox_run::transcripts_root(sandboxed, run_id, &home_root, &sandbox_root);
+    let stores = sandbox_run::HarnessStores::for_run(sandboxed, run_id, &home_root, &sandbox_root);
+    harness_probes::resolve_transcript(
+        harness,
+        stores.root_for(harness, &claude_root),
+        &working_dir,
+        find_launch_session_id(events, node_id, iter).as_deref(),
+    )
+}
+
+/// The node's iteration (`?iter=`, default its current one) and the harness it
+/// was launched with, for the transcript reader below; or the `404`.
+async fn transcript_reader_target(
+    state: &AppState,
+    run_id: &str,
+    node_id: &str,
+    iter: Option<i64>,
+) -> Result<(Vec<event_log::Event>, event_log::RunState, i64, String), Box<Response>> {
+    let (events, run_state) = load_projected(state, run_id).await?;
+    let Some(node_state) = run_state.nodes.get(node_id) else {
+        return Err(Box::new(
+            (StatusCode::NOT_FOUND, "node not found in run").into_response(),
+        ));
+    };
+    let iter = iter.unwrap_or(node_state.iter);
+    let harness = find_launch_harness(&events, node_id, iter)
+        .unwrap_or_else(|| harness_registry::CLAUDE.to_string());
+    Ok((events, run_state, iter, harness))
+}
+
+#[derive(Deserialize)]
+struct QuestionAnswerRequest {
+    #[serde(default)]
+    iter: Option<i64>,
+    /// Question text → the picked label(s), comma-separated for a multi-select,
+    /// or the user's own words.
+    answers: std::collections::BTreeMap<String, String>,
+}
+
+fn question_answer_key(run_id: &str, node_id: &str, tool_use_id: &str) -> String {
+    format!("{run_id}/{node_id}/{tool_use_id}")
+}
+
+/// A hook polls at least every [`CHILDREN_WAIT_SERVER_MAX_SECS`]; past this
+/// silence its question is no longer held (the hook ended, timed out, died).
+const QUESTION_HOLD_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Whether a `pdo ask-user` hook is holding this question right now.
+fn question_is_held(state: &AppState, key: &str) -> bool {
+    state
+        .question_holders
+        .lock()
+        .unwrap()
+        .get(key)
+        .is_some_and(|seen| seen.elapsed() < QUESTION_HOLD_GRACE)
+}
+
+/// `POST /runs/{run_id}/nodes/{node_id}/questions/{tool_use_id}/answer` — the
+/// user's answers to the agent's own question tool, from the Conversation view
+/// (ADR-0081). Held until the `pdo ask-user` hook of that question picks them
+/// up; lifts the wait like a reply. Refused, nothing sent, on an empty answer or
+/// without a live session.
+async fn node_question_answer(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id, tool_use_id)): AxumPath<(String, String, String)>,
+    Json(body): Json<QuestionAnswerRequest>,
+) -> Response {
+    const NOTHING: &str = "nothing sent";
+    if body.answers.is_empty() || body.answers.values().any(|a| a.trim().is_empty()) {
+        return node_gesture_refusal(
+            StatusCode::BAD_REQUEST,
+            "empty_answer",
+            format!("every question needs an answer; {NOTHING}"),
+        );
+    }
+    let live = match require_live_node_session(&state, &run_id, &node_id, body.iter, NOTHING).await
+    {
+        Ok(live) => live,
+        Err(refusal) => return *refusal,
+    };
+    let key = question_answer_key(&run_id, &node_id, &tool_use_id);
+    if !question_is_held(&state, &key) {
+        return node_gesture_refusal(
+            StatusCode::CONFLICT,
+            "question_not_held",
+            format!(
+                "no PDO hook is holding this question — answer it in the terminal menu; {NOTHING}"
+            ),
+        );
+    }
+    state
+        .question_answers
+        .lock()
+        .unwrap()
+        .insert(key, serde_json::json!(body.answers));
+    declared_wait::note_reply_sent(&state, &live.session, &run_id, &node_id, live.iter).await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "iter": live.iter })),
+    )
+        .into_response()
+}
+
+#[derive(Deserialize)]
+struct QuestionAnswerWaitQuery {
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+}
+
+/// `GET /runs/{run_id}/nodes/{node_id}/questions/{tool_use_id}/answer` — the
+/// `pdo ask-user` hook's long-poll: `200 {answers}` once the user answered (and
+/// the answers are handed over exactly once), `204` when the budget ran out —
+/// the hook polls again.
+async fn node_question_answer_wait(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id, tool_use_id)): AxumPath<(String, String, String)>,
+    Query(query): Query<QuestionAnswerWaitQuery>,
+) -> Response {
+    let key = question_answer_key(&run_id, &node_id, &tool_use_id);
+    let budget = query
+        .timeout_secs
+        .unwrap_or(CHILDREN_WAIT_SERVER_MAX_SECS)
+        .clamp(1, CHILDREN_WAIT_SERVER_MAX_SECS);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(budget);
+    loop {
+        state
+            .question_holders
+            .lock()
+            .unwrap()
+            .insert(key.clone(), std::time::Instant::now());
+        if let Some(answers) = state.question_answers.lock().unwrap().remove(&key) {
+            state.question_holders.lock().unwrap().remove(&key);
+            return Json(serde_json::json!({ "answers": answers })).into_response();
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return StatusCode::NO_CONTENT.into_response();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+/// How much of a transcript the Conversation view reads: its tail, so a very
+/// long session stays cheap to poll (the oldest entries drop out first).
+const CONVERSATION_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// `GET /runs/{run_id}/nodes/{node_id}/conversation[?iter=N]` — the node's
+/// conversation read from its transcript, for the panel's Conversation view
+/// (« Reply »): PDO's instructions, the user's and the agent's messages, the
+/// agent's tool calls grouped between them. `supported: false` on a `script`
+/// node or a harness PDO has no transcript reader for — the panel then shows the
+/// terminal; `entries`
+/// is empty before the agent wrote anything.
+async fn node_conversation(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    Query(query): Query<OptionalIterQuery>,
+) -> Response {
+    let (events, run_state, iter, harness) =
+        match transcript_reader_target(&state, &run_id, &node_id, query.iter).await {
+            Ok(t) => t,
+            Err(resp) => return *resp,
+        };
+    // A `script` node runs bash, not an agent: there is no conversation to read.
+    let is_script = run_state
+        .node_defs
+        .iter()
+        .any(|d| d.id == node_id && d.node_type == "script");
+    let supported = !is_script && harness_probes::can_read_conversation(&harness);
+    let path = node_transcript_path(
+        &state, &events, &run_state, &run_id, &node_id, iter, &harness,
+    );
+    let entries = path
+        .as_deref()
+        .and_then(|p| stale_detector::read_transcript_bytes(p, CONVERSATION_MAX_BYTES))
+        .and_then(|text| harness_probes::conversation(&harness, &text))
+        .unwrap_or_default();
+    // A question is answerable from the panel only while its hook holds it.
+    let entries: Vec<serde_json::Value> = entries
+        .into_iter()
+        .map(|entry| {
+            let mut v = serde_json::to_value(&entry).unwrap_or_default();
+            if let stale_detector::ConversationEntry::Question { tool_use_id, .. } = &entry {
+                let key = question_answer_key(&run_id, &node_id, tool_use_id);
+                v["held"] = serde_json::json!(question_is_held(&state, &key));
+            }
+            v
+        })
+        .collect();
+    Json(serde_json::json!({
+        "iter": iter,
+        "harness": harness,
+        "supported": supported,
+        "entries": entries,
+    }))
+    .into_response()
 }
 
 async fn node_pane(
@@ -18545,6 +18901,15 @@ struct WaitUserRequest {
     iter: Option<i64>,
     #[serde(default)]
     message: Option<String>,
+    /// The answers offered to the user (« Reply » shows them as choices).
+    #[serde(default)]
+    options: Vec<String>,
+    #[serde(default)]
+    multi: bool,
+    /// Sent by an interactive node's `Stop` hook, never by an agent: the wait
+    /// is `turn_ended`, and never replaces one already declared.
+    #[serde(default)]
+    turn_end: bool,
 }
 
 /// `POST /runs/{run_id}/nodes/{node_id}/wait-user` — the declared wait (#588 /
@@ -18558,13 +18923,29 @@ async fn node_wait_user(
 ) -> Response {
     let Json(body) = body.unwrap_or_default();
     let iter = body.iter.unwrap_or(1);
+    let (cause, options) = if body.turn_end {
+        (
+            event_log::AWAITING_CAUSE_TURN_ENDED,
+            declared_wait::WaitOptions::default(),
+        )
+    } else {
+        (
+            event_log::AWAITING_CAUSE_DECLARED,
+            declared_wait::WaitOptions::normalized(&body.options, body.multi),
+        )
+    };
     match declared_wait::declare_wait(
         &state,
         &run_id,
         &node_id,
         iter,
-        event_log::AWAITING_CAUSE_DECLARED,
-        body.message.as_deref(),
+        cause,
+        if body.turn_end {
+            None
+        } else {
+            body.message.as_deref()
+        },
+        &options,
         |session| state.node_session_alive(session),
     )
     .await
@@ -18833,6 +19214,48 @@ struct TerminalTextRequest {
 /// paragraphs, never a document.
 const TERMINAL_TEXT_MAX_BYTES: usize = 16 * 1024;
 
+/// Refuse an empty or oversized text, find the node's live session and paste
+/// the text into it with `paste` — the shared body of « Copy and send to
+/// terminal » and « Reply ». Every refusal says nothing was written.
+async fn paste_into_node_session(
+    state: &Arc<AppState>,
+    run_id: &str,
+    node_id: &str,
+    body: &TerminalTextRequest,
+    paste: fn(&str, &str, &str) -> bool,
+) -> Result<declared_wait::LiveSession, Box<Response>> {
+    const NOTHING: &str = "nothing written";
+    if body.text.trim().is_empty() {
+        return Err(Box::new(node_gesture_refusal(
+            StatusCode::BAD_REQUEST,
+            "empty_text",
+            format!("empty text; {NOTHING}"),
+        )));
+    }
+    if body.text.len() > TERMINAL_TEXT_MAX_BYTES {
+        return Err(Box::new(node_gesture_refusal(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "text_too_long",
+            format!("text over {} KB; {NOTHING}", TERMINAL_TEXT_MAX_BYTES / 1024),
+        )));
+    }
+    let live = require_live_node_session(state, run_id, node_id, body.iter, NOTHING).await?;
+    let socket = state.tmux_socket();
+    let session = live.session.clone();
+    let text = body.text.clone();
+    let pasted = tokio::task::spawn_blocking(move || paste(&socket, &session, &text))
+        .await
+        .unwrap_or(false);
+    if !pasted {
+        return Err(Box::new(node_gesture_refusal(
+            StatusCode::BAD_GATEWAY,
+            "paste_failed",
+            format!("tmux refused the paste into {}; {NOTHING}", live.session),
+        )));
+    }
+    Ok(live)
+}
+
 /// `POST /runs/{run_id}/nodes/{node_id}/terminal-text` — write `text` into the
 /// input of a node's live session **without pressing Enter** (#971, « Copy and
 /// send to terminal »). The user completes and submits it themselves: this
@@ -18843,42 +19266,50 @@ async fn node_terminal_text(
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
     Json(body): Json<TerminalTextRequest>,
 ) -> Response {
-    const NOTHING: &str = "nothing written";
-    if body.text.trim().is_empty() {
-        return node_gesture_refusal(
-            StatusCode::BAD_REQUEST,
-            "empty_text",
-            format!("empty text; {NOTHING}"),
-        );
-    }
-    if body.text.len() > TERMINAL_TEXT_MAX_BYTES {
-        return node_gesture_refusal(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "text_too_long",
-            format!("text over {} KB; {NOTHING}", TERMINAL_TEXT_MAX_BYTES / 1024),
-        );
-    }
-    let live = match require_live_node_session(&state, &run_id, &node_id, body.iter, NOTHING).await
+    let live = match paste_into_node_session(
+        &state,
+        &run_id,
+        &node_id,
+        &body,
+        tmux_session_manager::paste_without_enter,
+    )
+    .await
     {
         Ok(live) => live,
         Err(refusal) => return *refusal,
     };
-    let socket = state.tmux_socket();
-    let session = live.session.clone();
-    let text = body.text.clone();
-    let pasted = tokio::task::spawn_blocking(move || {
-        tmux_session_manager::paste_without_enter(&socket, &session, &text)
-    })
-    .await
-    .unwrap_or(false);
-    if !pasted {
-        return node_gesture_refusal(
-            StatusCode::BAD_GATEWAY,
-            "paste_failed",
-            format!("tmux refused the paste into {}; {NOTHING}", live.session),
-        );
-    }
     declared_wait::note_typed_text(&state, &live.session);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "iter": live.iter })),
+    )
+        .into_response()
+}
+
+/// `POST /runs/{run_id}/nodes/{node_id}/reply` — send the user's `text` to the
+/// node's agent **and submit it** (« Reply » in the node panel): the way to
+/// answer an agent without driving its terminal. Verbatim, no runtime prefix —
+/// the turn is the user's. Like the Enter it stands for, it lifts a declared
+/// wait. Same refusals as `terminal-text`. An agent mid-turn queues the reply
+/// as it would a typed message.
+async fn node_reply(
+    State(state): State<Arc<AppState>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    Json(body): Json<TerminalTextRequest>,
+) -> Response {
+    let live = match paste_into_node_session(
+        &state,
+        &run_id,
+        &node_id,
+        &body,
+        tmux_session_manager::paste_user_message,
+    )
+    .await
+    {
+        Ok(live) => live,
+        Err(refusal) => return *refusal,
+    };
+    declared_wait::note_reply_sent(&state, &live.session, &run_id, &node_id, live.iter).await;
     (
         StatusCode::OK,
         Json(serde_json::json!({ "ok": true, "iter": live.iter })),
@@ -25199,6 +25630,8 @@ mod tests {
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            question_answers: std::sync::Mutex::new(std::collections::HashMap::new()),
+            question_holders: std::sync::Mutex::new(std::collections::HashMap::new()),
             shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -30431,6 +30864,8 @@ mod tests {
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            question_answers: std::sync::Mutex::new(std::collections::HashMap::new()),
+            question_holders: std::sync::Mutex::new(std::collections::HashMap::new()),
             shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -34089,6 +34524,7 @@ mod tests {
             1,
             event_log::AWAITING_CAUSE_DECLARED,
             Some("anyone there?"),
+            &declared_wait::WaitOptions::default(),
             |session| {
                 *asked.lock().unwrap() = Some(session.to_string());
                 false
@@ -34115,6 +34551,7 @@ mod tests {
             1,
             event_log::AWAITING_CAUSE_DECLARED,
             Some("anyone there?"),
+            &declared_wait::WaitOptions::default(),
             |_| true,
         )
         .await
@@ -36362,6 +36799,8 @@ mod tests {
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            question_answers: std::sync::Mutex::new(std::collections::HashMap::new()),
+            question_holders: std::sync::Mutex::new(std::collections::HashMap::new()),
             shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -43889,6 +44328,8 @@ edges: []
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            question_answers: std::sync::Mutex::new(std::collections::HashMap::new()),
+            question_holders: std::sync::Mutex::new(std::collections::HashMap::new()),
             shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -44103,6 +44544,8 @@ edges: []
             reaper_killed: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             reaper_killed_for_absent_run: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             pty_typed: std::sync::Mutex::new(std::collections::HashSet::new()),
+            question_answers: std::sync::Mutex::new(std::collections::HashMap::new()),
+            question_holders: std::sync::Mutex::new(std::collections::HashMap::new()),
             shared_terminals: Default::default(),
             panic_on_stale_sweep: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             panic_on_spawn: Arc::new(std::sync::atomic::AtomicBool::new(false)),

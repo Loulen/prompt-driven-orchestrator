@@ -690,12 +690,22 @@ pub struct AwaitingInfo {
     /// The awaiting child run, for the `child_awaiting` overlay only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_run_id: Option<String>,
+    /// The answers the agent offered (`pdo wait-user --option …`), shown as
+    /// choices above « Reply »; empty for every other wait.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// Several of [`Self::options`] may be picked together (`--multi`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi: bool,
 }
 
 /// Cause slugs of [`AwaitingInfo`].
 pub(crate) const AWAITING_CAUSE_DECLARED: &str = "declared";
 pub(crate) const AWAITING_CAUSE_COMPLETION_NOT_RELEASED: &str = "completion_not_released";
 pub(crate) const AWAITING_CAUSE_CHILD_AWAITING: &str = "child_awaiting";
+/// An interactive node's agent ended its turn (« Reply », its `Stop` hook): the
+/// next move is its human's. Never replaces a wait already declared.
+pub(crate) const AWAITING_CAUSE_TURN_ENDED: &str = "turn_ended";
 
 /// The two Run-branch tips one delivery moved between (#654 / ADR-0060).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1613,9 +1623,12 @@ fn declared_wait_cause(payload: Option<&serde_json::Value>) -> Option<&str> {
 /// Does this cause open a declared wait? `children_pending` does not: an
 /// orchestrator parked on `pdo run wait` is working, not waiting on a human
 /// (CONTEXT.md § Durée active). Nor does `child_awaiting`, which is derived at
-/// read and never written to the log.
+/// read and never written to the log. `turn_ended` does (ADR-0081): an
+/// interactive node's agent handed its turn back, the time is its human's.
 fn opens_declared_wait(cause: &str) -> bool {
-    cause == AWAITING_CAUSE_DECLARED || cause == AWAITING_CAUSE_COMPLETION_NOT_RELEASED
+    cause == AWAITING_CAUSE_DECLARED
+        || cause == AWAITING_CAUSE_COMPLETION_NOT_RELEASED
+        || cause == AWAITING_CAUSE_TURN_ENDED
 }
 
 fn wait_millis(opened_at: &str, closed_at: &str) -> Option<f64> {
@@ -2587,11 +2600,26 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         .and_then(|v| v.as_str())
                         .filter(|s| !s.trim().is_empty())
                         .map(str::to_string);
+                    let options = payload
+                        .and_then(|p| p.get("options"))
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|o| o.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let multi = payload
+                        .and_then(|p| p.get("multi"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     node.awaiting = Some(AwaitingInfo {
                         cause,
                         message,
                         since: event.ts.clone(),
                         child_run_id: None,
+                        options,
+                        multi,
                     });
                 }
             }
@@ -8449,6 +8477,18 @@ mod tests {
                 at(EventKind::NodeCompleted, 1, 10),
             ]);
             assert_eq!(waited(&node, 1), 6 * MINUTE);
+        }
+
+        /// ADR-0081: an interactive node's turn handed back is its human's time.
+        #[test]
+        fn a_turn_ended_wait_counts_until_the_reply() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 3, AWAITING_CAUSE_TURN_ENDED),
+                at(EventKind::NodeResumed, 1, 7),
+                at(EventKind::NodeCompleted, 1, 9),
+            ]);
+            assert_eq!(waited(&node, 1), 4 * MINUTE);
         }
 
         #[test]

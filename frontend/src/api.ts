@@ -1037,6 +1037,89 @@ export function sendTextToNodeTerminal(
   );
 }
 
+/** Send the user's reply to the node's agent **and submit it** (« Reply » in the
+ *  node panel). Lifts a declared wait, like the Enter it stands for. */
+export function sendNodeReply(
+  runId: string,
+  nodeId: string,
+  iter: number,
+  text: string,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/reply`,
+    { body: { iter, text }, label: "Reply" },
+  );
+}
+
+/** One entry of a node's conversation, read from its transcript (« Reply »'s
+ *  Conversation view). */
+export type ConversationEntry =
+  | { kind: "brief"; text: string }
+  | { kind: "user"; text: string; ts: string | null; runtime: boolean }
+  | { kind: "agent"; text: string; ts: string | null }
+  | {
+      kind: "activity";
+      steps: { tool: string; detail: string | null }[];
+      ts: string | null;
+    }
+  | {
+      /** The agent's own question tool, answerable from the panel while
+       *  `answered` is false. */
+      kind: "question";
+      tool_use_id: string;
+      questions: AgentQuestion[];
+      answered: boolean;
+      answers: Record<string, string> | null;
+      ts: string | null;
+      /** A PDO hook holds the question: the panel's answer reaches the agent.
+       *  `false`: it waits in the terminal menu (a session without the hook). */
+      held?: boolean;
+    };
+
+export interface AgentQuestion {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options?: { label: string; description?: string }[];
+}
+
+export interface NodeConversation {
+  iter: number;
+  harness: string;
+  /** `false`: PDO has no transcript reader for this harness — show the terminal. */
+  supported: boolean;
+  entries: ConversationEntry[];
+}
+
+export function fetchNodeConversation(
+  runId: string,
+  nodeId: string,
+  iter: number,
+): Promise<NodeConversation> {
+  return request<NodeConversation>(
+    "GET",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/conversation`,
+    { query: { iter } },
+  );
+}
+
+/** Answer the agent's own question tool from the panel: question → answer
+ *  (picked labels comma-separated, or the user's own words). */
+export function answerNodeQuestion(
+  runId: string,
+  nodeId: string,
+  iter: number,
+  toolUseId: string,
+  answers: Record<string, string>,
+): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(
+    "POST",
+    `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/questions/${encodeURIComponent(toolUseId)}/answer`,
+    { body: { iter, answers }, label: "Answer" },
+  );
+}
+
 export function fetchPipelines(): Promise<PipelineListEntry[]> {
   return request<PipelineListEntry[]>("GET", "/pipelines");
 }

@@ -532,6 +532,8 @@ const INSPECTOR_TAB_RUN = testId("inspector-tab-run");
 /** The inspector's Config tab: on a Run followed in « pilotage », the Edit tab is gone (ADR-0080). */
 const INSPECTOR_TAB_CONFIG = testId("inspector-tab-config");
 const TERMINAL = testId("tmux-terminal");
+/** An agent node opens on its conversation; this tab switches to its terminal. */
+const VIEW_TERMINAL = testId("node-view-terminal");
 /** A finished node's terminal opens folded to this bar, to leave room for its outputs. */
 const TERMINAL_RESTORE = testId("term-restore");
 /** The Runs tab, and it is the one showing. */
@@ -822,13 +824,17 @@ const STEPS: TourStep[] = [
       if (o.present(TERMINAL)) {
         return "Every node runs in its own terminal; this one is frozen on the lines the script printed. While a node runs it is live and interactive — you talk to the harness there, and First run shows you how.";
       }
-      return onConfigTab(o)
-        ? "Click the Run tab: every node runs in its own terminal, and it is shown there."
+      if (onConfigTab(o)) {
+        return "Click the Run tab: every node runs in its own terminal, and it is shown there.";
+      }
+      return o.present(VIEW_TERMINAL)
+        ? "Click Terminal: an agent node opens on its conversation, and its terminal is one tab away."
         : "Click Terminal to unfold it. Every node runs in its own terminal; a finished node's is folded to leave room for its outputs.";
     },
     target: (o) => {
       if (o.present(TERMINAL)) return [TERMINAL];
       if (onConfigTab(o)) return [INSPECTOR_TAB_RUN];
+      if (o.present(VIEW_TERMINAL)) return [VIEW_TERMINAL];
       return o.present(TERMINAL_RESTORE) ? [TERMINAL_RESTORE] : [TERMINAL];
     },
     waitingFor: "the node's terminal",

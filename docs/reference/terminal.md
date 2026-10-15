@@ -47,3 +47,9 @@ A node with a live session (running or waiting for you) can receive files from y
 The import is refused, and nothing is written, when the node has no live session or when the files exceed `max_attachments_mb` (Settings, 50 MB by default, counted per import). Behind a reverse proxy, the proxy's own body limit (nginx `client_max_body_size`) must allow the same size (see [reverse-proxy.md](reverse-proxy.md)).
 
 API: `POST /runs/<run-id>/nodes/<node-id>/attachments` (multipart, `files` parts) and `POST /runs/<run-id>/nodes/<node-id>/terminal-text` (`{"text": "…"}`, pasted without Enter).
+
+## Reply without the terminal
+
+The node panel's **Reply** box sends a message to the agent **and submits it**, as your own turn: it reaches the agent like a message typed in its terminal, and lifts a wait like your Enter. It goes through the daemon, not the terminal, so a browser that only watches the terminal can reply without taking control. An agent in the middle of a turn reads it once it is done. Ctrl+Enter sends.
+
+API: `POST /runs/<run-id>/nodes/<node-id>/reply` (`{"text": "…"}`, pasted and submitted), `GET /runs/<run-id>/nodes/<node-id>/conversation` (the conversation the panel shows), `POST /runs/<run-id>/nodes/<node-id>/questions/<tool-use-id>/answer` (`{"answers": {"<question>": "<answer>"}}`, refused with `question_not_held` when no PDO hook holds that question).

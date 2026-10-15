@@ -12,6 +12,8 @@
 //! - the orchestrator binding marker (ADR-0064) keeps its own `children_pending`.
 //! - **Out**: an Enter key that crossed the UI's PTY bridge after at least one
 //!   typed byte since the declaration ([`note_pty_input`]) appends `NodeResumed`;
+//!   so does a reply sent from the node panel ([`note_reply_sent`]) — the
+//!   user's words submitted on their gesture, the Enter it stands for;
 //!   the completion release (ADR-0068) keeps its own event. Arrow keys, scroll,
 //!   mouse reports and the runtime's own `paste_text` never lift a wait — the
 //!   first two are escape sequences, the last never crosses the bridge.
@@ -23,6 +25,7 @@ use tracing::{info, warn};
 
 use crate::event_log::{
     self, NodeStatus, AWAITING_CAUSE_COMPLETION_NOT_RELEASED, AWAITING_CAUSE_DECLARED,
+    AWAITING_CAUSE_TURN_ENDED,
 };
 use crate::{append_event, load_events, tmux_session_manager, AppState};
 
@@ -41,6 +44,37 @@ pub(crate) fn truncate_message(raw: &str) -> String {
     let mut out: String = one_line.chars().take(MESSAGE_MAX_CHARS - 1).collect();
     out.push('…');
     out
+}
+
+/// At most this many answers per wait: choices, not a form.
+pub(crate) const MAX_OPTIONS: usize = 8;
+
+/// The answers a declared wait offers its user (`pdo wait-user --option …`), shown
+/// as choices above « Reply »; a click sends the chosen label as the reply.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct WaitOptions {
+    pub(crate) options: Vec<String>,
+    /// Several answers may be picked together.
+    pub(crate) multi: bool,
+}
+
+impl WaitOptions {
+    /// One line each, capped like the message, empties and repeats dropped, at
+    /// most [`MAX_OPTIONS`]. `multi` means nothing without options.
+    pub(crate) fn normalized(options: &[String], multi: bool) -> Self {
+        let mut out: Vec<String> = Vec::new();
+        for o in options {
+            let o = truncate_message(o);
+            if !o.is_empty() && !out.contains(&o) && out.len() < MAX_OPTIONS {
+                out.push(o);
+            }
+        }
+        let multi = multi && !out.is_empty();
+        Self {
+            options: out,
+            multi,
+        }
+    }
 }
 
 /// The daemon's sentence when a refused `pdo complete` declares the wait. The
@@ -179,9 +213,12 @@ pub(crate) async fn check_live_session(
 }
 
 /// Declare the wait of `(run, node, iter)`. Appends one `NodeAwaitingUser` with
-/// `{cause, message}` unless the node already awaits on exactly that, and
-/// forgets any keystroke typed before the declaration (the Enter rule counts
-/// from here).
+/// `{cause, message, options, multi}` unless the node already awaits on exactly
+/// that, and forgets any keystroke typed before the declaration (the Enter rule
+/// counts from here). A `turn_ended` wait never replaces one already declared:
+/// the agent's own question, or a refused completion, says more than « its turn
+/// ended ».
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn declare_wait(
     state: &Arc<AppState>,
     run_id: &str,
@@ -189,6 +226,7 @@ pub(crate) async fn declare_wait(
     iter: i64,
     cause: &str,
     message: Option<&str>,
+    options: &WaitOptions,
     session_alive: impl FnOnce(&str) -> bool,
 ) -> Result<DeclareOutcome, WaitRefusal> {
     let live = check_live_session(state, run_id, node_id, Some(iter), session_alive).await?;
@@ -211,9 +249,16 @@ pub(crate) async fn declare_wait(
         })
         .filter(|m| !m.is_empty());
     let already = node.status == NodeStatus::AwaitingUser;
+    if already && cause == AWAITING_CAUSE_TURN_ENDED {
+        return Ok(DeclareOutcome::Noop);
+    }
     if already {
         if let Some(current) = node.awaiting.as_ref() {
-            if current.cause == cause && current.message == message {
+            if current.cause == cause
+                && current.message == message
+                && current.options == options.options
+                && current.multi == options.multi
+            {
                 return Ok(DeclareOutcome::Noop);
             }
         }
@@ -222,6 +267,12 @@ pub(crate) async fn declare_wait(
     let mut payload = serde_json::json!({ "cause": cause });
     if let Some(m) = &message {
         payload["message"] = serde_json::json!(m);
+    }
+    if !options.options.is_empty() {
+        payload["options"] = serde_json::json!(options.options);
+    }
+    if options.multi {
+        payload["multi"] = serde_json::json!(true);
     }
     let event = event_log::Event {
         id: None,
@@ -267,6 +318,7 @@ pub(crate) async fn declare_completion_not_released(
         iter,
         AWAITING_CAUSE_COMPLETION_NOT_RELEASED,
         Some(COMPLETION_NOT_RELEASED_MESSAGE),
+        &WaitOptions::default(),
         |session| state.node_session_alive(session),
     )
     .await
@@ -361,7 +413,29 @@ pub(crate) async fn note_pty_input(state: &Arc<AppState>, session_name: &str, by
     if !lift {
         return;
     }
-    if let Err(e) = lift_wait(state, &run_id, &node_id, iter).await {
+    if let Err(e) = lift_wait(state, &run_id, &node_id, iter, RESUME_SOURCE_PTY_ENTER).await {
+        warn!("Run {run_id}: failed to lift the wait of {node_id} iter-{iter}: {e}");
+    }
+}
+
+/// `NodeResumed.payload.source` of an Enter that crossed the PTY bridge.
+pub(crate) const RESUME_SOURCE_PTY_ENTER: &str = "pty_enter";
+/// `NodeResumed.payload.source` of a reply sent from the node panel: the
+/// runtime pasted it, but the words and the gesture are the user's, so it lifts
+/// the wait like the Enter it stands for.
+pub(crate) const RESUME_SOURCE_REPLY: &str = "reply";
+
+/// A reply sent from the node panel was submitted to the agent: it consumes any
+/// half-typed terminal input as a message would, then lifts the wait.
+pub(crate) async fn note_reply_sent(
+    state: &Arc<AppState>,
+    session_name: &str,
+    run_id: &str,
+    node_id: &str,
+    iter: i64,
+) {
+    state.pty_typed.lock().unwrap().remove(session_name);
+    if let Err(e) = lift_wait(state, run_id, node_id, iter, RESUME_SOURCE_REPLY).await {
         warn!("Run {run_id}: failed to lift the wait of {node_id} iter-{iter}: {e}");
     }
 }
@@ -384,6 +458,7 @@ pub(crate) async fn lift_wait(
     run_id: &str,
     node_id: &str,
     iter: i64,
+    source: &str,
 ) -> anyhow::Result<bool> {
     let events = load_events(&state.db, run_id).await?;
     let Some(run_state) = event_log::project(&events) else {
@@ -396,7 +471,9 @@ pub(crate) async fn lift_wait(
         return Ok(false);
     }
     let liftable = node.awaiting.as_ref().is_none_or(|a| {
-        a.cause == AWAITING_CAUSE_DECLARED || a.cause == AWAITING_CAUSE_COMPLETION_NOT_RELEASED
+        a.cause == AWAITING_CAUSE_DECLARED
+            || a.cause == AWAITING_CAUSE_COMPLETION_NOT_RELEASED
+            || a.cause == AWAITING_CAUSE_TURN_ENDED
     });
     if !liftable {
         return Ok(false);
@@ -408,10 +485,10 @@ pub(crate) async fn lift_wait(
         kind: event_log::EventKind::NodeResumed,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
-        payload: Some(serde_json::json!({ "source": "pty_enter" })),
+        payload: Some(serde_json::json!({ "source": source })),
     };
     append_event(state, &event).await?;
-    info!("Run {run_id}: node {node_id} iter-{iter} resumed on the user's Enter");
+    info!("Run {run_id}: node {node_id} iter-{iter} resumed by the user ({source})");
     Ok(true)
 }
 

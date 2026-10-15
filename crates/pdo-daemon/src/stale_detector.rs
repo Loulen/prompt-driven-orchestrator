@@ -313,6 +313,234 @@ pub(crate) fn parse_turn_state(tail: &str) -> TurnState {
     }
 }
 
+/// One entry of a node's conversation as the panel's Conversation view shows it
+/// (« Reply »): PDO's instructions, the user's and the agent's messages, and the
+/// agent's tool calls grouped between them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ConversationEntry {
+    /// The node's first prompt — PDO's runtime preamble and the node's prompt.
+    Brief {
+        text: String,
+    },
+    /// A prompt typed by the user, or sent by PDO itself (`runtime`, the
+    /// `[pdo-runtime]` prefix of #792).
+    User {
+        text: String,
+        ts: Option<String>,
+        runtime: bool,
+    },
+    Agent {
+        text: String,
+        ts: Option<String>,
+    },
+    /// Consecutive tool calls, between two messages.
+    Activity {
+        steps: Vec<ActivityStep>,
+        ts: Option<String>,
+    },
+    /// The agent's own question tool (`AskUserQuestion`): its questions as the
+    /// tool received them (`question`, `header`, `options[{label,
+    /// description}]`, `multiSelect`), answerable from the panel while
+    /// `answered` is false (ADR-0081). `answers` (question → answer) once the
+    /// tool returned, when its result carries them.
+    Question {
+        tool_use_id: String,
+        questions: serde_json::Value,
+        answered: bool,
+        answers: Option<serde_json::Value>,
+        ts: Option<String>,
+    },
+}
+
+/// One tool call: its name and a one-line « what » (a path, a command's
+/// description, a pattern), when the input carries one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct ActivityStep {
+    pub(crate) tool: String,
+    pub(crate) detail: Option<String>,
+}
+
+/// The one-line « what » of a `claude` tool call, or `None`.
+fn tool_detail(name: &str, input: &serde_json::Value) -> Option<String> {
+    let field = |k: &str| input.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    let detail = match name {
+        "Bash" => field("description").or_else(|| field("command")),
+        "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
+            field("file_path").or_else(|| field("notebook_path"))
+        }
+        "Grep" | "Glob" => field("pattern"),
+        "WebFetch" => field("url"),
+        "WebSearch" => field("query"),
+        "Task" | "Agent" => field("description"),
+        "Skill" => field("skill"),
+        _ => None,
+    }?;
+    let one_line = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out: String = one_line.chars().take(160).collect();
+    if one_line.chars().count() > 160 {
+        out.push('…');
+    }
+    Some(out)
+}
+
+/// The conversation of a `claude` transcript `text`, oldest first. Subagent
+/// records (`isSidechain`) and Claude Code's own meta records are skipped, so
+/// are tool results and thinking: the view is what the user and the agent said,
+/// and what the agent did in between. Records cut by a tail read are skipped.
+pub(crate) fn parse_conversation(text: &str) -> Vec<ConversationEntry> {
+    let mut entries: Vec<ConversationEntry> = Vec::new();
+    for line in text.lines() {
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
+            continue;
+        };
+        let flag = |k: &str| record.get(k).and_then(|v| v.as_bool()) == Some(true);
+        if flag("isSidechain") || flag("isMeta") {
+            continue;
+        }
+        let Some(message) = record.get("message") else {
+            continue;
+        };
+        let ts = record
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let content = message.get("content");
+        match message.get("role").and_then(|r| r.as_str()) {
+            Some("user") => {
+                // A tool result closes the question it answers.
+                for block in content.and_then(|c| c.as_array()).into_iter().flatten() {
+                    if block.get("type").and_then(|t| t.as_str()) != Some("tool_result") {
+                        continue;
+                    }
+                    let id = block.get("tool_use_id").and_then(|v| v.as_str());
+                    for entry in entries.iter_mut() {
+                        if let ConversationEntry::Question {
+                            tool_use_id,
+                            answered,
+                            answers,
+                            ..
+                        } = entry
+                        {
+                            if Some(tool_use_id.as_str()) == id {
+                                *answered = true;
+                                *answers = record
+                                    .pointer("/toolUseResult/answers")
+                                    .filter(|a| a.is_object())
+                                    .cloned();
+                            }
+                        }
+                    }
+                }
+                let text = match content {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(serde_json::Value::Array(blocks)) => blocks
+                        .iter()
+                        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+                        .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n\n"),
+                    _ => String::new(),
+                };
+                let text = text.trim();
+                // Claude Code's slash-command echoes are not the user's words.
+                if text.is_empty()
+                    || text.starts_with("<command-")
+                    || text.starts_with("<local-command")
+                {
+                    continue;
+                }
+                let is_first_prompt = !entries.iter().any(|e| {
+                    matches!(
+                        e,
+                        ConversationEntry::Brief { .. } | ConversationEntry::User { .. }
+                    )
+                });
+                if is_first_prompt && text.contains("Runtime Preamble") {
+                    entries.push(ConversationEntry::Brief {
+                        text: text.to_string(),
+                    });
+                    continue;
+                }
+                entries.push(ConversationEntry::User {
+                    runtime: text.starts_with(crate::steering::RUNTIME_PREFIX),
+                    text: text.to_string(),
+                    ts,
+                });
+            }
+            Some("assistant") => {
+                for block in content.and_then(|c| c.as_array()).into_iter().flatten() {
+                    match block.get("type").and_then(|t| t.as_str()) {
+                        Some("text") => {
+                            let text = block.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                            if !text.trim().is_empty() {
+                                entries.push(ConversationEntry::Agent {
+                                    text: text.trim().to_string(),
+                                    ts: ts.clone(),
+                                });
+                            }
+                        }
+                        Some("tool_use")
+                            if block.get("name").and_then(|n| n.as_str())
+                                == Some("AskUserQuestion") =>
+                        {
+                            entries.push(ConversationEntry::Question {
+                                tool_use_id: block
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                questions: block
+                                    .pointer("/input/questions")
+                                    .cloned()
+                                    .unwrap_or_else(|| serde_json::json!([])),
+                                answered: false,
+                                answers: None,
+                                ts: ts.clone(),
+                            });
+                        }
+                        Some("tool_use") => {
+                            let tool = block
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("tool")
+                                .to_string();
+                            let detail = block
+                                .get("input")
+                                .and_then(|input| tool_detail(&tool, input));
+                            let step = ActivityStep { tool, detail };
+                            match entries.last_mut() {
+                                Some(ConversationEntry::Activity { steps, .. }) => steps.push(step),
+                                _ => entries.push(ConversationEntry::Activity {
+                                    steps: vec![step],
+                                    ts: ts.clone(),
+                                }),
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    entries
+}
+
+/// Read at most the last `max` bytes of a transcript, lossily decoded: the
+/// Conversation view reads far more than the sweep's tail, and still bounds it.
+pub fn read_transcript_bytes(path: &Path, max: u64) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(max);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start)).ok()?;
+    }
+    let mut buf = Vec::with_capacity((len - start) as usize);
+    file.take(max).read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// Whether the transcript has been quiet long enough for a constated end of turn
 /// to be acted on (#469 §2 anti-bounce). See [`TURN_END_QUIET_PERIOD`] for why
 /// the mtime survives *only* in this role.
@@ -874,6 +1102,125 @@ pub fn running_nodes(run_state: &event_log::RunState) -> Vec<(String, i64)> {
 mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn the_conversation_groups_tools_between_messages_and_folds_the_brief() {
+        let rec = |v: serde_json::Value| v.to_string();
+        let text = [
+            rec(serde_json::json!({"message": {"role": "user", "content": "# PDO Runtime Preamble\n\nYou are node X"}})),
+            rec(serde_json::json!({"timestamp": "t1", "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "Reading the repo."},
+                {"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "ls -la", "description": "List files"}}
+            ]}})),
+            rec(serde_json::json!({"message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a"}]}})),
+            rec(serde_json::json!({"message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "b", "name": "Read", "input": {"file_path": "/w/README.md"}},
+                {"type": "tool_use", "id": "c", "name": "TodoWrite", "input": {}}
+            ]}})),
+            rec(serde_json::json!({"isMeta": true, "message": {"role": "user", "content": "Caveat: …"}})),
+            rec(serde_json::json!({"isSidechain": true, "message": {"role": "assistant", "content": [{"type": "text", "text": "sub"}]}})),
+            rec(serde_json::json!({"timestamp": "t2", "message": {"role": "assistant", "content": [{"type": "text", "text": "Three questions:"}]}})),
+            rec(serde_json::json!({"timestamp": "t3", "message": {"role": "user", "content": "A web app"}})),
+            rec(serde_json::json!({"message": {"role": "user", "content": "[pdo-runtime] your output is missing frontmatter"}})),
+        ]
+        .join("\n");
+        let got = parse_conversation(&text);
+        assert_eq!(
+            got,
+            vec![
+                ConversationEntry::Brief {
+                    text: "# PDO Runtime Preamble\n\nYou are node X".into()
+                },
+                ConversationEntry::Agent {
+                    text: "Reading the repo.".into(),
+                    ts: Some("t1".into())
+                },
+                ConversationEntry::Activity {
+                    steps: vec![
+                        ActivityStep {
+                            tool: "Bash".into(),
+                            detail: Some("List files".into())
+                        },
+                        ActivityStep {
+                            tool: "Read".into(),
+                            detail: Some("/w/README.md".into())
+                        },
+                        ActivityStep {
+                            tool: "TodoWrite".into(),
+                            detail: None
+                        },
+                    ],
+                    ts: Some("t1".into())
+                },
+                ConversationEntry::Agent {
+                    text: "Three questions:".into(),
+                    ts: Some("t2".into())
+                },
+                ConversationEntry::User {
+                    text: "A web app".into(),
+                    ts: Some("t3".into()),
+                    runtime: false
+                },
+                ConversationEntry::User {
+                    text: "[pdo-runtime] your output is missing frontmatter".into(),
+                    ts: None,
+                    runtime: true
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn the_agents_own_question_is_an_entry_closed_by_its_result() {
+        let rec = |v: serde_json::Value| v.to_string();
+        let questions = serde_json::json!([{
+            "question": "What kind of product is it?",
+            "header": "Product",
+            "multiSelect": false,
+            "options": [{"label": "Web app", "description": "In a browser"}]
+        }]);
+        let asked = [
+            rec(serde_json::json!({"message": {"role": "user", "content": "start"}})),
+            rec(serde_json::json!({"message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "q1", "name": "AskUserQuestion", "input": {"questions": questions}}
+            ]}})),
+        ]
+        .join("\n");
+        let got = parse_conversation(&asked);
+        assert_eq!(
+            got[1],
+            ConversationEntry::Question {
+                tool_use_id: "q1".into(),
+                questions: questions.clone(),
+                answered: false,
+                answers: None,
+                ts: None
+            }
+        );
+
+        let answered = format!(
+            "{asked}\n{}",
+            rec(serde_json::json!({
+                "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "q1", "content": "User has answered"}
+                ]},
+                "toolUseResult": {"questions": questions, "answers": {"What kind of product is it?": "Web app"}}
+            }))
+        );
+        let got = parse_conversation(&answered);
+        assert_eq!(got.len(), 2, "a tool result is no message: {got:?}");
+        let ConversationEntry::Question {
+            answered, answers, ..
+        } = &got[1]
+        else {
+            panic!("{got:?}")
+        };
+        assert!(*answered);
+        assert_eq!(
+            answers.as_ref().unwrap()["What kind of product is it?"],
+            "Web app"
+        );
+    }
 
     // --- detect_usage_limit / strip_ansi (#290) ---
 

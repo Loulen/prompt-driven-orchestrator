@@ -86,6 +86,7 @@ const NODE_ID = "assistant";
 const NODE_CARD = `.react-flow__node[data-id="${NODE_ID}"]`;
 const INSPECTOR_RUN = t("inspector-pane-run");
 const TERMINAL = t("tmux-terminal");
+const VIEW_TERMINAL = t("node-view-terminal");
 const RELEASE = t("release-completion-btn");
 const OUT_ROW = `${t("port-row")}[data-kind="output"][data-port="out"]`;
 const OUT_MODAL = `${t("artifact-modal")}[data-port="out"]`;
@@ -1261,6 +1262,19 @@ describe("the definition holds the copy rules", () => {
       re.test(stepBody(s, fake.obs())) || re.test(s.title);
     expect(STEPS.some((s) => says(s, /\bStart\b/))).toBe(false);
     expect(stepBody(stepById("talk-to-agent"), fake.obs())).toContain("terminal");
+  });
+
+  /** The inspector opens on the node's conversation; the agent's first question
+   *  (trust this folder?) only shows in its terminal, one tab away. */
+  it("points at the Terminal tab first when the inspector shows the conversation", () => {
+    const fake = new FakeApp();
+    const step = stepById("talk-to-agent");
+    fake.show(VIEW_TERMINAL);
+    expect(step.target(fake.obs())).toEqual([VIEW_TERMINAL]);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click Terminal/);
+    fake.show(TERMINAL);
+    expect(step.target(fake.obs())).toEqual([TERMINAL]);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click in the terminal and paste the line/);
   });
 
   /** Every reading step is optional: a reader who already knows this half should

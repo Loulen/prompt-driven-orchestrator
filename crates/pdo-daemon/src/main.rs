@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use pdo_daemon::{
-    run_complete, run_daemon, run_docs, run_fail, run_migrate, run_page, run_reap, run_review,
-    run_run_create, run_run_wait, run_service, run_skip, run_wait_user, Cli, Commands, RunAction,
+    run_ask_user, run_complete, run_daemon, run_docs, run_fail, run_migrate, run_page, run_reap,
+    run_review, run_run_create, run_run_wait, run_service, run_skip, run_wait_user, Cli, Commands,
+    RunAction,
 };
 use std::process::ExitCode;
 
@@ -21,8 +22,17 @@ fn main() -> ExitCode {
     }
     // `wait-user` shares the `3` (refused, still your turn) of that contract, and
     // `run wait` owns the `2` (timeout, not a failure) — see ADR-0069.
-    if let Commands::WaitUser { message } = cli.command {
-        return run_wait_user(message);
+    if let Commands::AskUser = cli.command {
+        return run_ask_user();
+    }
+    if let Commands::WaitUser {
+        message,
+        options,
+        multi,
+        turn_end,
+    } = cli.command
+    {
+        return run_wait_user(message, options, multi, turn_end);
     }
     if let Commands::Run { action } = &cli.command {
         if let RunAction::Wait { all, timeout } = **action {
@@ -48,8 +58,8 @@ fn main() -> ExitCode {
                 .context("failed to build tokio runtime")
                 .and_then(|rt| rt.block_on(run_daemon(bind, port)))
         }
-        Commands::Complete { .. } | Commands::WaitUser { .. } => {
-            unreachable!("`complete` and `wait-user` return their own ExitCode")
+        Commands::Complete { .. } | Commands::WaitUser { .. } | Commands::AskUser => {
+            unreachable!("`complete`, `wait-user` and `ask-user` return their own ExitCode")
         }
         Commands::Fail { reason } => run_fail(reason),
         Commands::Skip { reason } => run_skip(reason),

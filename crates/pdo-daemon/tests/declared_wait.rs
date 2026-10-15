@@ -512,3 +512,299 @@ async fn wait_user_is_refused_when_the_tmux_session_is_gone() {
         "nothing written on refusal"
     );
 }
+
+async fn post_wait_user(
+    daemon: &TestDaemon,
+    run_id: &str,
+    node_id: &str,
+    body: serde_json::Value,
+) -> (u16, serde_json::Value) {
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/runs/{run_id}/nodes/{node_id}/wait-user",
+            daemon.url()
+        ))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap())
+}
+
+async fn reply(daemon: &TestDaemon, run_id: &str, node_id: &str, text: &str) {
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/runs/{run_id}/nodes/{node_id}/reply",
+            daemon.url()
+        ))
+        .json(&serde_json::json!({ "text": text }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+/// « Reply »: an interactive node's claude session carries the turn-end wait hook
+/// even with auto-completion off (the default).
+#[tokio::test]
+async fn an_interactive_node_is_armed_with_the_turn_end_wait_hook() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, PARENT, None).await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+    let settings = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(&run_id)
+        .join("worktree/.pdo/prompts/worker-iter-1.settings.json");
+    let body = std::fs::read_to_string(&settings).expect("the wait hook settings file");
+    assert!(body.contains("pdo wait-user --turn-end"), "{body}");
+    assert!(
+        !body.contains("pdo complete --auto"),
+        "auto-completion is off: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_turn_end_waits_on_the_user_without_replacing_a_declared_question() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, PARENT, None).await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+
+    // The hook's call: the node waits, cause `turn_ended`, no message.
+    let (status, body) = post_wait_user(
+        &daemon,
+        &run_id,
+        "worker",
+        serde_json::json!({ "iter": 1, "turn_end": true }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let run = get_json(&daemon, &format!("/runs/{run_id}")).await;
+    assert_eq!(run["status"], "awaiting_user", "{run}");
+    assert_eq!(run["nodes"]["worker"]["awaiting"]["cause"], "turn_ended");
+    assert!(run["nodes"]["worker"]["awaiting"]["message"].is_null());
+
+    // A reply lifts it like any other wait.
+    reply(&daemon, &run_id, "worker", "A web app for invoices").await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+
+    // The agent asks its own question, then its turn ends: the question stays.
+    let (status, _) = wait_user(&daemon, &run_id, "worker", Some("Strip or card?")).await;
+    assert_eq!(status, 200);
+    let (status, body) = post_wait_user(
+        &daemon,
+        &run_id,
+        "worker",
+        serde_json::json!({ "iter": 1, "turn_end": true }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["noop"], true, "{body}");
+    let run = get_json(&daemon, &format!("/runs/{run_id}")).await;
+    assert_eq!(run["nodes"]["worker"]["awaiting"]["cause"], "declared");
+    assert_eq!(
+        run["nodes"]["worker"]["awaiting"]["message"],
+        "Strip or card?"
+    );
+}
+
+#[tokio::test]
+async fn a_declared_wait_carries_its_options_normalized() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, PARENT, None).await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+
+    let options: Vec<String> = ["PDF invoices", "  ", "Images", "PDF invoices"]
+        .into_iter()
+        .map(str::to_string)
+        .chain((1..=10).map(|i| format!("extra {i}")))
+        .collect();
+    let (status, body) = post_wait_user(
+        &daemon,
+        &run_id,
+        "worker",
+        serde_json::json!({ "iter": 1, "message": "What should v1 accept?", "options": options, "multi": true }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let run = get_json(&daemon, &format!("/runs/{run_id}")).await;
+    let awaiting = &run["nodes"]["worker"]["awaiting"];
+    assert_eq!(awaiting["message"], "What should v1 accept?");
+    assert_eq!(awaiting["multi"], true);
+    let got: Vec<&str> = awaiting["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o.as_str().unwrap())
+        .collect();
+    assert_eq!(got.len(), 8, "capped: {got:?}");
+    assert_eq!(
+        &got[..3],
+        ["PDF invoices", "Images", "extra 1"],
+        "trimmed, deduped: {got:?}"
+    );
+
+    // Without options the wire carries neither field.
+    reply(&daemon, &run_id, "worker", "PDF invoices, Images").await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+    let (status, _) = wait_user(&daemon, &run_id, "worker", Some("Anything else?")).await;
+    assert_eq!(status, 200);
+    let run = get_json(&daemon, &format!("/runs/{run_id}")).await;
+    assert!(
+        run["nodes"]["worker"]["awaiting"].get("options").is_none(),
+        "{run}"
+    );
+    assert!(
+        run["nodes"]["worker"]["awaiting"].get("multi").is_none(),
+        "{run}"
+    );
+}
+
+/// ADR-0081: the agent's own question tool is answered from the panel. The real
+/// `pdo ask-user` hook declares the wait, holds the question, and hands the
+/// panel's answers to the tool as `updatedInput.answers`.
+#[tokio::test]
+async fn ask_user_hands_the_panels_answers_to_the_question_tool() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, PARENT, None).await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+
+    let questions = serde_json::json!([{
+        "question": "What kind of product is it?",
+        "header": "Product",
+        "multiSelect": false,
+        "options": [{"label": "Web app", "description": "In a browser"}]
+    }]);
+    let hook_input = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "AskUserQuestion",
+        "tool_use_id": "toolu_q1",
+        "tool_input": {"questions": questions},
+    });
+    let url = daemon.url();
+    let rid = run_id.clone();
+    let hook = std::thread::spawn(move || {
+        use std::io::Write;
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_pdo"))
+            .arg("ask-user")
+            .env("PDO_DAEMON_URL", url)
+            .env("PDO_RUN_ID", rid)
+            .env("PDO_NODE_ID", "worker")
+            .env("PDO_NODE_ITER", "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(hook_input.to_string().as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    });
+
+    // The hook declared the wait with the first question on the banner.
+    wait_node_status(&daemon, &run_id, "worker", "awaiting_user").await;
+    let run = get_json(&daemon, &format!("/runs/{run_id}")).await;
+    assert_eq!(
+        run["nodes"]["worker"]["awaiting"]["message"],
+        "What kind of product is it?"
+    );
+
+    // An empty answer is refused; a real one is accepted and lifts the wait.
+    let answer = |answers: serde_json::Value| {
+        reqwest::Client::new()
+            .post(format!(
+                "{}/runs/{run_id}/nodes/worker/questions/toolu_q1/answer",
+                daemon.url()
+            ))
+            .json(&serde_json::json!({ "answers": answers }))
+            .send()
+    };
+    let resp = answer(serde_json::json!({ "What kind of product is it?": " " }))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    // The hook checks in on its first poll; until then nobody holds the question.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let resp = answer(serde_json::json!({ "What kind of product is it?": "Web app" }))
+            .await
+            .unwrap();
+        if resp.status() == 200 {
+            break;
+        }
+        assert_eq!(
+            resp.status(),
+            409,
+            "only `question_not_held` may delay the answer"
+        );
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the hook never held the question"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+
+    let out = tokio::task::spawn_blocking(move || hook.join().unwrap())
+        .await
+        .unwrap();
+    assert!(out.status.success());
+    let decision: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let hso = &decision["hookSpecificOutput"];
+    assert_eq!(hso["hookEventName"], "PreToolUse");
+    assert_eq!(hso["permissionDecision"], "allow");
+    assert_eq!(hso["updatedInput"]["questions"], questions);
+    assert_eq!(
+        hso["updatedInput"]["answers"]["What kind of product is it?"],
+        "Web app"
+    );
+}
+
+/// Outside a node session (no identity), the hook decides nothing: Claude's
+/// own menu shows, as it always did.
+#[test]
+fn ask_user_without_a_node_identity_decides_nothing() {
+    use std::io::Write;
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_pdo"))
+        .arg("ask-user")
+        .env_remove("PDO_RUN_ID")
+        .env_remove("PDO_NODE_ID")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"tool_use_id":"x","tool_input":{"questions":[]}}"#)
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    assert!(out.stdout.is_empty());
+}
+
+/// A question no `pdo ask-user` hook holds (a session launched before the hook)
+/// is refused by name: the panel never says « sent » for an answer nobody reads.
+#[tokio::test]
+async fn an_answer_nobody_holds_is_refused() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, PARENT, None).await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/runs/{run_id}/nodes/worker/questions/toolu_old/answer",
+            daemon.url()
+        ))
+        .json(&serde_json::json!({ "answers": { "Strip or card?": "Card" } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 409);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["error"], "question_not_held");
+}

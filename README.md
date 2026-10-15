@@ -124,14 +124,14 @@ Cost, duration and failure rate per model and per node, from your own runs. See 
 
 ### Interactive & orchestrator nodes
 
-An interactive node waits for your answer before it goes on: its agent asks, you reply in its terminal. An orchestrator node launches child runs of pipelines from its own session, so pipelines run pipelines. Children nest under their parent in the run tree.
+An interactive node waits for your answer before it goes on: its agent asks, you reply from its conversation — no terminal needed — or in its terminal. An orchestrator node launches child runs of pipelines from its own session, so pipelines run pipelines. Children nest under their parent in the run tree.
 
 [Docs →](docs/features.md#interactive-and-orchestrator-nodes)
 
 </td>
 <td width="50%">
   <!-- scene: interactive-orchestrator -->
-  <a href="docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/interactive-orchestrator.jpg"><source srcset="docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="docs/assets/readme/interactive-orchestrator.jpg" alt="A node asks a question and waits for you, gets the answer typed in its terminal, then launches two child runs nested under it in the run tree" width="100%" /></picture></a>
+  <a href="docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/interactive-orchestrator.jpg"><source srcset="docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="docs/assets/readme/interactive-orchestrator.jpg" alt="A node asks a question and waits for you, gets the answer clicked in its conversation, then launches two child runs nested under it in the run tree" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

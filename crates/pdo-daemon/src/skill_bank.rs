@@ -1307,8 +1307,8 @@ enforces it, and the honest move is to wait, follow up, or fail loudly.
 /// the conversation, the release / exit-3 flow.
 pub(crate) const INTERACTIVE_SKILL_MD: &str = r#"---
 name: pdo-interactive
-description: Talk with a human inside a PDO node — declare when you wait for them (`pdo wait-user`), keep the conversation open, complete once released.
-skill_version: 2
+description: Talk with a human inside a PDO node — declare when you wait for them (`pdo wait-user`, with clickable options when the answer is a choice), keep the conversation open, complete once released.
+skill_version: 3
 ---
 
 # Talking with a human inside a PDO node
@@ -1332,6 +1332,24 @@ on the banner: that is how the user, who may be elsewhere, learns it is their
 turn. Do not skip it — a node that stays silently « running » while waiting is
 the failure this skill exists to prevent.
 
+## Offer the answers when it is a choice
+
+Your user may not be a developer: when the answer is a pick among a few known
+choices, offer them — PDO shows each as a button, and the user's click reaches
+you as their message:
+
+```bash
+pdo wait-user --message "What should v1 accept?" \
+  --option "PDF invoices" --option "Images" --option "Both" --multi
+```
+
+- Repeat `--option` for each answer, up to 8, each one short. `--multi` lets
+  the user pick several (they arrive comma-separated).
+- The user can always type something else instead: never assume they picked
+  one of your options.
+- Ask one choice per `pdo wait-user`. Several questions at once ⇒ write them
+  in the conversation and declare the wait without options.
+
 ## The banner is a notification, not the message
 
 The banner only tells the user it is their turn; they read your actual message
@@ -1344,9 +1362,9 @@ in the conversation. So:
   call »: they may not have it on screen. If they ask you to repeat something,
   write it again in full.
 
-- The wait **lifts by itself** when the user types an answer in the PDO
-  terminal (their Enter), or when they release your completion. You have
-  nothing to run afterwards — just continue the conversation.
+- The wait **lifts by itself** when the user answers (from the node panel or
+  the PDO terminal), or when they release your completion. You have nothing
+  to run afterwards — just continue the conversation.
 - Ask again later ⇒ declare again. A repeat with the same message is a no-op;
   a new message refreshes the banner.
 - `--message` is optional but always better: a bare `pdo wait-user` shows
@@ -2272,7 +2290,9 @@ mod tests {
         // rewrites it on every instance.
         assert!(on_disk.contains("The banner is a notification, not the message"));
         assert!(on_disk.contains("Never refer the user to « my previous message »"));
-        assert!(on_disk.contains("skill_version: 2"));
+        // « Reply » bumped it again: answers offered as clickable options.
+        assert!(on_disk.contains("--option"));
+        assert!(on_disk.contains("skill_version: 3"));
         // Both are locked against every bank write, like the first seed.
         assert!(is_seeded(SEEDED_SKILL_ID) && is_seeded(INTERACTIVE_SKILL_ID));
         assert!(!is_seeded("tdd"));

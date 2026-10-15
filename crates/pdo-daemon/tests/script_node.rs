@@ -208,6 +208,12 @@ async fn script_node_completes_on_exit_zero() {
         sentinel.exists(),
         "sentinel side-effect should exist at {sentinel:?}"
     );
+
+    // A script node has no agent, so no conversation: the panel shows its terminal.
+    let conversation = daemon
+        .get_json(&format!("/runs/{run_id}/nodes/{NODE_ID}/conversation"))
+        .await;
+    assert_eq!(conversation["supported"], false, "{conversation}");
 }
 
 #[tokio::test]

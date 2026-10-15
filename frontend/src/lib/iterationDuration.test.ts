@@ -105,6 +105,7 @@ describe("iterationDurations (#980)", () => {
   it.each([
     ["declared", true],
     ["completion_not_released", true],
+    ["turn_ended", true],
     ["children_pending", false],
     ["child_awaiting", false],
     [null, false],

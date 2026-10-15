@@ -272,6 +272,9 @@ const TUTORIAL_ENTRY = `${testId("repo-browse-entry")}[data-entry-name="${TUTORI
 /** The Run inspector — the pane the node's terminal, guard and outputs live in. */
 const INSPECTOR_RUN = testId("inspector-pane-run");
 const TERMINAL = testId("tmux-terminal");
+/** The inspector shows a node's conversation by default; this tab switches to
+ *  its terminal, the agent's own session. */
+const VIEW_TERMINAL = testId("node-view-terminal");
 const RELEASE_BUTTON = testId("release-completion-btn");
 const OUT_ROW = `${testId("port-row")}[data-kind="output"][data-port="${TUTORIAL_OUT_PORT}"]`;
 const OUT_MODAL = `${testId("artifact-modal")}[data-port="${TUTORIAL_OUT_PORT}"]`;
@@ -568,8 +571,8 @@ const STEPS: TourStep[] = [
     body: (o) => {
       const name = followedNode(o.app)?.name ?? "agent";
       return inspectorShows(o, followedNode(o.app))
-        ? `The inspector on the right is already showing the ${name} node — opening a Run selects the node it is running. It is the one agent of this pipeline, and that pane is its live terminal.`
-        : `Click the ${name} node. It is the one agent of this pipeline; the inspector on the right shows its live terminal.`;
+        ? `The inspector on the right is already showing the ${name} node — opening a Run selects the node it is running. It is the one agent of this pipeline, and that pane is its live session.`
+        : `Click the ${name} node. It is the one agent of this pipeline; the inspector on the right shows its live session.`;
     },
     target: (o) => nodeSel(followedNode(o.app)),
     waitingFor: "the agent node on the canvas",
@@ -585,8 +588,14 @@ const STEPS: TourStep[] = [
   {
     id: "talk-to-agent",
     title: "Talk to the agent",
-    body: "Click in the terminal and paste the line, then press Enter. This is the agent's own session; if it first asks whether you trust the folder, answer yes.",
-    target: () => [TERMINAL],
+    // The inspector opens on the node's conversation; the folder-trust question
+    // only shows in the terminal, so the step first points at the Terminal tab,
+    // then re-aims at the terminal once it is open.
+    body: (o) =>
+      o.present(TERMINAL) || !o.present(VIEW_TERMINAL)
+        ? "Click in the terminal and paste the line, then press Enter. This is the agent's own session; if it first asks whether you trust the folder, answer yes."
+        : "Click Terminal, above the conversation: the agent's own session is there, and its first question may only show in it.",
+    target: (o) => (!o.present(TERMINAL) && o.present(VIEW_TERMINAL) ? [VIEW_TERMINAL] : [TERMINAL]),
     waitingFor: "the agent's terminal in the Run inspector",
     failureHint: "The terminal is in the Run tab of the inspector, above the buttons.",
     targetTimeoutMs: READING_TIMEOUT_MS,
@@ -603,7 +612,7 @@ const STEPS: TourStep[] = [
     note: '"Mark complete" next to it takes the artifacts as they are, without the agent — not for now.',
     target: () => [RELEASE_BUTTON],
     waitingFor: "the Mark ready for completion button",
-    failureHint: "It only shows while the node is live, under the terminal.",
+    failureHint: "It only shows while the node is live, under the agent's session.",
     targetTimeoutMs: READING_TIMEOUT_MS,
     skippable: true,
     advanceHint: "advances once released",
@@ -632,8 +641,8 @@ const STEPS: TourStep[] = [
     // they can answer from where they are standing.
     note: (o) =>
       endedBadly(followedNode(o.app))
-        ? "The node ended without completing. Its terminal above says why; the tour goes on to the output, which may be missing."
-        : "If the agent asks you something in the terminal above, answer it — the step waits for as long as it takes.",
+        ? "The node ended without completing. Its session above says why; the tour goes on to the output, which may be missing."
+        : "If the agent asks you something above, answer it — the step waits for as long as it takes.",
     // The whole inspector, as a zone rather than a target: during a wait of
     // unknown length the reader must keep the terminal — read it, scroll it,
     // answer a late question. The rest of the app stays blocked.

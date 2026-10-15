@@ -124,14 +124,14 @@ Coût, durée et taux d'échec par modèle et par nœud, tirés de vos propres r
 
 ### Nœuds interactive et orchestrator
 
-Un nœud interactive attend votre réponse avant de continuer : son agent pose la question, vous répondez dans son terminal. Un nœud orchestrator lance des runs enfants de pipelines depuis sa propre session : des pipelines de pipelines. Les enfants se rangent sous leur parent dans l'arbre de runs.
+Un nœud interactive attend votre réponse avant de continuer : son agent pose la question, vous répondez depuis sa conversation — sans terminal — ou dans son terminal. Un nœud orchestrator lance des runs enfants de pipelines depuis sa propre session : des pipelines de pipelines. Les enfants se rangent sous leur parent dans l'arbre de runs.
 
 [Docs →](../../docs/features.md#interactive-and-orchestrator-nodes)
 
 </td>
 <td width="50%">
   <!-- scene: interactive-orchestrator -->
-  <a href="../../docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/interactive-orchestrator.jpg"><source srcset="../../docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="../../docs/assets/readme/interactive-orchestrator.jpg" alt="Un nœud pose une question et vous attend, reçoit la réponse tapée dans son terminal, puis lance deux runs enfants rangés sous lui dans l'arbre de runs" width="100%" /></picture></a>
+  <a href="../../docs/features.md#interactive-and-orchestrator-nodes"><picture><source media="(prefers-reduced-motion: reduce)" srcset="../../docs/assets/readme/interactive-orchestrator.jpg"><source srcset="../../docs/assets/readme/interactive-orchestrator.gif" type="image/gif"><img src="../../docs/assets/readme/interactive-orchestrator.jpg" alt="Un nœud pose une question et vous attend, reçoit la réponse cliquée dans sa conversation, puis lance deux runs enfants rangés sous lui dans l'arbre de runs" width="100%" /></picture></a>
 </td>
 </tr>
 <tr>

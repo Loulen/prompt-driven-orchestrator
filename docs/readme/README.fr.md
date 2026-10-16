@@ -207,6 +207,10 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/Loulen/prompt-driven-or
 
 PDO a besoin de `tmux`, de `git` et d'au moins un harnais d'agent authentifié.
 
+### Installation — Windows
+
+PDO ne tourne pas nativement sous Windows. À titre d'exemple, [docs/recipes/windows-docker.md](../recipes/windows-docker.md) (en anglais) fait tourner PDO avec GitHub Copilot CLI dans un conteneur Docker sous Docker Desktop. Servez-vous-en comme point de départ : il s'adapte à un autre harnais, comme Claude Code, en l'installant dans l'image. Si vous l'essayez ou l'adaptez, partagez vos retours ou votre variante dans une issue ou une pull request ([CONTRIBUTING.md](../../CONTRIBUTING.md)).
+
 ### Démarrer
 
 ```bash

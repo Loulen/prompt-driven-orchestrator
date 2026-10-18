@@ -4,7 +4,7 @@ Sans cet ADR, un agent garderait un assistant `claude` par pipeline, dont la dur
 de l'onglet affiché — jetant la conversation à chaque aller-retour entre deux templates, et laissant
 fuir la session quand le navigateur se recharge.
 
-> Statut : **accepted** (grilling du 2026-08-27, issue #594). **Amende ADR-0048** : ses décisions 1,
+> Statut : **accepted** (grilling du 2026-08-27, issue #594). **Amendé par ADR-0088** : le save de l'assistant s'applique au brouillon partagé, plus au fichier. **Amende ADR-0048** : ses décisions 1,
 > 3 et 4 sont remplacées par celles ci-dessous ; le reste d'ADR-0048 (mécanisme de session,
 > write-on-save, pas de MCP custom) tient. Vocabulaire : CONTEXT.md §*Assistant de bibliothèque*.
 

@@ -6,6 +6,7 @@
 > Amendé par #29 : les Emplacements d'UI deviennent un catalogue nommé, avec Commandes et
 > clauses `when` (§ *Amendement #29*).
 > Amendé par #34 : la ressource d'extension et l'Hôte (§ *Amendement #34*).
+> Amendé par ADR-0087 : le Projet d'un Run est celui enregistré à son lancement.
 > Amendé par #32 : une extension héberge ses propres emplacements, rendus par un module partagé
 > (§ *Amendement #32*).
 > Amendé par #33 : la CLI d'une extension (`pdo ext`) et ses skills (§ *Amendement #33*).
@@ -451,21 +452,20 @@ Projet elle a lieu, et rien ne liste les Ressources sur lesquelles régler des D
 - **Une Opération porte ses Projets** (`Operation::projects`, `Operation::in_projects`) : la liste
   des ids de Projet, vide pour une Opération **hors Projet**. Le core la remplit dans ses use
   cases, au moment de l'Autorisation d'opération :
-  - `run` et `node` : le Projet qui possède le dépôt primaire du Run (`Runs::projects_of_run`) ;
-    une création de Run : le dépôt qu'elle nomme (`target_repo`, sinon `target_repos[0]`), ou,
-    créée depuis une session de node sans dépôt, le Run parent dont elle hérite le dépôt ;
+  - `run` et `node` : le Projet enregistré sur le Run (`Runs::projects_of_run`) ;
+    une création de Run : le Projet qu'elle nomme, ou, créée depuis une session de node, le Run
+    parent dont elle hérite le Projet ;
   - `session` : le Run de la session (node, manager, shell de Run) ; l'assistant de bibliothèque
     est hors Projet ; `node` × `wait_user` / `resume` aussi par le Run ;
   - `review_comment` : le Run de la cible (`<run>` ou `<run>/<commentaire>`) ;
-  - `project` ciblé : ce Projet ; `repository` × `fetch` / `fast_forward` : le Projet qui possède
-    le dépôt ;
+  - `project` ciblé : ce Projet ; `repository` × `fetch` / `fast_forward` : les Projets dont le
+    dépôt est membre ;
   - tout le reste (pipelines, Triggers, réglages, skills, profils, Stats, mise à jour) : hors
     Projet, sauf rattachement explicite à venir.
 
-  Un dépôt appartient à au plus un Projet (ADR-0033), d'où une liste d'au plus un élément pour le
-  core. Les membres d'un Projet se comparent tels qu'écrits ; pour qu'un autre chemin du même
-  dossier (`/repo/`, `/repo/.`, un lien vers `/repo`) ne sorte pas un Run de son Projet, le dépôt
-  d'un Run est essayé tel quel, puis normalisé, puis résolu sur le disque. Une extension la remplit pour ses Ressources (une de ses entités peut appartenir à
+  Un Run porte le Projet choisi à son lancement (ADR-0087), d'où une liste d'au plus un élément
+  pour un Run. Un Run antérieur porte le Projet déduit de son dépôt primaire à la migration
+  (essayé tel quel, puis normalisé, puis résolu sur le disque). Une extension la remplit pour ses Ressources (une de ses entités peut appartenir à
   plusieurs Projets). **Une extension ne recalcule jamais dépôt -> Projet** : elle lit
   `operation.projects`. Une lecture des Projets qui échoue est journalisée et laisse l'Opération
   hors Projet. Sur le fil, l'Opération gagne `"projects": [...]`, dans `/ws` comme dans

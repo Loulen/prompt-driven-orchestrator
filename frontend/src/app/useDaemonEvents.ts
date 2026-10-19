@@ -4,6 +4,7 @@ import { useEditStore } from "../pipeline/store/editStore";
 import { trailingWindow } from "../shared/lib/trailingWindow";
 import { refreshGestureRights } from "../run/store/gestureRightsStore";
 import { announceHarnessCatalogueChanged } from "../harness/store/useHarnessCatalog";
+import { announceLaunchOfferChanged } from "../run/store/useLaunchTargets";
 
 /** What the live stream refreshes. */
 export interface DaemonEventTargets {
@@ -91,6 +92,7 @@ export function useDaemonEvents({
       // deleted): the indicators and the launch forms read it from the list.
       if (msg.type === "pipeline_validation_changed") {
         loadPipelines();
+        announceLaunchOfferChanged();
         return;
       }
       // #348: global pause flip — reflect it live across every client. The
@@ -111,6 +113,7 @@ export function useDaemonEvents({
       // Triggers rows themselves are unchanged, so only the Projet list refetches.
       if (msg.type === "project_changed") {
         refreshProjects();
+        announceLaunchOfferChanged();
         gestures();
         return;
       }

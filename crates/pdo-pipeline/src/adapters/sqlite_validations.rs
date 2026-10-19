@@ -1,8 +1,9 @@
 //! The validations of the pipelines over SQLite: one `pipeline_validation`
 //! row per pipeline that states one (absent ⇒ every Projet), and the Projets
-//! of a `projects` validation in `pipeline_validation_projects`, in the order
-//! given. The same tables the daemon has always written, so an instance keeps
-//! its validations across the update.
+//! of a `projects` validation — or those an `all` validation is listed first
+//! for — in `pipeline_validation_projects`, in the order given. The same
+//! tables the daemon has always written, so an instance keeps its validations
+//! across the update.
 
 use std::collections::HashMap;
 
@@ -75,7 +76,7 @@ impl SqlitePipelineValidations {
 
     async fn write(&self, id: &str, validation: &PipelineValidation) -> Result<(), sqlx::Error> {
         let kind = match validation {
-            PipelineValidation::All => ALL,
+            PipelineValidation::All { .. } => ALL,
             PipelineValidation::None => NONE,
             PipelineValidation::Projects { .. } => PROJECTS,
         };
@@ -146,13 +147,15 @@ impl SqlitePipelineValidations {
 }
 
 /// A row as the domain reads it. A `projects` row whose Projets are all gone
-/// is a test pipeline; a kind this build does not know reads as « every
-/// Projet », like an absent row.
+/// is a test pipeline; an `all` row reads its Projets as the ones it is listed
+/// first for; a kind this build does not know reads as « every Projet », like
+/// an absent row.
 fn from_row(kind: &str, project_ids: Vec<String>) -> PipelineValidation {
     match kind {
         NONE => PipelineValidation::None,
         PROJECTS => PipelineValidation::Projects { project_ids }.normalized(),
-        _ => PipelineValidation::All,
+        ALL => PipelineValidation::All { project_ids }.normalized(),
+        _ => PipelineValidation::all(),
     }
 }
 
@@ -205,10 +208,23 @@ mod tests {
         assert_eq!(all["p"], projects(&["b", "a"]));
         assert_eq!(all["t"], PipelineValidation::None);
 
-        store.put("p", &PipelineValidation::All).await.unwrap();
-        assert_eq!(store.all().await.unwrap()["p"], PipelineValidation::All);
+        store.put("p", &PipelineValidation::all()).await.unwrap();
+        assert_eq!(store.all().await.unwrap()["p"], PipelineValidation::all());
         store.put("p", &projects(&["c"])).await.unwrap();
         assert_eq!(store.all().await.unwrap()["p"], projects(&["c"]));
+    }
+
+    #[tokio::test]
+    async fn every_projet_keeps_the_projets_it_is_listed_first_for() {
+        let store = store().await;
+        let listed = PipelineValidation::All {
+            project_ids: vec!["b".into(), "a".into()],
+        };
+        store.put("p", &listed).await.unwrap();
+        assert_eq!(store.all().await.unwrap()["p"], listed);
+
+        store.put("p", &PipelineValidation::all()).await.unwrap();
+        assert_eq!(store.all().await.unwrap()["p"], PipelineValidation::all());
     }
 
     #[tokio::test]
@@ -237,6 +253,6 @@ mod tests {
         .execute(&store.db)
         .await
         .unwrap();
-        assert_eq!(store.all().await.unwrap()["p"], PipelineValidation::All);
+        assert_eq!(store.all().await.unwrap()["p"], PipelineValidation::all());
     }
 }

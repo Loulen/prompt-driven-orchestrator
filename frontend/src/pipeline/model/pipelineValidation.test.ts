@@ -63,6 +63,26 @@ describe("pipelineValidation", () => {
     expect(ids(noProject.test)).toEqual(["t1"]);
   });
 
+  it("puts a Pipeline validated for all in the Projets it is listed first for", () => {
+    const list = [
+      p("g1"),
+      p("first", { kind: "all", project_ids: ["a"] }),
+      p("pa", { kind: "projects", project_ids: ["a"] }),
+    ];
+    const forAlpha = pipelineSections(list, "a");
+    expect(ids(forAlpha.project)).toEqual(["first", "pa"]);
+    expect(ids(forAlpha.global)).toEqual(["g1"]);
+
+    const forBravo = pipelineSections(list, "b");
+    expect(ids(forBravo.project)).toEqual([]);
+    expect(ids(forBravo.global)).toEqual(["g1", "first"]);
+    expect(ids(pipelineSections(list, null).global)).toEqual(["g1", "first"]);
+
+    expect(isOffered(list[1], "b")).toBe(true);
+    expect(defaultPipeline(forAlpha)?.id).toBe("first");
+    expect(defaultPipeline(forBravo)?.id).toBe("g1");
+  });
+
   it("does not offer a Pipeline validated for other Projets only", () => {
     const pb = p("pb", { kind: "projects", project_ids: ["b"] });
     expect(isOffered(pb, "a")).toBe(false);
@@ -85,10 +105,17 @@ describe("pipelineValidation", () => {
     expect(validationTooltip(s)).toBe("Validated for: Alpha");
     expect(validationTooltip(validationSummary({ kind: "none" }, []))).toMatch(/test pipeline/i);
     expect(validationTooltip(validationSummary({ kind: "all" }, []))).toMatch(/all projects/i);
+
+    const first = validationSummary({ kind: "all", project_ids: ["a", "zz"] }, [alpha]);
+    expect(first).toEqual({ all: true, count: 0, names: ["Alpha"] });
+    expect(validationTooltip(first)).toBe(
+      "Validated for all projects (current and future), listed first for: Alpha",
+    );
   });
 
   it("builds the request from what the modal has ticked", () => {
-    expect(validationFromChoice(true, ["a"])).toEqual({ kind: "all" });
+    expect(validationFromChoice(true, [])).toEqual({ kind: "all" });
+    expect(validationFromChoice(true, ["a"])).toEqual({ kind: "all", project_ids: ["a"] });
     expect(validationFromChoice(false, [])).toEqual({ kind: "none" });
     expect(validationFromChoice(false, ["a", "b"])).toEqual({
       kind: "projects",

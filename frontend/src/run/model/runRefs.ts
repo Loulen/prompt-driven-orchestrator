@@ -262,20 +262,6 @@ export function langOf(path: string | null): string {
   return map[ext] ?? "";
 }
 
-/** Files grouped by directory, in patch order, for the flat-grouped list. */
-export function groupByDir(files: DiffFile[]): { dir: string; files: { file: DiffFile; index: number }[] }[] {
-  const groups: { dir: string; files: { file: DiffFile; index: number }[] }[] = [];
-  files.forEach((file, index) => {
-    const p = filePath(file);
-    const i = p.lastIndexOf("/");
-    const dir = i >= 0 ? p.slice(0, i) : "";
-    const last = groups[groups.length - 1];
-    if (last && last.dir === dir) last.files.push({ file, index });
-    else groups.push({ dir, files: [{ file, index }] });
-  });
-  return groups;
-}
-
 export function baseName(path: string): string {
   const i = path.lastIndexOf("/");
   return i >= 0 ? path.slice(i + 1) : path;

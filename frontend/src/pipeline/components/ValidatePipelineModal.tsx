@@ -3,13 +3,15 @@ import { Globe } from "lucide-react";
 import type { PipelineValidation } from "../../shared/generated/PipelineValidation";
 import type { Project } from "../../workspace/model/project";
 import { setPipelineValidation } from "../api/pipelines";
-import { validationFromChoice } from "../model/pipelineValidation";
+import { projectIdsOf, validationFromChoice } from "../model/pipelineValidation";
 
 /**
  * The Validate modal (CONTEXT.md « Pipeline validé »): Projets to tick, plus « All
- * projects (current and future) ». Unticking everything makes the Pipeline a test
- * Pipeline again. Saves on its own: the validation is data of the instance, not part
- * of the YAML the Save button writes.
+ * projects (current and future) ». Under « All projects » the boxes stay live and
+ * list the Pipeline first for the Projets ticked; otherwise they are the only Projets
+ * it is offered to, and unticking everything makes it a test Pipeline again. Saves on
+ * its own: the validation is data of the instance, not part of the YAML the Save
+ * button writes.
  */
 export default function ValidatePipelineModal({
   open,
@@ -38,7 +40,7 @@ export default function ValidatePipelineModal({
     if (!open) return;
     /* eslint-disable react-hooks/set-state-in-effect -- one-shot seed per open */
     setAll(validation.kind === "all");
-    setTicked(validation.kind === "projects" ? validation.project_ids : []);
+    setTicked(projectIdsOf(validation));
     setError(null);
     setSaving(false);
     /* eslint-enable react-hooks/set-state-in-effect */
@@ -62,7 +64,7 @@ export default function ValidatePipelineModal({
   // cannot see are kept as they are: saving must not withdraw a Projet nobody
   // here could untick.
   const visible = (id: string) => projects.some((p) => p.id === id);
-  const hidden = validation.kind === "projects" ? validation.project_ids.filter((id) => !visible(id)) : [];
+  const hidden = projectIdsOf(validation).filter((id) => !visible(id));
   const chosen = validationFromChoice(all, [...ticked.filter(visible), ...hidden]);
 
   const save = async () => {
@@ -78,9 +80,19 @@ export default function ValidatePipelineModal({
     }
   };
 
+  // Named in the stored order; the Projets the actor cannot see are counted.
+  const firstFor =
+    chosen.kind === "all"
+      ? [
+          ...ticked.flatMap((id) => projects.find((p) => p.id === id)?.name ?? []),
+          ...(hidden.length > 0 ? [`${hidden.length} hidden`] : []),
+        ]
+      : [];
   const verdict =
     chosen.kind === "all"
-      ? "Offered to every project, including the ones created later."
+      ? firstFor.length > 0
+        ? `Offered to every project, listed first for ${firstFor.join(", ")}.`
+        : "Offered to every project, including the ones created later."
       : chosen.kind === "none"
         ? "Nothing ticked: a test pipeline, offered only behind « Show test pipelines »."
         : `Offered to ${chosen.project_ids.length} project${chosen.project_ids.length > 1 ? "s" : ""}.`;
@@ -104,7 +116,8 @@ export default function ValidatePipelineModal({
           Validate <span className="font-mono">{pipelineName}</span>
         </h3>
         <p className="mt-1 shrink-0 text-fg-3">
-          Choose the projects whose New Run and Trigger forms offer this pipeline.
+          Choose the projects whose New Run and Trigger forms offer this pipeline, or list it
+          first.
         </p>
 
         <div className="mt-3 min-h-0 overflow-y-auto rounded-md border border-line bg-bg-1 p-1">
@@ -123,6 +136,16 @@ export default function ValidatePipelineModal({
             <span>All projects (current and future)</span>
           </label>
           <div className="my-1 h-px bg-line" />
+          <p
+            className="px-2 pt-1 pb-0.5 uppercase tracking-wider text-fg-4"
+            data-testid="validate-projects-heading"
+            style={{ fontSize: "9.5px" }}
+          >
+            {all ? "Listed first for" : "Only offered to"}
+            {all && (
+              <span className="normal-case tracking-normal"> · already offered to every project</span>
+            )}
+          </p>
           {projects.length === 0 ? (
             <p className="px-2 py-1.5 text-fg-4" data-testid="validate-no-project" style={{ fontSize: "11px" }}>
               No project yet. Name a repository group in the Runs list to create one.
@@ -131,15 +154,12 @@ export default function ValidatePipelineModal({
             projects.map((project) => (
               <label
                 key={project.id}
-                className={`flex items-center gap-2 rounded px-2 py-1.5 ${
-                  all ? "cursor-not-allowed text-fg-4" : "cursor-pointer text-fg-2 hover:bg-bg-3"
-                }`}
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 hover:bg-bg-3"
               >
                 <input
                   type="checkbox"
-                  // « All » covers every Projet: the boxes read ticked and wait.
-                  checked={all || ticked.includes(project.id)}
-                  disabled={all}
+                  // Under « All », a ticked box lists the Pipeline first for it.
+                  checked={ticked.includes(project.id)}
                   onChange={() => toggle(project.id)}
                   data-testid={`validate-project-${project.id}`}
                   className="accent-acc"

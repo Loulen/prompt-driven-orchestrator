@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.41.0 — Pipeline validé pour tous et mis en tête pour des Projets (CORE-89)
+
+- La validation `all` d'un pipeline accepte une liste de Projets :
+  `{"kind":"all","project_ids":[…]}`. `{"kind":"all"}` reste valide (liste vide), sans
+  migration. Un Projet inconnu est refusé (`400`), un doublon est réduit.
+- Dans New Run, ces Projets voient le pipeline sous « Project pipelines », les autres sous
+  « Global pipelines ». Supprimer un Projet le retire de la liste et laisse le pipeline offert à
+  tous.
+- Modale Validate : sous « All projects », les cases des Projets restent actives (« Listed first
+  for ») ; le verdict tient en une phrase.
+
 ## 2.40.0 — Guide de lecture d'une page montée, Public URL (CORE-83)
 
 - `pdo page mount <name> <directory> --guide <file>` attache un guide de lecture (YAML ou JSON,

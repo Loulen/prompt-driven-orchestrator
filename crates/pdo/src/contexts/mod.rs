@@ -213,7 +213,9 @@ pub(crate) fn wire_over(
 /// The Origin guard of the daemon's WebSocket upgrades, for a context that
 /// does not read the session context.
 fn ws_origin(port: u16, extra: Vec<String>) -> pdo_pipeline::adapters::http::draft::OriginCheck {
-    Arc::new(move |headers| pdo_session::adapters::http::origin::check_origin(headers, port, &extra))
+    Arc::new(move |headers| {
+        pdo_session::adapters::http::origin::check_origin(headers, port, &extra)
+    })
 }
 
 /// The settings context's stores, which the upstream contexts read too.

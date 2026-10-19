@@ -11,6 +11,7 @@ import {
   type Attributes,
 } from "../../../shared/extensions/attributes";
 import type { Project } from "../../../workspace/model/project";
+import { recordedProject } from "../../../workspace/model/projectLookup";
 
 /**
  * The Runs list's tree view: the client-side filters, the run tree split into
@@ -56,14 +57,18 @@ export function useRunTreeView(
       return project !== undefined && matchesAttributes(project.attributes, projectFilter);
     });
   }, [fullTree, projects, projectFilter]);
+  // ADR-0087 — the Projet recorded on a Run: the list's groups and the
+  // filter's Project axis read it alike.
+  const projectOfRun = useMemo(() => recordedProject(projects), [projects]);
   const { activeTree, archivedTree } = useMemo(() => {
     const match = (r: RunListEntry) =>
-      runMatchesFilter(r, runFilter) && matchesAttributes(r.attributes, attributeFilter);
+      runMatchesFilter(r, runFilter, projectOfRun) &&
+      matchesAttributes(r.attributes, attributeFilter);
     return {
       activeTree: filterRunTree(tree.filter((n) => !isInArchivedSection(n.run)), match),
       archivedTree: filterRunTree(tree.filter((n) => isInArchivedSection(n.run)), match),
     };
-  }, [tree, runFilter, attributeFilter]);
+  }, [tree, runFilter, attributeFilter, projectOfRun]);
   const filteredRuns = useMemo(
     () => [...flattenAll(activeTree), ...flattenAll(archivedTree)],
     [activeTree, archivedTree],
@@ -165,6 +170,7 @@ export function useRunTreeView(
   };
 
   return {
+    projectOfRun,
     runFilter,
     setRunFilter,
     attributeFilter,

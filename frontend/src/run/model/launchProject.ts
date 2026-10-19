@@ -63,9 +63,16 @@ export function repoCount(project: Project): string {
   return `${n} repo${n === 1 ? "" : "s"}`;
 }
 
-/** The folder names of a Projet's repositories, as the menu's second line shows them. */
+/**
+ * The folder names of a Projet's repositories, as the menu's second line shows
+ * them: its default primary repository first, the others in their order.
+ */
 export function memberNames(project: Project): string {
-  return project.members
+  const primary = project.primary_repo;
+  const members = primary && project.members.includes(primary)
+    ? [primary, ...project.members.filter((repo) => repo !== primary)]
+    : project.members;
+  return members
     .map((repo) => repo.replace(/\/+$/, "").split("/").pop() || repo)
     .join(" · ");
 }

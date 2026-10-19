@@ -77,4 +77,9 @@ describe("the Projet of a launch (ADR-0087)", () => {
     expect(repoCount({ ...mobile, members: ["/x"] })).toBe("1 repo");
     expect(memberNames(mobile)).toBe("shop-app · design-system");
   });
+
+  it("names the default primary repository first", () => {
+    const sorted = { ...checkout, members: ["/code/design-system", "/code/shop-api", "/code/shop-web"] };
+    expect(memberNames(sorted)).toBe("shop-web · design-system · shop-api");
+  });
 });

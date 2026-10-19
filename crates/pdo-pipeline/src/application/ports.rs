@@ -180,6 +180,8 @@ pub struct StoredDraft {
     pub baseline: DraftContent,
     /// Its changes since `baseline`.
     pub changes: u32,
+    /// The nodes it holds.
+    pub nodes: u32,
 }
 
 /// Where the drafts are kept.
@@ -190,8 +192,8 @@ pub trait DraftStore: Send + Sync {
     fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), String>>;
     /// A rename moved the pipeline `from` to `to`: its draft follows.
     fn carry<'a>(&'a self, from: &'a str, to: &'a str) -> BoxFuture<'a, Result<(), String>>;
-    /// The changes of every kept draft, by pipeline id.
-    fn changes(&self) -> BoxFuture<'_, Result<HashMap<String, u32>, String>>;
+    /// Every kept draft as the list shows it (nobody in it), by pipeline id.
+    fn summaries(&self) -> BoxFuture<'_, Result<HashMap<String, DraftSummary>, String>>;
 }
 
 /// The replicated document of a draft: it merges the changes of every

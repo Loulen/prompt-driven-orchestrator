@@ -40,6 +40,7 @@ pub(super) struct RoomState {
     pub doc: Box<dyn DraftDocument>,
     pub baseline: DraftContent,
     pub changes: u32,
+    pub nodes: u32,
     pub participants: BTreeMap<u64, DraftParticipant>,
 }
 
@@ -114,6 +115,7 @@ impl Room {
         let state = self.lock();
         DraftSummary {
             changes: state.changes,
+            nodes: state.nodes,
             participants: state.participants.values().cloned().collect(),
         }
     }
@@ -210,11 +212,16 @@ impl Room {
     pub(super) fn saved(&self, saved: &DraftContent) {
         let changes = {
             let mut state = self.lock();
-            state.baseline = saved.clone();
+            state.baseline = saved.clone().normalized();
             recount(&mut state);
             state.changes
         };
         self.send(DraftMessage::Status { changes });
+    }
+
+    /// Count the changes and the nodes again.
+    pub(super) fn recount(&self) {
+        recount(&mut self.lock());
     }
 
     pub(super) fn moved(&self, to: &str) {
@@ -241,15 +248,19 @@ impl Room {
                 state: state.doc.encode(),
                 baseline: state.baseline.clone(),
                 changes: state.changes,
+                nodes: state.nodes,
             },
         )
     }
 }
 
-/// Count the changes again; whether they moved.
+/// Count the changes and the nodes again; whether they moved.
 fn recount(state: &mut RoomState) -> bool {
-    let changes = change_count(&state.baseline, &state.doc.content());
-    let moved = changes != state.changes;
+    let content = state.doc.content();
+    let changes = change_count(&state.baseline, &content);
+    let nodes = content.node_count();
+    let moved = changes != state.changes || nodes != state.nodes;
     state.changes = changes;
+    state.nodes = nodes;
     moved
 }

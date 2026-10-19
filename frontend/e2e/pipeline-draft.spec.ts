@@ -114,9 +114,12 @@ test("two browsers share the draft, its presence, and their own undo", async ({ 
   const other = await second(browser);
   await open(other);
 
-  // Each sees the other.
+  // Each sees the other. The file, placed nodes and all, is the draft:
+  // nothing to save.
   await expect(page.getByTestId("draft-presence").getByTestId("draft-participant")).toHaveCount(1);
   await expect(other.getByTestId("draft-presence").getByTestId("draft-participant")).toHaveCount(1);
+  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expect(other.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
 
   // A types a prompt: B sees the text, and who types, without reloading.
   const mine = await promptOf(page, "alpha");
@@ -151,19 +154,36 @@ test("two browsers share the draft, its presence, and their own undo", async ({ 
   await expect(other.locator(".react-flow__node")).toHaveCount(4);
   expect(await node(page, "gamma").boundingBox()).toEqual(moved);
 
+  // A saves: nothing left to save, for A, for B, for the list, after a
+  // reload; the file keeps the order of its inline maps.
+  await page.getByTestId("save-button").click();
+  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expect(other.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expect(page.getByTestId("draft-changes")).toHaveCount(0);
+  const listed = (await (await page.request.get("/pipelines")).json()) as { id: string; draft?: { changes: number } }[];
+  expect(listed.find((p) => p.id === PIPELINE_NAME)?.draft?.changes ?? 0).toBe(0);
+  const written = await fs.readFile(PIPELINE_PATH, "utf8");
+  expect(written).toContain("view: { x: 0, y: 100 }");
+  expect(written).toContain("source: { node: start, port: user_prompt }");
+  expect(written).not.toContain("{ y:");
+  await page.reload();
+  await openPipelineForEdit(page, PIPELINE_NAME);
+  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
+
   // B leaves: A sees it.
   await other.context().close();
   await expect(page.getByTestId("draft-presence").getByTestId("draft-participant")).toHaveCount(0);
 
-  // The draft survives a reload.
+  // An unsaved change survives a reload.
+  const again = await promptOf(page, "alpha");
+  await again.click();
+  await again.press("End");
+  await again.pressSequentially(" More.");
+  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`• ${PIPELINE_NAME}.yaml`);
   await page.reload();
   await openPipelineForEdit(page, PIPELINE_NAME);
-  await expect(await promptOf(page, "alpha")).toHaveValue("Write the spec.");
+  await expect(await promptOf(page, "alpha")).toHaveValue("Write the spec. More.");
   await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`• ${PIPELINE_NAME}.yaml`);
-
-  // Save: nothing left to save.
-  await page.getByTestId("save-button").click();
-  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
 });
 
 test("a file written outside PDO lands in the draft beside its changes, with no conflict window", async ({ page }) => {

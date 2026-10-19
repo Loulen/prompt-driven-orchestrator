@@ -317,11 +317,18 @@ impl DraftStore for Drafts {
         }
         ready(Ok(()))
     }
-    fn changes(&self) -> BoxFuture<'_, Result<HashMap<String, u32>, String>> {
+    fn summaries(&self) -> BoxFuture<'_, Result<HashMap<String, DraftSummary>, String>> {
         let all = self.0.lock().unwrap();
         ready(Ok(all
             .iter()
-            .map(|(id, d)| (id.clone(), d.changes))
+            .map(|(id, d)| {
+                let summary = DraftSummary {
+                    changes: d.changes,
+                    nodes: d.nodes,
+                    participants: Vec::new(),
+                };
+                (id.clone(), summary)
+            })
             .collect()))
     }
 }

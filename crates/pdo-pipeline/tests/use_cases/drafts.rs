@@ -133,6 +133,28 @@ async fn the_draft_survives_a_restart() {
 }
 
 #[tokio::test]
+async fn a_kept_draft_is_counted_again_when_it_opens() {
+    let world = world_with_worker();
+    let join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    world.pipelines.leave_draft(&join.room, join.connection).await;
+    {
+        let mut kept = world.drafts.0.lock().unwrap();
+        let flow = kept.get_mut("flow").unwrap();
+        (flow.changes, flow.nodes) = (4, 0);
+    }
+    let again = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    assert_eq!((again.room.changes(), again.room.summary().nodes), (0, 3));
+}
+
+#[tokio::test]
 async fn a_participant_who_may_not_update_joins_to_read() {
     let world = world_with_worker();
     let reader = world
@@ -216,6 +238,60 @@ async fn saving_the_draft_leaves_no_change() {
         .unwrap();
     assert_eq!(join.room.changes(), 0);
     assert_eq!(world.drafts.0.lock().unwrap()["flow"].changes, 0);
+}
+
+/// The file's coordinates read back as floats (`470.0`), the draft's as the
+/// editor and the replicated document hold them (`470`): the same file.
+#[tokio::test]
+async fn a_file_with_coordinates_opens_and_saves_with_no_change() {
+    let placed = |yaml: String| {
+        yaml.replace(
+            "    type: agent\n",
+            "    type: agent\n    view: { x: 470, y: 120 }\n",
+        )
+    };
+    let world = World::new();
+    world.registry.put("flow", &placed(pipeline_with_worker("flow")));
+    let join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    assert_eq!(join.room.changes(), 0);
+    assert!(world.pipelines.draft_summaries().await.get("flow").unwrap().changes == 0);
+
+    let client = Client::of(&join);
+    let update = client.edit(|c| {
+        c.pipeline["nodes"][1]["name"] = json!("Builder");
+    });
+    world
+        .pipelines
+        .edit_draft(&join.room, join.connection, &update)
+        .await
+        .unwrap();
+    assert_eq!(join.room.changes(), 1);
+    let yaml = placed(pipeline_with_worker("flow")).replace("name: Worker", "name: Builder");
+    world
+        .pipelines
+        .save_draft(
+            &operator(),
+            "flow",
+            &yaml,
+            &HashMap::new(),
+            &client.doc.content(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(join.room.changes(), 0);
+
+    // Opened again from the store, after its last participant left.
+    world.pipelines.leave_draft(&join.room, join.connection).await;
+    let again = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    assert_eq!(again.room.changes(), 0);
 }
 
 #[tokio::test]
@@ -344,6 +420,10 @@ async fn the_list_shows_the_open_drafts_and_the_kept_changes() {
         .unwrap();
     let update = Client::of(&join).edit(|c| {
         c.pipeline["nodes"][1]["name"] = json!("Builder");
+        c.pipeline["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "extra", "name": "Extra", "type": "agent"}));
     });
     world
         .pipelines
@@ -352,11 +432,13 @@ async fn the_list_shows_the_open_drafts_and_the_kept_changes() {
         .unwrap();
     let open = world.pipelines.draft_summaries().await;
     assert_eq!(open["flow"].participants.len(), 1);
+    assert_eq!(open["flow"].nodes, 4);
     world
         .pipelines
         .leave_draft(&join.room, join.connection)
         .await;
     let kept = world.pipelines.draft_summaries().await;
-    assert_eq!(kept["flow"].changes, 1);
+    assert_eq!(kept["flow"].changes, 2);
+    assert_eq!(kept["flow"].nodes, 4);
     assert!(kept["flow"].participants.is_empty());
 }

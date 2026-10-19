@@ -176,7 +176,7 @@ export class DraftSession {
   /** The tab now holds what the copy holds. */
   private readBack(): void {
     if (!this.synced || this.pipelineMap.size === 0) return;
-    const pipeline = fromDraftPipeline(this.pipelineMap.toJSON());
+    const pipeline = fromDraftPipeline(this.pipelineMap.toJSON(), this.shown.pipeline);
     // An empty prompt the tab did not have is one opened for typing
     // (`openPrompt`), not one somebody cleared: no prompt yet.
     const prompts = Object.fromEntries(

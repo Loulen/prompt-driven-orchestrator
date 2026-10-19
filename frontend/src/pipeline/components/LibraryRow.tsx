@@ -140,7 +140,9 @@ export default function LibraryRow({
           data-testid="library-row-meta"
         >
           <span className="min-w-0 truncate">
-            <span>{nodeCount} nodes</span>
+            {/* ADR-0088: a draft with changes counts its own nodes (none
+                counted yet for a draft kept before the count). */}
+            <span>{draft && draft.changes > 0 && draft.nodes > 0 ? draft.nodes : nodeCount} nodes</span>
             {/* ADR-0088: before the date, which truncates first. */}
             {draft && draft.changes > 0 && (
               <span data-testid="library-row-draft">

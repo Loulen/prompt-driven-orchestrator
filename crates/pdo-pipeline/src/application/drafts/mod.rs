@@ -222,20 +222,11 @@ impl Pipelines {
         let mut summaries: HashMap<String, DraftSummary> = self
             .drafts
             .store
-            .changes()
+            .summaries()
             .await
             .unwrap_or_default()
             .into_iter()
-            .filter(|(_, changes)| *changes > 0)
-            .map(|(id, changes)| {
-                (
-                    id,
-                    DraftSummary {
-                        changes,
-                        participants: Vec::new(),
-                    },
-                )
-            })
+            .filter(|(_, summary)| summary.changes > 0)
             .collect();
         let open: Vec<Arc<Room>> = self.drafts.rooms().values().cloned().collect();
         for room in open {
@@ -273,14 +264,17 @@ impl Pipelines {
         });
         let room = match kept {
             Some((stored, doc)) => {
+                // Counted again: the rules may have changed since it was kept.
                 let room = Room::new(RoomState {
                     id: id.to_string(),
                     generation: stored.generation,
                     doc,
-                    baseline: stored.baseline,
+                    baseline: stored.baseline.normalized(),
                     changes: stored.changes,
+                    nodes: stored.nodes,
                     participants: Default::default(),
                 });
+                room.recount();
                 // Written while nobody had it open (or the daemon was down).
                 room.follow(&file);
                 room
@@ -289,6 +283,7 @@ impl Pipelines {
                 id: id.to_string(),
                 generation: uuid::Uuid::new_v4().simple().to_string(),
                 doc: self.drafts.documents.create(&file),
+                nodes: file.node_count(),
                 baseline: file,
                 changes: 0,
                 participants: Default::default(),

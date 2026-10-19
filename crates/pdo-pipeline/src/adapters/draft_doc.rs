@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use serde_json::{Map as JsonMap, Number as JsonNumber, Value};
+use serde_json::{Map as JsonMap, Value};
 use yrs::types::ToJson;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
@@ -22,7 +22,7 @@ use crate::application::ports::{DraftDocument, DraftDocuments};
 use crate::domain::draft::delta::{
     apply, diff, diff_prompt, Change, ElementChange, ElementKey, FieldChange, PromptChange,
 };
-use crate::domain::draft::DraftContent;
+use crate::domain::draft::{draft_number, DraftContent};
 
 const PIPELINE: &str = "pipeline";
 const PROMPTS: &str = "prompts";
@@ -269,20 +269,15 @@ fn to_in(value: &Value) -> In {
     }
 }
 
-/// A value of the document as JSON. A whole float is an integer again (the
-/// frontend's numbers have no integer type); `undefined` is no value.
+/// A value of the document as JSON. A whole float is an integer again
+/// ([`draft_number`]: the frontend's numbers have no integer type);
+/// `undefined` is no value.
 fn any_to_json(any: Any) -> Value {
     match any {
         Any::Null | Any::Undefined | Any::Buffer(_) => Value::Null,
         Any::Bool(b) => Value::Bool(b),
         Any::Number(Number::Int(i)) => Value::from(i),
-        Any::Number(Number::Float(f)) => {
-            if f.fract() == 0.0 && f.abs() < 9_007_199_254_740_992.0 {
-                Value::from(f as i64)
-            } else {
-                JsonNumber::from_f64(f).map_or(Value::Null, Value::Number)
-            }
-        }
+        Any::Number(Number::Float(f)) => draft_number(f),
         Any::String(s) => Value::String(s.to_string()),
         Any::Array(items) => Value::Array(items.iter().cloned().map(any_to_json).collect()),
         Any::Map(fields) => Value::Object(

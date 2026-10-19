@@ -279,6 +279,7 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
         deleteTitle="Delete pipeline"
         draft={{
           changes: 3,
+          nodes: 6,
           participants: [
             {
               connection: "4",
@@ -294,13 +295,15 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
       />,
     );
     expect(screen.getByTestId("library-row-draft")).toHaveTextContent("draft: 3 changes");
+    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("6 nodes");
     expect(screen.getAllByTestId("draft-participant")).toHaveLength(1);
   });
 
   it("shows nothing of a draft that is the file", () => {
     render(
-      <LibraryRow name="flow" nodeCount={5} showDuplicate={false} onDelete={() => {}} deleteTitle="Delete" draft={{ changes: 0, participants: [] }} />,
+      <LibraryRow name="flow" nodeCount={5} showDuplicate={false} onDelete={() => {}} deleteTitle="Delete" draft={{ changes: 0, nodes: 5, participants: [] }} />,
     );
+    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("5 nodes");
     expect(screen.queryByTestId("library-row-draft")).not.toBeInTheDocument();
     expect(screen.queryByTestId("draft-participant")).not.toBeInTheDocument();
   });

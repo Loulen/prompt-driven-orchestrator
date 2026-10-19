@@ -2,6 +2,11 @@
 import type { DraftParticipant } from "./DraftParticipant";
 
 /**
- * A draft as the pipeline list shows it: its changes and who has it open.
+ * A draft as the pipeline list shows it: its changes, its nodes and who has
+ * it open.
  */
-export type DraftSummary = { changes: number, participants: Array<DraftParticipant>, };
+export type DraftSummary = { changes: number, 
+/**
+ * The nodes the draft holds (the file's count until it changes).
+ */
+nodes: number, participants: Array<DraftParticipant>, };

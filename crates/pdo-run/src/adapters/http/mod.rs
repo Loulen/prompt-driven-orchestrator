@@ -81,6 +81,10 @@ pub fn router(runs: Arc<Runs>) -> Router {
         .route("/ws", get(ws::upgrade))
         .route("/runs/{run_id}", get(run_detail::detail))
         .route("/runs/{run_id}/events", get(run_detail::events))
+        .route(
+            "/runs/{run_id}/transcripts/search",
+            get(run_detail::transcript_search),
+        )
         .route("/runs/{run_id}/commands", post(commands::run_command))
         .route("/runs/{run_id}/nodes/{node_id}/done", post(gestures::done))
         .route(

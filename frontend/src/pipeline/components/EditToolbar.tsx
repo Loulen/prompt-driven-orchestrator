@@ -14,6 +14,7 @@ import {
 import { useEditStore } from "../store/editStore";
 import RunToolbarActions from "./RunToolbarActions";
 import RunEditControl, { type RunEdit } from "./RunEditControl";
+import RunSearchToggle from "../../run/components/runSearch/RunSearchToggle";
 
 interface Props {
   onAddNode: (type: NodeType) => void;
@@ -287,10 +288,19 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
         </>
       )}
 
+      {/* The loupe: the search over the Run's transcripts, between Review and
+          the info group. */}
+      {run && (
+        <>
+          {leadingGroup && !reviewHref && <span className="mx-0.5 h-4 w-px bg-line" />}
+          <RunSearchToggle runId={run.run_id} />
+        </>
+      )}
+
       {(onToggleInfo || (assistantAvailable && onOpenAssistant)) && (
         <>
           {/* #315: no leading separator when the info group is the sole control. */}
-          {leadingGroup && !reviewHref && <span className="mx-0.5 h-4 w-px bg-line" />}
+          {leadingGroup && !reviewHref && !run && <span className="mx-0.5 h-4 w-px bg-line" />}
 
           {/* #302 / ADR-0048: the "agent" glyph, immediately left of `(i)`, both
               driving the same Pipeline info panel — the Bot toggles the Assistant

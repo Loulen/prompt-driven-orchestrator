@@ -20,6 +20,7 @@ import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
 import { nodeSessionEnded } from "../model/nodeStatus";
 import type { ModalState, NodeGestureRights, TerminalView } from "./nodeDetail/types";
 import { useMayOnNode } from "../store/gestureRightsStore";
+import { useFocusTab } from "../store/runSearchStore";
 
 interface Props {
   node: NodeState;
@@ -101,6 +102,17 @@ export default function NodeDetailPanel({
     },
     [node.node_id],
   );
+
+  // A hit chosen in the Run's search opens this node's Transcript at its
+  // iteration.
+  const focusTranscript = useCallback(
+    (iter: number) => {
+      setDetailTab("transcript");
+      setSelectedIter(iter);
+    },
+    [setSelectedIter],
+  );
+  useFocusTab(runId, node.node_id, focusTranscript);
 
   // The retry handlers used to call `setTerminalView("split")` inline. The mode
   // stays presentational state here; it travels into `useNodeRun` as a *stable*

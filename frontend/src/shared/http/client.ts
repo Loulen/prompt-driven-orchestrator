@@ -185,6 +185,9 @@ export interface RequestOpts {
    * response is not guaranteed to arrive.
    */
   keepalive?: boolean;
+  /** Cancel the request: the caller aborts it when a newer one replaces it
+   *  (the search's next keystroke). The rejection is the caller's to ignore. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -198,7 +201,7 @@ export async function request<T = unknown>(
   path: string,
   opts: RequestOpts = {},
 ): Promise<T> {
-  const { body, query, responseMode = "json", label, keepalive } = opts;
+  const { body, query, responseMode = "json", label, keepalive, signal } = opts;
 
   let url = BASE + path;
   if (query) {
@@ -239,6 +242,7 @@ export async function request<T = unknown>(
     init.signal = controller.signal;
     timer = setTimeout(() => controller?.abort(), uploadTimeoutMs(uploadBytes));
   }
+  if (signal) init.signal = init.signal ? AbortSignal.any([init.signal, signal]) : signal;
   const startedAt = Date.now();
 
   let resp: Response;

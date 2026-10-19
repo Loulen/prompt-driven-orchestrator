@@ -2112,6 +2112,7 @@ dependencies = [
 name = "pdo-harness"
 version = "2.36.0"
 dependencies = [
+ "aho-corasick",
  "filetime",
  "pdo-kernel",
  "pretty_assertions",

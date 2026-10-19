@@ -117,7 +117,7 @@ pub async fn page(
 ) -> Response {
     let source = match source(state, run_id, node_id, iter).await {
         Ok(source) => source,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let limit = limit.clamp(1, MAX_PAGE);
     let page = match source {
@@ -158,7 +158,7 @@ pub async fn tool_detail(
     let (harness, path) = match source(state, run_id, node_id, iter).await {
         Ok(TranscriptSource::File { harness, path }) => (harness, path),
         Ok(_) => return not_found("no transcript for this node iteration"),
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let read = tokio::task::spawn_blocking(move || {
         TranscriptReader::shared().tool_detail(&harness, &path, index)
@@ -180,27 +180,59 @@ async fn source(
     run_id: &str,
     node_id: &str,
     iter: i64,
-) -> Result<TranscriptSource, Response> {
-    let (events, run_state) = load_projected(state, run_id).await.map_err(|r| *r)?;
-    if !run_state.nodes.contains_key(node_id)
-        && !run_state.node_defs.iter().any(|nd| nd.id == node_id)
+) -> Result<TranscriptSource, Box<Response>> {
+    let run = RunTranscripts::load(state, run_id).await?;
+    if !run.run_state.nodes.contains_key(node_id)
+        && !run.run_state.node_defs.iter().any(|nd| nd.id == node_id)
     {
-        return Err(not_found("node not found in run"));
+        return Err(Box::new(not_found("node not found in run")));
     }
-    let roots = match sandbox_home_roots(state) {
-        Ok((home_root, sandbox_root)) => StoreRoots {
-            home_root,
-            sandbox_root,
-        },
-        Err(e) => return Err(internal(format!("{e:#}"))),
-    };
-    let repo_root = effective_repo_root(state, &run_state);
-    Ok(locate(
-        &events, &run_state, &repo_root, node_id, iter, &roots,
-    ))
+    Ok(run.locate(node_id, iter))
 }
 
-fn not_found(reason: &str) -> Response {
+/// What locating the transcripts of a Run's node iterations reads, loaded once:
+/// its events, its state, where it works and its store roots.
+pub struct RunTranscripts {
+    pub events: Vec<event::Event>,
+    pub run_state: state::RunState,
+    repo_root: PathBuf,
+    roots: StoreRoots,
+}
+
+impl RunTranscripts {
+    /// Load the Run `run_id`; the error is the response to answer.
+    pub async fn load(state: &Runs, run_id: &str) -> Result<Self, Box<Response>> {
+        let (events, run_state) = load_projected(state, run_id).await?;
+        let roots = match sandbox_home_roots(state) {
+            Ok((home_root, sandbox_root)) => StoreRoots {
+                home_root,
+                sandbox_root,
+            },
+            Err(e) => return Err(Box::new(internal(format!("{e:#}")))),
+        };
+        let repo_root = effective_repo_root(state, &run_state);
+        Ok(RunTranscripts {
+            events,
+            run_state,
+            repo_root,
+            roots,
+        })
+    }
+
+    /// Where the transcript of `(node_id, iter)` is.
+    pub fn locate(&self, node_id: &str, iter: i64) -> TranscriptSource {
+        locate(
+            &self.events,
+            &self.run_state,
+            &self.repo_root,
+            node_id,
+            iter,
+            &self.roots,
+        )
+    }
+}
+
+pub(crate) fn not_found(reason: &str) -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({ "error": reason })),
@@ -208,7 +240,7 @@ fn not_found(reason: &str) -> Response {
         .into_response()
 }
 
-fn internal(reason: String) -> Response {
+pub(crate) fn internal(reason: String) -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(serde_json::json!({ "error": reason })),

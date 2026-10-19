@@ -5,6 +5,7 @@ import { usePinToBottom } from "../../../../hooks/usePinToBottom";
 import { openRunSearch } from "../../../model/runSearch";
 import { remaining } from "../../../model/transcript";
 import { useTranscript } from "../../../store/useTranscript";
+import { useSearchHighlight, useTranscriptFocus } from "../../../store/runSearchStore";
 import IterSelector from "../IterSelector";
 import MessageCard from "./MessageCard";
 import ToolCallRow from "./ToolCallRow";
@@ -36,6 +37,25 @@ export default function TranscriptTab({
   const scrollRef = useRef<HTMLDivElement>(null);
   const { pinnedRef, handleScroll, scrollToBottom } = usePinToBottom(scrollRef, nodeId, iter);
   const more = remaining(view);
+  // The Run's search: its word marked, and the hit chosen there brought into
+  // view — loading the pages up to it first.
+  const highlight = useSearchHighlight(runId);
+  const focus = useTranscriptFocus(runId, nodeId, iter);
+  const scrolledTo = useRef(0);
+  useEffect(() => {
+    if (!focus || !loaded) return;
+    if (view.entries.length <= focus.index) {
+      if (more > 0) loadMore();
+      return;
+    }
+    if (scrolledTo.current === focus.nonce) return;
+    scrolledTo.current = focus.nonce;
+    scrollRef.current
+      ?.querySelector(`[data-entry="${focus.index}"]`)
+      ?.scrollIntoView?.({ block: "center" });
+    // `view` changes at every read, a live poll's included: a page asked while
+    // another read was in flight is asked again.
+  }, [focus, loaded, view, more, loadMore]);
   const counts = `${view.messages} ${view.messages === 1 ? "message" : "messages"} · ${view.toolCalls} ${
     view.toolCalls === 1 ? "tool call" : "tool calls"
   }`;
@@ -144,7 +164,15 @@ export default function TranscriptTab({
         )}
         {view.entries.map((entry) =>
           entry.kind === "message" ? (
-            <MessageCard key={entry.index} speaker={entry.speaker} text={entry.text} at={entry.at} />
+            <MessageCard
+              key={entry.index}
+              index={entry.index}
+              speaker={entry.speaker}
+              text={entry.text}
+              at={entry.at}
+              highlight={highlight}
+              focusNonce={focus?.index === entry.index ? focus.nonce : undefined}
+            />
           ) : (
             <ToolCallRow
               key={entry.index}
@@ -157,6 +185,7 @@ export default function TranscriptTab({
               status={entry.status}
               outputBytes={entry.output_bytes}
               diff={entry.diff}
+              focusNonce={focus?.index === entry.index ? focus.nonce : undefined}
             />
           ),
         )}

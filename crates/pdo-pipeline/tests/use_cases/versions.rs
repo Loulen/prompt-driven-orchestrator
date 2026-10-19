@@ -208,8 +208,9 @@ async fn a_save_in_place_is_announced_with_its_new_version() {
         SaveAs::new_version(),
     )
     .await;
-    let announced = world.events.0.lock().unwrap().clone();
-    assert_eq!(announced.iter().filter(|(id, _)| id == "flow").count(), 1);
+    assert_eq!(*world.events.3.lock().unwrap(), ["flow"]);
+    // No editor reloads the file it saved.
+    assert!(world.events.0.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

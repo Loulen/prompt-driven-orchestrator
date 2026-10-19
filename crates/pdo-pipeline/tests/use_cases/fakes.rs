@@ -250,13 +250,14 @@ impl NodeLibrary for Library {
 }
 
 /// Every `pipeline_changed` announced, as `(id, path)`, every
-/// `pipeline_validation_changed`, as the id, and every
-/// `pipeline_draft_changed`.
+/// `pipeline_validation_changed`, as the id, every `pipeline_draft_changed`,
+/// and every `pipeline_version_changed`, as the id.
 #[derive(Default)]
 pub struct Events(
     pub Mutex<Vec<(String, String)>>,
     pub Mutex<Vec<String>>,
     pub Mutex<Vec<(String, DraftSummary)>>,
+    pub Mutex<Vec<String>>,
 );
 
 impl Events {
@@ -288,6 +289,9 @@ impl PipelineEvents for Events {
     }
     fn draft_changed(&self, id: &str, draft: &DraftSummary) {
         self.2.lock().unwrap().push((id.to_string(), draft.clone()));
+    }
+    fn version_changed(&self, id: &str) {
+        self.3.lock().unwrap().push(id.to_string());
     }
 }
 

@@ -105,6 +105,9 @@ pub trait PipelineEvents: Send + Sync {
     /// `pipeline_draft_changed`: the list shows who has the draft of `id`
     /// open, and its changes.
     fn draft_changed(&self, id: &str, draft: &DraftSummary);
+    /// `pipeline_version_changed`: the lists read the last version of `id`
+    /// again. No editor reloads: the file is what its draft was saved as.
+    fn version_changed(&self, id: &str);
 }
 
 /// The validations the pipelines state (CONTEXT.md « Pipeline validé »), keyed

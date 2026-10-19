@@ -37,9 +37,10 @@ async fn a_save_writes_the_yaml_and_prompts_and_prunes_the_prompts_of_deleted_no
     let entry = world.registry.get("editable").unwrap();
     assert_eq!(entry.yaml, yaml);
     assert_eq!(entry.prompts, prompts(&[("worker", "New.")]));
-    // The watcher suppresses the daemon's own write: the save announces it
-    // once, for the lists to read its new version (ADR-0088).
-    assert_eq!(world.events.0.lock().unwrap().len(), 1);
+    // The watcher suppresses the daemon's own write: nothing reloads it; the
+    // lists read its new version (ADR-0088).
+    assert!(world.events.0.lock().unwrap().is_empty());
+    assert_eq!(*world.events.3.lock().unwrap(), ["editable"]);
 }
 
 #[tokio::test]

@@ -30,7 +30,8 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   affiche « vN · titre » et « vM is out » quand une version plus récente existe.
 - API : `GET /pipelines/{id}/versions`, `GET /pipelines/{id}/versions/{n}` ; `PUT /pipelines/{id}`
   prend `version` (`new_version`, `title`, `keep_old`) et répond `version` et `kept` ;
-  `GET /pipelines` gagne `version`. Les Résumés de Run (version 3) se reconstruisent au boot.
+  `GET /pipelines` gagne `version` ; le flux `/ws` annonce `pipeline_version_changed`. Les
+  Résumés de Run (version 3) se reconstruisent au boot.
 
 ## 2.44.0 — Canevas : bord saisissable à tout zoom, renommage d'output validé (CORE-88)
 

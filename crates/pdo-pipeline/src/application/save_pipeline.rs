@@ -127,14 +127,11 @@ impl Pipelines {
         })
     }
 
-    /// A save in place is the daemon's own write, which the watcher does not
-    /// announce: the lists learn its new version from here (a move is
-    /// announced by the move).
+    /// The lists learn the new version from here: the save is the daemon's
+    /// own write, which the watcher does not announce, and an editor that
+    /// saved must not reload it (#17).
     fn announce_saved(&self, saved: &SaveOutcome) {
-        if !saved.renamed {
-            let path = self.registry.path_of(&saved.id);
-            self.events.changed(&saved.id, &path.to_string_lossy());
-        }
+        self.events.version_changed(&saved.id);
     }
 
     /// Write the file: whether the name moved it, and its id after.

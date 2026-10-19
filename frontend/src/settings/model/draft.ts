@@ -31,6 +31,8 @@ export interface DraftValues extends TelemetryDraft {
   managerProfile: string;
   /** #751: may an agent's `--resolved` reply resolve a review comment directly? */
   reviewAgentCanResolve: boolean;
+  /** The stored Public URL, as typed; `""` is unset. */
+  publicUrl: string;
 }
 
 export function seedFrom(settings: InstanceSettings): DraftValues {
@@ -52,7 +54,13 @@ export function seedFrom(settings: InstanceSettings): DraftValues {
     managerProfile: settings.manager_profile.stored ?? "",
     reviewAgentCanResolve: settings.review_agent_can_resolve.effective,
     ...seedTelemetry(settings),
+    publicUrl: settings.public_url.stored ?? "",
   };
+}
+
+/** A Public URL the daemon will accept: an origin `http(s)://host[:port]`, no path. */
+export function isPublicUrl(raw: string): boolean {
+  return /^https?:\/\/[^\s/?#:@][^\s/?#@]*\/*$/i.test(raw.trim());
 }
 
 /** The per-harness map the daemon will store: trimmed, empty entries dropped. */
@@ -123,6 +131,7 @@ export function computeDirty(values: DraftValues, settings: InstanceSettings): S
     dirty.add("manager-profile");
   }
   for (const field of telemetryDirty(values, settings)) dirty.add(field);
+  if (values.publicUrl.trim() !== (settings.public_url.stored ?? "")) dirty.add("public-url");
   return dirty;
 }
 
@@ -238,6 +247,14 @@ export function buildPatch(
   }
   if (values.managerProfile !== (settings.manager_profile.stored ?? "")) {
     patch.manager_profile = values.managerProfile.trim();
+  }
+  // `""` clears the stored Public URL (the env tier, then none, decide again).
+  const publicUrl = values.publicUrl.trim();
+  if (publicUrl !== (settings.public_url.stored ?? "")) {
+    if (publicUrl !== "" && !isPublicUrl(publicUrl)) {
+      return { error: "Public URL must be an http:// or https:// origin (host and port, no path)." };
+    }
+    patch.public_url = publicUrl;
   }
   // ADR-0090: the OTLP export.
   const telemetry = telemetryPatch(values, settings);

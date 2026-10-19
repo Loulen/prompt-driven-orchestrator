@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPatch, computeDirty, missingDefaultProfile, seedFrom } from "./draft";
+import { buildPatch, computeDirty, isPublicUrl, missingDefaultProfile, seedFrom } from "./draft";
 import type { InstanceSettings } from "./settings";
 
 const field = <T,>(effective: T, fallback: T) => ({
@@ -17,6 +17,7 @@ function settings(): InstanceSettings {
     libassist_idle_ttl_secs: field(120, 120),
     guard_timeout_secs: field(60, 60),
     max_attachments_mb: field(50, 50),
+    public_url: field<string | null>(null, null),
     default_model: field<string | null>(null, null),
     default_harness: field<string | null>(null, null),
     default_harness_model: { effective: {}, stored: {} },
@@ -87,3 +88,28 @@ describe("the instance form's draft", () => {
     expect(missingDefaultProfile({ ...values, defaultSandbox: "minimal" }, loaded)).toBe(false);
   });
 });
+
+describe("the Public URL in the draft (CORE-83)", () => {
+  it("is dirty against the stored value, sent trimmed, cleared with an empty string", () => {
+    const loaded = settings();
+    const values = { ...seedFrom(loaded), publicUrl: " https://pdo.example.net " };
+    const dirty = computeDirty(values, loaded);
+    expect(dirty.has("public-url")).toBe(true);
+    expect(buildPatch(values, loaded, dirty)).toEqual({ patch: { public_url: "https://pdo.example.net" } });
+
+    const stored = { ...loaded, public_url: { ...loaded.public_url, stored: "https://a", effective: "https://a" } };
+    const cleared = { ...seedFrom(stored), publicUrl: "" };
+    expect(buildPatch(cleared, stored, computeDirty(cleared, stored))).toEqual({ patch: { public_url: "" } });
+  });
+
+  it("refuses what the daemon would refuse", () => {
+    for (const bad of ["pdo.example.net", "ftp://x", "https://x/?a=1", "https://x/#y", "https:// x", "https://x/pdo"]) {
+      expect(isPublicUrl(bad)).toBe(false);
+      const loaded = settings();
+      const values = { ...seedFrom(loaded), publicUrl: bad };
+      expect(buildPatch(values, loaded, computeDirty(values, loaded))).toHaveProperty("error");
+    }
+    expect(isPublicUrl("http://10.0.0.4:5272/")).toBe(true);
+  });
+});
+

@@ -183,3 +183,16 @@ export function telemetryEndpointSourceNote(field: StringSettingField): string {
   if (field.source === "env") return `Source: env ${envDisplay ?? "PDO_TELEMETRY_OTLP_ENDPOINT"}.`;
   return "Source: none set.";
 }
+
+/** Which tier the Public URL comes from. No built-in value: unset, links stay on the
+ *  daemon's own address. Discloses a shadowed `PDO_PUBLIC_URL` too. */
+export function publicUrlSourceNote(field: StringSettingField): string {
+  const envDisplay = field.env ? `PDO_PUBLIC_URL=${field.env}` : null;
+  if (field.source === "stored") {
+    return envDisplay
+      ? `Source: stored setting (wins). Env ${envDisplay} is set but overridden.`
+      : "Source: stored setting (overrides PDO_PUBLIC_URL).";
+  }
+  if (field.source === "env") return `Source: env ${envDisplay ?? "PDO_PUBLIC_URL"}.`;
+  return "Source: none set (PDO_PUBLIC_URL unset).";
+}

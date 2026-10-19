@@ -183,6 +183,11 @@ pub struct InstanceConfig {
     /// (ADR-0090 §4): env [`pdo_telemetry::adapters::env::INCLUDE_ACTOR_ENV`],
     /// then off.
     pub telemetry_include_actor: Option<i64>,
+    /// Stored Public URL, the address humans open PDO at, or `None` when unset
+    /// (`stored → env PDO_PUBLIC_URL → none`, resolved by
+    /// [`pdo_kernel::public_url::resolve`]). Stored normalized: an origin `http(s)://host[:port]`
+    /// without a trailing `/`.
+    pub public_url: Option<String>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -282,6 +287,10 @@ pub struct UpdateInstanceConfig {
     pub telemetry_prometheus: Option<bool>,
     /// Set « include the Actor »; `None` leaves it untouched.
     pub telemetry_include_actor: Option<bool>,
+    /// Set the Public URL: `Some("")` clears it back to unset (same
+    /// `""`-sentinel as `default_model`); anything else must be an
+    /// `http(s)://` address, stored normalized. `None` leaves it untouched.
+    pub public_url: Option<String>,
 }
 
 impl UpdateInstanceConfig {
@@ -314,5 +323,6 @@ impl UpdateInstanceConfig {
             && self.manager_profile.is_none()
             && self.max_attachments_mb.is_none()
             && !self.touches_telemetry()
+            && self.public_url.is_none()
     }
 }

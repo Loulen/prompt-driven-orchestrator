@@ -55,6 +55,7 @@ vi.mock("../../settings/api/settings", () => ({
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness_model: { effective: {}, stored: {} },
@@ -223,7 +224,7 @@ function pipelineOptions(): Array<{ id: string; name: string }> {
     screen.getByTestId("pipeline-select-menu").querySelectorAll("[data-pipeline-id]"),
   ).map((row) => ({
     id: row.getAttribute("data-pipeline-id") ?? "",
-    name: row.textContent?.replace(/(instance|repo|user|library)$/, "") ?? "",
+    name: row.textContent ?? "",
   }));
 }
 
@@ -361,13 +362,9 @@ describe("NewRunModal — pipeline filter", () => {
     ]);
     // Typing filters immediately: the field already has the caret.
     expect(screen.getByTestId("pipeline-select-filter")).toHaveFocus();
-    // Each row states its scope — the information grouping would have carried,
-    // without the reordering grouping would have cost.
-    expect(screen.getByTestId("pipeline-select-option-grill-and-spec")).toHaveTextContent(
-      "repo",
-    );
+    // A row is its name: no scope column (every pipeline is the instance's).
     expect(screen.getByTestId("pipeline-select-option-review-loop")).toHaveTextContent(
-      "instance",
+      /^review-loop$/,
     );
   });
 
@@ -385,6 +382,11 @@ describe("NewRunModal — pipeline filter", () => {
     expect(
       screen.getByTestId("pipeline-select-option-review-loop").querySelector("svg"),
     ).toBeNull();
+    // The check keeps its own 13 px: the row's default icon size (16 px) would
+    // push it over the name.
+    expect(
+      screen.getByTestId("pipeline-select-option-implement-loop").querySelector("svg"),
+    ).toHaveClass("size-[13px]");
   });
 
   it("underlines the matched fragment in the surviving rows", async () => {
@@ -639,6 +641,32 @@ describe("NewRunModal — pipeline sections", () => {
 
     await user.click(screen.getByTestId("pipeline-select-option-draft"));
     expect(selectedPipeline()).toBe("draft");
+  });
+
+  it("lists a pipeline validated for all first for the Projets it names, global elsewhere", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      ...mixed,
+      makePipeline({
+        id: "featured",
+        name: "featured",
+        validation: { kind: "all", project_ids: ["prj-bravo"] },
+      }),
+    ]);
+    renderModal();
+    await enterValidRepo("/repos/bravo");
+    // The Projet's first pipeline is the default, as for one validated for it only.
+    await waitFor(() => expect(selectedPipeline()).toBe("featured"));
+
+    await openPipelineMenu();
+    expect(sectionIds("project")).toEqual(["featured"]);
+    expect(sectionIds("global")).toEqual(["common", "legacy"]);
+    await menuUser().keyboard("{Escape}");
+
+    await enterValidRepo("/repos/alpha");
+    await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
+    await openPipelineMenu();
+    expect(sectionIds("project")).toEqual(["alpha-only"]);
+    expect(sectionIds("global")).toEqual(["common", "legacy", "featured"]);
   });
 
   it("does not offer a pipeline validated for another Projet", async () => {
@@ -1293,6 +1321,7 @@ describe("NewRunModal — image upload", () => {
     vi.mocked(fetchSettings).mockResolvedValueOnce({
       ...base,
       max_attachments_mb: { effective: 1, source: "stored", stored: 1, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
     });
     renderModal();
     await waitFor(() =>
@@ -1613,6 +1642,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -2356,6 +2386,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -2696,6 +2727,7 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -2914,6 +2946,7 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -3265,6 +3298,7 @@ describe("NewRunModal — harness selector (#551)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },

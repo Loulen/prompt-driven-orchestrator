@@ -226,15 +226,13 @@ describe("ReviewPage (#749)", () => {
     await waitFor(() => expect(screen.getByTestId("review-from")).toHaveTextContent("Fork point"));
     expect(screen.getByTestId("review-to")).toHaveTextContent("Run tip");
     expect(screen.getByTestId("review-to")).toHaveTextContent("bbbbbbb");
-    // Left list: grouped by directory, +/- per row.
+    // Left list: a folder tree (CORE-84), +/- per row.
     const rows = screen.getAllByTestId("review-file-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("main.tsx");
     expect(rows[0]).toHaveTextContent("+2");
     expect(rows[0]).toHaveTextContent("−1");
-    const list = screen.getByTestId("review-file-list");
-    expect(within(list).getByText("src/")).toBeInTheDocument();
-    expect(within(list).getByText("docs/adr/")).toBeInTheDocument();
+    expect(screen.getAllByTestId("review-dir-row").map((r) => r.textContent)).toEqual(["src", "docs/adr"]);
     // Default pair: no reset, no delivery chip.
     expect(screen.queryByTestId("review-reset")).toBeNull();
     expect(screen.queryByTestId("review-delivery-chip")).toBeNull();
@@ -468,6 +466,139 @@ async function openEditorAndSave(text: string, testId = "mock-add-new-2") {
   fireEvent.change(within(editor).getByTestId("review-editor-text"), { target: { value: text } });
   fireEvent.click(within(editor).getByTestId("review-editor-save"));
 }
+
+// CORE-84: `src` holds two folders (kept apart), `lib/x/y` is a chain of
+// single-folder folders (one row), CHANGELOG.md sits at the root — listed first
+// by the patch, last by the tree.
+const NESTED = diff([
+  file({ path: "CHANGELOG.md" }),
+  file({ path: "lib/x/y/z.ts" }),
+  file({ path: "src/core/a.ts" }),
+  file({ path: "src/core/b.ts" }),
+  file({ path: "src/ui/c.tsx" }),
+]);
+
+const dirRow = (path: string) => screen.getAllByTestId("review-dir-row").find((r) => r.dataset.path === path)!;
+const fileRows = () => screen.getAllByTestId("review-file-row").map((r) => r.dataset.path);
+const currentRow = () => screen.getAllByTestId("review-file-row").find((r) => r.dataset.current === "true")?.dataset.path;
+
+describe("ReviewPage — file tree (CORE-84)", () => {
+  beforeEach(() => {
+    mockedDiff.mockResolvedValue(NESTED);
+  });
+
+  it("nests the files in folders, compresses single-child chains, and orders the cards like the tree", async () => {
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(5));
+    expect(screen.getAllByTestId("review-dir-row").map((r) => r.textContent)).toEqual(["lib/x/y", "src", "core", "ui"]);
+    expect(fileRows()).toEqual(["lib/x/y/z.ts", "src/core/a.ts", "src/core/b.ts", "src/ui/c.tsx", "CHANGELOG.md"]);
+    expect(screen.getAllByTestId("review-file").map((c) => c.dataset.path)).toEqual(fileRows());
+    expect(dirRow("src/core")).toHaveAttribute("data-open", "true");
+  });
+
+  it("folds and unfolds a folder; the fold survives picking another file; the button folds them all", async () => {
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file-row")).toHaveLength(5));
+    fireEvent.click(dirRow("src/core"));
+    expect(dirRow("src/core")).toHaveAttribute("data-open", "false");
+    expect(dirRow("src/core")).toHaveAttribute("aria-expanded", "false");
+    expect(fileRows()).toEqual(["lib/x/y/z.ts", "src/ui/c.tsx", "CHANGELOG.md"]);
+    // The cards stay: folding is the list's business.
+    expect(screen.getAllByTestId("review-file")).toHaveLength(5);
+    fireEvent.click(screen.getAllByTestId("review-file-row").find((r) => r.dataset.path === "src/ui/c.tsx")!);
+    expect(currentRow()).toBe("src/ui/c.tsx");
+    expect(fileRows()).toEqual(["lib/x/y/z.ts", "src/ui/c.tsx", "CHANGELOG.md"]);
+    fireEvent.click(dirRow("src/core"));
+    expect(fileRows()).toHaveLength(5);
+
+    fireEvent.click(screen.getByTestId("review-dirs-toggle"));
+    expect(screen.getByTestId("review-dirs-toggle")).toHaveAttribute("data-collapsed", "true");
+    expect(fileRows()).toEqual(["CHANGELOG.md"]);
+    // The counter keeps counting the folded files.
+    expect(screen.getByTestId("review-file-count")).toHaveTextContent("5");
+    expect(screen.getAllByTestId("review-dir-row").map((r) => r.dataset.path)).toEqual(["lib/x/y", "src"]);
+    fireEvent.click(screen.getByTestId("review-dirs-toggle"));
+    expect(fileRows()).toHaveLength(5);
+  });
+
+  it("counts a folder's unresolved comments, drafts included, resolved left out", async () => {
+    mockedRun.mockResolvedValue(
+      makeRun({
+        review_comments: [
+          sentComment({ id: "rc-001", path: "src/core/a.ts" }),
+          sentComment({ id: "rc-002", path: "src/core/b.ts", status: "resolved", resolved_by: "user", resolved_at: "2026-09-09T00:50:00Z" }),
+          sentComment({ id: "rc-003", path: "src/ui/c.tsx", replies: [REPLY_NODE_PROPOSES], proposal_pending: true }),
+        ],
+      }),
+    );
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-comment")).toHaveLength(3));
+    const count = (path: string) => within(dirRow(path)).queryByTestId("review-dir-comments")?.textContent ?? null;
+    expect(count("src")).toBe("2");
+    expect(count("src/core")).toBe("1");
+    expect(count("src/ui")).toBe("1");
+    expect(count("lib/x/y")).toBeNull();
+    // A draft counts too.
+    await openEditorAndSave("a draft on z");
+    await waitFor(() => expect(count("lib/x/y")).toBe("1"));
+  });
+
+  it("← / → fold and unfold the folders around the current file; j / k skip a folded folder's files", async () => {
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file-row")).toHaveLength(5));
+    fireEvent.keyDown(window, { key: "j" });
+    expect(currentRow()).toBe("src/core/a.ts");
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(dirRow("src/core")).toHaveAttribute("data-open", "false");
+    fireEvent.keyDown(window, { key: "j" });
+    expect(currentRow()).toBe("src/ui/c.tsx");
+    fireEvent.keyDown(window, { key: "k" });
+    expect(currentRow()).toBe("lib/x/y/z.ts");
+    fireEvent.keyDown(window, { key: "j" });
+    expect(currentRow()).toBe("src/ui/c.tsx");
+    // Innermost open folder first, then its parent.
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(dirRow("src/ui")).toHaveAttribute("data-open", "false");
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(screen.getAllByTestId("review-dir-row").map((r) => r.dataset.path)).toEqual(["lib/x/y", "src"]);
+    // Outermost folded folder first.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(dirRow("src")).toHaveAttribute("data-open", "true");
+    expect(dirRow("src/ui")).toHaveAttribute("data-open", "false");
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(currentRow()).toBe("src/ui/c.tsx");
+    // A hidden list folds nothing.
+    fireEvent.keyDown(window, { key: "[" });
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    fireEvent.keyDown(window, { key: "[" });
+    expect(dirRow("src/ui")).toHaveAttribute("data-open", "true");
+  });
+
+  it("a diff whose only folder is folded shows the folder, not « No file matches »", async () => {
+    mockedDiff.mockResolvedValue(diff([file({ path: "src/a.ts" }), file({ path: "src/b.ts" })]));
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file-row")).toHaveLength(2));
+    fireEvent.click(screen.getByTestId("review-dirs-toggle"));
+    expect(screen.queryByTestId("review-file-row")).toBeNull();
+    expect(screen.getByTestId("review-file-list")).not.toHaveTextContent("No file matches");
+    expect(screen.getByTestId("review-file-count")).toHaveTextContent("2");
+  });
+
+  it("the filter keeps the tree and opens the folders holding a match, then gives the folds back", async () => {
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file-row")).toHaveLength(5));
+    fireEvent.click(dirRow("src"));
+    fireEvent.change(screen.getByTestId("review-file-filter"), { target: { value: "c.tsx" } });
+    expect(screen.getAllByTestId("review-dir-row").map((r) => [r.dataset.path, r.dataset.open])).toEqual([
+      ["src", "true"],
+      ["src/ui", "true"],
+    ]);
+    expect(fileRows()).toEqual(["src/ui/c.tsx"]);
+    expect(screen.getByTestId("review-file-count")).toHaveTextContent("1");
+    fireEvent.change(screen.getByTestId("review-file-filter"), { target: { value: "" } });
+    expect(dirRow("src")).toHaveAttribute("data-open", "false");
+  });
+});
 
 describe("ReviewPage — review comments (#750)", () => {
   it("opens the inline editor from +, saves a draft that renders markdown under the line and persists across a reload", async () => {

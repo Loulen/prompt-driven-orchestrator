@@ -31,6 +31,10 @@ impl PageFiles for LocalPageFiles {
         Ok(canonical)
     }
 
+    fn exists<'a>(&'a self, root: &'a Path, components: &'a [OsString]) -> BoxFuture<'a, bool> {
+        Box::pin(async move { open_file(root, components).is_some() })
+    }
+
     fn read<'a>(
         &'a self,
         root: &'a Path,

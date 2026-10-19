@@ -209,6 +209,9 @@ mod frontmatter_validation;
 #[path = "fs_browse.rs"]
 mod fs_browse;
 
+#[path = "page_guide.rs"]
+mod page_guide;
+
 #[path = "page_mounts.rs"]
 mod page_mounts;
 

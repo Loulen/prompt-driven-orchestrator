@@ -215,6 +215,10 @@ pub(super) async fn reserve(
             interrupted_git_ops,
             partial_outputs: &partial_outputs,
             extension_preamble: extension.preamble.as_deref(),
+            public_url: extension
+                .env
+                .get(pdo_kernel::public_url::PUBLIC_URL_ENV)
+                .map(String::as_str),
         };
 
         let full_prompt = prompt_augmenter::build_full_prompt(&aug_ctx, role_prompt);

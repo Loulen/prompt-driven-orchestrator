@@ -7,6 +7,19 @@ import { useBranchList } from "../../workspace/store/useBranchList";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 
 /**
+ * Window bus fired when what the launch forms offer may have changed: a Projet
+ * created, edited or deleted, or a Pipeline's validation changed (the daemon's
+ * `project_changed` and `pipeline_validation_changed`, relayed by the App). An open
+ * form reads its Pipelines and Projets again, so its sections follow without a
+ * reload.
+ */
+export const LAUNCH_OFFER_CHANGED = "pdo:launch-offer-changed";
+
+export function announceLaunchOfferChanged() {
+  window.dispatchEvent(new Event(LAUNCH_OFFER_CHANGED));
+}
+
+/**
  * What a Run/Trigger can be launched AGAINST (#359): the target repo's branches and the
  * pipelines the instance serves. Both are lists the daemon owns, so both live here,
  * behind the same hook the New Run modal drives.
@@ -97,6 +110,12 @@ export function useLaunchTargets(open: boolean) {
   useEffect(() => {
     loadPipelines();
   }, [loadPipelines]);
+
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener(LAUNCH_OFFER_CHANGED, loadPipelines);
+    return () => window.removeEventListener(LAUNCH_OFFER_CHANGED, loadPipelines);
+  }, [open, loadPipelines]);
 
   const selectedPipeline = useMemo(
     () => pipelines.find((p) => p.id === selectedPipelineId),

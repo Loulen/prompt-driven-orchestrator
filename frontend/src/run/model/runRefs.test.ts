@@ -3,7 +3,6 @@ import {
   deliveryOfPair,
   defaultCollapsed,
   fileHunks,
-  groupByDir,
   hunkToUnified,
   isDefaultPair,
   miniBar,
@@ -227,20 +226,6 @@ describe("file list helpers", () => {
     expect(statusLetter(file({ path: "a", status: "deleted" }))).toBe("D");
     expect(statusLetter(file({ path: "a", status: "renamed" }))).toBe("R");
     expect(statusLetter(file({ path: "a", status: "modified" }))).toBe("M");
-  });
-
-  it("groups files by directory in patch order, merging consecutive runs only", () => {
-    const groups = groupByDir([
-      file({ path: "src/a.ts" }),
-      file({ path: "src/b.ts" }),
-      file({ path: "README.md" }),
-      file({ path: "src/c.ts" }),
-    ]);
-    expect(groups.map((g) => [g.dir, g.files.map((f) => f.index)])).toEqual([
-      ["src", [0, 1]],
-      ["", [2]],
-      ["src", [3]],
-    ]);
   });
 
   it("splits the mini bar between additions and deletions, empty for binaries and pure renames", () => {

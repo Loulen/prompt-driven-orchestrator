@@ -13,6 +13,8 @@ import type { Project } from "../../workspace/model/project";
 import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
 import type { PipelineEntity } from "../../shared/extensions/contract";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "../../shared/ui/dropdown-menu";
+import { PageTabActions, PageTabButtons } from "../../platform/components/PageTabs";
+import { useMountedPages } from "../../platform/store/mountedPages";
 
 function useRelativeTime(ts: number | undefined): string | null {
   const [now, setNow] = useState(() => Date.now());
@@ -44,6 +46,10 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const pipelines = useEditStore((s) => s.pipelines);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
+  // A mounted page's tab shown in the center: no pipeline tab is the active one.
+  const pageTabCount = useMountedPages((s) => s.tabs.length);
+  const activePage = useMountedPages((s) => s.active);
+  const showPage = useMountedPages((s) => s.showPage);
   // The Validate modal of the active Pipeline tab (CONTEXT.md « Pipeline validé »).
   const [validateOpen, setValidateOpen] = useState(false);
 
@@ -98,7 +104,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
     }
   }, [activeTabId]);
 
-  if (openTabs.length === 0) return null;
+  if (openTabs.length === 0 && pageTabCount === 0) return null;
 
   return (
     <>
@@ -109,13 +115,16 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
         style={{ scrollbarWidth: "thin" }}
       >
         {openTabs.map((tab) => {
-          const isActive = tab.id === activeTabId;
+          const isActive = tab.id === activeTabId && activePage == null;
           const label = tab.dirty ? `• ${tab.id}.yaml` : `${tab.id}.yaml`;
           return (
             <button
               key={tab.id}
               ref={(el) => setTabRef(tab.id, el)}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                showPage(null);
+                setActiveTab(tab.id);
+              }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setMenu({ x: e.clientX, y: e.clientY, tabId: tab.id });
@@ -144,51 +153,58 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
             </button>
           );
         })}
+        <PageTabButtons />
       </div>
 
       <div className="flex shrink-0 items-center gap-2 px-1.5 pb-0.5">
-        <DraftPresence />
-        {savedAgo && (
-          <span
-            className="whitespace-nowrap font-mono text-fg-4"
-            style={{ fontSize: "10px" }}
-            data-testid="saved-ago"
-          >
-            {savedAgo}
-          </span>
-        )}
-        {activeEntry && (
+        {activePage != null ? (
+          <PageTabActions name={activePage} />
+        ) : (
           <>
-            <ValidationIndicator
-              validation={activeValidation}
-              projects={projects}
-              testId="toolbar-validation-indicator"
-            />
-            <button
-              onClick={() => setValidateOpen(true)}
-              className="flex cursor-pointer items-center gap-1 rounded-md border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
-              style={{ fontSize: "11px" }}
-              data-testid="validate-button"
-              title="Choose the projects this pipeline is offered to"
-            >
-              <BadgeCheck size={11} />
-              Validate
-            </button>
+            <DraftPresence />
+            {savedAgo && (
+              <span
+                className="whitespace-nowrap font-mono text-fg-4"
+                style={{ fontSize: "10px" }}
+                data-testid="saved-ago"
+              >
+                {savedAgo}
+              </span>
+            )}
+            {activeEntry && (
+              <>
+                <ValidationIndicator
+                  validation={activeValidation}
+                  projects={projects}
+                  testId="toolbar-validation-indicator"
+                />
+                <button
+                  onClick={() => setValidateOpen(true)}
+                  className="flex cursor-pointer items-center gap-1 rounded-md border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
+                  style={{ fontSize: "11px" }}
+                  data-testid="validate-button"
+                  title="Choose the projects this pipeline is offered to"
+                >
+                  <BadgeCheck size={11} />
+                  Validate
+                </button>
+              </>
+            )}
+            {activeTab?.runId != null && !activeLocked ? (
+              <RunSaveGroup tab={{ ...activeTab, runId: activeTab.runId }} />
+            ) : activeLocked ? null : (
+              <button
+                onClick={() => { if (activeTabId) save(activeTabId); }}
+                disabled={!anyDirty}
+                className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+                style={{ fontSize: "11px" }}
+                data-testid="save-button"
+              >
+                <Save size={11} />
+                Save
+              </button>
+            )}
           </>
-        )}
-        {activeTab?.runId != null && !activeLocked ? (
-          <RunSaveGroup tab={{ ...activeTab, runId: activeTab.runId }} />
-        ) : activeLocked ? null : (
-          <button
-            onClick={() => { if (activeTabId) save(activeTabId); }}
-            disabled={!anyDirty}
-            className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
-            style={{ fontSize: "11px" }}
-            data-testid="save-button"
-          >
-            <Save size={11} />
-            Save
-          </button>
         )}
       </div>
     </div>

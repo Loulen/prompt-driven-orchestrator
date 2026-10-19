@@ -10,6 +10,41 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.42.0 — Arbre de fichiers de la Review (CORE-84)
+
+- La liste des fichiers de la Review est un arbre de dossiers repliables. Une chaîne de dossiers
+  à un seul enfant tient sur une ligne, chaque dossier affiche le compte de ses commentaires non
+  résolus, et un bouton à côté du compteur replie ou déplie tout.
+- Les cartes du diff suivent l'ordre de l'arbre (dossiers avant fichiers).
+- Clavier : ←/→ replient et déplient le dossier du fichier courant, j/k sautent les fichiers d'un
+  dossier replié. Le filtre « / » garde l'arbre et ouvre les branches qui contiennent une
+  correspondance.
+
+## 2.41.0 — Pipeline validé pour tous et mis en tête pour des Projets (CORE-89)
+
+- La validation `all` d'un pipeline accepte une liste de Projets :
+  `{"kind":"all","project_ids":[…]}`. `{"kind":"all"}` reste valide (liste vide), sans
+  migration. Un Projet inconnu est refusé (`400`), un doublon est réduit.
+- Dans New Run, ces Projets voient le pipeline sous « Project pipelines », les autres sous
+  « Global pipelines ». Supprimer un Projet le retire de la liste et laisse le pipeline offert à
+  tous.
+- Modale Validate : sous « All projects », les cases des Projets restent actives (« Listed first
+  for ») ; le verdict tient en une phrase.
+
+## 2.40.0 — Guide de lecture d'une page montée, Public URL (CORE-83)
+
+- `pdo page mount <name> <directory> --guide <file>` attache un guide de lecture (YAML ou JSON,
+  au plus 50 entrées). Le daemon le valide avant de monter : un guide refusé ne monte rien et la
+  commande dit pourquoi. Le guide est stocké avec le montage et part avec lui (`unmount`, archive
+  du Run qui a monté la page).
+- La page guidée s'ouvre dans un onglet du panneau central, le guide dans le panneau droit. Un
+  lien de guide mène à un Run, un nœud, un artefact, un fichier de la Review
+  (`/runs/<run>/review?file=`), une page d'extension ou une ancre de la page.
+- Nouveau réglage **Public URL** (Settings › General, ou `PDO_PUBLIC_URL` ; le réglage stocké
+  l'emporte) : une origine `http(s)://hôte[:port]`. `PUT /settings` gagne `public_url` (`""`
+  l'efface). Une session de nœud la reçoit dans `PDO_PUBLIC_URL`, `pdo page mount` imprime ses
+  adresses sous elle, et Settings › Telemetry nomme l'adresse de `/metrics` avec elle.
+- Un lien `?file=` de la Review amène au fichier même sous la ligne de flottaison.
 ## 2.39.0 — Complétion des skills dans les prompts, export et upload de skills (CORE-80)
 
 - `/` en début de mot dans le prompt d'un nœud ou de New Run ouvre la liste des skills au

@@ -40,7 +40,7 @@ import * as newRunForm from "../../model/newRunForm";
  * UI's typeahead, so there is one filtering gesture and not two competing ones.
  *
  * Sections (CONTEXT.md « Pipeline validé »): the Pipelines of the repository's Projet
- * first, then the global ones; the test Pipelines are folded behind « Show test
+ * first (a global one listed first for it included), then the global ones; the test Pipelines are folded behind « Show test
  * pipelines ». A Pipeline validated for other Projets only is in no section.
  */
 export default function PipelineSelect({
@@ -171,12 +171,6 @@ export default function PipelineSelect({
               {seg.text}
             </span>
           ))}
-        </span>
-        <span
-          className="ml-auto shrink-0 pl-3 font-sans text-fg-4"
-          style={{ fontSize: "10px" }}
-        >
-          {pipeline.scope}
         </span>
       </DropdownMenuItem>
     );

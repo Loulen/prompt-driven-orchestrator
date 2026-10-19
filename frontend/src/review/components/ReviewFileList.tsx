@@ -1,19 +1,28 @@
-import { PanelLeftClose } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, PanelLeftClose } from "lucide-react";
 import type { RefObject } from "react";
 import type { DiffFile } from "../../shared/generated/DiffFile";
-import { baseName, filePath, groupByDir, miniBar, statusLetter } from "../../run/model/runRefs";
-import { History, Hourglass } from "lucide-react";
+import { filePath } from "../../run/model/runRefs";
+import { Hourglass } from "lucide-react";
 import type { StateCounts } from "../model/commentStatus";
 import type { ReviewEntry } from "../model/entries";
 import { authorKind, authorLabel, commentState, footerStatus, plural, sortForSidebar } from "../model/commentStatus";
 import { anchorLabel } from "../model/drafts";
+import { dirCount, matchesFilter } from "../model/fileTree";
+import type { TreeRow } from "../model/fileTree";
 import { AuthorGlyph, Badge, StateIcon } from "./commentBits";
+import { DirRow, FileRow } from "./ReviewTreeRows";
 
 /**
- * The Review page's left column (#749, design option "flat list grouped by
- * directory"): filter box, directory headers, one row per file with its status
- * letter, `+a −d` and a 5-block mini bar. The current file follows the scroll;
- * clicking a row scrolls to it.
+ * The Review page's left column (#749): filter box, then one row per file with
+ * its status letter, `+a −d` and a 5-block mini bar. The current file follows
+ * the scroll; clicking a row scrolls to it.
+ *
+ * CORE-84: the files sit in a folder tree (`fileTree`), the way a forge's
+ * "Files changed" shows them — chevron + folder icon per folder, a chain of
+ * single-folder folders on one row, each folder carrying the count of
+ * unresolved comments it holds; a click folds or unfolds it, the button next to
+ * the file count folds or unfolds them all. A filter keeps the tree and opens
+ * the branches that hold a match.
  *
  * #750: each row carries its comment badges (drafts amber, sent blue), and a
  * **Comments** section lists every comment of the Run — badge, anchor, first
@@ -29,6 +38,12 @@ import { AuthorGlyph, Badge, StateIcon } from "./commentBits";
 
 interface Props {
   files: DiffFile[];
+  /** CORE-84: the tree rows to show (`visibleRows`: collapse state and filter applied). */
+  rows: TreeRow[];
+  onToggleDir: (path: string) => void;
+  /** Fold or unfold every folder; absent when the diff has no folder. */
+  onToggleAllDirs?: () => void;
+  allDirsCollapsed?: boolean;
   filter: string;
   onFilterChange: (v: string) => void;
   filterRef: RefObject<HTMLInputElement | null>;
@@ -47,15 +62,12 @@ interface Props {
   onJumpOther?: (entry: ReviewEntry) => void;
 }
 
-const LETTER_CLASS: Record<"A" | "M" | "D" | "R", string> = {
-  A: "text-st-done",
-  M: "text-st-await",
-  D: "text-st-failed",
-  R: "text-edit-tint",
-};
-
 export default function ReviewFileList({
   files,
+  rows,
+  onToggleDir,
+  onToggleAllDirs,
+  allDirsCollapsed,
   filter,
   onFilterChange,
   filterRef,
@@ -71,14 +83,14 @@ export default function ReviewFileList({
 }: Props) {
   const current = comments ? sortForSidebar(comments.current) : [];
   const needsYou = current.filter((e) => e.kind === "sent" && commentState(e.comment) === "proposed").length;
-  const q = filter.trim().toLowerCase();
-  const shown = files
-    .map((file, index) => ({ file, index }))
-    .filter(({ file }) => !q || filePath(file).toLowerCase().includes(q));
-  const groups = groupByDir(shown.map((s) => s.file)).map((g) => ({
-    dir: g.dir,
-    files: g.files.map((f) => ({ file: f.file, index: shown[f.index].index })),
-  }));
+  // The count is the files the filter keeps, folded or not.
+  const matching = files.filter((f) => matchesFilter(filePath(f), filter)).length;
+  // A folder's count: the drafts and the sent comments not resolved, of every file it holds.
+  const unresolved = (p: string) => {
+    const drafts = counts?.get(p)?.drafts ?? 0;
+    const st = states?.get(p);
+    return drafts + (st ? st.open + st.proposed : (counts?.get(p)?.sent ?? 0));
+  };
 
   return (
     <aside
@@ -105,113 +117,52 @@ export default function ReviewFileList({
           style={{ fontSize: "11px" }}
         />
         <span className="font-mono text-fg-4" data-testid="review-file-count">
-          {shown.length}
+          {matching}
         </span>
+        {onToggleAllDirs && (
+          <button
+            type="button"
+            onClick={onToggleAllDirs}
+            title={allDirsCollapsed ? "Expand all folders" : "Collapse all folders"}
+            data-testid="review-dirs-toggle"
+            data-collapsed={allDirsCollapsed ? "true" : "false"}
+            className="grid h-5 w-5 cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+          >
+            {allDirsCollapsed ? <ChevronsUpDown size={12} /> : <ChevronsDownUp size={12} />}
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-1.5 pb-2.5">
-        {groups.length === 0 && (
+        {rows.length === 0 && (
           <div className="px-2 py-2.5 text-fg-4" style={{ fontSize: "11px" }}>
             {files.length === 0 ? "No files" : "No file matches"}
           </div>
         )}
-        {groups.map((g) => (
-          <div key={g.dir || "."}>
-            <div
-              className="truncate px-1.5 pb-0.5 pt-1.5 font-mono text-fg-4"
-              style={{ fontSize: "10px" }}
-              title={g.dir ? `${g.dir}/` : "./"}
-            >
-              {g.dir ? `${g.dir}/` : "./"}
-            </div>
-            {g.files.map(({ file, index }) => {
-              const p = filePath(file);
-              const letter = statusLetter(file);
-              const cur = index === currentIndex;
-              const pureRename = file.status === "renamed" && file.additions + file.deletions === 0;
-              return (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => onSelect(index)}
-                  title={p}
-                  data-testid="review-file-row"
-                  data-path={p}
-                  data-current={cur}
-                  className={`grid w-full cursor-pointer grid-cols-[14px_1fr_auto] items-center gap-1.5 rounded px-1.5 py-[3px] text-left ${
-                    cur ? "bg-bg-3 shadow-[inset_2px_0_0_var(--color-acc)]" : "hover:bg-bg-3"
-                  }`}
-                  style={{ fontSize: "11px" }}
-                >
-                  <span
-                    className={`w-[14px] text-center font-mono font-semibold ${LETTER_CLASS[letter]}`}
-                    style={{ fontSize: "9.5px" }}
-                  >
-                    {letter}
-                  </span>
-                  <span className={`truncate font-mono ${cur ? "text-fg" : "text-fg-2"}`} style={{ fontSize: "10.5px" }}>
-                    {baseName(p)}
-                  </span>
-                  <span className="flex items-center gap-1 font-mono" style={{ fontSize: "10px" }}>
-                    {(counts?.get(p)?.drafts ?? 0) > 0 && <Badge kind="draft">{counts!.get(p)!.drafts}</Badge>}
-                    {(outdatedCounts?.get(p) ?? 0) > 0 && (
-                      <span
-                        className="inline-flex items-center text-st-stale"
-                        title={`${outdatedCounts!.get(p)} outdated — the line changed on this destination`}
-                        data-testid="review-file-row-outdated"
-                      >
-                        <History size={9} />
-                      </span>
-                    )}
-                    {states?.get(p) ? (
-                      <>
-                        {states.get(p)!.proposed > 0 && (
-                          <span className="inline-flex items-center gap-px text-st-await" title={`${states.get(p)!.proposed} resolution proposed`}>
-                            <StateIcon state="proposed" size={9} />
-                            {states.get(p)!.proposed}
-                          </span>
-                        )}
-                        {states.get(p)!.open > 0 && (
-                          <span className="inline-flex items-center gap-px text-fg-4" title={`${states.get(p)!.open} open`}>
-                            <StateIcon state="open" size={9} />
-                            {states.get(p)!.open}
-                          </span>
-                        )}
-                        {states.get(p)!.resolved > 0 && (
-                          <span className="inline-flex items-center gap-px text-st-done" title={`${states.get(p)!.resolved} resolved`}>
-                            <StateIcon state="resolved" size={9} />
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      (counts?.get(p)?.sent ?? 0) > 0 && <Badge kind="sent">{counts!.get(p)!.sent}</Badge>
-                    )}
-                    {file.binary ? (
-                      <span className="text-fg-4">bin</span>
-                    ) : pureRename ? (
-                      <span className="text-fg-4">→</span>
-                    ) : (
-                      <>
-                        <span className="text-st-done">+{file.additions}</span>
-                        <span className="text-st-failed">−{file.deletions}</span>
-                      </>
-                    )}
-                    <span className="ml-0.5 inline-flex gap-px" aria-hidden>
-                      {miniBar(file).map((b, i) => (
-                        <i
-                          key={i}
-                          className={`block h-2 w-[3px] rounded-[1px] ${
-                            b === "a" ? "bg-st-done" : b === "d" ? "bg-st-failed" : "bg-bg-4"
-                          }`}
-                        />
-                      ))}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ))}
+        {rows.map(({ node, depth, open }) =>
+          node.kind === "dir" ? (
+            <DirRow
+              key={`d:${node.path}`}
+              node={node}
+              depth={depth}
+              open={open}
+              count={dirCount(node, unresolved)}
+              onToggle={() => onToggleDir(node.path)}
+            />
+          ) : (
+            <FileRow
+              key={node.path}
+              file={files[node.index]}
+              depth={depth}
+              current={node.index === currentIndex}
+              onSelect={() => onSelect(node.index)}
+              drafts={counts?.get(node.path)?.drafts ?? 0}
+              sent={counts?.get(node.path)?.sent ?? 0}
+              states={states?.get(node.path)}
+              outdated={outdatedCounts?.get(node.path) ?? 0}
+            />
+          ),
+        )}
 
         {comments && (
           <div className="mt-3" data-testid="review-comments-section">
@@ -260,6 +211,9 @@ export default function ReviewFileList({
         </span>
         <span>
           <Kbd>n</Kbd>/<Kbd>p</Kbd> hunk
+        </span>
+        <span>
+          <Kbd>←</Kbd>/<Kbd>→</Kbd> fold folder
         </span>
         <span>
           <Kbd>u</Kbd> view

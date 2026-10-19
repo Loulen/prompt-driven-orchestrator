@@ -24,6 +24,8 @@ export const DEEP_LINK_PREFIX = "#/ext/";
  * The core's own deep link toward a Run (CORE-1): `#/runs/<run_id>` closes the
  * open page, selects the Run in the list and shows its detail. The app shell
  * follows it (`useRunLink`); a Run the daemon does not know says so in a toast.
+ * `#/runs/<run_id>/nodes/<node_id>` also selects the node, and
+ * `…/nodes/<node_id>/artifacts/<port>` lands on that node's I/O.
  */
 export const RUN_LINK_PREFIX = "#/runs/";
 
@@ -45,18 +47,38 @@ export function isRunLink(href: string | null | undefined): href is string {
   return typeof href === "string" && (href.startsWith(RUN_LINK_PREFIX) || href.startsWith(`/${RUN_LINK_PREFIX}`));
 }
 
-/** The id of the Run `href` (or a hash, or a URL ending with one) points at; `null` if none. */
-export function parseRunLink(href: string): string | null {
+/** The Run, and the node in it, a Run link points at. */
+export interface RunTarget {
+  runId: string;
+  nodeId: string | null;
+}
+
+/** The Run (and node) `href` (or a hash, or a URL ending with one) points at; `null` if none. */
+export function parseRunTarget(href: string): RunTarget | null {
   const at = href.indexOf(RUN_LINK_PREFIX);
   if (at < 0) return null;
-  let id: string;
+  let segments: string[];
   try {
-    id = decodeURIComponent(href.slice(at + RUN_LINK_PREFIX.length));
+    segments = href
+      .slice(at + RUN_LINK_PREFIX.length)
+      .replace(/\/+$/, "")
+      .split("/")
+      .map((segment) => decodeURIComponent(segment));
   } catch {
     return null;
   }
-  id = id.replace(/\/+$/, "");
-  return id && !id.includes("/") ? id : null;
+  if (segments.some((segment) => !segment || segment.includes("/"))) return null;
+  const [runId, nodes, nodeId, artifacts, port] = segments;
+  if (segments.length === 1) return { runId, nodeId: null };
+  if (nodes !== "nodes") return null;
+  if (segments.length === 3) return { runId, nodeId };
+  if (segments.length === 5 && artifacts === "artifacts" && port) return { runId, nodeId };
+  return null;
+}
+
+/** The id of the Run `href` (or a hash, or a URL ending with one) points at; `null` if none. */
+export function parseRunLink(href: string): string | null {
+  return parseRunTarget(href)?.runId ?? null;
 }
 
 /** The deep link toward the Run `runId`. */

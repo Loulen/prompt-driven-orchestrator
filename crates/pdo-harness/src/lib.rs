@@ -21,5 +21,5 @@ pub mod domain;
 
 pub use domain::{
     agent_choice, argv, catalogue, claude_transcript, context_peak, copilot_journal, pi_session,
-    probes, registry, resolver, steering, support,
+    probes, registry, resolver, steering, support, transcript,
 };

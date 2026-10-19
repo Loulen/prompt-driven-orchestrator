@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.36.0 — Onglet Transcript d'un nœud (CORE-81)
+
+- `GET /runs/{id}/nodes/{node}/transcript?iter=&after=&limit=` sert le transcript normalisé
+  d'une itération, par pages (messages Prompt / Agent, appels d'outils repliés) ;
+  `GET …/transcript/tools/{index}?iter=` sert l'entrée et la sortie d'un appel. Un appel qui
+  remplace du texte porte un diff (`keep` / `remove` / `add`) et son décompte `+N −M`.
+- La pensée du modèle est écartée à la lecture : elle n'apparaît ni dans les pages ni dans le
+  détail d'un appel.
+- Un harnais sans lecteur de transcript répond `unavailable` ; la capacité se lit dans le
+  tableau de support (ligne « Transcript tab »).
+
 ## 2.35.0 — Export OTLP des métriques et des traces (CORE-85)
 
 - Nouvelle catégorie « Telemetry » des Settings (ADR-0090) : le daemon pousse ses métriques et

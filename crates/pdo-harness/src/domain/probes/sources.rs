@@ -125,6 +125,49 @@ impl TranscriptResolution {
     }
 }
 
+/// How PDO reads a harness's transcript into the normalized messages and tool
+/// calls of a node's Transcript tab ([`crate::domain::transcript`]).
+///
+/// Absent ⇒ the tab says the transcript is unavailable for this harness, never
+/// an empty conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptReading {
+    /// Claude Code's `user` / `assistant` records and their content blocks.
+    ClaudeRecords,
+    /// GitHub Copilot's `user.message`, `assistant.message` and
+    /// `tool.execution_complete` journal events.
+    CopilotJournalEvents,
+    /// pi's `message` entries of role `user`, `assistant` and `toolResult`.
+    PiSessionMessages,
+}
+
+impl TranscriptReading {
+    /// The normalized records of one line of the transcript this reading names.
+    pub fn records(self, line: &str) -> Vec<crate::domain::transcript::TranscriptRecord> {
+        match self {
+            TranscriptReading::ClaudeRecords => crate::domain::transcript::claude_records(line),
+            TranscriptReading::CopilotJournalEvents => {
+                crate::domain::transcript::copilot_records(line)
+            }
+            TranscriptReading::PiSessionMessages => crate::domain::transcript::pi_records(line),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TranscriptReading::ClaudeRecords => {
+                "read — the transcript's user and assistant records, thinking dropped"
+            }
+            TranscriptReading::CopilotJournalEvents => {
+                "read — the journal's message and tool events, reasoning dropped"
+            }
+            TranscriptReading::PiSessionMessages => {
+                "read — the session's user, assistant and tool-result messages, thinking dropped"
+            }
+        }
+    }
+}
+
 /// The substrate PDO reads to constate an end of turn (#469 §2, ADR-0043).
 ///
 /// Absent ⇒ the turn-end auto-completion probe never runs for this harness, so no

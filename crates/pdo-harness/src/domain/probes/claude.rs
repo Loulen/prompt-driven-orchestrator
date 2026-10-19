@@ -18,6 +18,9 @@ impl HarnessProbes for ClaudeProbes {
     fn observed_identity_source(&self) -> Option<ObservedIdentitySource> {
         Some(ObservedIdentitySource::ModelPerMessage)
     }
+    fn transcript_reading(&self) -> Option<TranscriptReading> {
+        Some(TranscriptReading::ClaudeRecords)
+    }
     fn transcript_resolution(&self) -> Option<TranscriptResolution> {
         Some(TranscriptResolution::ClaudeJsonl)
     }

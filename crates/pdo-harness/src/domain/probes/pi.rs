@@ -41,6 +41,9 @@ impl HarnessProbes for PiProbes {
     fn observed_identity_source(&self) -> Option<ObservedIdentitySource> {
         Some(ObservedIdentitySource::ModelAndEffort)
     }
+    fn transcript_reading(&self) -> Option<TranscriptReading> {
+        Some(TranscriptReading::PiSessionMessages)
+    }
     fn transcript_resolution(&self) -> Option<TranscriptResolution> {
         Some(TranscriptResolution::PiJsonlById)
     }

@@ -37,7 +37,7 @@ interface Props {
   /** #723: open a child run listed in the Orchestration tab (App records the way back). */
   onOpenChildRun?: (childRunId: string) => void;
   /** #723: land on the Orchestration tab (the back arrow from a child run). */
-  initialDetailTab?: "io" | "orchestration";
+  initialDetailTab?: "io" | "transcript" | "orchestration";
   /** ADR-0086: the node is an on-demand node — its Start is its ▶. */
   isOnDemand?: boolean;
 }
@@ -65,7 +65,8 @@ export default function NodeDetailPanel({
   const [terminalSpectating, setTerminalSpectating] = useState(false);
   // #723 — an orchestrator NodeRun splits its lower pane into I/O | Orchestration.
   // I/O stays the default; the choice is per mounted node (remount = back to I/O).
-  // `io`, `orchestration`, or the key of a `node/detail` tab of an extension.
+  // `io`, `transcript`, `orchestration`, or the key of a `node/detail` tab of an
+  // extension.
   const [detailTab, setDetailTab] = useState<string>(initialDetailTab);
   // The children read polls with the run view cadence (never pushed), whether or
   // not the tab is open — the tab-header pastilles count from the same read.
@@ -329,6 +330,12 @@ export default function NodeDetailPanel({
             promptText={promptText}
             onOpenFile={(portKind, portName, files, portType) =>
               setModal({ portName, files, portKind, portType })
+            }
+            selectedIter={selectedIter}
+            onSelectIter={setSelectedIter}
+            iterLive={
+              !isArchived &&
+              (selectedIterStatus === "running" || selectedIterStatus === "awaiting_user")
             }
           />
         }

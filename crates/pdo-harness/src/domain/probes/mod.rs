@@ -80,7 +80,7 @@ pub use injection::{
 };
 pub use sources::{
     ContextUsageSource, CostSource, ObservedIdentity, ObservedIdentitySource, SteeringSource,
-    SubagentLayout, TranscriptResolution, TurnEndSubstrate, UsageLimitAnchor,
+    SubagentLayout, TranscriptReading, TranscriptResolution, TurnEndSubstrate, UsageLimitAnchor,
 };
 pub use staging::{
     staging_sets, AutonomyFixup, StagingEntry, StagingSet, CLAUDE_STAGING_SET, PI_STAGING_SET,
@@ -106,6 +106,11 @@ pub trait HarnessProbes: Sync {
     }
     /// How PDO finds this harness's transcript, or `None`.
     fn transcript_resolution(&self) -> Option<TranscriptResolution> {
+        None
+    }
+    /// How PDO reads the transcript into the Transcript tab, or `None` (the tab
+    /// says « unavailable for this harness »).
+    fn transcript_reading(&self) -> Option<TranscriptReading> {
         None
     }
     /// The end-of-turn substrate, or `None` (the sweep's turn-end probe is gated
@@ -228,6 +233,16 @@ pub trait HarnessProbes: Sync {
     fn steering_count(&self, _text: &str) -> Option<u32> {
         None
     }
+
+    /// The normalized records of one line of this harness's transcript
+    /// ([`crate::domain::transcript`]), the model's thinking dropped — read by
+    /// its declared [`Self::transcript_reading`], so the declaration and the
+    /// parser cannot drift apart. No reading ⇒ an empty `Vec`.
+    fn transcript_records(&self, line: &str) -> Vec<crate::domain::transcript::TranscriptRecord> {
+        self.transcript_reading()
+            .map(|reading| reading.records(line))
+            .unwrap_or_default()
+    }
 }
 
 /// The capabilities of a **data-declared** harness (a user's disk descriptor, or
@@ -285,6 +300,20 @@ pub fn steering_count(harness: &str, text: &str) -> Option<u32> {
 /// caller falls back to the requested identity, or invents nothing.
 pub fn observed_identities(harness: &str, text: &str) -> Vec<ObservedIdentity> {
     resolved(harness).observed_identities(text)
+}
+
+/// Whether PDO reads `harness`'s transcript into the Transcript tab.
+pub fn can_read_transcript(harness: &str) -> bool {
+    resolved(harness).transcript_reading().is_some()
+}
+
+/// The normalized records of one line of `harness`'s transcript, dispatched to
+/// its reader (ADR-0051). A harness with no reader answers an empty `Vec`.
+pub fn transcript_records(
+    harness: &str,
+    line: &str,
+) -> Vec<crate::domain::transcript::TranscriptRecord> {
+    resolved(harness).transcript_records(line)
 }
 
 /// Whether `harness` constates an end of turn from this transcript `tail`,

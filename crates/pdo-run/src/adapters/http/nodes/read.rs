@@ -1,5 +1,6 @@
 //! The node routes that only read: a node's prompt, its inputs and outputs, its
-//! diff, what a retry would invalidate, and the long-poll on its child runs.
+//! diff, its transcript, what a retry would invalidate, and the long-poll on its
+//! child runs.
 //! None asks the Autorisation d'opération.
 
 use std::sync::Arc;
@@ -11,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use crate::application::children_wait::{children_wait, ChildrenWaitQuery};
 use crate::application::session_claim::session_claim_from_headers;
 
-use crate::adapters::http::nodes::requests::IterQuery;
+use crate::adapters::http::nodes::requests::{IterQuery, TranscriptQuery};
 use crate::application::events::load_projected;
 use crate::application::node::io as node_io_resolver;
 use crate::application::node::launch::snapshot_isolation;
@@ -115,6 +116,33 @@ pub(in crate::adapters::http) async fn node_diff(
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
 ) -> Response {
     crate::application::node_diff::node_diff(&state, run_id, node_id).await
+}
+
+/// `GET /runs/{run_id}/nodes/{node_id}/transcript?iter=&after=&limit=`.
+pub(in crate::adapters::http) async fn node_transcript(
+    State(state): State<Arc<Runs>>,
+    AxumPath((run_id, node_id)): AxumPath<(String, String)>,
+    Query(query): Query<TranscriptQuery>,
+) -> Response {
+    crate::application::node::transcript::page(
+        &state,
+        &run_id,
+        &node_id,
+        query.iter,
+        query.after,
+        query.limit,
+    )
+    .await
+}
+
+/// `GET /runs/{run_id}/nodes/{node_id}/transcript/tools/{index}?iter=`.
+pub(in crate::adapters::http) async fn node_transcript_tool(
+    State(state): State<Arc<Runs>>,
+    AxumPath((run_id, node_id, index)): AxumPath<(String, String, usize)>,
+    Query(query): Query<IterQuery>,
+) -> Response {
+    crate::application::node::transcript::tool_detail(&state, &run_id, &node_id, query.iter, index)
+        .await
 }
 
 /// `GET /runs/{run_id}/nodes/{node_id}/retry/preview`.

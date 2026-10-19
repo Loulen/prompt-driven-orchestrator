@@ -212,7 +212,7 @@ describe("NodeDetailPanel", () => {
       ["derived", true, 2, "~$2.00†"],
       [null, false, 3, "~$3.00"],
       ["derived", false, null, "—"],
-    ] as const)("renders %s cost beside the end time", (form, partial, usd, text) => {
+    ] as const)("renders %s cost beside the duration", (form, partial, usd, text) => {
       render(
         <NodeDetailPanel
           node={makeNode({
@@ -232,7 +232,9 @@ describe("NodeDetailPanel", () => {
       );
       const chip = screen.getByTestId("node-cost");
       expect(chip).toHaveTextContent(text);
-      expect(chip.parentElement).toHaveTextContent(/ended .* · /);
+      // The cost follows the iteration's duration, which replaced `ended …`.
+      expect(chip.parentElement).toHaveTextContent(/ total · /);
+      expect(chip.parentElement).not.toHaveTextContent(/ended|started/);
       if (usd === null) expect(chip).not.toHaveTextContent("$0");
     });
 

@@ -39,6 +39,7 @@ use node_events::apply_node_event;
 use regions::{apply_collection_event, apply_foreach_event, apply_loop_event, apply_switch_event};
 use run_events::apply_run_event;
 
+use crate::domain::declared_wait::DeclaredWaitLedger;
 use crate::domain::event::{Event, EventKind};
 use crate::domain::state::RunState;
 
@@ -49,8 +50,10 @@ pub fn project(events: &[Event]) -> Option<RunState> {
 
     let run_id = events[0].run_id.clone();
     let mut state = RunState::new(run_id, String::new());
+    let mut waits = DeclaredWaitLedger::default();
 
     for event in events {
+        waits.observe(event);
         match event.kind {
             EventKind::RunStarted
             | EventKind::RunCompleted
@@ -129,6 +132,18 @@ pub fn project(events: &[Event]) -> Option<RunState> {
     // #328: a log with no RunStarted is an invalid fragment (e.g. a late event
     // appended after a forget) — never surface it as a phantom Running run.
     state.started_at.as_ref()?;
+
+    // Each iteration carries its declared waits — the closed ones Stats ›
+    // Performance subtracts, and the one still open — so the node panel
+    // derives the Active duration by the same rule.
+    for node in state.nodes.values_mut() {
+        for iteration in &mut node.iterations {
+            iteration.waited_ms = waits.waited_ms(&node.node_id, iteration.iter).round() as i64;
+            iteration.open_wait_since = waits
+                .open_since(&node.node_id, iteration.iter)
+                .map(str::to_string);
+        }
+    }
 
     finalize(&mut state);
 
@@ -3696,6 +3711,8 @@ mod tests {
                     completed_at: None,
                     interactive: false,
                     completion_released: false,
+                    waited_ms: 0,
+                    open_wait_since: None,
                 })
                 .collect(),
             frontmatter_retries: 0,
@@ -4854,5 +4871,208 @@ mod tests {
         );
         assert!(state.nodes.is_empty(), "misrouted kind must be a no-op");
         assert_eq!(state.status, RunStatus::Running);
+    }
+
+    /// `IterationInfo::waited_ms`: the closed declared waits of each iteration,
+    /// projected with the rule Stats › Performance uses.
+    mod waited_ms {
+        use super::*;
+        use crate::domain::declared_wait::declared_waits;
+        use pretty_assertions::assert_eq;
+
+        fn at(kind: EventKind, iter: i64, minute: u32) -> Event {
+            make_event_ts(
+                kind,
+                Some("n"),
+                Some(iter),
+                &format!("2026-01-01T00:{minute:02}:00.000Z"),
+            )
+        }
+
+        fn awaiting(iter: i64, minute: u32, cause: &str) -> Event {
+            let mut event = at(EventKind::NodeAwaitingUser, iter, minute);
+            event.payload = Some(serde_json::json!({ "cause": cause }));
+            event
+        }
+
+        fn project_node(body: Vec<Event>) -> NodeState {
+            let mut events = vec![make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "test" }),
+            )];
+            events.extend(body);
+            project(&events).unwrap().nodes["n"].clone()
+        }
+
+        fn waited(node: &NodeState, iter: i64) -> i64 {
+            node.iterations
+                .iter()
+                .find(|i| i.iter == iter)
+                .expect("iteration projected")
+                .waited_ms
+        }
+
+        const MINUTE: i64 = 60_000;
+
+        #[test]
+        fn a_single_declared_wait_is_counted() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 2, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 5),
+                at(EventKind::NodeCompleted, 1, 9),
+            ]);
+            assert_eq!(waited(&node, 1), 3 * MINUTE);
+        }
+
+        #[test]
+        fn several_waits_add_up_and_a_refreshed_question_is_the_same_wait() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 3),
+                awaiting(1, 4, AWAITING_CAUSE_DECLARED),
+                awaiting(1, 5, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 8),
+                at(EventKind::NodeCompleted, 1, 10),
+            ]);
+            assert_eq!(waited(&node, 1), 6 * MINUTE);
+        }
+
+        #[test]
+        fn completion_not_released_counts_until_the_release() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 2, AWAITING_CAUSE_COMPLETION_NOT_RELEASED),
+                at(EventKind::NodeCompletionReleased, 1, 6),
+                at(EventKind::NodeCompleted, 1, 7),
+            ]);
+            assert_eq!(waited(&node, 1), 4 * MINUTE);
+        }
+
+        #[test]
+        fn a_wait_closed_by_a_terminal_event_counts() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 2, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeStopped, 1, 7),
+            ]);
+            assert_eq!(waited(&node, 1), 5 * MINUTE);
+        }
+
+        #[test]
+        fn children_pending_is_not_a_wait() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, "children_pending"),
+                at(EventKind::NodeResumed, 1, 8),
+                at(EventKind::NodeCompleted, 1, 9),
+            ]);
+            assert_eq!(waited(&node, 1), 0);
+        }
+
+        #[test]
+        fn each_iteration_has_its_own_waits() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 3),
+                at(EventKind::NodeCompleted, 1, 4),
+                at(EventKind::NodeStarted, 2, 5),
+                awaiting(2, 6, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 2, 7),
+                at(EventKind::NodeCompleted, 2, 8),
+            ]);
+            assert_eq!(waited(&node, 1), 2 * MINUTE);
+            assert_eq!(waited(&node, 2), MINUTE);
+        }
+
+        #[test]
+        fn a_restart_on_the_same_iteration_resets_its_waits() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 4),
+                at(EventKind::NodeStopped, 1, 5),
+                at(EventKind::NodeStarted, 1, 6),
+                at(EventKind::NodeCompleted, 1, 9),
+            ]);
+            assert_eq!(waited(&node, 1), 0);
+        }
+
+        #[test]
+        fn an_open_wait_is_not_counted() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 2),
+                awaiting(1, 3, AWAITING_CAUSE_DECLARED),
+            ]);
+            assert_eq!(node.status, NodeStatus::AwaitingUser);
+            assert_eq!(waited(&node, 1), MINUTE);
+        }
+
+        #[test]
+        fn the_open_wait_starts_at_its_first_marker() {
+            // A refreshed question is the same wait: `awaiting.since` moves,
+            // the open wait does not.
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                awaiting(1, 5, AWAITING_CAUSE_DECLARED),
+            ]);
+            assert_eq!(
+                node.iterations[0].open_wait_since.as_deref(),
+                Some("2026-01-01T00:01:00.000Z")
+            );
+        }
+
+        #[test]
+        fn no_open_wait_once_lifted_nor_for_children_pending() {
+            let lifted = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 2),
+            ]);
+            assert_eq!(lifted.iterations[0].open_wait_since, None);
+            let orchestrating = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, "children_pending"),
+            ]);
+            assert_eq!(orchestrating.iterations[0].open_wait_since, None);
+        }
+
+        #[test]
+        fn waited_ms_is_on_the_wire_only_when_there_was_a_wait() {
+            let node = project_node(vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 2),
+                at(EventKind::NodeStarted, 2, 3),
+            ]);
+            let waited = serde_json::to_value(&node.iterations[0]).unwrap();
+            assert_eq!(waited["waited_ms"], MINUTE);
+            let never_waited = serde_json::to_value(&node.iterations[1]).unwrap();
+            assert!(never_waited.get("waited_ms").is_none());
+            let legacy: IterationInfo = serde_json::from_value(serde_json::json!({
+                "iter": 1, "status": "running", "started_at": null, "completed_at": null
+            }))
+            .unwrap();
+            assert_eq!(legacy.waited_ms, 0);
+        }
+
+        #[test]
+        fn the_projection_agrees_with_the_shared_rule() {
+            let events = vec![
+                at(EventKind::NodeStarted, 1, 0),
+                awaiting(1, 1, AWAITING_CAUSE_DECLARED),
+                at(EventKind::NodeResumed, 1, 4),
+                at(EventKind::NodeCompleted, 1, 6),
+            ];
+            let node = project_node(events.clone());
+            let rule = declared_waits(&events);
+            assert_eq!(waited(&node, 1) as f64, rule[&("n".to_string(), 1)]);
+        }
     }
 }

@@ -164,7 +164,7 @@ pub struct InstanceConfig {
     pub max_attachments_mb: Option<i64>,
     /// Stored Public URL, the address humans open PDO at, or `None` when unset
     /// (`stored → env PDO_PUBLIC_URL → none`, resolved by
-    /// [`pdo_kernel::public_url::resolve`]). Stored normalized: `http(s)://host[:port][/path]`
+    /// [`pdo_kernel::public_url::resolve`]). Stored normalized: an origin `http(s)://host[:port]`
     /// without a trailing `/`.
     pub public_url: Option<String>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).

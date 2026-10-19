@@ -9,10 +9,13 @@ import { toast } from "../shared/ui/toast";
 
 /**
  * The mounted page in the app shell: the page tab shown in the center (another
- * pipeline or Run tab takes the center back), whether its guide shows in the right
+ * pipeline or Run tab, or a Trigger, takes the center back), whether its guide shows in the right
  * pane, and its deep link followed.
  */
-export function useMountedPageShell(editActiveTabId: string | null): {
+export function useMountedPageShell(
+  editActiveTabId: string | null,
+  selectedTriggerId: string | null,
+): {
   activePage: PageMount | null;
   guideShown: boolean;
 } {
@@ -20,6 +23,10 @@ export function useMountedPageShell(editActiveTabId: string | null): {
   const guideOpen = useMountedPages((s) => s.guideOpen);
   const showPage = useMountedPages((s) => s.showPage);
   useEffect(() => showPage(null), [editActiveTabId, showPage]);
+  // A Trigger selected in the list shows its detail, which a page's guide would hide.
+  useEffect(() => {
+    if (selectedTriggerId) showPage(null);
+  }, [selectedTriggerId, showPage]);
   usePageLink();
   return { activePage, guideShown: guideOpen && (activePage?.guide?.length ?? 0) > 0 };
 }

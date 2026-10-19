@@ -574,7 +574,7 @@ describe("SettingsSurface", () => {
     fireEvent.change(field, { target: { value: "pdo.example.net" } });
     expect(screen.getByTestId("setting-public-url-invalid")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("settings-save"));
-    expect(await screen.findByTestId("settings-error")).toHaveTextContent(/http:\/\/ or https:\/\//);
+    expect(await screen.findByTestId("settings-error")).toHaveTextContent(/http:\/\/ or https:\/\/ origin/);
     expect(updateSettingsMock).not.toHaveBeenCalled();
 
     fireEvent.change(field, { target: { value: "https://pdo.example.net/" } });

@@ -56,9 +56,9 @@ export function seedFrom(settings: InstanceSettings): DraftValues {
   };
 }
 
-/** A Public URL the daemon will accept: `http(s)://host…`, no query nor fragment. */
+/** A Public URL the daemon will accept: an origin `http(s)://host[:port]`, no path. */
 export function isPublicUrl(raw: string): boolean {
-  return /^https?:\/\/[^\s/?#:@][^\s/?#@]*(\/[^\s?#]*)?$/i.test(raw.trim());
+  return /^https?:\/\/[^\s/?#:@][^\s/?#@]*\/*$/i.test(raw.trim());
 }
 
 /** The per-harness map the daemon will store: trimmed, empty entries dropped. */
@@ -249,7 +249,7 @@ export function buildPatch(
   const publicUrl = values.publicUrl.trim();
   if (publicUrl !== (settings.public_url.stored ?? "")) {
     if (publicUrl !== "" && !isPublicUrl(publicUrl)) {
-      return { error: "Public URL must be an http:// or https:// address, without ? or #." };
+      return { error: "Public URL must be an http:// or https:// origin (host and port, no path)." };
     }
     patch.public_url = publicUrl;
   }

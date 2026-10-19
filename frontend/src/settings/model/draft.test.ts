@@ -103,13 +103,13 @@ describe("the Public URL in the draft (CORE-83)", () => {
   });
 
   it("refuses what the daemon would refuse", () => {
-    for (const bad of ["pdo.example.net", "ftp://x", "https://x/?a=1", "https://x/#y", "https:// x"]) {
+    for (const bad of ["pdo.example.net", "ftp://x", "https://x/?a=1", "https://x/#y", "https:// x", "https://x/pdo"]) {
       expect(isPublicUrl(bad)).toBe(false);
       const loaded = settings();
       const values = { ...seedFrom(loaded), publicUrl: bad };
       expect(buildPatch(values, loaded, computeDirty(values, loaded))).toHaveProperty("error");
     }
-    expect(isPublicUrl("http://10.0.0.4:5272/pdo")).toBe(true);
+    expect(isPublicUrl("http://10.0.0.4:5272/")).toBe(true);
   });
 });
 

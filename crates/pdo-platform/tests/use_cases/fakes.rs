@@ -117,6 +117,13 @@ impl PageFiles for Files {
         }
         Ok(directory.to_path_buf())
     }
+    fn exists<'a>(&'a self, root: &'a Path, components: &'a [OsString]) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let mut path = root.to_path_buf();
+            path.extend(components);
+            self.0.contains_key(&path.display().to_string())
+        })
+    }
     fn read<'a>(
         &'a self,
         root: &'a Path,

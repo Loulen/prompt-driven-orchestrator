@@ -1,17 +1,40 @@
 import { useEffect, useState } from "react";
 import { BookOpen, ExternalLink, Link2, X } from "lucide-react";
 import { fetchSettings } from "../../settings/api/settings";
+import { fetchPageMounts } from "../api/pages";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 import { toast } from "../../shared/ui/toast";
 import { guidedPageUrl, pageUrl } from "../model/mountedPage";
 import { useMountedPages } from "../store/mountedPages";
 
-/** The tabs of the mounted pages, after the Run and pipeline tabs of the tab bar. */
+/**
+ * The tabs of the mounted pages, after the Run and pipeline tabs of the tab bar. Showing
+ * a tab reads its mount again: a page unmounted since (its guide gone with it) closes
+ * and says so, a guide written again shows its new entries.
+ */
 export function PageTabButtons() {
   const tabs = useMountedPages((s) => s.tabs);
   const active = useMountedPages((s) => s.active);
   const showPage = useMountedPages((s) => s.showPage);
   const closePage = useMountedPages((s) => s.closePage);
+  const openPage = useMountedPages((s) => s.openPage);
+  const show = async (name: string) => {
+    showPage(name);
+    let mounts;
+    try {
+      mounts = await fetchPageMounts();
+    } catch {
+      return; // Unreachable daemon: the tab shows what it last knew.
+    }
+    const mount = mounts.find((m) => m.name === name);
+    if (useMountedPages.getState().active !== name) return;
+    if (mount) {
+      openPage(mount);
+    } else {
+      closePage(name);
+      toast(`Page “${name}” is no longer mounted.`, "error");
+    }
+  };
   return (
     <>
       {tabs.map((tab) => {
@@ -20,7 +43,7 @@ export function PageTabButtons() {
           <button
             key={`page:${tab.name}`}
             type="button"
-            onClick={() => showPage(tab.name)}
+            onClick={() => void show(tab.name)}
             data-testid={`page-tab-${tab.name}`}
             data-active={isActive || undefined}
             title={`/pages/${tab.name}/`}

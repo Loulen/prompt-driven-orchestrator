@@ -107,7 +107,7 @@ export default function App() {
 
   const editTab = openTabs.find((t) => t.id === editActiveTabId);
   // A mounted page's tab shown in the centre (its guide owns the right pane).
-  const { activePage, guideShown } = useMountedPageShell(editActiveTabId);
+  const { activePage, guideShown } = useMountedPageShell(editActiveTabId, selectedTriggerId);
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
 

@@ -11,9 +11,10 @@
 /// receives it in.
 pub const PUBLIC_URL_ENV: &str = "PDO_PUBLIC_URL";
 
-/// The canonical form of a Public URL: `http(s)://host[:port][/path]`, without
-/// a trailing `/`, a query or a fragment. `Ok(None)` for a blank value (the
-/// clear); `Err` with the reason otherwise.
+/// The canonical form of a Public URL: an origin, `http(s)://host[:port]`,
+/// without a trailing `/`. No path: the interface and the pages are served from
+/// the root of the address. `Ok(None)` for a blank value (the clear); `Err`
+/// with the reason otherwise.
 pub fn normalize(raw: &str) -> Result<Option<String>, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -36,21 +37,23 @@ pub fn normalize(raw: &str) -> Result<Option<String>, String> {
     if host.is_empty() || host.starts_with(':') || host.contains('@') {
         return invalid("must name a host");
     }
-    let path = rest[host.len()..].trim_end_matches('/');
-    Ok(Some(format!(
-        "{}://{host}{path}",
-        scheme.to_ascii_lowercase()
-    )))
+    if !rest[host.len()..].trim_end_matches('/').is_empty() {
+        return invalid("must be an origin, without a path: PDO is served from the root");
+    }
+    Ok(Some(format!("{}://{host}", scheme.to_ascii_lowercase())))
 }
 
 /// The environment tier: [`PUBLIC_URL_ENV`], normalized; an invalid value is
-/// ignored with a warning rather than handed to the agents.
+/// ignored, with one warning per process, rather than handed to the agents.
 pub fn env_public_url() -> Option<String> {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     let raw = std::env::var(PUBLIC_URL_ENV).ok()?;
     match normalize(&raw) {
         Ok(url) => url,
         Err(why) => {
-            tracing::warn!("{PUBLIC_URL_ENV} ignored: {why}");
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!("{PUBLIC_URL_ENV} ignored: {why}");
+            }
             None
         }
     }
@@ -84,8 +87,8 @@ mod tests {
             Some("https://pdo.example.net".into())
         );
         assert_eq!(
-            normalize("HTTP://10.0.0.4:5272/pdo//").unwrap(),
-            Some("http://10.0.0.4:5272/pdo".into())
+            normalize("HTTP://10.0.0.4:5272//").unwrap(),
+            Some("http://10.0.0.4:5272".into())
         );
         assert_eq!(normalize("").unwrap(), None);
         assert_eq!(normalize("   ").unwrap(), None);
@@ -102,6 +105,7 @@ mod tests {
             "https://pdo.example.net/#/runs",
             "https://pdo example.net",
             "https://user@pdo.example.net",
+            "https://pdo.example.net/pdo",
         ] {
             let error = normalize(raw).expect_err(raw);
             assert!(error.contains("public_url"), "{error}");

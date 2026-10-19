@@ -73,6 +73,8 @@ pub trait PageFiles: Send + Sync {
         root: &'a Path,
         components: &'a [OsString],
     ) -> BoxFuture<'a, Result<Option<PageFile>, StorageError>>;
+    /// Whether [`Self::read`] would find a file there, without reading it.
+    fn exists<'a>(&'a self, root: &'a Path, components: &'a [OsString]) -> BoxFuture<'a, bool>;
 }
 
 /// The Runs, as the platform sees them. Implemented by the `run` context.

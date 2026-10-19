@@ -150,12 +150,7 @@ impl MountPage {
                     (run_id, Some(node_id))
                 }
                 GuideLink::Path(components) => {
-                    let found = self
-                        .files
-                        .read(directory, components)
-                        .await
-                        .map_err(|e| at(e.to_string()))?;
-                    if found.is_none() {
+                    if !self.files.exists(directory, components).await {
                         return Err(at(format!("`{}` is not a file of the page", entry.link)));
                     }
                     continue;

@@ -13,18 +13,13 @@ import Section from "./Section";
 /** The page name the preview prints. */
 const EXAMPLE_PAGE = "my-page";
 
-/** Where links go with no Public URL: the daemon's own port, on this machine only. */
-function localAddress(): string {
-  const port = window.location.port;
-  return `http://localhost${port ? `:${port}` : ""}`;
-}
-
 export default function PublicUrlSection({ section, values, settings, dirty, setField }: FormSectionProps) {
   const typed = values.publicUrl.trim();
   const isDirty = dirty.has("public-url");
   const invalid = typed !== "" && !isPublicUrl(typed);
   // What `pdo page mount` would print once saved: the typed address, else the env tier.
-  const base = typed && !invalid ? typed : typed === "" ? settings.public_url.env ?? localAddress() : null;
+  // Neither: links stay on the daemon's own address, which this browser may not show.
+  const base = typed && !invalid ? typed : typed === "" ? settings.public_url.env : null;
   return (
     <Section section={section}>
       <FieldBlock
@@ -33,8 +28,9 @@ export default function PublicUrlSection({ section, values, settings, dirty, set
         dirty={isDirty}
         help={
           <>
-            Empty: links stay on <span className="font-mono">{localAddress()}</span> and only work on
-            this machine. PDO does not guess it from your browser&apos;s address.
+            Empty: links stay on the daemon&apos;s own address (
+            <span className="font-mono">http://localhost:&lt;port&gt;</span>) and only work on this
+            machine. PDO does not guess it from your browser&apos;s address.
           </>
         }
         source={publicUrlSourceNote(settings.public_url)}
@@ -61,7 +57,7 @@ export default function PublicUrlSection({ section, values, settings, dirty, set
         />
         {invalid && (
           <div className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid="setting-public-url-invalid">
-            An http:// or https:// address, without ? or #.
+            An http:// or https:// origin: host and port, no path.
           </div>
         )}
       </FieldBlock>

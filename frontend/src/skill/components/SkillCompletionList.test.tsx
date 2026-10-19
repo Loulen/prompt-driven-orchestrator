@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Skill } from "../../shared/generated/Skill";
 import type { SkillFolder } from "../../shared/generated/SkillFolder";
@@ -116,6 +116,9 @@ describe("the skills completion of a prompt", () => {
     await userEvent.type(prompt, "/");
     const rows = screen.getByTestId("skill-completion-rows");
     vi.spyOn(rows, "getBoundingClientRect").mockReturnValue(DOMRect.fromRect({ x: 0, y: 100, width: 330, height: 60 }));
+    vi.spyOn(screen.getByText("Skill bank"), "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 104, width: 330, height: 16 }),
+    );
     vi.spyOn(screen.getByTestId("skill-completion-option-review-checklist"), "getBoundingClientRect").mockReturnValue(
       DOMRect.fromRect({ x: 0, y: 120, width: 330, height: 20 }),
     );
@@ -133,6 +136,43 @@ describe("the skills completion of a prompt", () => {
 
     await userEvent.keyboard("{ArrowDown}");
     expect(screen.getByTestId("skill-completion-option-code-review")).toHaveAttribute("aria-selected", "true");
-    expect(rows.scrollTop).toBe(20);
+    // Back to the first option, the rows go back to the top: its group's head shows again.
+    expect(rows.scrollTop).toBe(0);
+  });
+
+  it("brings the head of a group into sight with the first option under it", async () => {
+    render(<Prompt onAdd={vi.fn()} />);
+    await userEvent.type(screen.getByTestId("prompt"), "/");
+    const rows = screen.getByTestId("skill-completion-rows");
+    const head = screen.getByText("Skill bank");
+    vi.spyOn(rows, "getBoundingClientRect").mockReturnValue(DOMRect.fromRect({ x: 0, y: 100, width: 330, height: 60 }));
+    vi.spyOn(head, "getBoundingClientRect").mockReturnValue(DOMRect.fromRect({ x: 0, y: 90, width: 330, height: 16 }));
+    vi.spyOn(screen.getByTestId("skill-completion-option-review-checklist"), "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 106, width: 330, height: 20 }),
+    );
+    rows.scrollTop = 50;
+
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("skill-completion-option-review-checklist")).toHaveAttribute("aria-selected", "true");
+    expect(rows.scrollTop).toBe(40);
+  });
+
+  it("follows the pointer only when it moves, not when the rows scroll under a still pointer", async () => {
+    render(<Prompt onAdd={vi.fn()} />);
+    await userEvent.type(screen.getByTestId("prompt"), "/");
+    const tdd = screen.getByTestId("skill-completion-option-tdd");
+    const checklist = screen.getByTestId("skill-completion-option-review-checklist");
+
+    // The rows scroll under the pointer: the browser enters a row, the pointer has not moved.
+    fireEvent.mouseEnter(tdd, { clientX: 50, clientY: 50 });
+    fireEvent.mouseOver(tdd, { clientX: 50, clientY: 50 });
+    expect(screen.getByTestId("skill-completion-option-code-review")).toHaveAttribute("aria-selected", "true");
+    fireEvent.mouseMove(tdd, { clientX: 50, clientY: 50 });
+    fireEvent.mouseMove(tdd, { clientX: 50, clientY: 50 });
+    expect(screen.getByTestId("skill-completion-option-code-review")).toHaveAttribute("aria-selected", "true");
+
+    // The pointer moves over a row: it picks it.
+    fireEvent.mouseMove(checklist, { clientX: 52, clientY: 30 });
+    expect(checklist).toHaveAttribute("aria-selected", "true");
   });
 });

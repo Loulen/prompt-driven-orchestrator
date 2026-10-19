@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { CircleCheck, Sparkles } from "lucide-react";
 import { caretOffset } from "../../shared/lib/caretOffset";
@@ -19,8 +19,10 @@ export type SkillCompletionScope = "node" | "run";
  * as the detail), and the keys at the foot. A portal above everything, which
  * follows the page while it scrolls; it opens above the caret when the room
  * under it is short, and never leaves the viewport; its rows scroll to keep
- * the option chosen with the arrows in sight. A row is picked with a
- * click; the textarea keeps the focus.
+ * the option chosen with the arrows in sight, with the head of its group
+ * when it comes first under it. The pointer chooses a row only when it moves:
+ * rows scrolling under a still pointer leave the choice to the arrows. A row
+ * is picked with a click; the textarea keeps the focus.
  */
 export default function SkillCompletionList({
   completion,
@@ -37,6 +39,8 @@ export default function SkillCompletionList({
   const [place, setPlace] = useState<CaretPlace | null>(null);
   const rows = useRef<HTMLDivElement>(null);
   const foot = useRef<HTMLDivElement>(null);
+  // Where the pointer last moved: a scroll fires the mouse events without moving it.
+  const pointer = useRef<{ x: number; y: number } | null>(null);
   // What its height hangs on: the rows and the groups they fall in.
   const shown = options.map((option) => `${option.skill.id}${option.received ? "+" : ""}`).join(" ");
 
@@ -66,16 +70,32 @@ export default function SkillCompletionList({
     };
   }, [query, shown, textarea]);
 
-  // The option chosen with the arrows stays in sight while the rows scroll.
+  // The option chosen with the arrows stays in sight while the rows scroll,
+  // with the head of its group above it when it comes first in the group.
   useLayoutEffect(() => {
     const box = rows.current;
     const active = box?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (!box || !active) return;
+    if (selected === 0) {
+      box.scrollTop = 0;
+      return;
+    }
+    const before = active.previousElementSibling;
+    const head = before && before.getAttribute("role") !== "option" ? before : active;
     const view = box.getBoundingClientRect();
-    const option = active.getBoundingClientRect();
-    if (option.top < view.top) box.scrollTop -= view.top - option.top;
-    else if (option.bottom > view.bottom) box.scrollTop += option.bottom - view.bottom;
+    const top = head.getBoundingClientRect().top;
+    const bottom = active.getBoundingClientRect().bottom;
+    if (top < view.top) box.scrollTop -= view.top - top;
+    else if (bottom > view.bottom) box.scrollTop += bottom - view.bottom;
   }, [selected, shown]);
+
+  const hover = (index: number, event: MouseEvent) => {
+    const last = pointer.current;
+    pointer.current = { x: event.clientX, y: event.clientY };
+    if (last && (last.x !== event.clientX || last.y !== event.clientY) && index !== selected) {
+      completion.setSelected(index);
+    }
+  };
 
   if (!query || options.length === 0) return null;
   const received = options.filter((option) => option.received);
@@ -90,7 +110,7 @@ export default function SkillCompletionList({
         data-testid={`skill-completion-option-${option.skill.name}`}
         data-received={option.received || undefined}
         onMouseDown={(event) => event.preventDefault()}
-        onMouseEnter={() => completion.setSelected(index)}
+        onMouseMove={(event) => hover(index, event)}
         onClick={() => onPick(option)}
         className={`mx-1 grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-2 rounded px-1.5 py-1 ${
           active ? "bg-acc-bg" : "hover:bg-bg-3"

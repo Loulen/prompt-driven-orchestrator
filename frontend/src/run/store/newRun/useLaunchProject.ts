@@ -81,12 +81,13 @@ export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRu
     }
   }, [open, openIntent, projects, offered, rights, allowNone, projectId, projectChosen, apply, targetRepo, handleRepoChange]);
 
-  // A secondary of the Projet that became the primary is no longer a secondary.
+  // A secondary that became the primary is no longer a secondary.
   useEffect(() => {
     const primary = targetRepo.trim();
+    if (!primary) return;
     setSecondaryRepos((prev) =>
-      prev.some((r) => r.fromProject && r.path === primary)
-        ? prev.filter((r) => !(r.fromProject && r.path === primary))
+      prev.some((r) => r.path.trim() === primary)
+        ? prev.filter((r) => r.path.trim() !== primary)
         : prev,
     );
   }, [targetRepo, setSecondaryRepos]);

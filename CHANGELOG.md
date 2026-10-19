@@ -29,6 +29,10 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   déjà enregistré n'est jamais revu : changer les membres d'un Projet ne déplace aucun Run.
 - `GET /runs` et `GET /runs/{id}` portent `project_id` ; les listes de Runs et de Triggers se
   groupent par Projet enregistré. Les Stats rangent le coût d'un Run sous ce Projet.
+- **`pdo-extension-api` 0.16.0**, sans rupture : `NewRun::in_project(id)` lance le Run d'un
+  `Host::create_run` dans un Projet. Sans lui, le Run est hors Projet.
+- `pdo run create --project <id>` lance dans un Projet ; depuis une session de nœud, le Run
+  enfant reste dans le Projet de son parent.
 - New Run › Where commence par le Projet (le dernier choisi est présélectionné, « No project »
   seulement si les Droits le permettent), présélectionne son dépôt primaire par défaut et propose
   ses autres dépôts comme secondaires cochables, en lecture seule par défaut.

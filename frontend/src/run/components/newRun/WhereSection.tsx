@@ -41,9 +41,12 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
     : restricted
       ? repoGroups(rights, recentRepos, projects)
       : undefined;
+  // A secondary that is one of the Projet's repositories shows among them,
+  // whichever way it was added; the others are « outside » the Projet.
+  const projectPaths = new Set(projectRepos);
   const outside = secondaryRepos
     .map((repo, index) => ({ repo, index }))
-    .filter(({ repo }) => !repo.fromProject);
+    .filter(({ repo }) => !projectPaths.has(repo.path.trim()));
   const showProject = offeredProjects.length > 0 || projectId !== null;
   return (
     <div className="flex flex-col gap-3 pb-4 border-b border-line">
@@ -152,7 +155,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
             Other repositories of {launchProject.name}
           </span>
           {projectRepos.map((path) => {
-            const index = secondaryRepos.findIndex((r) => r.fromProject && r.path === path);
+            const index = secondaryRepos.findIndex((r) => r.path.trim() === path);
             if (index >= 0) {
               return (
                 <SecondaryRepoRow
@@ -163,6 +166,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
                   onChange={updateSecondary}
                   onRemove={removeSecondary}
                   home={home}
+                  inProject
                 />
               );
             }

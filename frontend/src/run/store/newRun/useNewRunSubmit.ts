@@ -64,7 +64,9 @@ export function useNewRunSubmit(
   s: NewRunState,
   { primaryInProject, launchProject, flushPendingSaves, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections, provideSections }: SubmitDeps,
 ) {
-  const projectId = launchProject?.id ?? null;
+  // The Projet as chosen, even one the form does not list (an edited Trigger's
+  // hidden one): sending none would take the Run or the Trigger out of it.
+  const { projectId } = s;
   const {
     selectedPipeline, sourceBranch, targetRepo, repoValid, runName, setRunName, autoName,
     setAutoName, input, setInput, overrides, setOverrides, mode, setMode, editingTriggerId,

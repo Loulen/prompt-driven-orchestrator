@@ -384,4 +384,27 @@ async fn one_repository_in_two_projets_each_run_recorded_in_the_projet_it_names(
         .find(|r| r["run_id"] == fired_run)
         .map(|r| r["project_id"].clone());
     assert_eq!(fired_project, Some(serde_json::json!(p2)));
+
+    // Its Projet deleted, the Trigger launches in none from now on; the Runs
+    // already launched keep theirs.
+    let deleted = reqwest::Client::new()
+        .delete(format!("{}/projects/{p2}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert!(deleted.status().is_success(), "{}", deleted.status());
+    let trigger_id = trigger["id"].as_str().unwrap();
+    let after: serde_json::Value = reqwest::get(format!("{}/triggers/{trigger_id}", daemon.url()))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(after["project_id"], serde_json::Value::Null, "{after}");
+    let list = runs_list(&daemon).await;
+    let kept = list
+        .iter()
+        .find(|r| r["run_id"] == in_p2)
+        .map(|r| r["project_id"].clone());
+    assert_eq!(kept, Some(serde_json::json!(p2)));
 }

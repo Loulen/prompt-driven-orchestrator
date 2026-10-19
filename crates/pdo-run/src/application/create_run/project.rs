@@ -1,9 +1,10 @@
-//! The Projet a new Run is launched in (ADR-0087): the one the request names,
-//! else its parent Run's, else none. Recorded in `RunStarted` and never
-//! recomputed: changing the members of a Projet moves no Run.
+//! The Projet a new Run is launched in (ADR-0087): its parent Run's for a Run
+//! created from a node session, else the one the request names, else none.
+//! Recorded in `RunStarted` and never recomputed: changing the members of a
+//! Projet moves no Run.
 
 use pdo_kernel::repository_path::member_spellings;
-use tracing::error;
+use tracing::{error, warn};
 
 use super::request::CreateRunRequest;
 use super::target::{bad_request, Refusal};
@@ -27,21 +28,37 @@ fn store_unavailable(e: String) -> Refusal {
     )
 }
 
-/// The Projet of the new Run: the one `req` names (it must exist), else the
-/// one of `parent`, the Run whose node session creates it (ADR-0064), else
-/// none.
+/// The Projet of the new Run: the one of `parent`, the Run whose node
+/// session creates it (ADR-0064) — a child stays in its parent's Projet, and
+/// naming another is refused — else the one `req` names, else none.
+///
+/// A named Projet that no longer exists is no Projet: a Trigger or a retried
+/// Run may name one deleted since, and its Run launches in none, as the Run
+/// did before (a gesture naming an unknown Projet was refused before, by
+/// [`Runs::check_primary_in_project`]).
 pub(super) async fn resolve(
     state: &Runs,
     req: &CreateRunRequest,
     parent: Option<&RunState>,
 ) -> Result<Option<String>, Refusal> {
+    if let Some(parent) = parent {
+        return match named_project(req) {
+            Some(id) if parent.project_id.as_deref() != Some(id) => Err(bad_request(format!(
+                "a run created from a node session stays in its parent's project, not `{id}`"
+            ))),
+            _ => Ok(parent.project_id.clone()),
+        };
+    }
     match named_project(req) {
         Some(id) => match state.projects.project(id).await {
             Ok(Some(project)) => Ok(Some(project.id)),
-            Ok(None) => Err(bad_request(format!("unknown project `{id}`"))),
+            Ok(None) => {
+                warn!("project `{id}` no longer exists: the run is launched in no project");
+                Ok(None)
+            }
             Err(e) => Err(store_unavailable(e)),
         },
-        None => Ok(parent.and_then(|run| run.project_id.clone())),
+        None => Ok(None),
     }
 }
 

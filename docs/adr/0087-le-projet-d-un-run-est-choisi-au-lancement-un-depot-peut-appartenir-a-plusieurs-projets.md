@@ -34,3 +34,8 @@ Projets tombent hors de leur Projet, donc hors de leurs Droits et de leurs Pipel
 
 - Changer les membres d'un Projet ne déplace plus aucun Run existant.
 - Un Run ne change pas de Projet après son lancement.
+- La migration des Runs existants écrit, une fois, la clé `project_id` dans leur `run_started`
+  (`null` pour un Run sans Projet) ; un `run_started` qui porte la clé n'est jamais revu. Les
+  Triggers existants reçoivent de même le Projet de leur dépôt cible. Un Run créé depuis une
+  session de nœud reste dans le Projet de son parent ; un Projet supprimé depuis qu'un Trigger ou
+  un Run le nommait laisse leurs nouveaux Runs hors Projet.

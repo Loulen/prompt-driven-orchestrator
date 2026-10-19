@@ -187,14 +187,14 @@ export function useNewRunState(open: boolean) {
     ]);
   }, []);
   // ADR-0087: a repository of the Projet, checked as a secondary — read-only by
-  // default — or unchecked.
+  // default — or unchecked. One line per path, wherever it was added from.
   const toggleProjectSecondary = useCallback((path: string, checked: boolean) => {
     setSecondaryRepos((prev) =>
       checked
-        ? prev.some((r) => r.fromProject && r.path === path)
+        ? prev.some((r) => r.path.trim() === path)
           ? prev
           : [...prev, { path, baseBranch: "", valid: null, readOnly: true, fromProject: true }]
-        : prev.filter((r) => !(r.fromProject && r.path === path)),
+        : prev.filter((r) => r.path.trim() !== path),
     );
   }, []);
 

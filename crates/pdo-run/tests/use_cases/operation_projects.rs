@@ -327,3 +327,97 @@ async fn a_launch_names_an_existing_projet_holding_its_primary_repository() {
     .await;
     assert_eq!(code, 201, "{answer}");
 }
+
+#[tokio::test]
+async fn a_child_run_records_the_projet_of_its_parent() {
+    let w = world_with_shared_repo();
+    relay_repository(&w);
+    seed_relay_in(&w, "parent", Some("p2")).await;
+    w.runs
+        .append_event()
+        .execute(&event("parent", EventKind::NodeStarted, Some("worker")))
+        .await
+        .unwrap();
+    let request: CreateRunRequest = serde_json::from_value(serde_json::json!({
+        "pipeline": "relay",
+        "input": "go",
+        "target_repo": w.repo.path(),
+    }))
+    .unwrap();
+    let claim = SessionClaim {
+        run_id: "parent".into(),
+        node_id: "worker".into(),
+    };
+
+    let (code, child) = body(
+        w.runs
+            .create_run(&Actor::LocalOperator, request, Vec::new(), Some(claim))
+            .await,
+    )
+    .await;
+
+    assert_eq!(code, 201, "{child}");
+    assert_eq!(
+        recorded_project(&w, child["run_id"].as_str().unwrap()),
+        "p2"
+    );
+}
+
+#[tokio::test]
+async fn a_child_run_naming_another_projet_is_refused() {
+    let w = world_with_shared_repo();
+    relay_repository(&w);
+    seed_relay_in(&w, "parent", Some("p2")).await;
+    w.runs
+        .append_event()
+        .execute(&event("parent", EventKind::NodeStarted, Some("worker")))
+        .await
+        .unwrap();
+    let claim = SessionClaim {
+        run_id: "parent".into(),
+        node_id: "worker".into(),
+    };
+    let repo = w.repo.path().to_string_lossy().into_owned();
+
+    let (code, answer) = body(
+        w.runs
+            .create_run(
+                &Actor::LocalOperator,
+                create_request_in(&repo, Some("p1")),
+                Vec::new(),
+                Some(claim),
+            )
+            .await,
+    )
+    .await;
+
+    assert_eq!(code, 400, "{answer}");
+    assert!(
+        answer["error"]
+            .as_str()
+            .unwrap()
+            .contains("stays in its parent's project"),
+        "{answer}"
+    );
+}
+
+#[tokio::test]
+async fn a_projet_deleted_since_a_trigger_or_a_retry_named_it_launches_in_none() {
+    // `start_run` is the creation a Trigger fire and a retry go through: the
+    // Projet they carry may have been deleted since.
+    let w = world_with_shared_repo();
+    relay_repository(&w);
+    let repo = w.repo.path().to_string_lossy().into_owned();
+
+    let run_id = w
+        .runs
+        .start_run(
+            create_request_in(&repo, Some("prj-deleted")),
+            Vec::new(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(recorded_project(&w, &run_id), serde_json::Value::Null);
+}

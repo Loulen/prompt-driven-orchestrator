@@ -180,6 +180,9 @@ pub(crate) async fn init_db(db: &sqlx::SqlitePool, repo_root: &Path) -> Result<(
     pdo_trigger::adapters::sqlite::init(db)
         .await
         .context("failed to create trigger tables")?;
+    record_legacy_trigger_projects(db)
+        .await
+        .context("failed to record the project of the existing triggers")?;
 
     // The stored instance settings and the agentic profiles (seeded with the
     // reserved `Default`) belong to the settings context (#929).
@@ -216,6 +219,34 @@ pub(crate) async fn init_db(db: &sqlx::SqlitePool, repo_root: &Path) -> Result<(
     Ok(())
 }
 
+/// ADR-0087's one migration of the existing Triggers: each one still pending
+/// receives the Projet the rule before ADR-0087 gave its Runs — the first
+/// Projet holding its target repository, or another spelling of it (as the
+/// Runs' migration matches) — else none.
+async fn record_legacy_trigger_projects(db: &sqlx::SqlitePool) -> Result<()> {
+    let pending = pdo_trigger::adapters::sqlite::legacy_project_pending(db).await?;
+    for (id, target_repo) in &pending {
+        let mut project = None;
+        if let Some(repo) = target_repo.as_deref().filter(|r| !r.trim().is_empty()) {
+            for spelling in pdo_kernel::repository_path::member_spellings(repo) {
+                project = pdo_workspace::adapters::sqlite::first_project_containing(db, &spelling)
+                    .await?;
+                if project.is_some() {
+                    break;
+                }
+            }
+        }
+        pdo_trigger::adapters::sqlite::record_legacy_project(db, id, project.as_deref()).await?;
+    }
+    if !pending.is_empty() {
+        info!(
+            "project recorded on {} existing triggers (ADR-0087)",
+            pending.len()
+        );
+    }
+    Ok(())
+}
+
 // --- API handlers ---
 
 #[cfg(test)]
@@ -242,6 +273,26 @@ mod tests {
         }
         sqlx::query(
             "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/web', 'p1', 's'), ('/root', 'p1', 's')",
+        )
+        .execute(db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE triggers (id TEXT PRIMARY KEY, name TEXT NOT NULL, pipeline_id TEXT NOT NULL, \
+             pipeline_name TEXT NOT NULL DEFAULT '', target_repo TEXT, target_repos TEXT, \
+             source_branch TEXT, input_template TEXT NOT NULL DEFAULT '', \
+             variables JSON NOT NULL DEFAULT '{}', cron TEXT NOT NULL, guard_command TEXT, \
+             overlap_policy TEXT NOT NULL DEFAULT 'skip', max_concurrent INTEGER, sandbox TEXT, \
+             enabled INTEGER NOT NULL DEFAULT 1, next_fire_at TEXT, last_fired_at TEXT, \
+             last_outcome TEXT, created_at TEXT NOT NULL)",
+        )
+        .execute(db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO triggers (id, name, pipeline_id, target_repo, cron, created_at) VALUES \
+             ('t-web', 'web', 'p', '/repos/web/.', '0 3 * * *', 's'), \
+             ('t-loose', 'loose', 'p', '/repos/loose', '0 3 * * *', 's')",
         )
         .execute(db)
         .await
@@ -322,5 +373,36 @@ mod tests {
             recorded(&db, "r-loose").await,
             Some(serde_json::Value::Null)
         );
+    }
+
+    #[tokio::test]
+    async fn the_existing_triggers_get_once_the_projet_the_old_rule_gave_them() {
+        let db = memory_db().await;
+        legacy(&db).await;
+        init_db(&db, Path::new("/root")).await.unwrap();
+        let project = |id: &'static str| {
+            let db = db.clone();
+            async move {
+                pdo_trigger::adapters::sqlite::get(&db, id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .project_id
+            }
+        };
+        assert_eq!(
+            project("t-web").await.as_deref(),
+            Some("p1"),
+            "`/repos/web/.` is `/repos/web`"
+        );
+        assert_eq!(project("t-loose").await, None);
+        sqlx::query(
+            "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/loose', 'p1', 's')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        init_db(&db, Path::new("/root")).await.unwrap();
+        assert_eq!(project("t-loose").await, None, "once");
     }
 }

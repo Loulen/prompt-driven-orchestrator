@@ -14,7 +14,7 @@ use sqlx::SqlitePool;
 use crate::application::ports::{BoxFuture, StorageError, Stored, TriggerRepository};
 use crate::domain::trigger::{FireRecord, NewTrigger, Trigger, TriggerFire, UpdateTrigger};
 use rows::{row_to_fire, row_to_trigger};
-pub use schema::init;
+pub use schema::{init, legacy_project_pending, record_legacy_project};
 pub use update::update;
 
 /// The Triggers of the daemon's database.
@@ -84,6 +84,16 @@ pub fn generate_trigger_id() -> String {
     let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
     let short = &uuid::Uuid::new_v4().to_string()[..7];
     format!("trg-{ts}-{short}")
+}
+
+/// A deleted Projet: the Triggers that launched their Runs in it launch them
+/// in no Projet from now on (ADR-0087). How many it moved.
+pub async fn forget_project(db: &SqlitePool, project_id: &str) -> Result<u64, sqlx::Error> {
+    let done = sqlx::query("UPDATE triggers SET project_id = NULL WHERE project_id = ?")
+        .bind(project_id)
+        .execute(db)
+        .await?;
+    Ok(done.rows_affected())
 }
 
 /// Insert a new Trigger, returning the stored row.

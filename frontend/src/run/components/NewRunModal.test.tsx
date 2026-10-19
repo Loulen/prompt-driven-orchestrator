@@ -695,6 +695,44 @@ describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
     await waitFor(() => expect(createRun).toHaveBeenCalled());
     expect(vi.mocked(createRun).mock.calls[0][0].project_id).toBeUndefined();
   });
+
+  it("shows an edited Trigger's Projet repository once, among the Projet's, and keeps its Projet", async () => {
+    const trigger: Trigger = {
+      id: "trg-shop",
+      name: "Shop nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/code/shop-web",
+      project_id: "prj-checkout",
+      target_repos: JSON.stringify([
+        { repo: "/code/shop-web" },
+        { repo: "/code/shop-api", read_only: true },
+      ]),
+      source_branch: "main",
+      input_template: "go",
+      variables: {},
+      cron: "0 9 * * *",
+      overlap_policy: "skip",
+      auto_name: true,
+      enabled: true,
+    };
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+    await settleRepo("/code/shop-web");
+    await waitFor(() => expect(screen.getByTestId("project-combobox")).toHaveTextContent("Checkout"));
+    // Checked among the Projet's repositories, never again « outside ».
+    expect(screen.getByTestId("project-repo-check-0")).toBeChecked();
+    expect(screen.getAllByTestId("project-repo-unchecked").map((r) => r.getAttribute("data-path"))).toEqual([
+      "/code/design-system",
+    ]);
+    expect(screen.queryByTestId("secondary-repo-row-0")).toBeNull();
+    // Checking it again from the list adds no second line.
+    fireEvent.click(within(screen.getAllByTestId("project-repo-unchecked")[0]).getByRole("checkbox"));
+    await settleRepo("/code/design-system");
+    expect(screen.getByTestId("project-repo-check-1")).toBeChecked();
+    expect(screen.queryAllByTestId(/^project-repo-row-/)).toHaveLength(2);
+  });
 });
 
 describe("NewRunModal — pipeline sections", () => {

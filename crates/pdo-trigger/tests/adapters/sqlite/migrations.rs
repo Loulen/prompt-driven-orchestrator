@@ -306,10 +306,8 @@ async fn init_is_idempotent_and_adds_max_concurrent_to_legacy_table() {
 
 // --- #244: guard-output capture on guard-exit-nonzero fire rows ---
 
-/// ADR-0087 migration: the `project_id` column is added once, and filled that
-/// once with the Projet the rule before ADR-0087 gave the Trigger's Runs (the
-/// first Projet holding its repository). A later change of the members moves
-/// no Trigger.
+/// ADR-0087 migration: the `project_id` column is added once, the Triggers
+/// that existed then marked « to record »; the boot records their Projet once.
 #[tokio::test]
 async fn init_records_the_projet_the_old_rule_gave_a_trigger_once() {
     let db = sqlx::sqlite::SqlitePoolOptions::new()
@@ -344,20 +342,6 @@ async fn init_records_the_projet_the_old_rule_gave_a_trigger_once() {
     .await
     .unwrap();
     sqlx::query(
-        "CREATE TABLE project_members (
-            path TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at TEXT NOT NULL
-        )",
-    )
-    .execute(&db)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/web', 'p1', 's')",
-    )
-    .execute(&db)
-    .await
-    .unwrap();
-    sqlx::query(
         "INSERT INTO triggers (id, name, pipeline_id, target_repo, cron, created_at) VALUES
             ('trg-in', 'in', 'pipe', '/repos/web/', '0 9 * * *', 's'),
             ('trg-out', 'out', 'pipe', '/repos/loose', '0 9 * * *', 's')",
@@ -367,6 +351,21 @@ async fn init_records_the_projet_the_old_rule_gave_a_trigger_once() {
     .unwrap();
 
     init(&db).await.unwrap();
+    // Marked « to record », read as no Projet until the boot records it.
+    assert_eq!(get(&db, "trg-in").await.unwrap().unwrap().project_id, None);
+    let mut pending = legacy_project_pending(&db).await.unwrap();
+    pending.sort();
+    assert_eq!(
+        pending,
+        vec![
+            ("trg-in".to_string(), Some("/repos/web/".to_string())),
+            ("trg-out".to_string(), Some("/repos/loose".to_string())),
+        ]
+    );
+    record_legacy_project(&db, "trg-in", Some("p1"))
+        .await
+        .unwrap();
+    record_legacy_project(&db, "trg-out", None).await.unwrap();
     assert_eq!(
         get(&db, "trg-in")
             .await
@@ -376,15 +375,21 @@ async fn init_records_the_projet_the_old_rule_gave_a_trigger_once() {
             .as_deref(),
         Some("p1")
     );
-    assert_eq!(get(&db, "trg-out").await.unwrap().unwrap().project_id, None);
+    assert!(legacy_project_pending(&db).await.unwrap().is_empty());
 
-    // Once: a member added afterwards moves no Trigger.
-    sqlx::query(
-        "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/loose', 'p2', 's')",
-    )
-    .execute(&db)
-    .await
-    .unwrap();
+    // Once: a later init marks nothing again, and a recorded Projet stays.
     init(&db).await.unwrap();
-    assert_eq!(get(&db, "trg-out").await.unwrap().unwrap().project_id, None);
+    assert!(legacy_project_pending(&db).await.unwrap().is_empty());
+    record_legacy_project(&db, "trg-in", Some("p2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        get(&db, "trg-in")
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id
+            .as_deref(),
+        Some("p1")
+    );
 }

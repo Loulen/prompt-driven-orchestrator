@@ -473,6 +473,8 @@ mod tests {
             "off",
             "--target-repo",
             "/somewhere/repo",
+            "--project",
+            "prj-1",
             "--target-repos",
             r#"[{"repo":"/somewhere/other","read_only":true}]"#,
             "--source-branch",
@@ -506,6 +508,7 @@ mod tests {
             harness,
             sandbox,
             target_repo,
+            project,
             target_repos,
             source_branch,
             name,
@@ -532,6 +535,7 @@ mod tests {
         assert_eq!(harness.as_deref(), Some("pi"));
         assert_eq!(sandbox.as_deref(), Some("off"));
         assert_eq!(target_repo.as_deref(), Some("/somewhere/repo"));
+        assert_eq!(project.as_deref(), Some("prj-1"));
         assert_eq!(
             target_repos.as_deref(),
             Some(r#"[{"repo":"/somewhere/other","read_only":true}]"#)

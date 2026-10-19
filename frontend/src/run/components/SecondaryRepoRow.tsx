@@ -17,7 +17,7 @@ export interface SecondaryRepo {
   baseBranch: string;
   valid: boolean | null;
   readOnly: boolean;
-  /** One of the Projet's repositories, checked in « Other repositories of <Projet> » (ADR-0087). */
+  /** Checked in « Other repositories of <Projet> » (ADR-0087): dropped when the Projet changes. */
   fromProject?: boolean;
 }
 
@@ -31,6 +31,8 @@ interface Props {
   onRemove: (index: number) => void;
   /** The daemon's home, to read a path as `~/code/…` (the Projet's rows). */
   home?: string | null;
+  /** A repository of the Projet (ADR-0087): a checked line, its path fixed. */
+  inProject?: boolean;
 }
 
 /**
@@ -52,6 +54,7 @@ export default function SecondaryRepoRow({
   onChange,
   onRemove,
   home,
+  inProject = false,
 }: Props) {
   const [branchOpen, setBranchOpen] = useState(false);
   // CORE-5: no loupe when the disk may not be browsed.
@@ -130,7 +133,7 @@ export default function SecondaryRepoRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, index]);
 
-  if (repo.fromProject) {
+  if (inProject) {
     // ADR-0087: one of the Projet's repositories, checked — its path is the
     // Projet's, so it shows as a line: unchecking takes it back out.
     return (

@@ -4,7 +4,7 @@ What an extension gets from `pdo-extension-api` besides its interface (ADR-0081 
 amendments; the interface is [extension-ui.md](extension-ui.md)). The crate's rustdoc is the
 source of truth for signatures; this page says what each part is for and what goes on the wire.
 
-Version: **0.15.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+Version: **0.16.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -115,7 +115,7 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /runs/presences` (0.12) | `run` × `read`, targeted, per Run listed | the Run is absent |
 | `/ws`, a Presence (0.12) | `run` × `read` on the Run a `presence_arrived` or `presence_left` is about, per connection (answer kept 5 s) | the message is not sent to that connection |
 | `GET /repos/recent` (the New Run prefill) | `run` × `read` on the last Run of each repository, in the repository's Projet | the repository is absent |
-| `GET /triggers` (0.11) | `trigger` × `read`, targeted, per Trigger listed, in the Projet of its target repository | the Trigger is absent |
+| `GET /triggers` (0.11) | `trigger` × `read`, targeted, per Trigger listed, in the Projet it launches its Runs in | the Trigger is absent |
 | `GET /triggers/{id}`, `/triggers/{id}/fires` (0.11) | `trigger` × `read` on `{id}` | `403` `operation_refused` |
 | `/ws`, about a Trigger (0.11) | `trigger` × `read` on the Trigger a message is about (`trigger_created`, `trigger_updated`, `trigger_deleted`, `trigger_fired`, `operation_applied` on it), in its Projet, per connection (answer kept 5 s) | the message is not sent to that connection |
 | `/ws`, an extension's event guarded by a read (0.11) | the read the event carries (`ExtensionEvent::guarded_by`), per connection (answer kept 5 s) | the event is not sent to that connection |
@@ -410,8 +410,10 @@ The surfaces that fill `extensions`:
 - the New Run form: a `run/new` section that `provide`s a value
   ([extension-ui.md](extension-ui.md#sections));
 - `Host::create_run(actor, run)`: `NewRun::new(pipeline, input).in_repo(RunRepo::new(path))
-  .named(name).with_extension(id, value)`; the first repository is the primary (its
-  `from_branch` is the source branch), the others are secondaries. The Run is created as `POST
+  .in_project(project_id).named(name).with_extension(id, value)`; the first repository is the
+  primary (its `from_branch` is the source branch), the others are secondaries. `in_project`
+  (0.16) launches the Run in a Projet holding its primary repository (ADR-0087); without it the
+  Run is in no Projet. The Run is created as `POST
   /runs` creates it for `actor`: the same authorization (a refused Actor gets `403`
   `operation_refused`), the same checks, the same stamps, `created_by` = `actor`, a root Run. Await
   it from a route or a task; never from a hook of the creation it starts.

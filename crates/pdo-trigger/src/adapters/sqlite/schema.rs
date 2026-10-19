@@ -130,9 +130,9 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     }
 
     // `project_id` — NULLABLE (ADR-0087): the Projet its Runs are launched in.
-    // Added once, and filled that once with the Projet the rule before
-    // ADR-0087 gave its Runs: the first Projet holding its repository, read
-    // off the workspace's `project_members` when that table already exists.
+    // Added once; the Triggers that existed then are marked `''` (« to
+    // record »), and the boot records on them, that once, the Projet the rule
+    // before ADR-0087 gave their Runs ([`legacy_project_pending`]).
     let has_project_id =
         sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'project_id'")
             .fetch_optional(db)
@@ -142,23 +142,9 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query("ALTER TABLE triggers ADD COLUMN project_id TEXT")
             .execute(db)
             .await?;
-        let has_members = sqlx::query(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project_members'",
-        )
-        .fetch_optional(db)
-        .await?
-        .is_some();
-        if has_members {
-            sqlx::query(
-                "UPDATE triggers SET project_id = (
-                    SELECT m.project_id FROM project_members m
-                    WHERE m.path = RTRIM(triggers.target_repo, '/')
-                    ORDER BY m.rowid ASC LIMIT 1
-                 )",
-            )
+        sqlx::query("UPDATE triggers SET project_id = ''")
             .execute(db)
             .await?;
-        }
     }
 
     // `auto_name` — `NOT NULL DEFAULT 1`, unlike the nullable columns: a plain
@@ -227,5 +213,30 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(db)
     .await?;
 
+    Ok(())
+}
+
+/// The Triggers that existed when the Projet of a Trigger was introduced
+/// (ADR-0087) and have not received it yet: their id and target repository.
+pub async fn legacy_project_pending(
+    db: &SqlitePool,
+) -> Result<Vec<(String, Option<String>)>, sqlx::Error> {
+    sqlx::query_as("SELECT id, target_repo FROM triggers WHERE project_id = ''")
+        .fetch_all(db)
+        .await
+}
+
+/// Record on the Trigger `id` the Projet the rule before ADR-0087 gave its
+/// Runs (`None`: no Projet). Done once: the Trigger is no longer pending.
+pub async fn record_legacy_project(
+    db: &SqlitePool,
+    id: &str,
+    project_id: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE triggers SET project_id = ? WHERE id = ? AND project_id = ''")
+        .bind(project_id)
+        .bind(id)
+        .execute(db)
+        .await?;
     Ok(())
 }

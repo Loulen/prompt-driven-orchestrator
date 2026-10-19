@@ -44,6 +44,7 @@ impl Review {
     ///    its SHAs and its excerpt. An anchor on the working tree freezes its
     ///    `snapshot` tree id (#835). The ids are assigned once the manager is up.
     ///    Each comment keeps the `actor` that sends it (CORE-63).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare(
         &self,
         actor: &Actor,

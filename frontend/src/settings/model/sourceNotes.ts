@@ -158,6 +158,20 @@ export function telemetryOtlpSourceNote(field: BoolSettingField): string {
   return "Source: built-in default (off). Nothing leaves this instance.";
 }
 
+/** Which tier a telemetry switch that is not the export's own comes from (ADR-0090): the
+ *  `/metrics` switch, « include the Actor ». Off by default. */
+export function telemetryFlagSourceNote(field: BoolSettingField, envVar: string): string {
+  const onOff = (v: boolean) => (v ? "on" : "off");
+  const envDisplay = field.env != null ? `${envVar}=${onOff(field.env)}` : null;
+  if (field.source === "stored") {
+    return envDisplay
+      ? `Source: stored setting. Env ${envDisplay} is set but overridden. Off by default.`
+      : "Source: stored setting. Off by default.";
+  }
+  if (field.source === "env") return `Source: env ${envDisplay ?? envVar}. Off by default.`;
+  return "Source: built-in default (off).";
+}
+
 /** Which tier the collector's address comes from (ADR-0090). No built-in address. */
 export function telemetryEndpointSourceNote(field: StringSettingField): string {
   const envDisplay = field.env ? `PDO_TELEMETRY_OTLP_ENDPOINT=${field.env}` : null;

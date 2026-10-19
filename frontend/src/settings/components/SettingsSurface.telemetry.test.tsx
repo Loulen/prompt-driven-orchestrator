@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { InstanceSettings } from "../model/settings";
 import type { TelemetryStatus } from "../../shared/generated/TelemetryStatus";
 
-// ADR-0090 — Settings › Telemetry. Every api function the surface (and the panels it
+// ADR-0090 — Settings › Telemetry: the OTLP export, `/metrics`, « include the Actor ». Every api function the surface (and the panels it
 // mounts) imports must exist in this factory: Vitest 4 wraps the module namespace in a
 // Proxy that throws on first access of a missing key — see the note in
 // `SettingsSurface.test.tsx`.
@@ -118,6 +118,8 @@ function settings(extra: Partial<InstanceSettings> = {}): InstanceSettings {
     telemetry_otlp: { effective: false, source: "default", stored: null, env: null, default: false },
     telemetry_otlp_endpoint: { effective: null, source: "default", stored: null, env: null, default: null },
     telemetry_otlp_headers: [],
+    telemetry_prometheus: { effective: false, source: "default", stored: null, env: null, default: false },
+    telemetry_include_actor: { effective: false, source: "default", stored: null, env: null, default: false },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...extra,
   } as unknown as InstanceSettings;
@@ -127,12 +129,21 @@ const SENT = {
   resource: ["service.name", "service.version", "service.instance.id"],
   run_attributes: ["pdo.project", "pdo.repository", "pdo.branch", "pdo.commit", "pdo.pipeline", "pdo.harness", "pdo.model"],
   trace_only: ["pdo.run.id", "pdo.node.id"],
+  with_actor: ["pdo.actor"],
   metrics: ["pdo.runs.started"],
   traces: ["HTTP requests", "Run → node"],
 };
 
 function telemetry(overrides: Partial<TelemetryStatus> = {}): TelemetryStatus {
-  return { exporting: false, interval_secs: 30, last_export: null, sent: SENT, ...overrides };
+  return {
+    exporting: false,
+    metrics_endpoint: false,
+    include_actor: false,
+    interval_secs: 30,
+    last_export: null,
+    sent: SENT,
+    ...overrides,
+  };
 }
 
 function renderTelemetry() {
@@ -245,5 +256,89 @@ describe("Settings › Telemetry (ADR-0090)", () => {
     fireEvent.click(screen.getByTestId("telemetry-test-export"));
     await waitFor(() => expect(sendTestExportMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(bar).toHaveTextContent("connection refused or unreachable"));
+  });
+
+  it("lists the /metrics and Identity sections between the export and « What is sent »", async () => {
+    renderTelemetry();
+    const sub = await screen.findByTestId("settings-section-body-prometheus-metrics");
+    expect(within(sub).getByText("Prometheus /metrics")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-section-body-identity")).toHaveTextContent("Identity");
+    const telemetrySections = new Set([
+      "settings-section-body-otlp-export",
+      "settings-section-body-prometheus-metrics",
+      "settings-section-body-identity",
+      "settings-section-body-what-is-sent",
+    ]);
+    const ids = Array.from(document.querySelectorAll("[data-testid^='settings-section-body-']"))
+      .map((el) => el.getAttribute("data-testid"))
+      .filter((id) => telemetrySections.has(id ?? ""));
+    expect(ids).toEqual([
+      "settings-section-body-otlp-export",
+      "settings-section-body-prometheus-metrics",
+      "settings-section-body-identity",
+      "settings-section-body-what-is-sent",
+    ]);
+  });
+
+  it("/metrics is off by default and names the address it would answer on", async () => {
+    renderTelemetry();
+    const toggle = await screen.findByTestId("setting-telemetry-prometheus");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("telemetry-metrics-url")).toHaveTextContent(
+      `Off. When on: ${window.location.origin}/metrics, same metrics as OTLP, no traces.`,
+    );
+    expect(screen.getByTestId("setting-source-telemetry-prometheus")).toHaveTextContent(
+      "built-in default (off)",
+    );
+  });
+
+  it("names the /metrics address with the Public URL when the daemon gives one", async () => {
+    fetchSettingsMock.mockResolvedValue(
+      settings({
+        public_url: { effective: "https://pdo.example.org/", source: "stored", stored: "https://pdo.example.org/", env: null, default: null },
+      } as Partial<InstanceSettings>),
+    );
+    renderTelemetry();
+    expect(await screen.findByTestId("telemetry-metrics-url")).toHaveTextContent(
+      "https://pdo.example.org/metrics",
+    );
+  });
+
+  it("saves the /metrics switch on its own", async () => {
+    renderTelemetry();
+    fireEvent.click(await screen.findByTestId("setting-telemetry-prometheus"));
+    expect(screen.getByTestId("telemetry-metrics-url")).toHaveTextContent(
+      `On: ${window.location.origin}/metrics, same metrics as OTLP`,
+    );
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() =>
+      expect(updateSettingsMock).toHaveBeenCalledWith({ telemetry_prometheus: true }),
+    );
+  });
+
+  it("« Include the Actor » is off by default; ticked, the warning shows before the save", async () => {
+    renderTelemetry();
+    const box = await screen.findByTestId("setting-telemetry-include-actor");
+    expect(box).not.toBeChecked();
+    expect(screen.queryByTestId("telemetry-actor-warning")).not.toBeInTheDocument();
+    fireEvent.click(box);
+    const warning = screen.getByTestId("telemetry-actor-warning");
+    expect(warning).toHaveTextContent("This turns the telemetry into a record of each person's activity.");
+    expect(warning).toHaveTextContent("L1222-4");
+    expect(warning).toHaveTextContent("L2312-38");
+    expect(warning).toHaveTextContent("GDPR");
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() =>
+      expect(updateSettingsMock).toHaveBeenCalledWith({ telemetry_include_actor: true }),
+    );
+  });
+
+  it("says in « What is sent » when the Actor goes with the measures", async () => {
+    fetchTelemetryStatusMock.mockResolvedValue(telemetry({ include_actor: true }));
+    renderTelemetry();
+    const sent = await screen.findByTestId("telemetry-what-is-sent");
+    expect(within(sent).getByText("pdo.actor")).toBeInTheDocument();
+    expect(sent).toHaveTextContent("Include the Actor is on");
   });
 });

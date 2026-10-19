@@ -62,4 +62,26 @@ describe("the Telemetry draft (ADR-0090)", () => {
     const draft = { ...seedTelemetry(s), telemetryHeaders: [{ name: "Bad Name", value: "v" }] };
     expect(telemetryPatch(draft, s)).toEqual({ error: "`Bad Name` is not a valid header name." });
   });
+
+  it("the /metrics switch and « include the Actor » are off by default, each its own field", () => {
+    const s = settings();
+    const draft = seedTelemetry(s);
+    expect(draft.telemetryPrometheus).toBe(false);
+    expect(draft.telemetryIncludeActor).toBe(false);
+    const on = { ...draft, telemetryPrometheus: true, telemetryIncludeActor: true };
+    expect(telemetryDirty(on, s)).toEqual(["telemetry-prometheus", "telemetry-include-actor"]);
+    expect(telemetryPatch(on, s)).toEqual({
+      patch: { telemetry_prometheus: true, telemetry_include_actor: true },
+    });
+  });
+
+  it("a stored switch seeds the draft and turning it off sends false", () => {
+    const flag = { effective: true, source: "stored", stored: true, env: null, default: false };
+    const s = { ...settings(), telemetry_prometheus: flag, telemetry_include_actor: flag } as InstanceSettings;
+    const draft = seedTelemetry(s);
+    expect(telemetryDirty(draft, s)).toEqual([]);
+    expect(telemetryPatch({ ...draft, telemetryIncludeActor: false }, s)).toEqual({
+      patch: { telemetry_include_actor: false },
+    });
+  });
 });

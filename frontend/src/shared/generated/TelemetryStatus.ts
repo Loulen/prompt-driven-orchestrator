@@ -11,6 +11,14 @@ export type TelemetryStatus = {
  */
 exporting: boolean, 
 /**
+ * Whether `/metrics` answers.
+ */
+metrics_endpoint: boolean, 
+/**
+ * Whether who launched a Run, and who answered it, goes with its measures.
+ */
+include_actor: boolean, 
+/**
  * Seconds between two metric exports.
  */
 interval_secs: number, last_export: LastExport | null, sent: TelemetryCatalogue, };

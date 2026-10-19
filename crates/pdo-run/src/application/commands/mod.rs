@@ -134,8 +134,10 @@ async fn dispatch(state: Arc<Runs>, run_id: String, cmd: RunCommand) -> Response
 
     match cmd {
         RunCommand::ReleaseNodeCompletion { node_id, iter } => {
+            // The Manager's command: no person answered. The node's button
+            // goes through `Runs::release_completion`, which names its Actor.
             crate::application::release_completion::release_node_completion(
-                &state, &run_id, &node_id, iter,
+                &state, &run_id, &node_id, iter, None,
             )
             .await
         }

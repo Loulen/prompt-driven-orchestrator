@@ -123,4 +123,12 @@ telemetry_otlp_endpoint?: string | null,
  * keeps the value stored under its name: the page never has it. `None`
  * leaves the headers untouched.
  */
-telemetry_otlp_headers?: Array<OtlpHeaderEdit> | null, };
+telemetry_otlp_headers?: Array<OtlpHeaderEdit> | null, 
+/**
+ * Set the `/metrics` switch; `None` leaves it untouched.
+ */
+telemetry_prometheus?: boolean | null, 
+/**
+ * Set « include the Actor »; `None` leaves it untouched.
+ */
+telemetry_include_actor?: boolean | null, };

@@ -1,18 +1,20 @@
 /**
  * Settings › Telemetry (ADR-0090): the OTLP export — its switch, its collector, its
  * headers (saved with the form; a header's value is never shown again) and the answer of
- * its last export — then what is sent, read from the daemon's own list.
+ * its last export —, `/metrics` by its own switch, « include the Actor » with what it
+ * obliges an employer to, then what is sent, read from the daemon's own list.
  */
 
 import { Play, X } from "lucide-react";
 import type { TelemetryStatus } from "../../../shared/generated/TelemetryStatus";
-import type { SettingsSection } from "../../model/settingsCategories";
+import type { SettingsSection, SettingsSectionId } from "../../model/settingsCategories";
 import { telemetryEndpointSourceNote, telemetryOtlpSourceNote } from "../../model/sourceNotes";
 import type { TelemetryHeaderDraft } from "../../model/telemetryDraft";
 import { ago, useTelemetryStatus } from "../../store/useTelemetryStatus";
 import { FieldBlock } from "./fields";
 import type { FormSectionProps } from "./GeneralSections";
 import Section from "./Section";
+import { Identity, PrometheusMetrics, Switch } from "./TelemetryMetricsIdentity";
 
 const INPUT =
   "rounded-md border bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:outline-none";
@@ -27,12 +29,19 @@ export default function TelemetrySections({
   ...form
 }: Omit<FormSectionProps, "section"> & { sections: SettingsSection[]; active: boolean }) {
   const telemetry = useTelemetryStatus(active);
+  const section = (id: SettingsSectionId) => sections.find((s) => s.id === id)!;
   return (
     <>
-      <Section section={sections[0]}>
+      <Section section={section("otlp-export")}>
         <OtlpExport {...form} {...telemetry} />
       </Section>
-      <Section section={sections[1]}>
+      <Section section={section("prometheus-metrics")}>
+        <PrometheusMetrics {...form} />
+      </Section>
+      <Section section={section("identity")}>
+        <Identity {...form} />
+      </Section>
+      <Section section={section("what-is-sent")}>
         <WhatIsSent status={telemetry.status} />
       </Section>
     </>
@@ -58,28 +67,13 @@ function OtlpExport({
   return (
     <div className="flex flex-col gap-4" style={{ maxWidth: 640 }}>
       <div className="flex flex-col gap-1" data-dirty={switchDirty ? "true" : undefined}>
-        <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={on}
-            aria-label="Export metrics and traces over OTLP"
-            data-testid="setting-telemetry-otlp"
-            onClick={() => setField("telemetryOtlp", !on)}
-            className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-              on ? "bg-acc" : "bg-fg-5"
-            } ${switchDirty ? "outline outline-1 outline-offset-2 outline-st-await" : ""}`}
-          >
-            <span
-              className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
-                on ? "left-3" : "left-0.5"
-              }`}
-            />
-          </button>
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
-            Export metrics and traces over OTLP
-          </span>
-        </div>
+        <Switch
+          on={on}
+          dirty={switchDirty}
+          label="Export metrics and traces over OTLP"
+          testId="setting-telemetry-otlp"
+          onToggle={() => setField("telemetryOtlp", !on)}
+        />
         <div className="pl-[34px] text-fg-4" style={{ fontSize: "10.5px" }}>
           Off by default. Logs are never exported.
         </div>
@@ -259,6 +253,7 @@ function WhatIsSent({ status }: { status: TelemetryStatus | null }) {
     ["On every measure", sent.resource],
     ["On the Run and node metrics", sent.run_attributes],
     ["On the traces only", sent.trace_only],
+    ["Only with Include the Actor", sent.with_actor],
     ["Metrics", sent.metrics],
     ["Traces", sent.traces],
   ];
@@ -285,7 +280,11 @@ function WhatIsSent({ status }: { status: TelemetryStatus | null }) {
       <ul className="flex list-disc flex-col gap-1 pl-4 text-fg-3" style={{ fontSize: "10.5px" }}>
         <li>The repository is named by its remote URL, without credentials, or by its folder name. Never by a local path.</li>
         <li>The Run and node ids go on the traces only, never on the metrics.</li>
-        <li>Who launched a Run or answered it is never sent.</li>
+        <li>
+          {status.include_actor
+            ? "Who launched a Run, and who answered it, is sent: Include the Actor is on."
+            : "Who launched a Run or answered it is never sent, unless you include the Actor."}
+        </li>
       </ul>
     </div>
   );

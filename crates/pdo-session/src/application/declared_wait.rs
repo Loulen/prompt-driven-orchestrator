@@ -275,7 +275,8 @@ impl LiftWait {
                 run_id,
                 node_id,
                 iter,
-                serde_json::json!({ "source": "pty_enter" }),
+                // Who answered, for the telemetry's « include the Actor ».
+                serde_json::json!({ "source": "pty_enter", "actor": actor }),
             )
             .await?;
         info!("Run {run_id}: node {node_id} iter-{iter} resumed on the user's Enter");

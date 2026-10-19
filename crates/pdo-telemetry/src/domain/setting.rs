@@ -1,6 +1,8 @@
-//! The OTLP export setting (ADR-0090 §1-2): the switch, off by default, the
-//! collector's address and the headers sent with every export. The headers'
-//! values are secrets (an API key): stored on the daemon, never shown again.
+//! The telemetry setting (ADR-0090 §1-2, §4): the OTLP export (its switch, off
+//! by default, the collector's address and the headers sent with every export),
+//! the `/metrics` switch, off by default, and whether the Actor is added to the
+//! measures, off by default. The headers' values are secrets (an API key):
+//! stored on the daemon, never shown again.
 
 use std::collections::BTreeMap;
 
@@ -24,7 +26,42 @@ impl Signal {
     }
 }
 
-/// The setting as the daemon applies it, every tier resolved.
+/// The whole setting as the daemon applies it, every tier resolved.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TelemetrySetting {
+    pub otlp: OtlpSetting,
+    /// Whether `/metrics` answers.
+    pub prometheus: bool,
+    /// Whether who launched a Run, and who answered it, goes with its measures.
+    pub include_actor: bool,
+}
+
+impl TelemetrySetting {
+    /// Where the measures go: the channels that are on.
+    pub fn channels(&self) -> Channels {
+        Channels {
+            otlp: self.otlp.target(),
+            prometheus: self.prometheus,
+        }
+    }
+}
+
+/// The channels the measures go through. With none, nothing is measured.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Channels {
+    /// The collector the OTLP export pushes to.
+    pub otlp: Option<ExportTarget>,
+    /// `/metrics`, read by whoever reaches the instance.
+    pub prometheus: bool,
+}
+
+impl Channels {
+    pub fn any(&self) -> bool {
+        self.otlp.is_some() || self.prometheus
+    }
+}
+
+/// The OTLP export setting, every tier resolved.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OtlpSetting {
     pub enabled: bool,
@@ -186,6 +223,35 @@ mod tests {
         };
         assert_eq!(unnamed.target(), None);
         assert_eq!(OtlpSetting::default().target(), None);
+    }
+
+    #[test]
+    fn each_channel_has_its_own_switch() {
+        let collector = OtlpSetting {
+            enabled: true,
+            endpoint: Some("http://collector:4318".into()),
+            headers: BTreeMap::new(),
+        };
+        let none = TelemetrySetting::default().channels();
+        assert!(!none.any());
+        let prometheus_only = TelemetrySetting {
+            prometheus: true,
+            ..Default::default()
+        }
+        .channels();
+        assert!(prometheus_only.any());
+        assert_eq!(prometheus_only.otlp, None);
+        let otlp_only = TelemetrySetting {
+            otlp: collector,
+            ..Default::default()
+        }
+        .channels();
+        assert!(otlp_only.any() && !otlp_only.prometheus);
+        let actor_alone = TelemetrySetting {
+            include_actor: true,
+            ..Default::default()
+        };
+        assert!(!actor_alone.channels().any(), "the Actor opens no channel");
     }
 
     #[test]

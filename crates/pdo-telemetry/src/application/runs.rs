@@ -1,6 +1,8 @@
 //! The Runs' measures and traces, read off the event bus: Runs launched,
 //! ended, failed; each node's durations; the declared waits; the cost and
 //! tokens of an ended Run; a trace per Run with a span per node execution.
+//! With « include the Actor », who launched the Run goes on its measures and
+//! its spans, and who answered a node's wait on the node's span.
 //! Nothing here touches a Run: a collector that does not answer, or an
 //! export that is off, leaves the Runs exactly as they were.
 
@@ -18,7 +20,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use super::hub::{Active, Telemetry};
 use super::instruments::key_values;
 use super::ports::{RunCosts, RunFactsSource};
-use crate::domain::attributes::{keys, RunFacts};
+use crate::domain::attributes::{events, keys, RunFacts};
 use crate::domain::lifecycle::{active_seconds, Execution, Lifecycle, Observation, Outcome};
 
 struct RunTrack {
@@ -90,10 +92,12 @@ impl RunRecorder {
             }
             return;
         };
+        // Read at each measure: switching it takes effect on the next one.
+        let actor = self.telemetry.include_actor();
         match observation {
             Observation::RunLaunched { run_id, at } => {
                 let facts = self.facts.facts(&run_id).await;
-                let attributes = key_values(&facts.attributes());
+                let attributes = key_values(&facts.attributes(actor));
                 active.instruments.runs_started.add(1, &attributes);
                 let span = start_span(&active, "pdo.run", at, &run_id, None, &attributes, None);
                 self.runs.insert(
@@ -112,10 +116,11 @@ impl RunRecorder {
                 model,
             } => {
                 let run = self.track(&execution.run_id).await;
-                let attributes = key_values(
-                    &run.facts
-                        .node_attributes(harness.as_deref(), model.as_deref()),
-                );
+                let attributes = key_values(&run.facts.node_attributes(
+                    harness.as_deref(),
+                    model.as_deref(),
+                    actor,
+                ));
                 let span = start_span(
                     &active,
                     "pdo.node",
@@ -135,8 +140,26 @@ impl RunRecorder {
                 );
             }
             Observation::WaitDeclared { execution } => {
-                let attributes = self.node_attributes(&execution).await;
+                let attributes = self.node_attributes(&execution, actor).await;
                 active.instruments.waits_declared.add(1, &attributes);
+            }
+            Observation::WaitAnswered {
+                execution,
+                at,
+                actor: answered_by,
+            } => {
+                let span = self
+                    .runs
+                    .get(&execution.run_id)
+                    .and_then(|run| run.nodes.get(&execution))
+                    .and_then(|node| node.span.as_ref());
+                if let (Some(span), Some(answered_by)) = (span, answered_by.filter(|_| actor)) {
+                    span.span().add_event_with_timestamp(
+                        events::WAIT_ANSWERED,
+                        SystemTime::from(at),
+                        vec![KeyValue::new(keys::ACTOR, answered_by)],
+                    );
+                }
             }
             Observation::NodeEnded {
                 execution,
@@ -145,7 +168,7 @@ impl RunRecorder {
                 total,
                 waiting,
             } => {
-                let mut attributes = self.node_attributes(&execution).await;
+                let mut attributes = self.node_attributes(&execution, actor).await;
                 attributes.push(KeyValue::new(keys::OUTCOME, outcome.as_str()));
                 let instruments = &active.instruments;
                 if let Some(total) = total {
@@ -173,7 +196,7 @@ impl RunRecorder {
                 let facts = run.facts.clone();
                 let span = run.span.take();
                 self.runs.remove(&run_id);
-                let mut attributes = key_values(&facts.attributes());
+                let mut attributes = key_values(&facts.attributes(actor));
                 if outcome == Outcome::Failed {
                     active.instruments.runs_failed.add(1, &attributes);
                 }
@@ -185,7 +208,7 @@ impl RunRecorder {
                 // The cost is read off the transcripts on disk: never on the
                 // bus's path.
                 let costs = self.costs.clone();
-                tokio::spawn(record_cost(active, costs, run_id, facts));
+                tokio::spawn(record_cost(active, costs, run_id, facts, actor));
             }
         }
     }
@@ -207,12 +230,13 @@ impl RunRecorder {
         self.runs.get_mut(run_id).expect("inserted above")
     }
 
-    async fn node_attributes(&mut self, execution: &Execution) -> Vec<KeyValue> {
+    async fn node_attributes(&mut self, execution: &Execution, actor: bool) -> Vec<KeyValue> {
         let run = self.track(&execution.run_id).await;
         let node = run.nodes.get(execution);
         key_values(&run.facts.node_attributes(
             node.and_then(|n| n.harness.as_deref()),
             node.and_then(|n| n.model.as_deref()),
+            actor,
         ))
     }
 }
@@ -222,10 +246,11 @@ async fn record_cost(
     costs: Arc<dyn RunCosts>,
     run_id: String,
     facts: RunFacts,
+    actor: bool,
 ) {
     for slice in costs.slices(&run_id).await {
         let attributes =
-            key_values(&facts.node_attributes(Some(&slice.harness), slice.model.as_deref()));
+            key_values(&facts.node_attributes(Some(&slice.harness), slice.model.as_deref(), actor));
         if let Some(usd) = slice.usd {
             active.instruments.cost.add(usd, &attributes);
         }

@@ -176,6 +176,13 @@ pub struct InstanceConfig {
     /// headers, never their values.
     #[serde(default)]
     pub telemetry_otlp_headers: std::collections::BTreeMap<String, String>,
+    /// Stored `/metrics` switch as `0`/`1`, or `None` when unset (ADR-0090):
+    /// env [`pdo_telemetry::adapters::env::PROMETHEUS_ENV`], then off.
+    pub telemetry_prometheus: Option<i64>,
+    /// Stored « include the Actor » as `0`/`1`, or `None` when unset
+    /// (ADR-0090 §4): env [`pdo_telemetry::adapters::env::INCLUDE_ACTOR_ENV`],
+    /// then off.
+    pub telemetry_include_actor: Option<i64>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -271,6 +278,10 @@ pub struct UpdateInstanceConfig {
     /// keeps the value stored under its name: the page never has it. `None`
     /// leaves the headers untouched.
     pub telemetry_otlp_headers: Option<Vec<pdo_telemetry::domain::setting::OtlpHeaderEdit>>,
+    /// Set the `/metrics` switch; `None` leaves it untouched.
+    pub telemetry_prometheus: Option<bool>,
+    /// Set « include the Actor »; `None` leaves it untouched.
+    pub telemetry_include_actor: Option<bool>,
 }
 
 impl UpdateInstanceConfig {
@@ -279,6 +290,8 @@ impl UpdateInstanceConfig {
         self.telemetry_otlp.is_some()
             || self.telemetry_otlp_endpoint.is_some()
             || self.telemetry_otlp_headers.is_some()
+            || self.telemetry_prometheus.is_some()
+            || self.telemetry_include_actor.is_some()
     }
 
     pub fn is_empty(&self) -> bool {

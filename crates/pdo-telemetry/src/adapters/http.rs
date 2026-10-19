@@ -4,6 +4,8 @@
 //!   answer, what is sent.
 //! - `POST /telemetry/test-export`: export now (a test span included), answer
 //!   the status that followed; `409` while nothing exports.
+//! - `GET /metrics`: the measures in the Prometheus text format; `404` while
+//!   its switch is off, as if the route did not exist.
 //! - [`measure`]: the latency of every routed request, and its span, labelled
 //!   by its route pattern (`/runs/{id}`), never by the path it was called on;
 //!   the telemetry's own routes are left out.
@@ -21,13 +23,31 @@ use opentelemetry::trace::{Span as _, SpanKind, Status, Tracer as _};
 use opentelemetry::KeyValue;
 use pdo_kernel::Actor;
 
+use super::prometheus::CONTENT_TYPE;
 use crate::application::hub::{Telemetry, TestExportError};
+
+/// Where Prometheus scrapes.
+pub const METRICS_PATH: &str = "/metrics";
 
 pub fn router(telemetry: Arc<Telemetry>) -> Router {
     Router::new()
         .route("/telemetry/status", get(status))
         .route("/telemetry/test-export", post(test_export))
+        .route("/metrics", get(metrics))
         .with_state(telemetry)
+}
+
+async fn metrics(State(telemetry): State<Arc<Telemetry>>) -> Response {
+    match telemetry.scrape() {
+        None => StatusCode::NOT_FOUND.into_response(),
+        Some(Ok(text)) => {
+            ([(axum::http::header::CONTENT_TYPE, CONTENT_TYPE)], text).into_response()
+        }
+        Some(Err(error)) => {
+            tracing::warn!(%error, "telemetry: cannot render /metrics");
+            (StatusCode::INTERNAL_SERVER_ERROR, error).into_response()
+        }
+    }
 }
 
 async fn status(State(telemetry): State<Arc<Telemetry>>) -> Response {
@@ -58,12 +78,11 @@ pub async fn measure(
     request: Request,
     next: Next,
 ) -> Response {
-    // The Telemetry page polls its own status: measuring it would only
-    // measure the page.
-    let Some(active) = telemetry
-        .active()
-        .filter(|_| !request.uri().path().starts_with("/telemetry/"))
-    else {
+    // The Telemetry page polls its own status, Prometheus scrapes on its
+    // period: measuring them would only measure the page and the scraper.
+    let path = request.uri().path();
+    let own = path.starts_with("/telemetry/") || path == METRICS_PATH;
+    let Some(active) = telemetry.active().filter(|_| !own) else {
         return next.run(request).await;
     };
     // The static files of the interface have no route: one label for them all.

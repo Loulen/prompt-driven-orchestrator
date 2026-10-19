@@ -1,6 +1,6 @@
 //! The `telemetry` context: the OTLP exporters over the daemon's runtime, the
-//! setting read off the stored tier, the Runs' facts and cost read from the
-//! run context, the live sessions from the session context.
+//! `/metrics` reader, the setting read off the stored tier, the Runs' facts and
+//! cost read from the run context, the live sessions from the session context.
 
 use std::sync::Arc;
 
@@ -8,8 +8,8 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_run::adapters::disk_live_facts::DiskLiveFacts;
 use pdo_run::Runs;
 use pdo_session::Session;
-use pdo_settings::adapters::contexts::OtlpSettingOfTelemetry;
-use pdo_telemetry::adapters::{env, host, otlp::OtlpExporters};
+use pdo_settings::adapters::contexts::SettingOfTelemetry;
+use pdo_telemetry::adapters::{env, host, otlp::OtlpExporters, prometheus::PrometheusEndpoint};
 use pdo_telemetry::application::runs::RunRecorder;
 use pdo_telemetry::{Identity, Telemetry};
 
@@ -25,7 +25,7 @@ pub(super) fn telemetry(
 ) -> (Arc<Telemetry>, RunRecorder) {
     let telemetry = Arc::new(
         Telemetry::new(
-            Arc::new(OtlpSettingOfTelemetry(stored.config.clone())),
+            Arc::new(SettingOfTelemetry(stored.config.clone())),
             Arc::new(OtlpExporters::current()),
             Identity {
                 instance: host::instance_id(r.port),
@@ -33,6 +33,7 @@ pub(super) fn telemetry(
             },
             env::export_interval(),
         )
+        .with_metrics_endpoint(Arc::new(PrometheusEndpoint))
         .with_sessions(Arc::new(SessionsOfTelemetry(session.clone())))
         .with_extensions(host),
     );

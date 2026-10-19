@@ -6,6 +6,7 @@
 mod authorization;
 mod create_delete;
 mod documents;
+mod drafts;
 mod fakes;
 mod library;
 mod overwrite;

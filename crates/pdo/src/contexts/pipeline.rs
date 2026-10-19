@@ -1,15 +1,18 @@
 //! The `pipeline` context: the instance registry and the node library on
 //! disk, the daemon's live stream, the skill bank, the Stats absorption a
 //! rename leaves behind, the Runs that still use a pipeline, and the
-//! validations of the pipelines over SQLite with the Projets they name.
+//! validations of the pipelines over SQLite with the Projets they name, and
+//! their shared drafts (SQLite, `yrs`).
 
 use std::sync::Arc;
 
 use pdo_kernel::extension_host::ExtensionHost;
+use pdo_pipeline::adapters::draft_doc::YDraftDocuments;
 use pdo_pipeline::adapters::events::BroadcastPipelineEvents;
 use pdo_pipeline::adapters::library_fs::FsNodeLibrary;
 use pdo_pipeline::adapters::registry::FsPipelineRegistry;
 use pdo_pipeline::adapters::skill_bank::BankOfSkills;
+use pdo_pipeline::adapters::sqlite_drafts::SqliteDrafts;
 use pdo_pipeline::adapters::sqlite_validations::SqlitePipelineValidations;
 use pdo_pipeline::{Pipelines, PipelinesPorts};
 use pdo_run::adapters::pipeline_runs::PipelineRuns;
@@ -29,7 +32,7 @@ pub(super) fn pipelines(
     skills: &Arc<Skills>,
     host: Arc<dyn ExtensionHost>,
 ) -> Arc<Pipelines> {
-    Arc::new(Pipelines::new(PipelinesPorts {
+    let pipelines = Arc::new(Pipelines::new(PipelinesPorts {
         registry: Arc::new(FsPipelineRegistry::new(
             r.repo_root.clone(),
             r.self_writes.clone(),
@@ -43,6 +46,14 @@ pub(super) fn pipelines(
         projects: Arc::new(WorkspaceKnownProjects(Arc::new(SqliteProjects::new(
             r.db.clone(),
         )))),
+        drafts: Arc::new(SqliteDrafts::new(r.db.clone())),
+        documents: Arc::new(YDraftDocuments),
         extensions: host,
-    }))
+    }));
+    // ADR-0088: a written file lands in its draft. Outside a runtime (the
+    // composition root's own sync tests), nothing follows.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        pdo_pipeline::adapters::draft_follow::spawn(pipelines.clone(), r.bus_tx.subscribe());
+    }
+    pipelines
 }

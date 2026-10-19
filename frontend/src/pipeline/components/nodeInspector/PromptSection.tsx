@@ -1,6 +1,10 @@
 import { useMemo } from "react";
 import { Lock } from "lucide-react";
 import { SectionHead } from "../InspectorPrimitives";
+import { firstName, presenceColor } from "../../model/presence";
+import { useTypingInPrompt } from "../../store/useDraftPresence";
+import { ParticipantAvatar } from "../ParticipantAvatar";
+import SharedPromptField from "./SharedPromptField";
 import type { Skill } from "../../../shared/generated/Skill";
 import type { SkillRef } from "../../../shared/generated/SkillRef";
 import type { SkillBank } from "../../../skill/model/skill";
@@ -45,6 +49,8 @@ export default function PromptSection({
   /** The last skill the completion added to this node, for the line under the prompt. */
   lastAddedSkill?: string | null;
 }) {
+  // ADR-0088: who else types in this prompt of the shared draft.
+  const typing = useTypingInPrompt(nodeId);
   const received = useMemo(
     () =>
       new Set(
@@ -65,7 +71,19 @@ export default function PromptSection({
     <>
         {/* Prompt / Script body. For a script node (#248) this textarea holds the
             bash body; its I/O arrives as PDO_* env vars, not a prose preamble. */}
-        <SectionHead title={isScript ? "Script (bash)" : "Prompt"} />
+        <SectionHead
+          title={isScript ? "Script (bash)" : "Prompt"}
+          aside={
+            typing.length > 0 && (
+              <span className="flex items-center gap-1 text-fg-4" style={{ fontSize: "10px" }} data-testid="prompt-typing">
+                <ParticipantAvatar participant={typing[0]} size={11} />
+                <span style={{ color: presenceColor(typing[0]) }}>
+                  {typing.map(firstName).join(", ")} {typing.length > 1 ? "are" : "is"} typing
+                </span>
+              </span>
+            )
+          }
+        />
         {isScript && (
           <p
             data-testid="script-help"
@@ -81,7 +99,9 @@ export default function PromptSection({
             ⇒ fails. Runs in the run's shared worktree — leave tracked files clean.
           </p>
         )}
-        <textarea
+        <SharedPromptField
+          nodeId={nodeId}
+          typing={typing}
           // #822: a script node's body keeps `script-body` (what it has always been
           // called, and what the script tests point at); the agentic prompt gets the
           // stable target the First pipeline tour types into.

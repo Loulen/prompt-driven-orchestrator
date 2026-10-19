@@ -7,7 +7,9 @@ import type { EditorPipelineDef } from "../model/pipeline";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import { carriedPorts, withCarriedPorts } from "../../lib/edgePorts";
 import { requalifyWhen, renameWhenPorts } from "../../lib/whenClause";
-import { hasUnsavedWork, isRunTabLocked } from "./editState";
+import { isEmergentInputNode } from "../../lib/anchorSide";
+import { hasUnsavedWork, isTabLocked } from "./editState";
+import { noteDraftGesture } from "./draftGesture";
 import type { EditState, OpenPipeline, TabHistory } from "./editState";
 
 export function mutateActiveTab(
@@ -16,8 +18,9 @@ export function mutateActiveTab(
 ): Partial<EditState> {
   const idx = state.openTabs.findIndex((t) => t.id === state.activeTabId);
   if (idx < 0) return {};
-  // ADR-0085: a run tab in « pilotage » takes no definition change at all.
-  if (isRunTabLocked(state.openTabs[idx])) return {};
+  // ADR-0085: a run tab in « pilotage » takes no definition change at all;
+  // ADR-0088: nor does a pipeline tab reading its shared draft.
+  if (isTabLocked(state.openTabs[idx])) return {};
   const tabs = [...state.openTabs];
   const tab = { ...tabs[idx], pipeline: { ...tabs[idx].pipeline }, dirty: true };
   fn(tab);
@@ -66,7 +69,13 @@ export function mutateActiveTabWithHistory(
   opts: { coalesceKey?: string | null; track?: boolean } = {},
 ): Partial<EditState> {
   const idx = state.openTabs.findIndex((t) => t.id === state.activeTabId);
-  if (idx < 0 || isRunTabLocked(state.openTabs[idx])) return {};
+  if (idx < 0 || isTabLocked(state.openTabs[idx])) return {};
+  // ADR-0088: a shared draft keeps its own history, of my changes only; it
+  // learns how this gesture folds into it.
+  if (state.openTabs[idx].draft) {
+    noteDraftGesture(state.openTabs[idx].id, opts.coalesceKey ?? null, opts.track !== false);
+    return mutateActiveTab(state, fn);
+  }
   const before = state.openTabs[idx].pipeline; // immutable per the COW invariant
   const tabId = state.openTabs[idx].id;
   const mutated = mutateActiveTab(state, fn);
@@ -217,8 +226,18 @@ export function propagatePortChangesToEdges(
     const renamed = ports.map((p) => renameMap.get(p) ?? p);
     const next = renamed.filter((p) => newPortNames.has(p));
     if (next.length === 0) continue;
+    // An emergent input is named after the output it carries (#149): renaming
+    // the output renames that input downstream (CORE-88). A declared input
+    // (End's `result`, a switch's `in`) keeps its own name.
+    const targetType = tab.pipeline.nodes.find((n) => n.id === edge.target.node)?.type;
+    const inputRename = ports.includes(edge.target.port) ? renameMap.get(edge.target.port) : undefined;
+    const target =
+      inputRename && targetType && isEmergentInputNode(targetType)
+        ? { ...edge.target, port: inputRename }
+        : edge.target;
     kept.push({
       ...edge,
+      target,
       source: withCarriedPorts(edge.source, next),
       when: requalifyWhen(renameWhenPorts(edge.when, ports, renameMap), renamed, next),
     });

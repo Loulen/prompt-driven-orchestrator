@@ -6,6 +6,7 @@
 //! middleware, which the composition root puts in front of every route.
 
 mod document;
+pub mod draft;
 mod dto;
 mod library;
 mod pipelines;
@@ -27,7 +28,7 @@ pub use document::skills_sidecar_response;
 ///
 /// ROUTER TRAP: a NEW top-level path prefix also needs its entry in the vite
 /// dev proxy whitelist (`frontend/vite.config.ts`).
-pub fn router(pipelines: Arc<Pipelines>) -> Router {
+pub fn router(pipelines: Arc<Pipelines>, ws_origin: draft::OriginCheck) -> Router {
     Router::new()
         .route("/pipelines", get(pipelines::list))
         .route("/pipelines/{pipeline_id}", get(pipelines::detail))
@@ -69,7 +70,12 @@ pub fn router(pipelines: Arc<Pipelines>) -> Router {
         .route("/library/{name}/instantiate", post(library::instantiate))
         // #155 — import a Claude Code workflow .js as a draft pipeline.
         .route("/library/import", post(library::import_workflow))
-        .with_state(pipelines)
+        .with_state(pipelines.clone())
+        // ADR-0088: the shared draft of a pipeline, over a WebSocket.
+        .route(
+            "/pipelines/{pipeline_id}/draft",
+            get(draft::upgrade).with_state(draft::DraftRoute::new(pipelines, ws_origin)),
+        )
 }
 
 /// `404 pipeline not found`, as plain text.

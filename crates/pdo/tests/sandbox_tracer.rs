@@ -82,17 +82,25 @@ fn seed(body: &str) -> impl FnOnce(&Path) -> anyhow::Result<()> {
 
 /// A fake `docker` logging every argv to `argv.log`. `container inspect` must report
 /// ABSENT, so `ensure_running` does `create` + `start` and the mounts get logged.
+///
+/// The node's session (`exec -i -t`) lasts, as a real one does: ended at once, the
+/// stale detector's next tick (every 30 s) would interrupt the node before a loaded
+/// machine lets the test complete it.
 fn write_fake_docker() -> (TempDir, String, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-docker");
     let log = dir.path().join("argv.log");
     let sq = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    // The argv lands in the log in one `cat` (one write), not in the chunks
+    // `printf` flushes: a test that reads the log once `create` shows reads
+    // every mount of it.
     let script = format!(
         "#!/usr/bin/env bash\n\
-         printf '%s\\n' \"$@\" >> {log}\n\
+         record=\"$(mktemp)\"; printf '%s\\n' \"$@\" > \"$record\"; cat \"$record\" >> {log}; rm -f \"$record\"\n\
          case \"$1\" in\n\
          image) exit 0 ;;\n\
          container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\
+         exec) if [ \"$2\" = -i ] && [ \"$3\" = -t ]; then exec sleep 300; fi; exit 0 ;;\n\
          *) exit 0 ;;\n\
          esac\n",
         log = sq(&log.display().to_string()),
@@ -132,11 +140,15 @@ async fn get_run(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
     daemon.get_json(&format!("/runs/{run_id}")).await
 }
 
+/// How long a Run may take to reach a state: a sandboxed start takes some 25 s
+/// on an idle machine, much more on a loaded one.
+const STATE_DEADLINE: Duration = Duration::from_secs(120);
+
 async fn wait_until<F>(mut pred: F) -> bool
 where
     F: FnMut() -> bool,
 {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + STATE_DEADLINE;
     while Instant::now() < deadline {
         if pred() {
             return true;
@@ -147,7 +159,7 @@ where
 }
 
 async fn wait_run_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + STATE_DEADLINE;
     let mut last = serde_json::Value::Null;
     while Instant::now() < deadline {
         let run = get_run(daemon, run_id).await;
@@ -161,7 +173,7 @@ async fn wait_run_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> s
 }
 
 async fn wait_node_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + STATE_DEADLINE;
     let mut last = serde_json::Value::Null;
     while Instant::now() < deadline {
         let run = get_run(daemon, run_id).await;
@@ -212,10 +224,11 @@ async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
         .send()
         .await
         .unwrap();
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
     assert!(
-        resp.status().is_success(),
-        "simulated pdo complete should succeed: {}",
-        resp.status()
+        status.is_success(),
+        "simulated pdo complete should succeed: {status} {body}"
     );
 }
 
@@ -963,9 +976,12 @@ fn write_fake_docker_image_absent() -> (TempDir, String, PathBuf) {
     let bin = dir.path().join("fake-docker");
     let log = dir.path().join("argv.log");
     let sq = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    // The argv lands in the log in one `cat` (one write), not in the chunks
+    // `printf` flushes: a test that reads the log once `create` shows reads
+    // every mount of it.
     let script = format!(
         "#!/usr/bin/env bash\n\
-         printf '%s\\n' \"$@\" >> {log}\n\
+         record=\"$(mktemp)\"; printf '%s\\n' \"$@\" > \"$record\"; cat \"$record\" >> {log}; rm -f \"$record\"\n\
          case \"$1\" in\n\
          image) exit 1 ;;\n\
          container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\
@@ -1264,7 +1280,7 @@ async fn create_trigger(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
 async fn fire_trigger_and_get_run(daemon: &TestDaemon, trigger_id: &str) -> String {
     daemon.force_trigger_due(trigger_id).await;
     daemon.run_trigger_tick().await;
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + STATE_DEADLINE;
     while Instant::now() < deadline {
         let runs = reqwest::get(format!("{}/runs", daemon.url()))
             .await
@@ -1378,9 +1394,12 @@ fn write_slow_create_docker(secs: u64) -> (TempDir, String, PathBuf) {
     let bin = dir.path().join("fake-docker");
     let log = dir.path().join("argv.log");
     let sq = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    // The argv lands in the log in one `cat` (one write), not in the chunks
+    // `printf` flushes: a test that reads the log once `create` shows reads
+    // every mount of it.
     let script = format!(
         "#!/usr/bin/env bash\n\
-         printf '%s\\n' \"$@\" >> {log}\n\
+         record=\"$(mktemp)\"; printf '%s\\n' \"$@\" > \"$record\"; cat \"$record\" >> {log}; rm -f \"$record\"\n\
          case \"$1\" in\n\
          image) exit 0 ;;\n\
          container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\

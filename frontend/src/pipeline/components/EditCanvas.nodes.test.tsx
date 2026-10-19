@@ -359,12 +359,18 @@ describe("EditNode rim drag-source (#844)", () => {
     expect(Number(top.style.zIndex)).toBeGreaterThan(1);
   });
 
-  it("draws a thin 4.5px rim on all four sides, in canvas space (#936)", () => {
+  it("draws an 8px rim on all four sides at 100 %, 3px inside the card and 5px out (CORE-88)", () => {
     render(<EditNode {...workProps([{ name: "out" }])} />, { wrapper: Wrapper });
-    expect((screen.getByTestId("rim-source-top") as HTMLElement).style.height).toBe("4.5px");
-    expect((screen.getByTestId("rim-source-bottom") as HTMLElement).style.height).toBe("4.5px");
-    expect((screen.getByTestId("rim-source-left") as HTMLElement).style.width).toBe("4.5px");
-    expect((screen.getByTestId("rim-source-right") as HTMLElement).style.width).toBe("4.5px");
+    const strip = (side: string) => screen.getByTestId(`rim-source-${side}`) as HTMLElement;
+    expect(strip("top").style.height).toBe("8px");
+    expect(strip("bottom").style.height).toBe("8px");
+    expect(strip("left").style.width).toBe("8px");
+    expect(strip("right").style.width).toBe("8px");
+    // Insets are taken inside the card's 1px border: -6px puts 5px outside it.
+    expect(strip("top").style.top).toBe("-6px");
+    expect(strip("bottom").style.bottom).toBe("-6px");
+    expect(strip("left").style.left).toBe("-6px");
+    expect(strip("right").style.right).toBe("-6px");
   });
 
   it("grows no rim on a node that declares no output — it starts no wire", () => {

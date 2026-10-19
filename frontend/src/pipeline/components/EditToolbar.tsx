@@ -12,6 +12,7 @@ import {
   DropdownMenuItem,
 } from "../../shared/ui/dropdown-menu";
 import { useEditStore } from "../store/editStore";
+import { useActiveDraft } from "../store/useDraftPresence";
 import RunToolbarActions from "./RunToolbarActions";
 import RunEditControl, { type RunEdit } from "./RunEditControl";
 import RunSearchToggle from "../../run/components/runSearch/RunSearchToggle";
@@ -77,14 +78,21 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
   // derived (reactive) rather than stored — no duplicated state to keep in sync.
   const undo = useEditStore((s) => s.undo);
   const redo = useEditStore((s) => s.redo);
+  // ADR-0088: a shared draft keeps the history of my own changes.
+  const draft = useActiveDraft();
   const canUndo = useEditStore((s) => {
     const t = s.activeTabId;
     return t != null && (s.history[t]?.past.length ?? 0) > 0;
-  });
+  }) || (draft?.canUndo ?? false);
   const canRedo = useEditStore((s) => {
     const t = s.activeTabId;
     return t != null && (s.history[t]?.future.length ?? 0) > 0;
-  });
+  }) || (draft?.canRedo ?? false);
+  const undoTip = !draft
+    ? "Undo · Ctrl+Z"
+    : draft.undoLabel
+      ? `Ctrl+Z · Undo your last change: ${draft.undoLabel}`
+      : "Ctrl+Z · Undo your last change";
   // A group sits before the trailing controls: they open with a separator.
   const leadingGroup = !readOnly || runEdit != null || finishedRun;
 
@@ -170,7 +178,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
 
           <span className="mx-0.5 h-4 w-px bg-line" />
 
-          <Tooltip content="Undo · Ctrl+Z">
+          <Tooltip content={undoTip}>
             <button
               data-testid="toolbar-undo"
               onClick={() => undo()}

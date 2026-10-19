@@ -37,6 +37,34 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   seulement si les Droits le permettent), présélectionne son dépôt primaire par défaut et propose
   ses autres dépôts comme secondaires cochables, en lecture seule par défaut.
 
+## 2.44.0 — Canevas : bord saisissable à tout zoom, renommage d'output validé (CORE-88)
+
+- Le bord d'un nœud est saisissable à tout zoom : 8 px à l'écran, dont au plus 3 px (et 25 % de
+  la carte) à l'intérieur. L'edge part du pixel pressé. Dézoom jusqu'à 25 %, zoom affiché en bas
+  à gauche du canevas.
+- L'accroche suit le zoom : pas du pipeline × 2, 4, 8… tant qu'une maille fait moins de 16 px à
+  l'écran, pastille « snap ×4 · 120px » au curseur. Le tracé enregistré ne dépend pas du zoom.
+- Le renommage d'un output s'applique à ↵ ou à la sortie du champ, Échap l'annule. Un nom pris
+  ou vide est refusé. Les edges suivent et l'input émergent aval prend le nouveau nom.
+- Une edge vers un port absent s'affiche en rouge pointillé, « <port> · port absent », et se
+  supprime directement. Après l'enregistrement, le lint est relu.
+- Hors Run, l'inspecteur n'a plus d'onglet « Run ».
+
+## 2.43.0 — Brouillon partagé d'un pipeline et présence (CORE-90)
+
+- Un pipeline du registre s'édite dans un brouillon partagé (ADR-0088) : un document Yjs par
+  pipeline, tenu par le daemon (SQLite) et synchronisé par `WS /pipelines/{id}/draft`. Les
+  modifications fusionnent au grain du champ, les prompts au caractère. Le brouillon survit au
+  redémarrage du daemon ; Save l'écrit dans le fichier et le remet à zéro.
+- Présence : avatars dans la barre d'onglets et sur la ligne de la liste Pipelines, sélection
+  des autres sur le canevas (contour et étiquette à leur couleur), saisie dans un prompt (caret
+  nommé, « X is typing »). `GET /pipelines` gagne `draft` (`changes`, `nodes`) : la ligne affiche
+  « draft: N changes » et compte les nœuds du brouillon.
+- Undo n'annule que ses propres changements, et son infobulle nomme le dernier.
+- Une Autorisation d'opération qui refuse `pipeline × update` fait rejoindre le brouillon en
+  lecture seule.
+- Un fichier écrit hors de PDO se fusionne dans le brouillon : la fenêtre de conflit disparaît.
+
 ## 2.42.0 — Arbre de fichiers de la Review (CORE-84)
 
 - La liste des fichiers de la Review est un arbre de dossiers repliables. Une chaîne de dossiers

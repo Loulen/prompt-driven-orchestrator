@@ -10,6 +10,7 @@ import { savePipeline, fetchPipeline, fetchPipelines, deletePipeline, renamePipe
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../model/pipeline";
 import { legacyScope } from "../../test/legacy";
+import { INITIAL_DRAFT_STATE } from "./draftSession";
 
 vi.mock("../../settings/api/settings", async (importOriginal) => ({
   // Keep the real `ApiError` (a value the store reads via `instanceof`) while
@@ -921,6 +922,64 @@ describe("editStore.save", () => {
   });
 });
 
+describe("editStore.save refreshes a stale lint (CORE-88)", () => {
+  const mockFetchPipeline = vi.mocked(fetchPipeline);
+  const mockFetchRunPipeline = vi.mocked(fetchRunPipeline);
+  const detail = (diagnostics: string[]) => ({
+    scope: "repo",
+    pipeline: makePipeline(),
+    prompts: {},
+    diagnostics,
+  });
+
+  function seedWithDiagnostics(diagnostics: string[], runId?: string) {
+    seedTab("p1", true);
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({ ...t, diagnostics, runId })),
+    }));
+  }
+
+  it("re-reads the diagnostics once the file the lint was about is saved", async () => {
+    seedWithDiagnostics(["edge 'a.x -> b.x': source port 'x' not found on node 'a'"]);
+    mockFetchPipeline.mockResolvedValueOnce(detail([]) as never);
+
+    await useEditStore.getState().save("p1");
+
+    expect(mockFetchPipeline).toHaveBeenCalledWith("p1", "repo");
+    expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([]);
+  });
+
+  it("does the same for a run tab", async () => {
+    seedWithDiagnostics(["stale"], "run-1");
+    mockFetchRunPipeline.mockResolvedValueOnce(detail([]) as never);
+
+    await useEditStore.getState().save("p1");
+
+    expect(mockFetchRunPipeline).toHaveBeenCalledWith("run-1");
+    expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([]);
+  });
+
+  it("costs no read when there was no lint to clear", async () => {
+    seedTab("p1", true);
+
+    await useEditStore.getState().save("p1");
+
+    expect(mockFetchPipeline).not.toHaveBeenCalled();
+  });
+
+  it("keeps the lint when the re-read fails", async () => {
+    seedWithDiagnostics(["kept"]);
+    mockFetchPipeline.mockRejectedValueOnce(new Error("offline"));
+
+    await useEditStore.getState().save("p1");
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.diagnostics).toEqual(["kept"]);
+    expect(tab.dirty).toBe(false);
+    expect(tab.saveError).toBeUndefined();
+  });
+});
+
 describe("editStore.flushPendingSaves", () => {
   it("resolves only after all dirty tabs are clean", async () => {
     useEditStore.setState({
@@ -1326,7 +1385,7 @@ const EXTERNAL_PIPELINE: EditorPipelineDef = {
   edges: [],
 };
 
-describe("reloadPipeline conflict detection", () => {
+describe("reloadPipeline", () => {
   it("silently re-renders when tab is NOT dirty", async () => {
     seedTab("my-pipe", false);
 
@@ -1346,92 +1405,31 @@ describe("reloadPipeline conflict detection", () => {
     expect(tab.pipeline.name).toBe("externally-modified");
     expect(tab.dirty).toBe(false);
     expect(tab.externalDirty).toBe(true);
-    expect(tab.conflict).toBeUndefined();
   });
 
-  it("sets conflict state instead of overwriting when tab IS dirty", async () => {
+  it("keeps unsaved work as it is", async () => {
     seedTab("my-pipe", true);
-
-    mockFetchPipeline.mockResolvedValueOnce({
-      id: "my-pipe",
-      scope: "repo",
-      path: "/test/my-pipe.yaml",
-      yaml: "",
-      pipeline: EXTERNAL_PIPELINE,
-      prompts: { "ext-node": "external prompt" },
-      diagnostics: ["diag1"],
-    });
 
     await useEditStore.getState().reloadPipeline("my-pipe");
 
     const tab = useEditStore.getState().openTabs[0];
-    // Canvas should NOT be overwritten
     expect(tab.pipeline.name).toBe("test");
     expect(tab.dirty).toBe(true);
-    // Conflict data should be stored
-    expect(tab.conflict).toBeDefined();
-    expect(tab.conflict!.pipeline.name).toBe("externally-modified");
-    expect(tab.conflict!.prompts["ext-node"]).toBe("external prompt");
-    expect(tab.conflict!.diagnostics).toEqual(["diag1"]);
+    expect(mockFetchPipeline).not.toHaveBeenCalled();
   });
-});
 
-describe("resolveConflict", () => {
-  it("'keep' discards external data and keeps canvas", () => {
-    seedTab("my-pipe", true);
-
+  it("leaves a tab with a shared draft to the draft (ADR-0088)", async () => {
+    seedTab("my-pipe", false);
     useEditStore.setState((s) => ({
-      openTabs: s.openTabs.map((t) =>
-        t.id === "my-pipe"
-          ? {
-              ...t,
-              conflict: {
-                pipeline: EXTERNAL_PIPELINE,
-                prompts: { "ext-node": "ext" },
-                diagnostics: [],
-              },
-            }
-          : t,
-      ),
+      openTabs: s.openTabs.map((t) => ({ ...t, draft: { ...INITIAL_DRAFT_STATE, synced: true, canWrite: true } })),
     }));
 
-    useEditStore.getState().resolveConflict("my-pipe", "keep");
+    await useEditStore.getState().reloadPipeline("my-pipe");
 
-    const tab = useEditStore.getState().openTabs[0];
-    expect(tab.conflict).toBeUndefined();
-    expect(tab.pipeline.name).toBe("test");
-    expect(tab.dirty).toBe(true);
-  });
-
-  it("'take' applies external data and clears dirty+conflict", () => {
-    seedTab("my-pipe", true);
-
-    useEditStore.setState((s) => ({
-      openTabs: s.openTabs.map((t) =>
-        t.id === "my-pipe"
-          ? {
-              ...t,
-              conflict: {
-                pipeline: EXTERNAL_PIPELINE,
-                prompts: { "ext-node": "ext" },
-                diagnostics: ["d1"],
-              },
-            }
-          : t,
-      ),
-    }));
-
-    useEditStore.getState().resolveConflict("my-pipe", "take");
-
-    const tab = useEditStore.getState().openTabs[0];
-    expect(tab.conflict).toBeUndefined();
-    expect(tab.pipeline.name).toBe("externally-modified");
-    expect(tab.prompts["ext-node"]).toBe("ext");
-    expect(tab.diagnostics).toEqual(["d1"]);
-    expect(tab.dirty).toBe(false);
+    expect(mockFetchPipeline).not.toHaveBeenCalled();
+    expect(useEditStore.getState().openTabs[0].pipeline.name).toBe("test");
   });
 });
-
 describe("createCollectionRegion (#151 / #269)", () => {
   it("creates a collection region with a minted id, over and members, and marks dirty", () => {
     const a = makeNode({ id: "aaaa1111", name: "worker" });
@@ -1509,6 +1507,64 @@ describe("updateNode propagates port changes to edges", () => {
     expect(tab.pipeline.edges).toHaveLength(1);
     expect(tab.pipeline.edges[0].source.port).toBe("screen");
     expect(tab.pipeline.edges[0].target).toEqual({ node: "bbbbbbbb", port: "in" });
+  });
+
+  // CORE-88: an emergent input is named after the output it carries, so the
+  // rename reaches the downstream input too — on every edge carrying it.
+  it("renames the downstream input with the output it carries, on every edge", () => {
+    const designer = makeNode({ id: "aaaaaaaa", outputs: [{ name: "spec" }, { name: "verdict" }] });
+    const builder = makeNode({ id: "bbbbbbbb", inputs: [] });
+    const reviewer = makeNode({ id: "cccccccc", inputs: [] });
+    const edges: EdgeDef[] = [
+      { source: { node: "aaaaaaaa", port: "spec" }, target: { node: "bbbbbbbb", port: "spec" } },
+      { source: { node: "aaaaaaaa", port: "spec" }, target: { node: "cccccccc", port: "spec" } },
+      { source: { node: "aaaaaaaa", port: "verdict" }, target: { node: "cccccccc", port: "verdict" } },
+    ];
+    seedTabWithPipeline(makePipeline([designer, builder, reviewer], edges));
+
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [{ name: "spec-v2" }, { name: "verdict" }],
+    });
+
+    const kept = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(kept.map(({ source, target }) => ({ source, target }))).toEqual([
+      { source: { node: "aaaaaaaa", port: "spec-v2" }, target: { node: "bbbbbbbb", port: "spec-v2" } },
+      { source: { node: "aaaaaaaa", port: "spec-v2" }, target: { node: "cccccccc", port: "spec-v2" } },
+      { source: { node: "aaaaaaaa", port: "verdict" }, target: { node: "cccccccc", port: "verdict" } },
+    ]);
+  });
+
+  it("leaves an input alone when its edge carries another output of the same name's node", () => {
+    const designer = makeNode({ id: "aaaaaaaa", outputs: [{ name: "spec" }, { name: "verdict" }] });
+    const builder = makeNode({ id: "bbbbbbbb", inputs: [] });
+    seedTabWithPipeline(
+      makePipeline(
+        [designer, builder],
+        [{ source: { node: "aaaaaaaa", port: "verdict" }, target: { node: "bbbbbbbb", port: "spec" } }],
+      ),
+    );
+
+    useEditStore.getState().updateNode("aaaaaaaa", { outputs: [{ name: "spec2" }, { name: "verdict" }] });
+
+    const [edge] = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(edge.target).toEqual({ node: "bbbbbbbb", port: "spec" });
+  });
+
+  it("keeps a declared input's name: only an emergent input follows the rename", () => {
+    const designer = makeNode({ id: "aaaaaaaa", outputs: [{ name: "result" }] });
+    const end = makeNode({ id: "eeeeeeee", type: "end", inputs: [{ name: "result" }], outputs: [] });
+    seedTabWithPipeline(
+      makePipeline(
+        [designer, end],
+        [{ source: { node: "aaaaaaaa", port: "result" }, target: { node: "eeeeeeee", port: "result" } }],
+      ),
+    );
+
+    useEditStore.getState().updateNode("aaaaaaaa", { outputs: [{ name: "report" }] });
+
+    const [edge] = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(edge.source).toEqual({ node: "aaaaaaaa", port: "report" });
+    expect(edge.target).toEqual({ node: "eeeeeeee", port: "result" });
   });
 
   // #843 / ADR-0073: an edge can carry SEVERAL outputs. A port rename must reach
@@ -1780,6 +1836,7 @@ describe("scope-qualified pipeline ops", () => {
       expect.any(String),
       {},
       "library",
+      undefined,
     );
   });
 });
@@ -2105,39 +2162,10 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
       expect(useEditStore.getState().history["my-pipe"].future).toHaveLength(0);
     });
 
-    it("KEEP: a dirty external reload (conflict) keeps the stack", async () => {
+    it("KEEP: a dirty external reload keeps the tab and its stack", async () => {
       seedWithHistory("my-pipe", true);
-      mockFetchPipeline.mockResolvedValueOnce({
-        id: "my-pipe", scope: "repo", path: "/p.yaml", yaml: "",
-        pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [],
-      });
       await useEditStore.getState().reloadPipeline("my-pipe");
-      // The conflict branch was taken (pipeline not overwritten); history kept.
       expect(useEditStore.getState().history["my-pipe"].past.length).toBeGreaterThan(0);
-    });
-
-    it("CLEAR: resolveConflict('take') clears; KEEP: ('keep') keeps", () => {
-      seedWithHistory("my-pipe", true);
-      useEditStore.setState((s) => ({
-        openTabs: s.openTabs.map((t) =>
-          t.id === "my-pipe"
-            ? { ...t, conflict: { pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [] } }
-            : t,
-        ),
-      }));
-      useEditStore.getState().resolveConflict("my-pipe", "keep");
-      expect(useEditStore.getState().history["my-pipe"].past.length).toBeGreaterThan(0);
-
-      // Re-arm a conflict and take theirs.
-      useEditStore.setState((s) => ({
-        openTabs: s.openTabs.map((t) =>
-          t.id === "my-pipe"
-            ? { ...t, conflict: { pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [] } }
-            : t,
-        ),
-      }));
-      useEditStore.getState().resolveConflict("my-pipe", "take");
-      expect(useEditStore.getState().history["my-pipe"].past).toHaveLength(0);
     });
 
     it("CLEAR: reloadFromLibrary clears the stack", async () => {
@@ -2429,16 +2457,6 @@ describe("single-tab mode (#342)", () => {
       expect(s.pendingSingleTab).toBeNull();
       expect(s.openTabs.map((t) => t.id)).toEqual(["a"]);
       expect(s.openTabs[0].dirty).toBe(true);
-    });
-
-    it("parks when the evicted tab carries an unresolved conflict (implies dirty)", async () => {
-      useEditStore.setState({
-        singleTabMode: true,
-        openTabs: [mkTab("a", { dirty: true, conflict: { pipeline: makePipeline(), prompts: {}, diagnostics: [] } })],
-        activeTabId: "a",
-      });
-      await useEditStore.getState().openPipeline("pipe-b");
-      expect(useEditStore.getState().pendingSingleTab).not.toBeNull();
     });
 
     it("ignores externalDirty (a hot-reload flash is not unsaved work)", async () => {

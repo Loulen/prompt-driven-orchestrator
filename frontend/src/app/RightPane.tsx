@@ -3,7 +3,7 @@ import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { NodeState } from "../shared/generated/NodeState";
-import { isRunTabLocked, type OpenPipeline } from "../pipeline/store/editState";
+import { isTabLocked, type OpenPipeline } from "../pipeline/store/editState";
 import type { TabId } from "../lib/infoPanelReconcile";
 import type { SettingsPosition } from "../settings/components/SettingsSurface";
 import type { useRightPaneRouter } from "../hooks/useRightPaneRouter";
@@ -24,7 +24,7 @@ import { deriveEdgeTrigger } from "../lib/edgeTrigger";
 import { useInspectorTab } from "../hooks/useInspectorTab";
 import { useOnHitChosen } from "../run/store/runSearchStore";
 import { useEditStore } from "../pipeline/store/editStore";
-import { NoRunPlaceholder, RunTabPlaceholder } from "./RunPanePlaceholders";
+import { RunTabPlaceholder } from "./RunPanePlaceholders";
 import GuidePanel, { type GuideNavigation } from "../platform/components/GuidePanel";
 import type { PageMount } from "../shared/generated/PageMount";
 
@@ -108,8 +108,9 @@ export default function RightPane({
 
   const isEditingRun = editTab?.scope === "run";
   // ADR-0085: a Run tab in « pilotage » (or archived): the inspector reads,
-  // never writes — Config instead of Edit.
-  const runLocked = isRunTabLocked(editTab);
+  // never writes — Config instead of Edit. ADR-0088: so does a pipeline tab
+  // that only reads its shared draft.
+  const runLocked = isTabLocked(editTab);
   // #684: which pane a selected node gets. Markers (start/end) never reach the
   // generic `NodeInspector` — outside a run they get a read-only pane.
   const nodeInspectorKind = resolveNodeInspector({
@@ -163,10 +164,7 @@ export default function RightPane({
         />
       );
     }
-    if (isEditingRun && selectedRun) {
-      return <RunTabPlaceholder nodeId={selection.id} />;
-    }
-    return <NoRunPlaceholder />;
+    return <RunTabPlaceholder nodeId={selection.id} />;
   }
 
   function inspectorEditPane() {
@@ -234,7 +232,13 @@ export default function RightPane({
           />
         ) : paneOwner === "editTab" ? (
           <>
-            {selection.kind === "node" && editNodeType != null && nodeInspectorKind === "node" ? (
+            {selection.kind === "node" && editNodeType != null && nodeInspectorKind === "node" && !isEditingRun ? (
+              // CORE-88: outside a Run there is nothing to show in a « Run » tab —
+              // the edition opens directly, without the tab bar.
+              <div className="h-full" data-testid="inspector-pane-edit">
+                {inspectorEditPane()}
+              </div>
+            ) : selection.kind === "node" && editNodeType != null && nodeInspectorKind === "node" ? (
               <InspectorTabs activeTab={inspectorTab} onTabChange={setInspectorTab} configMode={runLocked}>
                 <div hidden={inspectorTab !== "run"} className="h-full" data-testid="inspector-pane-run">
                   {inspectorRunPane()}

@@ -7,9 +7,12 @@ export function SectionHead({
   count,
   onAdd,
   addTestId,
+  aside,
 }: {
   title: string;
   count?: number;
+  /** Shown at the right of the title (« Alice is typing »). */
+  aside?: React.ReactNode;
   onAdd?: () => void;
   /** #823: gives the `+ Add` a stable target a tour can aim the Projecteur at. */
   addTestId?: string;
@@ -22,6 +25,7 @@ export function SectionHead({
           <span className="ml-1.5 rounded bg-bg-4 px-1 text-fg-4">{count}</span>
         )}
       </span>
+      {aside}
       {onAdd && (
         <button
           onClick={onAdd}

@@ -14,6 +14,7 @@ import { drawnEdgeLayout } from "../../lib/drawnEdge";
 import { pendingSource, resetWiringSession, wiringGesture, wiringTrace } from "../../lib/wiringSession";
 import { droppedPath } from "../../lib/wiringGesture";
 import { wireableOutputs } from "../../lib/edgePorts";
+import { snapStepAtZoom } from "../../lib/wiringGrid";
 // #723 — orchestrator pastilles on the run-view node card.
 
 export function useCanvasWiring({
@@ -94,11 +95,13 @@ export function useCanvasWiring({
         width: internal.measured?.width ?? CARD_WIDTH,
         height: internal.measured?.height ?? CARD_HEIGHT,
       };
-      const anchor = anchorFromPoint(pressFlow, rect, side, gridStep);
+      // CORE-88: the wire leaves from the pixel pressed (step 0), not from the
+      // nearest grid line — the anchor is the press, like a drop's.
+      const anchor = anchorFromPoint(pressFlow, rect, side, 0);
       pendingSource.anchor = anchor;
       pendingSource.point = anchorPoint(rect, anchor, anchor.side);
     },
-    [reactFlow, setWiring, gridStep],
+    [reactFlow, setWiring],
   );
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
@@ -168,6 +171,7 @@ export function useCanvasWiring({
             connectionState.toHandle ?? null,
             connectionState.fromNode?.id ?? null,
             gridStep,
+            snapStepAtZoom(gridStep, reactFlow.getZoom()).step,
           )
         : publishedTrace;
       // `drawnEdgeLayout` owns which fields a drop writes and which it

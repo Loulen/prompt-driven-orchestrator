@@ -50,7 +50,6 @@ export function runEditSlice(set: Set, get: Get): Partial<EditState> {
                   ? { pipeline: detail.pipeline, prompts: detail.prompts, diagnostics: detail.diagnostics ?? [] }
                   : {}),
                 dirty: false,
-                conflict: undefined,
                 saveError: undefined,
                 runEditing: false,
               }

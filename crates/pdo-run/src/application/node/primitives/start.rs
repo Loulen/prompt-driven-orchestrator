@@ -137,6 +137,11 @@ pub fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         // can survive; restart-with-artifacts is `node_spawn`'s concern.
         partial_outputs: &[],
         extension_preamble: params.extension.preamble.as_deref(),
+        public_url: params
+            .extension
+            .env
+            .get(pdo_kernel::public_url::PUBLIC_URL_ENV)
+            .map(String::as_str),
     };
 
     let full_prompt = crate::application::node::prompt::build_full_prompt(&aug_ctx, &role_prompt);

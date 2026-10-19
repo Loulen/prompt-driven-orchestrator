@@ -25,6 +25,8 @@ import { useInspectorTab } from "../hooks/useInspectorTab";
 import { useOnHitChosen } from "../run/store/runSearchStore";
 import { useEditStore } from "../pipeline/store/editStore";
 import { NoRunPlaceholder, RunTabPlaceholder } from "./RunPanePlaceholders";
+import GuidePanel, { type GuideNavigation } from "../platform/components/GuidePanel";
+import type { PageMount } from "../shared/generated/PageMount";
 
 /** What the right pane shows, and what it hands back. */
 export interface RightPaneProps {
@@ -50,6 +52,9 @@ export interface RightPaneProps {
   onOpenChildRun: (childRunId: string) => void;
   onRefreshRun: () => void;
   openSettings: (position?: SettingsPosition) => void;
+  /** The mounted page shown in the centre, whose guide owns the pane. */
+  activePage?: PageMount | null;
+  guideNavigation?: GuideNavigation;
 }
 
 /**
@@ -80,6 +85,8 @@ export default function RightPane({
   onOpenChildRun: handleOpenChildRun,
   onRefreshRun: refreshRun,
   openSettings,
+  activePage,
+  guideNavigation,
 }: RightPaneProps) {
   const selection = useEditStore((s) => s.selection);
   const editActiveTabId = useEditStore((s) => s.activeTabId);
@@ -201,7 +208,11 @@ export default function RightPane({
 
   return (
     <>
-        {paneOwner === "trigger" && selectedTrigger ? (
+        {paneOwner === "page" ? (
+          activePage?.guide?.length && guideNavigation ? (
+            <GuidePanel key={activePage.name} page={activePage} navigation={guideNavigation} />
+          ) : null
+        ) : paneOwner === "trigger" && selectedTrigger ? (
           <TriggerDetailPanel
             key={selectedTrigger.id}
             trigger={selectedTrigger}

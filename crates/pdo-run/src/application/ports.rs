@@ -193,6 +193,8 @@ pub struct InstanceDefaults {
     pub manager_enabled: bool,
     /// The stored agentic profile the manager is pinned to, if any.
     pub manager_profile: Option<String>,
+    /// The stored Public URL, before the environment tier.
+    pub public_url: Option<String>,
 }
 
 /// The instance settings and the agentic profiles, which the settings context

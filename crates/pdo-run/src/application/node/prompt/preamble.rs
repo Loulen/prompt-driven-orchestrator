@@ -29,6 +29,7 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     push_partial_outputs(&mut preamble, ctx);
     push_secondary_repos(&mut preamble, ctx);
     push_source_edits(&mut preamble, ctx);
+    push_public_url(&mut preamble, ctx);
     push_completion(&mut preamble);
     push_variables(&mut preamble, ctx);
 

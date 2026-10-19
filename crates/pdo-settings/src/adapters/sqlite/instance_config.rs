@@ -49,6 +49,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
             .unwrap_or_default(),
         telemetry_prometheus: row.try_get("telemetry_prometheus").unwrap_or(None),
         telemetry_include_actor: row.try_get("telemetry_include_actor").unwrap_or(None),
+        public_url: row.try_get("public_url").unwrap_or(None),
         updated_at: row.get("updated_at"),
     }
 }
@@ -157,6 +158,9 @@ fn assignments(edit: UpdateInstanceConfig) -> Vec<(&'static str, Bound)> {
     }
     if let Some(v) = edit.telemetry_include_actor {
         sets.push(("telemetry_include_actor", flag(v)));
+    }
+    if let Some(v) = edit.public_url {
+        sets.push(("public_url", text(v)));
     }
     sets
 }

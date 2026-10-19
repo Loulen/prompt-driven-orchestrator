@@ -10,6 +10,7 @@ import { useReviewDiff } from "../store/useReviewDiff";
 import { useReviewEntries } from "../store/useReviewEntries";
 import { useReviewGestures } from "../store/useReviewGestures";
 import { useReviewLayout } from "../store/useReviewLayout";
+import { useReviewFileLanding } from "../store/useReviewFileLanding";
 import { useReviewLive } from "../store/useReviewLive";
 import { useReviewRun } from "../store/useReviewRun";
 import ReviewBanners from "./ReviewBanners";
@@ -121,9 +122,11 @@ export default function ReviewPage({ runId }: Props) {
     registerEl,
     onScroll,
     goFile,
+    landOnFile,
     goHunk,
     jumpTo,
   } = useReviewLayout(files);
+  useReviewFileLanding(files, landOnFile);
   const { choosePair } = r;
   const { setNodeDelivered } = live;
   const setPair = useCallback(

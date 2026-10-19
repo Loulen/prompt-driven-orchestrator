@@ -1,4 +1,5 @@
-//! Page mounts: a directory served live under `/pages/<name>/`.
+//! Page mounts: a directory served live under `/pages/<name>/`, with an
+//! optional reading guide (`page_guide`) PDO shows beside it.
 //!
 //! The rules here are pure: what a mount name may be, which directories may
 //! never be mounted, and how a requested path is split into the components the
@@ -11,15 +12,23 @@ use std::path::{Component, Path};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use super::page_guide::GuideEntry;
+
 /// A directory bound to a name. `run_id` is the Run whose agent mounted it, if
-/// any: archiving that Run removes the mount.
+/// any: archiving that Run removes the mount, and its guide with it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PageMount {
     pub name: String,
     pub directory: String,
     pub run_id: Option<String>,
+    /// The node whose agent mounted it, beside `run_id`.
+    #[serde(default)]
+    pub node_id: Option<String>,
     pub created_at: String,
+    /// The reading guide given at mount time; `None` for a page served alone.
+    #[serde(default)]
+    pub guide: Option<Vec<GuideEntry>>,
 }
 
 /// Why a mount was refused.

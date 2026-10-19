@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDeepLink, formatRunLink, isDeepLink, isRunLink, parseDeepLink, parseRunLink } from "./deepLink";
+import { formatDeepLink, formatRunLink, isDeepLink, isRunLink, parseDeepLink, parseRunLink, parseRunTarget } from "./deepLink";
 
 describe("a deep link", () => {
   it("names the extension, its page location and the path", () => {
@@ -45,6 +45,19 @@ describe("a link toward a Run", () => {
     expect(parseRunLink("#/runs/")).toBeNull();
     expect(parseRunLink("#/runs/r1/review")).toBeNull();
     expect(parseRunLink("#/ext/demo/topbar/end")).toBeNull();
+  });
+
+  it("may name a node of the Run, or an artifact of that node", () => {
+    expect(parseRunTarget("#/runs/r1")).toEqual({ runId: "r1", nodeId: null });
+    expect(parseRunTarget("#/runs/r1/nodes/design")).toEqual({ runId: "r1", nodeId: "design" });
+    expect(parseRunTarget("https://pdo.example.net/#/runs/r1/nodes/design/artifacts/out")).toEqual({
+      runId: "r1",
+      nodeId: "design",
+    });
+    expect(parseRunLink("#/runs/r1/nodes/design")).toBe("r1");
+    expect(parseRunTarget("#/runs/r1/nodes")).toBeNull();
+    expect(parseRunTarget("#/runs/r1/nodes/design/artifacts")).toBeNull();
+    expect(parseRunTarget("#/runs/r1//design")).toBeNull();
   });
 
   it("is a link of its own, not an extension's", () => {

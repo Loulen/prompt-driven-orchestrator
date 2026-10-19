@@ -120,6 +120,7 @@ function settings(extra: Partial<InstanceSettings> = {}): InstanceSettings {
     telemetry_otlp_headers: [],
     telemetry_prometheus: { effective: false, source: "default", stored: null, env: null, default: false },
     telemetry_include_actor: { effective: false, source: "default", stored: null, env: null, default: false },
+    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
     updated_at: "2026-07-01T10:00:00.000Z",
     ...extra,
   } as unknown as InstanceSettings;
@@ -295,8 +296,8 @@ describe("Settings › Telemetry (ADR-0090)", () => {
   it("names the /metrics address with the Public URL when the daemon gives one", async () => {
     fetchSettingsMock.mockResolvedValue(
       settings({
-        public_url: { effective: "https://pdo.example.org/", source: "stored", stored: "https://pdo.example.org/", env: null, default: null },
-      } as Partial<InstanceSettings>),
+        public_url: { effective: "https://pdo.example.org", source: "stored", stored: "https://pdo.example.org", env: null, default: null },
+      }),
     );
     renderTelemetry();
     expect(await screen.findByTestId("telemetry-metrics-url")).toHaveTextContent(

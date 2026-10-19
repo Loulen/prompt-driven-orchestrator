@@ -126,3 +126,18 @@ describe("rightPaneCollapsed", () => {
     ).toBe(false);
   });
 });
+
+describe("a mounted page's tab", () => {
+  it("owns the pane over everything else", () => {
+    expect(
+      rightPaneOwner({ triggerSelected: true, infoPanelOpen: true, hasEditTab: true, pageOpen: true }),
+    ).toBe("page");
+  });
+
+  it("collapses the pane unless its guide is shown", () => {
+    const page = { owner: "page" as const, selectionKind: "none" as const, runPanelShown: true, legacyHasContent: true };
+    expect(rightPaneCollapsed({ ...page, guideShown: true })).toBe(false);
+    expect(rightPaneCollapsed({ ...page, guideShown: false })).toBe(true);
+    expect(rightPaneCollapsed(page)).toBe(true);
+  });
+});

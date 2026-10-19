@@ -37,6 +37,7 @@ impl InstanceSettings for RunInstanceSettings {
                 default_auto_name: c.default_auto_name,
                 manager_enabled: resolve_manager_enabled(c.manager_enabled),
                 manager_profile: c.manager_profile,
+                public_url: c.public_url,
             })
         })
     }
@@ -102,6 +103,21 @@ impl pdo_trigger::application::ports::TriggerSettings for SettingsOfTriggers {
                 .and_then(|c| c.guard_timeout_secs)
                 .map(|n| n as u64);
             pdo_trigger::adapters::env::guard_timeout_with(stored_secs)
+        })
+    }
+}
+
+/// The Public URL, `stored → env → none`, for the platform's printed links.
+pub struct PublicUrlOfPlatform(pub Arc<dyn InstanceConfigStore>);
+
+impl pdo_platform::application::ports::PublicUrlSetting for PublicUrlOfPlatform {
+    fn resolve(&self) -> pdo_platform::application::ports::BoxFuture<'_, Option<String>> {
+        Box::pin(async move {
+            let stored = self.0.get().await.ok().and_then(|c| c.public_url);
+            pdo_kernel::public_url::resolve(
+                stored.as_deref(),
+                pdo_kernel::public_url::env_public_url(),
+            )
         })
     }
 }

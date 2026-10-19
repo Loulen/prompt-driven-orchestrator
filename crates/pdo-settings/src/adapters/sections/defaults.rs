@@ -114,16 +114,20 @@ impl SettingsSection for ReviewDefaults {
     }
 }
 
-/// Whether the daemon may ask the release source for a newer version.
+/// Whether the daemon may ask the release source for a newer version, and the
+/// address humans open PDO at.
 pub struct PlatformDefaults;
 
 impl SettingsSection for PlatformDefaults {
     fn disclose<'a>(&'a self, c: &'a InstanceConfig) -> Keys<'a> {
         Box::pin(async move {
-            Ok(section([(
-                "update_check",
-                json(platform::update_check(c.update_check)),
-            )]))
+            Ok(section([
+                ("update_check", json(platform::update_check(c.update_check))),
+                (
+                    "public_url",
+                    json(platform::public_url(c.public_url.as_deref())),
+                ),
+            ]))
         })
     }
 }

@@ -67,6 +67,15 @@ pub fn check_ranges(edit: &UpdateInstanceConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// The Public URL in its stored form: normalized, or `""` (the clear) for a
+/// blank one; refused, naming why, when it is no `http(s)://` address.
+pub fn normalize_public_url(edit: &mut UpdateInstanceConfig) -> Result<(), String> {
+    if let Some(raw) = edit.public_url.take() {
+        edit.public_url = Some(pdo_kernel::public_url::normalize(&raw)?.unwrap_or_default());
+    }
+    Ok(())
+}
+
 /// The refusal of a manager pin naming no agentic profile. A pin to nothing
 /// would silently fall back at spawn time, so it is refused at registration.
 pub fn unknown_manager_profile(name: &str, known: &[String]) -> String {
@@ -92,6 +101,22 @@ mod tests {
                 "{err}"
             );
         }
+    }
+
+    #[test]
+    fn the_public_url_is_stored_normalized_cleared_or_refused() {
+        let mut edit = parse_edit(json!({ "public_url": " https://pdo.example.net/ " })).unwrap();
+        normalize_public_url(&mut edit).unwrap();
+        assert_eq!(edit.public_url.as_deref(), Some("https://pdo.example.net"));
+        let mut clear = parse_edit(json!({ "public_url": "" })).unwrap();
+        normalize_public_url(&mut clear).unwrap();
+        assert_eq!(clear.public_url.as_deref(), Some(""));
+        let mut bad = parse_edit(json!({ "public_url": "pdo.example.net" })).unwrap();
+        let err = normalize_public_url(&mut bad).unwrap_err();
+        assert!(err.contains("http://"), "{err}");
+        let mut untouched = parse_edit(json!({})).unwrap();
+        normalize_public_url(&mut untouched).unwrap();
+        assert_eq!(untouched.public_url, None);
     }
 
     #[test]

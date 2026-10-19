@@ -30,6 +30,8 @@ import { useSurfaces } from "./useSurfaces";
 import { useAppTour } from "./useAppTour";
 import { useRunNavigation } from "./useRunNavigation";
 import { useRunLink } from "./useRunLink";
+import { useMountedPageShell } from "./usePageLink";
+import { useGuideNavigation } from "./useGuideNavigation";
 import { formatRunLink } from "../shared/extensions/deepLink";
 import { setSignInReturnLink } from "../shared/http/signIn";
 import { useEditorHotkeys } from "./useEditorHotkeys";
@@ -104,6 +106,8 @@ export default function App() {
   const pipelines = useEditStore((s) => s.pipelines);
 
   const editTab = openTabs.find((t) => t.id === editActiveTabId);
+  // A mounted page's tab shown in the centre (its guide owns the right pane).
+  const { activePage, guideShown } = useMountedPageShell(editActiveTabId, selectedTriggerId);
   const isEditingRun = editTab?.scope === "run";
   const hasEditTab = editTab != null;
 
@@ -158,6 +162,8 @@ export default function App() {
       triggers,
       pipelines,
       selectedRun,
+      pageOpen: activePage != null,
+      guideShown,
     });
 
   useShellRefresh({
@@ -185,8 +191,12 @@ export default function App() {
     setSelectedNodeId,
   });
 
-  // CORE-1: `#/runs/<id>` selects the Run, from the address bar or an extension.
-  useRunLink(handleSelectRun);
+  // CORE-1: `#/runs/<id>` selects the Run, from the address bar or an extension;
+  // `#/runs/<id>/nodes/<node>` its node too.
+  const setSelection = useEditStore((s) => s.setSelection);
+  const selectNode = useCallback((id: string) => setSelection({ kind: "node", id }), [setSelection]);
+  useRunLink(handleSelectRun, selectNode);
+  const guideNavigation = useGuideNavigation(runs, handleSelectRun);
   // API 0.12: the daemon knows which Run this tab shows (the Presences).
   usePresences(selectedRunId);
   // CORE-2: the address keeps no Run, so a lost session comes back to it this way.
@@ -324,6 +334,8 @@ export default function App() {
               onOpenChildRun={handleOpenChildRun}
               onRefreshRun={refreshRun}
               openSettings={openSettings}
+              activePage={activePage}
+              guideNavigation={guideNavigation}
             />
           </ResizablePanel>
         </ResizablePanelGroup>

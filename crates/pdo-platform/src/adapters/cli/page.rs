@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use pdo_kernel::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
+use pdo_kernel::public_url::{guided_page_url, page_url};
 
 use super::PageAction;
 use crate::domain::page_mount::PageMount;
@@ -38,19 +39,26 @@ pub fn run_page(action: PageAction) -> Result<()> {
     };
 
     match action {
-        PageAction::Mount { name, directory } => {
+        PageAction::Mount {
+            name,
+            directory,
+            guide,
+        } => {
             let directory = directory
                 .canonicalize()
                 .with_context(|| format!("cannot resolve {}", directory.display()))?;
+            let guide = guide
+                .map(|path| {
+                    std::fs::read_to_string(&path)
+                        .with_context(|| format!("cannot read the guide {}", path.display()))
+                })
+                .transpose()?;
             let response = with_identity(client.post(format!("{url}/pages")))
-                .json(&serde_json::json!({ "name": name, "directory": directory }))
+                .json(&serde_json::json!({ "name": name, "directory": directory, "guide": guide }))
                 .send()
                 .context("failed to reach daemon")?;
-            let mount: PageMount = daemon_response(response, "mount page")?;
-            println!(
-                "Mounted {} at /pages/{}/ from {}.",
-                mount.name, mount.name, mount.directory
-            );
+            let mounted: MountedPage = daemon_response(response, "mount page")?;
+            print!("{}", mounted_text(&mounted, &url));
         }
         PageAction::List => {
             let response = with_identity(client.get(format!("{url}/pages")))
@@ -76,6 +84,37 @@ pub fn run_page(action: PageAction) -> Result<()> {
     Ok(())
 }
 
+/// What `POST /pages` answers: the mount, and the Public URL to print its
+/// links under.
+#[derive(serde::Deserialize)]
+struct MountedPage {
+    #[serde(flatten)]
+    mount: PageMount,
+    #[serde(default)]
+    public_url: Option<String>,
+}
+
+/// The lines `pdo page mount` prints: the full address of PDO's view with the
+/// guide when there is one, of the page alone otherwise. Under the instance's
+/// Public URL, else the daemon address this CLI reached.
+fn mounted_text(mounted: &MountedPage, daemon_url: &str) -> String {
+    let base = mounted.public_url.as_deref().unwrap_or(daemon_url);
+    let name = &mounted.mount.name;
+    let page = page_url(base, name);
+    if mounted.mount.guide.is_some() {
+        format!(
+            "Mounted {name} from {}.\nWith its guide: {}\nPage alone: {page}\n",
+            mounted.mount.directory,
+            guided_page_url(base, name)
+        )
+    } else {
+        format!(
+            "Mounted {name} at {page} from {}.\n",
+            mounted.mount.directory
+        )
+    }
+}
+
 /// The body of a success, or the daemon's own `error` sentence.
 fn daemon_response<T: serde::de::DeserializeOwned>(
     response: reqwest::blocking::Response,
@@ -94,4 +133,51 @@ fn daemon_response<T: serde::de::DeserializeOwned>(
     }
     serde_json::from_str(&raw)
         .with_context(|| format!("unreadable success body from daemon: {raw}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::page_guide::GuideEntry;
+
+    fn mounted(guide: bool, public_url: Option<&str>) -> MountedPage {
+        MountedPage {
+            mount: PageMount {
+                name: "demo".into(),
+                directory: "/srv/demo".into(),
+                run_id: None,
+                node_id: None,
+                created_at: "now".into(),
+                guide: guide.then(|| {
+                    vec![GuideEntry {
+                        title: "t".into(),
+                        text: String::new(),
+                        link: "#a".into(),
+                    }]
+                }),
+            },
+            public_url: public_url.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn a_guided_page_prints_pdo_s_view_first_under_the_public_url() {
+        assert_eq!(
+            mounted_text(
+                &mounted(true, Some("https://pdo.example.net")),
+                "http://localhost:5172"
+            ),
+            "Mounted demo from /srv/demo.\n\
+             With its guide: https://pdo.example.net/#/pages/demo\n\
+             Page alone: https://pdo.example.net/pages/demo/\n"
+        );
+    }
+
+    #[test]
+    fn a_page_alone_prints_its_address_under_the_daemon_s_without_a_public_url() {
+        assert_eq!(
+            mounted_text(&mounted(false, None), "http://localhost:5172"),
+            "Mounted demo at http://localhost:5172/pages/demo/ from /srv/demo.\n"
+        );
+    }
 }

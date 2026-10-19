@@ -1,7 +1,7 @@
 //! The `platform` context: SQLite for the mounts and the audit, the local
 //! filesystem for the pages and the update journal, GitHub for the releases,
 //! a detached `sh` for the update, the Runs of the run context, and its
-//! `update_check` instance setting.
+//! `update_check` and `public_url` instance settings.
 
 use std::sync::Arc;
 
@@ -18,7 +18,7 @@ use pdo_platform::application::update_context::UpdateOptions;
 use pdo_platform::domain::release_channel::UpdateChannel;
 use pdo_platform::{Platform, PlatformPorts};
 use pdo_run::Runs;
-use pdo_settings::adapters::contexts::UpdateCheckOfPlatform;
+use pdo_settings::adapters::contexts::{PublicUrlOfPlatform, UpdateCheckOfPlatform};
 
 use super::{ContextResources, StoredSettings};
 use crate::ports::platform_runs::RunsOfPlatform;
@@ -35,6 +35,7 @@ pub(super) fn platform(
         audit: Arc::new(SqliteAuditLog::new(r.db.clone())),
         runs: Arc::new(RunsOfPlatform(run.clone())),
         update_setting: Arc::new(UpdateCheckOfPlatform(stored.config.clone())),
+        public_url: Arc::new(PublicUrlOfPlatform(stored.config.clone())),
         release_source: Arc::new(GithubReleases),
         update_journal: Arc::new(FsUpdateJournal::new(r.home_root.clone())),
         // A daemon whose home is overridden (the test seam) looks for the

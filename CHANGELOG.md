@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.33.0 — Envoi de texte réservé au pilote, rafraîchissement des modèles d'un harnais (CORE-79)
+
+- **`pdo-extension-api` 0.15.0**, sans rupture : l'opération `instance_settings` gagne le verbe
+  `refresh_catalogue` (re-sonder les modèles d'un harnais). Une extension qui répond à
+  `authorize` peut le refuser comme `update`.
+- `POST /runs/<run>/nodes/<node>/terminal-text` accepte `poste`. Un poste qui regarde le terminal d'un nœud
+  pendant qu'un autre le pilote reçoit `409 not_pilot` (avec l'Acteur du pilote), et rien n'est
+  collé. Un envoi sans poste (CLI, extension) passe comme avant.
+- `POST /settings/harnesses/{name}/refresh` re-sonde le catalogue d'un harnais même à version
+  égale, et `/ws` annonce `harness_catalogue_changed`. Le catalogue servi porte `probed_at`.
+
 ## 2.32.0 — Auteur Acteur des commentaires de Review, sources d'autocomplétion du compositeur (CORE-63)
 
 - **`pdo-extension-api` 0.14.0** : nouvel Emplacement d'UI `review/composer` (le compositeur de

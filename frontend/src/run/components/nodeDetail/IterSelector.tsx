@@ -21,6 +21,8 @@ export default function IterSelector({
 }) {
   // Each iteration's duration reads in the Mode de durée on screen.
   const durationMode = useNodeDurationMode((st) => st.mode);
+  // The latest iteration first: it is the one the user usually looks for.
+  const latestFirst = [...iterations].sort((a, b) => b.iter - a.iter);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -35,7 +37,7 @@ export default function IterSelector({
         side="bottom"
         align="start"
       >
-        {iterations.map((it) => (
+        {latestFirst.map((it) => (
           <DropdownMenuItem
             key={it.iter}
             className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4 ${

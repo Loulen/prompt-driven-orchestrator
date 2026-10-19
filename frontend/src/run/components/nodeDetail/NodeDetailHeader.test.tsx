@@ -157,11 +157,11 @@ describe("NodeDetailHeader duration", () => {
     fireEvent.click(label);
     expect(label).toHaveTextContent("8m 31s active");
     expect(label).toHaveAccessibleName("8m 31s active. Click to show total time");
-    // Off the default, the unit takes the accent color.
-    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-acc-app");
+    // Both units read the same: grey, dotted underline.
+    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-fg-4", "decoration-dotted");
     fireEvent.click(label);
     expect(label).toHaveTextContent("12m 4s total");
-    expect(screen.getByTestId("iteration-duration-unit")).not.toHaveClass("text-acc-app");
+    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-fg-4", "decoration-dotted");
   });
 
   it("is a native button, so Enter and Space switch it too", () => {
@@ -280,6 +280,14 @@ describe("NodeDetailHeader duration", () => {
       expect(screen.getByTestId("iter-option-1")).not.toHaveTextContent(
         formatTime("2026-01-01T10:00:00Z"),
       );
+    });
+
+    it("lists the latest iteration first", async () => {
+      header(looped);
+      fireEvent.click(screen.getByText(/iter 2/));
+      await screen.findByTestId("iter-option-1");
+      const options = screen.getAllByTestId(/^iter-option-/);
+      expect(options.map((o) => o.dataset.testid)).toEqual(["iter-option-2", "iter-option-1"]);
     });
 
     it("follows the mode on screen", async () => {

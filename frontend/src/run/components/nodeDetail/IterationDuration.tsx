@@ -82,11 +82,9 @@ function IterationDurationTooltip({
 
 /**
  * The meta line's duration: `· ● 12m 4s total`. A `<button>` so the tooltip
- * opens on keyboard focus; the dotted unit reads as a defined term. A click (or
- * Enter / Space) switches the Mode de durée; off the default, the unit takes
- * the app green (`acc-app`), not the Inspector's amber, which would blend with
- * the awaiting dot. Renders nothing, separator included, when there is no
- * duration to show.
+ * opens on keyboard focus; the dotted unit reads as a defined term, the same
+ * grey in both modes. A click (or Enter / Space) switches the Mode de durée.
+ * Renders nothing, separator included, when there is no duration to show.
  */
 export function IterationDurationLabel({
   timing,
@@ -106,10 +104,6 @@ export function IterationDurationLabel({
       : timing.status === "awaiting_user"
         ? "bg-st-await"
         : null;
-  const unitColor =
-    mode === "active"
-      ? "text-acc-app decoration-acc-app"
-      : "text-fg-4 decoration-fg-4 group-hover:decoration-fg-3";
   return (
     // A local provider: the panel also renders outside the App's (tests).
     <TooltipProvider>
@@ -135,7 +129,7 @@ export function IterationDurationLabel({
           )}
           <span>{duration}</span>{" "}
           <span
-            className={`underline decoration-dotted underline-offset-2 ${unitColor}`}
+            className="text-fg-4 underline decoration-fg-4 decoration-dotted underline-offset-2 group-hover:decoration-fg-3"
             data-testid="iteration-duration-unit"
           >
             {mode}

@@ -18,7 +18,7 @@ export type ArtifactSource =
   | {
       kind: "iter-nav";
       nodeId: string;
-      portKind: "input" | "output";
+      portKind: "input" | "output" | "live";
       iterations: IterationInfo[];
       initialIter: number;
     }
@@ -100,9 +100,13 @@ export default function MarkdownArtifactModal({
     fetchNodeIO(runId, navNodeId, iter)
       .then((io) => {
         if (cancelled) return;
-        const ports = navPortKind === "input" ? io.inputs : io.outputs;
-        const port = ports.find((p) => p.port === portName);
-        setFiles(port?.files ?? []);
+        // ADR-0089: a live artifact is read from the iteration's `live` list.
+        const files =
+          navPortKind === "live"
+            ? io.live?.find((l) => l.name === portName)?.files
+            : (navPortKind === "input" ? io.inputs : io.outputs).find((p) => p.port === portName)
+                ?.files;
+        setFiles(files ?? []);
         setFileIndex(0);
         setFilesLoading(false);
       })

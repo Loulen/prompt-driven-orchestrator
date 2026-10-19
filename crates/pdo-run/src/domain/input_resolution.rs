@@ -473,6 +473,8 @@ mod tests {
         node_type: pdo_pipeline::domain::pipeline::NodeType,
     ) -> pdo_pipeline::domain::pipeline::NodeDef {
         pdo_pipeline::domain::pipeline::NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),

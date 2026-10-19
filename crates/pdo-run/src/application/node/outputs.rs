@@ -41,14 +41,9 @@ pub fn validate(
         None => return Ok(()),
     };
 
-    // An *Output intermédiaire* is never checked: neither its presence nor its
-    // frontmatter. Only the ordinary outputs are the node's production contract.
-    let ordinary: Vec<Port> = node
-        .outputs
-        .iter()
-        .filter(|port| !port.intermediate)
-        .cloned()
-        .collect();
+    // The outputs are the node's production contract. Its live artifacts
+    // (ADR-0089) live elsewhere and are never checked.
+    let ordinary: &[Port] = &node.outputs;
     if ordinary.is_empty() {
         return Ok(());
     }
@@ -56,7 +51,7 @@ pub fn validate(
     let mut missing = Vec::new();
     let mut violations = Vec::new();
 
-    for port in &ordinary {
+    for port in ordinary {
         match port.port_type {
             PortType::Image => {
                 let port_dir =
@@ -115,7 +110,7 @@ pub fn validate(
         return Err(ValidationError::FrontmatterMismatch(violations));
     }
 
-    let fm_violations = validate_frontmatter_schemas(&ordinary, node_id, iter, artifacts_dir);
+    let fm_violations = validate_frontmatter_schemas(ordinary, node_id, iter, artifacts_dir);
     if !fm_violations.is_empty() {
         return Err(ValidationError::FrontmatterMismatch(fm_violations));
     }
@@ -158,11 +153,23 @@ fn validate_frontmatter_schemas(
                 }
             };
 
-        for (field_name, decl) in schema {
-            validate_field(&port.name, field_name, decl, &fields, &mut violations);
-        }
+        violations.extend(frontmatter_violations(&port.name, schema, &fields));
     }
 
+    violations
+}
+
+/// What a parsed frontmatter misses of its `schema`: the completion's rule for
+/// an output, and the Run view's warning for a live artifact (ADR-0089).
+pub fn frontmatter_violations(
+    port_name: &str,
+    schema: &HashMap<String, FrontmatterFieldDecl>,
+    fields: &HashMap<String, serde_yaml::Value>,
+) -> Vec<FieldViolation> {
+    let mut violations = Vec::new();
+    for (field_name, decl) in schema {
+        validate_field(port_name, field_name, decl, fields, &mut violations);
+    }
     violations
 }
 
@@ -294,6 +301,8 @@ mod tests {
 
     fn make_node(id: &str, outputs: Vec<Port>) -> NodeDef {
         NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
@@ -323,7 +332,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -336,7 +344,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -356,66 +363,36 @@ mod tests {
         std::fs::write(d.join("output.md"), content).unwrap();
     }
 
-    fn intermediate(mut port: Port) -> Port {
-        port.intermediate = true;
-        port
-    }
-
     #[test]
-    fn an_absent_intermediate_output_never_refuses_the_completion() {
+    fn a_live_artifact_never_refuses_the_completion() {
+        // ADR-0089: declared, absent, or with a frontmatter that misses its
+        // schema — the completion only reads the outputs.
         let tmp = TempDir::new().unwrap();
         let artifacts = tmp.path();
         write_artifact(artifacts, "writer", 1, "report", "done");
-        let mut html = intermediate(port("preview"));
-        html.port_type = PortType::Html;
-        let pipeline = make_pipeline(vec![make_node(
-            "writer",
-            vec![
-                port("report"),
-                intermediate(port("plan")),
-                html,
-                intermediate(port("notes")),
-            ],
-        )]);
+        let live = artifacts.join("writer/iter-1/live");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join("draft.md"), "---\nverdict: [unclosed\n").unwrap();
+        let mut node = make_node("writer", vec![port("report")]);
+        for name in ["progress", "draft"] {
+            node.live_artifacts
+                .push(pdo_pipeline::domain::pipeline::LiveArtifact {
+                    name: name.into(),
+                    port_type: PortType::Markdown,
+                    instructions: None,
+                    frontmatter: Some(
+                        [(
+                            "verdict".to_string(),
+                            field_decl("enum", Some(vec!["PASS"])),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ),
+                });
+        }
+        node.free_live_artifacts = true;
+        let pipeline = make_pipeline(vec![node]);
         assert_eq!(validate(&pipeline, "writer", 1, artifacts), Ok(()));
-    }
-
-    #[test]
-    fn an_empty_or_invalid_intermediate_output_never_refuses_the_completion() {
-        let tmp = TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        write_artifact(artifacts, "writer", 1, "report", "done");
-        write_artifact(artifacts, "writer", 1, "plan", "");
-        write_artifact(artifacts, "writer", 1, "draft", "---\nverdict: [unclosed\n");
-        let mut schema = HashMap::new();
-        schema.insert(
-            "verdict".to_string(),
-            field_decl("enum", Some(vec!["PASS"])),
-        );
-        let pipeline = make_pipeline(vec![make_node(
-            "writer",
-            vec![
-                port("report"),
-                intermediate(port("plan")),
-                intermediate(typed_port("draft", schema)),
-            ],
-        )]);
-        assert_eq!(validate(&pipeline, "writer", 1, artifacts), Ok(()));
-    }
-
-    #[test]
-    fn a_missing_ordinary_output_still_refuses_beside_an_intermediate_one() {
-        let tmp = TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        write_artifact(artifacts, "writer", 1, "plan", "draft");
-        let pipeline = make_pipeline(vec![make_node(
-            "writer",
-            vec![port("report"), intermediate(port("plan"))],
-        )]);
-        assert_eq!(
-            validate(&pipeline, "writer", 1, artifacts),
-            Err(ValidationError::MissingOutputs(vec!["report".into()]))
-        );
     }
 
     #[test]
@@ -749,7 +726,6 @@ edges: []
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -762,7 +738,6 @@ edges: []
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -876,7 +851,6 @@ edges: []
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 

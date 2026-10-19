@@ -316,69 +316,64 @@ async fn artifact_endpoint_returns_markdown_content() {
         .output();
 }
 
-const INTERMEDIATE_PIPELINE: &str = "io-intermediate";
+const LIVE_PIPELINE: &str = "io-live";
 
-fn seed_intermediate(repo: &std::path::Path) -> anyhow::Result<()> {
-    let yaml = crate::common::flow::solo_pipeline_yaml(INTERMEDIATE_PIPELINE, false).replace(
+fn seed_live(repo: &std::path::Path) -> anyhow::Result<()> {
+    let yaml = crate::common::flow::solo_pipeline_yaml(LIVE_PIPELINE, false).replace(
         "      - name: out\n",
-        "      - name: out\n      - name: preview\n        port_type: html\n        intermediate: true\n",
+        "      - name: out\n    free_live_artifacts: true\n    live_artifacts:\n      - name: progress\n        frontmatter:\n          status: { type: enum, allowed: [drafting, ready] }\n      - name: risks\n",
     );
-    crate::common::flow::write_pipeline(repo, INTERMEDIATE_PIPELINE, &yaml)?;
+    crate::common::flow::write_pipeline(repo, LIVE_PIPELINE, &yaml)?;
     crate::common::flow::git_init(repo)
 }
 
-/// An *Output intermédiaire* is listed and marked while its node runs: absent
-/// first (« not written yet », no error), then present as soon as the agent
-/// writes it. The node description the Pipeline Manager reads marks it too, and
-/// the completion neither waits for it nor hides it afterwards.
+/// ADR-0089: the live artifacts are listed apart from the outputs while the
+/// node runs — declared ones « not produced » first, then present as soon as
+/// the agent publishes them, with their frontmatter and a schema warning; a
+/// free one appears beside them. The completion neither waits for them nor
+/// hides them afterwards.
 #[tokio::test]
-async fn io_endpoint_marks_an_intermediate_output_while_the_node_runs() {
+async fn io_endpoint_lists_the_live_artifacts_while_the_node_runs() {
     use crate::common::flow;
 
-    let daemon = TestDaemon::spawn(seed_intermediate).await.unwrap();
-    let run_id = flow::create_run(&daemon, INTERMEDIATE_PIPELINE).await;
-    let run = flow::wait_node_status(&daemon, &run_id, "worker", "running").await;
-
-    let worker = run["node_defs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|n| n["id"] == "worker")
-        .unwrap();
-    assert_eq!(worker["outputs"][1]["name"], "preview");
-    assert_eq!(worker["outputs"][1]["intermediate"], true);
-    assert!(
-        worker["outputs"][0].get("intermediate").is_none(),
-        "{worker}"
-    );
+    let daemon = TestDaemon::spawn(seed_live).await.unwrap();
+    let run_id = flow::create_run(&daemon, LIVE_PIPELINE).await;
+    flow::wait_node_status(&daemon, &run_id, "worker", "running").await;
 
     let io_path = format!("/runs/{run_id}/nodes/worker/io?iter=1");
     let io = daemon.get_json(&io_path).await;
-    let outputs = io["outputs"].as_array().unwrap();
-    assert_eq!(outputs.len(), 2, "{io}");
-    assert_eq!(outputs[0]["port"], "out");
-    assert_eq!(outputs[0]["intermediate"], false);
-    assert_eq!(outputs[1]["port"], "preview");
-    assert_eq!(outputs[1]["intermediate"], true);
-    assert_eq!(outputs[1]["port_type"], "html");
-    assert_eq!(outputs[1]["files"][0]["exists"], false);
+    assert_eq!(io["outputs"].as_array().unwrap().len(), 1, "{io}");
+    let live = io["live"].as_array().unwrap();
+    assert_eq!(live.len(), 2, "{io}");
+    assert_eq!(live[0]["name"], "progress");
+    assert_eq!(live[0]["declared"], true);
+    assert_eq!(live[0]["files"].as_array().unwrap().len(), 0);
+    assert!(live[0]["updated_at"].is_null());
 
-    let dir = flow::worktree(&daemon, &run_id).join(".pdo/artifacts/worker/iter-1/preview");
+    let dir = flow::worktree(&daemon, &run_id).join(".pdo/artifacts/worker/iter-1/live");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("output.html"), "<p>step 1</p>").unwrap();
+    std::fs::write(
+        dir.join("progress.md"),
+        "---\nstatus: maybe\n---\nStep 1.\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("notes.md"), "Free notes.\n").unwrap();
 
     let io = daemon.get_json(&io_path).await;
-    let preview = &io["outputs"][1];
-    assert_eq!(preview["intermediate"], true);
-    assert_eq!(preview["files"][0]["exists"], true);
-    assert!(preview["files"][0]["path"]
-        .as_str()
-        .unwrap()
-        .ends_with("worker/iter-1/preview/output.html"));
+    let live = io["live"].as_array().unwrap();
+    assert_eq!(live.len(), 3, "{io}");
+    let progress = &live[0];
+    assert_eq!(progress["files"][0]["frontmatter"]["status"], "maybe");
+    assert_eq!(progress["schema_warnings"][0]["field"], "status", "{io}");
+    assert!(progress["updated_at"].is_string());
+    assert_eq!(live[1]["name"], "risks");
+    assert_eq!(live[1]["files"].as_array().unwrap().len(), 0);
+    assert_eq!(live[2]["name"], "notes");
+    assert_eq!(live[2]["declared"], false);
 
     // Only `out` is written: the completion is accepted all the same.
     let (status, body) = flow::complete_node(&daemon, &run_id, "worker").await;
     assert_eq!(status, 200, "{body}");
     let io = daemon.get_json(&io_path).await;
-    assert_eq!(io["outputs"][1]["files"][0]["exists"], true, "{io}");
+    assert_eq!(io["live"].as_array().unwrap().len(), 3, "{io}");
 }

@@ -1,3 +1,4 @@
+import type { LiveArtifact } from "../shared/generated/LiveArtifact";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { fetchLibrary } from "../pipeline/api/library";
 import type { LibraryEntry } from "../pipeline/model/library";
@@ -38,6 +39,17 @@ export function useLibrary() {
   return { entries, loading, refresh };
 }
 
+/** Live artifacts as the daemon stores them: defaults dropped, so a markdown
+ *  one with no expected content reads alike on both sides. */
+function liveArtifactsComparable(live: LiveArtifact[] | null | undefined): unknown[] {
+  return (live ?? []).map((l) => ({
+    name: l.name,
+    port_type: l.port_type ?? "markdown",
+    instructions: l.instructions?.trim() ? l.instructions : null,
+    frontmatter: l.frontmatter ?? null,
+  }));
+}
+
 function portsMatch(
   nodePorts: PortDef[],
   libPorts: LibraryEntry["inputs"],
@@ -52,7 +64,6 @@ function portsMatch(
     if (!deepEqual(np.frontmatter ?? null, lp.frontmatter ?? null)) return false;
     if (!deepEqual(np.when ?? null, lp.when ?? null)) return false;
     if ((np.instructions ?? null) !== (lp.instructions ?? null)) return false;
-    if ((np.intermediate ?? false) !== (lp.intermediate ?? false)) return false;
   }
   return true;
 }
@@ -84,6 +95,9 @@ export function computeSyncState(
     // ADR-0086: an on-demand node is not the same content as one the runtime
     // launches.
     (entry.on_demand ?? false) === (node.on_demand ?? false) &&
+    // ADR-0089: the live artifacts are part of what the node is told to do.
+    (entry.free_live_artifacts ?? false) === (node.free_live_artifacts ?? false) &&
+    deepEqual(liveArtifactsComparable(entry.live_artifacts), liveArtifactsComparable(node.live_artifacts)) &&
     entry.prompt === prompt &&
     portsMatch(node.inputs, entry.inputs) &&
     portsMatch(node.outputs, entry.outputs)

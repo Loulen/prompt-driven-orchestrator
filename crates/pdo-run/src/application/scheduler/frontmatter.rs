@@ -110,9 +110,9 @@ pub fn resolve_source_frontmatter(
     };
 
     let mut fields = HashMap::new();
-    // An *Output intermédiaire* is a draft for humans: its frontmatter never
-    // steers an edge.
-    for port in node.outputs.iter().filter(|port| !port.intermediate) {
+    // Only the outputs: a live artifact's frontmatter never steers an edge
+    // (ADR-0089).
+    for port in &node.outputs {
         let artifact_path =
             blackboard::artifact_path(artifacts_dir, completed_node_id, iter, &port.name);
         if let Ok(port_fields) =

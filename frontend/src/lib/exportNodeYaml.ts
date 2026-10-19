@@ -9,7 +9,7 @@ import { foldNodeIntoHarnesses } from "../harness/model/nodeHarness";
 import { nodeIsolation } from "./nodeIsolation";
 import { hasProvisioningRules } from "../workspace/model/provisioning";
 import type { EditorNodeDef } from "../pipeline/model/pipeline";
-import { frontmatterToYamlObject } from "./serializePipeline";
+import { frontmatterToYamlObject, liveArtifactToYamlObject } from "./serializePipeline";
 import { yamlStringify } from "./yamlDump";
 
 // Serialize one authored port to the node-library YAML shape (#345), mirroring
@@ -25,7 +25,6 @@ function portToYamlObject(port: PortDef): Record<string, unknown> {
   if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
   if (port.when) p.when = port.when;
   if (port.instructions?.trim()) p.instructions = port.instructions;
-  if (port.intermediate) p.intermediate = true;
   return p;
 }
 
@@ -92,6 +91,10 @@ export function exportNodeAsYaml(node: EditorNodeDef, prompt: string): string {
   if (node.orchestrator) obj.orchestrator = true;
   // ADR-0086: an exported on-demand node stays on demand.
   if (node.on_demand) obj.on_demand = true;
+  // ADR-0089: an exported node keeps its live artifacts.
+  if (node.free_live_artifacts) obj.free_live_artifacts = true;
+  if (node.live_artifacts && node.live_artifacts.length > 0)
+    obj.live_artifacts = node.live_artifacts.map(liveArtifactToYamlObject);
   if (node.auto_fail !== undefined && node.auto_fail !== null) obj.auto_fail = node.auto_fail;
   if (node.pin_harness) obj.pin_harness = node.pin_harness;
   if (node.agent_choice && node.agent_choice.mode !== "inherit") {

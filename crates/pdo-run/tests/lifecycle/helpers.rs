@@ -880,6 +880,8 @@ pub fn spawn_test_fixture(
     isolated: bool,
 ) -> (pipeline::PipelineDef, pipeline::NodeDef, std::path::PathBuf) {
     let node = pipeline::NodeDef {
+        free_live_artifacts: false,
+        live_artifacts: Vec::new(),
         skills: Vec::new(),
         isolated_worktree: Some(isolated),
         id: node_id.into(),

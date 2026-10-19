@@ -4,6 +4,7 @@
  * would invalidate), and the files a user imports into it.
  */
 
+import type { LiveArtifactIO } from "../../shared/generated/LiveArtifactIO";
 import type { ImportFilesResponse } from "../../shared/generated/ImportFilesResponse";
 import type { PortType } from "../../shared/generated/PortType";
 import { request } from "../../shared/http/client";
@@ -35,15 +36,14 @@ export interface PortIO {
   port: string;
   repeated: boolean;
   port_type?: PortType;
-  /** CORE-45: an Output intermédiaire — written while the node works, never
-   *  checked. Always false on an input. */
-  intermediate?: boolean;
   files: FileInfo[];
 }
 
 export interface NodeIO {
   inputs: PortIO[];
   outputs: PortIO[];
+  /** ADR-0089: the iteration's live artifacts, declared then free. */
+  live?: LiveArtifactIO[];
 }
 
 export function fetchNodeIO(

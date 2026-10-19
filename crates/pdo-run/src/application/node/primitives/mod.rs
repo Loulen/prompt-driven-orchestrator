@@ -179,8 +179,8 @@ pub fn inject_outputs(params: &InjectOutputsParams<'_>) -> InjectOutputsResult {
 /// (if empty) artifact rather than a missing file that reads as "not produced".
 /// The port set is every declared ordinary output port plus every distinct source
 /// port the node's outgoing edges read; a node with neither still gets a single
-/// default `output` port. An *Output intermédiaire* gets nothing — an empty file
-/// would read as content — and an override naming one is ignored.
+/// default `output` port. A live artifact (ADR-0089) is no port: it gets
+/// nothing, and an override naming one is ignored.
 pub fn write_skip_outputs(
     pipeline: &PipelineDef,
     node_id: &str,
@@ -190,7 +190,7 @@ pub fn write_skip_outputs(
 ) -> Result<Vec<String>, String> {
     let mut ports: Vec<String> = Vec::new();
     if let Some(node) = pipeline.nodes.iter().find(|n| n.id == node_id) {
-        for out in node.outputs.iter().filter(|port| !port.intermediate) {
+        for out in &node.outputs {
             if !ports.contains(&out.name) {
                 ports.push(out.name.clone());
             }
@@ -246,6 +246,8 @@ mod tests {
 
     fn make_node(id: &str, node_type: NodeType, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             // #653: these fixtures exercise graph wiring, not worktrees — a
             // shared-worktree node keeps them out of `git worktree add` on a
@@ -264,7 +266,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 })
                 .collect(),
             outputs: outputs
@@ -277,7 +278,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 })
                 .collect(),
             interactive: false,
@@ -295,6 +295,8 @@ mod tests {
 
     fn make_node_with_repeated_input(id: &str, port_name: &str) -> NodeDef {
         NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
@@ -308,7 +310,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             outputs: vec![Port {
                 name: "out".into(),
@@ -318,7 +319,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             interactive: false,
             view: None,
@@ -946,9 +946,15 @@ mod tests {
     }
 
     #[test]
-    fn write_skip_outputs_writes_nothing_for_an_intermediate_output() {
-        let mut node = make_node("skipme", NodeType::Agent, &["task"], &["report", "preview"]);
-        node.outputs[1].intermediate = true;
+    fn write_skip_outputs_writes_nothing_for_a_live_artifact() {
+        let mut node = make_node("skipme", NodeType::Agent, &["task"], &["report"]);
+        node.live_artifacts
+            .push(pdo_pipeline::domain::pipeline::LiveArtifact {
+                name: "preview".into(),
+                port_type: pdo_pipeline::domain::pipeline::PortType::Markdown,
+                instructions: None,
+                frontmatter: None,
+            });
         let pipeline = PipelineDef {
             name: "test".into(),
             version: None,
@@ -964,7 +970,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
         std::fs::create_dir_all(&artifacts_dir).unwrap();
-        // An override naming the intermediate output is not a port to force.
+        // An override naming the live artifact is not a port to force.
         let mut overrides = HashMap::new();
         overrides.insert("preview".to_string(), "forced".to_string());
 
@@ -973,32 +979,7 @@ mod tests {
         assert_eq!(ports, vec!["report".to_string()]);
         assert!(blackboard::artifact_path(&artifacts_dir, "skipme", 1, "report").exists());
         assert!(!blackboard::port_dir(&artifacts_dir, "skipme", 1, "preview").exists());
-    }
-
-    #[test]
-    fn write_skip_outputs_falls_back_to_the_default_port_when_every_output_is_intermediate() {
-        let mut node = make_node("skipme", NodeType::Agent, &["task"], &["preview"]);
-        node.outputs[0].intermediate = true;
-        let pipeline = PipelineDef {
-            name: "test".into(),
-            version: None,
-            variables: HashMap::new(),
-            nodes: vec![node],
-            edges: vec![],
-            loops: Vec::new(),
-            notes: Vec::new(),
-            prompt_required: true,
-            grid_size: None,
-            wait_for_started_nodes: false,
-        };
-        let tmp = tempfile::tempdir().unwrap();
-        let artifacts_dir = tmp.path().join("artifacts");
-        std::fs::create_dir_all(&artifacts_dir).unwrap();
-
-        let ports = write_skip_outputs(&pipeline, "skipme", 1, &HashMap::new(), &artifacts_dir)
-            .expect("ok");
-        assert_eq!(ports, vec!["output".to_string()]);
-        assert!(!blackboard::port_dir(&artifacts_dir, "skipme", 1, "preview").exists());
+        assert!(!blackboard::live_dir(&artifacts_dir, "skipme", 1).exists());
     }
 
     #[test]

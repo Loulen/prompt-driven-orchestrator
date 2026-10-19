@@ -71,6 +71,9 @@ export default function AddNodeFromYamlModal({
         isolated_worktree: result.spec.isolated_worktree ?? null,
         // ADR-0086: a pasted on-demand node stays on demand.
         on_demand: result.spec.on_demand ?? false,
+        // ADR-0089: and its live artifacts.
+        live_artifacts: result.spec.live_artifacts ?? [],
+        free_live_artifacts: result.spec.free_live_artifacts ?? false,
         pin_harness: result.spec.pin_harness ?? null,
         harnesses: result.spec.harnesses ?? undefined,
         // Fallback flat values (a legacy library/export with no `harnesses` map);

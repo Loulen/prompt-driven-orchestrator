@@ -160,6 +160,12 @@ pub(super) struct SaveToLibraryRequest {
     /// stars a node the runtime launches.
     #[serde(default)]
     on_demand: bool,
+    /// The declared live artifacts (ADR-0089). Optional, like `on_demand`.
+    #[serde(default)]
+    live_artifacts: Vec<pipeline::LiveArtifact>,
+    /// « Free live artifacts » (ADR-0089). Optional, like `on_demand`.
+    #[serde(default)]
+    free_live_artifacts: bool,
 }
 
 impl From<SaveToLibraryRequest> for LibraryEntry {
@@ -177,6 +183,8 @@ impl From<SaveToLibraryRequest> for LibraryEntry {
             prompt: req.prompt,
             isolated_worktree: req.isolated_worktree,
             on_demand: req.on_demand,
+            live_artifacts: req.live_artifacts,
+            free_live_artifacts: req.free_live_artifacts,
         }
     }
 }

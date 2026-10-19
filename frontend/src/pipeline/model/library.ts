@@ -6,6 +6,7 @@
 import type { FrontmatterFieldDecl } from "../../shared/generated/FrontmatterFieldDecl";
 import type { PortDef } from "../../shared/generated/PortDef";
 import type { PortType } from "../../shared/generated/PortType";
+import type { LiveArtifact } from "../../shared/generated/LiveArtifact";
 
 export interface LibraryPort {
   name: string;
@@ -13,8 +14,6 @@ export interface LibraryPort {
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
   instructions?: string | null;
-  /** An Output intermédiaire (CORE-45). Absent ⇒ an ordinary port. */
-  intermediate?: boolean | null;
 }
 
 export function libraryPortToPortDef(port: LibraryPort): PortDef {
@@ -24,7 +23,6 @@ export function libraryPortToPortDef(port: LibraryPort): PortDef {
     ...(port.frontmatter ? { frontmatter: port.frontmatter } : {}),
     ...(port.when ? { when: port.when } : {}),
     ...(port.instructions?.trim() ? { instructions: port.instructions } : {}),
-    ...(port.intermediate ? { intermediate: true } : {}),
   };
 }
 
@@ -49,6 +47,10 @@ export interface LibraryEntry {
   isolated_worktree?: boolean | null;
   /** ADR-0086: the entry is an on-demand node. Absent ⇒ `false`. */
   on_demand?: boolean;
+  /** ADR-0089: the entry's declared live artifacts. Absent ⇒ none. */
+  live_artifacts?: LiveArtifact[] | null;
+  /** ADR-0089: « Free live artifacts ». Absent ⇒ `false`. */
+  free_live_artifacts?: boolean | null;
 }
 
 export interface LibrarySaveSpec {
@@ -67,6 +69,9 @@ export interface LibrarySaveSpec {
   isolated_worktree?: boolean | null;
   /** ADR-0086: star the « on demand » option with the node. */
   on_demand?: boolean;
+  /** ADR-0089: star the live artifacts with the node. */
+  live_artifacts?: LiveArtifact[];
+  free_live_artifacts?: boolean;
 }
 
 export interface InstantiateResult {
@@ -86,6 +91,9 @@ export interface InstantiateResult {
     isolated_worktree?: boolean | null;
     /** ADR-0086: an on-demand entry instantiates an on-demand node. */
     on_demand?: boolean;
+    /** ADR-0089: the entry's live artifacts ride with the new node. */
+    live_artifacts?: LiveArtifact[] | null;
+    free_live_artifacts?: boolean | null;
   };
   prompt: string;
 }
@@ -115,6 +123,9 @@ export interface ParseNodeResult {
     isolated_worktree?: boolean | null;
     /** ADR-0086: the pasted node waits for the user's ▶. */
     on_demand?: boolean;
+    /** ADR-0089: the pasted node's live artifacts. */
+    live_artifacts?: LiveArtifact[] | null;
+    free_live_artifacts?: boolean | null;
     max_iter?: number | string | null;
     branches?: number | null;
   };

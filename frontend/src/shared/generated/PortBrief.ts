@@ -4,10 +4,4 @@
  * A port as the Run's snapshot summarises it. A port has no side: an event log
  * written before carries a `side` key, which reads back ignored.
  */
-export type PortBrief = { name: string, description?: string, 
-/**
- * An *Output intermédiaire* (CONTEXT.md): shown to humans while the node
- * works, never checked, never wired. Absent from the wire when `false`,
- * so a pre-option snapshot reads unchanged.
- */
-intermediate?: boolean, };
+export type PortBrief = { name: string, description?: string, };

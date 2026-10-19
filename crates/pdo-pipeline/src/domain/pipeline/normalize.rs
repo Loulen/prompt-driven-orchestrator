@@ -128,6 +128,37 @@ pub fn normalize_node_value(
         }
     }
 
+    // ADR-0089: a legacy output marked `intermediate` is a live artifact. Read
+    // as one here, so every reader sees the same node; the file is rewritten
+    // only when it is saved.
+    diagnostics.extend(migrate_intermediate_outputs(node_map, &node_id));
+
+    // ADR-0089: live artifacts belong to a node that runs something. On a
+    // structural node nothing would ever publish them: refused, like
+    // `on_demand`, rather than carried in silence.
+    let node_type = node_map
+        .get(serde_yaml::Value::String("type".into()))
+        .and_then(|v| v.as_str())
+        .unwrap_or("agent")
+        .to_string();
+    if !matches!(node_type.as_str(), "agent" | "script") {
+        let declares = node_map
+            .get(serde_yaml::Value::String(LIVE_ARTIFACTS_KEY.into()))
+            .and_then(|v| v.as_sequence())
+            .is_some_and(|s| !s.is_empty());
+        let free = node_map
+            .get(serde_yaml::Value::String(FREE_LIVE_ARTIFACTS_KEY.into()))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if declares || free {
+            return Err(ParseError::InvalidField(format!(
+                "node '{node_id}': a `{node_type}` node cannot publish live artifacts — only \
+                 an `agent` or a `script` node works while the Run goes. Remove the \
+                 `{LIVE_ARTIFACTS_KEY}` and `{FREE_LIVE_ARTIFACTS_KEY}` keys"
+            )));
+        }
+    }
+
     // #550: fold a legacy flat `model:` / `effort:` into `harnesses.claude.*` so
     // that a parse is lossless even before the on-disk migrator has rewritten the
     // file. The migrator persists the same fold; this is the in-memory safety net
@@ -142,6 +173,101 @@ pub const ISOLATED_WORKTREE_KEY: &str = "isolated_worktree";
 
 /// The node key of the « on demand » option (ADR-0086).
 pub const ON_DEMAND_KEY: &str = "on_demand";
+
+/// The node key of its declared live artifacts (ADR-0089).
+pub const LIVE_ARTIFACTS_KEY: &str = "live_artifacts";
+
+/// The node key of the « Free live artifacts » option (ADR-0089).
+pub const FREE_LIVE_ARTIFACTS_KEY: &str = "free_live_artifacts";
+
+/// The key a legacy output carried to be an *Output intermédiaire*, read as a
+/// live artifact since ADR-0089.
+const INTERMEDIATE_KEY: &str = "intermediate";
+
+/// Move every output marked `intermediate: true` of an `agent`/`script` node
+/// into its `live_artifacts` (ADR-0089), keeping its name, type, expected
+/// content and frontmatter schema. An `intermediate` key anywhere else (an
+/// input, a structural node's output) meant nothing: dropped with a warning; a
+/// `false` is dropped silently.
+pub fn migrate_intermediate_outputs(
+    node_map: &mut serde_yaml::Mapping,
+    node_id: &str,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let key = serde_yaml::Value::String(INTERMEDIATE_KEY.into());
+    let runs_something = matches!(
+        node_map
+            .get(serde_yaml::Value::String("type".into()))
+            .and_then(|v| v.as_str()),
+        Some("agent" | "script")
+    );
+
+    let mut moved: Vec<serde_yaml::Value> = Vec::new();
+    for (role, ports_key) in [("input", "inputs"), ("output", "outputs")] {
+        let Some(ports) = node_map
+            .get_mut(serde_yaml::Value::String(ports_key.into()))
+            .and_then(|v| v.as_sequence_mut())
+        else {
+            continue;
+        };
+        let mut kept = Vec::with_capacity(ports.len());
+        for mut port in std::mem::take(ports) {
+            let flagged = port
+                .as_mapping_mut()
+                .and_then(|m| m.remove(&key))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if !flagged {
+                kept.push(port);
+            } else if role == "output" && runs_something {
+                moved.push(live_artifact_from_port(port));
+            } else {
+                let name = port
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unnamed>");
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "{role} '{name}' of node '{node_id}' is marked intermediate, which only \
+                         applies to an output of an agent or script node (ignored)"
+                    ),
+                });
+                kept.push(port);
+            }
+        }
+        *ports = kept;
+    }
+
+    if !moved.is_empty() {
+        let live_key = serde_yaml::Value::String(LIVE_ARTIFACTS_KEY.into());
+        if !node_map.get(&live_key).is_some_and(|v| v.is_sequence()) {
+            node_map.insert(live_key.clone(), serde_yaml::Value::Sequence(Vec::new()));
+        }
+        if let Some(live) = node_map
+            .get_mut(&live_key)
+            .and_then(|v| v.as_sequence_mut())
+        {
+            live.extend(moved);
+        }
+    }
+    diagnostics
+}
+
+/// A legacy intermediate output's mapping as a live artifact: what a live
+/// artifact keeps of a port (name, type, expected content, frontmatter schema).
+fn live_artifact_from_port(port: serde_yaml::Value) -> serde_yaml::Value {
+    let serde_yaml::Value::Mapping(port) = port else {
+        return port;
+    };
+    let mut live = serde_yaml::Mapping::new();
+    for field in ["name", "port_type", "instructions", "frontmatter"] {
+        if let Some(value) = port.get(field) {
+            live.insert(serde_yaml::Value::String(field.into()), value.clone());
+        }
+    }
+    serde_yaml::Value::Mapping(live)
+}
 
 /// The node key carrying its skills selection (#669, ADR-0062).
 pub const SKILLS_KEY: &str = "skills";

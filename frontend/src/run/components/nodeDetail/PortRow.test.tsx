@@ -16,7 +16,6 @@ function preview(exists: boolean): PortIO {
     port: "preview",
     repeated: false,
     port_type: "html",
-    intermediate: true,
     files: [
       {
         path: "worker/iter-1/preview/output.html",
@@ -37,17 +36,15 @@ function renderRow(port: PortIO, onOpen = vi.fn()) {
   return onOpen;
 }
 
-describe("PortRow — Output intermédiaire (CORE-45)", () => {
+describe("PortRow — an html output", () => {
   beforeEach(() => {
     fetchArtifactMock.mockReset();
     fetchArtifactMock.mockResolvedValue("<p>step 2</p>");
   });
 
-  it("an absent one carries the badge and reads « not written yet », not a missing output", () => {
+  it("an absent one keeps its path, with nothing to open or copy", () => {
     renderRow(preview(false));
-    expect(screen.getByTestId("intermediate-badge")).toHaveTextContent("intermediate");
-    expect(screen.getByTestId("port-not-written-yet")).toHaveTextContent("not written yet");
-    // Nothing to open and nothing to copy yet.
+    expect(screen.getByText("worker/iter-1/preview/output.html")).toBeInTheDocument();
     expect(screen.queryByTestId("port-row-open")).not.toBeInTheDocument();
     expect(screen.queryByTestId("port-copy")).not.toBeInTheDocument();
   });
@@ -57,8 +54,6 @@ describe("PortRow — Output intermédiaire (CORE-45)", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     const onOpen = renderRow(preview(true));
 
-    expect(screen.getByTestId("intermediate-badge")).toBeInTheDocument();
-    expect(screen.queryByTestId("port-not-written-yet")).not.toBeInTheDocument();
     expect(screen.getByText("worker/iter-1/preview/output.html")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("port-row-open"));
@@ -69,12 +64,5 @@ describe("PortRow — Output intermédiaire (CORE-45)", () => {
     });
     expect(fetchArtifactMock).toHaveBeenCalledWith("run-1", "worker/iter-1/preview/output.html");
     expect(writeText).toHaveBeenCalledWith("<p>step 2</p>");
-  });
-
-  it("an ordinary output carries no badge, and its absence keeps its path", () => {
-    renderRow({ ...preview(false), port: "out", intermediate: false });
-    expect(screen.queryByTestId("intermediate-badge")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("port-not-written-yet")).not.toBeInTheDocument();
-    expect(screen.getByText("worker/iter-1/preview/output.html")).toBeInTheDocument();
   });
 });

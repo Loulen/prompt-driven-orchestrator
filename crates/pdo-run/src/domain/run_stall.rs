@@ -203,6 +203,8 @@ mod tests {
 
     fn doc_node_def(id: &str) -> pipeline::NodeDef {
         pipeline::NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),

@@ -41,6 +41,8 @@ mod tests {
 
     fn make_switch(outputs: Vec<Port>) -> NodeDef {
         NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: "sw".into(),
@@ -54,7 +56,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             outputs,
             interactive: false,
@@ -79,7 +80,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 
@@ -92,7 +92,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         }
     }
 

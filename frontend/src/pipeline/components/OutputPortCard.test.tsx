@@ -235,54 +235,20 @@ describe("OutputPortCard — O3 tab-head card", () => {
   });
 });
 
-describe("OutputPortCard — « intermediate » (CORE-45)", () => {
-  const schema = { verdict: { type: "string" } };
-  const props = (port: Partial<PortDef>, extra: Record<string, unknown> = {}) => ({
-    port: { name: "preview", ...port } as PortDef,
-    highlighted: false,
-    onUpdate: vi.fn(),
-    onRemove: vi.fn(),
-    schema: null,
-    onSchemaChange: vi.fn(),
-    ...extra,
-  });
-
-  it("ticking an unwired output marks it intermediate", () => {
-    const p = props({});
-    render(<OutputPortCard {...p} />, { wrapper: Wrapper });
-    const box = screen.getByTestId("port-intermediate-checkbox");
-    expect(box).not.toBeChecked();
-    fireEvent.click(box);
-    expect(p.onUpdate).toHaveBeenCalledWith({ intermediate: true });
-  });
-
-  it("unticking drops the flag (omitted when false)", () => {
-    const p = props({ intermediate: true });
-    render(<OutputPortCard {...p} />, { wrapper: Wrapper });
-    fireEvent.click(screen.getByTestId("port-intermediate-checkbox"));
-    expect(p.onUpdate).toHaveBeenCalledWith({ intermediate: undefined });
-  });
-
-  it("keeps the frontmatter schema editor on an ordinary output", () => {
-    render(<OutputPortCard {...props({})} />, { wrapper: Wrapper });
+describe("OutputPortCard — no « intermediate » any more (ADR-0089)", () => {
+  it("offers no intermediate tick, and keeps the schema editor", () => {
+    render(
+      <OutputPortCard
+        port={{ name: "preview" }}
+        onUpdate={vi.fn()}
+        onRemove={vi.fn()}
+        schema={null}
+        onSchemaChange={vi.fn()}
+      />,
+      { wrapper: Wrapper },
+    );
+    expect(screen.queryByTestId("port-intermediate-checkbox")).not.toBeInTheDocument();
     expect(screen.getByTestId("output-schema-editor")).toBeInTheDocument();
-  });
-
-  it("says a kept schema is ignored, without the editor", () => {
-    render(<OutputPortCard {...props({ intermediate: true }, { schema })} />, { wrapper: Wrapper });
-    expect(screen.queryByTestId("output-schema-editor")).not.toBeInTheDocument();
-    expect(screen.getByTestId("port-intermediate-schema-ignored")).toBeInTheDocument();
-  });
-
-  it("refuses to mark a wired output, naming the port and the edge", () => {
-    const p = props({}, { wiredBy: "designer.preview -> builder.spec" });
-    render(<OutputPortCard {...p} />, { wrapper: Wrapper });
-    fireEvent.click(screen.getByTestId("port-intermediate-checkbox"));
-    expect(p.onUpdate).not.toHaveBeenCalled();
-    const refusal = screen.getByTestId("port-intermediate-refusal");
-    expect(refusal).toHaveTextContent('Output "preview"');
-    expect(refusal).toHaveTextContent('edge "designer.preview -> builder.spec"');
-    expect(screen.getByTestId("port-intermediate-checkbox")).not.toBeChecked();
   });
 });
 

@@ -30,16 +30,17 @@ pub const DOCUMENT: &str = "docs/reference/harnesses.md";
 pub const BEGIN_MARKER: &str = "<!-- support-table:begin -->";
 pub const END_MARKER: &str = "<!-- support-table:end -->";
 
-/// One of the eight capabilities the support table publishes, in publication order.
+/// One of the nine capabilities the support table publishes, in publication order.
 ///
-/// A closed enum is right *here* (unlike the harness axis, ADR-0045): the eight are
-/// the trait's methods, so a ninth capability is a code change in
+/// A closed enum is right *here* (unlike the harness axis, ADR-0045): the nine are
+/// the trait's methods, so a tenth capability is a code change in
 /// [`crate::domain::probes`] anyway — and this `match` is then the compiler's
 /// reminder to publish it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
     Cost,
     Transcript,
+    TranscriptReading,
     ObservedIdentity,
     TurnEnd,
     UsageLimit,
@@ -49,10 +50,11 @@ pub enum Capability {
 }
 
 impl Capability {
-    /// The eight, in the order the table lists them.
-    pub const ALL: [Capability; 8] = [
+    /// The nine, in the order the table lists them.
+    pub const ALL: [Capability; 9] = [
         Capability::Cost,
         Capability::Transcript,
+        Capability::TranscriptReading,
         Capability::ObservedIdentity,
         Capability::TurnEnd,
         Capability::UsageLimit,
@@ -66,6 +68,7 @@ impl Capability {
         match self {
             Capability::Cost => "Cost",
             Capability::Transcript => "Transcript",
+            Capability::TranscriptReading => "Transcript tab",
             Capability::ObservedIdentity => "Observed model & effort",
             Capability::TurnEnd => "End of turn",
             Capability::UsageLimit => "Usage-limit menu",
@@ -81,6 +84,9 @@ impl Capability {
         match self {
             Capability::Cost => "Show the Run cost",
             Capability::Transcript => "Find the session transcript",
+            Capability::TranscriptReading => {
+                "Show the session's messages and folded tool calls in the node's Transcript tab"
+            }
             Capability::ObservedIdentity => {
                 "Show the model and effort the execution actually ran on (Stats › Cost › By model)"
             }
@@ -104,6 +110,7 @@ impl Capability {
         match self {
             Capability::Cost => p.cost_source().map(|c| c.label()),
             Capability::Transcript => p.transcript_resolution().map(|t| t.label()),
+            Capability::TranscriptReading => p.transcript_reading().map(|t| t.label()),
             Capability::ObservedIdentity => p
                 .observed_identity_source()
                 .map(crate::domain::probes::ObservedIdentitySource::label),
@@ -280,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn render_names_every_harness_its_version_and_the_eight_capabilities() {
+    fn render_names_every_harness_its_version_and_the_nine_capabilities() {
         let block = render();
         for d in embedded_floor() {
             assert!(

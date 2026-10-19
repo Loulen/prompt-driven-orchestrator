@@ -100,6 +100,14 @@ pub fn router(runs: Arc<Runs>) -> Router {
         .route("/runs/{run_id}/nodes/{node_id}/io", get(read::node_io))
         .route("/runs/{run_id}/nodes/{node_id}/diff", get(read::node_diff))
         .route(
+            "/runs/{run_id}/nodes/{node_id}/transcript",
+            get(read::node_transcript),
+        )
+        .route(
+            "/runs/{run_id}/nodes/{node_id}/transcript/tools/{index}",
+            get(read::node_transcript_tool),
+        )
+        .route(
             "/runs/{run_id}/nodes/{node_id}/start",
             post(gestures::start),
         )

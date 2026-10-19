@@ -36,6 +36,9 @@ impl HarnessProbes for CopilotProbes {
     fn observed_identity_source(&self) -> Option<ObservedIdentitySource> {
         Some(ObservedIdentitySource::ModelAndEffort)
     }
+    fn transcript_reading(&self) -> Option<TranscriptReading> {
+        Some(TranscriptReading::CopilotJournalEvents)
+    }
     fn transcript_resolution(&self) -> Option<TranscriptResolution> {
         Some(TranscriptResolution::CopilotEventsJsonl)
     }

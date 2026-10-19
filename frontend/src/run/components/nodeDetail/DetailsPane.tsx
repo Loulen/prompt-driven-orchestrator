@@ -1,4 +1,5 @@
 import { useMemo, type ReactNode } from "react";
+import { MessageSquare } from "lucide-react";
 import type { NodeState } from "../../../shared/generated/NodeState";
 import type { PortIO, FileInfo } from "../../api/nodes";
 import type { PortType } from "../../../shared/generated/PortType";
@@ -7,12 +8,14 @@ import type { ChildCounts, RunChildEntry } from "../../model/orchestration";
 import { ChildCountPills, OrchestrationTab } from "../OrchestrationTab";
 import IOSection from "./IOSection";
 import PromptSection from "./PromptSection";
+import TranscriptTab from "./transcript/TranscriptTab";
 import ExtensionDetailTab from "../../../shared/extensions/ExtensionDetailTab";
 import { useDetailTabs } from "../../../shared/extensions/catalogue";
 
 /**
- * The lower pane of the panel: the actions, then (for an orchestrator node) the
- * I/O | Orchestration tabs, then Inputs / Outputs / Initial Prompt.
+ * The lower pane of the panel: the actions, then the tabs — I/O, Transcript,
+ * Orchestration for an orchestrator node, the extensions' — then the selected
+ * tab: Inputs / Outputs / Initial Prompt under I/O.
  */
 export default function DetailsPane({
   actions,
@@ -30,6 +33,9 @@ export default function DetailsPane({
   outputs,
   promptText,
   onOpenFile,
+  selectedIter,
+  onSelectIter,
+  iterLive,
 }: {
   actions: ReactNode;
   node: NodeState;
@@ -37,7 +43,8 @@ export default function DetailsPane({
   isArchived?: boolean;
   isOrchestratorNode: boolean;
   nodeName?: string | null;
-  /** `io`, `orchestration`, or the key of a `node/detail` tab of an extension. */
+  /** `io`, `transcript`, `orchestration`, or the key of a `node/detail` tab of
+   *  an extension. */
   detailTab: string;
   onSelectTab: (tab: string) => void;
   childCounts: ChildCounts;
@@ -52,9 +59,14 @@ export default function DetailsPane({
     files: FileInfo[],
     portType: PortType,
   ) => void;
+  /** The iteration on screen, which the Transcript tab follows and can change. */
+  selectedIter: number;
+  onSelectIter: (iter: number) => void;
+  /** The iteration on screen is running: its transcript is followed live. */
+  iterLive: boolean;
 }) {
-  // ADR-0081 (#31): the `node/detail` tabs extensions add, after I/O and
-  // Orchestration. The tab bar shows once there is a second tab.
+  // ADR-0081 (#31): the `node/detail` tabs extensions add, after the core's.
+  // The tab bar always shows: I/O and Transcript are there for every node.
   const entity = useMemo(
     () => ({
       kind: "node",
@@ -66,8 +78,10 @@ export default function DetailsPane({
   );
   const { tabs: extensionTabs, context: extensionContext } = useDetailTabs(entity, "node/detail");
   const extensionTab = extensionTabs.find((t) => t.key === detailTab) ?? null;
-  const coreTabs = isOrchestratorNode ? (["io", "orchestration"] as const) : (["io"] as const);
-  const showTabs = isOrchestratorNode || extensionTabs.length > 0;
+  const coreTabs = isOrchestratorNode
+    ? (["io", "transcript", "orchestration"] as const)
+    : (["io", "transcript"] as const);
+  const isCoreTab = (tab: string) => (coreTabs as readonly string[]).includes(tab);
   return (
     <div
       className="flex h-full flex-col overflow-auto"
@@ -76,55 +90,65 @@ export default function DetailsPane({
       {/* Actions */}
       {actions}
 
-      {/* #723 — I/O | Orchestration tabs, only for an orchestrator node.
+      {/* I/O | Transcript (| Orchestration for an orchestrator node, #723).
           Below « Mark complete » (the escape hatch stays reachable from
-          both tabs), above the I/O content. */}
-      {showTabs && (
-        <div className="flex shrink-0 overflow-x-auto border-b border-line" data-testid="detail-tabs">
-          {coreTabs.map((tab) => {
-            const active = extensionTab === null && (detailTab === tab || (tab === "io" && detailTab !== "orchestration"));
-            return (
-              <button
-                key={tab}
-                type="button"
-                data-testid={`detail-tab-${tab}`}
-                data-active={active}
-                onClick={() => onSelectTab(tab)}
-                className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 py-1.5 transition-colors ${
-                  active ? "border-b-2 border-acc font-medium text-fg" : "text-fg-3 hover:text-fg-2"
-                }`}
-                style={{ fontSize: "11px" }}
-              >
-                {tab === "io" ? "I/O" : "Orchestration"}
-                {tab === "orchestration" && <ChildCountPills counts={childCounts} size="xs" testId="tab-child-pills" />}
-              </button>
-            );
-          })}
-          {extensionTabs.map((t) => {
-            const active = extensionTab?.key === t.key;
-            return (
-              <button
-                key={t.key}
-                type="button"
-                data-testid={`detail-tab-ext-${t.key}`}
-                data-active={active}
-                onClick={() => onSelectTab(t.key)}
-                className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap px-2 py-1.5 transition-colors ${
-                  active ? "border-b-2 border-acc font-medium text-fg" : "text-fg-3 hover:text-fg-2"
-                }`}
-                style={{ fontSize: "11px" }}
-              >
-                {t.contribution.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
+          every tab), above the tab's content. */}
+      <div className="flex shrink-0 overflow-x-auto border-b border-line" data-testid="detail-tabs">
+        {coreTabs.map((tab) => {
+          const active =
+            extensionTab === null && (detailTab === tab || (tab === "io" && !isCoreTab(detailTab)));
+          return (
+            <button
+              key={tab}
+              type="button"
+              data-testid={`detail-tab-${tab}`}
+              data-active={active}
+              onClick={() => onSelectTab(tab)}
+              className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 py-1.5 transition-colors ${
+                active ? "border-b-2 border-acc font-medium text-fg" : "text-fg-3 hover:text-fg-2"
+              }`}
+              style={{ fontSize: "11px" }}
+            >
+              {tab === "transcript" && <MessageSquare size={11} />}
+              {tab === "io" ? "I/O" : tab === "transcript" ? "Transcript" : "Orchestration"}
+              {tab === "orchestration" && <ChildCountPills counts={childCounts} size="xs" testId="tab-child-pills" />}
+            </button>
+          );
+        })}
+        {extensionTabs.map((t) => {
+          const active = extensionTab?.key === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              data-testid={`detail-tab-ext-${t.key}`}
+              data-active={active}
+              onClick={() => onSelectTab(t.key)}
+              className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap px-2 py-1.5 transition-colors ${
+                active ? "border-b-2 border-acc font-medium text-fg" : "text-fg-3 hover:text-fg-2"
+              }`}
+              style={{ fontSize: "11px" }}
+            >
+              {t.contribution.label}
+            </button>
+          );
+        })}
+      </div>
       {extensionTab ? (
         <ExtensionDetailTab
           key={`${extensionTab.key}:${node.node_id}`}
           tab={extensionTab}
           context={extensionContext}
+        />
+      ) : detailTab === "transcript" ? (
+        <TranscriptTab
+          key={`${node.node_id}:${selectedIter}`}
+          runId={runId}
+          nodeId={node.node_id}
+          iter={selectedIter}
+          iterations={node.iterations ?? []}
+          onSelectIter={onSelectIter}
+          live={iterLive}
         />
       ) : isOrchestratorNode && detailTab === "orchestration" ? (
         <OrchestrationTab

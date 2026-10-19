@@ -19,7 +19,13 @@ use crate::common::flow::git_init;
 use crate::common::{ws_text, TestDaemon};
 use crate::test_extension::{Refusal, TestExtension};
 
-async fn send(daemon: &TestDaemon, method: reqwest::Method, path: &str, body: Value, actor: &str) -> (u16, Value) {
+async fn send(
+    daemon: &TestDaemon,
+    method: reqwest::Method,
+    path: &str,
+    body: Value,
+    actor: &str,
+) -> (u16, Value) {
     let resp = reqwest::Client::new()
         .request(method, format!("{}{path}", daemon.url()))
         .header("x-pdo-test-actor", actor)

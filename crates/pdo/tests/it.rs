@@ -179,6 +179,9 @@ mod run_create_upload_errors;
 #[path = "stats_cost_by_model.rs"]
 mod stats_cost_by_model;
 
+#[path = "node_transcript.rs"]
+mod node_transcript;
+
 #[path = "release_channel.rs"]
 mod release_channel;
 #[path = "update_apply.rs"]

@@ -12,3 +12,4 @@ pub mod registry;
 pub mod resolver;
 pub mod steering;
 pub mod support;
+pub mod transcript;

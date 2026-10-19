@@ -16,6 +16,11 @@ Set every public browser origin as an exact `scheme://host[:port]` value, for ex
 | WebSocket routes | `/ws` and `/sessions/<id>/pty` |
 | TLS proxy | The UI uses `wss://` automatically |
 
+Set the **Public URL** (Settings › General › Public URL, or `PDO_PUBLIC_URL`) to the address
+browsers use, for example `https://pdo.example.tld`. Agents receive it and print their links with
+it, and `pdo page mount` prints page addresses under it; without it, those links point at
+`http://localhost:<port>` and only work on the daemon's machine.
+
 Add `PDO_ALLOWED_WS_ORIGINS` to the service environment when the daemon runs as a service. Keep it
 in a `pdo.service.d/override.conf` drop-in, which survives unit rewrites including Update (see
 [`pdo service install`](cli.md#cli-commands)).

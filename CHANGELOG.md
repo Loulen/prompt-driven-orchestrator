@@ -10,6 +10,24 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.46.0 — Output de type files, téléchargement des artefacts (CORE-94)
+
+- Nouveau type d'output `files` (`PortType::Files`) : un fichier ou plus, de tout format, dans
+  `<node>/iter-<N>/<port>/`. La complétion refuse un dossier sans fichier (`missing_outputs`, un
+  sous-dossier ne compte pas). L'aval reçoit le dossier du port, dans le préambule, dans
+  `PDO_INPUT_*` d'un script et dans le panneau d'I/O ; une accumulation donne un dossier par
+  itération complétée.
+- `GET /runs/{id}/artifact?path=…&download=true` renvoie les octets bruts en pièce jointe, avec un
+  nom lisible (`<node>-<port>.md`, suffixé `-iter-<N>` après la première itération).
+  `GET /runs/{id}/artifact/zip?path=…` renvoie le zip d'un dossier de port (`<node>-<port>.zip`).
+  Les deux routes partagent le garde de traversal et posent `nosniff` ; jamais de `text/html`
+  (ADR-0028).
+- Vue du Run : badge « files », une puce par fichier qui le télécharge, « Download all » (zip),
+  icône ↓ au survol de toute ligne d'artefact et dans l'en-tête de la modale markdown. La modale
+  d'un port files pagine ses fichiers et les affiche selon leur format (image, texte, ou
+  téléchargement).
+- Inspecteur : option « Files » dans le sélecteur de type d'output.
+
 ## 2.45.0 — Durée Total ou Active d'un nœud (CORE-99)
 
 - L'état d'itération expose `waited_ms` (attentes déclarées closes) et `open_wait_since`

@@ -155,6 +155,25 @@ describe("OutputPortCard — O3 tab-head card", () => {
     expect(values).toContain("html");
   });
 
+  it("offers a single Files option, for one file or more of any format", () => {
+    const onUpdate = vi.fn();
+    render(<OutputPortCard {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
+    const select = screen.getByTestId("port-type-select") as HTMLSelectElement;
+    const files = Array.from(select.options).filter((o) => o.value === "files");
+    expect(files).toHaveLength(1);
+    expect(files[0].textContent).toBe("Files");
+    expect(files[0].title).toBe("one file or more, any format");
+    expect(Array.from(select.options).map((o) => o.value)).not.toContain("file");
+    fireEvent.change(select, { target: { value: "files" } });
+    expect(onUpdate).toHaveBeenCalledWith({ port_type: "files" });
+  });
+
+  it("hides schema editor when port type is files", () => {
+    const port = { ...baseProps.port, port_type: "files" as const };
+    render(<OutputPortCard {...baseProps} port={port} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId("output-schema-editor")).toBeNull();
+  });
+
   it("hides schema editor when port type is html", () => {
     const port = { ...baseProps.port, port_type: "html" as const };
     render(<OutputPortCard {...baseProps} port={port} />, { wrapper: Wrapper });

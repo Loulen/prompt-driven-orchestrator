@@ -20,6 +20,24 @@ export function artifactUrl(runId: string, relativePath: string): string {
   return `${BASE}/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(relativePath)}`;
 }
 
+/** The artifact as an attachment: any format, saved under a readable name. */
+export function artifactDownloadUrl(runId: string, relativePath: string): string {
+  return `${artifactUrl(runId, relativePath)}&download=true`;
+}
+
+/** Every file of a port folder in one zip, named after its node and port. */
+export function portZipUrl(runId: string, folder: string): string {
+  return `${BASE}/runs/${encodeURIComponent(runId)}/artifact/zip?path=${encodeURIComponent(folder)}`;
+}
+
+/** The folder all `paths` share, or null when they are spread over several. */
+export function commonFolder(paths: string[]): string | null {
+  const folders = new Set(paths.map((p) => p.slice(0, Math.max(0, p.lastIndexOf("/")))));
+  if (folders.size !== 1) return null;
+  const [folder] = folders;
+  return folder || null;
+}
+
 /** Full content of one file at a Run ref (#748); defaults to the Run tip. */
 export function fetchRunFileAtRef(
   runId: string,

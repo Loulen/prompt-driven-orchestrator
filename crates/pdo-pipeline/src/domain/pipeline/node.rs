@@ -92,6 +92,9 @@ pub enum PortType {
     /// A rendered, static HTML artifact (`output.html`): a leaf review surface
     /// shown in a sandboxed iframe (no JS), never consumed downstream (ADR-0028).
     Html,
+    /// One file or more, of any format, dropped in the port folder. The folder
+    /// travels on the edges: the consumer reads the folder, not one file.
+    Files,
 }
 
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];

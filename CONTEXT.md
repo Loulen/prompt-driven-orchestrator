@@ -256,6 +256,8 @@ Résolution des inputs : wire simple → dernière itération **complétée** du
 
 **html** *(type de port de sortie)* : un port dont l'artefact est un `output.html` **rendu** dans une iframe sandboxée — HTML + CSS statiques, **aucun JS exécuté**, jamais servi en `text/html` par le daemon (ADR-0028). Surface de relecture, non consommée en aval en v1. Pour montrer un prototype navigable, on passe par un **Page mount** (ADR-0066), pas par ce port. _Éviter_ : « aperçu HTML interactif ».
 
+**files** *(type de port de sortie)* : un port dont l'artefact est **un fichier ou plus, de tout format**, déposés dans le dossier du port (`<node-id>/iter-<N>/<port>/`). `pdo complete` refuse un dossier sans fichier (`missing_outputs`) ; un ou vingt, peu importe. Il passe sur les edges : l'aval reçoit **le dossier**, pas un fichier (une accumulation, un dossier par itération complétée). Dans la vue du Run, chaque fichier se télécharge, et le port entier en zip (« Download all »). Un seul type, pas de variante « un seul fichier ». _Éviter_ : « pièce jointe » (celle d'un Run ou d'un Node importé), « file » au singulier.
+
 ### Frontmatter — minimal
 
 La frontmatter sert au *runtime* (parser un verdict, router) — **pas** à structurer le contenu. Tout ce qui est destiné à être lu par un autre LLM reste dans le **corps** markdown. Pas de structures imbriquées ni de listes lourdes en frontmatter.

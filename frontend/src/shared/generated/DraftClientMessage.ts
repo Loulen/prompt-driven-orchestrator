@@ -4,4 +4,4 @@ import type { PresenceState } from "./PresenceState";
 /**
  * What a client says on a draft's socket.
  */
-export type DraftClientMessage = { "type": "presence", presence: PresenceState, };
+export type DraftClientMessage = { "type": "presence", presence: PresenceState, } | { "type": "heartbeat" };

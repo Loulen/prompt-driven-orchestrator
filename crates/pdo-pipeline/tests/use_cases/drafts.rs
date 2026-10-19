@@ -52,7 +52,11 @@ fn node<'a>(content: &'a DraftContent, id: &str) -> &'a serde_json::Value {
 #[tokio::test]
 async fn the_first_participant_opens_the_draft_from_the_file() {
     let world = world_with_worker();
-    let join = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
+    let join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
     assert!(join.can_write);
     let content = Client::of(&join).doc.content();
     assert_eq!(node(&content, "worker")["name"], "Worker");
@@ -66,8 +70,16 @@ async fn the_first_participant_opens_the_draft_from_the_file() {
 #[tokio::test]
 async fn a_change_reaches_the_other_participants_and_is_counted() {
     let world = world_with_worker();
-    let alice = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
-    let mut bob = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
+    let alice = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    let mut bob = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
     assert_ne!(alice.color, bob.color);
     let update = Client::of(&alice).edit(|c| {
         c.pipeline["nodes"][1]["name"] = json!("Builder");
@@ -93,7 +105,11 @@ async fn a_change_reaches_the_other_participants_and_is_counted() {
 #[tokio::test]
 async fn the_draft_survives_a_restart() {
     let world = world_with_worker();
-    let join = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
+    let join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
     let update = Client::of(&join).edit(|c| {
         c.pipeline["nodes"][1]["view"] = json!({"x": 420, "y": 80});
     });
@@ -105,7 +121,11 @@ async fn the_draft_survives_a_restart() {
     let generation = join.room.generation();
 
     let restarted = world.restarted();
-    let again = restarted.pipelines.join_draft(&operator(), "flow").await.unwrap();
+    let again = restarted
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
     assert_eq!(again.room.generation(), generation);
     let content = Client::of(&again).doc.content();
     assert_eq!(node(&content, "worker")["view"], json!({"x": 420, "y": 80}));
@@ -128,7 +148,11 @@ async fn a_participant_who_may_not_update_joins_to_read() {
 #[tokio::test]
 async fn a_file_written_elsewhere_lands_in_the_draft_beside_its_changes() {
     let world = world_with_worker();
-    let join = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
+    let join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
     // In the draft: the worker moved.
     let update = Client::of(&join).edit(|c| {
         c.pipeline["nodes"][1]["view"] = json!({"x": 10, "y": 20});
@@ -139,9 +163,10 @@ async fn a_file_written_elsewhere_lands_in_the_draft_beside_its_changes() {
         .await
         .unwrap();
     // In the file: the worker renamed, and a new prompt.
-    world
-        .registry
-        .put("flow", &pipeline_with_worker("flow").replace("name: Worker", "name: Reviewer"));
+    world.registry.put(
+        "flow",
+        &pipeline_with_worker("flow").replace("name: Worker", "name: Reviewer"),
+    );
     world.registry.put_prompt("flow", "worker", "Review it.");
     world.pipelines.draft_file_changed("flow").await;
 
@@ -163,8 +188,13 @@ async fn a_draft_nobody_opened_ignores_the_file() {
 #[tokio::test]
 async fn saving_the_draft_leaves_no_change() {
     let world = world_with_worker();
-    let join = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
-    let update = Client::of(&join).edit(|c| {
+    let join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    let client = Client::of(&join);
+    let update = client.edit(|c| {
         c.pipeline["nodes"][1]["name"] = json!("Builder");
     });
     world
@@ -175,7 +205,13 @@ async fn saving_the_draft_leaves_no_change() {
     let yaml = pipeline_with_worker("flow").replace("name: Worker", "name: Builder");
     world
         .pipelines
-        .save_draft(&operator(), "flow", &yaml, &HashMap::new())
+        .save_draft(
+            &operator(),
+            "flow",
+            &yaml,
+            &HashMap::new(),
+            &client.doc.content(),
+        )
         .await
         .unwrap();
     assert_eq!(join.room.changes(), 0);
@@ -183,9 +219,61 @@ async fn saving_the_draft_leaves_no_change() {
 }
 
 #[tokio::test]
+async fn a_change_made_while_saving_is_still_a_change_and_survives_a_restart() {
+    let world = world_with_worker();
+    let alice = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    let bob = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    // Alice serializes the draft for her save...
+    let saved = Client::of(&alice).doc.content();
+    // ...while Bob moves the worker.
+    let update = Client::of(&bob).edit(|c| {
+        c.pipeline["nodes"][1]["view"] = json!({"x": 7, "y": 8});
+    });
+    world
+        .pipelines
+        .edit_draft(&bob.room, bob.connection, &update)
+        .await
+        .unwrap();
+    world
+        .pipelines
+        .save_draft(
+            &operator(),
+            "flow",
+            &pipeline_with_worker("flow"),
+            &HashMap::new(),
+            &saved,
+        )
+        .await
+        .unwrap();
+    assert_eq!(alice.room.changes(), 1);
+
+    let restarted = world.restarted();
+    let again = restarted
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    let content = Client::of(&again).doc.content();
+    assert_eq!(node(&content, "worker")["view"], json!({"x": 7, "y": 8}));
+    assert_eq!(again.room.changes(), 1);
+}
+
+#[tokio::test]
 async fn a_rename_moves_the_draft_and_tells_its_participants() {
     let world = world_with_worker();
-    let mut join = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
+    let mut join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
     world
         .pipelines
         .rename(&operator(), "flow", "Shipping")
@@ -206,7 +294,11 @@ async fn a_rename_moves_the_draft_and_tells_its_participants() {
 #[tokio::test]
 async fn deleting_the_pipeline_deletes_its_draft() {
     let world = world_with_worker();
-    let mut join = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
+    let mut join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
     world.pipelines.delete(&operator(), "flow").await.unwrap();
     assert!(world.drafts.0.lock().unwrap().is_empty());
     let mut removed = false;
@@ -214,14 +306,30 @@ async fn deleting_the_pipeline_deletes_its_draft() {
         removed |= matches!(message, DraftMessage::Removed);
     }
     assert!(removed);
+    // Its last participant leaving keeps nothing of it.
+    world
+        .pipelines
+        .leave_draft(&join.room, join.connection)
+        .await;
+    assert!(world.drafts.0.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn the_last_participant_to_leave_closes_the_draft_and_the_store_keeps_it() {
     let world = world_with_worker();
-    let join = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
-    world.pipelines.leave_draft(&join.room, join.connection).await;
-    assert_eq!(world.events.last_draft("flow").unwrap().participants.len(), 0);
+    let join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
+    world
+        .pipelines
+        .leave_draft(&join.room, join.connection)
+        .await;
+    assert_eq!(
+        world.events.last_draft("flow").unwrap().participants.len(),
+        0
+    );
     assert!(world.pipelines.draft_summaries().await.is_empty());
     assert!(world.drafts.0.lock().unwrap().contains_key("flow"));
 }
@@ -229,7 +337,11 @@ async fn the_last_participant_to_leave_closes_the_draft_and_the_store_keeps_it()
 #[tokio::test]
 async fn the_list_shows_the_open_drafts_and_the_kept_changes() {
     let world = world_with_worker();
-    let join = world.pipelines.join_draft(&operator(), "flow").await.unwrap();
+    let join = world
+        .pipelines
+        .join_draft(&operator(), "flow")
+        .await
+        .unwrap();
     let update = Client::of(&join).edit(|c| {
         c.pipeline["nodes"][1]["name"] = json!("Builder");
     });
@@ -240,7 +352,10 @@ async fn the_list_shows_the_open_drafts_and_the_kept_changes() {
         .unwrap();
     let open = world.pipelines.draft_summaries().await;
     assert_eq!(open["flow"].participants.len(), 1);
-    world.pipelines.leave_draft(&join.room, join.connection).await;
+    world
+        .pipelines
+        .leave_draft(&join.room, join.connection)
+        .await;
     let kept = world.pipelines.draft_summaries().await;
     assert_eq!(kept["flow"].changes, 1);
     assert!(kept["flow"].participants.is_empty());

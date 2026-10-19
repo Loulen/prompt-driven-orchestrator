@@ -6,12 +6,15 @@ import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
 import { applyObject, applyPrompts, type Json } from "../model/draftDelta";
 import { toDraftPipeline } from "../model/draftForm";
 import type { EditorPipelineDef } from "../model/pipeline";
-import { startDraftSessions } from "./draftSessions";
+import { draftSessionOf, startDraftSessions } from "./draftSessions";
 import { useEditStore } from "./editStore";
+import { savePipeline } from "../api/pipelines";
 import type { OpenPipeline } from "./editState";
 
 /** The sockets the sessions opened, by pipeline id. */
 const sockets = new Map<string, { handlers: DraftSocketHandlers; sent: { tag: number; payload: Uint8Array }[]; texts: unknown[] }>();
+
+vi.mock("../api/pipelines", () => ({ savePipeline: vi.fn(), fetchPipeline: vi.fn(), fetchPipelines: vi.fn() }));
 
 vi.mock("../api/draftSocket", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api/draftSocket")>();
@@ -81,6 +84,10 @@ function join(server: Y.Doc, canWrite = true) {
   socket.handlers.onBinary(SYNC_REPLY, Y.encodeStateAsUpdate(server));
   socket.sent.length = 0;
   return socket;
+}
+
+function sessionOf() {
+  return draftSessionOf("flow")!;
 }
 
 function current(): OpenPipeline {
@@ -182,6 +189,46 @@ describe("a pipeline tab's shared draft", () => {
       type: "presence",
       presence: { selection: { kind: "node", id: "b" }, typing: null },
     });
+  });
+
+  it("stops, and reads, once the pipeline is deleted", () => {
+    const socket = join(serverDoc());
+    socket.handlers.onMessage({ type: "removed" });
+    expect(sockets.has("flow")).toBe(false);
+    expect(current().draft).toMatchObject({ status: "offline", canWrite: false });
+  });
+
+  it("edits without a draft when the draft cannot open", () => {
+    const socket = sockets.get("flow")!;
+    socket.handlers.onMessage({ type: "unavailable", message: "the file no longer reads" });
+    expect(current().draft).toBeUndefined();
+    expect(sockets.has("flow")).toBe(false);
+    useEditStore.getState().updateNode("a", { name: "Designer" });
+    expect(current().pipeline.nodes[0].name).toBe("Designer");
+  });
+
+  it("opens a prompt for typing without showing an empty one", () => {
+    const server = serverDoc();
+    const socket = join(server);
+    useEditStore.getState().setSelection({ kind: "node", id: "b" });
+    sessionOf().openPrompt("b");
+    const opened = socket.sent.find((m) => m.tag === UPDATE);
+    expect(opened).toBeDefined();
+    Y.applyUpdate(server, opened!.payload);
+    expect(server.getMap("prompts").get("b")).toBeInstanceOf(Y.Text);
+    // A change from elsewhere reads the draft back: still no prompt for b.
+    socket.handlers.onBinary(UPDATE, Y.encodeStateAsUpdate(server));
+    expect(current().prompts).toEqual({ a: "Read." });
+  });
+
+  it("saves with the draft as the tab holds it", async () => {
+    join(serverDoc());
+    const content = sessionOf().content();
+    expect(content.prompts).toEqual({ a: "Read." });
+    expect((content.pipeline as { name: string }).name).toBe("flow");
+    vi.mocked(savePipeline).mockResolvedValueOnce({ ok: true });
+    await useEditStore.getState().save("flow");
+    expect(savePipeline).toHaveBeenCalledWith("flow", expect.any(String), { a: "Read." }, "instance", content);
   });
 
   it("follows a rename to the new id", () => {

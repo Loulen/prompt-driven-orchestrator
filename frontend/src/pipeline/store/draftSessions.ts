@@ -13,6 +13,8 @@ import type { DraftTabState, EditState, OpenPipeline, Selection } from "./editSt
 import { rekeyTab } from "./tabHistory";
 
 const sessions = new Map<string, DraftSession>();
+/** The tabs whose draft could not open: they edit without one. */
+const detached = new Set<string>();
 /** The store is being written from a draft: not a local edit to send. */
 let showing = false;
 
@@ -63,6 +65,12 @@ function hostOf(store: StoreApi<EditState>): DraftHost {
         // changed it.
         return patch.changes === undefined ? { draft } : { draft, dirty: patch.changes > 0 };
       }),
+    detach: (tabId) => {
+      detached.add(tabId);
+      sessions.get(tabId)?.close();
+      sessions.delete(tabId);
+      patchTab(store, tabId, () => ({ draft: undefined }));
+    },
     moved: (tabId, to) => {
       // The draft opens again under the new id.
       store.setState((s) => rekeyTab(s, tabId, to, { draft: INITIAL_DRAFT_STATE }));
@@ -103,7 +111,10 @@ export function startDraftSessions(store: StoreApi<EditState>): () => void {
         sessions.delete(tabId);
       }
     }
+    // A tab closed forgets that its draft could not open: reopened, it tries again.
+    for (const tabId of detached) if (!open.has(tabId)) detached.delete(tabId);
     for (const tab of pipelineTabs) {
+      if (detached.has(tab.id)) continue;
       const session = sessions.get(tab.id);
       if (!session) {
         sessions.set(tab.id, new DraftSession(tab.id, host));
@@ -126,5 +137,6 @@ export function startDraftSessions(store: StoreApi<EditState>): () => void {
     unsubscribe();
     for (const session of sessions.values()) session.close();
     sessions.clear();
+    detached.clear();
   };
 }

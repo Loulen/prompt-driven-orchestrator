@@ -148,13 +148,27 @@ fn diff_array(old: &[Value], new: &[Value]) -> Vec<ElementChange> {
                 }
                 let deleted: Vec<usize> = steps[start..i]
                     .iter()
-                    .filter_map(|s| if let Step::Delete(o) = s { Some(*o) } else { None })
+                    .filter_map(|s| {
+                        if let Step::Delete(o) = s {
+                            Some(*o)
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
                 let inserted: Vec<usize> = steps[start..i]
                     .iter()
-                    .filter_map(|s| if let Step::Insert(n) = s { Some(*n) } else { None })
+                    .filter_map(|s| {
+                        if let Step::Insert(n) = s {
+                            Some(*n)
+                        } else {
+                            None
+                        }
+                    })
                     .collect();
-                changes.extend(run_changes(old, new, &old_keys, &new_keys, &deleted, &inserted));
+                changes.extend(run_changes(
+                    old, new, &old_keys, &new_keys, &deleted, &inserted,
+                ));
             }
         }
     }
@@ -301,7 +315,8 @@ fn empty_like(change: &Change) -> Value {
 }
 
 fn apply_element(array: &mut Vec<Value>, change: &ElementChange) {
-    let position = |array: &[Value], key: &ElementKey| array.iter().position(|e| &ElementKey::of(e) == key);
+    let position =
+        |array: &[Value], key: &ElementKey| array.iter().position(|e| &ElementKey::of(e) == key);
     match change {
         ElementChange::Remove { key } => {
             if let Some(i) = position(array, key) {
@@ -403,7 +418,10 @@ mod tests {
                 ("name".into(), FieldChange::Set(json!("b"))),
                 (
                     "nested".into(),
-                    FieldChange::Patch(Change::Object(vec![("y".into(), FieldChange::Set(json!(3)))]))
+                    FieldChange::Patch(Change::Object(vec![(
+                        "y".into(),
+                        FieldChange::Set(json!(3))
+                    )]))
                 ),
                 ("new".into(), FieldChange::Set(json!([1]))),
             ]))
@@ -443,8 +461,12 @@ mod tests {
         assert_eq!(
             diff(&old, &new),
             Some(Change::Array(vec![
-                ElementChange::Remove { key: key(json!({"source": "a"})) },
-                ElementChange::Remove { key: key(json!({"source": "b"})) },
+                ElementChange::Remove {
+                    key: key(json!({"source": "a"}))
+                },
+                ElementChange::Remove {
+                    key: key(json!({"source": "b"}))
+                },
             ]))
         );
     }
@@ -467,8 +489,13 @@ mod tests {
         assert_eq!(
             diff(&json!(["x", "y"]), &json!(["x", "z"])),
             Some(Change::Array(vec![
-                ElementChange::Remove { key: key(json!("y")) },
-                ElementChange::Insert { after: Some(key(json!("x"))), value: json!("z") },
+                ElementChange::Remove {
+                    key: key(json!("y"))
+                },
+                ElementChange::Insert {
+                    after: Some(key(json!("x"))),
+                    value: json!("z")
+                },
             ]))
         );
     }
@@ -500,19 +527,31 @@ mod tests {
         // Meanwhile, someone added a node first and changed another field.
         let mut theirs = json!({"nodes": [{"id": "z"}, {"id": "a", "name": "A", "prompt_x": 9}]});
         apply(&mut theirs, &diff(&base, &mine).unwrap());
-        assert_eq!(theirs, json!({"nodes": [{"id": "z"}, {"id": "a", "name": "A2", "prompt_x": 9}]}));
+        assert_eq!(
+            theirs,
+            json!({"nodes": [{"id": "z"}, {"id": "a", "name": "A2", "prompt_x": 9}]})
+        );
     }
 
     #[test]
     fn inserting_a_node_already_there_patches_it() {
         let mut draft = json!([{"id": "a", "name": "old"}]);
-        apply(&mut draft, &Change::Array(vec![ElementChange::Insert { after: None, value: json!({"id": "a", "name": "new"}) }]));
+        apply(
+            &mut draft,
+            &Change::Array(vec![ElementChange::Insert {
+                after: None,
+                value: json!({"id": "a", "name": "new"}),
+            }]),
+        );
         assert_eq!(draft, json!([{"id": "a", "name": "new"}]));
     }
 
     #[test]
     fn canonical_json_ignores_key_order() {
-        assert_eq!(canonical(&json!({"b": 1, "a": [{"d": 1, "c": 2}]})), canonical(&json!({"a": [{"c": 2, "d": 1}], "b": 1})));
+        assert_eq!(
+            canonical(&json!({"b": 1, "a": [{"d": 1, "c": 2}]})),
+            canonical(&json!({"a": [{"c": 2, "d": 1}], "b": 1}))
+        );
     }
 
     #[test]
@@ -520,11 +559,19 @@ mod tests {
         assert_eq!(diff_prompt("abc", "abc"), None);
         assert_eq!(
             diff_prompt("Keep it short and clear", "Keep it very short and clear"),
-            Some(PromptChange { index: 8, delete: 0, insert: "very ".into() })
+            Some(PromptChange {
+                index: 8,
+                delete: 0,
+                insert: "very ".into()
+            })
         );
         assert_eq!(
             diff_prompt("hello world", "hello"),
-            Some(PromptChange { index: 5, delete: 6, insert: String::new() })
+            Some(PromptChange {
+                index: 5,
+                delete: 6,
+                insert: String::new()
+            })
         );
     }
 
@@ -533,11 +580,19 @@ mod tests {
         // "é" is one UTF-16 unit, "😀" two.
         assert_eq!(
             diff_prompt("é😀a", "é😀ba"),
-            Some(PromptChange { index: 3, delete: 0, insert: "b".into() })
+            Some(PromptChange {
+                index: 3,
+                delete: 0,
+                insert: "b".into()
+            })
         );
         assert_eq!(
             diff_prompt("😀", "😁"),
-            Some(PromptChange { index: 0, delete: 2, insert: "😁".into() })
+            Some(PromptChange {
+                index: 0,
+                delete: 2,
+                insert: "😁".into()
+            })
         );
     }
 }

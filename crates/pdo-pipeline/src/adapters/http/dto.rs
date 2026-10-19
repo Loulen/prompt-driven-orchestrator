@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::application::PipelineSummary;
-use crate::domain::draft::DraftSummary;
+use crate::domain::draft::{DraftContent, DraftSummary};
 use crate::domain::library::LibraryEntry;
 use crate::domain::pipeline::{self, VariableDef};
 use crate::domain::validation::PipelineValidation;
@@ -61,8 +61,13 @@ pub(super) struct PipelineListEntry {
     draft: Option<DraftSummary>,
 }
 
-impl From<(PipelineSummary, Attributes, PipelineValidation, Option<DraftSummary>)>
-    for PipelineListEntry
+impl
+    From<(
+        PipelineSummary,
+        Attributes,
+        PipelineValidation,
+        Option<DraftSummary>,
+    )> for PipelineListEntry
 {
     fn from(
         (summary, attributes, validation, draft): (
@@ -105,10 +110,10 @@ pub(super) struct SavePipelineRequest {
     pub(super) yaml: String,
     #[serde(default)]
     pub(super) prompts: HashMap<String, String>,
-    /// The editor saves the shared draft as it holds it (ADR-0088): the
-    /// draft is the file afterwards, with no change left.
+    /// The editor saves its shared draft (ADR-0088): the draft as it held it
+    /// when it serialized `yaml` and `prompts`.
     #[serde(default)]
-    pub(super) from_draft: bool,
+    pub(super) draft: Option<DraftContent>,
 }
 
 #[derive(Deserialize)]

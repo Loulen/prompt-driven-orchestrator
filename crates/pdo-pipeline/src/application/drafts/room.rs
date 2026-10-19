@@ -2,6 +2,7 @@
 //! participants, and the channel that carries what each one must hear.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use tokio::sync::broadcast;
@@ -47,6 +48,8 @@ pub struct Room {
     state: Mutex<RoomState>,
     /// Writes to the store one at a time, each with the latest state.
     persist: tokio::sync::Mutex<()>,
+    /// The pipeline was deleted: nothing of the room is kept any more.
+    removed: AtomicBool,
     tx: broadcast::Sender<DraftMessage>,
 }
 
@@ -56,12 +59,15 @@ impl Room {
         Self {
             state: Mutex::new(state),
             persist: tokio::sync::Mutex::new(()),
+            removed: AtomicBool::new(false),
             tx,
         }
     }
 
     pub(super) fn lock(&self) -> MutexGuard<'_, RoomState> {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub(super) fn persist_lock(&self) -> &tokio::sync::Mutex<()> {
@@ -199,14 +205,16 @@ impl Room {
         true
     }
 
-    /// The draft was saved as it is: it is the file now.
-    pub(super) fn saved(&self) {
-        {
+    /// The draft was saved as `saved` (what the editor serialized): that is
+    /// the file now. What changed in the draft since still counts.
+    pub(super) fn saved(&self, saved: &DraftContent) {
+        let changes = {
             let mut state = self.lock();
-            state.baseline = state.doc.content();
-            state.changes = 0;
-        }
-        self.send(DraftMessage::Status { changes: 0 });
+            state.baseline = saved.clone();
+            recount(&mut state);
+            state.changes
+        };
+        self.send(DraftMessage::Status { changes });
     }
 
     pub(super) fn moved(&self, to: &str) {
@@ -215,7 +223,12 @@ impl Room {
     }
 
     pub(super) fn removed(&self) {
+        self.removed.store(true, Ordering::SeqCst);
         self.send(DraftMessage::Removed);
+    }
+
+    pub(super) fn is_removed(&self) -> bool {
+        self.removed.load(Ordering::SeqCst)
     }
 
     /// The draft as the store keeps it.

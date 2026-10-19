@@ -97,9 +97,9 @@ pub(super) async fn save(
     AxumPath(pipeline_id): AxumPath<String>,
     Json(req): Json<SavePipelineRequest>,
 ) -> Response {
-    let saved = if req.from_draft {
+    let saved = if let Some(draft) = &req.draft {
         pipelines
-            .save_draft(&actor, &pipeline_id, &req.yaml, &req.prompts)
+            .save_draft(&actor, &pipeline_id, &req.yaml, &req.prompts, draft)
             .await
     } else {
         pipelines

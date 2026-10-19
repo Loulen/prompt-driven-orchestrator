@@ -185,7 +185,8 @@ pub struct StoredDraft {
 /// Where the drafts are kept.
 pub trait DraftStore: Send + Sync {
     fn load<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Option<StoredDraft>, String>>;
-    fn save<'a>(&'a self, id: &'a str, draft: &'a StoredDraft) -> BoxFuture<'a, Result<(), String>>;
+    fn save<'a>(&'a self, id: &'a str, draft: &'a StoredDraft)
+        -> BoxFuture<'a, Result<(), String>>;
     fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), String>>;
     /// A rename moved the pipeline `from` to `to`: its draft follows.
     fn carry<'a>(&'a self, from: &'a str, to: &'a str) -> BoxFuture<'a, Result<(), String>>;

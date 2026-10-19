@@ -4,4 +4,4 @@ import type { DraftParticipant } from "./DraftParticipant";
 /**
  * What the daemon says on a draft's socket.
  */
-export type DraftServerMessage = { "type": "welcome", connection: string, generation: string, can_write: boolean, color: number, } | { "type": "participants", participants: Array<DraftParticipant>, } | { "type": "status", changes: number, } | { "type": "moved", to: string, } | { "type": "removed" } | { "type": "heartbeat" };
+export type DraftServerMessage = { "type": "welcome", connection: string, generation: string, can_write: boolean, color: number, } | { "type": "participants", participants: Array<DraftParticipant>, } | { "type": "status", changes: number, } | { "type": "moved", to: string, } | { "type": "removed" } | { "type": "unavailable", message: string, } | { "type": "heartbeat" };

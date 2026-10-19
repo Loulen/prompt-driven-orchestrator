@@ -37,4 +37,3 @@ pub fn editor_json(detail: &PipelineDetail) -> anyhow::Result<serde_json::Value>
     }
     Ok(json)
 }
-

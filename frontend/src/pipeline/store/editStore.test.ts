@@ -1720,20 +1720,8 @@ describe("scope-qualified pipeline ops", () => {
       expect.any(String),
       {},
       "library",
-      false,
+      undefined,
     );
-  });
-
-  it("saves a tab's shared draft as the draft (ADR-0088)", async () => {
-    seedTab("my-pipe", true);
-    useEditStore.setState((s) => ({
-      openTabs: s.openTabs.map((t) => ({ ...t, draft: { ...INITIAL_DRAFT_STATE, synced: true, canWrite: true } })),
-    }));
-    mockSavePipeline.mockResolvedValueOnce({ ok: true });
-
-    await useEditStore.getState().save("my-pipe");
-
-    expect(mockSavePipeline).toHaveBeenCalledWith("my-pipe", expect.any(String), expect.anything(), expect.anything(), true);
   });
 });
 

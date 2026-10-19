@@ -18,8 +18,8 @@ use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tokio::sync::broadcast;
 use tracing::warn;
 
-pub use room::{DraftMessage, Room};
 use room::RoomState;
+pub use room::{DraftMessage, Room};
 
 use super::editor_json::editor_json;
 use super::error::PipelineError;
@@ -33,8 +33,10 @@ pub struct Drafts {
     store: Arc<dyn DraftStore>,
     documents: Arc<dyn DraftDocuments>,
     rooms: Mutex<HashMap<String, Arc<Room>>>,
-    /// One draft opens at a time: two first participants share one.
-    opening: tokio::sync::Mutex<()>,
+    /// Opening a draft, seating a participant and closing a draft after its
+    /// last one, one at a time: two first participants share one draft, and a
+    /// newcomer never sits in a draft that is closing.
+    seating: tokio::sync::Mutex<()>,
     next_connection: AtomicU64,
 }
 
@@ -44,13 +46,15 @@ impl Drafts {
             store,
             documents,
             rooms: Mutex::new(HashMap::new()),
-            opening: tokio::sync::Mutex::new(()),
+            seating: tokio::sync::Mutex::new(()),
             next_connection: AtomicU64::new(room::DAEMON + 1),
         }
     }
 
     fn rooms(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Room>>> {
-        self.rooms.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.rooms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn loaded(&self, id: &str) -> Option<Arc<Room>> {
@@ -59,6 +63,10 @@ impl Drafts {
 
     async fn persist(&self, room: &Room) {
         let _one_at_a_time = room.persist_lock().lock().await;
+        // A deleted pipeline's draft is not written back.
+        if room.is_removed() {
+            return;
+        }
         let (id, stored) = room.stored();
         if let Err(e) = self.store.save(&id, &stored).await {
             warn!("draft of pipeline {id}: not kept: {e}");
@@ -80,6 +88,7 @@ impl Pipelines {
     /// Seat `actor` in the draft of `id`, opening it from the store, or from
     /// the file the first time.
     pub async fn join_draft(&self, actor: &Actor, id: &str) -> Result<DraftJoin, PipelineError> {
+        let _seating = self.drafts.seating.lock().await;
         let room = self.open_draft(id).await?;
         let update = Operation::new(ResourceKind::Pipeline, Verb::Update).on(id);
         let can_write = self.host().authorize(actor, &update).is_allowed();
@@ -109,18 +118,24 @@ impl Pipelines {
     pub async fn leave_draft(&self, room: &Arc<Room>, connection: u64) {
         room.unseat(connection);
         self.announce(room);
+        let _seating = self.drafts.seating.lock().await;
         if room.has_participants() {
             return;
         }
         self.drafts.persist(room).await;
-        let mut rooms = self.drafts.rooms();
-        if rooms.get(&room.id()).is_some_and(|r| Arc::ptr_eq(r, room)) && !room.has_participants() {
-            rooms.remove(&room.id());
-        }
+        self.close_if_empty(room);
     }
 
     /// `update` from `connection`, kept, then passed to the others.
-    pub async fn edit_draft(&self, room: &Room, connection: u64, update: &[u8]) -> Result<(), String> {
+    ///
+    /// Kept before it is passed on: what a participant saw survives a
+    /// restart of the daemon.
+    pub async fn edit_draft(
+        &self,
+        room: &Room,
+        connection: u64,
+        update: &[u8],
+    ) -> Result<(), String> {
         let moved = room.apply(update)?;
         self.drafts.persist(room).await;
         room.pass_on(connection, update, moved);
@@ -136,14 +151,17 @@ impl Pipelines {
         let room = match self.drafts.loaded(id) {
             Some(room) => room,
             None => match self.drafts.store.load(id).await {
-                Ok(Some(_)) => match self.open_draft(id).await {
-                    // Opening followed the file already.
-                    Ok(room) => {
-                        self.announce(&room);
-                        return self.close_if_empty(&room);
+                Ok(Some(_)) => {
+                    let _seating = self.drafts.seating.lock().await;
+                    match self.open_draft(id).await {
+                        // Opening followed the file already.
+                        Ok(room) => {
+                            self.announce(&room);
+                            return self.close_if_empty(&room);
+                        }
+                        Err(_) => return,
                     }
-                    Err(_) => return,
-                },
+                }
                 _ => return,
             },
         };
@@ -156,16 +174,19 @@ impl Pipelines {
         }
     }
 
-    /// The draft of `id` was saved as it is, as the pipeline `saved_as`.
-    pub(crate) async fn draft_saved(&self, id: &str, saved_as: &str) {
+    /// The draft of `id` was saved as the pipeline `saved_as`, holding
+    /// `saved` (what the editor serialized). A change made meanwhile by
+    /// someone else still counts; what the file normalized lands in the draft.
+    pub(crate) async fn draft_saved(&self, id: &str, saved_as: &str, saved: &DraftContent) {
         if id != saved_as {
             self.draft_moved(id, saved_as, false).await;
         }
         let Some(room) = self.drafts.loaded(saved_as) else {
             return;
         };
-        room.saved();
+        room.saved(saved);
         self.drafts.persist(&room).await;
+        self.draft_file_changed(saved_as).await;
         self.announce(&room);
     }
 
@@ -206,7 +227,15 @@ impl Pipelines {
             .unwrap_or_default()
             .into_iter()
             .filter(|(_, changes)| *changes > 0)
-            .map(|(id, changes)| (id, DraftSummary { changes, participants: Vec::new() }))
+            .map(|(id, changes)| {
+                (
+                    id,
+                    DraftSummary {
+                        changes,
+                        participants: Vec::new(),
+                    },
+                )
+            })
             .collect();
         let open: Vec<Arc<Room>> = self.drafts.rooms().values().cloned().collect();
         for room in open {
@@ -218,13 +247,13 @@ impl Pipelines {
     /// The file of `id` as a draft holds it.
     fn draft_file(&self, id: &str) -> Result<DraftContent, PipelineError> {
         let detail = self.detail(id)?;
-        let pipeline = editor_json(&detail).map_err(|e| PipelineError::BadRequest(e.to_string()))?;
+        let pipeline =
+            editor_json(&detail).map_err(|e| PipelineError::BadRequest(e.to_string()))?;
         Ok(DraftContent::new(pipeline, detail.prompts))
     }
 
-    /// The draft of `id`, opened if needed.
+    /// The draft of `id`, opened if needed. The caller holds `seating`.
     async fn open_draft(&self, id: &str) -> Result<Arc<Room>, PipelineError> {
-        let _one_at_a_time = self.drafts.opening.lock().await;
         if let Some(room) = self.drafts.loaded(id) {
             return Ok(room);
         }

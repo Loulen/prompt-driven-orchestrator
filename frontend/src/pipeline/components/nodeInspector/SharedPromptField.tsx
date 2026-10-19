@@ -95,7 +95,10 @@ export default function SharedPromptField({
           report();
         }}
         onSelect={report}
-        onFocus={report}
+        onFocus={() => {
+          draftSessionOf(useEditStore.getState().activeTabId)?.openPrompt(nodeId);
+          report();
+        }}
         onBlur={() => draftSessionOf(useEditStore.getState().activeTabId)?.present({ typing: null })}
       />
       {carets.map(({ participant, top, left }) => (

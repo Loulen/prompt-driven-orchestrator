@@ -150,7 +150,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
         // `library`-scoped edit never overwrites a same-named repo file (#216).
         // ADR-0088: a tab with a shared draft saves the draft as it holds it;
         // the daemon then counts no change left.
-        const result = await savePipeline(id, yaml, tab.prompts, tab.scope, tab.draft != null);
+        const result = await savePipeline(id, yaml, tab.prompts, tab.scope, draftSessionOf(id)?.content());
         // #774 — the save may have RENAMED the pipeline (a `name:` edit moved
         // the file): rekey the tab to the daemon's final id in the same
         // gesture, so the store never keeps a tab pointing at a dead stem.

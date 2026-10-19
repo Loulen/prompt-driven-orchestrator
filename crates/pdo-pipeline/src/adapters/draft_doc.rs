@@ -125,7 +125,12 @@ fn text_of<T: ReadTxn>(txn: &T, value: Out) -> Option<String> {
     }
 }
 
-fn change_prompts(txn: &mut TransactionMut, prompts: &MapRef, from: &DraftContent, to: &DraftContent) {
+fn change_prompts(
+    txn: &mut TransactionMut,
+    prompts: &MapRef,
+    from: &DraftContent,
+    to: &DraftContent,
+) {
     for node in from.prompts.keys().filter(|n| !to.prompts.contains_key(*n)) {
         prompts.remove(txn, node);
     }
@@ -138,7 +143,12 @@ fn change_prompts(txn: &mut TransactionMut, prompts: &MapRef, from: &DraftConten
                 continue;
             }
         };
-        if let Some(PromptChange { index, delete, insert }) = diff_prompt(old, new) {
+        if let Some(PromptChange {
+            index,
+            delete,
+            insert,
+        }) = diff_prompt(old, new)
+        {
             let len = text.len(txn);
             let index = index.min(len);
             text.remove_range(txn, index, delete.min(len - index));
@@ -167,14 +177,17 @@ fn apply_object(txn: &mut TransactionMut, map: &MapRef, fields: &[(String, Field
                 map.insert(txn, key.as_str(), to_in(value));
             }
             FieldChange::Patch(change) => match (map.get(txn, key), change) {
-                (Some(Out::YMap(nested)), Change::Object(fields)) => apply_object(txn, &nested, fields),
+                (Some(Out::YMap(nested)), Change::Object(fields)) => {
+                    apply_object(txn, &nested, fields)
+                }
                 (Some(Out::YArray(nested)), Change::Array(elements)) => {
                     apply_array(txn, &nested, elements)
                 }
                 (current, change) => {
                     // The structure differs from what the change expects:
                     // rewrite the field from its value.
-                    let mut value = current.map_or(Value::Null, |out| any_to_json(out.to_json(txn)));
+                    let mut value =
+                        current.map_or(Value::Null, |out| any_to_json(out.to_json(txn)));
                     apply(&mut value, change);
                     map.insert(txn, key.as_str(), to_in(&value));
                 }
@@ -208,7 +221,9 @@ fn apply_array(txn: &mut TransactionMut, array: &ArrayRef, elements: &[ElementCh
             ElementChange::Insert { after, value } => {
                 let key = ElementKey::of(value);
                 if let Some(i) = position(&key) {
-                    let current = array.get(txn, i).map_or(Value::Null, |o| any_to_json(o.to_json(txn)));
+                    let current = array
+                        .get(txn, i)
+                        .map_or(Value::Null, |o| any_to_json(o.to_json(txn)));
                     if let Some(change) = diff(&current, value) {
                         patch_element(txn, array, i, &change);
                     }
@@ -286,7 +301,10 @@ mod tests {
     use serde_json::json;
 
     fn content(pipeline: Value, prompts: &[(&str, &str)]) -> DraftContent {
-        DraftContent::new(pipeline, prompts.iter().map(|(k, v)| (k.to_string(), v.to_string())))
+        DraftContent::new(
+            pipeline,
+            prompts.iter().map(|(k, v)| (k.to_string(), v.to_string())),
+        )
     }
 
     fn base() -> DraftContent {
@@ -315,7 +333,10 @@ mod tests {
     fn a_draft_holds_its_content_through_its_encoding() {
         let draft = YDraftDocuments.create(&base());
         assert_eq!(draft.content(), base());
-        assert_eq!(YDraftDocuments.load(&draft.encode()).unwrap().content(), base());
+        assert_eq!(
+            YDraftDocuments.load(&draft.encode()).unwrap().content(),
+            base()
+        );
     }
 
     #[test]
@@ -354,11 +375,19 @@ mod tests {
     fn nodes_added_at_once_both_land() {
         let (first, second) = pair();
         let mut mine = base();
-        mine.pipeline["nodes"].as_array_mut().unwrap().push(json!({"id": "c"}));
+        mine.pipeline["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "c"}));
         let mut theirs = base();
-        theirs.pipeline["nodes"].as_array_mut().unwrap().push(json!({"id": "d"}));
+        theirs.pipeline["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "d"}));
         let one = first.change(&base(), &mine);
-        second.apply_update(&second.change(&base(), &theirs)).unwrap();
+        second
+            .apply_update(&second.change(&base(), &theirs))
+            .unwrap();
         first.apply_update(&second.encode()).unwrap();
         second.apply_update(&one).unwrap();
         let ids = |d: &dyn DraftDocument| {
@@ -379,14 +408,20 @@ mod tests {
     fn two_people_typing_in_one_prompt_keep_both_texts() {
         let (first, second) = pair();
         let mut mine = base();
-        mine.prompts.insert("a".into(), "Please read the task.".into());
+        mine.prompts
+            .insert("a".into(), "Please read the task.".into());
         let mut theirs = base();
-        theirs.prompts.insert("a".into(), "Read the task. Be short.".into());
+        theirs
+            .prompts
+            .insert("a".into(), "Read the task. Be short.".into());
         let one = first.change(&base(), &mine);
         let two = second.change(&base(), &theirs);
         first.apply_update(&two).unwrap();
         second.apply_update(&one).unwrap();
-        assert_eq!(first.content().prompts["a"], "Please read the task. Be short.");
+        assert_eq!(
+            first.content().prompts["a"],
+            "Please read the task. Be short."
+        );
         assert_eq!(first.content(), second.content());
     }
 
@@ -407,7 +442,10 @@ mod tests {
         let draft = YDraftDocuments.create(&base());
         // Someone else added a node in front.
         let mut theirs = base();
-        theirs.pipeline["nodes"].as_array_mut().unwrap().insert(0, json!({"id": "z"}));
+        theirs.pipeline["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, json!({"id": "z"}));
         draft.change(&base(), &theirs);
         // A change computed against the old file still finds node `b`.
         let mut file = base();
@@ -420,6 +458,9 @@ mod tests {
 
     #[test]
     fn a_garbled_update_is_refused() {
-        assert!(YDraftDocuments.create(&base()).apply_update(&[1, 2, 3]).is_err());
+        assert!(YDraftDocuments
+            .create(&base())
+            .apply_update(&[1, 2, 3])
+            .is_err());
     }
 }

@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use pdo_extension_api::{Authorization, RequestParts};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
-use pdo_pipeline::application::ports::*;
 use pdo_pipeline::adapters::draft_doc::YDraftDocuments;
+use pdo_pipeline::application::ports::*;
 use pdo_pipeline::domain::draft::DraftSummary;
 use pdo_pipeline::domain::library::LibraryEntry;
 use pdo_pipeline::domain::pipeline::{split_live_prompts, PipelineDef};
@@ -298,7 +298,11 @@ impl DraftStore for Drafts {
     fn load<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Option<StoredDraft>, String>> {
         ready(Ok(self.0.lock().unwrap().get(id).cloned()))
     }
-    fn save<'a>(&'a self, id: &'a str, draft: &'a StoredDraft) -> BoxFuture<'a, Result<(), String>> {
+    fn save<'a>(
+        &'a self,
+        id: &'a str,
+        draft: &'a StoredDraft,
+    ) -> BoxFuture<'a, Result<(), String>> {
         self.0.lock().unwrap().insert(id.to_string(), draft.clone());
         ready(Ok(()))
     }
@@ -315,7 +319,10 @@ impl DraftStore for Drafts {
     }
     fn changes(&self) -> BoxFuture<'_, Result<HashMap<String, u32>, String>> {
         let all = self.0.lock().unwrap();
-        ready(Ok(all.iter().map(|(id, d)| (id.clone(), d.changes)).collect()))
+        ready(Ok(all
+            .iter()
+            .map(|(id, d)| (id.clone(), d.changes))
+            .collect()))
     }
 }
 
@@ -466,7 +473,12 @@ impl World {
     }
 
     pub fn with(host: Host, registry: Registry, bank: Bank) -> Self {
-        Self::over(Arc::new(host), Arc::new(registry), Arc::new(bank), Arc::default())
+        Self::over(
+            Arc::new(host),
+            Arc::new(registry),
+            Arc::new(bank),
+            Arc::default(),
+        )
     }
 
     /// The same registry and drafts, as a restarted daemon finds them.
@@ -489,7 +501,12 @@ impl World {
         )
     }
 
-    fn over(host: Arc<Host>, registry: Arc<Registry>, bank: Arc<Bank>, drafts: Arc<Drafts>) -> Self {
+    fn over(
+        host: Arc<Host>,
+        registry: Arc<Registry>,
+        bank: Arc<Bank>,
+        drafts: Arc<Drafts>,
+    ) -> Self {
         let library = Arc::new(Library::default());
         let events = Arc::new(Events::default());
         let runs = Arc::new(Runs::default());

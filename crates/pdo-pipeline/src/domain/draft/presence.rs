@@ -121,7 +121,10 @@ mod tests {
         assert_eq!(
             state,
             PresenceState {
-                selection: Some(PresenceSelection { kind: SelectionKind::Node, id: "a".into() }),
+                selection: Some(PresenceSelection {
+                    kind: SelectionKind::Node,
+                    id: "a".into()
+                }),
                 typing: None,
             }
         );
@@ -130,8 +133,15 @@ mod tests {
     #[test]
     fn an_overlong_id_is_dropped() {
         let state = PresenceState {
-            selection: Some(PresenceSelection { kind: SelectionKind::Node, id: "x".repeat(300) }),
-            typing: Some(PresenceTyping { node_id: "a".into(), field: TypingField::Prompt, caret: 3 }),
+            selection: Some(PresenceSelection {
+                kind: SelectionKind::Node,
+                id: "x".repeat(300),
+            }),
+            typing: Some(PresenceTyping {
+                node_id: "a".into(),
+                field: TypingField::Prompt,
+                caret: 3,
+            }),
         };
         let bounded = state.bounded();
         assert_eq!(bounded.selection, None);

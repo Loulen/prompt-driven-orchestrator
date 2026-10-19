@@ -31,6 +31,8 @@ export interface DraftHost {
   setDraftState: (tabId: string, patch: Partial<DraftTabState>) => void;
   /** A rename moved the pipeline: the tab follows. */
   moved: (tabId: string, to: string) => void;
+  /** The draft cannot open: the tab edits without it. */
+  detach: (tabId: string) => void;
 }
 
 /** The origin of my own changes: the only ones Undo replays. */
@@ -42,6 +44,9 @@ const REMOTE = "remote";
 
 /** Changes closer than this fold into one Undo step when they share a gesture. */
 const CAPTURE_MS = 500;
+
+/** « Still here », so the daemon can tell a gone connection (it waits 20 s). */
+const HEARTBEAT_MS = 5_000;
 
 export const INITIAL_DRAFT_STATE: DraftTabState = {
   status: "connecting",
@@ -66,6 +71,7 @@ export class DraftSession {
   private lastKey: string | null = null;
   private presence: PresenceState = { selection: null, typing: null };
   private readonly socket: DraftSocket;
+  private readonly heartbeat: ReturnType<typeof setInterval>;
   /** The definition the tab holds, as the copy last gave it. */
   shown: { pipeline: EditorPipelineDef; prompts: Record<string, string> };
 
@@ -88,6 +94,7 @@ export class DraftSession {
       onState: (state) =>
         host.setDraftState(tabId, { status: state === "ouvert" ? "live" : state === "connexion" ? "connecting" : "offline" }),
     });
+    this.heartbeat = setInterval(() => this.socket.send({ type: "heartbeat" }), HEARTBEAT_MS);
   }
 
   private newDoc(): void {
@@ -152,6 +159,15 @@ export class DraftSession {
       case "moved":
         this.host.moved(this.tabId, message.to);
         return;
+      case "removed":
+        // The pipeline is gone: nothing to reconnect to.
+        this.stop();
+        this.host.setDraftState(this.tabId, { status: "offline", canWrite: false });
+        return;
+      case "unavailable":
+        this.stop();
+        this.host.detach(this.tabId);
+        return;
       default:
         return;
     }
@@ -161,7 +177,11 @@ export class DraftSession {
   private readBack(): void {
     if (!this.synced || this.pipelineMap.size === 0) return;
     const pipeline = fromDraftPipeline(this.pipelineMap.toJSON());
-    const prompts = promptsOf(this.promptMap);
+    // An empty prompt the tab did not have is one opened for typing
+    // (`openPrompt`), not one somebody cleared: no prompt yet.
+    const prompts = Object.fromEntries(
+      Object.entries(promptsOf(this.promptMap)).filter(([node, text]) => text !== "" || node in this.shown.prompts),
+    );
     this.shown = { pipeline, prompts };
     this.host.showDraft(this.tabId, pipeline, prompts);
   }
@@ -187,6 +207,21 @@ export class DraftSession {
     const top = this.undo.undoStack[this.undo.undoStack.length - 1];
     if (label && top) top.meta.set("label", label);
     this.publishHistory();
+  }
+
+  /** The draft as this tab holds it, for a save. */
+  content(): { pipeline: unknown; prompts: Record<string, string> } {
+    return { pipeline: this.pipelineMap.toJSON(), prompts: promptsOf(this.promptMap) };
+  }
+
+  /**
+   * Make sure the prompt of `nodeId` has its text before anyone types in it:
+   * two people starting a new prompt at once then type into the same one,
+   * rather than each into a text of their own of which one is dropped.
+   */
+  openPrompt(nodeId: string): void {
+    if (!this.synced || !this.canWrite || this.promptMap.has(nodeId)) return;
+    this.doc.transact(() => this.promptMap.set(nodeId, new Y.Text()), MINE_UNTRACKED);
   }
 
   /** Undo my last change; nobody else's. */
@@ -225,8 +260,13 @@ export class DraftSession {
     this.socket.send({ type: "presence", presence: next });
   }
 
-  close(): void {
+  private stop(): void {
+    clearInterval(this.heartbeat);
     this.socket.close();
+  }
+
+  close(): void {
+    this.stop();
     this.undo.destroy();
     this.doc.destroy();
   }

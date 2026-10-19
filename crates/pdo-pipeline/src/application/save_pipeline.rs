@@ -9,6 +9,7 @@ use super::error::PipelineError;
 use super::pipelines::Pipelines;
 use super::ports::Renamed;
 use super::registry_names::lenient_name;
+use crate::domain::draft::DraftContent;
 use crate::domain::naming::pipeline_slug;
 use crate::domain::pipeline::parse_pipeline;
 
@@ -45,17 +46,19 @@ impl Pipelines {
         Ok(saved)
     }
 
-    /// Save the draft of `id` as the editor serialized it (ADR-0088): the
-    /// draft is the file now, with no change left.
+    /// Save the draft of `id` as the editor serialized it (ADR-0088):
+    /// `draft` is what it held then, the file the draft counts its changes
+    /// from now on.
     pub async fn save_draft(
         &self,
         actor: &Actor,
         id: &str,
         yaml: &str,
         prompts: &HashMap<String, String>,
+        draft: &DraftContent,
     ) -> Result<SaveOutcome, PipelineError> {
         let saved = self.write_saved(actor, id, yaml, prompts).await?;
-        self.draft_saved(id, &saved.id).await;
+        self.draft_saved(id, &saved.id, draft).await;
         Ok(saved)
     }
 

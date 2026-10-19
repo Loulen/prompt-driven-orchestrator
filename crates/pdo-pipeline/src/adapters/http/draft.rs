@@ -20,7 +20,7 @@
 //! §3).
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Path as AxumPath, State, WebSocketUpgrade};
@@ -48,6 +48,13 @@ pub const UPDATE: u8 = 2;
 /// How often the daemon beats on the socket (ADR-0083 §5).
 pub const HEARTBEAT: Duration = Duration::from_secs(5);
 
+/// A client heard of for this long is gone (a half-open connection after a
+/// sleep fires no Close): its presence ends. The client beats every 5 s.
+pub const SILENCE: Duration = Duration::from_secs(20);
+
+/// The largest frame a client may send: a whole draft fits many times over.
+const MAX_FRAME: usize = 8 * 1024 * 1024;
+
 /// Whether a WebSocket upgrade comes from an origin the daemon accepts.
 pub type OriginCheck = Arc<dyn Fn(&HeaderMap) -> bool + Send + Sync>;
 
@@ -68,11 +75,20 @@ pub enum DraftServerMessage {
         participants: Vec<DraftParticipant>,
     },
     /// The draft's changes since the file; 0 is nothing to save.
-    Status { changes: u32 },
+    Status {
+        changes: u32,
+    },
     /// A rename moved the pipeline to `to`: open the draft there.
-    Moved { to: String },
+    Moved {
+        to: String,
+    },
     /// The pipeline was deleted.
     Removed,
+    /// The draft cannot open (the file no longer reads): the editor edits
+    /// without it.
+    Unavailable {
+        message: String,
+    },
     Heartbeat,
 }
 
@@ -81,7 +97,11 @@ pub enum DraftServerMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum DraftClientMessage {
-    Presence { presence: PresenceState },
+    Presence {
+        presence: PresenceState,
+    },
+    /// « Still here », every 5 s.
+    Heartbeat,
 }
 
 /// The state of the draft's route.
@@ -111,21 +131,27 @@ pub(super) async fn upgrade(
     if !route.pipelines.exists(&pipeline_id) {
         return super::not_found();
     }
-    ws.on_upgrade(move |socket| async move {
-        let pipelines = route.pipelines;
-        match pipelines.join_draft(&actor, &pipeline_id).await {
-            Ok(join) => {
-                let room = join.room.clone();
-                let connection = join.connection;
-                serve(socket, &pipelines, join).await;
-                pipelines.leave_draft(&room, connection).await;
+    ws.max_message_size(MAX_FRAME)
+        .on_upgrade(move |socket| async move {
+            let pipelines = route.pipelines;
+            match pipelines.join_draft(&actor, &pipeline_id).await {
+                Ok(join) => {
+                    let room = join.room.clone();
+                    let connection = join.connection;
+                    serve(socket, &pipelines, join).await;
+                    pipelines.leave_draft(&room, connection).await;
+                }
+                Err(e) => {
+                    warn!("draft of pipeline {pipeline_id} could not open: {e:?}");
+                    let mut socket = socket;
+                    let message = DraftServerMessage::Unavailable {
+                        message: format!("{e:?}"),
+                    };
+                    let _ = socket.send(text(&message)).await;
+                    close(socket).await;
+                }
             }
-            Err(e) => {
-                warn!("draft of pipeline {pipeline_id} could not open: {e:?}");
-                close(socket).await;
-            }
-        }
-    })
+        })
 }
 
 async fn close(mut socket: WebSocket) {
@@ -174,10 +200,19 @@ async fn serve(mut socket: WebSocket, pipelines: &Pipelines, join: DraftJoin) {
         }
     }
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
+    let mut heard_at = Instant::now();
     loop {
         let outgoing = tokio::select! {
-            _ = heartbeat.tick() => vec![text(&DraftServerMessage::Heartbeat)],
-            incoming = socket.recv() => match incoming {
+            _ = heartbeat.tick() => {
+                if heard_at.elapsed() > SILENCE {
+                    close(socket).await;
+                    return;
+                }
+                vec![text(&DraftServerMessage::Heartbeat)]
+            }
+            incoming = socket.recv() => {
+                heard_at = Instant::now();
+                match incoming {
                 Some(Ok(Message::Close(_))) => {
                     // The answer is queued by the protocol; flushing sends it.
                     let _ = socket.flush().await;
@@ -194,7 +229,8 @@ async fn serve(mut socket: WebSocket, pipelines: &Pipelines, join: DraftJoin) {
                 }
                 Some(Ok(_)) => Vec::new(),
                 None | Some(Err(_)) => return,
-            },
+                }
+            }
             heard = messages.recv() => match heard {
                 Ok(DraftMessage::Update { from, update }) if from != connection => {
                     vec![binary(UPDATE, &update)]

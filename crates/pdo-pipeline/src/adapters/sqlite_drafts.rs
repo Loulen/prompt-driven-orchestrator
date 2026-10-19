@@ -82,7 +82,11 @@ impl DraftStore for SqliteDrafts {
         Box::pin(self.read(id))
     }
 
-    fn save<'a>(&'a self, id: &'a str, draft: &'a StoredDraft) -> BoxFuture<'a, Result<(), String>> {
+    fn save<'a>(
+        &'a self,
+        id: &'a str,
+        draft: &'a StoredDraft,
+    ) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(self.write(id, draft))
     }
 

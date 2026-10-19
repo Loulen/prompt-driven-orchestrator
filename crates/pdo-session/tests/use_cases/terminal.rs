@@ -41,8 +41,12 @@ async fn a_spectator_takes_control_unless_it_is_refused() {
         let t = terminals(host);
         let (pilot_tx, _pilot_rx) = mpsc::unbounded_channel();
         let (spectator_tx, _spectator_rx) = mpsc::unbounded_channel();
-        let _pilot = t.registry().join("s", Some("A".into()), pilot_tx);
-        let spectator = t.registry().join("s", Some("B".into()), spectator_tx);
+        let _pilot = t
+            .registry()
+            .join("s", Some("A".into()), Actor::LocalOperator, pilot_tx);
+        let spectator =
+            t.registry()
+                .join("s", Some("B".into()), Actor::LocalOperator, spectator_tx);
         assert_eq!(
             t.take_control(&Actor::LocalOperator, "s", spectator.id)
                 .await,
@@ -70,8 +74,15 @@ async fn a_take_over_is_announced_only_when_it_changes_the_pilot() {
         let t = terminals(host.clone());
         let (pilot_tx, _pilot_rx) = mpsc::unbounded_channel();
         let (spectator_tx, _spectator_rx) = mpsc::unbounded_channel();
-        let pilot = t.registry().join(SESSION, Some("A".into()), pilot_tx);
-        let spectator = t.registry().join(SESSION, Some("B".into()), spectator_tx);
+        let pilot = t
+            .registry()
+            .join(SESSION, Some("A".into()), Actor::LocalOperator, pilot_tx);
+        let spectator = t.registry().join(
+            SESSION,
+            Some("B".into()),
+            Actor::LocalOperator,
+            spectator_tx,
+        );
         t.take_control(&Actor::LocalOperator, SESSION, pilot.id)
             .await;
         t.take_control(&bob, SESSION, spectator.id).await;

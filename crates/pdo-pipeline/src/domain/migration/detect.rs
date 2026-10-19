@@ -23,13 +23,6 @@ pub(crate) fn looks_like_nanoid(id: &str) -> bool {
     id.len() == NANOID_LEN && id.bytes().all(|b| NANOID_ALPHABET.contains(&b))
 }
 
-pub(crate) fn port_missing_side(ports: &[serde_yaml::Value]) -> bool {
-    ports.iter().any(|p| {
-        p.as_mapping()
-            .is_some_and(|m| !m.contains_key(serde_yaml::Value::String("side".into())))
-    })
-}
-
 pub(crate) fn nodes_contain_type(nodes: &[serde_yaml::Value], node_type: &str) -> bool {
     nodes.iter().any(|n| {
         n.get("type")
@@ -89,6 +82,11 @@ pub fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
         if node.get("model").is_some() || node.get("effort").is_some() {
             return true;
         }
+        // A port that still declares a `side` or a `repeated`, on any node: the
+        // side moves onto the edges and both keys go.
+        if crate::domain::pipeline::node_has_legacy_port_key(node) {
+            return true;
+        }
         let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if matches!(node_type, "start" | "end" | "switch" | "loop") {
             continue;
@@ -113,11 +111,6 @@ pub fn needs_migration(yaml_value: &serde_yaml::Value) -> bool {
                 .is_some_and(|s| !s.is_empty())
         {
             return true;
-        }
-        if let Some(outputs) = node.get("outputs").and_then(|v| v.as_sequence()) {
-            if port_missing_side(outputs) {
-                return true;
-            }
         }
     }
     false

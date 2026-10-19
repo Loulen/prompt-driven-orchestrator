@@ -264,8 +264,6 @@ mod tests {
             node_type: crate::domain::pipeline::NodeType::Agent,
             inputs: vec![crate::domain::pipeline::Port {
                 name: "in".to_string(),
-                repeated: false,
-                side: Some(crate::domain::pipeline::PortSide::Left),
                 port_type: crate::domain::pipeline::PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -276,8 +274,6 @@ mod tests {
             }],
             outputs: vec![crate::domain::pipeline::Port {
                 name: "out".to_string(),
-                repeated: false,
-                side: Some(crate::domain::pipeline::PortSide::Right),
                 port_type: crate::domain::pipeline::PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -479,8 +475,6 @@ mod tests {
             inputs: vec![
                 crate::domain::pipeline::Port {
                     name: "plan".to_string(),
-                    repeated: false,
-                    side: Some(crate::domain::pipeline::PortSide::Left),
                     port_type: crate::domain::pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -491,8 +485,6 @@ mod tests {
                 },
                 crate::domain::pipeline::Port {
                     name: "reviews".to_string(),
-                    repeated: true,
-                    side: Some(crate::domain::pipeline::PortSide::Top),
                     port_type: crate::domain::pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -504,8 +496,6 @@ mod tests {
             ],
             outputs: vec![crate::domain::pipeline::Port {
                 name: "summary".to_string(),
-                repeated: false,
-                side: Some(crate::domain::pipeline::PortSide::Right),
                 when: None,
                 port_type: crate::domain::pipeline::PortType::Markdown,
                 frontmatter: Some({
@@ -810,8 +800,6 @@ mod tests {
             inputs: vec![
                 crate::domain::pipeline::Port {
                     name: "task".to_string(),
-                    repeated: false,
-                    side: Some(crate::domain::pipeline::PortSide::Left),
                     port_type: crate::domain::pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -822,8 +810,6 @@ mod tests {
                 },
                 crate::domain::pipeline::Port {
                     name: "reviews".to_string(),
-                    repeated: true,
-                    side: Some(crate::domain::pipeline::PortSide::Top),
                     port_type: crate::domain::pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -835,8 +821,6 @@ mod tests {
             ],
             outputs: vec![crate::domain::pipeline::Port {
                 name: "review".to_string(),
-                repeated: false,
-                side: Some(crate::domain::pipeline::PortSide::Right),
                 port_type: crate::domain::pipeline::PortType::Markdown,
                 frontmatter: Some({
                     let mut m = HashMap::new();
@@ -911,8 +895,6 @@ mod tests {
                 effort: None,
                 inputs: vec![crate::domain::pipeline::Port {
                     name: "in".to_string(),
-                    repeated: false,
-                    side: Some(crate::domain::pipeline::PortSide::Left),
                     port_type: crate::domain::pipeline::PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -923,8 +905,6 @@ mod tests {
                 }],
                 outputs: vec![crate::domain::pipeline::Port {
                     name: "result".to_string(),
-                    repeated: false,
-                    side: Some(crate::domain::pipeline::PortSide::Right),
                     port_type: crate::domain::pipeline::PortType::Markdown,
                     frontmatter: Some({
                         let mut m = HashMap::new();

@@ -10,6 +10,61 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.36.0 — Onglet Transcript d'un nœud (CORE-81)
+
+- `GET /runs/{id}/nodes/{node}/transcript?iter=&after=&limit=` sert le transcript normalisé
+  d'une itération, par pages (messages Prompt / Agent, appels d'outils repliés) ;
+  `GET …/transcript/tools/{index}?iter=` sert l'entrée et la sortie d'un appel. Un appel qui
+  remplace du texte porte un diff (`keep` / `remove` / `add`) et son décompte `+N −M`.
+- La pensée du modèle est écartée à la lecture : elle n'apparaît ni dans les pages ni dans le
+  détail d'un appel.
+- Un harnais sans lecteur de transcript répond `unavailable` ; la capacité se lit dans le
+  tableau de support (ligne « Transcript tab »).
+
+## 2.35.0 — Export OTLP des métriques et des traces (CORE-85)
+
+- Nouvelle catégorie « Telemetry » des Settings (ADR-0090) : le daemon pousse ses métriques et
+  ses traces en OTLP/HTTP vers un collecteur. **Éteint par défaut** : rien ne se connecte tant
+  que l'interrupteur n'est pas allumé. `PUT /settings` gagne l'interrupteur, l'adresse et les
+  en-têtes du collecteur ; la valeur d'un en-tête n'est jamais renvoyée (`GET /settings` dit
+  seulement qu'elle est posée). Un changement recharge l'export sans redémarrage.
+- `GET /telemetry/status` et `POST /telemetry/test-export`, autorisé comme une modification
+  des réglages d'instance.
+- Les attributs nomment le dépôt par son remote sans identifiants, jamais par un chemin local,
+  et ne portent jamais l'Acteur. `service.instance.id` vaut `<hôte>:<port>`.
+- Un collecteur injoignable est journalisé une fois, dit dans le statut, sans effet sur les
+  Runs ; les traces émises pendant la coupure sont perdues.
+
+## 2.34.0 — Envoi de texte réservé au pilote, rafraîchissement des modèles d'un harnais (CORE-79)
+
+- **`pdo-extension-api` 0.15.0**, sans rupture : l'opération `instance_settings` gagne le verbe
+  `refresh_catalogue` (re-sonder les modèles d'un harnais). Une extension qui répond à
+  `authorize` peut le refuser comme `update`.
+- `POST /runs/<run>/nodes/<node>/terminal-text` accepte `poste`. Un poste qui regarde le terminal d'un nœud
+  pendant qu'un autre le pilote reçoit `409 not_pilot` (avec l'Acteur du pilote), et rien n'est
+  collé. Un envoi sans poste (CLI, extension) passe comme avant.
+- `POST /settings/harnesses/{name}/refresh` re-sonde le catalogue d'un harnais même à version
+  égale, et `/ws` annonce `harness_catalogue_changed`. Le catalogue servi porte `probed_at`.
+
+## 2.33.0 — Ports sans côté ni `repeated` (CORE-87)
+
+- **Changement de format du pipeline.** Un port n'a plus de côté (`side`) ni de `repeated` :
+  l'inspecteur d'un output n'offre plus `L/T/R/B` ni `rpt`, et son type passe dans la ligne
+  du nom. Où un fil part appartient à l'edge, l'accumulation aussi. Au chargement, le `side`
+  d'un output devient une `source_anchor` sans `offset` (milieu du côté) sur ses edges, celui
+  du `result` d'un End un `target_side`, et le `repeated` d'un port est ignoré ; la
+  vérification de fin de nœud ne cherche plus un output dans les itérations précédentes (un
+  Run en cours dont un output `repeated` n'a été écrit qu'à une itération antérieure doit le
+  réécrire pour terminer l'itération courante). Le
+  fichier n'est réécrit qu'à la sauvegarde : lancer `pdo migrate` pour convertir le registre
+  (`~/.pdo/pipelines`) et la bibliothèque de nœuds (`~/.pdo/library`) ; la commande dit, par
+  fichier, ce qu'elle a changé, et une seconde passe ne change rien.
+- `EdgeAnchor.offset` devient optionnel ; `PortDef` perd `side` et `repeated`, `PortBrief`
+  perd `side`. Le `side` d'un `PortBrief` d'un event log antérieur est ignoré à la lecture.
+  Bump mineur : tout fichier et tout Run écrits avant se relisent sans erreur.
+- L'éditeur écrit désormais le `repeated` d'une edge : une sauvegarde depuis le canevas le
+  perdait.
+
 ## 2.32.0 — Auteur Acteur des commentaires de Review, sources d'autocomplétion du compositeur (CORE-63)
 
 - **`pdo-extension-api` 0.14.0** : nouvel Emplacement d'UI `review/composer` (le compositeur de

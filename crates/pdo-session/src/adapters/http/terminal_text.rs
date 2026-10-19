@@ -1,5 +1,6 @@
 //! `POST /runs/{run_id}/nodes/{node_id}/terminal-text` — « Copy & send to
 //! terminal »: a text into the input of a node's live session, without Enter.
+//! The body names the poste it comes from; a spectator's is refused.
 
 use std::sync::Arc;
 
@@ -15,6 +16,7 @@ use ts_rs::TS;
 use crate::application::terminal_text::{
     SendTerminalTextCommand, SendTextError, TERMINAL_TEXT_MAX_BYTES,
 };
+use crate::domain::shared_terminal::sanitize_poste;
 use crate::Session;
 
 #[derive(Deserialize)]
@@ -22,6 +24,10 @@ pub(super) struct TerminalTextRequest {
     #[serde(default)]
     iter: Option<i64>,
     text: String,
+    /// The browser's poste (ADR-0075). Absent or malformed: a request from no
+    /// poste.
+    #[serde(default)]
+    poste: Option<String>,
 }
 
 /// `200` once pasted: the iteration whose session received the text.
@@ -43,15 +49,16 @@ pub(super) async fn send(
 ) -> Response {
     // The body is read after the Autorisation d'opération: a malformed body
     // reaches the use case as an empty text, which it refuses once allowed.
-    let (iter, text, malformed) = match body {
-        Ok(Json(body)) => (body.iter, body.text, None),
-        Err(rejection) => (None, String::new(), Some(rejection.body_text())),
+    let (iter, text, poste, malformed) = match body {
+        Ok(Json(body)) => (body.iter, body.text, body.poste, None),
+        Err(rejection) => (None, String::new(), None, Some(rejection.body_text())),
     };
     let command = SendTerminalTextCommand {
         run_id: run_id.clone(),
         node_id: node_id.clone(),
         iter,
         text,
+        poste: sanitize_poste(poste.as_deref()),
     };
     match session.send_terminal_text().execute(&actor, command).await {
         Ok(iter) => (
@@ -91,6 +98,19 @@ pub(super) async fn send(
             "paste_failed",
             format!("tmux refused the paste into {tmux_session}; {NOTHING}"),
         ),
+        // The pilot rides along, so the page names who has the hand.
+        Err(SendTextError::NotPilot(pilot)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "not_pilot",
+                "recoverable": true,
+                "message": format!(
+                    "another poste has the terminal of {node_id}: take control to write into it; {NOTHING}"
+                ),
+                "pilot": pilot.actor,
+            })),
+        )
+            .into_response(),
     }
 }
 

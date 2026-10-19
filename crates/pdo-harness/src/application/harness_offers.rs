@@ -3,7 +3,7 @@
 
 use crate::application::read_catalogue::CatalogueReader;
 use crate::domain::catalogue::CachedCatalogue;
-use crate::domain::registry::{HarnessRegistry, HarnessSource};
+use crate::domain::registry::{HarnessListing, HarnessRegistry, HarnessSource};
 
 /// One harness's offer, in registry order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,20 +35,47 @@ pub async fn list_offers(
         } else {
             CachedCatalogue::default()
         };
-        let has_effort_hole = registry
-            .resolve(&h.name)
-            .map(|d| d.has_effort_hole())
-            .unwrap_or(false);
-        let has_effort = cached.catalogue.has_effort_axis() || has_effort_hole;
-        offers.push(HarnessOffer {
-            name: h.name,
-            source: h.source,
-            installed,
-            cached,
-            has_effort,
-        });
+        offers.push(offer(registry, h, installed, cached));
     }
     offers
+}
+
+/// Re-probe the catalogue of `name` now, at the same version or not, and return
+/// its offer; `None` when `registry` resolves no such harness. An uninstalled
+/// binary is not run: its offer stays empty.
+pub async fn refresh_offer(
+    reader: &CatalogueReader,
+    registry: &HarnessRegistry,
+    name: &str,
+) -> Option<HarnessOffer> {
+    let listing = registry.listing().into_iter().find(|h| h.name == name)?;
+    let installed = reader.installed(&listing.binary);
+    let cached = if installed {
+        reader.refresh(&listing.name, &listing.binary).await
+    } else {
+        CachedCatalogue::default()
+    };
+    Some(offer(registry, listing, installed, cached))
+}
+
+fn offer(
+    registry: &HarnessRegistry,
+    h: HarnessListing,
+    installed: bool,
+    cached: CachedCatalogue,
+) -> HarnessOffer {
+    let has_effort_hole = registry
+        .resolve(&h.name)
+        .map(|d| d.has_effort_hole())
+        .unwrap_or(false);
+    let has_effort = cached.catalogue.has_effort_axis() || has_effort_hole;
+    HarnessOffer {
+        name: h.name,
+        source: h.source,
+        installed,
+        cached,
+        has_effort,
+    }
 }
 
 /// Probe every installed harness's catalogue once, populating the cache, so the
@@ -120,5 +147,29 @@ mod tests {
         assert_eq!(fake.runs(), vec!["pi --version", "pi --help"]);
         list_offers(&reader, &HarnessRegistry::builtin()).await;
         assert_eq!(fake.runs().len(), 2, "the offers are served warm");
+    }
+
+    #[tokio::test]
+    async fn a_refresh_reprobes_one_harness_and_names_an_unknown_one() {
+        let fake = Arc::new(FakeBinaries {
+            installed: vec!["claude", "pi"],
+            catalogues: HashMap::from([("claude", catalogue(&["opus"], &[]))]),
+            ..FakeBinaries::default()
+        });
+        fake.set_version("claude", "2.1.0");
+        let reader = reader(&fake);
+        let registry = HarnessRegistry::builtin();
+        list_offers(&reader, &registry).await;
+        fake.runs.lock().unwrap().clear();
+
+        let offer = refresh_offer(&reader, &registry, CLAUDE).await.unwrap();
+        assert_eq!(offer.cached.catalogue.models, vec!["opus"]);
+        assert!(offer.has_effort);
+        assert_eq!(fake.runs(), vec!["claude --version", "claude --help"]);
+
+        let absent = refresh_offer(&reader, &registry, OPENCODE).await.unwrap();
+        assert!(!absent.installed);
+        assert_eq!(fake.runs().len(), 2, "an uninstalled binary is not run");
+        assert!(refresh_offer(&reader, &registry, "ghost").await.is_none());
     }
 }

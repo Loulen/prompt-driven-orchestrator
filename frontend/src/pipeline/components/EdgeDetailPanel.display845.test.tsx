@@ -16,7 +16,7 @@ function source(outputs: string[]): EditorNodeDef {
     name: "design",
     type: "agent",
     inputs: [],
-    outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+    outputs: outputs.map((name) => ({ name })),
     interactive: false,
     view: { x: 0, y: 0 },
   };
@@ -28,7 +28,7 @@ function target(): EditorNodeDef {
     name: "orchestrator",
     type: "agent",
     inputs: [],
-    outputs: [{ name: "out", repeated: false, side: "right" }],
+    outputs: [{ name: "out" }],
     interactive: false,
     view: { x: 300, y: 0 },
   };

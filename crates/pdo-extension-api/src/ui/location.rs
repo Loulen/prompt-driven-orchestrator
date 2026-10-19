@@ -1,7 +1,7 @@
 use serde::Serialize;
 
-// The intra-doc links of the catalogue name the kinds of contribution.
-#[cfg(doc)]
+// The variants' docs and the tests name the elements; `accepts` lives in `accepts.rs`.
+#[cfg(any(doc, test))]
 use super::UiElement;
 
 /// The catalogue of the UI's named locations (Emplacements d'UI, CONTEXT.md §
@@ -337,7 +337,6 @@ impl UiLocation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::UiElement;
 
     #[test]
     fn each_location_serializes_as_its_id() {

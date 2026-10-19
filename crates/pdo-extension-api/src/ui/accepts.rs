@@ -1,5 +1,5 @@
 //! What each location of the catalogue renders: the kinds of
-//! [`UiElement`] it accepts, and which locations are Action locations.
+//! [`UiElement`] it accepts, and whether it is an Action location.
 
 use super::{UiElement, UiLocation};
 

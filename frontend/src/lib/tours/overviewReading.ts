@@ -67,8 +67,8 @@ export const SETTINGS_BUTTON = testId("open-settings");
 
 /**
  * The inspector's navigation, which a read-only step still lets through (#911):
- * the Run / Config tabs, the I/O / Orchestration tabs, the « Initial Prompt » fold,
- * and the terminal's own unfold / expand / copy. Everything else in the panel
+ * the Run / Config tabs, the I/O / Transcript / Orchestration tabs, the « Initial
+ * Prompt » fold, and the terminal's own unfold / expand / copy. Everything else in the panel
  * that is a control stays refused while the tour shows it.
  */
 export const INSPECTOR_EXPLORE = [

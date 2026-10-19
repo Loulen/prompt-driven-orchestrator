@@ -5,11 +5,11 @@
 //! ([`HostedLocation`], amendment #32). The reference page is
 //! `docs/reference/extension-ui.md`.
 
+mod accepts;
 mod command;
 mod contribution;
 mod hosted;
 mod location;
-mod location_accepts;
 mod slot;
 mod when;
 

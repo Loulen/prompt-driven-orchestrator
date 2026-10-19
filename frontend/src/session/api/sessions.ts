@@ -5,6 +5,7 @@
 import type { DaemonStatus } from "../../platform/model/daemon";
 import type { TerminalTextResponse } from "../../shared/generated/TerminalTextResponse";
 import { request } from "../../shared/http/client";
+import { posteId } from "../model/poste";
 
 export function fetchSessions(): Promise<DaemonStatus> {
   return request<DaemonStatus>("GET", "/sessions");
@@ -69,7 +70,9 @@ export function fetchPane(
 }
 
 /** Write `text` into the input of a node's live session **without** pressing
- *  Enter: the user completes and submits it in the terminal. */
+ *  Enter: the user completes and submits it in the terminal. The request names
+ *  this browser's poste: the daemon refuses it (`409 not_pilot`) while another
+ *  poste pilots the terminal (ADR-0075). */
 export function sendTextToNodeTerminal(
   runId: string,
   nodeId: string,
@@ -79,6 +82,6 @@ export function sendTextToNodeTerminal(
   return request<TerminalTextResponse>(
     "POST",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/terminal-text`,
-    { body: { iter, text }, label: "Send to terminal" },
+    { body: { iter, text, poste: posteId() }, label: "Send to terminal" },
   );
 }

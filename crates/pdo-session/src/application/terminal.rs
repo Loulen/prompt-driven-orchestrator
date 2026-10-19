@@ -17,7 +17,7 @@ use crate::application::shared_terminal::{follow_ignore_size, SharedTerminalRegi
 use crate::domain::shared_terminal::ConnId;
 
 pub struct Terminals {
-    registry: SharedTerminalRegistry,
+    registry: Arc<SharedTerminalRegistry>,
     tmux: Arc<dyn Tmux>,
     lift: LiftWait,
     host: Arc<dyn ExtensionHost>,
@@ -28,7 +28,7 @@ pub struct Terminals {
 impl Terminals {
     pub fn new(tmux: Arc<dyn Tmux>, lift: LiftWait, host: Arc<dyn ExtensionHost>) -> Self {
         Self {
-            registry: SharedTerminalRegistry::default(),
+            registry: Arc::default(),
             ledger: Arc::new(SessionLedger::new(tmux.clone(), host.clone())),
             tmux,
             lift,
@@ -41,6 +41,13 @@ impl Terminals {
     /// `ledger` (CORE-61).
     pub fn with_ledger(mut self, ledger: Arc<SessionLedger>) -> Self {
         self.ledger = ledger;
+        self
+    }
+
+    /// The same use case over `registry`, shared with the gestures that read
+    /// who pilots a terminal.
+    pub fn with_registry(mut self, registry: Arc<SharedTerminalRegistry>) -> Self {
+        self.registry = registry;
         self
     }
 

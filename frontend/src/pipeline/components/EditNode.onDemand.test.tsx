@@ -42,7 +42,7 @@ function card(data: {
       nodeType: "agent",
       status: data.status ?? "pending",
       inputs: [],
-      outputs: [{ name: "out", side: "right" }],
+      outputs: [{ name: "out" }],
       interactive: false,
       onDemand: data.onDemand,
       inRun: data.inRun,

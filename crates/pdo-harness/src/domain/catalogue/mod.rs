@@ -163,6 +163,10 @@ impl Catalogue {
 pub struct CachedCatalogue {
     pub version: Option<String>,
     pub catalogue: Catalogue,
+    /// When the catalogue ladder last ran for it (RFC 3339 UTC): a version
+    /// re-check that finds the same version leaves it alone. `None` for a
+    /// catalogue never probed (an uninstalled binary).
+    pub probed_at: Option<String>,
 }
 #[cfg(test)]
 mod tests {

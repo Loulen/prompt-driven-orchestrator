@@ -14,21 +14,17 @@ function design(): EditorNodeDef {
     id: "design",
     name: "design",
     type: "agent",
-    inputs: [{ name: "brief", repeated: false, side: "left" }],
+    inputs: [{ name: "brief" }],
     outputs: [
       {
         name: "out",
-        repeated: false,
-        side: "right",
         frontmatter: { has_design_work: { type: "bool" } },
       },
       {
         name: "spec",
-        repeated: false,
-        side: "right",
         frontmatter: { ready: { type: "bool" } },
       },
-      { name: "notes", repeated: false, side: "right" },
+      { name: "notes" },
     ],
     interactive: false,
     view: { x: 0, y: 0 },
@@ -41,7 +37,7 @@ function orchestrator(): EditorNodeDef {
     name: "orchestrator",
     type: "agent",
     inputs: [],
-    outputs: [{ name: "out", repeated: false, side: "right" }],
+    outputs: [{ name: "out" }],
     interactive: false,
     view: { x: 300, y: 0 },
   };

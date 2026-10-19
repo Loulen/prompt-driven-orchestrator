@@ -5,23 +5,22 @@ nodes:
     name: Start
     type: start
     outputs:
-      - { name: user_prompt, side: right }
+      - { name: user_prompt }
     view: { x: 197, y: 23 }
   - id: end
     name: End
     type: end
     inputs:
-      - { name: result, side: left }
+      - { name: result }
     view: { x: 209, y: 378 }
   - id: RlRyUvAz
     name: Incident-debugger
     type: agent
     isolated_worktree: false
     inputs:
-      - { name: in, side: left }
+      - { name: in }
     outputs:
       - name: incidents
-        side: right
         frontmatter:
           Incident_found: { type: bool }
     view: { x: 202, y: 120 }
@@ -33,10 +32,9 @@ nodes:
     skills:
       - { id: pdo-orchestrate, name: pdo-orchestrate }
     inputs:
-      - { name: in, side: left }
+      - { name: in }
     outputs:
       - name: report
-        side: right
         frontmatter:
           fixed: { type: bool }
     view: { x: 203, y: 202 }
@@ -45,9 +43,9 @@ nodes:
     type: agent
     isolated_worktree: false
     inputs:
-      - { name: in, side: left }
+      - { name: in }
     outputs:
-      - { name: out, side: right }
+      - { name: out }
     view: { x: 209, y: 281 }
 edges:
   - source: { node: RlRyUvAz, port: incidents }

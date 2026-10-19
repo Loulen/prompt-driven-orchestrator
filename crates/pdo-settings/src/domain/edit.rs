@@ -61,6 +61,9 @@ pub fn check_ranges(edit: &UpdateInstanceConfig) -> Result<(), String> {
             "max_attachments_mb must be between 1 and {MAX_ATTACHMENTS_MB_LIMIT}"
         ));
     }
+    if let Some(endpoint) = edit.telemetry_otlp_endpoint.as_deref() {
+        pdo_telemetry::domain::setting::check_endpoint(endpoint)?;
+    }
     Ok(())
 }
 

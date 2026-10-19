@@ -4553,17 +4553,19 @@ mod tests {
                 "region2": { "break_received": false, "current_iter": 1, "done": true, "loop_node_id": "region2", "max_iter": 0 }
             },
             "name": "Golden Run (final)",
+            // The golden log's `PortBrief`s still carry their retired `side`: it
+            // reads back without error and is dropped.
             "node_defs": [
-                { "id": "start", "inputs": [], "node_type": "start", "outputs": [ { "name": "user_prompt", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "end", "inputs": [ { "name": "result", "side": "left" } ], "node_type": "end", "outputs": [], "view_x": null, "view_y": null },
-                { "id": "planner", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "worker", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "auto", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "stopped", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "stale", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "temp", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "interactive", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null },
-                { "id": "sw", "inputs": [ { "name": "task", "side": "left" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out", "side": "right" } ], "view_x": null, "view_y": null }
+                { "id": "start", "inputs": [], "node_type": "start", "outputs": [ { "name": "user_prompt" } ], "view_x": null, "view_y": null },
+                { "id": "end", "inputs": [ { "name": "result" } ], "node_type": "end", "outputs": [], "view_x": null, "view_y": null },
+                { "id": "planner", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "worker", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "auto", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "stopped", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "stale", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "temp", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "interactive", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null },
+                { "id": "sw", "inputs": [ { "name": "task" } ], "node_type": "agent", "isolated_worktree": false, "outputs": [ { "name": "out" } ], "view_x": null, "view_y": null }
             ],
             "nodes": {
                 "auto": {

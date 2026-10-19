@@ -6,7 +6,6 @@ nodes:
   type: start
   outputs:
   - name: user_prompt
-    side: bottom
   view:
     x: 535
     y: -194
@@ -15,7 +14,6 @@ nodes:
   type: end
   inputs:
   - name: result
-    side: top
   view:
     x: 523
     y: 517
@@ -28,7 +26,6 @@ nodes:
     y: -10
   outputs:
   - name: out
-    side: bottom
     frontmatter:
       Verdict:
         allowed:
@@ -38,9 +35,7 @@ nodes:
         - Not Reproduced
         type: enum
   - name: how_to_reproduce
-    side: right
   - name: bug-screenshots
-    side: right
     port_type: image_list
 - id: KHFCO0US
   name: implementer
@@ -51,7 +46,6 @@ nodes:
     y: -19
   outputs:
   - name: out
-    side: bottom
 - id: 9NOnrpKY
   name: Visual tester
   type: agent
@@ -61,7 +55,6 @@ nodes:
     y: 371
   outputs:
   - name: out
-    side: bottom
     frontmatter:
       Verdict:
         allowed:
@@ -70,7 +63,6 @@ nodes:
         - Minor_changes
         type: enum
   - name: screens-fixed
-    side: right
     port_type: image_list
 - id: mWllKR47
   name: Ship It
@@ -81,7 +73,6 @@ nodes:
     y: 399
   outputs:
   - name: out
-    side: bottom
 edges:
 - source:
     node: 9LvO3oid
@@ -90,24 +81,34 @@ edges:
     node: end
     port: result
   else: true
+  source_anchor:
+    side: bottom
+  target_side: top
 - source:
     node: KHFCO0US
     port: out
   target:
     node: 9NOnrpKY
     port: in
+  source_anchor:
+    side: bottom
 - source:
     node: start
     port: user_prompt
   target:
     node: 9LvO3oid
     port: in
+  source_anchor:
+    side: bottom
 - source:
     node: mWllKR47
     port: out
   target:
     node: end
     port: result
+  source_anchor:
+    side: bottom
+  target_side: top
 - source:
     node: 9LvO3oid
     port: how_to_reproduce
@@ -120,6 +121,8 @@ edges:
   target:
     node: KHFCO0US
     port: in
+  source_anchor:
+    side: bottom
 - source:
     node: 9LvO3oid
     port: bug-screenshots
@@ -135,6 +138,8 @@ edges:
   when:
     Verdict:
       eq: Bug
+  source_anchor:
+    side: bottom
 - source:
     node: 9NOnrpKY
     port: out
@@ -144,6 +149,8 @@ edges:
   when:
     Verdict:
       eq: Pass
+  source_anchor:
+    side: bottom
 - source:
     node: 9NOnrpKY
     port: out
@@ -151,6 +158,8 @@ edges:
     node: KHFCO0US
     port: in
   else: true
+  source_anchor:
+    side: bottom
 loops:
 - id: loop
   kind: bounded

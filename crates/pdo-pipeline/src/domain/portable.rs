@@ -221,8 +221,6 @@ mod tests {
     fn pipeline() -> PipelineDef {
         let port = |name: &str| Port {
             name: name.into(),
-            repeated: false,
-            side: None,
             port_type: Default::default(),
             frontmatter: None,
             when: None,
@@ -309,8 +307,6 @@ mod tests {
             .unwrap();
         worker.outputs.push(Port {
             name: "preview".into(),
-            repeated: false,
-            side: None,
             port_type: crate::domain::pipeline::PortType::Html,
             frontmatter: None,
             when: None,

@@ -1,0 +1,64 @@
+//! The ports of the telemetry context: what the hub needs from the outside
+//! world, as traits the composition root plugs adapters into.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
+
+use opentelemetry_sdk::metrics::{MeterProviderBuilder, SdkMeterProvider};
+use opentelemetry_sdk::trace::{SdkTracerProvider, TracerProviderBuilder};
+
+use super::status::ExportStatus;
+use crate::domain::attributes::RunFacts;
+use crate::domain::cost::CostSlice;
+use crate::domain::setting::{ExportTarget, OtlpSetting};
+
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// The OTLP export setting, every tier resolved, read fresh at each call.
+pub trait OtlpSettingSource: Send + Sync {
+    fn otlp(&self) -> BoxFuture<'_, OtlpSetting>;
+}
+
+/// What a Run's measures are attached to: the Projet, the repository named by
+/// its remote, git, the pipeline and the harness. Never the Actor.
+pub trait RunFactsSource: Send + Sync {
+    fn facts<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, RunFacts>;
+}
+
+/// A Run's cost and tokens, read once it ended.
+pub trait RunCosts: Send + Sync {
+    fn slices<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<CostSlice>>;
+}
+
+/// The agent sessions alive now, or `None` when they cannot be counted.
+pub trait LiveSessions: Send + Sync {
+    fn live(&self) -> BoxFuture<'_, Option<i64>>;
+}
+
+/// The providers the measures go through.
+pub struct Providers {
+    pub meters: SdkMeterProvider,
+    pub tracers: SdkTracerProvider,
+}
+
+/// The SDK's builders, already carrying the instance's resource, that each
+/// channel plugs its reader and its span exporter into. The hub owns the
+/// providers they build: a channel adds a destination, never the measures.
+pub struct Builders {
+    pub meters: MeterProviderBuilder,
+    pub tracers: TracerProviderBuilder,
+}
+
+/// The channel that pushes to a collector: the OTLP exporters in the daemon,
+/// in-memory ones in the tests. Every export reports its outcome to `status`.
+pub trait Exporters: Send + Sync {
+    fn attach(
+        &self,
+        target: &ExportTarget,
+        interval: Duration,
+        status: Arc<ExportStatus>,
+        builders: Builders,
+    ) -> Result<Builders, String>;
+}

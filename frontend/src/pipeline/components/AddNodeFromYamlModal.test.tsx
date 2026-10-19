@@ -46,7 +46,7 @@ function okResult(overrides: Partial<ParseNodeResult> = {}): ParseNodeResult {
       name: "Imported",
       type: "agent",
       inputs: [],
-      outputs: [{ name: "out", repeated: false, side: "right" }],
+      outputs: [{ name: "out" }],
       interactive: false,
       model: null,
       ...(overrides.spec ?? {}),

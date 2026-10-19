@@ -1,11 +1,11 @@
 /**
- * The Settings surface's map (#690, CONTEXT.md « Surface Settings »): four **categories**
+ * The Settings surface's map (#690, CONTEXT.md « Surface Settings »): the **categories**
  * on the rail, each a scrollable page cut into **sections** (the sub-categories the second
  * column lists and scroll-spies). Data, not JSX: the rail, the sub-column, the dirty
  * rollups and the confirm-close copy are all derived from this one list.
  */
 
-export type SettingsCategoryId = "general" | "agents" | "sandbox" | "diagnostics";
+export type SettingsCategoryId = "general" | "agents" | "sandbox" | "telemetry" | "diagnostics";
 
 export type SettingsSectionId =
   | "interface"
@@ -21,6 +21,8 @@ export type SettingsSectionId =
   | "sandbox"
   | "staging-profiles"
   | "worktree-provisioning"
+  | "otlp-export"
+  | "what-is-sent"
   | "price-table"
   | "harness-descriptors";
 
@@ -158,6 +160,26 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
     ],
   },
   {
+    // ADR-0090: the instance's metrics and traces, pushed to the organisation's collector.
+    id: "telemetry",
+    label: "Telemetry",
+    sections: [
+      {
+        id: "otlp-export",
+        label: "OTLP export",
+        description:
+          "Pushes this instance's metrics and traces to your organisation's collector. Takes effect without a restart.",
+      },
+      {
+        id: "what-is-sent",
+        label: "What is sent",
+        description:
+          "Every measure is attached to the instance, the project, the repository, git, the pipeline, the harness and the model. Nothing else leaves.",
+        readOnly: true,
+      },
+    ],
+  },
+  {
     id: "diagnostics",
     label: "Diagnostics",
     sections: [
@@ -200,7 +222,10 @@ export type SettingsFieldId =
   | "default-sandbox"
   | "update-check"
   | "manager-enabled"
-  | "manager-profile";
+  | "manager-profile"
+  | "telemetry-otlp"
+  | "telemetry-endpoint"
+  | "telemetry-headers";
 
 export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "session-cap": "runtime-limits",
@@ -219,6 +244,9 @@ export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "update-check": "version-update",
   "manager-enabled": "pipeline-manager",
   "manager-profile": "pipeline-manager",
+  "telemetry-otlp": "otlp-export",
+  "telemetry-endpoint": "otlp-export",
+  "telemetry-headers": "otlp-export",
 };
 
 export function categoryOf(section: SettingsSectionId): SettingsCategory {

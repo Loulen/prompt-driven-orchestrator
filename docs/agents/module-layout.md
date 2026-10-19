@@ -48,7 +48,7 @@ Frontend: `frontend/src/<context>/{api,model,store,components}/`, plus `shared/`
 - **Architecture test.** A `domain/` module imports nothing technical and no `adapters::`: no
   sqlx, no axum, no `tokio::process` (`crates/pdo/tests/architecture.rs`, proven on the fixtures
   of `crates/pdo/tests/fixtures/architecture/`). It covers every crate with a `src/domain/`, and
-  checks that those are exactly the twelve contexts.
+  checks that those are exactly the thirteen contexts.
 - **File size.** A production file has **at most 400 lines**, Rust and TypeScript. Tests are not
   counted (`tests/`, a `#[cfg(test)]` module, `*.test.ts(x)`), nor is `shared/generated/`. The
   baseline of the files that were already too big when the rule landed
@@ -135,6 +135,14 @@ and unit tests beside the code.
   (`crates/pdo/src/ports/trigger_fires.rs`).
 - `workspace` (`crates/pdo-workspace`, `frontend/src/workspace/`): the Projets, the repositories,
   the recent ones, git (`adapters/git/`, behind the `Git` port), the worktrees, the provisioning.
+- `telemetry` (`crates/pdo-telemetry`, `frontend/src/settings/` for its page): the instance's
+  metrics and traces pushed over OTLP (ADR-0090). The pure rules (the setting, the attributes, a
+  repository named by its remote and never by a path, the Run lifecycle read off the events) are
+  `domain/`; the hub that rebuilds its providers when the setting changes, the instruments and the
+  recorder of the Runs (a subscriber of the kernel's bus) are `application/`; the OTLP exporters,
+  the routes and the layer that measures every request are `adapters/`. A Run's facts and cost are
+  read through `RunFactsSource` and `RunCosts`, which the composition root answers
+  (`crates/pdo/src/ports/telemetry_runs.rs`). The Actor is never an attribute.
 - `settings` (`crates/pdo-settings`, `frontend/src/settings/`): the last context of the map, it
   depends on the others and never the other way round. **Each context owns its instance
   defaults** — their env var, their built-in value, their `stored → env → default` resolver and how

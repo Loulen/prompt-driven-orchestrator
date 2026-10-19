@@ -63,6 +63,27 @@ impl DiskLiveFacts {
     }
 }
 
+impl DiskLiveFacts {
+    /// The Run's cost, ventilated by execution and by model × effort, with
+    /// the tokens the fold counted: what the instance's telemetry records once
+    /// the Run ended. Reads the disk: call it off the runtime.
+    pub fn cost_breakdown(
+        &self,
+        run: &RunState,
+        events: &[Event],
+    ) -> crate::domain::run_cost::RunCostBreakdown {
+        let (projects_root, stores, prices) = self.cost_sources(run);
+        compute_run_cost_breakdown_cached(
+            events,
+            &projects_root,
+            &stores,
+            &self.repo_root(run),
+            &run.run_id,
+            &prices,
+        )
+    }
+}
+
 impl LiveFacts for DiskLiveFacts {
     fn fill<'a>(&'a self, run: &'a mut RunState, events: &'a [Event]) -> BoxFuture<'a, ()> {
         Box::pin(async move {

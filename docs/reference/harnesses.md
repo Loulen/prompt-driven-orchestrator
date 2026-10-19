@@ -16,6 +16,7 @@ PDO can launch, attach, resume, and complete nodes with every built-in harness.
 | --- | --- | --- | --- | --- | --- |
 | **Cost** | Show the Run cost | ✅ derived: per-message token usage × the price table | ❌ | ✅ reported: the harness's own billing unit × a published constant | ✅ reported: the harness's own billing unit × a published constant |
 | **Transcript** | Find the session transcript | ✅ the JSONL transcript, keyed by working directory | ❌ | ✅ the event journal, keyed by the session identity PDO imposed | ✅ the session JSONL in the working directory's folder, keyed by the session identity PDO imposed |
+| **Transcript tab** | Show the session's messages and folded tool calls in the node's Transcript tab | ✅ read: the transcript's user and assistant records, thinking dropped | ❌ | ✅ read: the journal's message and tool events, reasoning dropped | ✅ read: the session's user, assistant and tool-result messages, thinking dropped |
 | **Observed model & effort** | Show the model and effort the execution actually ran on (Stats › Cost › By model) | ✅ observed: the model per message; the effort stays requested | ❌ | ✅ observed: the model and the effort, from the source | ✅ observed: the model and the effort, from the source |
 | **End of turn** | Complete a node when its turn ends | ✅ an injected `Stop` hook, plus the transcript tail as the sweep's fallback | ❌ | ✅ the journal's explicit `assistant.turn_end` event | ✅ an injected `agent_settled` extension, plus the session tail as the sweep's fallback |
 | **Usage-limit menu** | Detect the harness usage-limit menu | ✅ the interactive "wait for limit to reset" menu, matched in a pane capture | ❌ | ❌ | ❌ |
@@ -40,6 +41,22 @@ Custom descriptors in `~/.pdo/harnesses/descriptors.yaml` can launch, attach, re
 | `pi` in the sandbox image | PDO does not provide the sandbox image. For a sandboxed `pi` node your image must contain the `pi` binary: PDO checks it with a `which` at spawn, and a node whose binary is missing goes `Interrupted` with that reason (ADR-0063) |
 
 Outside sandboxed runs, PDO does not stage any harness's home.
+
+## Model catalogue
+
+The models and efforts a picker offers come from the installed binary: PDO reads them once,
+then again only when the binary's `--version` changes. A binary can change what it offers
+without changing its version. **Refresh models** probes the catalogue again anyway: in
+Settings › Diagnostics › Harness descriptors (one row per harness, with its version, its number
+of models and when they were probed), or with ↻ beside the model of an agentic profile. A refresh
+asked while a probe of the same harness runs waits for that probe instead of starting another,
+and every open browser reads the new list.
+
+API: `POST /settings/harnesses/<name>/refresh` answers the harness's entry of
+`GET /settings → harness_descriptors.harnesses` (`probed_at` included), `404` for a harness
+PDO does not resolve. It runs the harness's binary on demand: an extension of rights authorizes it
+as `instance_settings` × `refresh_catalogue`. The event stream (`/ws`) then carries
+`{"type": "harness_catalogue_changed", "harness": "<name>"}`.
 
 Inside a sandbox, the image and profile define the available harness configuration.
 

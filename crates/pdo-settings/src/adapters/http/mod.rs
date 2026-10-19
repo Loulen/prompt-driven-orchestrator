@@ -6,13 +6,14 @@
 //! proxy whitelist (`frontend/vite.config.ts`).
 
 mod agent_profiles;
+mod harnesses;
 mod settings;
 
 use std::sync::Arc;
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 
 pub use agent_profiles::WriteAgentProfileRequest;
@@ -29,6 +30,10 @@ pub fn router(settings: Arc<Settings>) -> Router {
         // `GET` answers the per-field {effective, source, stored, env, default}
         // view; `PUT` writes the stored tier, with fail-fast validation.
         .route("/settings", get(settings::get).put(settings::put))
+        .route(
+            "/settings/harnesses/{name}/refresh",
+            post(harnesses::refresh),
+        )
         .route(
             "/settings/agent-profiles",
             get(agent_profiles::list).post(agent_profiles::create),

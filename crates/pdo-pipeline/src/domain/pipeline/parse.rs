@@ -2,7 +2,8 @@
 
 use super::definition::PipelineDef;
 use super::diagnostic::{Diagnostic, ParseError, ParseResult, Severity};
-use super::node::{NodeDef, NodeType, Port, PortSide, PortType};
+use super::legacy_ports::convert_legacy_ports;
+use super::node::{NodeDef, NodeType, Port, PortType};
 use super::normalize::normalize_node_value;
 use super::references::{
     dangling_edge_references, intermediate_outputs_on_edges, validate_switch_when_clauses,
@@ -47,20 +48,11 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
         }
     }
 
-    let mut pipeline: PipelineDef = serde_yaml::from_value(raw.clone())?;
+    // A port's retired `side` moves onto its edges and goes, with its `repeated`:
+    // the document is rewritten only when it is saved (or by `pdo migrate`).
+    convert_legacy_ports(&mut raw);
 
-    for node in &mut pipeline.nodes {
-        for port in &mut node.inputs {
-            if port.side.is_none() {
-                port.side = Some(PortSide::Left);
-            }
-        }
-        for port in &mut node.outputs {
-            if port.side.is_none() {
-                port.side = Some(PortSide::Right);
-            }
-        }
-    }
+    let mut pipeline: PipelineDef = serde_yaml::from_value(raw.clone())?;
 
     for node in &mut pipeline.nodes {
         match node.node_type {
@@ -75,8 +67,6 @@ pub fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
                 if !has_default {
                     node.outputs.push(Port {
                         name: "default".into(),
-                        repeated: false,
-                        side: Some(PortSide::Right),
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,

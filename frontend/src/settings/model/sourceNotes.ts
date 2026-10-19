@@ -144,3 +144,28 @@ export function defaultSandboxSourceNote(field: EnumSettingFieldWithReason): str
   }
   return `Source: built-in default (${field.default ?? "off"}).`;
 }
+
+/** Which tier the OTLP export switch comes from (ADR-0090). Off by default; both
+ *  directions of a save are a stored decision. */
+export function telemetryOtlpSourceNote(field: BoolSettingField): string {
+  const onOff = (v: boolean) => (v ? "on" : "off");
+  const envDisplay = field.env != null ? `PDO_TELEMETRY_OTLP=${onOff(field.env)}` : null;
+  if (field.source === "stored") {
+    const base = `Source: stored setting (${onOff(field.effective)}).`;
+    return envDisplay ? `${base} Env ${envDisplay} is set but overridden.` : base;
+  }
+  if (field.source === "env") return `Source: env ${envDisplay ?? "PDO_TELEMETRY_OTLP"}.`;
+  return "Source: built-in default (off). Nothing leaves this instance.";
+}
+
+/** Which tier the collector's address comes from (ADR-0090). No built-in address. */
+export function telemetryEndpointSourceNote(field: StringSettingField): string {
+  const envDisplay = field.env ? `PDO_TELEMETRY_OTLP_ENDPOINT=${field.env}` : null;
+  if (field.source === "stored") {
+    return envDisplay
+      ? `Source: stored setting. Env ${envDisplay} is set but overridden.`
+      : "Source: stored setting.";
+  }
+  if (field.source === "env") return `Source: env ${envDisplay ?? "PDO_TELEMETRY_OTLP_ENDPOINT"}.`;
+  return "Source: none set.";
+}

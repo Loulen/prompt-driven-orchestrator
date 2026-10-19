@@ -9,7 +9,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 
 describe("InspectorPortRow — I1 hairline layout", () => {
   const baseProps = {
-    port: { name: "in", repeated: false, side: "left" as const },
+    port: { name: "in" },
     onUpdate: vi.fn(),
     onRemove: vi.fn(),
   };
@@ -29,35 +29,27 @@ describe("InspectorPortRow — I1 hairline layout", () => {
     expect(row.className).not.toContain("border-b");
   });
 
-  it("renders the repeated control as a toggle switch", () => {
+  it("offers neither a side (L/T/R/B) nor a repeated toggle", () => {
     render(<InspectorPortRow {...baseProps} />, { wrapper: Wrapper });
-    const toggle = screen.getByRole("switch", { name: /repeated/i });
-    expect(toggle).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /repeated/i })).toBeNull();
+    expect(screen.queryByText("rpt")).toBeNull();
+    for (const side of ["left", "top", "right", "bottom"]) {
+      expect(screen.queryByTitle(side)).toBeNull();
+    }
   });
 
-  it("repeated toggle is off when port.repeated=false", () => {
-    render(<InspectorPortRow {...baseProps} />, { wrapper: Wrapper });
-    const toggle = screen.getByRole("switch", { name: /repeated/i });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-  });
-
-  it("repeated toggle is on when port.repeated=true", () => {
+  it("renders its trailing controls between the name and the delete button", () => {
     render(
-      <InspectorPortRow
-        {...baseProps}
-        port={{ ...baseProps.port, repeated: true }}
-      />,
+      <InspectorPortRow {...baseProps}>
+        <select data-testid="trailing" />
+      </InspectorPortRow>,
       { wrapper: Wrapper },
     );
-    const toggle = screen.getByRole("switch", { name: /repeated/i });
-    expect(toggle).toHaveAttribute("aria-checked", "true");
-  });
-
-  it("clicking the repeated toggle calls onUpdate", () => {
-    const onUpdate = vi.fn();
-    render(<InspectorPortRow {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
-    fireEvent.click(screen.getByRole("switch", { name: /repeated/i }));
-    expect(onUpdate).toHaveBeenCalledWith({ repeated: true });
+    const row = screen.getByTestId("inspector-port-in");
+    const trailing = screen.getByTestId("trailing");
+    const remove = screen.getByLabelText("Delete port");
+    expect(row.contains(trailing)).toBe(true);
+    expect(trailing.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("name input fires onUpdate on change", () => {
@@ -65,13 +57,6 @@ describe("InspectorPortRow — I1 hairline layout", () => {
     render(<InspectorPortRow {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
     fireEvent.change(screen.getByDisplayValue("in"), { target: { value: "review" } });
     expect(onUpdate).toHaveBeenCalledWith({ name: "review" });
-  });
-
-  it("side picker fires onUpdate with new side", () => {
-    const onUpdate = vi.fn();
-    render(<InspectorPortRow {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
-    fireEvent.click(screen.getByTitle("top"));
-    expect(onUpdate).toHaveBeenCalledWith({ side: "top" });
   });
 
   it("delete button fires onRemove", () => {

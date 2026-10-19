@@ -100,26 +100,26 @@ export default function OutputPortCard({
           isLast
           onUpdate={onUpdate}
           onRemove={onRemove}
-        />
+        >
+          {/* The type sits in the name row, where the side (L/T/R/B) and rpt were. */}
+          <select
+            value={portType}
+            onChange={(e) => onUpdate({ port_type: e.target.value as PortType })}
+            aria-label="Output type"
+            className="shrink-0 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-mono text-fg outline-none focus:border-acc"
+            style={{ fontSize: "10px" }}
+            data-testid="port-type-select"
+          >
+            {PORT_TYPE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </InspectorPortRow>
       </div>
       {!collapsed && (
         <div className="op-body">
-          <div className="flex items-center gap-2 px-2 py-1" data-testid="port-type-selector">
-            <span className="text-fg-3" style={{ fontSize: "10px" }}>Type</span>
-            <select
-              value={portType}
-              onChange={(e) => onUpdate({ port_type: e.target.value as PortType })}
-              className="rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-mono text-fg outline-none focus:border-acc"
-              style={{ fontSize: "10px" }}
-              data-testid="port-type-select"
-            >
-              {PORT_TYPE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
           <div className="flex flex-col gap-1 px-2 py-1">
             <label
               className="flex items-center gap-2 text-fg-3"

@@ -1,11 +1,32 @@
-import { useEffect, useState } from "react";
-import { fetchHarnessCatalog } from "../api/catalog";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchHarnessCatalog, refreshHarnessModels } from "../api/catalog";
 import { harnessCatalog, type HarnessCatalog } from "../model/catalog";
 
 /**
+ * Window bus fired when a harness's model catalogue was probed again: here, or
+ * in another browser (the daemon's `harness_catalogue_changed`, relayed by the
+ * App). Every surface that shows a catalogue reads it again.
+ */
+export const HARNESS_CATALOGUE_CHANGED = "pdo:harness-catalogue-changed";
+
+export function announceHarnessCatalogueChanged() {
+  window.dispatchEvent(new Event(HARNESS_CATALOGUE_CHANGED));
+}
+
+/** Run `onChange` at each {@link HARNESS_CATALOGUE_CHANGED}. */
+export function useHarnessCatalogueChanged(onChange: () => void, enabled = true) {
+  useEffect(() => {
+    if (!enabled) return;
+    window.addEventListener(HARNESS_CATALOGUE_CHANGED, onChange);
+    return () => window.removeEventListener(HARNESS_CATALOGUE_CHANGED, onChange);
+  }, [onChange, enabled]);
+}
+
+/**
  * The harness catalog for surfaces that don't already hold `GET /settings` — the
- * node inspector and the Projet modal (#586). One fetch per mount: the embedded
- * floor shows until it resolves, and a failed fetch keeps that fallback (the
+ * node inspector, the Projet modal, the agentic profile modal (#586). Fetched on
+ * mount and again whenever a catalogue was probed again: the embedded floor
+ * shows until the first answer, and a failed fetch keeps the last one (the
  * daemon re-resolves authoritatively at spawn, so a stale picker never
  * mis-launches a node).
  *
@@ -14,18 +35,53 @@ import { harnessCatalog, type HarnessCatalog } from "../model/catalog";
  */
 export function useHarnessCatalog(): HarnessCatalog {
   const [catalog, setCatalog] = useState<HarnessCatalog>(() => harnessCatalog(null));
-  useEffect(() => {
-    let cancelled = false;
+  const mounted = useRef(true);
+  const load = useCallback(() => {
     fetchHarnessCatalog()
       .then((served) => {
-        if (!cancelled) setCatalog(served);
+        if (mounted.current) setCatalog(served);
       })
       .catch(() => {
-        /* keep the floor fallback — the picker is never empty */
+        /* keep the last catalogue — the picker is never empty */
       });
-    return () => {
-      cancelled = true;
-    };
   }, []);
+  useEffect(() => {
+    mounted.current = true;
+    load();
+    return () => {
+      mounted.current = false;
+    };
+  }, [load]);
+  useHarnessCatalogueChanged(load);
   return catalog;
+}
+
+/**
+ * « Refresh models »: probe a harness's catalogue again. While a probe of a
+ * harness is in flight its button spins and a second click asks nothing (the
+ * daemon would join the running probe anyway). Once it answers, every surface
+ * of this tab reads the catalogue again; the other browsers hear it from the
+ * daemon.
+ */
+export function useRefreshModels() {
+  const [probing, setProbing] = useState<ReadonlySet<string>>(() => new Set());
+  const inFlight = useRef(new Set<string>());
+  const [failed, setFailed] = useState<Record<string, string>>({});
+  const refresh = useCallback(async (harness: string) => {
+    if (inFlight.current.has(harness)) return;
+    inFlight.current.add(harness);
+    setProbing(new Set(inFlight.current));
+    setFailed(({ [harness]: _dropped, ...rest }) => rest);
+    try {
+      await refreshHarnessModels(harness);
+      announceHarnessCatalogueChanged();
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Refresh failed";
+      setFailed((current) => ({ ...current, [harness]: message }));
+    } finally {
+      inFlight.current.delete(harness);
+      setProbing(new Set(inFlight.current));
+    }
+  }, []);
+  return { probing, failed, refresh };
 }

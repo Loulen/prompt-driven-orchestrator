@@ -45,11 +45,9 @@ nodes:
     isolated_worktree: false
     inputs:
       - name: task
-        side: left
         description: The task to plan
     outputs:
       - name: plan
-        side: right
         description: The generated plan
     view: { x: 250, y: 100 }
   - id: sw1
@@ -57,12 +55,9 @@ nodes:
     type: switch
     inputs:
       - name: in
-        side: left
     outputs:
       - name: pass
-        side: right
       - name: default
-        side: right
     view: { x: 500, y: 100 }
   - id: loop1
     name: review-loop
@@ -70,14 +65,10 @@ nodes:
     max_iter: 5
     inputs:
       - name: in
-        side: left
       - name: break
-        side: left
     outputs:
       - name: body
-        side: right
       - name: done
-        side: right
     view: { x: 500, y: 300 }
   - id: fe1
     name: per-item
@@ -85,14 +76,10 @@ nodes:
     isolated_worktree: false
     inputs:
       - name: in
-        side: left
       - name: break
-        side: left
     outputs:
       - name: body
-        side: right
       - name: done
-        side: right
     view: { x: 750, y: 100 }
   - id: gather1
     name: gather
@@ -100,7 +87,6 @@ nodes:
     isolated_worktree: true
     outputs:
       - name: summary
-        side: right
     view: { x: 750, y: 300 }
   - id: impl1
     name: implementer
@@ -108,17 +94,14 @@ nodes:
     isolated_worktree: true
     inputs:
       - name: in
-        side: left
     outputs:
       - name: out
-        side: right
     view: { x: 1000, y: 200 }
   - id: end
     name: End
     type: end
     inputs:
       - name: result
-        side: left
     outputs: []
     view: { x: 1200, y: 200 }
 edges:

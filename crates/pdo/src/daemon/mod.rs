@@ -51,6 +51,9 @@ pub async fn serve_with_config(
         pdo_kernel::event_bus::BroadcastEventBus::from_sender(bus_tx.clone()),
     );
 
+    // The telemetry reads the Runs' events from the first one on.
+    let telemetry_events = bus_tx.subscribe();
+
     let self_writes = SelfWrites::new();
 
     let (run_modified_tx, run_modified_rx) =
@@ -120,8 +123,13 @@ pub async fn serve_with_config(
         triggers,
         stats,
         settings,
+        telemetry,
+        telemetry_runs,
         router,
     } = wire_contexts(resources);
+    // ADR-0090: the stored setting applies from the start; off, nothing is
+    // built and nothing connects.
+    telemetry.reload().await;
     // API 0.11: the extensions read the names of the Projets from the first
     // request on.
     load_project_names(&SqliteProjects::new(db.clone()), &project_names).await;
@@ -171,7 +179,8 @@ pub async fn serve_with_config(
     origins::log_allowed_ws_origins(&config.allowed_ws_origins);
 
     let loops = Loops::start(&run, &session, &triggers, &config)
-        .relay_pipeline_modifications(&run, run_modified_rx);
+        .relay_pipeline_modifications(&run, run_modified_rx)
+        .record_telemetry(&telemetry, telemetry_runs, telemetry_events);
 
     let task = tokio::spawn(async move {
         let _watcher = run_watcher; // keep the file watcher alive for the server's lifetime

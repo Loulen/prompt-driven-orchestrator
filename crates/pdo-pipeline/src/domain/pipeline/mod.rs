@@ -7,6 +7,7 @@
 mod definition;
 mod diagnostic;
 mod edge;
+mod legacy_ports;
 mod node;
 mod normalize;
 mod parse;
@@ -18,6 +19,9 @@ pub use definition::{
 };
 pub use diagnostic::{Diagnostic, ParseError, ParseResult, Severity};
 pub use edge::{EdgeAnchor, EdgeDef, EdgeEndpoint, EdgeRouteMode, EdgeSource, EdgeWaypoint};
+pub use legacy_ports::{
+    convert_legacy_ports, node_has_legacy_port_key, strip_legacy_port_keys, LegacyPortsReport,
+};
 pub use node::{
     is_image_file, FrontmatterFieldDecl, NodeDef, NodeType, Port, PortSide, PortType, ViewPosition,
     IMAGE_EXTENSIONS,
@@ -1377,10 +1381,10 @@ edges:
         let edge = &result.pipeline.edges[0];
         let src = edge.source_anchor.expect("source anchor parsed");
         assert_eq!(src.side, PortSide::Bottom);
-        assert_eq!(src.offset, 80.0);
+        assert_eq!(src.offset, Some(80.0));
         let tgt = edge.target_anchor.expect("target anchor parsed");
         assert_eq!(tgt.side, PortSide::Top);
-        assert_eq!(tgt.offset, 36.0);
+        assert_eq!(tgt.offset, Some(36.0));
 
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
         let reparsed: PipelineDef = serde_yaml::from_str(&serialized).unwrap();
@@ -1637,100 +1641,93 @@ nodes:
         assert!(schema["score"].allowed.is_none());
     }
 
-    #[test]
-    fn port_side_defaults_left_for_inputs_right_for_outputs() {
-        let result = parse_pipeline(VALID_MINIMAL).unwrap();
-        let node = result
-            .pipeline
-            .nodes
-            .iter()
-            .find(|n| n.id == "ab12cd34")
-            .unwrap();
-        assert_eq!(node.inputs[0].side, Some(PortSide::Left));
-        assert_eq!(node.outputs[0].side, Some(PortSide::Right));
-    }
-
-    #[test]
-    fn parses_explicit_port_side_all_four_values() {
-        let yaml = with_start_end(
-            r#"
-name: sides-test
+    /// A pipeline saved before ports lost their side and `repeated`: an output
+    /// leaving by the bottom, one by the right, an End landed on from the top.
+    const LEGACY_SIDED_PIPELINE: &str = r#"
+name: legacy-sides
 nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - { name: user_prompt, side: right }
   - id: ab12cd34
     name: worker
     type: agent
     isolated_worktree: false
-    inputs:
-      - name: left-in
-        side: left
-      - name: right-in
-        side: right
-      - name: top-in
-        side: top
-      - name: bottom-in
-        side: bottom
     outputs:
-      - name: left-out
-        side: left
-      - name: right-out
-        side: right
-      - name: top-out
-        side: top
-      - name: bottom-out
-        side: bottom
-"#,
+      - { name: plan, side: bottom, repeated: true }
+      - { name: notes, side: right }
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - { name: result, side: top }
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: ab12cd34, port: in }
+  - source: { node: ab12cd34, port: plan }
+    target: { node: end, port: result }
+    repeated: true
+  - source: { node: ab12cd34, port: notes }
+    target: { node: end, port: result }
+    target_anchor: { side: right, offset: 12 }
+"#;
+
+    #[test]
+    fn a_legacy_pipeline_reopens_with_its_edges_at_the_same_place() {
+        let result = parse_pipeline(LEGACY_SIDED_PIPELINE).unwrap();
+        let edges = &result.pipeline.edges;
+        // The default departure (`right`) and landing (`left` on a work node)
+        // stay implicit.
+        assert_eq!(edges[0].source_anchor, None);
+        assert_eq!(edges[0].target_side, None);
+        // A `bottom` output leaves from the middle of the bottom side…
+        assert_eq!(
+            edges[1].source_anchor,
+            Some(EdgeAnchor {
+                side: PortSide::Bottom,
+                offset: None
+            })
         );
-        let result = parse_pipeline(&yaml).unwrap();
-        let node = result
-            .pipeline
-            .nodes
-            .iter()
-            .find(|n| n.id == "ab12cd34")
-            .unwrap();
-
-        assert_eq!(node.inputs[0].side, Some(PortSide::Left));
-        assert_eq!(node.inputs[1].side, Some(PortSide::Right));
-        assert_eq!(node.inputs[2].side, Some(PortSide::Top));
-        assert_eq!(node.inputs[3].side, Some(PortSide::Bottom));
-
-        assert_eq!(node.outputs[0].side, Some(PortSide::Left));
-        assert_eq!(node.outputs[1].side, Some(PortSide::Right));
-        assert_eq!(node.outputs[2].side, Some(PortSide::Top));
-        assert_eq!(node.outputs[3].side, Some(PortSide::Bottom));
+        // …and lands on the End's `top`, as its `result` declared.
+        assert_eq!(edges[1].target_side, Some(PortSide::Top));
+        // The accumulation stays on the edge.
+        assert!(edges[1].repeated);
+        // An edge already anchored keeps its anchor.
+        assert_eq!(edges[2].source_anchor, None);
+        assert_eq!(edges[2].target_side, None);
+        assert_eq!(
+            edges[2].target_anchor.map(|a| a.side),
+            Some(PortSide::Right)
+        );
     }
 
     #[test]
-    fn port_side_omitted_gets_contextual_default() {
-        let yaml = with_start_end(
-            r#"
-name: defaults-test
-nodes:
-  - id: ab12cd34
-    name: worker
-    type: agent
-    isolated_worktree: false
-    inputs:
-      - name: a
-      - name: b
-        side: top
-    outputs:
-      - name: x
-      - name: y
-        side: bottom
-"#,
+    fn a_parsed_pipeline_saves_back_without_port_side_nor_repeated() {
+        let result = parse_pipeline(LEGACY_SIDED_PIPELINE).unwrap();
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let doc: serde_yaml::Value = serde_yaml::from_str(&serialized).unwrap();
+        for node in doc["nodes"].as_sequence().unwrap() {
+            for key in ["inputs", "outputs"] {
+                for port in node[key].as_sequence().into_iter().flatten() {
+                    assert!(port.get("side").is_none(), "{serialized}");
+                    assert!(port.get("repeated").is_none(), "{serialized}");
+                }
+            }
+        }
+        assert!(
+            serialized.contains("source_anchor:\n    side: bottom\n"),
+            "{serialized}"
         );
-        let result = parse_pipeline(&yaml).unwrap();
-        let node = result
-            .pipeline
-            .nodes
-            .iter()
-            .find(|n| n.id == "ab12cd34")
-            .unwrap();
-
-        assert_eq!(node.inputs[0].side, Some(PortSide::Left));
-        assert_eq!(node.inputs[1].side, Some(PortSide::Top));
-        assert_eq!(node.outputs[0].side, Some(PortSide::Right));
-        assert_eq!(node.outputs[1].side, Some(PortSide::Bottom));
+        assert!(!serialized.contains("offset: null"), "{serialized}");
+        // Saved, it reopens identical.
+        let reopened = parse_pipeline(&serialized).unwrap().pipeline;
+        assert_eq!(
+            serde_yaml::to_string(&reopened).unwrap(),
+            serialized,
+            "a converted pipeline round-trips"
+        );
     }
 
     #[test]
@@ -1808,7 +1805,6 @@ nodes:
         );
         assert_eq!(mg.inputs.len(), 1);
         assert_eq!(mg.inputs[0].name, "branches");
-        assert!(mg.inputs[0].repeated);
         assert_eq!(mg.outputs.len(), 1);
         assert_eq!(mg.outputs[0].name, "merged");
     }
@@ -2014,8 +2010,6 @@ skills:
             inputs: vec![],
             outputs: vec![Port {
                 name: "out".into(),
-                repeated: false,
-                side: None,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -2250,7 +2244,6 @@ edges:
         assert_eq!(sw.outputs.len(), 2);
         assert_eq!(sw.outputs[1].name, "default");
         assert!(sw.outputs[1].when.is_none());
-        assert_eq!(sw.outputs[1].side, Some(PortSide::Right));
     }
 
     #[test]
@@ -2293,8 +2286,7 @@ edges:
             .find(|n| n.id == "ab000001")
             .unwrap();
         assert_eq!(sw.outputs.len(), 2);
-        let default_port = sw.outputs.iter().find(|p| p.name == "default").unwrap();
-        assert_eq!(default_port.side, Some(PortSide::Bottom));
+        assert!(sw.outputs.iter().any(|p| p.name == "default"));
     }
 
     #[test]

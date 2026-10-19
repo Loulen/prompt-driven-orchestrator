@@ -61,14 +61,16 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   // ADR-0086: `on_demand` is SEMANTIC — it decides whether the runtime
   // launches the node at all.
   node: ["id", "name", "type", "interactive", "agent_choice", "skills", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "orchestrator", "on_demand", "auto_fail", "inputs", "outputs"] satisfies (keyof EditorNodeDef)[],
-  // `side` is SEMANTIC today (emitted, not stripped) — deliberate, see #355 D5:
-  // the node-library star already treats port side as identity, so the pipeline
-  // diff must agree or the two stars contradict each other on the same edit.
-  inputPort: ["name", "repeated", "required", "side", "port_type", "frontmatter"] satisfies (keyof PortDef)[],
+  // A port has no side (where a wire leaves and lands is the edge's layout:
+  // `source_anchor`, `target_anchor`, `target_side`) nor accumulation flag
+  // (`repeated` belongs to the edge).
+  inputPort: ["name", "required", "port_type", "frontmatter"] satisfies (keyof PortDef)[],
   // CORE-45: `intermediate` is SEMANTIC — an Output intermédiaire leaves the
   // completion contract and the wiring, so the star and the diff must see it.
-  outputPort: ["name", "repeated", "required", "side", "port_type", "frontmatter", "when", "instructions", "intermediate"] satisfies (keyof PortDef)[],
-  edge: ["source", "target", "when", "else"] satisfies (keyof EdgeDef)[],
+  outputPort: ["name", "required", "port_type", "frontmatter", "when", "instructions", "intermediate"] satisfies (keyof PortDef)[],
+  // `repeated` (#149): the accumulation across iterations, which only the edge
+  // carries.
+  edge: ["source", "target", "when", "else", "repeated"] satisfies (keyof EdgeDef)[],
   loopRegion: ["id", "kind", "members", "max_iter", "over"] satisfies (keyof LoopRegion)[],
   note: [], // the whole `notes` block is layout — no semantic note field
 };

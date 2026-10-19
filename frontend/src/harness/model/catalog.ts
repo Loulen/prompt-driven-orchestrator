@@ -36,6 +36,9 @@ export interface HarnessOption {
   hasEffort: boolean;
   /** The probed binary version the offer was read at, for the provenance line. */
   version: string | null;
+  /** When the daemon last probed this harness's catalogue (RFC 3339); `null`
+   *  when never. Optional so a literal predating it still typechecks. */
+  probedAt?: string | null;
 }
 
 /** The picker's two sections (#586): the embedded floor, and the disk-declared
@@ -88,6 +91,7 @@ export function harnessCatalog(
       modelEfforts: h.model_efforts ?? {},
       hasEffort: h.has_effort ?? true,
       version: h.version ?? null,
+      probedAt: h.probed_at ?? null,
     });
   }
   return catalog;
@@ -152,4 +156,23 @@ export function effortOffer(
 export function resolveEditorHarness(node: { pin_harness?: string | null }): string {
   const pin = node.pin_harness;
   return pin && pin !== "" ? pin : HARNESS_FLOOR;
+}
+
+/** `4 models`, `1 model`, `no model listed`: the size of a served catalogue. */
+export function modelCount(n: number): string {
+  if (n === 0) return "no model listed";
+  return `${n} model${n === 1 ? "" : "s"}`;
+}
+
+/** `probed just now`, `probed 12 min ago`, `probed 3 days ago`: when the
+ *  catalogue was last probed. `not probed` for a harness never probed. */
+export function probedAgo(probedAt: string | null | undefined, now = new Date()): string {
+  const t = probedAt ? Date.parse(probedAt) : Number.NaN;
+  if (Number.isNaN(t)) return "not probed";
+  const s = Math.max(0, Math.round((now.getTime() - t) / 1000));
+  if (s < 60) return "probed just now";
+  if (s < 3600) return `probed ${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `probed ${Math.round(s / 3600)} h ago`;
+  const days = Math.round(s / 86400);
+  return `probed ${days} day${days === 1 ? "" : "s"} ago`;
 }

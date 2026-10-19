@@ -4,6 +4,9 @@
 //! to tell a slow opening or a hostile page from the log alone; the plain HTTP
 //! requests are not journaled.
 //!
+//! Each opening and closing also moves the count of open WebSockets the
+//! telemetry reads (`pdo_kernel::live_connections`).
+//!
 //! Shared by every upgrade of the daemon: `/ws` (the run context), the
 //! terminals' PTY, and the admission of the composition root.
 
@@ -41,6 +44,7 @@ impl Closing {
 
 /// An upgrade answered `101`: `to_upgrade` from the request to the upgrade.
 pub fn opened(path: &str, to_upgrade: Duration) {
+    pdo_kernel::live_connections::opened(path);
     info!(
         "WebSocket opened: {path} ({} ms to the 101)",
         to_upgrade.as_millis()
@@ -49,6 +53,7 @@ pub fn opened(path: &str, to_upgrade: Duration) {
 
 /// A WebSocket ended, `lifetime` after it opened.
 pub fn closed(path: &str, closing: Closing, lifetime: Duration) {
+    pdo_kernel::live_connections::closed(path);
     info!(
         "WebSocket closed: {path}, {}, after {:.1} s",
         closing.describe(),

@@ -1,12 +1,23 @@
 //! Read a harness's offered catalogue, cached by the version of its binary
-//! (#616, #798, ADR-0053 §3).
+//! (#616, #798, ADR-0053 §3), and re-probe it on demand.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use pdo_kernel::clock::now_iso;
+
 use crate::application::ports::BinaryProbe;
 use crate::domain::catalogue::CachedCatalogue;
+
+/// One harness's cache entry.
+struct Entry {
+    /// When the version was last checked: the start of the freshness window.
+    checked: Instant,
+    /// When the catalogue ladder last ran for it.
+    probed: Instant,
+    cached: CachedCatalogue,
+}
 
 /// The daemon's catalogue cache, in front of the [`BinaryProbe`].
 pub struct CatalogueReader {
@@ -14,7 +25,8 @@ pub struct CatalogueReader {
     /// The version re-check window, read at every call so a test can change it
     /// after boot.
     ttl: Box<dyn Fn() -> Duration + Send + Sync>,
-    cache: tokio::sync::Mutex<HashMap<String, (Instant, CachedCatalogue)>>,
+    /// Held across a probe: two probes of the catalogues never run at once.
+    cache: tokio::sync::Mutex<HashMap<String, Entry>>,
 }
 
 impl CatalogueReader {
@@ -52,34 +64,75 @@ impl CatalogueReader {
     /// last good catalogue (or an empty one), i.e. the free-text fallback.
     pub async fn read(&self, harness: &str, binary: &str) -> CachedCatalogue {
         let mut guard = self.cache.lock().await;
-        if let Some((at, cached)) = guard.get(harness) {
-            if at.elapsed() < (self.ttl)() {
-                return cached.clone();
+        if let Some(entry) = guard.get(harness) {
+            if entry.checked.elapsed() < (self.ttl)() {
+                return entry.cached.clone();
             }
         }
 
+        let version = self.version(binary).await;
+        if let Some(entry) = guard.get_mut(harness) {
+            if entry.cached.version == version {
+                entry.checked = Instant::now();
+                return entry.cached.clone();
+            }
+        }
+        self.probe_into(&mut guard, harness, binary, version).await
+    }
+
+    /// Re-probe `harness`'s catalogue now, whatever its version and its window
+    /// (the « refresh models » gesture): a binary may change what it offers
+    /// without changing its version. A probe of this harness already running
+    /// when the refresh is asked is awaited and its result returned: the refresh
+    /// never starts a second one.
+    pub async fn refresh(&self, harness: &str, binary: &str) -> CachedCatalogue {
+        let asked = Instant::now();
+        let mut guard = self.cache.lock().await;
+        if let Some(entry) = guard.get(harness) {
+            if entry.probed >= asked {
+                return entry.cached.clone();
+            }
+        }
+        let version = self.version(binary).await;
+        self.probe_into(&mut guard, harness, binary, version).await
+    }
+
+    async fn version(&self, binary: &str) -> Option<String> {
         let probe = self.probe.clone();
         let bin = binary.to_string();
-        let version = tokio::task::spawn_blocking(move || probe.version(&bin))
+        tokio::task::spawn_blocking(move || probe.version(&bin))
             .await
             .ok()
-            .flatten();
+            .flatten()
+    }
 
-        if let Some((_, cached)) = guard.get(harness) {
-            if cached.version == version {
-                let refreshed = cached.clone();
-                guard.insert(harness.to_string(), (Instant::now(), refreshed.clone()));
-                return refreshed;
-            }
-        }
-
+    /// Run the catalogue ladder of `binary` and cache it at `version`.
+    async fn probe_into(
+        &self,
+        cache: &mut HashMap<String, Entry>,
+        harness: &str,
+        binary: &str,
+        version: Option<String>,
+    ) -> CachedCatalogue {
         let probe = self.probe.clone();
         let bin = binary.to_string();
         let catalogue = tokio::task::spawn_blocking(move || probe.catalogue(&bin))
             .await
             .unwrap_or_default();
-        let cached = CachedCatalogue { version, catalogue };
-        guard.insert(harness.to_string(), (Instant::now(), cached.clone()));
+        let cached = CachedCatalogue {
+            version,
+            catalogue,
+            probed_at: Some(now_iso()),
+        };
+        let now = Instant::now();
+        cache.insert(
+            harness.to_string(),
+            Entry {
+                checked: now,
+                probed: now,
+                cached: cached.clone(),
+            },
+        );
         cached
     }
 }
@@ -199,6 +252,51 @@ pub(crate) mod tests {
             fake.runs().last().map(String::as_str),
             Some("claude --help")
         );
+        assert_eq!(fake.runs().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_reprobes_at_the_same_version() {
+        let fake = binaries();
+        let reader = CatalogueReader::new(fake.clone(), || Duration::from_secs(3600));
+        let first = reader.read("claude", "claude").await;
+        fake.runs.lock().unwrap().clear();
+        let refreshed = reader.refresh("claude", "claude").await;
+        assert_eq!(fake.runs(), vec!["claude --version", "claude --help"]);
+        assert_eq!(refreshed.version.as_deref(), Some("2.1.0"));
+        assert!(refreshed.probed_at.is_some());
+        assert!(refreshed.probed_at >= first.probed_at);
+        // The refreshed catalogue is the one the next reads serve.
+        fake.runs.lock().unwrap().clear();
+        assert_eq!(reader.read("claude", "claude").await, refreshed);
+        assert!(fake.runs().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_version_recheck_keeps_the_time_of_the_probe() {
+        let fake = binaries();
+        let reader = CatalogueReader::new(fake.clone(), || Duration::ZERO);
+        let first = reader.read("claude", "claude").await;
+        let again = reader.read("claude", "claude").await;
+        assert_eq!(again.probed_at, first.probed_at);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_during_a_probe_awaits_it_instead_of_starting_another() {
+        let fake = binaries();
+        let reader = CatalogueReader::new(fake.clone(), || Duration::from_secs(3600));
+        let (a, b) = tokio::join!(
+            reader.refresh("claude", "claude"),
+            reader.refresh("claude", "claude")
+        );
+        assert_eq!(a, b);
+        assert_eq!(
+            fake.runs(),
+            vec!["claude --version", "claude --help"],
+            "one probe for two refreshes asked while it ran"
+        );
+        // A refresh asked once that probe is over probes again.
+        reader.refresh("claude", "claude").await;
         assert_eq!(fake.runs().len(), 4);
     }
 }

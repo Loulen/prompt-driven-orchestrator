@@ -5,13 +5,10 @@
 
 import type { FrontmatterFieldDecl } from "../../shared/generated/FrontmatterFieldDecl";
 import type { PortDef } from "../../shared/generated/PortDef";
-import type { PortSide } from "../../shared/generated/PortSide";
 import type { PortType } from "../../shared/generated/PortType";
 
 export interface LibraryPort {
   name: string;
-  repeated: boolean;
-  side?: string | null;
   port_type?: PortType;
   frontmatter?: Record<string, FrontmatterFieldDecl> | null;
   when?: Record<string, unknown> | null;
@@ -20,11 +17,9 @@ export interface LibraryPort {
   intermediate?: boolean | null;
 }
 
-export function libraryPortToPortDef(port: LibraryPort, defaultSide: PortSide): PortDef {
+export function libraryPortToPortDef(port: LibraryPort): PortDef {
   return {
     name: port.name,
-    repeated: port.repeated,
-    side: (port.side as PortSide) ?? defaultSide,
     ...(port.port_type ? { port_type: port.port_type } : {}),
     ...(port.frontmatter ? { frontmatter: port.frontmatter } : {}),
     ...(port.when ? { when: port.when } : {}),

@@ -98,7 +98,7 @@ export function useCanvasPlacement({
           id, name, type, interactive: false, view,
           isolated_worktree: false,
           inputs: [],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          outputs: [{ name: "out" }],
         };
         break;
       default:
@@ -107,8 +107,8 @@ export function useCanvasPlacement({
           // #653/ADR-0060: a new Agent is isolated. The safe placement is the
           // default, and sharing the Run worktree is an explicit opt-out.
           isolated_worktree: true,
-          inputs: [{ name: "in", repeated: false, side: "left" }],
-          outputs: [{ name: "out", repeated: false, side: "right" }],
+          inputs: [{ name: "in" }],
+          outputs: [{ name: "out" }],
         };
     }
     addNodeToStore(newNode);

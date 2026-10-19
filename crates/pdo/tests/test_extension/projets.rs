@@ -77,7 +77,11 @@ fn update_note(creation: &Creation, actor: Actor, id: &str, body: &Value) -> Res
         return not_started().into_response();
     };
     let kind = ResourceKind::extension(super::ID, super::NOTE);
-    let projects: Vec<String> = body["project"].as_str().map(str::to_string).into_iter().collect();
+    let projects: Vec<String> = body["project"]
+        .as_str()
+        .map(str::to_string)
+        .into_iter()
+        .collect();
     let update = Operation::new(kind.clone(), Verb::Update)
         .on(id)
         .in_projects(projects.clone());

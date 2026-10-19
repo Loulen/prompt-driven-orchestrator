@@ -34,16 +34,6 @@ const ANCHOR_HANDLE_SIDES: { side: PortSide; position: Position; style: React.CS
   { side: "bottom", position: Position.Bottom, style: { bottom: 0, left: "50%", transform: "translateX(-50%)" } },
 ];
 
-// A declared input port's side maps to the xyflow `Position` its body handle
-// renders on, so a fixed-side declared port (End's `result`) arrives from its
-// own declared side rather than a hardcoded left (#168 / #175 AC3).
-const SIDE_TO_POSITION: Record<PortSide, Position> = {
-  left: Position.Left,
-  right: Position.Right,
-  top: Position.Top,
-  bottom: Position.Bottom,
-};
-
 interface EditNodeData {
   label: string;
   nodeId: string;
@@ -125,10 +115,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   // vestigial declared `in` still anchors by drop (#175) rather than being
   // mistaken for a fixed-side declared port.
   const emergent = landsByDrop(data.nodeType);
-  // A declared port's body handle arrives from its own declared side (#175 AC3),
-  // not a hardcoded left. Moot for a lands-by-drop body (edges bind to the
-  // per-side anchor handles below), but kept consistent.
-  const bodyHandleSide = data.inputs[0]?.side ?? "left";
   // ADR-0086: an on-demand node the Run never launched is drawn greyed — no
   // status of its own, it waits for the user's ▶.
   const awaitingPlay = data.onDemand === true && data.inRun === true && data.status === "pending";
@@ -167,12 +153,12 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           on the node body. A single invisible target handle covers the card and
           carries the drop highlight. A lands-by-drop node (work nodes, End since
           #840) renders it id-less and binds incoming edges to the per-side
-          anchors below; any other declared input keeps its handle id and its
-          declared-side `position`. */}
+          anchors below; any other declared input keeps its handle id and lands
+          on the left (a port has no side). */}
       <Handle
         id={emergent ? undefined : data.inputs[0]?.name}
         type="target"
-        position={SIDE_TO_POSITION[bodyHandleSide]}
+        position={Position.Left}
         isConnectable={isConnectable}
         isConnectableStart={false}
         className={`emergent-body-target${isDropTarget ? " is-drop" : ""}`}

@@ -24,7 +24,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "2.36.0"
+version = "2.39.0"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/PDO-v2"
@@ -80,6 +80,9 @@ opentelemetry = { version = "0.33.1", default-features = false, features = ["tra
 opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "metrics"] }
 opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "trace", "metrics"] }
 opentelemetry-http = { version = "0.33.1", default-features = false }
+# `/metrics` (ADR-0090 §2): the SDK's pull reader in the Prometheus text format.
+opentelemetry-prometheus = { version = "0.33.1", default-features = false }
+prometheus = { version = "0.14", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
 pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.15.0" }
 pdo-kernel = { path = "crates/pdo-kernel" }

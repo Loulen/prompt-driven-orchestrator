@@ -10,6 +10,7 @@ import {
   updateSkillFolder,
 } from "../api/bank";
 import { rescanSkillFolder, updateSkillFolderFromSource } from "../api/import";
+import { useSkillBundle } from "./useSkillBundle";
 import type { Skill } from "../../shared/generated/Skill";
 import type { SkillBank, SkillDetail, SkillReferents } from "../model/skill";
 import type { SkillFolder } from "../../shared/generated/SkillFolder";
@@ -373,6 +374,11 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
       return next;
     });
 
+  const bundle = useSkillBundle({
+    bank, expanded, filter, onChanged, setMenuFor, setAddMenuOpen, setError, failWith, showToast,
+    expandTo, setSelected, setPending,
+  });
+
   return {
     selected, setSelected, selectedRef, selectedSkill, selectedFolder,
     expanded, toggleExpanded, expandTo, filter, setFilter,
@@ -385,6 +391,7 @@ export function useSkillBankPanel(bank: SkillBank, home: string | null, onChange
     folderById, counts, existingNames,
     moveSkill, moveFolder, commitRename, startRename, newFolder, askDelete, confirmDelete, copyId,
     startUpdateFromSource, confirmUpdateFromSource, openSourceFolder,
+    ...bundle,
   };
 }
 

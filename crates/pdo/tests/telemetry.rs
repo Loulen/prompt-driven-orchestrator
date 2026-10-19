@@ -3,6 +3,7 @@
 //! or pointed elsewhere by `PUT /settings`, without a restart; a Run's
 //! measures named by the repository's remote, never by its path; a collector
 //! that does not answer is said in the status and leaves the Runs alone.
+//! `/metrics` beside it, by its own switch; the Actor only when included.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,16 +15,19 @@ use serde_json::{json, Value};
 
 use crate::common::TestDaemon;
 
+/// Every request a collector received: its path and its body.
+type Received = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
 /// A collector that keeps every request it receives: its path and its body.
 #[derive(Clone, Default)]
 struct Collector {
-    received: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
+    received: Received,
     url: String,
 }
 
 impl Collector {
     async fn start() -> Self {
-        let received: Arc<Mutex<Vec<(String, Vec<u8>)>>> = Arc::default();
+        let received: Received = Arc::default();
         let kept = received.clone();
         let app = Router::new().fallback(move |uri: Uri, body: Bytes| {
             let kept = kept.clone();
@@ -157,6 +161,17 @@ async fn the_switch_and_the_collector_take_effect_without_a_restart() {
 
     put_settings(&daemon, json!({ "telemetry_otlp": false })).await;
     wait_exporting(&daemon, false).await;
+    // What left before the switch went off may still land: wait for the
+    // collectors to go quiet before listening for what follows.
+    let mut seen = usize::MAX;
+    for _ in 0..50 {
+        let now = first.requests().len() + second.requests().len();
+        if now == seen {
+            break;
+        }
+        seen = now;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
     first.clear();
     second.clear();
     reqwest::get(format!("{}/settings", daemon.url()))
@@ -301,5 +316,115 @@ async fn a_run_is_measured_with_its_remote_and_never_its_path() {
     assert!(
         !everything.contains(&daemon.target_repo()),
         "a local path leaked"
+    );
+}
+
+/// `GET /metrics`: its status code and body.
+async fn scrape(daemon: &TestDaemon) -> (u16, String) {
+    let resp = reqwest::get(format!("{}/metrics", daemon.url()))
+        .await
+        .unwrap();
+    (resp.status().as_u16(), resp.text().await.unwrap())
+}
+
+/// The reload is detached from the `PUT`: wait for `/metrics` to answer `want`.
+async fn wait_scrape(daemon: &TestDaemon, want: u16) -> String {
+    for _ in 0..100 {
+        let (code, text) = scrape(daemon).await;
+        if code == want {
+            return text;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("/metrics never answered {want}");
+}
+
+#[tokio::test]
+async fn metrics_answers_only_while_its_switch_is_on_and_names_the_actor_only_when_included() {
+    let collector = Collector::start().await;
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let (code, _) = scrape(&daemon).await;
+    assert_eq!(code, 404, "off by default");
+    let page = daemon.get_json("/settings").await;
+    assert_eq!(page["telemetry_prometheus"]["effective"], false);
+    assert_eq!(page["telemetry_include_actor"]["effective"], false);
+
+    put_settings(&daemon, json!({ "telemetry_prometheus": true })).await;
+    wait_scrape(&daemon, 200).await;
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&json!({
+            "pipeline": "telemetry-test",
+            "input": "",
+            "target_repo": daemon.target_repo(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let mut text = String::new();
+    for _ in 0..100 {
+        text = scrape(&daemon).await.1;
+        if text.contains("pdo_runs_started") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(text.contains("pdo_runs_started"), "no Run measure:\n{text}");
+    assert!(text.contains("pdo_pipeline=\"telemetry-test\""), "{text}");
+    assert!(!text.contains("pdo_actor"), "the Actor is off by default");
+    assert!(!text.contains(&daemon.target_repo()), "a local path leaked");
+
+    // « Include the Actor » on, the OTLP export on beside `/metrics`.
+    put_settings(
+        &daemon,
+        json!({
+            "telemetry_include_actor": true,
+            "telemetry_otlp": true,
+            "telemetry_otlp_endpoint": collector.url,
+        }),
+    )
+    .await;
+    wait_exporting(&daemon, true).await;
+    assert_eq!(
+        daemon.get_json("/telemetry/status").await["include_actor"],
+        true
+    );
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&json!({
+            "pipeline": "telemetry-test",
+            "input": "",
+            "target_repo": daemon.target_repo(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let mut metrics = String::new();
+    for _ in 0..100 {
+        text = scrape(&daemon).await.1;
+        test_export(&daemon).await;
+        metrics = collector.text_on("/v1/metrics");
+        if text.contains("pdo_actor") && metrics.contains("pdo.actor") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        text.contains("pdo_actor=\"local_operator\""),
+        "no Actor on /metrics:\n{text}"
+    );
+    assert!(
+        metrics.contains("pdo.actor") && metrics.contains("local_operator"),
+        "no Actor in the OTLP export"
+    );
+
+    put_settings(&daemon, json!({ "telemetry_prometheus": false })).await;
+    wait_scrape(&daemon, 404).await;
+    assert_eq!(
+        daemon.get_json("/telemetry/status").await["exporting"],
+        true,
+        "the OTLP export is independent of /metrics"
     );
 }

@@ -182,6 +182,11 @@ mod stats_cost_by_model;
 #[path = "node_transcript.rs"]
 mod node_transcript;
 
+#[path = "run_transcript_search.rs"]
+mod run_transcript_search;
+#[path = "run_transcript_search_bench.rs"]
+mod run_transcript_search_bench;
+
 #[path = "release_channel.rs"]
 mod release_channel;
 #[path = "update_apply.rs"]
@@ -350,6 +355,9 @@ mod sandbox_profiles;
 
 #[path = "skill_bank.rs"]
 mod skill_bank;
+
+#[path = "skill_bundle.rs"]
+mod skill_bundle;
 
 #[path = "skill_document.rs"]
 mod skill_document;

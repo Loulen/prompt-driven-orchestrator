@@ -87,3 +87,18 @@ async fn a_test_export_sends_a_span_even_with_no_measure_yet() {
     let spans = w.exporters.spans.get_finished_spans().unwrap();
     assert!(spans.iter().any(|s| s.name == "pdo.telemetry.test"));
 }
+
+#[tokio::test]
+async fn a_build_that_failed_is_tried_again_by_the_next_reload() {
+    let w = world();
+    w.exporters.refuse.store(true, Ordering::SeqCst);
+    w.setting.set(true, Some("http://127.0.0.1:4318"));
+    w.telemetry.reload().await;
+    assert!(w.telemetry.active().is_none());
+    w.exporters.refuse.store(false, Ordering::SeqCst);
+    w.telemetry.reload().await;
+    assert!(
+        w.telemetry.status().exporting,
+        "the same setting, built this time"
+    );
+}

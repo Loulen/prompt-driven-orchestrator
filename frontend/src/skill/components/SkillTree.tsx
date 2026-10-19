@@ -27,8 +27,10 @@ export interface SkillTreeProps {
   onOpen?: (ref: TreeNodeRef) => void;
   /** Rendered when `rows` is empty (empty bank or no filter match). */
   emptyState?: ReactNode;
-  /** Optional row decoration (e.g. checkboxes for the future selector). */
+  /** Optional row decoration at the row's start (the multiple selection's boxes). */
   renderLeading?: (row: TreeRow) => ReactNode;
+  /** Rows of the multiple selection, tinted. */
+  isMarked?: (row: TreeRow) => boolean;
   draggable?: boolean;
   className?: string;
 }
@@ -61,6 +63,7 @@ export default function SkillTree({
   onOpen,
   emptyState,
   renderLeading,
+  isMarked,
   draggable = true,
   className = "",
 }: SkillTreeProps) {
@@ -176,6 +179,7 @@ export default function SkillTree({
             }}
             actions={renderActions?.(row)}
             leading={renderLeading?.(row)}
+            marked={isMarked?.(row) ?? false}
             draggable={draggable && row.ref.kind === "skill"}
             isDragging={dragging === row.ref.id}
             isDropTarget={row.ref.kind === "folder" && dropTarget === row.ref.id}

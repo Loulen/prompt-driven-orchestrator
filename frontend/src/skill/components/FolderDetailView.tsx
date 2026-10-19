@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Folder, FolderInput, FolderPlus, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { Download, Folder, FolderInput, FolderPlus, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import type { Skill } from "../../shared/generated/Skill";
 import type { SkillFolder } from "../../shared/generated/SkillFolder";
 import { timeAgo } from "../model/skillMd";
@@ -19,6 +19,7 @@ export default function FolderDetailView({
   onDelete,
   onMoveTo,
   onUpdateFromSource,
+  onExport,
   home,
 }: {
   folder: SkillFolder;
@@ -30,6 +31,8 @@ export default function FolderDetailView({
   onDelete: () => void;
   onMoveTo: (parentId: string | null) => void;
   onUpdateFromSource: () => void;
+  /** Download the folder's skills (sub-folders included) as a zip. */
+  onExport: () => void;
   /** The daemon's home: a local source reads `~/…`. */
   home: string | null;
 }) {
@@ -55,10 +58,27 @@ export default function FolderDetailView({
             Source
           </span>
         )}
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={onExport}
+          disabled={count === 0}
+          title={count === 0 ? "No skill in this folder" : undefined}
+          data-testid="folder-detail-export"
+          className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc disabled:cursor-not-allowed disabled:opacity-45"
+          style={{ fontSize: "11.5px" }}
+        >
+          <Download size={11} />
+          Export folder
+        </button>
       </div>
       <p className="mt-1.5 text-fg-3" style={{ fontSize: "12px" }}>
         {count} skill{count === 1 ? "" : "s"} in this folder and below. Checking a folder in a
         selector will check its skills at that instant; nothing references a folder.
+      </p>
+      <p className="mt-1 text-fg-4" style={{ fontSize: "11px" }} data-testid="folder-export-hint">
+        The zip holds one folder per skill (<code>SKILL.md</code> + its reference files), the format
+        « + Add › Upload a zip » reads back on another instance.
       </p>
       <div className="mt-3 flex items-center gap-2">
         <ActionButton icon={<FolderPlus size={11} />} label="New subfolder" onClick={onNewSubfolder} testid="folder-detail-new" />

@@ -22,6 +22,8 @@ export type SettingsSectionId =
   | "staging-profiles"
   | "worktree-provisioning"
   | "otlp-export"
+  | "prometheus-metrics"
+  | "identity"
   | "what-is-sent"
   | "price-table"
   | "harness-descriptors";
@@ -171,6 +173,16 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
           "Pushes this instance's metrics and traces to your organisation's collector. Takes effect without a restart.",
       },
       {
+        id: "prometheus-metrics",
+        label: "Prometheus /metrics",
+        description: "For instances a Prometheus can reach. Independent of the OTLP export.",
+      },
+      {
+        id: "identity",
+        label: "Identity",
+        description: "Who launched a Run never leaves with the metrics, unless you decide it here.",
+      },
+      {
         id: "what-is-sent",
         label: "What is sent",
         description:
@@ -225,7 +237,9 @@ export type SettingsFieldId =
   | "manager-profile"
   | "telemetry-otlp"
   | "telemetry-endpoint"
-  | "telemetry-headers";
+  | "telemetry-headers"
+  | "telemetry-prometheus"
+  | "telemetry-include-actor";
 
 export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "session-cap": "runtime-limits",
@@ -247,6 +261,8 @@ export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "telemetry-otlp": "otlp-export",
   "telemetry-endpoint": "otlp-export",
   "telemetry-headers": "otlp-export",
+  "telemetry-prometheus": "prometheus-metrics",
+  "telemetry-include-actor": "identity",
 };
 
 export function categoryOf(section: SettingsSectionId): SettingsCategory {

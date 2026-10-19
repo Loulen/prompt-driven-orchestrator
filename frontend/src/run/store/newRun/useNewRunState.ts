@@ -145,6 +145,9 @@ export function useNewRunState(open: boolean) {
   // #669/ADR-0062: the Run tier of the skills selection (a Trigger stores the same
   // list for its fired Runs). Inherits the instance and the Projet of the repo.
   const [skills, setSkills] = useState<SkillRef[]>([]);
+  // The skills the prompt's `/` completion added to the Run tier: the « added »
+  // chips of the selector and the line under the prompt.
+  const [promptAddedSkills, setPromptAddedSkills] = useState<SkillRef[]>([]);
   const { profiles: agentProfiles } = useAgentProfiles(open);
   const { bank: skillBank } = useSkillBank(open);
   // The instance tier comes from the modal's own `settings` read (#452: one
@@ -197,6 +200,7 @@ export function useNewRunState(open: boolean) {
     attachmentDragOver, setAttachmentDragOver, attachmentShake, setAttachmentShake,
     closeWarning, setCloseWarning, settings, setSettings, settingsFailed, setSettingsFailed,
     sandbox, setSandbox, harness, setHarness, agentChoice, setAgentChoice, skills, setSkills,
+    promptAddedSkills, setPromptAddedSkills,
     agentProfiles, skillBank, instanceSkills, inheritedSkillTiers, recentRepos,
     refreshRecentRepos, fileInputRef, updateSecondary, removeSecondary, addSecondary,
   };

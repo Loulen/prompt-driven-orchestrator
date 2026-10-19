@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type TextareaHTMLAttributes } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject, type TextareaHTMLAttributes } from "react";
 import type { DraftParticipant } from "../../../shared/generated/DraftParticipant";
 import { shiftCaret } from "../../model/draftDelta";
 import { firstName, presenceColor } from "../../model/presence";
@@ -33,21 +33,26 @@ function caretPosition(textarea: HTMLTextAreaElement, caret: number): { top: num
 /**
  * A node's prompt in its shared draft (ADR-0088): the text others type lands
  * without moving my caret, and the caret of each other participant typing here
- * shows in their color, with their first name.
+ * shows in their color, with their first name. The textarea's own handlers
+ * (a completion's keys, its `ref`) run beside the draft's.
  */
 export default function SharedPromptField({
   nodeId,
   value,
   onChange,
+  onSelect,
+  onFocus,
+  onBlur,
   typing,
+  ref: outerRef,
   ...rest
-}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "onChange"> & {
+}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value"> & {
   nodeId: string;
   value: string;
-  onChange: (value: string) => void;
   typing: DraftParticipant[];
+  ref?: RefObject<HTMLTextAreaElement | null>;
 }) {
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const ref = useRef<HTMLTextAreaElement | null>(null);
   const shown = useRef(value);
   const [carets, setCarets] = useState<{ participant: DraftParticipant; top: number; left: number }[]>([]);
 
@@ -87,19 +92,29 @@ export default function SharedPromptField({
     <div className="relative">
       <textarea
         {...rest}
-        ref={ref}
+        ref={(textarea) => {
+          ref.current = textarea;
+          if (outerRef) outerRef.current = textarea;
+        }}
         value={value}
         onChange={(e) => {
           shown.current = e.target.value;
-          onChange(e.target.value);
+          onChange?.(e);
           report();
         }}
-        onSelect={report}
-        onFocus={() => {
+        onSelect={(e) => {
+          onSelect?.(e);
+          report();
+        }}
+        onFocus={(e) => {
+          onFocus?.(e);
           draftSessionOf(useEditStore.getState().activeTabId)?.openPrompt(nodeId);
           report();
         }}
-        onBlur={() => draftSessionOf(useEditStore.getState().activeTabId)?.present({ typing: null })}
+        onBlur={(e) => {
+          onBlur?.(e);
+          draftSessionOf(useEditStore.getState().activeTabId)?.present({ typing: null });
+        }}
       />
       {carets.map(({ participant, top, left }) => (
         <span

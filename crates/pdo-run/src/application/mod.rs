@@ -77,3 +77,4 @@ pub mod stale;
 pub mod start_node;
 pub mod stop_node;
 pub mod supervision;
+pub mod transcript_search;

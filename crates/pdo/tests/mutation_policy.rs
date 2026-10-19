@@ -213,6 +213,9 @@ async fn delete_pending_node_succeeds() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
 
+    // The added node waits on `worker`, which never completes here: without
+    // that edge it is ready at once, and a loaded scheduler may start it
+    // before the delete arrives (a 409 for a node that ran).
     let yaml_with_extra = r#"name: mutation-test
 nodes:
   - id: start
@@ -246,6 +249,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: pending-node, port: data }
 "#;
 
     let resp = reqwest::Client::new()

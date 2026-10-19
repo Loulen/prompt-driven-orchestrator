@@ -48,6 +48,8 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("telemetry_otlp", "INTEGER"),
     ("telemetry_otlp_endpoint", "TEXT"),
     ("telemetry_otlp_headers", "TEXT"),
+    ("telemetry_prometheus", "INTEGER"),
+    ("telemetry_include_actor", "INTEGER"),
 ];
 
 /// Create both tables if absent, seed the all-NULL singleton row and the

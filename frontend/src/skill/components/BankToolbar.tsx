@@ -1,10 +1,12 @@
-import { ChevronDown, ClipboardPaste, Download, Folder, Plus, Search } from "lucide-react";
+import { useRef } from "react";
+import { ChevronDown, ClipboardPaste, Download, FileArchive, Folder, Plus, Search } from "lucide-react";
 import type { SkillBankPanelState } from "../store/useSkillBankPanel";
 import { MenuItem } from "./BankControls";
 
-/** Above the tree: the filter, the new-folder button and the Add menu (paste or import). */
+/** Above the tree: the filter, the new-folder button and the Add menu (paste, import, upload a zip). */
 export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
   const { selectedFolder, selectedSkill, addMenuOpen } = panel;
+  const zipInput = useRef<HTMLInputElement>(null);
   return (
     <div className="flex items-center gap-2 px-3 py-2.5">
       <label className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2 py-1.5">
@@ -74,8 +76,28 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
                 panel.setImportOpen(true);
               }}
             />
+            <MenuItem
+              icon={<FileArchive size={12} />}
+              label="Upload a zip…"
+              hint=".skills.zip"
+              testid="skill-upload-zip"
+              onClick={() => zipInput.current?.click()}
+            />
           </div>
         )}
+        {/* Outside the menu: it stays mounted while the file picker is open. */}
+        <input
+          ref={zipInput}
+          type="file"
+          accept=".zip,application/zip"
+          className="hidden"
+          data-testid="skill-upload-zip-input"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void panel.uploadZip(file);
+          }}
+        />
       </span>
     </div>
   );

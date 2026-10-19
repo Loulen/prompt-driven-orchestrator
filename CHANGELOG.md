@@ -10,6 +10,47 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.39.0 — Complétion des skills dans les prompts, export et upload de skills (CORE-80)
+
+- `/` en début de mot dans le prompt d'un nœud ou de New Run ouvre la liste des skills au
+  curseur ; choisir un skill que le nœud (ou le Run) ne reçoit pas l'ajoute à son tier.
+- `POST /settings/skills/export` sert un zip au format du sidecar, nommé d'après le dossier, le
+  skill ou `selection` pour une sélection mixte.
+- `POST /settings/skills/upload?name=` importe un zip selon la politique d'import du sidecar :
+  les nouveaux skills arrivent dans un dossier nommé d'après le zip, à plat (la hiérarchie de
+  l'archive n'est pas reprise). L'Opération `skill.import` est demandée avant de lire l'archive.
+
+## 2.38.0 — Recherche dans les transcripts du Run (CORE-82)
+
+- `GET /runs/{id}/transcripts/search?q=&client=` cherche dans le transcript de chaque itération
+  de nœud que PDO lit : texte des messages et résumé d'une ligne des appels d'outils, jamais la
+  pensée du modèle. Résultats par nœud (ordre du pipeline) puis chronologie, bornés à 200
+  extraits, tous comptés par nœud. La recherche suivante du même `client` annule la précédente
+  côté serveur (réponse `cancelled: true`), comme la fermeture de la connexion.
+- Sans index persistant : la 1re recherche sur un très gros transcript paie son indexation en
+  mémoire, les suivantes ne relisent que ce que le fichier a gagné.
+- Correspondance insensible à la casse, sensible aux accents (« creme » ne trouve pas « crème »).
+- Banc : `make bench-transcript-search`.
+
+## 2.37.0 — `/metrics` Prometheus et « inclure l'Acteur » (CORE-86)
+
+- Settings › Telemetry gagne la section « Prometheus /metrics » : `GET /metrics` sert les mêmes
+  métriques que l'export OTLP au format texte Prometheus (pas de traces), par son propre
+  interrupteur, **éteint par défaut** (`404` tant qu'il l'est). La route n'exige rien de plus
+  que le reste du daemon : qui joint l'instance la lit. Réglage `telemetry_prometheus`, env
+  `PDO_TELEMETRY_PROMETHEUS`.
+- Section « Identity » : « Include the Actor », **éteint par défaut** (`telemetry_include_actor`,
+  env `PDO_TELEMETRY_INCLUDE_ACTOR`). Allumé, `pdo.actor` (qui a lancé le Run) s'ajoute aux
+  métriques de Run et de nœud et aux spans, sur les deux voies, et la réponse à une attente
+  déclarée devient un événement `pdo.wait.answered` du span du nœud. Un agent est nommé
+  `agent`, sans ses ids. Coché, un avertissement rappelle l'information préalable des
+  personnes, la consultation du CSE et la base RGPD avant l'enregistrement.
+- Les événements `NodeResumed` (Entrée tapée dans le terminal) et `NodeCompletionReleased`
+  (bouton du nœud) portent désormais l'Acteur qui a répondu (`payload.actor`). Les événements
+  plus anciens n'en ont pas et se lisent comme avant.
+- `GET /telemetry/status` dit aussi `metrics_endpoint` et `include_actor` ; « What is sent »
+  liste `with_actor`. Tous les changements prennent effet sans redémarrage.
+
 ## 2.36.0 — Onglet Transcript d'un nœud (CORE-81)
 
 - `GET /runs/{id}/nodes/{node}/transcript?iter=&after=&limit=` sert le transcript normalisé

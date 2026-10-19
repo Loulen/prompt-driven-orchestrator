@@ -1029,3 +1029,12 @@ body {
 .pdo-attach-shake {
   animation: pdo-attach-shake 300ms ease-in-out;
 }
+
+/* The search over a Run's transcripts: its word, marked in a transcript's
+   messages (shared/markdown/rehypeMarkQuery). */
+mark.query-mark {
+  background: var(--color-st-await);
+  color: var(--color-on-acc-warn);
+  border-radius: 3px;
+  padding: 0 2px;
+}

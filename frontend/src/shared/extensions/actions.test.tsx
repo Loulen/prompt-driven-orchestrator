@@ -528,6 +528,7 @@ describe("the skill bank's menu (skill/menu)", () => {
       expect.stringContaining("Rename"),
       expect.stringContaining("Move to…"),
       expect.stringContaining("Copy id"),
+      expect.stringContaining("Export"),
       "Do s",
       expect.stringContaining("Delete…"),
     ]);

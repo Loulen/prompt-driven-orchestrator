@@ -10,11 +10,15 @@ import {
   hasProvisioningRules,
 } from "../../../workspace/model/provisioning";
 import IterSelector from "./IterSelector";
+import { IterationDurationLabel } from "./IterationDuration";
 import { formatTime } from "../../model/nodeDetailFormat";
+import { nodeIterationTimings } from "../../model/iterationDuration";
+import type { IterationTiming } from "../../model/iterationDuration";
+import { useNodeDurationMode } from "../../store/nodeDurationModeStore";
 import { STATUS_LABELS } from "./labels";
 
 /** The panel header: name, status, frozen harness, the extensions' `node/toolbar`
- *  actions (#30), iter selector, times, cost. */
+ *  actions (#30), iter selector, duration of the iteration on show, cost. */
 export default function NodeDetailHeader({
   node,
   nodeName,
@@ -43,10 +47,17 @@ export default function NodeDetailHeader({
     };
     return { entity };
   }, [node.node_id, node.status, nodeName]);
-  // The times of the iteration on show, not always the latest one's.
-  const shown = node.iterations.find((it) => it.iter === selectedIter);
-  const startedAt = shown ? shown.started_at : node.started_at;
-  const completedAt = shown ? shown.completed_at : node.completed_at;
+  const iterations = useMemo(() => nodeIterationTimings(node), [node]);
+  // The duration of the iteration on show, not always the latest one's.
+  const current = selectedIter === node.iter;
+  const timing: IterationTiming = iterations.find((it) => it.iter === selectedIter) ?? {
+    status: node.status,
+    started_at: current ? node.started_at : null,
+    completed_at: current ? node.completed_at : null,
+  };
+  // The Mode de durée on screen — one global, persisted preference.
+  const durationMode = useNodeDurationMode((st) => st.mode);
+  const toggleDurationMode = useNodeDurationMode((st) => st.toggle);
   return (
     <div className="border-b border-line px-3 py-2">
       <div className="flex items-center gap-2">
@@ -89,19 +100,21 @@ export default function NodeDetailHeader({
       >
         {hasMultipleIters ? (
           <IterSelector
-            iterations={node.iterations}
+            iterations={iterations}
             selectedIter={selectedIter}
             onSelect={onSelectIter}
           />
         ) : (
           <span>iter {node.iter}</span>
         )}
-        {startedAt && (
-          <span data-testid="node-started-at"> · started {formatTime(startedAt)}</span>
-        )}
-        {completedAt && (
-          <span data-testid="node-ended-at"> · ended {formatTime(completedAt)}</span>
-        )}
+        {/* The duration of the SELECTED iteration; its start and end live in
+            the tooltip. A click switches it between Total and Active. */}
+        <IterationDurationLabel
+          key={selectedIter}
+          timing={timing}
+          mode={durationMode}
+          onToggle={toggleDurationMode}
+        />
         {node.cost && (
           <span data-testid="node-cost" title={nodeCostTitle(node.cost)}>
             {" · "}

@@ -286,6 +286,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
               // library file-stem — duplicateLibraryPipeline resolves it.
               showDuplicate
               modified={p.modified}
+              draft={p.draft}
               decorations={<PipelineItemDecorations pipeline={p} />}
               // Where the launch forms offer it, at a glance.
               indicator={

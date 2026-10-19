@@ -118,10 +118,11 @@ fn write_live_docker() -> (TempDir, String, PathBuf) {
     // container name, then exec the remaining argv (`bash -lc '<tail>'`). No arg
     // before the container name starts with `pdo-sbx-` (the session marker is
     // `PDO_SBX_SESSION=pdo-<run>-<node>-…`, a distinct prefix), so the match is
-    // unambiguous.
+    // unambiguous. The argv lands in the log in one `cat` (one write), not in
+    // the chunks `printf` flushes.
     let script = format!(
         "#!/usr/bin/env bash\n\
-         printf '%s\\n' \"$@\" >> {log}\n\
+         record=\"$(mktemp)\"; printf '%s\\n' \"$@\" > \"$record\"; cat \"$record\" >> {log}; rm -f \"$record\"\n\
          case \"$1\" in\n\
          image) exit 0 ;;\n\
          container) printf 'true'; exit 0 ;;\n\

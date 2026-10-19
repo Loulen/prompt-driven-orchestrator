@@ -38,6 +38,10 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
     }
   },
 
+  showListedDraft: (id, draft) => {
+    set((s) => ({ pipelines: s.pipelines.map((p) => (p.id === id ? { ...p, draft } : p)) }));
+  },
+
   openPipeline: async (id: string, scope?: PipelineScope) => {
     const existing = get().openTabs.find((t) => t.id === id);
     if (existing) {

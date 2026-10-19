@@ -7,9 +7,10 @@ use pdo_kernel::authorization::{authorize, Denied};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 
+use super::drafts::Drafts;
 use super::ports::{
-    ActiveRuns, KnownProjects, NodeLibrary, PipelineEvents, PipelineRegistry, PipelineValidations,
-    RenameLedger, SkillBank,
+    ActiveRuns, DraftDocuments, DraftStore, KnownProjects, NodeLibrary, PipelineEvents,
+    PipelineRegistry, PipelineValidations, RenameLedger, SkillBank,
 };
 
 /// One adapter per port.
@@ -22,6 +23,10 @@ pub struct PipelinesPorts {
     pub skills: Arc<dyn SkillBank>,
     pub validations: Arc<dyn PipelineValidations>,
     pub projects: Arc<dyn KnownProjects>,
+    /// Where the shared drafts are kept (ADR-0088).
+    pub drafts: Arc<dyn DraftStore>,
+    /// The replicated documents of the drafts.
+    pub documents: Arc<dyn DraftDocuments>,
     pub extensions: Arc<dyn ExtensionHost>,
 }
 
@@ -35,6 +40,7 @@ pub struct Pipelines {
     pub(crate) skills: Arc<dyn SkillBank>,
     pub(crate) validations: Arc<dyn PipelineValidations>,
     pub(crate) projects: Arc<dyn KnownProjects>,
+    pub(crate) drafts: Drafts,
     host: Arc<dyn ExtensionHost>,
 }
 
@@ -49,6 +55,7 @@ impl Pipelines {
             skills: ports.skills,
             validations: ports.validations,
             projects: ports.projects,
+            drafts: Drafts::new(ports.drafts, ports.documents),
             host: ports.extensions,
         }
     }

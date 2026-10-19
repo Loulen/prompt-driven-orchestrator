@@ -1,22 +1,19 @@
 import { useCallback } from "react";
-import ConflictModal from "../pipeline/components/ConflictModal";
 import SaveErrorModal from "../pipeline/components/SaveErrorModal";
 import ConfirmCloseTabsModal from "../pipeline/components/ConfirmCloseTabsModal";
 import type { OpenPipeline } from "../pipeline/store/editState";
 import { useEditStore } from "../pipeline/store/editStore";
 
-/** The editor's global modals: a save conflict, a refused save, and a tab
- *  change that would discard unsaved work. */
+/** The editor's global modals: a refused save, and a tab change that would
+ *  discard unsaved work. A file written elsewhere has no modal: it lands in
+ *  the shared draft (ADR-0088). */
 export default function EditorModals({
-  conflictTab,
   saveErrorTab,
   onViewYaml: handleViewYaml,
 }: {
-  conflictTab: OpenPipeline | undefined;
   saveErrorTab: OpenPipeline | undefined;
   onViewYaml: () => void;
 }) {
-  const resolveConflict = useEditStore((s) => s.resolveConflict);
   const clearSaveError = useEditStore((s) => s.clearSaveError);
   const handleDismissSaveError = useCallback(() => {
     if (saveErrorTab) clearSaveError(saveErrorTab.id);
@@ -28,16 +25,6 @@ export default function EditorModals({
   const cancelPendingSingleTab = useEditStore((s) => s.cancelPendingSingleTab);
   return (
     <>
-      <ConflictModal
-        open={conflictTab != null}
-        pipelineId={conflictTab?.id ?? ""}
-        onKeep={() => {
-          if (conflictTab) resolveConflict(conflictTab.id, "keep");
-        }}
-        onTake={() => {
-          if (conflictTab) resolveConflict(conflictTab.id, "take");
-        }}
-      />
       <SaveErrorModal
         open={saveErrorTab != null}
         error={saveErrorTab?.saveError ?? null}

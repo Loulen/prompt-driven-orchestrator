@@ -316,6 +316,29 @@ mod tests {
     }
 
     #[test]
+    fn frontmatter_fields_come_in_a_stable_order() {
+        // The run view re-reads `/io` every 2 s while the node works: its
+        // frontmatter labels must not swap places from one read to the next.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("designer/iter-1/live");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("progress.md"),
+            "---\nstep: two\nstatus: drafting\nowner: ana\nzone: eu\nbatch: 3\nmood: ok\n---\nWorking.\n",
+        )
+        .unwrap();
+        let node = node(vec![progress_with_schema()], false);
+        let live = resolve(&node, tmp.path());
+        let keys: Vec<&String> = live[0].files[0]
+            .frontmatter
+            .as_ref()
+            .unwrap()
+            .keys()
+            .collect();
+        assert_eq!(keys, ["batch", "mood", "owner", "status", "step", "zone"]);
+    }
+
+    #[test]
     fn declared_then_free_artifacts_with_their_frontmatter_and_schema_warnings() {
         let tmp = tempfile::TempDir::new().unwrap();
         let dir = tmp.path().join("designer/iter-1/live");

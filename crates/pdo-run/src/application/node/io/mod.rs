@@ -1,6 +1,6 @@
 //! A node's inputs and outputs as the node panel reads them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use serde::Serialize;
@@ -21,8 +21,9 @@ pub struct FileInfo {
     pub path: String,
     pub exists: bool,
     pub size: Option<u64>,
+    /// Sorted by field, so the panel's labels keep their place across reads.
     #[ts(type = "Record<string, unknown> | null")]
-    pub frontmatter: Option<HashMap<String, serde_json::Value>>,
+    pub frontmatter: Option<BTreeMap<String, serde_json::Value>>,
     /// #796: the file predates the execution whose output it is displayed as.
     /// An output file that was on disk BEFORE this node's iteration started
     /// (`IterationInfo::started_at`) was not written by the session shown as

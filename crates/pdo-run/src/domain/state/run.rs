@@ -346,6 +346,12 @@ pub struct RunState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pipeline_id: Option<String>,
+    /// The version of the pipeline this Run launched (ADR-0088), frozen into
+    /// `RunStarted`. `None` on a Run older than the versions, and on one not
+    /// launched from the registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pipeline_version: Option<pdo_pipeline::domain::version::PipelineVersionRef>,
     /// Cumulative count of `NodeStarted` events for this Run — i.e. how many
     /// Claude Code NodeRun sessions it spawned (issue #100). A **raw** count,
     /// not deduplicated by `(node, iter)`: a legal re-spawn at the same

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use pdo_pipeline::application::ports::Renamed;
-use pdo_pipeline::application::{PipelineError, SaveOutcome};
+use pdo_pipeline::application::PipelineError;
 
 use crate::fakes::*;
 
@@ -33,18 +33,13 @@ async fn a_save_writes_the_yaml_and_prompts_and_prunes_the_prompts_of_deleted_no
         )
         .await
         .unwrap();
-    assert_eq!(
-        saved,
-        SaveOutcome {
-            id: "editable".into(),
-            renamed: false
-        }
-    );
+    assert_eq!((saved.id.as_str(), saved.renamed), ("editable", false));
     let entry = world.registry.get("editable").unwrap();
     assert_eq!(entry.yaml, yaml);
     assert_eq!(entry.prompts, prompts(&[("worker", "New.")]));
-    // The watcher suppresses the daemon's own write: nothing is announced.
-    assert!(world.events.0.lock().unwrap().is_empty());
+    // The watcher suppresses the daemon's own write: the save announces it
+    // once, for the lists to read its new version (ADR-0088).
+    assert_eq!(world.events.0.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -96,13 +91,7 @@ async fn a_save_that_changes_the_name_moves_the_entry_and_records_the_rename() {
         )
         .await
         .unwrap();
-    assert_eq!(
-        saved,
-        SaveOutcome {
-            id: "saved-new".into(),
-            renamed: true
-        }
-    );
+    assert_eq!((saved.id.as_str(), saved.renamed), ("saved-new", true));
     assert!(!world.registry.exists_id("saved-old"));
     assert_eq!(
         world.registry.get("saved-new").unwrap().prompts["worker"],

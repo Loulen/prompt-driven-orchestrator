@@ -199,6 +199,40 @@ describe("TabBar Save on a run tab (ADR-0085)", () => {
     expect(screen.queryByTestId("save-menu")).toBeNull();
   });
 
+  it("a shared draft reads « Save… » and opens the version window, saved as it says (ADR-0088)", async () => {
+    const save = vi.fn().mockResolvedValue({ ok: true });
+    const draft = {
+      status: "live" as const,
+      synced: true,
+      canWrite: true,
+      connection: "1",
+      participants: [],
+      changes: 2,
+      canUndo: false,
+      canRedo: false,
+      undoLabel: null,
+    };
+    seed([tab("tpl", { dirty: true, draft })], "tpl");
+    useEditStore.setState({ save, saveVersionFor: null });
+    render(<TabBar />);
+    const button = screen.getByTestId("save-button");
+    expect(button).toHaveTextContent("Save…");
+    fireEvent.click(button);
+    expect(save).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("save-version-modal")).toHaveTextContent("Save tpl");
+    fireEvent.click(screen.getByTestId("save-version-confirm"));
+    await waitFor(() => expect(save).toHaveBeenCalledWith("tpl", { new_version: true, title: "v2", keep_old: false }));
+    await waitFor(() => expect(screen.queryByTestId("save-version-modal")).toBeNull());
+  });
+
+  it("a version shown read only is named after its pipeline and has no Save (ADR-0088)", () => {
+    const version = { pipelineId: "tpl", number: 5, title: "v5", author: null, savedAt: "2026-10-14T10:00:00Z" };
+    seed([tab("__version__tpl@5", { version })], "__version__tpl@5");
+    render(<TabBar />);
+    expect(screen.getByTestId("tab-title-__version__tpl@5")).toHaveTextContent("tpl.yaml @ v5");
+    expect(screen.queryByTestId("save-button")).toBeNull();
+  });
+
   it("« Overwrite default pipeline » warns about future runs, triggers and a change since launch", async () => {
     const user = userEvent.setup();
     vi.mocked(fetchRunPipelineOverwritePreview).mockResolvedValue(

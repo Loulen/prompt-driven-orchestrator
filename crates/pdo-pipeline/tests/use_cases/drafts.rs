@@ -8,6 +8,7 @@ use pdo_pipeline::adapters::draft_doc::YDraftDocuments;
 use pdo_pipeline::application::drafts::{DraftJoin, DraftMessage};
 use pdo_pipeline::application::ports::{DraftDocument, DraftDocuments};
 use pdo_pipeline::domain::draft::DraftContent;
+use pdo_pipeline::domain::version::SaveAs;
 use serde_json::json;
 
 use crate::fakes::*;
@@ -140,7 +141,10 @@ async fn a_kept_draft_is_counted_again_when_it_opens() {
         .join_draft(&operator(), "flow")
         .await
         .unwrap();
-    world.pipelines.leave_draft(&join.room, join.connection).await;
+    world
+        .pipelines
+        .leave_draft(&join.room, join.connection)
+        .await;
     {
         let mut kept = world.drafts.0.lock().unwrap();
         let flow = kept.get_mut("flow").unwrap();
@@ -233,6 +237,7 @@ async fn saving_the_draft_leaves_no_change() {
             &yaml,
             &HashMap::new(),
             &client.doc.content(),
+            &SaveAs::new_version(),
         )
         .await
         .unwrap();
@@ -251,14 +256,25 @@ async fn a_file_with_coordinates_opens_and_saves_with_no_change() {
         )
     };
     let world = World::new();
-    world.registry.put("flow", &placed(pipeline_with_worker("flow")));
+    world
+        .registry
+        .put("flow", &placed(pipeline_with_worker("flow")));
     let join = world
         .pipelines
         .join_draft(&operator(), "flow")
         .await
         .unwrap();
     assert_eq!(join.room.changes(), 0);
-    assert!(world.pipelines.draft_summaries().await.get("flow").unwrap().changes == 0);
+    assert!(
+        world
+            .pipelines
+            .draft_summaries()
+            .await
+            .get("flow")
+            .unwrap()
+            .changes
+            == 0
+    );
 
     let client = Client::of(&join);
     let update = client.edit(|c| {
@@ -279,13 +295,17 @@ async fn a_file_with_coordinates_opens_and_saves_with_no_change() {
             &yaml,
             &HashMap::new(),
             &client.doc.content(),
+            &SaveAs::new_version(),
         )
         .await
         .unwrap();
     assert_eq!(join.room.changes(), 0);
 
     // Opened again from the store, after its last participant left.
-    world.pipelines.leave_draft(&join.room, join.connection).await;
+    world
+        .pipelines
+        .leave_draft(&join.room, join.connection)
+        .await;
     let again = world
         .pipelines
         .join_draft(&operator(), "flow")
@@ -326,6 +346,7 @@ async fn a_change_made_while_saving_is_still_a_change_and_survives_a_restart() {
             &pipeline_with_worker("flow"),
             &HashMap::new(),
             &saved,
+            &SaveAs::new_version(),
         )
         .await
         .unwrap();

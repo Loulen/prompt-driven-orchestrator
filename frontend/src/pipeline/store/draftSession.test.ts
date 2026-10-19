@@ -228,7 +228,12 @@ describe("a pipeline tab's shared draft", () => {
     expect((content.pipeline as { name: string }).name).toBe("flow");
     vi.mocked(savePipeline).mockResolvedValueOnce({ ok: true });
     await useEditStore.getState().save("flow");
-    expect(savePipeline).toHaveBeenCalledWith("flow", expect.any(String), { a: "Read." }, "instance", content);
+    expect(savePipeline).toHaveBeenCalledWith("flow", expect.any(String), { a: "Read." }, "instance", content, undefined);
+    // ADR-0088: as the « Save… » window says.
+    const replace = { new_version: false, keep_old: true };
+    vi.mocked(savePipeline).mockResolvedValueOnce({ ok: true, version: { number: 1, title: "v1" } });
+    await useEditStore.getState().save("flow", replace);
+    expect(vi.mocked(savePipeline).mock.calls.at(-1)?.[5]).toEqual(replace);
   });
 
   it("follows a rename to the new id", () => {

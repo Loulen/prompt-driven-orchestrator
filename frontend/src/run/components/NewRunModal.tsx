@@ -14,6 +14,7 @@ import type { RunNewContext } from "../../shared/extensions/contract";
 import { useSectionForm } from "../../shared/extensions/sectionForm";
 import { useRunCreationRightsStore } from "../store/runCreationRightsStore";
 import { projectLookup } from "../../workspace/model/projectLookup";
+import LaunchDraftModal from "../../pipeline/components/LaunchDraftModal";
 
 // `OpenIntent` / `RUN_INTENT` live in `newRun/openIntent.ts`; re-exported so the existing
 // importers (`app/App.tsx`) keep importing them from here.
@@ -50,7 +51,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const {
     sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, handleProvisioningValidity,
     handlePaste, requestClose, triggerInputRejectReason, selectedPipelineId, editingTriggerId,
-    input, runName, triggerName,
+    input, runName, triggerName, pendingDraft, cancelPendingDraft, handleLaunch,
   } = form;
   // CORE-5: where a Run may be created, asked again at each open (a right may
   // have changed since the Projets were last read).
@@ -160,6 +161,14 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         {/* Footer */}
         <NewRunFooter form={form} />
       </div>
+      {/* ADR-0088: a draft that differs from the last version is saved, or left out, on purpose. */}
+      {pendingDraft && (
+        <LaunchDraftModal
+          draft={pendingDraft}
+          onCancel={cancelPendingDraft}
+          onChoose={(choice) => void handleLaunch(choice)}
+        />
+      )}
     </div>
   );
 }

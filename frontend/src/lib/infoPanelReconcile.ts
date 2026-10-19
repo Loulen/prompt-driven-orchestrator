@@ -33,18 +33,33 @@ export interface InfoPanelReconcileInputs {
  */
 export function shouldCloseInfoOnTabChange(input: InfoPanelReconcileInputs): boolean {
   if (!input.infoOpen || input.prevTabId === input.nextTabId) return false;
+  // ADR-0088: a pipeline and its versions shown read only share one history:
+  // « View » from the Versions tab keeps the panel on it.
+  if (input.prevTabId && input.nextTabId && historyOf(input.prevTabId) === historyOf(input.nextTabId)) {
+    return false;
+  }
   const rekey = input.rekey;
   return !(rekey && rekey.from === input.prevTabId && rekey.to === input.nextTabId);
 }
 
+/** The pipeline whose history a tab shows: a version tab's pipeline, else the tab. */
+function historyOf(tabId: string): string {
+  const VERSION = "__version__";
+  if (!tabId.startsWith(VERSION)) return tabId;
+  const at = tabId.lastIndexOf("@");
+  return at > VERSION.length ? tabId.slice(VERSION.length, at) : tabId;
+}
+
 /** A tab of the Pipeline info panel. */
-export type TabId = "info" | "diff" | "repositories" | "manager" | "yaml" | "assistant";
+export type TabId = "info" | "diff" | "repositories" | "manager" | "yaml" | "assistant" | "versions";
 
 /** What the panel's context offers: a live Run (Diff / Repositories / Manager)
  *  or a library template with an Assistant (#302) — never both. */
 export interface InfoTabContext {
   hasRun: boolean;
   hasAssistant: boolean;
+  /** ADR-0088: a registry pipeline's tab (or a version of it) has a history. */
+  hasVersions?: boolean;
 }
 
 /**
@@ -56,6 +71,7 @@ export interface InfoTabContext {
 export function resolveInfoTab(tab: TabId, ctx: InfoTabContext): TabId {
   if ((tab === "manager" || tab === "diff" || tab === "repositories") && !ctx.hasRun) return "info";
   if (tab === "assistant" && !ctx.hasAssistant) return "info";
+  if (tab === "versions" && !ctx.hasVersions) return "info";
   return tab;
 }
 

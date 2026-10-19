@@ -11,7 +11,8 @@ export function useAssistantTarget(): string | null {
   // #302 / ADR-0048: the Assistant authors a library *template*, so it targets the
   // active edit tab's pipeline id + scope — never a run. `null` on a run tab hides
   // the Assistant tab (the Manager tab covers a run instead).
-  const assistantId = editTab && editTab.scope !== "run" ? editTab.id : null;
+  // ADR-0088: a version shown read only is no template to author.
+  const assistantId = editTab && editTab.scope !== "run" && !editTab.version ? editTab.id : null;
   // Paired with `assistantId`, deliberately: a scope of `"run"` alongside a null
   // id would be a half-fact, and it would churn the lifecycle effect on every
   // hop to a Run for nothing.
@@ -21,7 +22,7 @@ export function useAssistantTarget(): string | null {
   // so it reads the open tabs, not the active one. Keying it on the active tab
   // (the first cut) meant a glance at a Run threw the conversation away while two
   // templates were still open, which is the regret this issue is made of.
-  const hasTemplateTab = openTabs.some((t) => t.scope !== "run");
+  const hasTemplateTab = openTabs.some((t) => t.scope !== "run" && !t.version);
 
   // The assistant's whole lifecycle hangs here, and not down in the Assistant
   // tab. This is the right altitude for it: the tab unmounts on every panel close

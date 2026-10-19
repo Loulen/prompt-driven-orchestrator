@@ -36,6 +36,7 @@ async fn an_overwrite_copies_the_snapshot_prunes_orphan_prompts_and_announces_it
             &snapshot,
             &prompts(&[("worker", "New.")]),
         )
+        .await
         .unwrap();
 
     assert_eq!(world.registry.ids(), ["shared"]);
@@ -55,31 +56,38 @@ async fn an_overwrite_copies_the_snapshot_prunes_orphan_prompts_and_announces_it
 async fn an_overwrite_refuses_a_missing_pipeline_an_invalid_snapshot_and_a_denied_update() {
     let world = World::new();
     assert!(matches!(
-        world.pipelines.overwrite(
-            &operator(),
-            "ghost",
-            &pipeline_yaml("ghost"),
-            &HashMap::new()
-        ),
+        world
+            .pipelines
+            .overwrite(
+                &operator(),
+                "ghost",
+                &pipeline_yaml("ghost"),
+                &HashMap::new()
+            )
+            .await,
         Err(PipelineError::NotFound)
     ));
     world.registry.put("kept", &pipeline_yaml("kept"));
     assert!(matches!(
         world
             .pipelines
-            .overwrite(&operator(), "kept", "name: [unclosed", &HashMap::new()),
+            .overwrite(&operator(), "kept", "name: [unclosed", &HashMap::new())
+            .await,
         Err(PipelineError::Invalid(_))
     ));
 
     let refused = World::refusing("read only");
     refused.registry.put("kept", &pipeline_yaml("kept"));
     assert!(matches!(
-        refused.pipelines.overwrite(
-            &operator(),
-            "kept",
-            &pipeline_with_worker("kept"),
-            &HashMap::new()
-        ),
+        refused
+            .pipelines
+            .overwrite(
+                &operator(),
+                "kept",
+                &pipeline_with_worker("kept"),
+                &HashMap::new()
+            )
+            .await,
         Err(PipelineError::Denied(_))
     ));
     for w in [&world, &refused] {

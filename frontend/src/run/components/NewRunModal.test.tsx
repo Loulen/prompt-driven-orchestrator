@@ -3588,3 +3588,115 @@ describe("NewRunModal — a run/new section provides a value (API 0.9)", () => {
     expect(sent).not.toHaveProperty("extensions");
   });
 });
+
+describe("NewRunModal — a draft that differs from the last version (ADR-0088)", () => {
+  const versioned = makePipeline({ version: { number: 8, title: "external edit" } });
+
+  function openDraft(changes: number) {
+    useEditStore.setState({
+      pipelines: [versioned],
+      activeTabId: versioned.id,
+      openTabs: [
+        {
+          id: versioned.id,
+          scope: "instance",
+          pipeline: { name: versioned.name, variables: {}, nodes: [], edges: [] },
+          prompts: {},
+          diagnostics: [],
+          dirty: changes > 0,
+          externalDirty: false,
+          draft: {
+            status: "live",
+            synced: true,
+            canWrite: true,
+            connection: "1",
+            participants: [],
+            changes,
+            canUndo: false,
+            canRedo: false,
+            undoLabel: null,
+          },
+        },
+      ],
+    });
+  }
+
+  async function fillAndLaunch() {
+    renderModal();
+    await enterValidRepo();
+    await waitFor(() => expect(selectedPipeline()).toContain(versioned.name));
+    fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), { target: { value: "go" } });
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^launch/i }));
+  }
+
+  beforeEach(() => {
+    vi.mocked(fetchPipelines).mockResolvedValue([versioned]);
+  });
+
+  it("asks before launching, then runs the last version and leaves the draft as it is", async () => {
+    const save = vi.fn();
+    openDraft(3);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    const modal = await screen.findByTestId("launch-draft-modal");
+    expect(createRun).not.toHaveBeenCalled();
+    expect(modal).toHaveTextContent("The draft has 3 changes that are not in a version yet");
+    expect(within(modal).getByTestId("launch-draft-confirm")).toHaveTextContent("Save as v9 and run");
+    expect(within(modal).getByTestId("launch-draft-last")).toHaveTextContent("Run last version (v8 · external edit)");
+
+    fireEvent.click(within(modal).getByTestId("launch-draft-last").querySelector("input")!);
+    expect(within(modal).getByTestId("launch-draft-confirm")).toHaveTextContent("Run last version");
+    fireEvent.click(within(modal).getByTestId("launch-draft-confirm"));
+
+    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("saves the draft as the next version first, by default", async () => {
+    const save = vi.fn().mockResolvedValue({ ok: true, version: { number: 9, title: "v9" } });
+    openDraft(2);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    fireEvent.click(await screen.findByTestId("launch-draft-confirm"));
+    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenCalledWith(versioned.id, { new_version: true, keep_old: false });
+    expect(save.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(createRun).mock.invocationCallOrder[0]);
+  });
+
+  it("launches the pipeline under the id the save moved it to", async () => {
+    const save = vi.fn().mockResolvedValue({ ok: true, id: "renamed-pipe", renamed: true, version: { number: 9, title: "v9" } });
+    openDraft(1);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    fireEvent.click(await screen.findByTestId("launch-draft-confirm"));
+    await waitFor(() =>
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ pipeline_id: "renamed-pipe" })),
+    );
+  });
+
+  it("launches nothing when the save fails", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    openDraft(1);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    fireEvent.click(await screen.findByTestId("launch-draft-confirm"));
+    expect(await screen.findByTestId("launch-error")).toHaveTextContent("could not be saved as v9");
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it("launches at once, with nothing saved, when the draft has no change", async () => {
+    const save = vi.fn();
+    openDraft(0);
+    useEditStore.setState({ save });
+    await fillAndLaunch();
+
+    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("launch-draft-modal")).not.toBeInTheDocument();
+    expect(save).not.toHaveBeenCalled();
+  });
+});

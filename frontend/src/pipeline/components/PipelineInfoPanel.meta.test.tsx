@@ -150,19 +150,22 @@ describe("Pipeline info — Info tab on a template (#948)", () => {
     expect(screen.queryByText("Pipeline Inspector")).not.toBeInTheDocument();
   });
 
-  it("edits name and version through the edit store: dirty, undoable", () => {
+  it("edits the name through the edit store: dirty, undoable", () => {
     render(<StorePanel />);
     fireEvent.change(screen.getByTestId("pipeline-name-input"), { target: { value: "Renamed" } });
     expect(pipelineNow().name).toBe("Renamed");
     expect(tabNow().dirty).toBe(true);
     expect(screen.getByTestId("info-panel-name")).toHaveTextContent("Renamed");
-
-    fireEvent.change(screen.getByTestId("pipeline-version-input"), { target: { value: "2.0" } });
-    expect(pipelineNow().version).toBe("2.0");
     expect(serializePipeline(pipelineNow())).toContain("Renamed");
 
     useEditStore.getState().undo();
-    expect(pipelineNow().version).toBe("1.0");
+    expect(pipelineNow().name).not.toBe("Renamed");
+  });
+
+  it("has no free « Version » field: a Save numbers the versions (ADR-0088)", () => {
+    render(<StorePanel />);
+    expect(screen.queryByTestId("pipeline-version-input")).not.toBeInTheDocument();
+    expect(screen.getByTestId("info-panel-version")).toHaveTextContent("template · v1");
   });
 
   it("checks 'Prompt required' by default when the flag is absent", () => {
@@ -332,7 +335,7 @@ describe("Pipeline info — wiring grid size on a template (#877)", () => {
 
 describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
   it.each([["running"], ["archived"]] as const)(
-    "shows version, Prompt required, variables and grid size as text on a %s Run, with no input",
+    "shows Prompt required, variables and grid size as text on a %s Run, with no input",
     (status) => {
       patchPipeline({
         version: "3.1",
@@ -344,7 +347,7 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
 
       const meta = screen.getByTestId("pipeline-meta");
       expect(meta).toHaveAttribute("data-readonly", "true");
-      expect(screen.getByTestId("pipeline-meta-version")).toHaveTextContent("3.1");
+      expect(screen.queryByTestId("pipeline-meta-version")).not.toBeInTheDocument();
       expect(screen.getByTestId("pipeline-meta-prompt-required")).toHaveTextContent("No");
       expect(screen.getByTestId("pipeline-meta-grid-size")).toHaveTextContent("S");
       expect(screen.getByTestId("info-panel-variables")).toHaveTextContent("max_iter");
@@ -363,6 +366,32 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
     render(<StorePanel run={makeRun()} />);
     expect(screen.getByTestId("pipeline-meta-grid-size")).toHaveTextContent("Global (M)");
     expect(screen.getByTestId("pipeline-meta-prompt-required")).toHaveTextContent("Yes");
+  });
+
+  it("shows the version the Run launched, and when a newer one is out (ADR-0088)", () => {
+    useEditStore.setState({
+      pipelines: [
+        {
+          id: "my-pipeline",
+          name: "My Pipeline",
+          scope: "instance",
+          path: "/p/my-pipeline.yaml",
+          node_count: 2,
+          modified: null,
+          variables: {},
+          prompt_required: true,
+          validation: { kind: "all" },
+          version: { number: 8, title: "external edit" },
+        },
+      ],
+    });
+    const run = makeRun({ pipeline_id: "my-pipeline", pipeline_version: { number: 7, title: "Add reviewer loop" } });
+    const { rerender } = render(<StorePanel run={run} />);
+    expect(screen.getByTestId("info-panel-version")).toHaveTextContent(`run ${run.run_id.slice(-8)} · v7 · Add reviewer loop`);
+    expect(screen.getByTestId("newer-version")).toHaveTextContent("v8 is out");
+    rerender(<StorePanel run={{ ...run, pipeline_version: { number: 8, title: "external edit" } }} />);
+    expect(screen.queryByTestId("newer-version")).not.toBeInTheDocument();
+    useEditStore.setState({ pipelines: [] });
   });
 
   it("keeps the Run stats alongside the graph stats", () => {

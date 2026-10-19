@@ -1,13 +1,17 @@
 import { useActiveDraft, useOthers } from "../store/useDraftPresence";
+import { useEditStore } from "../store/editStore";
+import { lastVersionOf } from "../model/versions";
 import { ParticipantStack } from "./ParticipantAvatar";
 
 /**
  * The shared draft of the active tab, in the tab bar (ADR-0088): who else has
- * it open, and its changes since the file. A tab that only reads says so.
+ * it open, and its changes since the last version. A tab that only reads
+ * says so.
  */
 export default function DraftPresence() {
   const draft = useActiveDraft();
   const participants = useOthers();
+  const last = useEditStore((s) => (s.activeTabId ? lastVersionOf(s.pipelines, s.activeTabId).number : 1));
   if (!draft) return null;
   const changes = draft.changes === 1 ? "1 change" : `${draft.changes} changes`;
   return (
@@ -30,7 +34,7 @@ export default function DraftPresence() {
       )}
       {draft.changes > 0 && (
         <span className="whitespace-nowrap font-mono text-fg-4" style={{ fontSize: "10px" }} data-testid="draft-changes">
-          draft · {changes}
+          draft · {changes} since v{last}
         </span>
       )}
     </span>

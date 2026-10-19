@@ -272,6 +272,11 @@ pub(super) fn apply_run_started(state: &mut RunState, event: &Event) {
         if let Some(pid) = payload.get("pipeline_id").and_then(|v| v.as_str()) {
             state.pipeline_id = Some(pid.to_string());
         }
+        // ADR-0088: the version the Run launched; absent on a Run older than
+        // the versions, or not launched from the registry.
+        state.pipeline_version = payload
+            .get("pipeline_version")
+            .and_then(|v| serde_json::from_value(v.clone()).ok());
 
         let string_list = |key: &str| -> Vec<String> {
             payload

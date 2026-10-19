@@ -10,11 +10,13 @@ use pdo_kernel::attributes::{AttributeFilter, Attributes};
 use pdo_kernel::Actor;
 
 use super::dto::{
-    CreatePipelineRequest, PipelineListEntry, RenamePipelineRequest, SavePipelineRequest,
+    CreatePipelineRequest, PipelineListEntry, PipelineVersionEntry, RenamePipelineRequest,
+    SavePipelineRequest,
 };
 use super::{common_response, error, error_with_message, structured_parse_error};
 use crate::application::{editor_json, Created, PipelineError, Pipelines, RenameOutcome};
 use crate::domain::validation::PipelineValidation;
+use crate::domain::version::SaveAs;
 
 /// `GET /pipelines[?attr.<id>/<key>=<value>…]`.
 pub(super) async fn list(
@@ -26,12 +28,15 @@ pub(super) async fn list(
         Ok(list) => {
             let mut validations = pipelines.validations().await;
             let mut drafts = pipelines.draft_summaries().await;
+            let ids: Vec<String> = list.iter().map(|(summary, _)| summary.id.clone()).collect();
+            let mut versions = pipelines.last_versions(&ids).await;
             Json(
                 list.into_iter()
                     .map(|(summary, attributes)| {
                         let validation = validations.remove(&summary.id).unwrap_or_default();
                         let draft = drafts.remove(&summary.id);
-                        PipelineListEntry::from((summary, attributes, validation, draft))
+                        let version = versions.remove(&summary.id);
+                        PipelineListEntry::from((summary, attributes, validation, draft, version))
                     })
                     .collect::<Vec<_>>(),
             )
@@ -98,8 +103,16 @@ pub(super) async fn save(
     Json(req): Json<SavePipelineRequest>,
 ) -> Response {
     let saved = if let Some(draft) = &req.draft {
+        let save_as = req.version.clone().unwrap_or_else(SaveAs::new_version);
         pipelines
-            .save_draft(&actor, &pipeline_id, &req.yaml, &req.prompts, draft)
+            .save_draft(
+                &actor,
+                &pipeline_id,
+                &req.yaml,
+                &req.prompts,
+                draft,
+                &save_as,
+            )
             .await
     } else {
         pipelines
@@ -107,11 +120,18 @@ pub(super) async fn save(
             .await
     };
     match saved {
-        Ok(saved) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "id": saved.id, "renamed": saved.renamed })),
-        )
-            .into_response(),
+        Ok(saved) => {
+            let mut body = serde_json::json!({
+                "ok": true,
+                "id": saved.id,
+                "renamed": saved.renamed,
+                "version": saved.version,
+            });
+            if let Some(kept) = saved.kept {
+                body["kept"] = serde_json::json!({ "id": kept.id });
+            }
+            (StatusCode::OK, Json(body)).into_response()
+        }
         Err(PipelineError::Invalid(e)) => structured_parse_error("invalid YAML", &e),
         Err(e) => move_refusal(e),
     }
@@ -234,6 +254,48 @@ pub(super) async fn delete(
             StatusCode::CONFLICT,
             format!("Cannot delete: {count} active run(s)"),
         ),
+        Err(PipelineError::Storage(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => fallback(e),
+    }
+}
+
+/// `GET /pipelines/{id}/versions`: the history, newest first.
+pub(super) async fn versions(
+    State(pipelines): State<Arc<Pipelines>>,
+    AxumPath(pipeline_id): AxumPath<String>,
+) -> Response {
+    match pipelines.versions(&pipeline_id).await {
+        Ok(listed) => Json(serde_json::json!({
+            "versions": listed.into_iter().map(PipelineVersionEntry::from).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(PipelineError::Storage(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => fallback(e),
+    }
+}
+
+/// `GET /pipelines/{id}/versions/{number}`: one version, as the editor reads
+/// it, read only.
+pub(super) async fn version(
+    State(pipelines): State<Arc<Pipelines>>,
+    AxumPath((pipeline_id, number)): AxumPath<(String, u32)>,
+) -> Response {
+    match pipelines.version(&pipeline_id, number).await {
+        Ok(detail) => Json(serde_json::json!({
+            "number": detail.meta.number,
+            "title": detail.meta.title,
+            "author": detail.meta.author,
+            "saved_at": detail.meta.saved_at,
+            "external": detail.meta.external,
+            "yaml": detail.yaml,
+            "pipeline": detail.pipeline,
+            "prompts": detail.prompts,
+        }))
+        .into_response(),
+        Err(PipelineError::Invalid(e)) => {
+            error(StatusCode::BAD_REQUEST, format!("parse error: {e}"))
+        }
+        Err(PipelineError::BadRequest(e)) => error(StatusCode::BAD_REQUEST, e),
         Err(PipelineError::Storage(e)) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
         Err(e) => fallback(e),
     }

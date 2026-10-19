@@ -287,6 +287,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
               showDuplicate
               modified={p.modified}
               draft={p.draft}
+              version={p.version?.number}
               decorations={<PipelineItemDecorations pipeline={p} />}
               // Where the launch forms offer it, at a glance.
               indicator={

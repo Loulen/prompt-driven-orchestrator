@@ -1,4 +1,5 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
+import type { DraftLaunch } from "../../../pipeline/model/versions";
 import { createTrigger, updateTrigger } from "../../../trigger/api/triggers";
 import { testGuard } from "../../../trigger/api/guard";
 import { createRun } from "../../api/createRun";
@@ -10,8 +11,15 @@ import type { EntityContext } from "../../../shared/extensions/contract";
 import { sectionSaveError } from "../../../shared/extensions/sectionForm";
 import { toast } from "../../../shared/ui/toast";
 
+/** ADR-0088: what « Launch » does with a draft that differs from the last version. */
+export type DraftChoice = "save" | "last";
+
 interface SubmitDeps {
-  flushPendingSaves: () => Promise<void>;
+  /** The draft a launch of the pipeline would leave out, if any (ADR-0088). */
+  draftLaunchOf: (pipelineId: string) => DraftLaunch | null;
+  /** Freeze the draft of the tab `tabId` as a new version: the pipeline's id
+   *  after the save (a renamed draft moves it), `null` when it failed. */
+  saveDraftVersion: (tabId: string) => Promise<string | null>;
   attachmentsOverLimit: boolean;
   onCreated: (runId: string) => void;
   onClose: () => void;
@@ -57,7 +65,7 @@ export async function createdRun(runId: string, runName: string): Promise<Entity
  */
 export function useNewRunSubmit(
   s: NewRunState,
-  { flushPendingSaves, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections, provideSections }: SubmitDeps,
+  { draftLaunchOf, saveDraftVersion, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections, provideSections }: SubmitDeps,
 ) {
   const {
     selectedPipeline, sourceBranch, targetRepo, repoValid, runName, setRunName, autoName,
@@ -124,21 +132,40 @@ export function useNewRunSubmit(
     ];
   }, [secondaryRepos, targetRepo, sourceBranch]);
 
-  const handleLaunch = useCallback(async () => {
+  // ADR-0088: a Run launches a saved version, never the draft. A draft that
+  // differs from the last version asks first: save it as one, or run the last.
+  const [pendingDraft, setPendingDraft] = useState<DraftLaunch | null>(null);
+  const cancelPendingDraft = useCallback(() => setPendingDraft(null), []);
+
+  const handleLaunch = useCallback(async (choice?: DraftChoice) => {
     if (!repoValid || !selectedPipeline || !hasRequiredPrompt) return;
+    const draft = draftLaunchOf(selectedPipeline.id);
+    if (draft && choice == null) {
+      setPendingDraft(draft);
+      return;
+    }
+    setPendingDraft(null);
     setSubmitting(true);
     setError(null);
 
     const variables = newRunForm.buildVariables(overrides, selectedPipeline);
 
     try {
-      await flushPendingSaves();
+      let launched = selectedPipeline;
+      if (draft && choice === "save") {
+        const savedId = await saveDraftVersion(draft.tabId);
+        if (savedId == null) {
+          setError(`The draft could not be saved as v${draft.next}: nothing was launched.`);
+          return;
+        }
+        launched = { ...selectedPipeline, id: savedId };
+      }
       // A section that fails to provide keeps the form open, like the
       // extension's refusal of what it provided (a 400 naming the reason).
       const extensions = provideSections ? await provideSections() : {};
       const resp = await createRun({
         ...newRunForm.buildRunPayload({
-          selectedPipeline,
+          selectedPipeline: launched,
           input,
           variables,
           targetRepo,
@@ -177,7 +204,7 @@ export function useNewRunSubmit(
     } finally {
       setSubmitting(false);
     }
-  }, [saveSections, provideSections, selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning, setAttachmentError, setAttachmentHint, setAttachments, setAutoName, setError, setInput, setOverrides, setProvisioning, setRunName, setSkills, setSubmitting]);
+  }, [saveSections, provideSections, selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, draftLaunchOf, saveDraftVersion, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning, setAttachmentError, setAttachmentHint, setAttachments, setAutoName, setError, setInput, setOverrides, setProvisioning, setRunName, setSkills, setSubmitting]);
 
   const canLaunch = provisioningValid && !attachmentsOverLimit && newRunForm.canLaunch({
     repoValid,
@@ -264,7 +291,7 @@ export function useNewRunSubmit(
     };
 
     try {
-      await flushPendingSaves();
+      // ADR-0088: a Trigger fires the last version; nothing to save first.
       const saved = editingTriggerId
         ? await updateTrigger(editingTriggerId, newRunForm.buildTriggerUpdatePayload(fields))
         : await createTrigger(newRunForm.buildTriggerCreatePayload(fields));
@@ -314,7 +341,6 @@ export function useNewRunSubmit(
     harness,
     skills,
     autoName,
-    flushPendingSaves,
     onTriggerSaved,
     onClose,
     setAllowOverlap,
@@ -349,6 +375,6 @@ export function useNewRunSubmit(
     missingProfile, instanceDefaultSandbox, effectiveSandbox, sandboxDoomed,
     inheritedDefaultReason, harnessCatalog, instanceDefaultHarness, secondariesReady,
     buildTargetRepos, handleLaunch, canLaunch, launchBlockReason, resolvedCron, triggerInputRejectReason,
-    canCreateTrigger, handleCreateTrigger, onTestGuard,
+    canCreateTrigger, handleCreateTrigger, onTestGuard, pendingDraft, cancelPendingDraft,
   };
 }

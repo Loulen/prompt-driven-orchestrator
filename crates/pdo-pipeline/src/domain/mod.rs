@@ -14,5 +14,6 @@ pub mod node_spec;
 pub mod pipeline;
 pub mod portable;
 pub mod validation;
+pub mod version;
 pub mod workflow_import;
 pub mod yaml_json;

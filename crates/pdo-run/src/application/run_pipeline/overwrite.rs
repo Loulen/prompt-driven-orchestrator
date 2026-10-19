@@ -212,7 +212,11 @@ impl Runs {
             &target.repo_root,
             run_id,
         ));
-        match self.source_pipelines.overwrite(actor, &id, &yaml, &prompts) {
+        match self
+            .source_pipelines
+            .overwrite(actor, &id, &yaml, &prompts)
+            .await
+        {
             Ok(()) => {}
             Err(OverwriteRefusal::Denied(denied)) => return denied.into_response(),
             Err(OverwriteRefusal::NotFound) => {

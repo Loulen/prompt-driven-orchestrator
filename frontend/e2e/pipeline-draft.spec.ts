@@ -1,7 +1,7 @@
 import { test, expect, type Browser, type Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { openPipelineForEdit } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 
 // Layer 3b — ADR-0088: a pipeline of the registry is edited in a shared draft.
 // Two browsers on the same pipeline see each other's changes, selection and
@@ -157,6 +157,7 @@ test("two browsers share the draft, its presence, and their own undo", async ({ 
   // A saves: nothing left to save, for A, for B, for the list, after a
   // reload; the file keeps the order of its inline maps.
   await page.getByTestId("save-button").click();
+  await confirmSaveVersion(page);
   await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
   await expect(other.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
   await expect(page.getByTestId("draft-changes")).toHaveCount(0);

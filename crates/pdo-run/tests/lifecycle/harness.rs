@@ -128,8 +128,17 @@ impl SourcePipelines for NoSourcePipelines {
         _id: &'a str,
         _yaml: &'a str,
         _prompts: &'a std::collections::HashMap<String, String>,
-    ) -> Result<(), OverwriteRefusal> {
-        Err(OverwriteRefusal::NotFound)
+    ) -> pdo_run::application::ports::BoxFuture<'a, Result<(), OverwriteRefusal>> {
+        Box::pin(async { Err(OverwriteRefusal::NotFound) })
+    }
+    fn last_version<'a>(
+        &'a self,
+        _id: &'a str,
+    ) -> pdo_run::application::ports::BoxFuture<
+        'a,
+        Option<pdo_pipeline::domain::version::PipelineVersionRef>,
+    > {
+        Box::pin(async { None })
     }
 }
 

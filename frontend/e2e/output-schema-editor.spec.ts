@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openPipelineForEdit } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 
 // Layer 3b — OutputSchemaEditor round-trip + retry banner (#59).
 // Verifies:
@@ -122,6 +122,7 @@ test("output schema editor round-trips through YAML save", async ({ page }) => {
   // Save
   const saveBtn = page.getByTestId("save-button");
   await saveBtn.click();
+  await confirmSaveVersion(page);
 
   // Read the YAML file and verify the frontmatter schema round-tripped
   const yaml = await fs.readFile(PIPELINE_PATH, "utf-8");

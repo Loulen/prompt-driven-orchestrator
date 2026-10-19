@@ -119,7 +119,11 @@ impl Runs {
             None => None,
         };
         let target = target::resolve(self, &req, parent.as_ref())?;
-        let launchable = target::load_pipeline(self, &req)?;
+        let version = target::version_of(self, &req).await;
+        let launchable = target::Launchable {
+            version,
+            ..target::load_pipeline(self, &req)?
+        };
         let provisioning = freeze::provisioning(self, &req, &target).await?;
 
         let run_id = generate_run_id();

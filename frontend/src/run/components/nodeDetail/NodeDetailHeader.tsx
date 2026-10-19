@@ -43,6 +43,10 @@ export default function NodeDetailHeader({
     };
     return { entity };
   }, [node.node_id, node.status, nodeName]);
+  // The times of the iteration on show, not always the latest one's.
+  const shown = node.iterations.find((it) => it.iter === selectedIter);
+  const startedAt = shown ? shown.started_at : node.started_at;
+  const completedAt = shown ? shown.completed_at : node.completed_at;
   return (
     <div className="border-b border-line px-3 py-2">
       <div className="flex items-center gap-2">
@@ -80,7 +84,7 @@ export default function NodeDetailHeader({
         {node.node_id}
       </div>
       <div
-        className="mt-0.5 flex items-center gap-1 font-mono text-fg-4"
+        className="mt-0.5 flex flex-wrap items-center gap-x-1 whitespace-nowrap font-mono text-fg-4"
         style={{ fontSize: "10px" }}
       >
         {hasMultipleIters ? (
@@ -92,11 +96,11 @@ export default function NodeDetailHeader({
         ) : (
           <span>iter {node.iter}</span>
         )}
-        {node.started_at && (
-          <span> · started {formatTime(node.started_at)}</span>
+        {startedAt && (
+          <span data-testid="node-started-at"> · started {formatTime(startedAt)}</span>
         )}
-        {node.completed_at && (
-          <span> · ended {formatTime(node.completed_at)}</span>
+        {completedAt && (
+          <span data-testid="node-ended-at"> · ended {formatTime(completedAt)}</span>
         )}
         {node.cost && (
           <span data-testid="node-cost" title={nodeCostTitle(node.cost)}>

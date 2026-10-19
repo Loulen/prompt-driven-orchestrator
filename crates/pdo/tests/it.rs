@@ -179,12 +179,18 @@ mod run_create_upload_errors;
 #[path = "stats_cost_by_model.rs"]
 mod stats_cost_by_model;
 
+#[path = "node_transcript.rs"]
+mod node_transcript;
+
 #[path = "release_channel.rs"]
 mod release_channel;
 #[path = "update_apply.rs"]
 mod update_apply;
 #[path = "update_check.rs"]
 mod update_check;
+
+#[path = "telemetry.rs"]
+mod telemetry;
 
 #[path = "docs_links.rs"]
 mod docs_links;

@@ -40,6 +40,21 @@ pub struct IterQuery {
     pub iter: i64,
 }
 
+/// The query of a transcript page: the iteration, the first entry, how many.
+#[derive(Deserialize)]
+pub struct TranscriptQuery {
+    #[serde(default = "default_iter")]
+    pub iter: i64,
+    #[serde(default)]
+    pub after: usize,
+    #[serde(default = "default_transcript_limit")]
+    pub limit: usize,
+}
+
+pub fn default_transcript_limit() -> usize {
+    50
+}
+
 pub fn default_iter() -> i64 {
     1
 }

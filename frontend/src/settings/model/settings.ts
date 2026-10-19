@@ -5,6 +5,7 @@
  */
 
 import type { AgentChoice } from "../../shared/generated/AgentChoice";
+import type { OtlpHeaderView } from "../../shared/generated/OtlpHeaderView";
 import type { SkillRef } from "../../shared/generated/SkillRef";
 import type { HarnessDescriptorsView } from "../../harness/model/harness";
 import type { SandboxProfileRef } from "../../sandbox/model/sandbox";
@@ -200,6 +201,16 @@ export interface InstanceSettings {
    * takes for `price_table`. In production the SPA is embedded, so they agree.
    */
   harness_descriptors?: HarnessDescriptorsView;
+  /**
+   * ADR-0090: the OTLP export of the instance's metrics and traces. Off by default; on,
+   * every measure goes to `telemetry_otlp_endpoint` (the paths `/v1/metrics` and
+   * `/v1/traces` are added). Optional like `harness_descriptors`, for a daemon that
+   * predates it.
+   */
+  telemetry_otlp?: BoolSettingField;
+  telemetry_otlp_endpoint?: StringSettingField;
+  /** The export's headers, by name: their values are never sent back. */
+  telemetry_otlp_headers?: OtlpHeaderView[];
   updated_at: string;
 }
 

@@ -22,6 +22,8 @@ export interface WsMessage {
     | "trigger_deleted"
     | "triggers_paused"
     | "project_changed"
+    /** A harness's model catalogue was probed again (« Refresh models »). */
+    | "harness_catalogue_changed"
     | "pipeline_validation_changed"
     /** Who has a Pipeline's shared draft open, and its changes (ADR-0088). */
     | "pipeline_draft_changed"
@@ -49,6 +51,8 @@ export interface WsMessage {
   paused?: boolean;
   /** Set on `project_changed` messages (#552): the mutated Projet's id. */
   project_id?: string;
+  /** Set on `harness_catalogue_changed` messages: the harness probed again. */
+  harness?: string;
   /** Set on `cost_prices_synced` messages: how many price rows the sync wrote. */
   rows?: number;
   /** Set on `presence_*` messages: who arrived or left. */

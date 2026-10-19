@@ -54,6 +54,14 @@ export const TAKE_CONTROL_FRAME = JSON.stringify({ type: "take_control" });
 
 export const TAKE_CONTROL_LABEL = "Take control";
 
+/** Window bus: a gesture outside the terminal (the toast of a refused send)
+ *  asks the terminal of `session` open in this tab to take control. */
+export const TAKE_CONTROL_REQUESTED = "pdo:take-control";
+
+export function requestTakeControl(session: string): void {
+  window.dispatchEvent(new CustomEvent<{ session: string }>(TAKE_CONTROL_REQUESTED, { detail: { session } }));
+}
+
 /** #870: shown briefly to a pilot that has just become a spectator. */
 export const TAKEN_OVER_NOTICE = "Another browser took control";
 

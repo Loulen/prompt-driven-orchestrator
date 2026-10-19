@@ -1,8 +1,9 @@
 //! The `settings` context: the stored tier and the agentic profiles over
 //! SQLite, the page's sections — each context's instance defaults, the staging
 //! profiles and Docker, the harnesses' catalogues, the price table — under the
-//! daemon's home, the platform's version check, and who names a profile (the
-//! Projets, the Triggers, the instance pipelines).
+//! daemon's home, the platform's version check, the telemetry export an edit
+//! reloads, and who names a profile (the Projets, the Triggers, the instance
+//! pipelines).
 
 use std::sync::Arc;
 
@@ -12,13 +13,15 @@ use pdo_platform::Platform;
 use pdo_sandbox::adapters::local_runtime;
 use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_settings::adapters::contexts::{
-    ContextReferents, PlatformUpdateChecks, SandboxStagingProfiles,
+    ContextReferents, PlatformUpdateChecks, SandboxStagingProfiles, TelemetryOfSettings,
 };
 use pdo_settings::adapters::sections::{
     HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,
-    SandboxSection, SessionDefaults, TriggerDefaults,
+    SandboxSection, SessionDefaults, TelemetryDefaults, TriggerDefaults,
 };
+use pdo_settings::application::ports::CatalogueEvents;
 use pdo_settings::{Settings, SettingsPorts};
+use tokio::sync::broadcast;
 
 use super::{ContextResources, StoredSettings};
 
@@ -26,6 +29,7 @@ pub(super) fn settings(
     r: &ContextResources,
     stored: StoredSettings,
     platform: &Arc<Platform>,
+    telemetry: &Arc<pdo_telemetry::Telemetry>,
     host: Arc<dyn ExtensionHost>,
 ) -> Arc<Settings> {
     let home = HostHome {
@@ -50,17 +54,34 @@ pub(super) fn settings(
             Arc::new(TriggerDefaults),
             Arc::new(ReviewDefaults),
             Arc::new(PlatformDefaults),
+            Arc::new(TelemetryDefaults),
             Arc::new(sandbox),
             harnesses.clone(),
             Arc::new(PriceTableSection { home }),
         ],
         harnesses,
+        catalogue_events: Arc::new(BusCatalogueEvents(r.bus_tx.clone())),
         staging_profiles: Arc::new(SandboxStagingProfiles(profiles)),
         update_checks: Arc::new(PlatformUpdateChecks(platform.clone())),
+        telemetry: Arc::new(TelemetryOfSettings(telemetry.clone())),
         referents: Arc::new(ContextReferents {
             db: r.db.clone(),
             repo_root: r.repo_root.clone(),
         }),
         extensions: host,
     })
+}
+
+/// A harness's catalogue probed again, announced on the raw channel of the
+/// kernel's bus, which `/ws` relays to every open page.
+struct BusCatalogueEvents(broadcast::Sender<serde_json::Value>);
+
+impl CatalogueEvents for BusCatalogueEvents {
+    fn catalogue_refreshed(&self, harness: &str) {
+        // No listener (no page open) is not a failure.
+        let _ = self.0.send(serde_json::json!({
+            "type": "harness_catalogue_changed",
+            "harness": harness,
+        }));
+    }
 }

@@ -57,6 +57,7 @@ pub fn execution_model_slices(
                     executions: 1,
                     unpriced_models: usage.unpriced.into_iter().collect(),
                     missing_reasons: Vec::new(),
+                    tokens: Some(usage.tokens),
                 })
                 .collect();
         }
@@ -79,6 +80,7 @@ pub fn execution_model_slices(
                 executions: 1,
                 unpriced_models: derived.unpriced_models,
                 missing_reasons: derived.missing_reasons,
+                tokens: None,
             }]
         })
         .unwrap_or_default()
@@ -105,6 +107,7 @@ pub fn leftover_model_slices(
             executions,
             unpriced_models: usage.unpriced.iter().cloned().collect(),
             missing_reasons: Vec::new(),
+            tokens: Some(usage.tokens),
         })
         .collect()
 }

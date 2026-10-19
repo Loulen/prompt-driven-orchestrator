@@ -32,6 +32,8 @@ const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   "triggers_paused",
   // #552: a Projet created, renamed or deleted elsewhere.
   "project_changed",
+  // A harness's model catalogue probed again (« Refresh models »).
+  "harness_catalogue_changed",
   // The validation of a Pipeline changed (CONTEXT.md « Pipeline validé »).
   "pipeline_validation_changed",
   // ADR-0088: who has a Pipeline's shared draft open, and its changes.

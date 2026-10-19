@@ -17,13 +17,14 @@ members = [
   "crates/pdo-trigger",
   "crates/pdo-stats",
   "crates/pdo-review",
+  "crates/pdo-telemetry",
   "crates/pdo-settings",
   "crates/pdo",
 ]
 
 [workspace.package]
 edition = "2021"
-version = "2.33.0"
+version = "2.36.0"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/PDO-v2"
@@ -72,8 +73,15 @@ ts-rs = { version = "12", features = ["no-serde-warnings"] }
 # the Yjs CRDT, binary-compatible (update format v1) with the `yjs` package of
 # the frontend.
 yrs = "0.28"
+# Telemetry export (ADR-0090): the OpenTelemetry SDK and its OTLP exporter over
+# HTTP/protobuf. No default features: the exporter's own HTTP client would pull
+# a second reqwest; `pdo-telemetry` hands it one built on the reqwest above.
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "trace", "metrics"] }
+opentelemetry-http = { version = "0.33.1", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
-pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.14.0" }
+pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.15.0" }
 pdo-kernel = { path = "crates/pdo-kernel" }
 pdo-workspace = { path = "crates/pdo-workspace" }
 pdo-skill = { path = "crates/pdo-skill" }
@@ -86,6 +94,7 @@ pdo-run = { path = "crates/pdo-run" }
 pdo-trigger = { path = "crates/pdo-trigger" }
 pdo-stats = { path = "crates/pdo-stats" }
 pdo-review = { path = "crates/pdo-review" }
+pdo-telemetry = { path = "crates/pdo-telemetry" }
 pdo-settings = { path = "crates/pdo-settings" }
 
 # --- Release packaging (dist / ex-cargo-dist) -------------------------------

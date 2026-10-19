@@ -1,6 +1,7 @@
 //! The daemon's background work: the periodic loops (the reaper, the stale
 //! detection, the Triggers' heartbeat, the relay of a Run's pipeline edits,
-//! the end of the sessions announced to the extensions),
+//! the end of the sessions announced to the extensions, the telemetry's
+//! recording of the Runs),
 //! each panic-isolated, and the detached boot tasks (the price refresh, the
 //! version check, the harness catalogues' warm-up).
 
@@ -20,6 +21,9 @@ use tracing::warn;
 
 use super::config::DaemonConfig;
 
+/// How often the live sessions are counted for the telemetry.
+const TELEMETRY_SESSIONS_PERIOD: Duration = Duration::from_secs(10);
+
 /// The loops of one daemon, kept alive as long as it serves.
 pub(super) struct Loops {
     _reaper: Option<JoinHandle<()>>,
@@ -27,6 +31,7 @@ pub(super) struct Loops {
     _trigger: Option<JoinHandle<()>>,
     _run_modified: Option<JoinHandle<()>>,
     _sessions: JoinHandle<()>,
+    _telemetry: Vec<JoinHandle<()>>,
 }
 
 impl Loops {
@@ -54,7 +59,23 @@ impl Loops {
                     .clone()
                     .watch(pdo_session::application::session_ledger::RECONCILE_INTERVAL),
             ),
+            _telemetry: Vec::new(),
         }
+    }
+
+    /// Measure the Runs off the bus and count the live sessions, for the
+    /// telemetry export (ADR-0090). Both are idle while the export is off.
+    pub(super) fn record_telemetry(
+        mut self,
+        telemetry: &Arc<pdo_telemetry::Telemetry>,
+        runs: pdo_telemetry::application::runs::RunRecorder,
+        events: tokio::sync::broadcast::Receiver<serde_json::Value>,
+    ) -> Self {
+        self._telemetry = vec![
+            tokio::spawn(runs.consume(events)),
+            tokio::spawn(telemetry.clone().count_sessions(TELEMETRY_SESSIONS_PERIOD)),
+        ];
+        self
     }
 
     /// Process the run-scoped pipeline modifications the watcher reports.

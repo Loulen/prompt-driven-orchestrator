@@ -3,6 +3,7 @@ import type { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { useEditStore } from "../pipeline/store/editStore";
 import { trailingWindow } from "../shared/lib/trailingWindow";
 import { refreshGestureRights } from "../run/store/gestureRightsStore";
+import { announceHarnessCatalogueChanged } from "../harness/store/useHarnessCatalog";
 
 /** What the live stream refreshes. */
 export interface DaemonEventTargets {
@@ -103,6 +104,12 @@ export function useDaemonEvents({
       // so no refresh is needed; just mirror the flag.
       if (msg.type === "triggers_paused") {
         setTriggersPaused(!!msg.paused);
+        return;
+      }
+      // A harness's catalogue probed again, here or in another browser: every
+      // model picker of the tab reads it anew.
+      if (msg.type === "harness_catalogue_changed") {
+        announceHarnessCatalogueChanged();
         return;
       }
       // #552: a Projet mutation (name/harness/members) — refresh the Projet list

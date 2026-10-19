@@ -68,6 +68,9 @@ pub struct ModelEffortSlice {
     pub executions: i64,
     pub unpriced_models: Vec<String>,
     pub missing_reasons: Vec<String>,
+    /// The slice's tokens, when the fold counted them (`claude`'s
+    /// transcripts); `None` for a reported cost, whose source gives dollars.
+    pub tokens: Option<usage::TokenTotals>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

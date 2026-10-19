@@ -1,17 +1,27 @@
 /**
  * Transient messages at the bottom of the window, styled like App's run-now
- * error: an `error` toast has the failed border, an `info` one the strong line.
- * Each goes away after a few seconds, or on its ✕.
+ * error: an `error` toast has the failed border, an `info` one the strong line,
+ * a `warning` one the awaiting amber. Each goes away after a few seconds, or on
+ * its ✕. A toast may carry a title and one action button (« Take control »).
  */
 
+import type { ReactNode } from "react";
 import { create } from "zustand";
 
-export type ToastKind = "info" | "error";
+export type ToastKind = "info" | "error" | "warning";
 
-interface Toast {
+/** The one button a toast may offer; clicking it also dismisses the toast. */
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
+export interface Toast {
   id: number;
-  message: string;
+  message: ReactNode;
   kind: ToastKind;
+  title?: string;
+  action?: ToastAction;
 }
 
 interface ToastsState {
@@ -29,8 +39,13 @@ export const useToasts = create<ToastsState>((set) => ({
 
 /** Show `message` for a few seconds. */
 export function toast(message: string, kind: ToastKind = "info"): void {
+  showToast({ message, kind });
+}
+
+/** Show a toast with a title and an action, for a few seconds. */
+export function showToast(toast: Omit<Toast, "id">): void {
   const id = nextId++;
-  useToasts.setState((s) => ({ toasts: [...s.toasts, { id, message, kind }] }));
+  useToasts.setState((s) => ({ toasts: [...s.toasts, { ...toast, id }] }));
   setTimeout(() => useToasts.getState().dismiss(id), LIFETIME_MS);
 }
 

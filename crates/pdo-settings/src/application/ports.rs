@@ -83,6 +83,16 @@ pub trait Harnesses: Send + Sync {
     /// Probe every installed harness's catalogue once, so the first page
     /// answers warm.
     fn warm(&self) -> BoxFuture<'_, ()>;
+    /// Probe the catalogue of `name` again now, at the same binary version or
+    /// not, and answer its entry of the page's `harness_descriptors.harnesses`;
+    /// `None` when no harness is called `name`.
+    fn refresh<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Option<serde_json::Value>>;
+}
+
+/// Who hears that a harness's catalogue was probed again: every open page
+/// reads it anew.
+pub trait CatalogueEvents: Send + Sync {
+    fn catalogue_refreshed(&self, harness: &str);
 }
 
 /// The staging profiles (the sandbox context).
@@ -96,6 +106,13 @@ pub trait UpdateChecks: Send + Sync {
     /// Run one check now, detached: re-enabling the check must not wait for
     /// the next period.
     fn check_now(&self);
+}
+
+/// The telemetry export (the telemetry context).
+pub trait TelemetryReloads: Send + Sync {
+    /// Apply the stored setting now, detached: an edit takes effect without a
+    /// restart.
+    fn reload(&self);
 }
 
 /// Who names an agentic profile, outside the instance tier.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { harnessColor } from "./color";
-import { harnessCatalog, findHarnessOption, effortOffer } from "./catalog";
+import { harnessCatalog, findHarnessOption, effortOffer, modelCount, probedAgo } from "./catalog";
 import type { HarnessOption } from "./catalog";
 
 describe("harnessColor (#638)", () => {
@@ -113,5 +113,39 @@ describe("effortOffer (#798)", () => {
       levels: [],
       authoritative: true,
     });
+  });
+});
+
+describe("refresh models: the catalogue's size and age", () => {
+  const now = new Date("2026-10-19T10:00:00.000Z");
+
+  it("counts the models", () => {
+    expect(modelCount(0)).toBe("no model listed");
+    expect(modelCount(1)).toBe("1 model");
+    expect(modelCount(23)).toBe("23 models");
+  });
+
+  it("says when the catalogue was probed", () => {
+    expect(probedAgo("2026-10-19T09:59:30.000Z", now)).toBe("probed just now");
+    expect(probedAgo("2026-10-19T09:48:00.000Z", now)).toBe("probed 12 min ago");
+    expect(probedAgo("2026-10-19T07:00:00.000Z", now)).toBe("probed 3 h ago");
+    expect(probedAgo("2026-10-18T10:00:00.000Z", now)).toBe("probed 1 day ago");
+    expect(probedAgo("2026-10-16T10:00:00.000Z", now)).toBe("probed 3 days ago");
+    expect(probedAgo(null, now)).toBe("not probed");
+  });
+
+  it("carries the time of the probe into the picker's option", () => {
+    const catalog = harnessCatalog({
+      path: null,
+      names: ["claude"],
+      harnesses: [
+        { name: "claude", source: "builtin", installed: true, probed_at: "2026-10-19T09:00:00.000Z" },
+        { name: "pi", source: "builtin", installed: false },
+      ],
+      rejected: [],
+      reason: null,
+    });
+    expect(catalog.builtin[0].probedAt).toBe("2026-10-19T09:00:00.000Z");
+    expect(catalog.builtin[1].probedAt).toBeNull();
   });
 });

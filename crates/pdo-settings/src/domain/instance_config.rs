@@ -162,6 +162,20 @@ pub struct InstanceConfig {
     /// run » modal through `GET /settings`, so the client-side gate and the
     /// daemon's refusal cannot disagree.
     pub max_attachments_mb: Option<i64>,
+    /// Stored OTLP export switch as `0`/`1`, or `None` when unset (ADR-0090).
+    /// `None` falls through to the env seam
+    /// ([`pdo_telemetry::adapters::env::OTLP_ENV`]) then the built-in default
+    /// (`false`: nothing leaves the instance). Same `0`-not-`NULL` discipline
+    /// as [`Self::autocomplete_turn_end`].
+    pub telemetry_otlp: Option<i64>,
+    /// Stored address of the OTLP collector, or `None` when unset (env
+    /// [`pdo_telemetry::adapters::env::OTLP_ENDPOINT_ENV`], then none).
+    pub telemetry_otlp_endpoint: Option<String>,
+    /// Stored headers of every export (an API key): `name → value`, persisted
+    /// as a JSON object. The values are secrets: `GET /settings` names the
+    /// headers, never their values.
+    #[serde(default)]
+    pub telemetry_otlp_headers: std::collections::BTreeMap<String, String>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -248,9 +262,25 @@ pub struct UpdateInstanceConfig {
     /// Set the per-run attachment budget in MB (#779). Set-only like the other
     /// numeric knobs; `PUT /settings` refuses `< 1`.
     pub max_attachments_mb: Option<i64>,
+    /// Set the OTLP export switch (ADR-0090): `Some(true)` stores `1`,
+    /// `Some(false)` stores `0`, `None` leaves it untouched.
+    pub telemetry_otlp: Option<bool>,
+    /// Set the collector's address; `Some("")` clears it back to unset.
+    pub telemetry_otlp_endpoint: Option<String>,
+    /// Replace the export headers wholesale. A header sent without a value
+    /// keeps the value stored under its name: the page never has it. `None`
+    /// leaves the headers untouched.
+    pub telemetry_otlp_headers: Option<Vec<pdo_telemetry::domain::setting::OtlpHeaderEdit>>,
 }
 
 impl UpdateInstanceConfig {
+    /// Whether the edit touches the telemetry export, which then reloads.
+    pub fn touches_telemetry(&self) -> bool {
+        self.telemetry_otlp.is_some()
+            || self.telemetry_otlp_endpoint.is_some()
+            || self.telemetry_otlp_headers.is_some()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.session_cap.is_none()
             && self.reaper_ttl_secs.is_none()
@@ -270,5 +300,6 @@ impl UpdateInstanceConfig {
             && self.manager_enabled.is_none()
             && self.manager_profile.is_none()
             && self.max_attachments_mb.is_none()
+            && !self.touches_telemetry()
     }
 }

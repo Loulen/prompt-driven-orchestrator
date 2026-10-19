@@ -15,6 +15,7 @@ mod session;
 mod settings;
 pub(crate) mod skill;
 mod stats;
+mod telemetry;
 mod trigger;
 mod workspace;
 
@@ -100,6 +101,10 @@ pub struct Contexts {
     pub stats: Arc<pdo_stats::Stats>,
     /// The daemon warms its harness catalogues at boot.
     pub settings: Arc<pdo_settings::Settings>,
+    /// The daemon applies its setting at boot.
+    pub telemetry: Arc<pdo_telemetry::Telemetry>,
+    /// The daemon feeds it the bus.
+    pub telemetry_runs: pdo_telemetry::application::runs::RunRecorder,
     pub router: Router,
 }
 
@@ -152,7 +157,9 @@ pub(crate) fn wire_over(
         platform: &platform,
         host: host.clone(),
     });
-    let settings = settings::settings(&r, stored, &platform, host.clone());
+    let (telemetry, telemetry_runs) =
+        telemetry::telemetry(&r, &run, &session, &stored, host.clone());
+    let settings = settings::settings(&r, stored, &platform, &telemetry, host.clone());
     late_runs.set(&run);
     late_platform.set(&platform);
     late_pipelines.set(&pipelines);
@@ -181,9 +188,15 @@ pub(crate) fn wire_over(
         .merge(pdo_stats::router(stats.clone()))
         .merge(pdo_trigger::router(triggers.clone()))
         .merge(pdo_settings::router(settings.clone()))
+        .merge(pdo_telemetry::router(telemetry.clone()))
         .merge(crate::authorize::router(host, run.clone()));
     // CORE-5: every read of one Run, whichever context serves it, asks first.
     let router = pdo_run::adapters::http::read_guard::guard_run_reads(router, run.clone());
+    // ADR-0090: every request measured while the export runs, by its route.
+    let router = router.layer(axum::middleware::from_fn_with_state(
+        telemetry.clone(),
+        pdo_telemetry::adapters::http::measure,
+    ));
     Contexts {
         router,
         platform,
@@ -192,6 +205,8 @@ pub(crate) fn wire_over(
         stats,
         triggers,
         settings,
+        telemetry,
+        telemetry_runs,
     }
 }
 

@@ -44,6 +44,10 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("manager_profile", "TEXT"),
     // #779: the per-run attachment budget.
     ("max_attachments_mb", "INTEGER"),
+    // ADR-0090: NULL keeps the OTLP export off, the env still able to speak.
+    ("telemetry_otlp", "INTEGER"),
+    ("telemetry_otlp_endpoint", "TEXT"),
+    ("telemetry_otlp_headers", "TEXT"),
 ];
 
 /// Create both tables if absent, seed the all-NULL singleton row and the

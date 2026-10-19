@@ -154,6 +154,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
         call("DELETE", "/pages/{name}", "/pages/site".into(), None),
         call("POST", "/update/check", "/update/check".into(), None),
         call("POST", "/update/apply", "/update/apply".into(), None),
+        call(
+            "POST",
+            "/telemetry/test-export",
+            "/telemetry/test-export".into(),
+            None,
+        ),
         call("POST", "/repos/fetch", format!("/repos/fetch?{q}"), None),
         call(
             "POST",
@@ -544,13 +550,20 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             "/settings/cost-prices/sync".into(),
             None,
         ),
-        // The settings context (#929): an edit of the instance settings and the
-        // agentic profiles' gestures ask before they validate or read anything.
+        // The settings context (#929): an edit of the instance settings, a
+        // harness's models probed again and the agentic profiles' gestures ask
+        // before they validate or read anything.
         call(
             "PUT",
             "/settings",
             "/settings".into(),
             Some(json!({ "session_cap": 3 })),
+        ),
+        call(
+            "POST",
+            "/settings/harnesses/{name}/refresh",
+            "/settings/harnesses/claude/refresh".into(),
+            None,
         ),
         call(
             "POST",

@@ -4,6 +4,7 @@
 //! legacy crate's router `oneshot` tests of `/settings`, moved.
 
 mod put;
+mod telemetry;
 mod view;
 
 use std::sync::Arc;
@@ -19,10 +20,10 @@ use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_settings::adapters::contexts::{ContextReferents, SandboxStagingProfiles};
 use pdo_settings::adapters::sections::{
     HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,
-    SandboxSection, SessionDefaults, TriggerDefaults,
+    SandboxSection, SessionDefaults, TelemetryDefaults, TriggerDefaults,
 };
 use pdo_settings::adapters::sqlite::{SqliteAgentProfiles, SqliteInstanceConfig};
-use pdo_settings::application::ports::UpdateChecks;
+use pdo_settings::application::ports::{CatalogueEvents, TelemetryReloads, UpdateChecks};
 use pdo_settings::{Settings, SettingsPorts};
 use sqlx::SqlitePool;
 use tower::ServiceExt;
@@ -32,6 +33,16 @@ struct NoChecks;
 
 impl UpdateChecks for NoChecks {
     fn check_now(&self) {}
+}
+
+impl TelemetryReloads for NoChecks {
+    fn reload(&self) {}
+}
+
+struct NoCatalogueEvents;
+
+impl CatalogueEvents for NoCatalogueEvents {
+    fn catalogue_refreshed(&self, _harness: &str) {}
 }
 
 pub(super) struct TestState {
@@ -72,6 +83,7 @@ pub(super) async fn test_state() -> TestState {
             Arc::new(TriggerDefaults),
             Arc::new(ReviewDefaults),
             Arc::new(PlatformDefaults),
+            Arc::new(TelemetryDefaults),
             Arc::new(SandboxSection::new(
                 profiles.clone(),
                 Arc::new(ProcessDocker::from_override(None)),
@@ -81,8 +93,10 @@ pub(super) async fn test_state() -> TestState {
             Arc::new(PriceTableSection { home }),
         ],
         harnesses,
+        catalogue_events: Arc::new(NoCatalogueEvents),
         staging_profiles: Arc::new(SandboxStagingProfiles(profiles)),
         update_checks: Arc::new(NoChecks),
+        telemetry: Arc::new(NoChecks),
         referents: Arc::new(ContextReferents {
             db: db.clone(),
             repo_root: home_dir.path().to_path_buf(),
@@ -117,6 +131,24 @@ pub(super) async fn get_settings_json(state: &TestState) -> serde_json::Value {
         .await
         .unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+pub(super) async fn post_json(state: &TestState, uri: &str) -> (StatusCode, serde_json::Value) {
+    let resp = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
 }
 
 pub(super) async fn put_settings_resp(

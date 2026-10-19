@@ -7,8 +7,8 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 
 use super::ports::{
-    AgentProfileStore, Harnesses, InstanceConfigStore, ProfileReferents, SettingsSection,
-    StagingProfiles, UpdateChecks,
+    AgentProfileStore, CatalogueEvents, Harnesses, InstanceConfigStore, ProfileReferents,
+    SettingsSection, StagingProfiles, TelemetryReloads, UpdateChecks,
 };
 
 /// Every port the context needs, as the composition root plugs them in.
@@ -21,8 +21,11 @@ pub struct SettingsPorts {
     /// context owns itself (the agentic profile and the skills selection).
     pub sections: Vec<Arc<dyn SettingsSection>>,
     pub harnesses: Arc<dyn Harnesses>,
+    /// Told when a harness's catalogue was probed again.
+    pub catalogue_events: Arc<dyn CatalogueEvents>,
     pub staging_profiles: Arc<dyn StagingProfiles>,
     pub update_checks: Arc<dyn UpdateChecks>,
+    pub telemetry: Arc<dyn TelemetryReloads>,
     pub referents: Arc<dyn ProfileReferents>,
     /// Asked before every mutation.
     pub extensions: Arc<dyn ExtensionHost>,
@@ -34,8 +37,10 @@ pub struct Settings {
     pub(crate) profiles: Arc<dyn AgentProfileStore>,
     pub(crate) sections: Vec<Arc<dyn SettingsSection>>,
     pub(crate) harnesses: Arc<dyn Harnesses>,
+    pub(crate) catalogue_events: Arc<dyn CatalogueEvents>,
     pub(crate) staging_profiles: Arc<dyn StagingProfiles>,
     pub(crate) update_checks: Arc<dyn UpdateChecks>,
+    pub(crate) telemetry: Arc<dyn TelemetryReloads>,
     pub(crate) referents: Arc<dyn ProfileReferents>,
     extensions: Arc<dyn ExtensionHost>,
 }
@@ -47,8 +52,10 @@ impl Settings {
             profiles,
             sections,
             harnesses,
+            catalogue_events,
             staging_profiles,
             update_checks,
+            telemetry,
             referents,
             extensions,
         } = ports;
@@ -57,8 +64,10 @@ impl Settings {
             profiles,
             sections,
             harnesses,
+            catalogue_events,
             staging_profiles,
             update_checks,
+            telemetry,
             referents,
             extensions,
         })

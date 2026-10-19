@@ -39,6 +39,14 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         manager_enabled: row.try_get("manager_enabled").unwrap_or(None),
         manager_profile: row.try_get("manager_profile").unwrap_or(None),
         max_attachments_mb: row.try_get("max_attachments_mb").unwrap_or(None),
+        telemetry_otlp: row.try_get("telemetry_otlp").unwrap_or(None),
+        telemetry_otlp_endpoint: row.try_get("telemetry_otlp_endpoint").unwrap_or(None),
+        // NULL / unparseable ⇒ no header, never an error.
+        telemetry_otlp_headers: row
+            .try_get::<Option<String>, _>("telemetry_otlp_headers")
+            .unwrap_or(None)
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
         updated_at: row.get("updated_at"),
     }
 }
@@ -125,6 +133,22 @@ fn assignments(edit: UpdateInstanceConfig) -> Vec<(&'static str, Bound)> {
     }
     if let Some(v) = edit.max_attachments_mb {
         sets.push(("max_attachments_mb", Bound::Int(Some(v))));
+    }
+    if let Some(v) = edit.telemetry_otlp {
+        sets.push(("telemetry_otlp", flag(v)));
+    }
+    if let Some(v) = edit.telemetry_otlp_endpoint {
+        sets.push(("telemetry_otlp_endpoint", text(v.trim().to_string())));
+    }
+    if let Some(headers) = edit.telemetry_otlp_headers {
+        // The use case resolved every kept value before the write; an empty
+        // list stores NULL.
+        let map: std::collections::BTreeMap<String, String> = headers
+            .into_iter()
+            .map(|h| (h.name, h.value.unwrap_or_default()))
+            .collect();
+        let json = (!map.is_empty()).then(|| serde_json::to_string(&map).unwrap_or_default());
+        sets.push(("telemetry_otlp_headers", Bound::Text(json)));
     }
     sets
 }

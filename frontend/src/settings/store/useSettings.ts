@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchSettings, updateSettings } from "../api/settings";
 import type { InstanceSettings } from "../model/settings";
 import type { UpdateSettingsRequest } from "../../shared/generated/UpdateSettingsRequest";
+import { useHarnessCatalogueChanged } from "../../harness/store/useHarnessCatalog";
 
 /**
  * Window bus fired after every write that changes what `GET /settings` serves — the
@@ -56,6 +57,14 @@ export function useSettings(open: boolean) {
       cancelled = true;
     };
   }, [open]);
+
+  // A harness's catalogue probed again: the page's `harness_descriptors` with it.
+  const reread = useCallback(() => {
+    fetchSettings()
+      .then(setSettings)
+      .catch(() => {});
+  }, []);
+  useHarnessCatalogueChanged(reread, open);
 
   const save = useCallback(async (patch: UpdateSettingsRequest) => {
     // Let the caller catch a rejection (fail-fast 400) and surface it.

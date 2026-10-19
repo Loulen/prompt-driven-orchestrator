@@ -6,6 +6,7 @@
 //! a legitimate sibling edit riding in the same body.
 
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
+use pdo_telemetry::domain::setting::{merge_headers, OtlpHeaderEdit};
 use serde_json::Value;
 
 use super::SettingsError;
@@ -19,11 +20,13 @@ impl Settings {
             actor,
             &Operation::new(ResourceKind::InstanceSettings, Verb::Update),
         )?;
-        let edit = parse_edit(body).map_err(SettingsError::Invalid)?;
+        let mut edit = parse_edit(body).map_err(SettingsError::Invalid)?;
         check_ranges(&edit).map_err(SettingsError::Invalid)?;
         self.check_references(&edit).await?;
+        self.resolve_kept_headers(&mut edit).await?;
 
         let update_check = edit.update_check;
+        let telemetry = edit.touches_telemetry();
         let stored = self
             .config
             .update(edit)
@@ -35,7 +38,39 @@ impl Settings {
         if update_check == Some(true) {
             self.update_checks.check_now();
         }
+        // ADR-0090: the export follows the setting without a restart.
+        if telemetry {
+            self.telemetry.reload();
+        }
         self.view_of(&stored).await
+    }
+
+    /// A header sent without a value keeps the stored one: resolve them all,
+    /// so the store writes values only.
+    async fn resolve_kept_headers(
+        &self,
+        edit: &mut UpdateInstanceConfig,
+    ) -> Result<(), SettingsError> {
+        let Some(headers) = edit.telemetry_otlp_headers.take() else {
+            return Ok(());
+        };
+        let stored = self
+            .config
+            .get()
+            .await
+            .map_err(|e| SettingsError::Storage(e.0))?;
+        let merged = merge_headers(&stored.telemetry_otlp_headers, headers)
+            .map_err(SettingsError::Invalid)?;
+        edit.telemetry_otlp_headers = Some(
+            merged
+                .into_iter()
+                .map(|(name, value)| OtlpHeaderEdit {
+                    name,
+                    value: Some(value),
+                })
+                .collect(),
+        );
+        Ok(())
     }
 
     /// What names something else must name something that exists: the default

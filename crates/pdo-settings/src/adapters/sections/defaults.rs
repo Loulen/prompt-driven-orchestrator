@@ -128,7 +128,8 @@ impl SettingsSection for PlatformDefaults {
     }
 }
 
-/// The OTLP export: its switch, its collector, its headers by name.
+/// The telemetry: the OTLP export's switch, its collector, its headers by
+/// name; the `/metrics` switch; « include the Actor ».
 pub struct TelemetryDefaults;
 
 impl SettingsSection for TelemetryDefaults {
@@ -148,6 +149,16 @@ impl SettingsSection for TelemetryDefaults {
                 (
                     "telemetry_otlp_headers",
                     json(telemetry::telemetry_otlp_headers(&c.telemetry_otlp_headers)),
+                ),
+                (
+                    "telemetry_prometheus",
+                    json(telemetry::telemetry_prometheus(c.telemetry_prometheus)),
+                ),
+                (
+                    "telemetry_include_actor",
+                    json(telemetry::telemetry_include_actor(
+                        c.telemetry_include_actor,
+                    )),
                 ),
             ]))
         })

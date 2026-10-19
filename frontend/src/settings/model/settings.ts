@@ -211,6 +211,13 @@ export interface InstanceSettings {
   telemetry_otlp_endpoint?: StringSettingField;
   /** The export's headers, by name: their values are never sent back. */
   telemetry_otlp_headers?: OtlpHeaderView[];
+  /** ADR-0090 §2: `/metrics` in the Prometheus format, by its own switch. Off by default. */
+  telemetry_prometheus?: BoolSettingField;
+  /**
+   * ADR-0090 §4: who launched a Run, and who answered it, goes with its measures on both
+   * channels. Off by default.
+   */
+  telemetry_include_actor?: BoolSettingField;
   updated_at: string;
 }
 

@@ -26,11 +26,14 @@ pub fn release_refusal(slug: &str, message: impl Into<String>) -> Response {
         .into_response()
 }
 
+/// Release the completion `node_id` iter `iter` waits on. `actor`, who
+/// released it, is kept on the event: who answered the wait.
 pub async fn release_node_completion(
     state: &Arc<Runs>,
     run_id: &str,
     node_id: &str,
     iter: i64,
+    actor: Option<&Actor>,
 ) -> Response {
     let events = match load_events(state, run_id).await {
         Ok(events) => events,
@@ -95,7 +98,7 @@ pub async fn release_node_completion(
         kind: event::EventKind::NodeCompletionReleased,
         node_id: Some(node_id.to_string()),
         iter: Some(iter),
-        payload: None,
+        payload: actor.map(|actor| serde_json::json!({ "actor": actor })),
     };
     if let Err(e) = append_event(state, &event).await {
         return (
@@ -138,6 +141,6 @@ impl Runs {
         {
             return denied.into_response();
         }
-        release_node_completion(self, &run_id, &node_id, iter).await
+        release_node_completion(self, &run_id, &node_id, iter, Some(actor)).await
     }
 }

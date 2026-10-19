@@ -730,7 +730,7 @@ mod tests {
         assert_eq!(t.events(run_id).await.len(), n);
 
         // The release (ADR-0068) brings the node back to running — unchanged.
-        let response = release_node_completion(&t.contexts.run, run_id, "griller", 1).await;
+        let response = release_node_completion(&t.contexts.run, run_id, "griller", 1, None).await;
         assert_eq!(response.status(), StatusCode::OK);
         let released = projected(&t, run_id).await;
         assert_eq!(released.status, event_log::RunStatus::Running);

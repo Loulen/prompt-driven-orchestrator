@@ -1,7 +1,8 @@
 /**
  * The Telemetry part of the instance form (ADR-0090): the OTLP switch, the collector's
- * address and the headers. A header's value is a secret the daemon never sends back, so a
- * stored header is drafted without its value (`null`: keep it) until someone types a new one.
+ * address and the headers, the `/metrics` switch and « include the Actor ». A header's
+ * value is a secret the daemon never sends back, so a stored header is drafted without its
+ * value (`null`: keep it) until someone types a new one.
  */
 
 import type { OtlpHeaderEdit } from "../../shared/generated/OtlpHeaderEdit";
@@ -19,6 +20,8 @@ export interface TelemetryDraft {
   telemetryOtlp: boolean;
   telemetryEndpoint: string;
   telemetryHeaders: TelemetryHeaderDraft[];
+  telemetryPrometheus: boolean;
+  telemetryIncludeActor: boolean;
 }
 
 export function seedTelemetry(settings: InstanceSettings): TelemetryDraft {
@@ -29,6 +32,8 @@ export function seedTelemetry(settings: InstanceSettings): TelemetryDraft {
       name: header.name,
       value: null,
     })),
+    telemetryPrometheus: settings.telemetry_prometheus?.effective ?? false,
+    telemetryIncludeActor: settings.telemetry_include_actor?.effective ?? false,
   };
 }
 
@@ -61,6 +66,12 @@ export function telemetryDirty(values: TelemetryDraft, settings: InstanceSetting
     dirty.push("telemetry-endpoint");
   }
   if (headersDirty(values.telemetryHeaders, settings)) dirty.push("telemetry-headers");
+  if (values.telemetryPrometheus !== (settings.telemetry_prometheus?.effective ?? false)) {
+    dirty.push("telemetry-prometheus");
+  }
+  if (values.telemetryIncludeActor !== (settings.telemetry_include_actor?.effective ?? false)) {
+    dirty.push("telemetry-include-actor");
+  }
   return dirty;
 }
 
@@ -95,6 +106,10 @@ export function telemetryPatch(
       headers.push({ name: row.name, value: row.value });
     }
     patch.telemetry_otlp_headers = headers;
+  }
+  if (dirty.has("telemetry-prometheus")) patch.telemetry_prometheus = values.telemetryPrometheus;
+  if (dirty.has("telemetry-include-actor")) {
+    patch.telemetry_include_actor = values.telemetryIncludeActor;
   }
   return { patch };
 }

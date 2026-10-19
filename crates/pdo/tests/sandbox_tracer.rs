@@ -87,9 +87,12 @@ fn write_fake_docker() -> (TempDir, String, PathBuf) {
     let bin = dir.path().join("fake-docker");
     let log = dir.path().join("argv.log");
     let sq = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    // The argv lands in the log in one `cat` (one write), not in the chunks
+    // `printf` flushes: a test that reads the log once `create` shows reads
+    // every mount of it.
     let script = format!(
         "#!/usr/bin/env bash\n\
-         printf '%s\\n' \"$@\" >> {log}\n\
+         record=\"$(mktemp)\"; printf '%s\\n' \"$@\" > \"$record\"; cat \"$record\" >> {log}; rm -f \"$record\"\n\
          case \"$1\" in\n\
          image) exit 0 ;;\n\
          container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\
@@ -963,9 +966,12 @@ fn write_fake_docker_image_absent() -> (TempDir, String, PathBuf) {
     let bin = dir.path().join("fake-docker");
     let log = dir.path().join("argv.log");
     let sq = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    // The argv lands in the log in one `cat` (one write), not in the chunks
+    // `printf` flushes: a test that reads the log once `create` shows reads
+    // every mount of it.
     let script = format!(
         "#!/usr/bin/env bash\n\
-         printf '%s\\n' \"$@\" >> {log}\n\
+         record=\"$(mktemp)\"; printf '%s\\n' \"$@\" > \"$record\"; cat \"$record\" >> {log}; rm -f \"$record\"\n\
          case \"$1\" in\n\
          image) exit 1 ;;\n\
          container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\
@@ -1378,9 +1384,12 @@ fn write_slow_create_docker(secs: u64) -> (TempDir, String, PathBuf) {
     let bin = dir.path().join("fake-docker");
     let log = dir.path().join("argv.log");
     let sq = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    // The argv lands in the log in one `cat` (one write), not in the chunks
+    // `printf` flushes: a test that reads the log once `create` shows reads
+    // every mount of it.
     let script = format!(
         "#!/usr/bin/env bash\n\
-         printf '%s\\n' \"$@\" >> {log}\n\
+         record=\"$(mktemp)\"; printf '%s\\n' \"$@\" > \"$record\"; cat \"$record\" >> {log}; rm -f \"$record\"\n\
          case \"$1\" in\n\
          image) exit 0 ;;\n\
          container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\

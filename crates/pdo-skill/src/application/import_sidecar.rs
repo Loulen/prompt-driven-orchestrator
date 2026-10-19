@@ -143,7 +143,7 @@ impl Skills {
             .list()
             .await?
             .into_iter()
-            .find(|f| f.parent_id.is_none() && f.name.eq_ignore_ascii_case(&name))
+            .find(|f| f.parent_id.is_none() && f.name.eq_ignore_ascii_case(name))
         {
             return Ok(existing);
         }

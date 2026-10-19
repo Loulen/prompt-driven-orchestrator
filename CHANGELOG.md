@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## Prochaine version — `/metrics` Prometheus et « inclure l'Acteur » (CORE-86)
+## 2.37.0 — `/metrics` Prometheus et « inclure l'Acteur » (CORE-86)
 
 - Settings › Telemetry gagne la section « Prometheus /metrics » : `GET /metrics` sert les mêmes
   métriques que l'export OTLP au format texte Prometheus (pas de traces), par son propre

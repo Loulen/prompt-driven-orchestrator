@@ -51,7 +51,7 @@ nodes:
       - { name: in }
     outputs:                      # a port has no side nor `repeated`: both belong to the edge
       - name: out
-        port_type: markdown       # markdown (default) | image | image_list | html
+        port_type: markdown       # markdown (default) | image | image_list | html | files
         frontmatter:              # optional typed frontmatter the node must emit
           Verdict:
             type: enum            # enum | bool | string | int | number

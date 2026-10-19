@@ -180,14 +180,22 @@ pub(super) fn serde_yaml_to_json(v: &serde_yaml::Value) -> serde_json::Value {
 }
 
 pub(super) fn list_image_files(artifacts_dir: &Path, port_dir: &Path) -> Vec<FileInfo> {
+    list_port_files(artifacts_dir, port_dir, pipeline::is_image_file)
+}
+
+/// The regular files of a port folder that `keep` accepts, sorted by path; a
+/// missing folder lists none.
+pub(super) fn list_port_files(
+    artifacts_dir: &Path,
+    port_dir: &Path,
+    keep: impl Fn(&Path) -> bool,
+) -> Vec<FileInfo> {
     let Ok(entries) = std::fs::read_dir(port_dir) else {
         return vec![];
     };
     let mut files: Vec<FileInfo> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_type().ok().is_some_and(|ft| ft.is_file()) && pipeline::is_image_file(&e.path())
-        })
+        .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_file()) && keep(&e.path()))
         .map(|e| {
             let path = e.path();
             let size = std::fs::metadata(&path).ok().map(|m| m.len());

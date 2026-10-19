@@ -520,6 +520,10 @@ async fn artifact_returns_content_with_text_markdown() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(resp.headers().get("content-type").unwrap(), "text/markdown");
+    assert_eq!(
+        resp.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
@@ -627,6 +631,150 @@ async fn artifact_returns_404_for_missing_file() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// A `files` port folder of the seeded io run: a PDF and a CSV.
+fn seed_port_files(dir: &Path, run_id: &str) -> PathBuf {
+    let port = dir
+        .join(".pdo/runs")
+        .join(run_id)
+        .join("worktree/.pdo/artifacts/planner/iter-1/exports");
+    std::fs::create_dir_all(port.join("nested")).unwrap();
+    std::fs::write(port.join("report.pdf"), b"%PDF-1.4\n\xff\xfe binary").unwrap();
+    std::fs::write(port.join("rows.csv"), "a,b\n1,2\n").unwrap();
+    port
+}
+
+async fn get(state: Arc<TestState>, uri: String) -> Response {
+    build_router(state)
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_downloaded_artifact_is_an_attachment_with_a_readable_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run_id = "artifact-download";
+    seed_io_test(tmp.path(), run_id);
+    let state = test_state_with_dir(tmp.path()).await;
+    seed_io_run_events(&state, run_id).await;
+
+    let resp = get(
+        state,
+        format!("/runs/{run_id}/artifact?path=planner/iter-1/plan/output.md&download=true"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        "attachment; filename=\"planner-plan.md\"; filename*=UTF-8''planner-plan.md"
+    );
+    assert_eq!(
+        resp.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/octet-stream"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], b"# Plan\nDo stuff.");
+}
+
+#[tokio::test]
+async fn a_binary_file_of_a_port_downloads_byte_for_byte() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run_id = "artifact-download-binary";
+    seed_io_test(tmp.path(), run_id);
+    seed_port_files(tmp.path(), run_id);
+    let state = test_state_with_dir(tmp.path()).await;
+    seed_io_run_events(&state, run_id).await;
+
+    let resp = get(
+        state,
+        format!("/runs/{run_id}/artifact?path=planner/iter-1/exports/report.pdf&download=true"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp
+        .headers()
+        .get(header::CONTENT_DISPOSITION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("attachment; filename=\"report.pdf\""));
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], b"%PDF-1.4\n\xff\xfe binary");
+}
+
+#[tokio::test]
+async fn a_port_folder_downloads_as_a_zip_of_its_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run_id = "artifact-zip";
+    seed_io_test(tmp.path(), run_id);
+    seed_port_files(tmp.path(), run_id);
+    let state = test_state_with_dir(tmp.path()).await;
+    seed_io_run_events(&state, run_id).await;
+
+    let resp = get(
+        state,
+        format!("/runs/{run_id}/artifact/zip?path=planner/iter-1/exports"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(header::CONTENT_TYPE).unwrap(),
+        "application/zip"
+    );
+    assert!(resp
+        .headers()
+        .get(header::CONTENT_DISPOSITION)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("attachment; filename=\"planner-exports.zip\""));
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(body.to_vec())).unwrap();
+    let names: Vec<String> = archive.file_names().map(str::to_string).collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(sorted, vec!["report.pdf", "rows.csv"]);
+    let mut csv = String::new();
+    std::io::Read::read_to_string(&mut archive.by_name("rows.csv").unwrap(), &mut csv).unwrap();
+    assert_eq!(csv, "a,b\n1,2\n");
+}
+
+#[tokio::test]
+async fn a_zip_never_leaves_the_artifacts_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run_id = "artifact-zip-traversal";
+    seed_io_test(tmp.path(), run_id);
+    let state = test_state_with_dir(tmp.path()).await;
+    seed_io_run_events(&state, run_id).await;
+
+    let resp = get(state, format!("/runs/{run_id}/artifact/zip?path=../../..")).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_zip_of_a_file_or_a_missing_folder_is_not_found() {
+    let tmp = tempfile::tempdir().unwrap();
+    let run_id = "artifact-zip-missing";
+    seed_io_test(tmp.path(), run_id);
+    let state = test_state_with_dir(tmp.path()).await;
+    seed_io_run_events(&state, run_id).await;
+
+    for path in ["planner/iter-1/plan/output.md", "planner/iter-1/nope"] {
+        let resp = get(
+            state.clone(),
+            format!("/runs/{run_id}/artifact/zip?path={path}"),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{path}");
+    }
 }
 
 // --- Transition guard wiring (#212, closes #195 #196 #197 #198 #201) ---

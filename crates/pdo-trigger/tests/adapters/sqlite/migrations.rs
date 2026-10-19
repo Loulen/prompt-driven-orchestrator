@@ -305,3 +305,86 @@ async fn init_is_idempotent_and_adds_max_concurrent_to_legacy_table() {
 }
 
 // --- #244: guard-output capture on guard-exit-nonzero fire rows ---
+
+/// ADR-0087 migration: the `project_id` column is added once, and filled that
+/// once with the Projet the rule before ADR-0087 gave the Trigger's Runs (the
+/// first Projet holding its repository). A later change of the members moves
+/// no Trigger.
+#[tokio::test]
+async fn init_records_the_projet_the_old_rule_gave_a_trigger_once() {
+    let db = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE triggers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            pipeline_id TEXT NOT NULL,
+            pipeline_name TEXT NOT NULL DEFAULT '',
+            target_repo TEXT,
+            target_repos TEXT,
+            source_branch TEXT,
+            input_template TEXT NOT NULL DEFAULT '',
+            variables JSON NOT NULL DEFAULT '{}',
+            cron TEXT NOT NULL,
+            guard_command TEXT,
+            overlap_policy TEXT NOT NULL DEFAULT 'skip',
+            max_concurrent INTEGER,
+            sandbox TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            next_fire_at TEXT,
+            last_fired_at TEXT,
+            last_outcome TEXT,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE project_members (
+            path TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/web', 'p1', 's')",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO triggers (id, name, pipeline_id, target_repo, cron, created_at) VALUES
+            ('trg-in', 'in', 'pipe', '/repos/web/', '0 9 * * *', 's'),
+            ('trg-out', 'out', 'pipe', '/repos/loose', '0 9 * * *', 's')",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    init(&db).await.unwrap();
+    assert_eq!(
+        get(&db, "trg-in")
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id
+            .as_deref(),
+        Some("p1")
+    );
+    assert_eq!(get(&db, "trg-out").await.unwrap().unwrap().project_id, None);
+
+    // Once: a member added afterwards moves no Trigger.
+    sqlx::query(
+        "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/loose', 'p2', 's')",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    init(&db).await.unwrap();
+    assert_eq!(get(&db, "trg-out").await.unwrap().unwrap().project_id, None);
+}

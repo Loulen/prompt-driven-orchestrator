@@ -59,6 +59,12 @@ export function useNewRunState(open: boolean) {
     resetRepo,
   } = useRepoValidation({ open, loadBranches, clearBranches });
 
+  // ADR-0087: the Projet the Run (or the Trigger's Runs) is launched in;
+  // `null` = no Projet. `projectChosen` once the user picked one: the form's
+  // own default no longer replaces it.
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectChosen, setProjectChosen] = useState(false);
+
   const [runName, setRunName] = useState("");
   const [autoName, setAutoName] = useState(true);
   const [input, setInput] = useState("");
@@ -153,7 +159,7 @@ export function useNewRunState(open: boolean) {
   // The instance tier comes from the modal's own `settings` read (#452: one
   // `GET /settings` per open); only the Projets are read here.
   const instanceSkills = useMemo(() => settings?.skills ?? [], [settings]);
-  const { inherited: inheritedSkillTiers } = useSkillTiers(targetRepo, open, instanceSkills);
+  const { inherited: inheritedSkillTiers } = useSkillTiers(targetRepo, open, instanceSkills, projectId);
 
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
   const refreshRecentRepos = useRecentReposStore((s) => s.refresh);
@@ -180,8 +186,20 @@ export function useNewRunState(open: boolean) {
       { path: "", baseBranch: "", valid: null, readOnly: false },
     ]);
   }, []);
+  // ADR-0087: a repository of the Projet, checked as a secondary — read-only by
+  // default — or unchecked.
+  const toggleProjectSecondary = useCallback((path: string, checked: boolean) => {
+    setSecondaryRepos((prev) =>
+      checked
+        ? prev.some((r) => r.fromProject && r.path === path)
+          ? prev
+          : [...prev, { path, baseBranch: "", valid: null, readOnly: true, fromProject: true }]
+        : prev.filter((r) => !(r.fromProject && r.path === path)),
+    );
+  }, []);
 
   return {
+    projectId, setProjectId, projectChosen, setProjectChosen, toggleProjectSecondary,
     pipelines, projects, selectedPipeline, selectedPipelineId, setSelectedPipelineId,
     pipelineChosen, setPipelineChosen, branches,
     branchesLoading, sourceBranch, setSourceBranch, loadBranches, clearBranches, lastFetchAt,

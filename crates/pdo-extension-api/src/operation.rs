@@ -32,11 +32,13 @@ pub struct Operation {
     /// when it is in none (hors Projet).
     ///
     /// The core fills them for its own Operations: a Run's, its nodes', its
-    /// sessions' and its review comments' are the Projet of the Run's primary
-    /// repository (a creation: of the repository it names); a Projet's are
-    /// that Projet; a repository's, the Projet it belongs to. The others
-    /// (pipelines, Triggers, settings, skills…) are in none. An extension fills
-    /// them for its own resources (a note may belong to several Projets).
+    /// sessions' and its review comments' are the Projet recorded on the Run
+    /// at its launch (ADR-0087; a creation: the Projet it names, else its
+    /// parent Run's); a Trigger's, the Projet it launches its Runs in; a
+    /// Projet's are that Projet; a repository's, every Projet it is a member
+    /// of. The others (pipelines, settings, skills…) are in none. An extension
+    /// fills them for its own resources (a note may belong to several
+    /// Projets).
     #[serde(default)]
     pub projects: Vec<String>,
 }

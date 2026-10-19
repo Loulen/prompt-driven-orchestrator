@@ -1,23 +1,18 @@
 //! The reads of the Runs go through the Autorisation d'opération (CORE-5): a
-//! Run is read in the Projet of its primary repository, like every gesture on
-//! it ([`Runs::scoped`]).
+//! Run is read in the Projet recorded at its launch (ADR-0087), like every
+//! gesture on it ([`Runs::scoped`]).
 //!
 //! - One Run (its detail, its nodes, its artifacts…): [`Runs::authorize_read`],
 //!   `403` on a refusal.
-//! - A list: [`Runs::readable`] keeps only the Runs the actor may read. It
-//!   asks once per Run, but works out the Projet once per repository: a list
-//!   of 500 Runs over a handful of repositories asks the store a handful of
-//!   times.
+//! - A list: [`Runs::readable`] keeps only the Runs the actor may read, asking
+//!   once per Run; the Projet is on the Run itself, so no store is read.
 //!
 //! Without extension nothing is asked (`allows_everything`): the lists are
 //! served exactly as before.
 
-use std::collections::HashMap;
-
 use pdo_kernel::authorization::{authorize_read, Denied};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
-use crate::application::paths::effective_repo_of;
 use crate::domain::run_summary::RunSummary;
 use crate::domain::state::RunState;
 use crate::Runs;
@@ -39,20 +34,14 @@ impl Runs {
 
     /// What `actor` may read of a list of Runs.
     pub fn readable<'a>(&'a self, actor: &'a Actor) -> ReadableRuns<'a> {
-        ReadableRuns {
-            runs: self,
-            actor,
-            projects: HashMap::new(),
-        }
+        ReadableRuns { runs: self, actor }
     }
 }
 
-/// The filter of a list of Runs for one actor, with the Projet of each
-/// repository it met.
+/// The filter of a list of Runs for one actor.
 pub struct ReadableRuns<'a> {
     runs: &'a Runs,
     actor: &'a Actor,
-    projects: HashMap<String, Vec<String>>,
 }
 
 impl ReadableRuns<'_> {
@@ -62,18 +51,7 @@ impl ReadableRuns<'_> {
         if host.allows_everything() {
             return true;
         }
-        let repo = effective_repo_of(self.runs, run.target_repo())
-            .to_string_lossy()
-            .into_owned();
-        let projects = match self.projects.get(&repo) {
-            Some(projects) => projects.clone(),
-            None => {
-                let projects = self.runs.projects_of_repository(&repo).await;
-                self.projects.insert(repo, projects.clone());
-                projects
-            }
-        };
-        let operation = read_run(run.run_id()).in_projects(projects);
+        let operation = read_run(run.run_id()).in_projects(run.project_id());
         authorize_read(host, self.actor, &operation).is_ok()
     }
 
@@ -93,15 +71,16 @@ impl ReadableRuns<'_> {
 /// Résumé de Run (ADR-0084).
 pub trait ListedRun {
     fn run_id(&self) -> &str;
-    fn target_repo(&self) -> Option<&str>;
+    /// The Projet recorded on the Run (ADR-0087).
+    fn project_id(&self) -> Option<&str>;
 }
 
 impl ListedRun for RunState {
     fn run_id(&self) -> &str {
         &self.run_id
     }
-    fn target_repo(&self) -> Option<&str> {
-        self.target_repo.as_deref()
+    fn project_id(&self) -> Option<&str> {
+        self.project_id.as_deref()
     }
 }
 
@@ -109,7 +88,7 @@ impl ListedRun for RunSummary {
     fn run_id(&self) -> &str {
         &self.run_id
     }
-    fn target_repo(&self) -> Option<&str> {
-        self.target_repo.as_deref()
+    fn project_id(&self) -> Option<&str> {
+        self.project_id.as_deref()
     }
 }

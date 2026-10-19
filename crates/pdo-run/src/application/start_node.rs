@@ -271,9 +271,9 @@ pub async fn force_spawn_node(
         default_harness_models: stored_default_harness_models(state).await,
         // The Projet tier, resolved fresh so a manual force-spawn honours a Projet
         // setting attached mid-Run. A DB error degrades to a transparent tier.
-        project_harness: crate::application::node::project_tiers::project_harness_for_path(
+        project_harness: crate::application::node::project_tiers::project_harness(
             state,
-            &repo_root.to_string_lossy(),
+            run_state.project_id.as_deref(),
         )
         .await
         .ok()

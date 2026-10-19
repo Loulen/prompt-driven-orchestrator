@@ -27,7 +27,7 @@ pub(super) async fn open(repo_root: &Path) -> Result<(sqlx::SqlitePool, std::pat
         .await
         .context("failed to open SQLite database")?;
 
-    init_db(&db).await?;
+    init_db(&db, repo_root).await?;
     Ok((db, db_path))
 }
 
@@ -144,15 +144,37 @@ async fn seed_extension_skills(seeding: &pdo_skill::Skills, host: &dyn Extension
     }
 }
 
-pub(crate) async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
+pub(crate) async fn init_db(db: &sqlx::SqlitePool, repo_root: &Path) -> Result<()> {
     // The event log and the tombstones of the forgotten Runs (ADR-0024), with
     // the Résumés de Run (ADR-0084), rebuilt from the log unless they are its
     // own — before the daemon serves anything.
     pdo_run::adapters::sqlite_event_store::init(db).await?;
-    let events = pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone());
-    pdo_run::application::run_summary::ensure_summaries(&events)
+
+    // The Projets and their members come before the Résumés: the one
+    // migration of the Runs reads the members (ADR-0087).
+    pdo_workspace::adapters::sqlite::init(db)
         .await
-        .context("failed to rebuild the run summaries")?;
+        .context("failed to create project and provisioning rules tables")?;
+    let recorded =
+        pdo_run::adapters::sqlite_event_store::record_legacy_projects(db, repo_root, |path| {
+            let db = db.clone();
+            async move {
+                Ok(pdo_workspace::adapters::sqlite::first_project_containing(&db, &path).await?)
+            }
+        })
+        .await
+        .context("failed to record the project of the existing runs")?;
+    let events = pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone());
+    if recorded > 0 {
+        info!("project recorded on {recorded} existing runs (ADR-0087)");
+        pdo_run::application::run_summary::rebuild_summaries(&events)
+            .await
+            .context("failed to rebuild the run summaries")?;
+    } else {
+        pdo_run::application::run_summary::ensure_summaries(&events)
+            .await
+            .context("failed to rebuild the run summaries")?;
+    }
 
     // The Triggers' tables belong to the trigger context (#927).
     pdo_trigger::adapters::sqlite::init(db)
@@ -173,11 +195,6 @@ pub(crate) async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
 
     // The audit journal (ADR-0044) and the page mounts belong to the platform
     // context, which creates its own tables (`Platform::init`).
-
-    // Materialised on demand — nothing seeded.
-    pdo_workspace::adapters::sqlite::init(db)
-        .await
-        .context("failed to create project and provisioning rules tables")?;
 
     // The validations of the pipelines (CONTEXT.md « Pipeline validé »): no
     // row is every Projet, so nothing is seeded.
@@ -200,3 +217,110 @@ pub(crate) async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
 }
 
 // --- API handlers ---
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn memory_db() -> sqlx::SqlitePool {
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap()
+    }
+
+    /// The database a daemon before ADR-0087 left: one Projet per path, and
+    /// `run_started` events recording no Projet.
+    async fn legacy(db: &sqlx::SqlitePool) {
+        for sql in [
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, harness TEXT, created_at TEXT NOT NULL)",
+            "CREATE TABLE project_members (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at TEXT NOT NULL)",
+            "INSERT INTO projects (id, name, created_at) VALUES ('p1', 'Alpha', 's')",
+        ] {
+            sqlx::query(sql).execute(db).await.unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/web', 'p1', 's'), ('/root', 'p1', 's')",
+        )
+        .execute(db)
+        .await
+        .unwrap();
+        pdo_run::adapters::sqlite_event_store::init(db)
+            .await
+            .unwrap();
+        for (run, payload) in [
+            (
+                "r-web",
+                r#"{"pipeline_name":"p","target_repo":"/repos/web/"}"#,
+            ),
+            (
+                "r-loose",
+                r#"{"pipeline_name":"p","target_repo":"/repos/loose"}"#,
+            ),
+            ("r-root", r#"{"pipeline_name":"p"}"#),
+            (
+                "r-new",
+                r#"{"pipeline_name":"p","target_repo":"/repos/web","project_id":null}"#,
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, payload) VALUES (?, '2026-10-01T00:00:00Z', 'run_started', ?)",
+            )
+            .bind(run)
+            .bind(payload)
+            .execute(db)
+            .await
+            .unwrap();
+        }
+    }
+
+    async fn recorded(db: &sqlx::SqlitePool, run: &str) -> Option<serde_json::Value> {
+        let (payload,): (String,) =
+            sqlx::query_as("SELECT payload FROM events WHERE run_id = ? AND kind = 'run_started'")
+                .bind(run)
+                .fetch_one(db)
+                .await
+                .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        payload.get("project_id").cloned()
+    }
+
+    #[tokio::test]
+    async fn the_existing_runs_get_once_the_projet_the_old_rule_gave_them() {
+        let db = memory_db().await;
+        legacy(&db).await;
+
+        init_db(&db, Path::new("/root")).await.unwrap();
+
+        assert_eq!(recorded(&db, "r-web").await, Some(serde_json::json!("p1")));
+        assert_eq!(
+            recorded(&db, "r-loose").await,
+            Some(serde_json::Value::Null)
+        );
+        // No target: the daemon's repo root, which Alpha holds.
+        assert_eq!(recorded(&db, "r-root").await, Some(serde_json::json!("p1")));
+        // Already recorded (in none): never revisited.
+        assert_eq!(recorded(&db, "r-new").await, Some(serde_json::Value::Null));
+        // The Résumés carry it.
+        let store = pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone());
+        use pdo_run::application::ports::EventStore;
+        let web = store.summary("r-web").await.unwrap().unwrap();
+        assert_eq!(web.project_id.as_deref(), Some("p1"));
+        let loose = store.summary("r-loose").await.unwrap().unwrap();
+        assert_eq!(loose.project_id, None);
+
+        // Once: a later membership moves no Run.
+        sqlx::query(
+            "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/loose', 'p1', 's')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        init_db(&db, Path::new("/root")).await.unwrap();
+        assert_eq!(
+            recorded(&db, "r-loose").await,
+            Some(serde_json::Value::Null)
+        );
+    }
+}

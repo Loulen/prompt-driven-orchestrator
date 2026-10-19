@@ -1,6 +1,7 @@
-//! The Projets of the Operations of a Run (CORE-3): a Run's and its nodes'
-//! are the Projet that owns the Run's primary repository, a creation's the one
-//! owning the repository it names; none when no Projet owns it.
+//! The Projet of a Run (ADR-0087): chosen at launch, recorded on the Run and
+//! read by every Operation on it and its nodes (CORE-3); a creation is in the
+//! Projet it names, a child inherits its parent's; none otherwise. Changing
+//! the members of a Projet moves no Run.
 
 use axum::body::to_bytes;
 use axum::response::Response;
@@ -9,35 +10,70 @@ use pdo_run::application::commands::RunCommandRequest;
 use pdo_run::application::create_run::CreateRunRequest;
 use pdo_run::application::session_claim::SessionClaim;
 use pdo_run::application::stop_node::StopNode;
+use pdo_run::domain::event::EventKind;
 use pdo_workspace::domain::project::Project;
 
 use crate::fakes::*;
 
 async fn status(response: Response) -> u16 {
-    let status = response.status().as_u16();
-    let _ = to_bytes(response.into_body(), usize::MAX).await;
-    status
+    body(response).await.0
 }
 
-/// A world whose Projet `p1` owns the world's repository (the primary
-/// repository of the Runs it seeds), refusing everything: nothing runs, the
+async fn body(response: Response) -> (u16, serde_json::Value) {
+    let status = response.status().as_u16();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// A world whose repository (the primary repository of the Runs it seeds) is
+/// a member of both `p1` and `p2` (ADR-0087).
+fn world_with_shared_repo() -> World {
+    let w = world();
+    let repo = w.repo.path().to_string_lossy().into_owned();
+    for (id, name) in [("p1", "Alpha"), ("p2", "Beta")] {
+        let mut project = Project::named(id, name);
+        project.members = vec![repo.clone()];
+        w.projects.0.lock().unwrap().push(project);
+    }
+    w
+}
+
+/// [`world_with_shared_repo`], refusing everything: nothing runs, the
 /// Operations are only asked about.
 fn world_in_projet() -> World {
-    let w = world();
-    let mut project = Project::named("p1", "Alpha");
-    project.members = vec![w.repo.path().to_string_lossy().into_owned()];
-    w.projects.0.lock().unwrap().push(project);
+    let w = world_with_shared_repo();
     *w.host.refuse.lock().unwrap() = true;
     w
 }
 
 fn create_request(repo: &str) -> CreateRunRequest {
+    create_request_in(repo, None)
+}
+
+fn create_request_in(repo: &str, project: Option<&str>) -> CreateRunRequest {
     serde_json::from_value(serde_json::json!({
         "pipeline": "relay",
         "input": "go",
         "target_repo": repo,
+        "project_id": project,
     }))
     .unwrap()
+}
+
+/// The `project_id` the `RunStarted` of `run_id` recorded.
+fn recorded_project(w: &World, run_id: &str) -> serde_json::Value {
+    w.store
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|e| e.run_id == run_id && e.kind == EventKind::RunStarted)
+        .and_then(|e| e.payload.clone())
+        .expect("a RunStarted")["project_id"]
+        .clone()
 }
 
 fn asked(w: &World) -> Vec<Operation> {
@@ -76,9 +112,9 @@ async fn gestures_on_r1(w: &World) {
 }
 
 #[tokio::test]
-async fn the_operations_of_a_run_and_its_nodes_are_in_the_projet_of_its_primary_repository() {
+async fn the_operations_of_a_run_and_its_nodes_are_in_the_projet_recorded_on_it() {
     let w = world_in_projet();
-    seed_relay(&w, "r1").await;
+    seed_relay_in(&w, "r1", Some("p1")).await;
 
     gestures_on_r1(&w).await;
 
@@ -92,8 +128,9 @@ async fn the_operations_of_a_run_and_its_nodes_are_in_the_projet_of_its_primary_
 }
 
 #[tokio::test]
-async fn the_operations_of_a_run_no_projet_owns_are_in_none() {
-    let w = world();
+async fn the_operations_of_a_run_launched_in_no_projet_are_in_none() {
+    // Its repository is in two Projets: the Run is in neither.
+    let w = world_in_projet();
     *w.host.refuse.lock().unwrap() = true;
     seed_relay(&w, "r1").await;
 
@@ -108,46 +145,30 @@ async fn the_operations_of_a_run_no_projet_owns_are_in_none() {
 }
 
 #[tokio::test]
-async fn creating_a_run_is_in_the_projet_of_the_repository_it_names() {
+async fn creating_a_run_is_in_the_projet_it_names_never_in_its_repositorys() {
     let w = world_in_projet();
     let actor = Actor::LocalOperator;
     let repo = w.repo.path().to_string_lossy().into_owned();
-    let elsewhere = tempfile::tempdir().unwrap();
-    let elsewhere = elsewhere.path().to_string_lossy().into_owned();
 
-    for request in [create_request(&repo), create_request(&elsewhere)] {
+    for request in [
+        create_request_in(&repo, Some("p2")),
+        create_request_in(&repo, Some(" p1 ")),
+        create_request(&repo),
+        create_request_in(&repo, Some("  ")),
+    ] {
         let answer = w.runs.create_run(&actor, request, Vec::new(), None).await;
-        assert_eq!(status(answer).await, 403);
-    }
-    // The primary of `target_repos` counts when `target_repo` is blank.
-    let request: CreateRunRequest = serde_json::from_value(serde_json::json!({
-        "pipeline": "relay",
-        "input": "go",
-        "target_repo": "  ",
-        "target_repos": [{ "repo": repo }],
-    }))
-    .unwrap();
-    let answer = w.runs.create_run(&actor, request, Vec::new(), None).await;
-    assert_eq!(status(answer).await, 403);
-
-    // Another spelling of the same directory stays in its Projet.
-    for alias in [format!("{repo}/"), format!("{repo}/.")] {
-        let answer = w
-            .runs
-            .create_run(&actor, create_request(&alias), Vec::new(), None)
-            .await;
         assert_eq!(status(answer).await, 403);
     }
 
     let projects: Vec<Vec<String>> = asked(&w).into_iter().map(|op| op.projects).collect();
-    let p1 = || vec!["p1".to_string()];
-    assert_eq!(projects, vec![p1(), vec![], p1(), p1(), p1()]);
+    let p = |id: &str| vec![id.to_string()];
+    assert_eq!(projects, vec![p("p2"), p("p1"), vec![], vec![]]);
 }
 
 #[tokio::test]
-async fn a_run_created_from_a_node_session_without_a_repository_is_in_its_parents_projet() {
+async fn a_run_created_from_a_node_session_is_in_its_parents_projet() {
     let w = world_in_projet();
-    seed_relay(&w, "r1").await;
+    seed_relay_in(&w, "r1", Some("p2")).await;
     let request: CreateRunRequest =
         serde_json::from_value(serde_json::json!({ "pipeline": "relay", "input": "go" })).unwrap();
     let claim = SessionClaim {
@@ -161,19 +182,148 @@ async fn a_run_created_from_a_node_session_without_a_repository_is_in_its_parent
         .await;
 
     assert_eq!(status(answer).await, 403);
-    assert_eq!(asked(&w)[0].projects, vec!["p1".to_string()]);
+    assert_eq!(asked(&w)[0].projects, vec!["p2".to_string()]);
 }
 
 #[tokio::test]
-async fn an_unreadable_workspace_puts_the_operation_in_no_projet() {
+async fn changing_the_members_of_a_projet_moves_no_run() {
     let w = world_in_projet();
-    seed_relay(&w, "r1").await;
-    *w.projects.1.lock().unwrap() = true;
+    seed_relay_in(&w, "r1", Some("p1")).await;
+    w.projects
+        .0
+        .lock()
+        .unwrap()
+        .iter_mut()
+        .for_each(|p| p.members.clear());
 
     assert_eq!(
         status(w.runs.start_manager(&Actor::LocalOperator, "r1").await).await,
         403
     );
 
-    assert!(asked(&w)[0].is_outside_projects());
+    assert_eq!(asked(&w)[0].projects, vec!["p1".to_string()]);
+}
+
+#[tokio::test]
+async fn a_launch_records_the_projet_it_names_and_provisions_from_it() {
+    let w = world_with_shared_repo();
+    relay_repository(&w);
+    let repo = w.repo.path().to_string_lossy().into_owned();
+    let actor = Actor::LocalOperator;
+
+    let (code, p1) = body(
+        w.runs
+            .create_run(
+                &actor,
+                create_request_in(&repo, Some("p1")),
+                Vec::new(),
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(code, 201, "{p1}");
+    let (code, p2) = body(
+        w.runs
+            .create_run(
+                &actor,
+                create_request_in(&repo, Some("p2")),
+                Vec::new(),
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(code, 201, "{p2}");
+    let (code, none) = body(
+        w.runs
+            .create_run(&actor, create_request(&repo), Vec::new(), None)
+            .await,
+    )
+    .await;
+    assert_eq!(code, 201, "{none}");
+
+    let id = |answer: &serde_json::Value| answer["run_id"].as_str().unwrap().to_string();
+    assert_eq!(recorded_project(&w, &id(&p1)), "p1");
+    assert_eq!(recorded_project(&w, &id(&p2)), "p2");
+    assert_eq!(
+        recorded_project(&w, &id(&none)),
+        serde_json::Value::Null,
+        "recorded as none, so the migration never revisits it"
+    );
+    assert_eq!(
+        *w.projects.2.lock().unwrap(),
+        vec![Some("p1".to_string()), Some("p2".to_string()), None]
+    );
+    let summary = w.store.summaries.lock().unwrap().clone();
+    let summary_of = |run: &str| summary.get(run).and_then(|s| s.project_id.clone());
+    assert_eq!(summary_of(&id(&p2)).as_deref(), Some("p2"));
+    assert_eq!(summary_of(&id(&none)), None);
+}
+
+#[tokio::test]
+async fn a_launch_names_an_existing_projet_holding_its_primary_repository() {
+    let w = world_with_shared_repo();
+    relay_repository(&w);
+    let repo = w.repo.path().to_string_lossy().into_owned();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let elsewhere = elsewhere.path().to_string_lossy().into_owned();
+    let actor = Actor::LocalOperator;
+    let before = w.store.events.lock().unwrap().len();
+
+    let (code, answer) = body(
+        w.runs
+            .create_run(
+                &actor,
+                create_request_in(&repo, Some("nope")),
+                Vec::new(),
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(code, 400, "{answer}");
+    assert!(answer["error"]
+        .as_str()
+        .unwrap()
+        .contains("unknown project"));
+
+    let (code, answer) = body(
+        w.runs
+            .create_run(
+                &actor,
+                create_request_in(&elsewhere, Some("p1")),
+                Vec::new(),
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(code, 400, "{answer}");
+    assert!(
+        answer["error"]
+            .as_str()
+            .unwrap()
+            .contains("not a member of project `Alpha`"),
+        "{answer}"
+    );
+    assert_eq!(
+        w.store.events.lock().unwrap().len(),
+        before,
+        "nothing written"
+    );
+
+    // Another spelling of a member is a member.
+    let (code, answer) = body(
+        w.runs
+            .create_run(
+                &actor,
+                create_request_in(&format!("{repo}/"), Some("p1")),
+                Vec::new(),
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(code, 201, "{answer}");
 }

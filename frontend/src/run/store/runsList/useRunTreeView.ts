@@ -11,7 +11,6 @@ import {
   type Attributes,
 } from "../../../shared/extensions/attributes";
 import type { Project } from "../../../workspace/model/project";
-import { projectLookup } from "../../../workspace/model/projectLookup";
 
 /**
  * The Runs list's tree view: the client-side filters, the run tree split into
@@ -51,11 +50,10 @@ export function useRunTreeView(
   const runById = useMemo(() => new Map(runs.map((r) => [r.run_id, r])), [runs]);
   const tree = useMemo(() => {
     if (!isAttributeFilterActive(projectFilter)) return fullTree;
-    const projectOf = projectLookup(projects);
     const byId = new Map(projects.map((p) => [p.id, p]));
     return fullTree.filter((n) => {
-      const ref = projectOf(n.run.effective_repo);
-      return ref !== null && matchesAttributes(byId.get(ref.id)?.attributes, projectFilter);
+      const project = n.run.project_id ? byId.get(n.run.project_id) : undefined;
+      return project !== undefined && matchesAttributes(project.attributes, projectFilter);
     });
   }, [fullTree, projects, projectFilter]);
   const { activeTree, archivedTree } = useMemo(() => {

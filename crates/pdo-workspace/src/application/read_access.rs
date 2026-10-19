@@ -5,8 +5,8 @@
 //!
 //! A Projet is read in itself; the disk is read in no Projet. A recent
 //! repository comes from a Run: it is listed when its last Run may be read,
-//! in the Projet of the repository, as the Run list does. Without extension,
-//! nothing is asked.
+//! in the Projet recorded on that Run (ADR-0087), as the Run list does.
+//! Without extension, nothing is asked.
 
 use pdo_kernel::attributes::AttributeFilter;
 use pdo_kernel::authorization::{authorize_read, Denied};
@@ -73,7 +73,7 @@ impl Workspace {
                 break;
             }
             if !self.host().allows_everything() {
-                let projects = self.projects_of_repository(&recent.path).await;
+                let projects = recent.project_id.iter().cloned().collect();
                 let operation = read_run_in(&recent.run_id, projects);
                 if authorize_read(self.host(), actor, &operation).is_err() {
                     continue;
@@ -176,8 +176,8 @@ mod tests {
         f.projects
             .seed(with_members(Project::named("p2", "Back"), &["/r2"]));
         f.recent.set(vec![
-            RecentRepository::new("/r2", "run-b"),
-            RecentRepository::new("/r1", "run-a"),
+            RecentRepository::new("/r2", "run-b").in_project("p2"),
+            RecentRepository::new("/r1", "run-a").in_project("p1"),
             RecentRepository::new("/loose", "run-c"),
         ]);
         let actor = Actor::LocalOperator;
@@ -191,13 +191,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_repository_spelled_otherwise_stays_in_its_projet() {
+    async fn a_recent_repository_is_read_in_the_projet_recorded_on_its_run() {
+        // ADR-0087: `/shared` is in both Projets; its last Run was launched in
+        // `p2`, so it is read there, whatever the members say.
         let f = denying_reads_in(&["p2"]);
         f.projects
-            .seed(with_members(Project::named("p2", "Back"), &["/r2"]));
+            .seed(with_members(Project::named("p1", "Front"), &["/shared"]));
+        f.projects
+            .seed(with_members(Project::named("p2", "Back"), &["/shared"]));
         f.recent.set(vec![
-            RecentRepository::new("/r2/", "run-a"),
-            RecentRepository::new("/r2/.", "run-b"),
+            RecentRepository::new("/shared", "run-a").in_project("p2")
         ]);
         let actor = Actor::LocalOperator;
         let recent = f.workspace.recent_repositories(&actor).await.unwrap();
@@ -218,7 +221,7 @@ mod tests {
         let mut recent: Vec<_> = hidden
             .iter()
             .enumerate()
-            .map(|(i, path)| RecentRepository::new(*path, format!("run-h{i}")))
+            .map(|(i, path)| RecentRepository::new(*path, format!("run-h{i}")).in_project("p2"))
             .collect();
         recent.extend((0..6).map(|i| RecentRepository::new(format!("/r{i}"), format!("run-{i}"))));
         f.recent.set(recent);

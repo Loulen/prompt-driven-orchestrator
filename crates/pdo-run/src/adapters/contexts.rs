@@ -39,18 +39,18 @@ impl DeclaredWaits for SessionWaits {
 pub struct WorkspaceProjects(pub Arc<Workspace>);
 
 impl Projects for WorkspaceProjects {
-    fn owner_of<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
-        Box::pin(async move { self.0.owner_of(path).await.map_err(|e| e.to_string()) })
+    fn project<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
+        Box::pin(async move { self.0.project(id).await.map_err(|e| e.to_string()) })
     }
 
     fn provisioning_rules<'a>(
         &'a self,
-        repository: &'a str,
+        project: Option<&'a str>,
         run: ProvisioningRules,
     ) -> BoxFuture<'a, Result<Vec<ScopedRules>, String>> {
         Box::pin(async move {
             self.0
-                .scoped_provisioning_rules(repository, run, ProvisioningRules::default())
+                .scoped_provisioning_rules(project, run, ProvisioningRules::default())
                 .await
                 .map_err(|e| e.to_string())
         })
@@ -133,9 +133,9 @@ mod tests {
             .unwrap();
 
         let projects = WorkspaceProjects(workspace);
-        let owner = projects.owner_of("/repos/front").await.unwrap().unwrap();
-        assert_eq!(owner.id, project.id);
-        assert_eq!(owner.harness.as_deref(), Some("codex"));
-        assert!(projects.owner_of("/repos/other").await.unwrap().is_none());
+        let read = projects.project(&project.id).await.unwrap().unwrap();
+        assert_eq!(read.members, vec!["/repos/front".to_string()]);
+        assert_eq!(read.harness.as_deref(), Some("codex"));
+        assert!(projects.project("prj-none").await.unwrap().is_none());
     }
 }

@@ -26,6 +26,8 @@ export interface CreateRunRequest {
   variables: Record<string, unknown>;
   pipeline_id?: string;
   target_repo?: string;
+  /** ADR-0087: the Projet the Run is launched in; omitted for none. */
+  project_id?: string;
   /** Read-only secondary repos (#465). `[0]` is the primary (kept in sync with
    *  `target_repo`), `[1..]` are secondaries. Omit for a mono-repo Run. */
   target_repos?: TargetRepoInput[];
@@ -70,6 +72,7 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     form.append("variables", JSON.stringify(req.variables));
     if (req.pipeline_id) form.append("pipeline_id", req.pipeline_id);
     if (req.target_repo) form.append("target_repo", req.target_repo);
+    if (req.project_id) form.append("project_id", req.project_id);
     // Every field of the JSON path must be mirrored here: a field the multipart
     // branch omits is silently dropped for a Run created WITH attached images.
     // Non-scalars ride as JSON strings, bools as stringified bools.

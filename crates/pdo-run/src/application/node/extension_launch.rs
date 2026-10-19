@@ -131,20 +131,12 @@ pub async fn node_launch(
     launch
 }
 
-/// The Run's primary repository, and the id of the Projet owning it if one
-/// does.
+/// The Run's primary repository, and the Projet recorded on it (ADR-0087).
 async fn repository_and_project(runs: &Runs, run: &RunState) -> (String, Option<String>) {
     let repository = effective_repo_root(runs, run)
         .to_string_lossy()
         .into_owned();
-    let project = runs
-        .projects
-        .owner_of(&repository)
-        .await
-        .ok()
-        .flatten()
-        .map(|project| project.id);
-    (repository, project)
+    (repository, run.project_id.clone())
 }
 
 /// The kind of a pipeline node, as the launch hooks name it.

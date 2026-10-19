@@ -373,17 +373,19 @@ describe("a run/new section that provides a value (API 0.9)", () => {
 });
 
 describe("the list filters of the Triggers list", () => {
-  function trigger(id: string, repo: string, attributes?: Record<string, string>): TriggerListEntry {
+  function trigger(id: string, repo: string, projectId: string, attributes?: Record<string, string>): TriggerListEntry {
     return {
       id, name: `Trigger ${id}`, pipeline_id: "p", pipeline_name: "P", target_repo: repo,
+      project_id: projectId,
       effective_repo: repo, variables: {}, cron: "0 9 * * *", overlap_policy: "skip", auto_name: true,
       enabled: true, ...(attributes ? { attributes } : {}),
     } as unknown as TriggerListEntry;
   }
+  // ADR-0087: each Trigger is in the Projet it launches in.
   const triggers = [
-    trigger("t1", "/repos/a", { "test/started_by": "alice" }),
-    trigger("t2", "/repos/b", { "test/started_by": "bob" }),
-    trigger("t3", "/repos/b"),
+    trigger("t1", "/repos/a", "pa", { "test/started_by": "alice" }),
+    trigger("t2", "/repos/b", "pb", { "test/started_by": "bob" }),
+    trigger("t3", "/repos/b", "pb"),
   ];
   const projects = [
     { id: "pa", name: "A", members: ["/repos/a"], attributes: {} },

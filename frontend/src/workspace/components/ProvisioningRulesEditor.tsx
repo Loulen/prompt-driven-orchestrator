@@ -29,6 +29,7 @@ export default function ProvisioningRulesEditor({
   frozenPlan,
   inherited,
   gitRef = "HEAD",
+  projectId = null,
   defaultExpanded = false,
   leading,
   trailing,
@@ -45,6 +46,8 @@ export default function ProvisioningRulesEditor({
   frozenPlan?: ProvisioningPlan;
   inherited?: ScopedProvisioningRules[];
   gitRef?: string;
+  /** ADR-0087: the Projet whose stored rules the preview inherits; `null` for none. */
+  projectId?: string | null;
   /** Notion #7: collapsed everywhere provisioning is secondary; Settings, where
    *  the section *is* provisioning, opens it. Never remembered across mounts. */
   defaultExpanded?: boolean;
@@ -78,7 +81,7 @@ export default function ProvisioningRulesEditor({
     }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      previewProvisioning(repository, level, rules, previewInherited, gitRef)
+      previewProvisioning(repository, level, rules, previewInherited, gitRef, projectId)
         .then((next) => {
           if (cancelled) return;
           setPlan(next);
@@ -111,6 +114,7 @@ export default function ProvisioningRulesEditor({
     rules,
     previewInherited,
     gitRef,
+    projectId,
     frozenPlan,
   ]);
 

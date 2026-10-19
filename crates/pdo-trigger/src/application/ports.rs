@@ -101,12 +101,17 @@ pub trait Repositories: Send + Sync {
     fn refresh<'a>(&'a self, targets: &'a [String]) -> BoxFuture<'a, Option<FetchError>>;
 }
 
-/// The Projets a Trigger is in: those of its target repository (the
-/// workspace context's Projets, matched as a Run's repository is).
+/// The Projets a Trigger launches its Runs in (ADR-0087), checked as a Run's
+/// launch is (the run context).
 pub trait TriggerProjects: Send + Sync {
-    /// The Projets owning the repository `path`: one at most, none when no
-    /// Projet owns it or the Projets cannot be read.
-    fn of_repository<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Vec<String>>;
+    /// Why a Run may not be launched in the Projet `project` on the primary
+    /// repository `repo` (an unknown Projet, a repository it does not hold);
+    /// `None` when it may.
+    fn refusal<'a>(
+        &'a self,
+        project: &'a str,
+        repo: Option<&'a str>,
+    ) -> BoxFuture<'a, Option<String>>;
 }
 
 /// The staging profiles a Trigger's `sandbox` may name (the sandbox context).

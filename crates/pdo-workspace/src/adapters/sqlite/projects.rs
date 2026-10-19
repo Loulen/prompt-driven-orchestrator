@@ -27,6 +27,10 @@ fn row_to_project(row: &sqlx::sqlite::SqliteRow, members: Vec<String>) -> Projec
         agent_choice: stored(row.get::<Option<String>, _>("agent_choice")),
         skills: stored(row.try_get::<Option<String>, _>("skills").unwrap_or(None)),
         members,
+        primary_repo: row
+            .try_get::<Option<String>, _>("primary_repo")
+            .unwrap_or(None)
+            .filter(|s| !s.is_empty()),
         attributes: Default::default(),
     }
 }
@@ -82,28 +86,37 @@ pub async fn get(db: &SqlitePool, id: &str) -> Result<Option<Project>, sqlx::Err
     }
 }
 
-/// The Projet that owns `path`, compared **verbatim** (ADR-0033).
-pub async fn owner_of(db: &SqlitePool, path: &str) -> Result<Option<Project>, sqlx::Error> {
-    let row = sqlx::query("SELECT project_id FROM project_members WHERE path = ?")
-        .bind(path)
-        .fetch_optional(db)
-        .await?;
-    match row {
-        Some(row) => get(db, &row.get::<String, _>("project_id")).await,
-        None => Ok(None),
+/// The Projets `path` is a member of, compared **verbatim** (ADR-0033), in the
+/// order it joined them.
+pub async fn containing(db: &SqlitePool, path: &str) -> Result<Vec<Project>, sqlx::Error> {
+    let rows =
+        sqlx::query("SELECT project_id FROM project_members WHERE path = ? ORDER BY rowid ASC")
+            .bind(path)
+            .fetch_all(db)
+            .await?;
+    let mut projects = Vec::with_capacity(rows.len());
+    for row in &rows {
+        if let Some(project) = get(db, &row.get::<String, _>("project_id")).await? {
+            projects.push(project);
+        }
     }
+    Ok(projects)
 }
 
-/// The `project` tier of the harness resolver. An empty stored harness is
-/// already `None`.
-pub async fn harness_for_path(db: &SqlitePool, path: &str) -> Result<Option<String>, sqlx::Error> {
-    Ok(owner_of(db, path).await?.and_then(|p| p.harness))
-}
-
-/// The `project` tier of the auto-fail preference. `None` ⇒ no Projet owns the
-/// path, or it states no preference — transparent either way.
-pub async fn auto_fail_for_path(db: &SqlitePool, path: &str) -> Result<Option<bool>, sqlx::Error> {
-    Ok(owner_of(db, path).await?.and_then(|p| p.auto_fail))
+/// The Projet the rule before ADR-0087 gave a Run working in `path`: the one
+/// `path` joined first, when memberships were still one per path. Read by the
+/// one migration that records that Projet on the existing Runs.
+pub async fn first_project_containing(
+    db: &SqlitePool,
+    path: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT project_id FROM project_members WHERE path = ? ORDER BY rowid ASC LIMIT 1",
+    )
+    .bind(path)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|row| row.get::<String, _>("project_id")))
 }
 
 /// Set one column of a Projet. `sql` is one of the `UPDATE` literals below.
@@ -125,6 +138,7 @@ const SET_HARNESS: &str = "UPDATE projects SET harness = ? WHERE id = ?";
 const SET_AUTO_FAIL: &str = "UPDATE projects SET auto_fail = ? WHERE id = ?";
 const SET_AGENT_CHOICE: &str = "UPDATE projects SET agent_choice = ? WHERE id = ?";
 const SET_SKILLS: &str = "UPDATE projects SET skills = ? WHERE id = ?";
+const SET_PRIMARY_REPO: &str = "UPDATE projects SET primary_repo = ? WHERE id = ?";
 
 async fn add_member(db: &SqlitePool, project_id: &str, path: &str) -> Result<(), sqlx::Error> {
     let now = pdo_kernel::clock::now_iso();
@@ -172,8 +186,8 @@ impl ProjectRepository for SqliteProjects {
     fn get<'a>(&'a self, id: &'a str) -> BoxFuture<'a, StoreResult<Option<Project>>> {
         Box::pin(async move { store(get(&self.db, id).await) })
     }
-    fn owner_of<'a>(&'a self, path: &'a str) -> BoxFuture<'a, StoreResult<Option<Project>>> {
-        Box::pin(async move { store(owner_of(&self.db, path).await) })
+    fn containing<'a>(&'a self, path: &'a str) -> BoxFuture<'a, StoreResult<Vec<Project>>> {
+        Box::pin(async move { store(containing(&self.db, path).await) })
     }
     fn create<'a>(&'a self, name: &'a str) -> BoxFuture<'a, StoreResult<Project>> {
         Box::pin(async move { store(create(&self.db, name).await) })
@@ -213,13 +227,21 @@ impl ProjectRepository for SqliteProjects {
         let text = skills.map(|s| s.0);
         Box::pin(async move { store(set_column(&self.db, SET_SKILLS, id, text).await) })
     }
+    fn set_primary_repo<'a>(
+        &'a self,
+        id: &'a str,
+        repo: Option<&'a str>,
+    ) -> BoxFuture<'a, StoreResult<()>> {
+        Box::pin(async move { store(set_column(&self.db, SET_PRIMARY_REPO, id, repo).await) })
+    }
     fn add_member<'a>(&'a self, id: &'a str, path: &'a str) -> BoxFuture<'a, StoreResult<()>> {
         Box::pin(async move { store(add_member(&self.db, id, path).await) })
     }
-    fn remove_member<'a>(&'a self, path: &'a str) -> BoxFuture<'a, StoreResult<()>> {
+    fn remove_member<'a>(&'a self, id: &'a str, path: &'a str) -> BoxFuture<'a, StoreResult<()>> {
         Box::pin(async move {
             store(
-                sqlx::query("DELETE FROM project_members WHERE path = ?")
+                sqlx::query("DELETE FROM project_members WHERE project_id = ? AND path = ?")
+                    .bind(id)
                     .bind(path)
                     .execute(&self.db)
                     .await

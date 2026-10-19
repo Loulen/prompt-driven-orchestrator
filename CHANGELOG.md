@@ -10,6 +10,29 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## À venir — Lancer dans un Projet ; un dépôt dans plusieurs Projets (CORE-95)
+
+- **Cassant (ADR-0087).** Le Projet d'un Run est choisi au lancement et enregistré sur le Run,
+  jamais déduit de son dépôt. `POST /runs` et `POST|PATCH /triggers` acceptent `project_id` ; un
+  Projet nommé doit exister et contenir le dépôt primaire (`400` sinon). Sans `project_id`, un
+  Run est **hors Projet**, même sur un dépôt membre d'un Projet ; un Run créé depuis une session
+  de nœud hérite du Projet de son Run parent, un Trigger lance ses Runs dans son Projet. Les
+  `Operation.projects` d'un Run, de ses nœuds, sessions et commentaires de Review sont ce Projet
+  enregistré : une extension qui lisait le Projet du dépôt doit relire ce champ.
+- Un dépôt peut appartenir à plusieurs Projets : plus de `409` « déjà dans un autre Projet ».
+  `DELETE /projects/{id}/members` ne retire le dépôt que de ce Projet. Chaque Projet désigne un
+  dépôt primaire par défaut (`primary_repo`, `PATCH /projects/{id}`), par défaut son premier
+  membre.
+- **Migration unique au démarrage.** Chaque Run existant reçoit dans son `run_started` le Projet
+  que l'ancienne règle lui attribuait (`project_id`, `null` s'il n'en avait pas), puis les Résumés
+  de Run sont reconstruits ; chaque Trigger reçoit de même le Projet de son dépôt cible. Un Run
+  déjà enregistré n'est jamais revu : changer les membres d'un Projet ne déplace aucun Run.
+- `GET /runs` et `GET /runs/{id}` portent `project_id` ; les listes de Runs et de Triggers se
+  groupent par Projet enregistré. Les Stats rangent le coût d'un Run sous ce Projet.
+- New Run › Where commence par le Projet (le dernier choisi est présélectionné, « No project »
+  seulement si les Droits le permettent), présélectionne son dépôt primaire par défaut et propose
+  ses autres dépôts comme secondaires cochables, en lecture seule par défaut.
+
 ## 2.42.0 — Arbre de fichiers de la Review (CORE-84)
 
 - La liste des fichiers de la Review est un arbre de dossiers repliables. Une chaîne de dossiers

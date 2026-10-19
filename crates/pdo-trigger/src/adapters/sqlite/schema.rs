@@ -129,6 +129,38 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // `project_id` — NULLABLE (ADR-0087): the Projet its Runs are launched in.
+    // Added once, and filled that once with the Projet the rule before
+    // ADR-0087 gave its Runs: the first Projet holding its repository, read
+    // off the workspace's `project_members` when that table already exists.
+    let has_project_id =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'project_id'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_project_id {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN project_id TEXT")
+            .execute(db)
+            .await?;
+        let has_members = sqlx::query(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project_members'",
+        )
+        .fetch_optional(db)
+        .await?
+        .is_some();
+        if has_members {
+            sqlx::query(
+                "UPDATE triggers SET project_id = (
+                    SELECT m.project_id FROM project_members m
+                    WHERE m.path = RTRIM(triggers.target_repo, '/')
+                    ORDER BY m.rowid ASC LIMIT 1
+                 )",
+            )
+            .execute(db)
+            .await?;
+        }
+    }
+
     // `auto_name` — `NOT NULL DEFAULT 1`, unlike the nullable columns: a plain
     // flat bool (mirror of `enabled`). The default `1` is load-bearing — every
     // pre-existing Trigger keeps auto-naming its Runs.

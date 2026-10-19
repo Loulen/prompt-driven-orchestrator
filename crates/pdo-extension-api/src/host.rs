@@ -79,7 +79,7 @@ pub trait Host: Send + Sync {
 
     /// Create a Run on behalf of `actor` (API 0.9), as `POST /runs` creates
     /// one for that caller: the same Autorisation d'opération (`run` ×
-    /// `create`, in the Projet of its primary repository), the same checks of
+    /// `create`, in the Projet it names, ADR-0087), the same checks of
     /// the extension data ([`Extension::validate_create`](crate::Extension::validate_create),
     /// the calling extension's included), the same attributes stamped before
     /// its first Node. Answers the new Run's id, or the refusal `POST /runs`

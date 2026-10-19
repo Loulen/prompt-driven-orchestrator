@@ -14,6 +14,7 @@ pub(super) fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         pipeline_id: row.get("pipeline_id"),
         pipeline_name: row.get("pipeline_name"),
         target_repo: row.get("target_repo"),
+        project_id: row.try_get("project_id").unwrap_or(None),
         // Tolerant of a legacy-NULL / pre-migration read: absence fires mono-repo.
         target_repos: row.try_get("target_repos").unwrap_or(None),
         source_branch: row.get("source_branch"),

@@ -87,8 +87,8 @@ function serve(extensions: ExtensionEntry[]) {
 }
 
 const runs = [
-  { run_id: "r1", pipeline_name: "demo", status: "running", effective_repo: "/repos/pdo" },
-  { run_id: "r2", pipeline_name: "demo", status: "done", effective_repo: "/repos/other" },
+  { run_id: "r1", pipeline_name: "demo", status: "running", effective_repo: "/repos/pdo", project_id: "p1" },
+  { run_id: "r2", pipeline_name: "demo", status: "done", effective_repo: "/repos/pdo" },
   { run_id: "r1-child", pipeline_name: "demo", status: "running", effective_repo: "/elsewhere", parent_run_id: "r1" },
 ] as unknown as RunListEntry[];
 
@@ -324,7 +324,7 @@ describe("deep links", () => {
 });
 
 describe("the Projet of the selected Run", () => {
-  it("is the one its root's repository belongs to, verbatim", () => {
+  it("is the one its root was launched in, never its repository's (ADR-0087)", () => {
     expect(projectOfRun("r1", runs, projects)?.name).toBe("PDO");
     expect(projectOfRun("r1-child", runs, projects)?.name).toBe("PDO");
     expect(projectOfRun("r2", runs, projects)).toBeNull();

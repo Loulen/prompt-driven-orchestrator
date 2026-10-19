@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { GitBranch, X } from "lucide-react";
+import { tildify } from "../../lib/homePath";
 import { validateRepo } from "../../workspace/api/repos";
 import { pickDefaultBranch } from "../../workspace/model/branchSelect";
 import { useBranchList } from "../../workspace/store/useBranchList";
@@ -16,6 +17,8 @@ export interface SecondaryRepo {
   baseBranch: string;
   valid: boolean | null;
   readOnly: boolean;
+  /** One of the Projet's repositories, checked in « Other repositories of <Projet> » (ADR-0087). */
+  fromProject?: boolean;
 }
 
 interface Props {
@@ -26,6 +29,8 @@ interface Props {
    *  stable per index and cannot loop the validation effect). */
   onChange: (index: number, patch: Partial<SecondaryRepo>) => void;
   onRemove: (index: number) => void;
+  /** The daemon's home, to read a path as `~/code/…` (the Projet's rows). */
+  home?: string | null;
 }
 
 /**
@@ -46,7 +51,9 @@ export default function SecondaryRepoRow({
   recentRepos,
   onChange,
   onRemove,
+  home,
 }: Props) {
+  const [branchOpen, setBranchOpen] = useState(false);
   // CORE-5: no loupe when the disk may not be browsed.
   const canBrowse = useRunCreationRightsStore((s) => s.rights.canBrowse);
   const [validating, setValidating] = useState(false);
@@ -122,6 +129,91 @@ export default function SecondaryRepoRow({
     // to decide re-seeding — depending on it would re-run on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, index]);
+
+  if (repo.fromProject) {
+    // ADR-0087: one of the Projet's repositories, checked — its path is the
+    // Projet's, so it shows as a line: unchecking takes it back out.
+    return (
+      <div className="flex flex-col gap-1.5" data-testid={`project-repo-row-${index}`}>
+        <div
+          className={`flex items-center gap-2 rounded-md border bg-bg-3 px-2.5 py-1.5 ${
+            repo.valid === false ? "border-st-failed" : "border-line-strong"
+          }`}
+        >
+          <input
+            type="checkbox"
+            className="accent-acc"
+            checked
+            onChange={() => onRemove(index)}
+            aria-label={`Use ${path} as a secondary repository`}
+            data-testid={`project-repo-check-${index}`}
+          />
+          <span className="min-w-0 flex-1 truncate font-mono text-fg" style={{ fontSize: "12px" }} title={path}>
+            {tildify(path, home)}
+          </span>
+          <div
+            className="flex shrink-0 rounded border border-line-strong p-px"
+            role="radiogroup"
+            aria-label="Access"
+            style={{ fontSize: "10px" }}
+          >
+            {(
+              [
+                [true, "read-only"],
+                [false, "writable"],
+              ] as const
+            ).map(([readOnly, label]) => (
+              <button
+                key={label}
+                type="button"
+                role="radio"
+                aria-checked={repo.readOnly === readOnly}
+                onClick={() => onChange(index, { readOnly })}
+                className={`rounded-sm px-1.5 py-px transition-colors ${
+                  repo.readOnly === readOnly ? "bg-bg-5 text-fg" : "text-fg-4 hover:text-fg-2"
+                }`}
+                data-testid={`project-repo-${readOnly ? "readonly" : "writable"}-${index}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setBranchOpen((o) => !o)}
+            className="flex shrink-0 items-center gap-1 font-mono text-fg-4 transition-colors hover:text-fg-2"
+            style={{ fontSize: "10.5px" }}
+            title="Base branch"
+            data-testid={`project-repo-branch-${index}`}
+          >
+            <GitBranch size={10} />
+            {validating ? "…" : repo.baseBranch || "HEAD"}
+          </button>
+        </div>
+        {error && (
+          <span className="text-st-failed" style={{ fontSize: "10.5px" }}>
+            {error}
+          </span>
+        )}
+        {branchOpen && repo.valid && (
+          <SourceBranchField
+            value={repo.baseBranch}
+            onChange={(branch) => onChange(index, { baseBranch: branch })}
+            branches={branches}
+            loading={branchesLoading}
+            fetching={fetching}
+            lastFetchAt={lastFetchAt}
+            fetchError={fetchError}
+            onFetch={refetchRemotes}
+            onReread={rereadBranches}
+            onFastForward={fastForward}
+            testIdPrefix={`secondary-branch-${index}`}
+            ariaLabel={`Base branch for secondary repository ${index + 1}`}
+          />
+        )}
+      </div>
+    );
+  }
 
   let borderClass = "border-line-strong focus:border-acc";
   if (repo.valid === true) borderClass = "border-acc focus:border-acc";

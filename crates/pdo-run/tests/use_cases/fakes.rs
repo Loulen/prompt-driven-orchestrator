@@ -330,31 +330,31 @@ impl DeclaredWaits for Waits {
     }
 }
 
-/// The Projets, as a list; `broken` makes every read fail.
+/// The Projets, as a list; `broken` makes every read fail. The Projet each
+/// provisioning read was asked for is recorded.
 #[derive(Default)]
-pub struct FakeProjects(pub Mutex<Vec<Project>>, pub Mutex<bool>);
+pub struct FakeProjects(
+    pub Mutex<Vec<Project>>,
+    pub Mutex<bool>,
+    pub Mutex<Vec<Option<String>>>,
+);
 
 impl Projects for FakeProjects {
-    fn owner_of<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
+    fn project<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
         Box::pin(async move {
             if *self.1.lock().unwrap() {
                 return Err("the workspace store is unreadable".to_string());
             }
-            Ok(self
-                .0
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|p| p.members.iter().any(|m| m == path))
-                .cloned())
+            Ok(self.0.lock().unwrap().iter().find(|p| p.id == id).cloned())
         })
     }
 
     fn provisioning_rules<'a>(
         &'a self,
-        _repository: &'a str,
+        project: Option<&'a str>,
         run: ProvisioningRules,
     ) -> BoxFuture<'a, Result<Vec<ScopedRules>, String>> {
+        self.2.lock().unwrap().push(project.map(str::to_string));
         Box::pin(async move {
             Ok(vec![ScopedRules {
                 scope: ProvisioningScope::Run,
@@ -776,6 +776,11 @@ edges:
 /// A started Run of the [`RELAY`] pipeline in the world's repository: its
 /// run-scoped pipeline and prompts, its worktree, its `RunStarted`.
 pub async fn seed_relay(w: &World, run_id: &str) {
+    seed_relay_in(w, run_id, None).await
+}
+
+/// [`seed_relay`], the Run launched in the Projet `project` (ADR-0087).
+pub async fn seed_relay_in(w: &World, run_id: &str, project: Option<&str>) {
     let repo = w.repo.path();
     let run_dir = repo.join(".pdo").join("runs").join(run_id);
     std::fs::create_dir_all(run_dir.join("worktree").join(".pdo").join("artifacts")).unwrap();
@@ -789,8 +794,33 @@ pub async fn seed_relay(w: &World, run_id: &str) {
         "pipeline_name": "relay",
         "input": "go",
         "target_repo": repo.to_string_lossy(),
+        "project_id": project,
     }));
     w.runs.append_event().execute(&started).await.unwrap();
+}
+
+/// The world's repository as a git repository holding the `relay` pipeline.
+pub fn relay_repository(w: &World) {
+    let repo = w.repo.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "test@test.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(repo.join(".gitignore"), ".pdo/\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "init"]);
+    let pipelines = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(pipelines.join("relay.prompts")).unwrap();
+    std::fs::write(pipelines.join("relay.yaml"), RELAY).unwrap();
+    std::fs::write(pipelines.join("relay.prompts/worker.md"), "Do the work.\n").unwrap();
+    std::fs::write(pipelines.join("relay.prompts/second.md"), "Do the rest.\n").unwrap();
 }
 
 /// Write the artifact `node_id`'s `out` port expects, where its agent would.

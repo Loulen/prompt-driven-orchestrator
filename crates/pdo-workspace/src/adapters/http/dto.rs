@@ -40,9 +40,15 @@ pub struct ProjectDto<A, S> {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<S>,
     /// Member repository paths, compared **verbatim** (ADR-0033). Ordered by
-    /// attach time.
+    /// attach time. A path may be a member of several Projets (ADR-0087).
     #[serde(default)]
     pub members: Vec<String>,
+    /// The member a launch in this Projet preselects as its primary
+    /// repository (ADR-0087): the one chosen, else the first member. Absent
+    /// for a Projet without members.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub primary_repo: Option<String>,
     /// The entity attributes the extensions stamped on it (CONTEXT.md §
     /// *Extensions*); absent when none.
     #[serde(default, skip_serializing_if = "Attributes::is_empty")]
@@ -57,6 +63,7 @@ impl<A, S> ProjectDto<A, S> {
     where
         P: ProjectSettings<AgentChoice = A, Skill = S>,
     {
+        let primary_repo = project.default_primary().map(str::to_string);
         Self {
             agent_choice: project
                 .agent_choice
@@ -67,6 +74,7 @@ impl<A, S> ProjectDto<A, S> {
             name: project.name,
             harness: project.harness,
             auto_fail: project.auto_fail,
+            primary_repo,
             members: project.members,
             attributes: project.attributes,
         }
@@ -106,6 +114,10 @@ pub(crate) struct PatchProjectRequest<A, S> {
     /// The Projet's `auto_fail` (ADR-0049); `null` states no preference.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     auto_fail: Option<Option<bool>>,
+    /// The default primary repository (ADR-0087), a member of the Projet;
+    /// `null` or blank goes back to the first member.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    primary_repo: Option<Option<String>>,
 }
 
 impl<A, S> PatchProjectRequest<A, S> {
@@ -124,13 +136,14 @@ impl<A, S> PatchProjectRequest<A, S> {
                 .skills
                 .map(|skills| P::encode_skills(skills).map(StoredSetting)),
             auto_fail: self.auto_fail,
+            primary_repo: self.primary_repo,
         }
     }
 }
 
 /// Body of `POST|DELETE /projects/{id}/members`. The path is compared
-/// **verbatim** (ADR-0033). The attach enforces at-most-one membership before any
-/// write; a path owned by another Projet is a 409 naming the owner.
+/// **verbatim** (ADR-0033). A path may be a member of several Projets
+/// (ADR-0087): the attach and the detach touch the named Projet only.
 #[derive(Deserialize)]
 pub(crate) struct ProjectMemberRequest {
     pub path: String,

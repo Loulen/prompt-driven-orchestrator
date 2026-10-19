@@ -108,7 +108,7 @@ function serve(extensions: ExtensionEntry[]) {
 }
 
 function shell(children: ReactNode, selected: RunState | null = null) {
-  const runs = [{ run_id: "r1", pipeline_name: "demo", status: "running", effective_repo: "/repos/pdo" }] as unknown as RunListEntry[];
+  const runs = [{ run_id: "r1", pipeline_name: "demo", status: "running", effective_repo: "/repos/pdo", project_id: "p1" }] as unknown as RunListEntry[];
   const projects = [{ id: "p1", name: "PDO", members: ["/repos/pdo"] }] as unknown as Project[];
   return (
     <TooltipProvider>

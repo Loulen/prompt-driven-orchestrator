@@ -27,7 +27,7 @@ use pdo_pipeline::domain::pipeline;
 ///
 /// - **node**: the node's `auto_fail:` in the run's (live-snapshot) pipeline;
 /// - **run**: the frozen `RunState::auto_fail`;
-/// - **project**: the Projet owning the run's primary repo (verbatim path);
+/// - **project**: the Projet the run was launched in (ADR-0087);
 /// - **instance**: `stored → env → false`.
 ///
 /// Best-effort per tier: a tier that cannot be read (pipeline unparsable, DB
@@ -58,17 +58,13 @@ pub async fn resolve_run_auto_fail(
             })
     };
 
-    // Project tier: the Projet owning the run's primary repo (compared verbatim,
-    // like the harness tier). Falls back to the daemon repo root when the run
-    // carries no explicit target (ADR-0033 read-side resolution).
-    let primary_repo = run_state
-        .target_repo
-        .clone()
-        .unwrap_or_else(|| state.repo_root.to_string_lossy().to_string());
-    let project =
-        crate::application::node::project_tiers::project_auto_fail_for_path(state, &primary_repo)
-            .await
-            .unwrap_or(None);
+    // Project tier: the Projet the Run was launched in (ADR-0087).
+    let project = crate::application::node::project_tiers::project_auto_fail(
+        state,
+        run_state.project_id.as_deref(),
+    )
+    .await
+    .unwrap_or(None);
 
     // Instance tier: stored → env → false.
     let instance = state

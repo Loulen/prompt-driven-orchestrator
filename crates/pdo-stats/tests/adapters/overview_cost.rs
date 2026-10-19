@@ -274,6 +274,7 @@ async fn stats_cost_returns_harness_coverage_and_nested_contribution_hierarchies
                 "pipeline_id":"p1",
                 "pipeline_name":format!("Pipeline {}", index + 1),
                 "target_repo":repo,
+                "project_id":"prj-product",
                 "harness":"claude",
                 "node_defs":[{"id":"worker","name":format!("Worker {}", index + 1),"node_type":"agent", "isolated_worktree":true}]
             }),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
 import FsExplorerModal from "./FsExplorerModal";
 import { tildify } from "../../lib/homePath";
@@ -42,6 +42,8 @@ interface Props {
   help?: string | null;
   /** The daemon's home, to read a grouped repository as `~/code/…`. */
   home?: string | null;
+  /** A mark at the end of the field (New Run's « project default »). */
+  badge?: ReactNode;
 }
 
 function splitPath(fullPath: string): { folder: string; parent: string } {
@@ -68,6 +70,7 @@ export default function RepoCombobox({
   groupsNote,
   help,
   home,
+  badge,
 }: Props) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -144,7 +147,7 @@ export default function RepoCombobox({
         <input
           ref={inputRef}
           id="target-repo"
-          className={`w-full rounded-md border bg-bg-3 px-2.5 py-1.5 pr-9 font-mono text-fg placeholder:text-fg-4 transition-colors focus:outline-none ${borderClass}`}
+          className={`w-full rounded-md border bg-bg-3 px-2.5 py-1.5 ${badge ? "pr-32" : "pr-9"} font-mono text-fg placeholder:text-fg-4 transition-colors focus:outline-none ${borderClass}`}
           style={{ fontSize: "12px" }}
           placeholder="/path/to/your/repo"
           value={value}
@@ -153,6 +156,9 @@ export default function RepoCombobox({
           data-testid="target-repo-input"
           autoComplete="off"
         />
+        {badge && (
+          <span className="pointer-events-none absolute inset-y-0 right-8 flex items-center">{badge}</span>
+        )}
         {canBrowse ? (
           <button
             type="button"

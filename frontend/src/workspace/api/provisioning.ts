@@ -15,9 +15,11 @@ export function previewProvisioning(
   rules: ProvisioningRules,
   inherited?: ScopedProvisioningRules[],
   gitRef = "HEAD",
+  /** ADR-0087: the Projet the Run is launched in, whose rules it inherits; `null` for none. */
+  projectId: string | null = null,
 ): Promise<ProvisioningPlan> {
   return request("POST", "/repos/provisioning/preview", {
-    body: { repository, git_ref: gitRef, scope, rules, inherited },
+    body: { repository, git_ref: gitRef, scope, rules, inherited, project_id: projectId },
   });
 }
 

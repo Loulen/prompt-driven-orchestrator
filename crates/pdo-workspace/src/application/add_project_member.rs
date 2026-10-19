@@ -1,34 +1,23 @@
-//! Attach a repository path to a Projet: at most one Projet per path, and the
-//! refusal names the owner (ADR-0046).
+//! Attach a repository path to a Projet. A path may be a member of several
+//! Projets (ADR-0087); attaching it twice to the same one is a no-op.
 
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 
-use crate::domain::project::{membership_verdict, AddMember, Project};
+use crate::domain::project::Project;
 
 use super::error::{WorkspaceError, WorkspaceResult};
 use super::ports::StorageError;
 use super::workspace::Workspace;
 
-/// What attaching a path came to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MemberAdded {
-    /// Attached (or already a member of this Projet). `None` when the Projet
-    /// vanished right after.
-    Attached(Option<Project>),
-    /// The path belongs to another Projet; nothing was written.
-    Refused {
-        owner_id: String,
-        owner_name: String,
-    },
-}
-
 impl Workspace {
+    /// The Projet once `path` is attached; `None` when it vanished right
+    /// after.
     pub async fn add_project_member(
         &self,
         actor: &Actor,
         id: &str,
         path: &str,
-    ) -> WorkspaceResult<MemberAdded> {
+    ) -> WorkspaceResult<Option<Project>> {
         let failed = |what: &'static str| {
             move |e: StorageError| StorageError(format!("failed to {what} project {id}: {e}"))
         };
@@ -36,45 +25,21 @@ impl Workspace {
         if path.is_empty() {
             return Err(WorkspaceError::Invalid("member path is required".into()));
         }
-        if self
-            .projects
-            .get(id)
-            .await
-            .map_err(failed("load"))?
-            .is_none()
-        {
+        let Some(project) = self.projects.get(id).await.map_err(failed("load"))? else {
             return Err(WorkspaceError::NotFound);
-        }
+        };
         self.authorize(
             actor,
             Operation::new(ResourceKind::Project, Verb::Update).on(id),
         )?;
-        let owner = self
-            .projects
-            .owner_of(path)
-            .await
-            .map_err(failed("add member to"))?;
-        match membership_verdict(owner.as_ref(), id) {
-            Some(AddMember::Refused {
-                owner_id,
-                owner_name,
-            }) => {
-                return Ok(MemberAdded::Refused {
-                    owner_id,
-                    owner_name,
-                })
-            }
-            Some(_) => {}
-            None => self
-                .projects
+        if !project.has_member(path) {
+            self.projects
                 .add_member(id, path)
                 .await
-                .map_err(failed("add member to"))?,
+                .map_err(failed("add member to"))?;
         }
         self.events.project_changed(id).await;
-        Ok(MemberAdded::Attached(
-            self.projects.get(id).await.ok().flatten(),
-        ))
+        Ok(self.projects.get(id).await.ok().flatten())
     }
 }
 
@@ -93,7 +58,7 @@ mod tests {
             .add_project_member(&actor, "a", " /repos/front ")
             .await
             .unwrap();
-        let MemberAdded::Attached(Some(project)) = added else {
+        let Some(project) = added else {
             panic!("expected an attach, got {added:?}")
         };
         assert_eq!(project.members, vec!["/repos/front".to_string()]);
@@ -102,12 +67,12 @@ mod tests {
             .add_project_member(&actor, "a", "/repos/front")
             .await
             .unwrap();
-        assert!(matches!(again, MemberAdded::Attached(Some(p)) if p.members.len() == 1));
+        assert!(matches!(again, Some(p) if p.members.len() == 1));
         assert_eq!(f.events.changed().len(), 2);
     }
 
     #[tokio::test]
-    async fn a_path_owned_elsewhere_is_refused_by_name_before_any_write() {
+    async fn a_path_may_be_a_member_of_several_projets() {
         let f = fixture();
         f.projects.seed(Project::named("a", "Alpha"));
         f.projects.seed(Project::named("b", "Bravo"));
@@ -116,20 +81,15 @@ mod tests {
             .add_project_member(&actor, "a", "/repos/front")
             .await
             .unwrap();
-        let refused = f
+        let bravo = f
             .workspace
             .add_project_member(&actor, "b", "/repos/front")
             .await
+            .unwrap()
             .unwrap();
-        assert_eq!(
-            refused,
-            MemberAdded::Refused {
-                owner_id: "a".into(),
-                owner_name: "Alpha".into()
-            }
-        );
-        let bravo = f.projects.all().into_iter().find(|p| p.id == "b").unwrap();
-        assert!(bravo.members.is_empty());
+        assert_eq!(bravo.members, vec!["/repos/front".to_string()]);
+        let alpha = f.projects.all().into_iter().find(|p| p.id == "a").unwrap();
+        assert_eq!(alpha.members, vec!["/repos/front".to_string()]);
     }
 
     #[tokio::test]

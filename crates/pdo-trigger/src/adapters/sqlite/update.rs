@@ -31,6 +31,9 @@ pub async fn update(
     if edit.target_repo.is_some() {
         sets.push("target_repo = ?");
     }
+    if edit.project_id.is_some() {
+        sets.push("project_id = ?");
+    }
     if edit.target_repos.is_some() {
         sets.push("target_repos = ?");
     }
@@ -92,6 +95,9 @@ pub async fn update(
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.target_repo {
+        query = query.bind(v.clone());
+    }
+    if let Some(v) = &edit.project_id {
         query = query.bind(v.clone());
     }
     if let Some(v) = &edit.target_repos {

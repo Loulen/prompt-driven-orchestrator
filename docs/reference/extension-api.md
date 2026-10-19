@@ -80,17 +80,18 @@ The core fills `projects` for its own Operations:
 
 | Resource | Projets |
 | --- | --- |
-| `run`, `node` | the Projet owning the Run's primary repository; a creation: the repository it names (`target_repo`, else `target_repos[0]`), or the parent Run's for a Run created from a node session without a repository |
+| `run`, `node` | the Projet recorded on the Run at its launch (ADR-0087); a creation: the Projet it names (`project_id`), else the parent Run's for a Run created from a node session, else none |
 | `session` | the Projets of the session's Run (node, manager, run shell); the library assistant is in none |
 | `review_comment` | the Projets of the Run in its target |
 | `project` (targeted) | that Projet |
-| `repository` (`fetch`, `fast_forward`) | the Projet owning the repository |
-| `trigger` (0.11) | the Projet owning the Trigger's target repository, matched as a Run's; a creation: the repository it names; a Trigger without a target repository is in none. An edit moving it to another Projet's repository is asked, and announced applied, in each |
+| `repository` (`fetch`, `fast_forward`) | every Projet the repository is a member of |
+| `trigger` (0.11) | the Projet the Trigger launches its Runs in (`project_id`); none without one. An edit moving it to another Projet is asked, and announced applied, in each |
 | everything else | none |
 
-A repository belongs to one Projet at most, so the core's lists hold one id at most. A Run's
-repository is matched to a Projet's member verbatim, then without trailing `/` or `.`, then
-resolved on disk: `/repo/` or a link to `/repo` stays in the Projet that owns `/repo`. An extension
+A Run, its nodes, sessions and review comments are in one Projet at most: the one recorded at
+its launch, never recomputed when a Projet's members change. A repository may be a member of
+several Projets; it is matched to a Projet's member verbatim, then without trailing `/` or `.`,
+then resolved on disk: `/repo/` or a link to `/repo` is in the Projets of `/repo`. An extension
 fills `projects` for its own Ressources (`Operation::in_projects`), with as many Projets as its
 entity belongs to. **An extension never works out a Projet from a repository**: it reads
 `operation.projects`. When the Projets cannot be read, the core logs it and the Operation is in
@@ -332,7 +333,8 @@ library assistant do too. `session_env` and `session_preamble` receive a `Sessio
   comments, `POST /runs/<id>/review/comments/send`, which starts it on demand). The library
   assistant: the Actor who opens it. `null` for a Run created before the core recorded its
   creator.
-- `projects`: the Projet owning the Run's primary repository; none for the library assistant.
+- `projects`: the Projet recorded on the Run (ADR-0087); none for a Run in no Projet and for the
+  library assistant.
 - `node`: for a Node, its `NodeLaunch` (above); `null` otherwise.
 
 By default `session_env` answers `node_env(launch.node)` for a Node and nothing for any other

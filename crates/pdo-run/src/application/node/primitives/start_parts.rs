@@ -41,11 +41,10 @@ pub struct StartNodeParams<'a> {
     pub default_harness: Option<String>,
     /// Fallback tier of the model resolution for the winning harness.
     pub default_harness_models: std::collections::BTreeMap<String, String>,
-    /// The harness carried by the **Projet** of this Run's primary repo (ADR-0046),
-    /// pre-resolved like [`Self::default_harness`]. Feeds the `project` tier,
-    /// between the Run and the instance default; `None` makes the tier transparent.
-    /// Resolve it from the **primary** repo only, so a secondary (ADR-0042) never
-    /// sways it.
+    /// The harness carried by the **Projet** this Run was launched in (ADR-0046,
+    /// ADR-0087), pre-resolved like [`Self::default_harness`]. Feeds the `project`
+    /// tier, between the Run and the instance default; `None` makes the tier
+    /// transparent. No repository of the Run sways it.
     pub project_harness: Option<String>,
     /// Turn-end auto-completion (ADR-0043), pre-resolved like
     /// [`Self::default_model`]. `start_node` ANDs `!is_script` so a `script` node

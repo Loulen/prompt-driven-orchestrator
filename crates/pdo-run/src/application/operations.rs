@@ -2,15 +2,14 @@
 //! about (ADR-0081): a node's is targeted `<run>/<node>`, a Run's by its id.
 //! The scheduler's own transitions never build one (D10).
 //!
-//! Both are in the Projet of the Run's primary repository (CORE-3): the one
-//! that owns it, or none ([`Runs::projects_of_run`]).
+//! Both are in the Projet recorded on the Run at its launch (ADR-0087), or in
+//! none ([`Runs::projects_of_run`]).
 
-use pdo_kernel::repository_path::member_spellings;
 use pdo_kernel::{Operation, ResourceKind, Verb};
 use tracing::warn;
 
+use crate::application::create_run::project::named_project;
 use crate::application::create_run::CreateRunRequest;
-use crate::application::paths::effective_repo_of;
 use crate::application::session_claim::SessionClaim;
 use crate::Runs;
 
@@ -36,64 +35,33 @@ fn run_of(operation: &Operation) -> Option<&str> {
     }
 }
 
-/// A repository a request names: a field that is not blank, trimmed.
-fn named_repo(field: Option<&str>) -> Option<&str> {
-    field.map(str::trim).filter(|repo| !repo.is_empty())
-}
-
 impl Runs {
-    /// The Projets the Run `run_id` is in: the one that owns its primary
-    /// repository, read from its Résumé (ADR-0084), never its log. None for
-    /// an unknown Run, for a repository no Projet owns, or when the Projets
-    /// cannot be read (logged).
+    /// The Projets the Run `run_id` is in: the one recorded at its launch
+    /// (ADR-0087), read from its Résumé (ADR-0084), never its log. None for
+    /// an unknown Run, a Run launched in no Projet, or when the Résumé cannot
+    /// be read (logged).
     pub async fn projects_of_run(&self, run_id: &str) -> Vec<String> {
-        let summary = match self.store.summary(run_id).await {
-            Ok(Some(summary)) => summary,
-            Ok(None) => return Vec::new(),
+        match self.store.summary(run_id).await {
+            Ok(Some(summary)) => summary.project_id.into_iter().collect(),
+            Ok(None) => Vec::new(),
             Err(e) => {
                 warn!("the Projets of run {run_id} cannot be read: {e:#}");
-                return Vec::new();
-            }
-        };
-        let repo = effective_repo_of(self, summary.target_repo.as_deref());
-        self.projects_of_repository(&repo.to_string_lossy()).await
-    }
-
-    /// The Projets the repository `path` is in: the one that owns it, or none.
-    ///
-    /// A Projet's members are compared verbatim (ADR-0033), but a Run works in
-    /// whatever directory its path names: `/repo/`, `/repo/.` or a link to
-    /// `/repo` must not take a Run out of the Projet owning `/repo`. So when
-    /// the path itself is no member, its other spellings are tried: without
-    /// trailing `/` nor `.`, then resolved on disk.
-    pub async fn projects_of_repository(&self, path: &str) -> Vec<String> {
-        for spelling in member_spellings(path) {
-            match self.projects.owner_of(&spelling).await {
-                Ok(Some(owner)) => return vec![owner.id],
-                Ok(None) => {}
-                Err(e) => {
-                    warn!("the Projet owning {path} cannot be read: {e}");
-                    return Vec::new();
-                }
+                Vec::new()
             }
         }
-        Vec::new()
     }
 
-    /// The Projets a new Run would be in: those of the primary repository the
-    /// request names (`target_repo`, else `target_repos[0]`), else, for a Run
-    /// created from a node session, those of that session's Run, whose
-    /// repository it then inherits (ADR-0064). A claim the creation refuses
+    /// The Projets a new Run would be in: the one the request names, else,
+    /// for a Run created from a node session, the one of that session's Run,
+    /// which it inherits (ADR-0064, ADR-0087). A claim the creation refuses
     /// later never creates anything.
     pub async fn projects_of_new_run(
         &self,
         req: &CreateRunRequest,
         session: Option<&SessionClaim>,
     ) -> Vec<String> {
-        let named = named_repo(req.target_repo.as_deref())
-            .or_else(|| named_repo(req.target_repos.first().map(|r| r.repo.as_str())));
-        match (named, session) {
-            (Some(repo), _) => self.projects_of_repository(repo).await,
+        match (named_project(req), session) {
+            (Some(project), _) => vec![project.to_string()],
             (None, Some(claim)) => self.projects_of_run(&claim.run_id).await,
             (None, None) => Vec::new(),
         }

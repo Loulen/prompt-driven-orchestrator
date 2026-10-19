@@ -12,7 +12,7 @@ use super::freeze::Sandbox;
 use super::naming::{placeholder_run_name, run_name_hint};
 use super::request::{CreateRunRequest, InputFile};
 use super::target::{Launchable, Target};
-use crate::application::node::project_tiers::project_skills_for_path;
+use crate::application::node::project_tiers::project_skills;
 use crate::application::node::prompt::{default_auto_name_with, RunNameHint};
 use crate::application::ports::InstanceDefaults;
 use crate::application::session_claim::SessionClaim;
@@ -45,6 +45,8 @@ pub(super) struct Frozen<'a> {
     pub parent: Option<&'a RunState>,
     pub session: Option<&'a SessionClaim>,
     pub attachments: &'a [InputFile],
+    /// The Projet the Run is launched in (ADR-0087), `None` for none.
+    pub project: Option<&'a str>,
 }
 
 pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
@@ -60,6 +62,7 @@ pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
         parent,
         session,
         attachments,
+        project,
     } = frozen;
     let pipeline = &launchable.pipeline;
     let edge_infos: Vec<EdgeInfo> = pipeline.edges.iter().map(edge_info_from_pipeline).collect();
@@ -90,6 +93,10 @@ pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
     // Persist the canonical (trimmed, validated) path, never the raw field. Historical
     // events keep their legitimate `null`; the read side resolves those (ADR-0033).
     run_payload["target_repo"] = serde_json::json!(target.run_repo_root.to_string_lossy());
+    // ADR-0087: the Projet the Run is launched in, recorded once. Written even
+    // when `null` (no Projet): a `run_started` without the key predates the
+    // record, and only those get the one migration of the existing Runs.
+    run_payload["project_id"] = serde_json::json!(project);
     // Carry the frozen secondary pins ONLY when there is at least one, so a mono-repo
     // Run's payload stays byte-identical to the historical shape.
     if !target.secondary_pins.is_empty() {
@@ -189,10 +196,7 @@ pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
     // An id the bank does not know is a warning on the Run, never a refusal.
     let frozen_skills = {
         let instance_skills = defaults.skills.clone();
-        let project_skills =
-            project_skills_for_path(state, &target.run_repo_root.to_string_lossy())
-                .await
-                .unwrap_or_default();
+        let project_skills = project_skills(state, project).await.unwrap_or_default();
         let bank = state.skills.bank_names().await;
         let tiers = pdo_skill::domain::selection::SkillTiers {
             instance: Some(&instance_skills),

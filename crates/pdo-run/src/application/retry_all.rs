@@ -110,6 +110,8 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
         // same "by pipeline" stats bucket rather than falling back to the name.
         pipeline_id: run_state.pipeline_id.clone(),
         target_repo,
+        // A retry stays in the Projet the original was launched in (ADR-0087).
+        project_id: run_state.project_id.clone(),
         target_repos,
         source_branch,
         name: None,

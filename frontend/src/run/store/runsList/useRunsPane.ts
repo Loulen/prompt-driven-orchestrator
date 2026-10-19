@@ -7,7 +7,7 @@ import { useRecentReposStore } from "../../../stores/recentReposStore";
 import { type BulkItem, type BulkOutcome } from "../../../lib/bulk";
 import { groupByProject, type ProjectRef } from "../../../lib/groupByRepo";
 import { cascadeImpact, flattenVisible, type RunTreeNode } from "../../model/runTree";
-import { projectLookup } from "../../../workspace/model/projectLookup";
+import { projectLookup, recordedProject } from "../../../workspace/model/projectLookup";
 import { RETRYABLE } from "../../components/runsList/runsListTables";
 import { useRunRowActions } from "./useRunRowActions";
 import { useRunTreeView } from "./useRunTreeView";
@@ -92,11 +92,16 @@ export function useRunsPane({
     return [...set];
   }, [projects, recentRepos, runs]);
 
-  // Group the active Runs list by Projet (#552), falling back to the #258
-  // per-path grouping when nothing is named; `null` ⇒ the flat list. #783: the
-  // grouping key is the ROOT's repo — a child follows its parent whatever its
-  // own repo.
-  const runGroups = groupByProject(activeTree, (n) => n.run.effective_repo, projectOf);
+  // Group the active Runs list by the Projet each Run was launched in (#552,
+  // ADR-0087), falling back to the #258 per-path grouping for a Run in no
+  // Projet; `null` ⇒ the flat list. #783: the grouping key is the ROOT's — a
+  // child follows its parent whatever its own repo.
+  const projectOfRun = useMemo(() => recordedProject(projects), [projects]);
+  const runGroups = groupByProject(
+    activeTree,
+    (n) => n.run.effective_repo,
+    (n) => projectOfRun(n.run.project_id),
+  );
   const orderedActive: RunTreeNode[] =
     runGroups === null ? activeTree : runGroups.flatMap((g) => g.items);
 

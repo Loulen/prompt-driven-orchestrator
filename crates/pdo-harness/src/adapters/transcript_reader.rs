@@ -216,7 +216,7 @@ mod tests {
     const PI_FIXTURE: &str = include_str!("../../tests/fixtures/transcript/pi.jsonl");
 
     fn claude_line(i: usize) -> String {
-        if i % 2 == 0 {
+        if i.is_multiple_of(2) {
             serde_json::json!({
                 "type": "assistant", "uuid": format!("a{i}"), "timestamp": "2026-10-19T10:00:00Z",
                 "message": {"role": "assistant", "content": [

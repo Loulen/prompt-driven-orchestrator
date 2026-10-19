@@ -117,7 +117,7 @@ pub async fn page(
 ) -> Response {
     let source = match source(state, run_id, node_id, iter).await {
         Ok(source) => source,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let limit = limit.clamp(1, MAX_PAGE);
     let page = match source {
@@ -158,7 +158,7 @@ pub async fn tool_detail(
     let (harness, path) = match source(state, run_id, node_id, iter).await {
         Ok(TranscriptSource::File { harness, path }) => (harness, path),
         Ok(_) => return not_found("no transcript for this node iteration"),
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let read = tokio::task::spawn_blocking(move || {
         TranscriptReader::shared().tool_detail(&harness, &path, index)
@@ -180,19 +180,19 @@ async fn source(
     run_id: &str,
     node_id: &str,
     iter: i64,
-) -> Result<TranscriptSource, Response> {
-    let (events, run_state) = load_projected(state, run_id).await.map_err(|r| *r)?;
+) -> Result<TranscriptSource, Box<Response>> {
+    let (events, run_state) = load_projected(state, run_id).await?;
     if !run_state.nodes.contains_key(node_id)
         && !run_state.node_defs.iter().any(|nd| nd.id == node_id)
     {
-        return Err(not_found("node not found in run"));
+        return Err(Box::new(not_found("node not found in run")));
     }
     let roots = match sandbox_home_roots(state) {
         Ok((home_root, sandbox_root)) => StoreRoots {
             home_root,
             sandbox_root,
         },
-        Err(e) => return Err(internal(format!("{e:#}"))),
+        Err(e) => return Err(Box::new(internal(format!("{e:#}")))),
     };
     let repo_root = effective_repo_root(state, &run_state);
     Ok(locate(

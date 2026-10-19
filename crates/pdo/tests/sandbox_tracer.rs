@@ -82,6 +82,10 @@ fn seed(body: &str) -> impl FnOnce(&Path) -> anyhow::Result<()> {
 
 /// A fake `docker` logging every argv to `argv.log`. `container inspect` must report
 /// ABSENT, so `ensure_running` does `create` + `start` and the mounts get logged.
+///
+/// The node's session (`exec -i -t`) lasts, as a real one does: ended at once, the
+/// stale detector's next tick (every 30 s) would interrupt the node before a loaded
+/// machine lets the test complete it.
 fn write_fake_docker() -> (TempDir, String, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("fake-docker");
@@ -96,6 +100,7 @@ fn write_fake_docker() -> (TempDir, String, PathBuf) {
          case \"$1\" in\n\
          image) exit 0 ;;\n\
          container) printf '%s' 'Error: No such container' >&2; exit 1 ;;\n\
+         exec) if [ \"$2\" = -i ] && [ \"$3\" = -t ]; then exec sleep 300; fi; exit 0 ;;\n\
          *) exit 0 ;;\n\
          esac\n",
         log = sq(&log.display().to_string()),
@@ -219,10 +224,11 @@ async fn simulate_node_done(daemon: &TestDaemon, run_id: &str) {
         .send()
         .await
         .unwrap();
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
     assert!(
-        resp.status().is_success(),
-        "simulated pdo complete should succeed: {}",
-        resp.status()
+        status.is_success(),
+        "simulated pdo complete should succeed: {status} {body}"
     );
 }
 

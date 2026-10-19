@@ -6,7 +6,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "../../../shared/ui/dropdown-menu";
-import { formatTime } from "../../model/nodeDetailFormat";
+import { useNodeDurationMode } from "../../store/nodeDurationModeStore";
+import { IterOptionDuration } from "./IterationDuration";
 import { STATUS_DOTS } from "./labels";
 
 export default function IterSelector({
@@ -18,6 +19,8 @@ export default function IterSelector({
   selectedIter: number;
   onSelect: (iter: number) => void;
 }) {
+  // Each iteration's duration reads in the Mode de durée on screen.
+  const durationMode = useNodeDurationMode((st) => st.mode);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -50,8 +53,7 @@ export default function IterSelector({
               className="ml-auto font-mono text-fg-4"
               style={{ fontSize: "10px" }}
             >
-              {it.started_at ? formatTime(it.started_at) : ""}
-              {it.completed_at ? ` – ${formatTime(it.completed_at)}` : ""}
+              <IterOptionDuration timing={it} mode={durationMode} />
             </span>
           </DropdownMenuItem>
         ))}

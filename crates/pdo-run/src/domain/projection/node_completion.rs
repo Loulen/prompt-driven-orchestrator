@@ -80,6 +80,8 @@ pub(super) fn node_completed(state: &mut RunState, event: &Event) {
                         completed_at: Some(event.ts.clone()),
                         interactive: false,
                         completion_released: false,
+                        waited_ms: 0,
+                        open_wait_since: None,
                     }],
                     frontmatter_retries: 0,
                     frontmatter_violations: Vec::new(),

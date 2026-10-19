@@ -68,12 +68,17 @@ async fn projet_of_the_daemons_repo(daemon: &TestDaemon) -> String {
     project["id"].as_str().unwrap().to_string()
 }
 
-/// `POST /runs` of `solo` on `repo`: the status and the run id, if any.
-async fn create_run_on(daemon: &TestDaemon, repo: &str) -> (u16, Option<String>) {
+/// `POST /runs` of `solo` on `repo`, launched in `project`: the status and
+/// the run id, if any.
+async fn create_run_on(
+    daemon: &TestDaemon,
+    repo: &str,
+    project: Option<&str>,
+) -> (u16, Option<String>) {
     let (status, body) = post(
         daemon,
         "/runs",
-        json!({ "pipeline": "solo", "input": "go", "target_repo": repo }),
+        json!({ "pipeline": "solo", "input": "go", "target_repo": repo, "project_id": project }),
     )
     .await;
     (status, body["run_id"].as_str().map(str::to_string))
@@ -131,7 +136,7 @@ async fn without_extension_the_catalogue_is_the_cores() {
 }
 
 #[tokio::test]
-async fn creating_a_run_reaches_the_extension_in_the_projet_of_its_repository_or_in_none() {
+async fn creating_a_run_reaches_the_extension_in_the_projet_it_names_or_in_none() {
     // Refused: the Operations are asked about, and nothing runs.
     let (ext, control) = TestExtension::new(Refusal::Only(ResourceKind::Run, Verb::Create));
     let daemon = TestDaemon::spawn_with_extensions(seed, ext.boxed())
@@ -141,10 +146,12 @@ async fn creating_a_run_reaches_the_extension_in_the_projet_of_its_repository_or
     let outside = tempfile::tempdir().unwrap();
     git_init(outside.path()).unwrap();
 
-    let (status, _) = create_run_on(&daemon, &daemon.target_repo()).await;
+    let (status, _) = create_run_on(&daemon, &daemon.target_repo(), Some(&projet)).await;
     assert_eq!(status, 403);
-    let (status, _) = create_run_on(&daemon, &outside.path().to_string_lossy()).await;
+    // ADR-0087: a repository of the Projet, launched in none, is in none.
+    let (status, _) = create_run_on(&daemon, &daemon.target_repo(), None).await;
     assert_eq!(status, 403);
+    let _ = &outside;
 
     let creations: Vec<Operation> = control
         .seen()
@@ -181,7 +188,7 @@ async fn a_runs_node_and_session_operations_are_in_its_projet() {
         .await
         .unwrap();
     let projet = projet_of_the_daemons_repo(&daemon).await;
-    let (status, run_id) = create_run_on(&daemon, &daemon.target_repo()).await;
+    let (status, run_id) = create_run_on(&daemon, &daemon.target_repo(), Some(&projet)).await;
     assert_eq!(status, 201);
     let run_id = run_id.unwrap();
     wait_node_status(&daemon, &run_id, "worker", "running").await;

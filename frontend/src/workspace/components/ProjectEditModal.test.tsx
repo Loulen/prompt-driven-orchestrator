@@ -97,7 +97,7 @@ function memberRow(path: string): HTMLElement {
 }
 
 describe("ProjectEditModal", () => {
-  it("disables the checkbox of a repo owned by another project, naming the owner", () => {
+  it("names the other projects holding a repo, and leaves it free to check (ADR-0087)", () => {
     const other: Project = {
       id: "p2",
       name: "Other",
@@ -106,22 +106,38 @@ describe("ProjectEditModal", () => {
     };
     renderModal({ projects: [other] });
 
-    // Assert on the DISABLED attribute + rendered owner text — never on `.value`,
-    // which cannot fail a desync assertion (the #347 frontend guidance).
     const backCheckbox = within(memberRow("/repos/back")).getByTestId(
       "project-member-checkbox",
     ) as HTMLInputElement;
-    expect(backCheckbox).toBeDisabled();
-    expect(memberRow("/repos/back").getAttribute("data-disabled")).toBe("true");
-    expect(within(memberRow("/repos/back")).getByTestId("project-member-owner").textContent).toContain(
-      "Other",
+    expect(backCheckbox).not.toBeDisabled();
+    expect(within(memberRow("/repos/back")).getByTestId("project-member-also-in").textContent).toBe(
+      "also in Other",
     );
+    expect(within(memberRow("/repos/front")).queryByTestId("project-member-also-in")).toBeNull();
+  });
 
-    // The unowned repo stays enabled.
-    const frontCheckbox = within(memberRow("/repos/front")).getByTestId(
-      "project-member-checkbox",
-    ) as HTMLInputElement;
-    expect(frontCheckbox).not.toBeDisabled();
+  it("chooses the default primary among the members and saves it", async () => {
+    const user = userEvent.setup();
+    const project: Project = {
+      id: "p1",
+      name: "front",
+      members: ["/repos/front", "/repos/back"],
+      primary_repo: "/repos/front",
+    };
+    updateProject.mockResolvedValue(project);
+    renderModal({
+      initialProject: project,
+      initialMemberPaths: project.members,
+    });
+    expect(within(memberRow("/repos/front")).getByTestId("project-member-primary")).toBeTruthy();
+
+    await user.click(within(memberRow("/repos/back")).getByTestId("project-member-make-primary"));
+    expect(within(memberRow("/repos/back")).getByTestId("project-member-primary")).toBeTruthy();
+    await user.click(screen.getByTestId("project-edit-save"));
+
+    await waitFor(() =>
+      expect(updateProject).toHaveBeenCalledWith("p1", { primary_repo: "/repos/back" }),
+    );
   });
 
   it("creates a project with the checked members, then sets its harness, on save", async () => {

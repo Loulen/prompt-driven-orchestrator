@@ -33,6 +33,11 @@ pub struct Trigger {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub target_repo: Option<String>,
+    /// The Projet the Runs it fires are launched in (ADR-0087), and the one the
+    /// Trigger is in; `None` for none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project_id: Option<String>,
     /// Read-only secondary repos to associate with fired Runs (ADR-0042), stored
     /// as raw JSON TEXT (`[{repo, base_branch?}]`) so the Trigger stays
     /// decoupled from the Run's request types. `None`/blank → mono-repo fire. The
@@ -144,6 +149,8 @@ pub struct NewTrigger {
     pub pipeline_id: String,
     pub pipeline_name: String,
     pub target_repo: Option<String>,
+    /// The Projet its Runs are launched in (ADR-0087); `None` for none.
+    pub project_id: Option<String>,
     /// Raw JSON TEXT; `None` → mono-repo.
     pub target_repos: Option<String>,
     pub source_branch: Option<String>,
@@ -232,6 +239,8 @@ pub struct UpdateTrigger {
     pub pipeline_id: Option<String>,
     pub pipeline_name: Option<String>,
     pub target_repo: Option<Option<String>>,
+    /// `Some(None)` clears to NULL: its Runs are launched in no Projet.
+    pub project_id: Option<Option<String>>,
     /// `Some(None)` clears to NULL (mono-repo).
     pub target_repos: Option<Option<String>>,
     pub source_branch: Option<Option<String>>,
@@ -268,6 +277,7 @@ impl UpdateTrigger {
             && self.pipeline_id.is_none()
             && self.pipeline_name.is_none()
             && self.target_repo.is_none()
+            && self.project_id.is_none()
             && self.target_repos.is_none()
             && self.source_branch.is_none()
             && self.input_template.is_none()

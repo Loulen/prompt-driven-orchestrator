@@ -13,7 +13,6 @@ import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { RunNewContext } from "../../shared/extensions/contract";
 import { useSectionForm } from "../../shared/extensions/sectionForm";
 import { useRunCreationRightsStore } from "../store/runCreationRightsStore";
-import { projectLookup } from "../../workspace/model/projectLookup";
 
 // `OpenIntent` / `RUN_INTENT` live in `newRun/openIntent.ts`; re-exported so the existing
 // importers (`app/App.tsx`) keep importing them from here.
@@ -50,19 +49,18 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const {
     sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, handleProvisioningValidity,
     handlePaste, requestClose, triggerInputRejectReason, selectedPipelineId, editingTriggerId,
-    input, runName, triggerName,
+    input, runName, triggerName, launchProject,
   } = form;
   // CORE-5: where a Run may be created, asked again at each open (a right may
   // have changed since the Projets were last read).
   const refreshRights = useRunCreationRightsStore((s) => s.refresh);
-  const projects = useRunCreationRightsStore((s) => s.projects);
   useEffect(() => {
     if (open) void refreshRights();
   }, [open, refreshRights]);
   const sectionContext = useMemo<Omit<RunNewContext, "location" | "run" | "project">>(
     () => {
-      const ref = projectLookup(projects)(targetRepo.trim());
-      const target = ref ? projects.find((p) => p.id === ref.id) : undefined;
+      // ADR-0087: the Projet the Run is launched in.
+      const target = launchProject;
       return {
         mode,
         pipeline: selectedPipelineId || null,
@@ -75,7 +73,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
         trigger: editingTriggerId ?? null,
       };
     },
-    [mode, selectedPipelineId, targetRepo, input, runName, triggerName, editingTriggerId, projects],
+    [mode, selectedPipelineId, targetRepo, input, runName, triggerName, editingTriggerId, launchProject],
   );
 
   if (!open) return null;
@@ -142,6 +140,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                 onChange={setProvisioning}
                 onValidityChange={handleProvisioningValidity}
                 gitRef={sourceBranch || "HEAD"}
+                projectId={launchProject?.id ?? null}
               />
             </div>
           )}

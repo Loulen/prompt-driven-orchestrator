@@ -70,25 +70,83 @@ async fn init_projects(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
-    // `path` is the PRIMARY KEY: at-most-one-Projet-per-path is a schema
-    // invariant. `project_id` is indexed for the members-of lookup. No FK
-    // ON DELETE cascade — deletes clear members explicitly (portable, and the
-    // daemon never enables `PRAGMA foreign_keys`).
+    // The default primary repository a launch in the Projet preselects
+    // (ADR-0087). Guarded `ADD COLUMN`, NULLABLE: an existing Projet
+    // preselects its first member.
+    let has_primary_repo =
+        sqlx::query("SELECT 1 FROM pragma_table_info('projects') WHERE name = 'primary_repo'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_primary_repo {
+        sqlx::query("ALTER TABLE projects ADD COLUMN primary_repo TEXT")
+            .execute(db)
+            .await?;
+    }
+
+    // `(project_id, path)` is the PRIMARY KEY: a path joins a Projet once,
+    // and may join several (ADR-0087). `path` is indexed for the
+    // Projets-of-a-path lookup. No FK ON DELETE cascade — deletes clear
+    // members explicitly (portable, and the daemon never enables
+    // `PRAGMA foreign_keys`).
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS project_members (
-            path       TEXT PRIMARY KEY,
+            path       TEXT NOT NULL,
             project_id TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (project_id, path)
         )",
     )
     .execute(db)
     .await?;
+    migrate_members_to_many_projects(db).await?;
 
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_project_members_project ON project_members(project_id)",
     )
     .execute(db)
     .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_project_members_path ON project_members(path)")
+        .execute(db)
+        .await?;
 
     Ok(())
+}
+
+/// Before ADR-0087, `path` alone was the key of `project_members` (one Projet
+/// per path). The table is rebuilt once under the `(project_id, path)` key,
+/// its rows and their order kept (`rowid` is the order a path joined).
+async fn migrate_members_to_many_projects(db: &SqlitePool) -> Result<(), sqlx::Error> {
+    let keys: Vec<(String,)> = sqlx::query_as(
+        "SELECT name FROM pragma_table_info('project_members') WHERE pk > 0 ORDER BY pk",
+    )
+    .fetch_all(db)
+    .await?;
+    if keys.len() != 1 {
+        return Ok(());
+    }
+    let mut tx = db.begin().await?;
+    sqlx::query(
+        "CREATE TABLE project_members_many (
+            path       TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (project_id, path)
+        )",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO project_members_many (path, project_id, created_at)
+         SELECT path, project_id, created_at FROM project_members ORDER BY rowid ASC",
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DROP TABLE project_members")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("ALTER TABLE project_members_many RENAME TO project_members")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
 }

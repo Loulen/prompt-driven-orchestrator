@@ -1865,6 +1865,30 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     expect(labels).toEqual(["Alpha auditor", "Alpha deploy"]);
   });
 
+  it("offers the recorded Projets by name, so a repo in two Projets never mixes them (ADR-0087)", async () => {
+    const user = userEvent.setup();
+    const shared: RunListEntry[] = [
+      { stalled: false, run_id: "s1", pipeline_name: "p", status: "running", started_at: null, name: "In Checkout", effective_repo: "/code/shop-api", project_id: "p1" },
+      { stalled: false, run_id: "s2", pipeline_name: "p", status: "running", started_at: null, name: "In Mobile", effective_repo: "/code/shop-api", project_id: "p2" },
+      { stalled: false, run_id: "s3", pipeline_name: "p", status: "running", started_at: null, name: "In none", effective_repo: "/code/shop-api" },
+    ];
+    const projects: Project[] = [
+      { id: "p1", name: "Checkout", members: ["/code/shop-api", "/code/shop-web"] },
+      { id: "p2", name: "Mobile", members: ["/code/shop-api"] },
+    ];
+    renderPanel({ runs: shared, projects });
+
+    await user.click(screen.getByTestId("run-filter-project"));
+    expect(await screen.findByTestId("run-filter-option-project:p1")).toHaveTextContent("Checkout");
+    expect(screen.getByTestId("run-filter-option-project:p2")).toHaveTextContent("Mobile");
+    expect(screen.getByTestId("run-filter-option-/code/shop-api")).toHaveTextContent("shop-api");
+
+    await user.click(screen.getByTestId("run-filter-option-project:p2"));
+    const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
+    expect(labels).toEqual(["In Mobile"]);
+    expect(screen.getByTestId("run-filter-project")).toHaveTextContent("Mobile");
+  });
+
   it("filters by trigger, labelling options by trigger name with raw-id fallback", async () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });

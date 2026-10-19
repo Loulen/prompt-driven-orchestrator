@@ -24,6 +24,9 @@ pub(super) struct ProvisioningPreviewRequest {
     rules: ProvisioningRules,
     #[serde(default)]
     inherited: Option<Vec<ScopedRules>>,
+    /// The Projet the Run is launched in (ADR-0087), whose rules it inherits.
+    #[serde(default)]
+    project_id: Option<String>,
 }
 
 fn default_git_ref() -> String {
@@ -74,6 +77,7 @@ pub(super) async fn preview<S: ProjectSettings>(
         scope: req.scope,
         rules: req.rules,
         inherited: req.inherited,
+        project_id: req.project_id.filter(|id| !id.trim().is_empty()),
     };
     match http.workspace.preview_provisioning(request).await {
         Ok(plan) => (StatusCode::OK, Json(plan)).into_response(),

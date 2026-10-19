@@ -24,11 +24,15 @@ export function announceSkillTiersChanged() {
  *
  * `instanceSkills`: a caller that already holds `GET /settings` (the run modal,
  * #452: one settings read per open) passes its list and no second read happens.
+ *
+ * `projectId`: a launch names its Projet (ADR-0087). When given (`null`: no
+ * Projet), it is the Projet tier, and `repoPath` is not read for it.
  */
 export function useSkillTiers(
   repoPath?: string | null,
   enabled = true,
   instanceSkills?: SkillRef[],
+  projectId?: string | null,
 ) {
   const readsSettings = instanceSkills === undefined;
   const [fetchedInstance, setFetchedInstance] = useState<SkillRef[]>([]);
@@ -80,10 +84,13 @@ export function useSkillTiers(
   const instance = instanceSkills ?? fetchedInstance;
 
   const project = useMemo(() => {
+    if (projectId !== undefined) {
+      return projectId ? (projects.find((candidate) => candidate.id === projectId) ?? null) : null;
+    }
     const path = repoPath?.trim();
     if (!path) return null;
     return projects.find((candidate) => candidate.members.includes(path)) ?? null;
-  }, [projects, repoPath]);
+  }, [projects, repoPath, projectId]);
 
   const inherited = useMemo<InheritedTier[]>(() => {
     const tiers: InheritedTier[] = [{ tier: "instance", skills: instance }];

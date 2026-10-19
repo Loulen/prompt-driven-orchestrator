@@ -11,7 +11,6 @@
 import { createContext, useContext } from "react";
 import { rootOf } from "../../run/model/runTree";
 import type { Project } from "../../workspace/model/project";
-import { projectLookup } from "../../workspace/model/projectLookup";
 import type { RunListEntry } from "../generated/RunListEntry";
 import type { RunState } from "../generated/RunState";
 import type { Attributes } from "./attributes";
@@ -43,7 +42,7 @@ export const NOTHING_SELECTED: BaseContext = { run: null, project: null };
 /** Provided by `ExtensionContextProvider`. */
 export const BaseContextValue = createContext<BaseContext>(NOTHING_SELECTED);
 
-/** The Projet `runId` belongs to, by the Runs list's rule; `null` without one. */
+/** The Projet `runId` was launched in (its root's, as the Runs list groups it, ADR-0087); `null` without one. */
 export function projectOfRun(
   runId: string,
   runs: RunListEntry[],
@@ -51,8 +50,7 @@ export function projectOfRun(
 ): ProjectContext | null {
   const root = rootOf(runs, runId) ?? runs.find((r) => r.run_id === runId);
   if (!root) return null;
-  const ref = projectLookup(projects)(root.effective_repo);
-  const project = ref ? projects.find((p) => p.id === ref.id) : undefined;
+  const project = root.project_id ? projects.find((p) => p.id === root.project_id) : undefined;
   return project
     ? { id: project.id, name: project.name, attributes: project.attributes ?? {} }
     : null;

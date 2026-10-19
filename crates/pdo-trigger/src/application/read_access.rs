@@ -1,17 +1,14 @@
-//! A Trigger is in the Projets of its target repository, like a Run in those
-//! of its primary repository: every Operation on it names them, and so does
-//! every read. A Trigger without a target repository is in none.
+//! A Trigger is in the Projet it launches its Runs in (ADR-0087), like a Run
+//! in the one recorded at its launch: every Operation on it names it, and so
+//! does every read. A Trigger launching in no Projet is in none.
 //!
 //! - A gesture on one Trigger: [`Triggers::on_trigger`] places its Operation.
 //! - One Trigger, its fires: [`Triggers::authorize_read`], `403` on a refusal.
 //! - The list: [`Triggers::readable`] keeps only the Triggers the actor may
-//!   read, asking once per Trigger but working out the Projets once per
-//!   repository.
+//!   read, asking once per Trigger.
 //!
 //! Without extension nothing is asked (`allows_everything`): the reads are
-//! served exactly as before, and no Projet is looked up.
-
-use std::collections::HashMap;
+//! served exactly as before.
 
 use pdo_kernel::authorization::authorize_read;
 use pdo_kernel::{Actor, Operation, Verb};
@@ -20,25 +17,20 @@ use super::{operation, TriggerError};
 use crate::domain::trigger::Trigger;
 use crate::Triggers;
 
-/// A repository a Trigger names: a field that is not blank, trimmed.
-fn named_repo(field: Option<&str>) -> Option<&str> {
-    field.map(str::trim).filter(|repo| !repo.is_empty())
+/// A Projet a request names: a field that is not blank, trimmed.
+pub(crate) fn named_project(field: Option<&str>) -> Option<String> {
+    field
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+/// The Projets of a Trigger launching in `project`: it, or none.
+pub(crate) fn projects_of(project: Option<&str>) -> Vec<String> {
+    project.into_iter().map(str::to_string).collect()
 }
 
 impl Triggers {
-    /// The Projets of the target repository `repo`; none without one.
-    /// Without extension nobody reads them: none, and the Projets are not
-    /// asked.
-    pub(crate) async fn projects_of_repo(&self, repo: Option<&str>) -> Vec<String> {
-        if self.extensions().allows_everything() {
-            return Vec::new();
-        }
-        match named_repo(repo) {
-            Some(repo) => self.projects.of_repository(repo).await,
-            None => Vec::new(),
-        }
-    }
-
     /// `verb` on the Trigger `id`, in the Projets of the Trigger as stored.
     /// An unknown Trigger (or one the store cannot read) is in none: the
     /// gesture says why later, once allowed.
@@ -46,11 +38,11 @@ impl Triggers {
         if self.extensions().allows_everything() {
             return operation(verb, Some(id));
         }
-        let repo = match self.store.get(id).await {
-            Ok(Some(trigger)) => trigger.target_repo,
+        let project = match self.store.get(id).await {
+            Ok(Some(trigger)) => trigger.project_id,
             _ => None,
         };
-        operation(verb, Some(id)).in_projects(self.projects_of_repo(repo.as_deref()).await)
+        operation(verb, Some(id)).in_projects(projects_of(project.as_deref()))
     }
 
     /// Whether `actor` may read the Trigger `id`: its detail, its fires, what
@@ -69,17 +61,14 @@ impl Triggers {
         ReadableTriggers {
             triggers: self,
             actor,
-            projects: HashMap::new(),
         }
     }
 }
 
-/// The filter of a list of Triggers for one actor, with the Projets of each
-/// repository it met.
+/// The filter of a list of Triggers for one actor.
 pub struct ReadableTriggers<'a> {
     triggers: &'a Triggers,
     actor: &'a Actor,
-    projects: HashMap<String, Vec<String>>,
 }
 
 impl ReadableTriggers<'_> {
@@ -89,18 +78,7 @@ impl ReadableTriggers<'_> {
         if host.allows_everything() {
             return true;
         }
-        let repo = named_repo(trigger.target_repo.as_deref()).map(str::to_string);
-        let projects = match repo {
-            None => Vec::new(),
-            Some(repo) => match self.projects.get(&repo) {
-                Some(projects) => projects.clone(),
-                None => {
-                    let projects = self.triggers.projects.of_repository(&repo).await;
-                    self.projects.insert(repo, projects.clone());
-                    projects
-                }
-            },
-        };
+        let projects = projects_of(trigger.project_id.as_deref());
         let read = operation(Verb::Read, Some(&trigger.id)).in_projects(projects);
         authorize_read(host, self.actor, &read).is_ok()
     }

@@ -64,6 +64,7 @@ fn apply(t: &mut Trigger, e: UpdateTrigger) {
         pipeline_id,
         pipeline_name,
         target_repo,
+        project_id,
         target_repos,
         source_branch,
         input_template,
@@ -103,6 +104,7 @@ impl TriggerRepository for InMemoryTriggers {
             pipeline_id: new.pipeline_id,
             pipeline_name: new.pipeline_name,
             target_repo: new.target_repo,
+            project_id: new.project_id,
             target_repos: new.target_repos,
             source_branch: new.source_branch,
             input_template: new.input_template,
@@ -334,23 +336,27 @@ impl Repositories for Repos {
     }
 }
 
-/// The Projets of the repositories: those `owners` says, none otherwise.
+/// The Projets and their repositories: `members` holds `(path, project)`
+/// pairs; a Projet exists when it holds one.
 #[derive(Default)]
 pub struct Projets {
-    pub owners: Mutex<std::collections::BTreeMap<String, String>>,
+    pub members: Mutex<Vec<(String, String)>>,
 }
 
 impl TriggerProjects for Projets {
-    fn of_repository<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Vec<String>> {
-        ready(
-            self.owners
-                .lock()
-                .unwrap()
-                .get(path)
-                .cloned()
-                .into_iter()
-                .collect(),
-        )
+    fn refusal<'a>(
+        &'a self,
+        project: &'a str,
+        repo: Option<&'a str>,
+    ) -> BoxFuture<'a, Option<String>> {
+        let members = self.members.lock().unwrap();
+        let refusal = if !members.iter().any(|(_, p)| p == project) {
+            Some(format!("unknown project `{project}`"))
+        } else {
+            repo.filter(|repo| !members.iter().any(|(m, p)| m == repo && p == project))
+                .map(|repo| format!("repository `{repo}` is not a member of project `{project}`"))
+        };
+        ready(refusal)
     }
 }
 

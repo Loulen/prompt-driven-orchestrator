@@ -7,7 +7,7 @@
 //! any effect. [`Runs::start_run`] is the creation itself, for a caller that
 //! has already passed its own gate: a `retry_all` command, a Trigger fire. In
 //! order: the session claim (ADR-0064), the repositories ([`target`]), the
-//! pipeline, the provisioning and the isolation ([`freeze`]), the `RunStarted`
+//! pipeline, the Projet ([`project`], ADR-0087), the provisioning and the isolation ([`freeze`]), the `RunStarted`
 //! payload ([`payload`]), the Run on disk ([`materialize`]), the extensions'
 //! attributes, then its start ([`launch`]).
 
@@ -16,6 +16,7 @@ mod launch;
 mod materialize;
 pub mod naming;
 mod payload;
+pub(crate) mod project;
 pub mod repos;
 pub mod request;
 pub mod target;
@@ -66,6 +67,11 @@ impl Runs {
             .in_projects(self.projects_of_new_run(&req, session.as_ref()).await);
         if let Err(denied) = self.authorize(actor, &operation).await {
             return denied.into_response();
+        }
+        // ADR-0087: launched in a Projet, the Run works in one of its
+        // repositories.
+        if let Err((status, body)) = self.check_primary_in_project(&req).await {
+            return (status, Json(body)).into_response();
         }
         // Then each extension checks its value, before any effect.
         if let Err(refusal) =
@@ -120,7 +126,8 @@ impl Runs {
         };
         let target = target::resolve(self, &req, parent.as_ref())?;
         let launchable = target::load_pipeline(self, &req)?;
-        let provisioning = freeze::provisioning(self, &req, &target).await?;
+        let project = project::resolve(self, &req, parent.as_ref()).await?;
+        let provisioning = freeze::provisioning(self, &req, &target, project.as_deref()).await?;
 
         let run_id = generate_run_id();
         // Freeze the fork point NOW, from the same local `source_ref`
@@ -161,6 +168,7 @@ impl Runs {
                 parent: parent.as_ref(),
                 session: session.as_ref(),
                 attachments: &attachments,
+                project: project.as_deref(),
             },
         )
         .await;

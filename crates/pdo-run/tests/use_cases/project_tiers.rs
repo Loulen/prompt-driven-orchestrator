@@ -1,4 +1,5 @@
-//! The Projet tier of a node's resolutions, read through the workspace port.
+//! The Projet tier of a node's resolutions: the Projet recorded on the Run
+//! (ADR-0087), read through the workspace port.
 
 use pdo_harness::agent_choice::AgentChoice;
 use pdo_run::application::node::project_tiers::*;
@@ -13,16 +14,8 @@ use crate::fakes::*;
 async fn the_projet_tiers_decode_what_the_workspace_stores() {
     let w = world();
     let runs = &w.runs;
-    assert_eq!(
-        project_agent_choice_for_path(runs, "/repos/front")
-            .await
-            .unwrap(),
-        None
-    );
-    assert!(project_skills_for_path(runs, "/repos/front")
-        .await
-        .unwrap()
-        .is_empty());
+    assert_eq!(project_agent_choice(runs, Some("p1")).await.unwrap(), None);
+    assert!(project_skills(runs, Some("p1")).await.unwrap().is_empty());
 
     let choice = AgentChoice::Profile {
         profile_id: "reviewer".to_string(),
@@ -40,30 +33,32 @@ async fn the_projet_tiers_decode_what_the_workspace_stores() {
     w.projects.0.lock().unwrap().push(project);
 
     assert_eq!(
-        project_agent_choice_for_path(runs, "/repos/front")
-            .await
-            .unwrap(),
+        project_agent_choice(runs, Some("p1")).await.unwrap(),
         Some(choice)
     );
-    let selected = project_skills_for_path(runs, "/repos/front").await.unwrap();
+    let selected = project_skills(runs, Some("p1")).await.unwrap();
     assert_eq!(selected.len(), 1);
     assert_eq!(selected[0].id, "tdd");
     assert_eq!(
-        project_harness_for_path(runs, "/repos/front")
-            .await
-            .unwrap(),
+        project_harness(runs, Some("p1")).await.unwrap(),
         Some("codex".into())
     );
     assert_eq!(
-        project_auto_fail_for_path(runs, "/repos/front")
-            .await
-            .unwrap(),
+        project_auto_fail(runs, Some("p1")).await.unwrap(),
         Some(true)
     );
-    assert!(project_skills_for_path(runs, "/repos/other")
-        .await
-        .unwrap()
-        .is_empty());
+}
+
+#[tokio::test]
+async fn a_run_in_no_projet_has_a_transparent_tier() {
+    let w = world();
+    let mut project = Project::named("p1", "Alpha");
+    project.harness = Some("codex".into());
+    w.projects.0.lock().unwrap().push(project);
+    *w.projects.1.lock().unwrap() = true;
+    // No Projet: nothing is read, not even a broken store.
+    assert_eq!(project_harness(&w.runs, None).await.unwrap(), None);
+    assert!(project_skills(&w.runs, None).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -71,7 +66,5 @@ async fn an_unreadable_workspace_is_handed_back_for_the_caller_to_degrade() {
     let w = world();
     let runs = &w.runs;
     *w.projects.1.lock().unwrap() = true;
-    assert!(project_harness_for_path(runs, "/repos/front")
-        .await
-        .is_err());
+    assert!(project_harness(runs, Some("p1")).await.is_err());
 }

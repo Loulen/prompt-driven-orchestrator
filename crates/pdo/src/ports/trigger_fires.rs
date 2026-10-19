@@ -88,7 +88,9 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        crate::daemon::storage::init_db(&db).await.unwrap();
+        crate::daemon::storage::init_db(&db, std::path::Path::new("/"))
+            .await
+            .unwrap();
         // One live trigger + fires; plus a fire from a trigger that no longer exists.
         sqlx::query(
             "INSERT INTO triggers (id, name, pipeline_id, cron, enabled, created_at) \

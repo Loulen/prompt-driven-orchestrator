@@ -129,6 +129,24 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // `project_id` — NULLABLE (ADR-0087): the Projet its Runs are launched in.
+    // Added once; the Triggers that existed then are marked `''` (« to
+    // record »), and the boot records on them, that once, the Projet the rule
+    // before ADR-0087 gave their Runs ([`legacy_project_pending`]).
+    let has_project_id =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'project_id'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_project_id {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN project_id TEXT")
+            .execute(db)
+            .await?;
+        sqlx::query("UPDATE triggers SET project_id = ''")
+            .execute(db)
+            .await?;
+    }
+
     // `auto_name` — `NOT NULL DEFAULT 1`, unlike the nullable columns: a plain
     // flat bool (mirror of `enabled`). The default `1` is load-bearing — every
     // pre-existing Trigger keeps auto-naming its Runs.
@@ -195,5 +213,30 @@ pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(db)
     .await?;
 
+    Ok(())
+}
+
+/// The Triggers that existed when the Projet of a Trigger was introduced
+/// (ADR-0087) and have not received it yet: their id and target repository.
+pub async fn legacy_project_pending(
+    db: &SqlitePool,
+) -> Result<Vec<(String, Option<String>)>, sqlx::Error> {
+    sqlx::query_as("SELECT id, target_repo FROM triggers WHERE project_id = ''")
+        .fetch_all(db)
+        .await
+}
+
+/// Record on the Trigger `id` the Projet the rule before ADR-0087 gave its
+/// Runs (`None`: no Projet). Done once: the Trigger is no longer pending.
+pub async fn record_legacy_project(
+    db: &SqlitePool,
+    id: &str,
+    project_id: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE triggers SET project_id = ? WHERE id = ? AND project_id = ''")
+        .bind(project_id)
+        .bind(id)
+        .execute(db)
+        .await?;
     Ok(())
 }

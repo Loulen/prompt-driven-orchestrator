@@ -28,6 +28,7 @@ pub(super) async fn parse_multipart_create_run(
     let mut variables: HashMap<String, serde_yaml::Value> = HashMap::new();
     let mut pipeline_id = None;
     let mut target_repo = None;
+    let mut project_id = None;
     let mut target_repos: Vec<TargetRepoInput> = Vec::new();
     let mut source_branch = None;
     let mut name = None;
@@ -144,6 +145,15 @@ pub(super) async fn parse_multipart_create_run(
                     .map_err(|e| multipart_field_error("target_repo", None, received_bytes, &e))?;
                 if !v.is_empty() {
                     target_repo = Some(v);
+                }
+            }
+            "project_id" => {
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| multipart_field_error("project_id", None, received_bytes, &e))?;
+                if !v.is_empty() {
+                    project_id = Some(v);
                 }
             }
             "target_repos" => {
@@ -305,6 +315,7 @@ pub(super) async fn parse_multipart_create_run(
         variables,
         pipeline_id,
         target_repo,
+        project_id,
         target_repos,
         source_branch,
         name,

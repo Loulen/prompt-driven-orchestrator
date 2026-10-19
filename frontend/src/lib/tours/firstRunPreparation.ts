@@ -18,6 +18,7 @@ import {
   setPipelineValidation,
 } from "../../pipeline/api/pipelines";
 import { addProjectMember, createProject, fetchProjects } from "../../workspace/api/projects";
+import { writeLastProject } from "../../run/model/launchProject";
 import { createRepo } from "../../workspace/api/repos";
 
 /** Where the training repository is created, and the folder the explorer opens on. */
@@ -167,18 +168,18 @@ async function writeTutorialPipeline(): Promise<void> {
 
 /**
  * The Projet « Tutorial » holds the training repository, and `tutorial-interactive`
- * is validated for it alone. Idempotent: a Projet that already owns the repository
- * is reused whatever its name (a path belongs to one Projet at most, so a second
- * one could not take it), then one named « Tutorial », and only then is one
- * created. The validation is rewritten on every pass: it is the tour's own
- * setting, and a pipeline that existed before validations did would otherwise
- * stay offered to every Projet.
+ * is validated for it alone. Idempotent: a Projet named « Tutorial » is reused,
+ * else one that already holds the repository, and only then is one created. The
+ * validation is rewritten on every pass: it is the tour's own setting, and a
+ * pipeline that existed before validations did would otherwise stay offered to
+ * every Projet. New Run then opens on this Projet (ADR-0087: the Run is launched
+ * in it, its default primary being the training repository).
  */
 export async function prepareTutorialProject(): Promise<void> {
   const projects = await fetchProjects();
   let project =
-    projects.find((p) => p.members.includes(TUTORIAL_REPO_PATH)) ??
     projects.find((p) => p.name === TUTORIAL_PROJECT_NAME) ??
+    projects.find((p) => p.members.includes(TUTORIAL_REPO_PATH)) ??
     null;
   if (project == null) project = await createProject(TUTORIAL_PROJECT_NAME, [TUTORIAL_REPO_PATH]);
   if (!project.members.includes(TUTORIAL_REPO_PATH)) {
@@ -189,4 +190,5 @@ export async function prepareTutorialProject(): Promise<void> {
     kind: "projects",
     project_ids: [project.id],
   });
+  writeLastProject(project.id);
 }

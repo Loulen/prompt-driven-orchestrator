@@ -734,6 +734,7 @@ fn create_run_known_fields_cover_the_struct() {
         "variables": {},
         "pipeline_id": null,
         "target_repo": null,
+        "project_id": null,
         "target_repos": [],
         "source_branch": null,
         "name": null,

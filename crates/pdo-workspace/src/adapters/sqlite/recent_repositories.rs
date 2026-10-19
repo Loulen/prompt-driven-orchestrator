@@ -1,8 +1,8 @@
 //! The repositories Runs worked in, read off the `run_started` events.
 //!
 //! The event table belongs to the Run context; this adapter only reads the
-//! `target_repo` and the Run of each start, newest first, and never writes
-//! there.
+//! `target_repo`, the Run and the Projet recorded on it (ADR-0087) of each
+//! start, newest first, and never writes there.
 
 use sqlx::SqlitePool;
 
@@ -42,7 +42,11 @@ impl RecentRepositories for SqliteRecentRepositories {
                 };
                 if let Some(repo) = value["target_repo"].as_str() {
                     if seen.insert(repo.to_string()) {
-                        repos.push(RecentRepository::new(repo, run_id));
+                        let recent = RecentRepository::new(repo, run_id);
+                        repos.push(match value["project_id"].as_str() {
+                            Some(project) => recent.in_project(project),
+                            None => recent,
+                        });
                     }
                 }
             }

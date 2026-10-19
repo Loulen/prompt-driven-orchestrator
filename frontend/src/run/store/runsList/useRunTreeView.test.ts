@@ -4,7 +4,12 @@ import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import type { Project } from "../../../workspace/model/project";
 import { useRunTreeView } from "./useRunTreeView";
 
-function run(runId: string, attributes?: Record<string, string>, repo = "/repo"): RunListEntry {
+function run(
+  runId: string,
+  attributes?: Record<string, string>,
+  repo = "/repo",
+  projectId?: string,
+): RunListEntry {
   return {
     run_id: runId,
     pipeline_name: "solo",
@@ -12,6 +17,7 @@ function run(runId: string, attributes?: Record<string, string>, repo = "/repo")
     stalled: false,
     started_at: "2026-09-28T00:00:00Z",
     effective_repo: repo,
+    project_id: projectId,
     attributes,
   };
 }
@@ -32,10 +38,15 @@ describe("useRunTreeView", () => {
   });
 
   it("keeps only the Runs of a Projet carrying the attributes of the projects/filter (#31)", () => {
-    const runs = [run("core", undefined, "/repos/core"), run("ext", undefined, "/repos/ext"), run("loose", undefined, "/tmp/x")];
+    // ADR-0087: the Projet recorded on each Run, not its repository's.
+    const runs = [
+      run("core", undefined, "/repos/shared", "p1"),
+      run("ext", undefined, "/repos/shared", "p2"),
+      run("loose", undefined, "/repos/shared"),
+    ];
     const projects = [
-      { id: "p1", name: "Core", members: ["/repos/core"], attributes: { "test/team": "core" } },
-      { id: "p2", name: "Ext", members: ["/repos/ext"] },
+      { id: "p1", name: "Core", members: ["/repos/shared"], attributes: { "test/team": "core" } },
+      { id: "p2", name: "Ext", members: ["/repos/shared"] },
     ] as unknown as Project[];
     const { result } = renderHook(() => useRunTreeView(runs, null, projects));
     expect(result.current.filteredRuns).toHaveLength(3);

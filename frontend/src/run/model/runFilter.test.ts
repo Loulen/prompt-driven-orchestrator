@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   EMPTY_RUN_FILTER,
   isFilterActive,
+  projectKey,
   runMatchesFilter,
   type RunFilterValue,
 } from "./runFilter";
@@ -44,5 +45,33 @@ describe("runFilter — three axes, filiation-blind (#783)", () => {
     expect(isFilterActive({ ...EMPTY_RUN_FILTER, repo: "/repos/x" })).toBe(true);
     expect(isFilterActive({ ...EMPTY_RUN_FILTER, pipeline: "p" })).toBe(true);
     expect(isFilterActive({ ...EMPTY_RUN_FILTER, trigger: "t" })).toBe(true);
+  });
+});
+
+describe("runFilter — the Project axis follows the recorded Projet (ADR-0087)", () => {
+  const projects = new Map([
+    ["p1", { id: "p1", name: "Checkout" }],
+    ["p2", { id: "p2", name: "Mobile" }],
+  ]);
+  const projectOf = (id: string | null | undefined) => (id ? projects.get(id) ?? null : null);
+  const inP1 = run({ run_id: "a", effective_repo: "/code/shop-api", project_id: "p1" });
+  const inP2 = run({ run_id: "b", effective_repo: "/code/shop-api", project_id: "p2" });
+  const inNone = run({ run_id: "c", effective_repo: "/code/shop-api" });
+  const inGone = run({ run_id: "d", effective_repo: "/code/shop-api", project_id: "deleted" });
+
+  it("buckets a Run by its Projet, else by its repo", () => {
+    expect(projectKey(inP1, projectOf)).toBe("project:p1");
+    expect(projectKey(inNone, projectOf)).toBe("/code/shop-api");
+    expect(projectKey(inGone, projectOf)).toBe("/code/shop-api");
+  });
+
+  it("never mixes the Projets of a repo shared between them", () => {
+    const f = { ...EMPTY_RUN_FILTER, repo: "project:p1" };
+    expect(runMatchesFilter(inP1, f, projectOf)).toBe(true);
+    expect(runMatchesFilter(inP2, f, projectOf)).toBe(false);
+    expect(runMatchesFilter(inNone, f, projectOf)).toBe(false);
+    const byRepo = { ...EMPTY_RUN_FILTER, repo: "/code/shop-api" };
+    expect(runMatchesFilter(inNone, byRepo, projectOf)).toBe(true);
+    expect(runMatchesFilter(inP2, byRepo, projectOf)).toBe(false);
   });
 });

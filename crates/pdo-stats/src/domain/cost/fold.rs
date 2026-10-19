@@ -627,6 +627,7 @@ mod tests {
                 .then(|| "no attributable Claude transcript".to_string())
                 .into_iter()
                 .collect(),
+            tokens: None,
         }
     }
 

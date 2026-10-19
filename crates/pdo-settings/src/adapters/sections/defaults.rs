@@ -5,6 +5,7 @@ use pdo_platform::adapters::instance_defaults as platform;
 use pdo_review::adapters::instance_defaults as review;
 use pdo_run::adapters::instance_defaults as run;
 use pdo_session::adapters::instance_defaults as session;
+use pdo_telemetry::adapters::instance_defaults as telemetry;
 use pdo_trigger::adapters::instance_defaults as trigger;
 use serde_json::{Map, Value};
 
@@ -123,6 +124,32 @@ impl SettingsSection for PlatformDefaults {
                 "update_check",
                 json(platform::update_check(c.update_check)),
             )]))
+        })
+    }
+}
+
+/// The OTLP export: its switch, its collector, its headers by name.
+pub struct TelemetryDefaults;
+
+impl SettingsSection for TelemetryDefaults {
+    fn disclose<'a>(&'a self, c: &'a InstanceConfig) -> Keys<'a> {
+        Box::pin(async move {
+            Ok(section([
+                (
+                    "telemetry_otlp",
+                    json(telemetry::telemetry_otlp(c.telemetry_otlp)),
+                ),
+                (
+                    "telemetry_otlp_endpoint",
+                    json(telemetry::telemetry_otlp_endpoint(
+                        c.telemetry_otlp_endpoint.as_deref(),
+                    )),
+                ),
+                (
+                    "telemetry_otlp_headers",
+                    json(telemetry::telemetry_otlp_headers(&c.telemetry_otlp_headers)),
+                ),
+            ]))
         })
     }
 }

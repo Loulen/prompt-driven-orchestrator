@@ -163,8 +163,8 @@ fn context_crates() -> Vec<PathBuf> {
     crates
 }
 
-/// The twelve bounded contexts of the context map (ADR-0079).
-const CONTEXTS: [&str; 12] = [
+/// The thirteen bounded contexts of the context map (ADR-0079).
+const CONTEXTS: [&str; 13] = [
     "pdo-harness",
     "pdo-pipeline",
     "pdo-platform",
@@ -175,12 +175,13 @@ const CONTEXTS: [&str; 12] = [
     "pdo-settings",
     "pdo-skill",
     "pdo-stats",
+    "pdo-telemetry",
     "pdo-trigger",
     "pdo-workspace",
 ];
 
 #[test]
-fn the_architecture_test_covers_the_twelve_context_crates() {
+fn the_architecture_test_covers_the_thirteen_context_crates() {
     let covered: Vec<String> = context_crates()
         .iter()
         .map(|c| c.file_name().unwrap().to_string_lossy().into_owned())

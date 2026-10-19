@@ -8,7 +8,7 @@ use pdo_kernel::{Actor, Operation};
 
 use super::ports::{
     AgentProfileStore, CatalogueEvents, Harnesses, InstanceConfigStore, ProfileReferents,
-    SettingsSection, StagingProfiles, UpdateChecks,
+    SettingsSection, StagingProfiles, TelemetryReloads, UpdateChecks,
 };
 
 /// Every port the context needs, as the composition root plugs them in.
@@ -25,6 +25,7 @@ pub struct SettingsPorts {
     pub catalogue_events: Arc<dyn CatalogueEvents>,
     pub staging_profiles: Arc<dyn StagingProfiles>,
     pub update_checks: Arc<dyn UpdateChecks>,
+    pub telemetry: Arc<dyn TelemetryReloads>,
     pub referents: Arc<dyn ProfileReferents>,
     /// Asked before every mutation.
     pub extensions: Arc<dyn ExtensionHost>,
@@ -39,6 +40,7 @@ pub struct Settings {
     pub(crate) catalogue_events: Arc<dyn CatalogueEvents>,
     pub(crate) staging_profiles: Arc<dyn StagingProfiles>,
     pub(crate) update_checks: Arc<dyn UpdateChecks>,
+    pub(crate) telemetry: Arc<dyn TelemetryReloads>,
     pub(crate) referents: Arc<dyn ProfileReferents>,
     extensions: Arc<dyn ExtensionHost>,
 }
@@ -53,6 +55,7 @@ impl Settings {
             catalogue_events,
             staging_profiles,
             update_checks,
+            telemetry,
             referents,
             extensions,
         } = ports;
@@ -64,6 +67,7 @@ impl Settings {
             catalogue_events,
             staging_profiles,
             update_checks,
+            telemetry,
             referents,
             extensions,
         })

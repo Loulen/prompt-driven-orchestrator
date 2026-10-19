@@ -108,6 +108,13 @@ pub trait UpdateChecks: Send + Sync {
     fn check_now(&self);
 }
 
+/// The telemetry export (the telemetry context).
+pub trait TelemetryReloads: Send + Sync {
+    /// Apply the stored setting now, detached: an edit takes effect without a
+    /// restart.
+    fn reload(&self);
+}
+
 /// Who names an agentic profile, outside the instance tier.
 pub trait ProfileReferents: Send + Sync {
     fn projects<'a>(&'a self, profile_id: &'a str) -> BoxFuture<'a, Vec<ProjectReferent>>;

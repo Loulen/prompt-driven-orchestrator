@@ -183,3 +183,44 @@ async fn an_unknown_field_is_ignored_and_an_empty_edit_writes_nothing() {
         .unwrap();
     assert_eq!(*w.config.writes.lock().unwrap(), 0);
 }
+
+#[tokio::test]
+async fn an_edit_of_the_telemetry_export_reloads_it_and_no_other_edit_does() {
+    // ADR-0090: switching the export or changing its collector takes effect
+    // without a restart.
+    let w = world();
+    w.settings
+        .update(&Actor::LocalOperator, json!({ "session_cap": 3 }))
+        .await
+        .unwrap();
+    assert_eq!(*w.checks.telemetry_reloads.lock().unwrap(), 0);
+    w.settings
+        .update(
+            &Actor::LocalOperator,
+            json!({ "telemetry_otlp": true, "telemetry_otlp_endpoint": "http://127.0.0.1:4318" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(*w.checks.telemetry_reloads.lock().unwrap(), 1);
+    assert_eq!(w.row().telemetry_otlp, Some(1));
+    w.settings
+        .update(&Actor::LocalOperator, json!({ "telemetry_otlp": false }))
+        .await
+        .unwrap();
+    assert_eq!(*w.checks.telemetry_reloads.lock().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn a_refused_telemetry_edit_reloads_nothing() {
+    let w = world();
+    let refusal = w
+        .settings
+        .update(
+            &Actor::LocalOperator,
+            json!({ "telemetry_otlp_endpoint": "ftp://collector" }),
+        )
+        .await
+        .unwrap_err();
+    assert!(invalid(refusal).contains("telemetry_otlp_endpoint"));
+    assert_eq!(*w.checks.telemetry_reloads.lock().unwrap(), 0);
+}

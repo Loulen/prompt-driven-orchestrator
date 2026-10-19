@@ -51,6 +51,7 @@ pdo-pipeline.workspace = true
 pdo-run.workspace = true
 pdo-review.workspace = true
 pdo-settings.workspace = true
+pdo-telemetry.workspace = true
 pdo-sandbox.workspace = true
 pdo-trigger.workspace = true
 pdo-stats.workspace = true

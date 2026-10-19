@@ -10,6 +10,20 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.35.0 — Export OTLP des métriques et des traces (CORE-85)
+
+- Nouvelle catégorie « Telemetry » des Settings (ADR-0090) : le daemon pousse ses métriques et
+  ses traces en OTLP/HTTP vers un collecteur. **Éteint par défaut** : rien ne se connecte tant
+  que l'interrupteur n'est pas allumé. `PUT /settings` gagne l'interrupteur, l'adresse et les
+  en-têtes du collecteur ; la valeur d'un en-tête n'est jamais renvoyée (`GET /settings` dit
+  seulement qu'elle est posée). Un changement recharge l'export sans redémarrage.
+- `GET /telemetry/status` et `POST /telemetry/test-export`, autorisé comme une modification
+  des réglages d'instance.
+- Les attributs nomment le dépôt par son remote sans identifiants, jamais par un chemin local,
+  et ne portent jamais l'Acteur. `service.instance.id` vaut `<hôte>:<port>`.
+- Un collecteur injoignable est journalisé une fois, dit dans le statut, sans effet sur les
+  Runs ; les traces émises pendant la coupure sont perdues.
+
 ## 2.34.0 — Envoi de texte réservé au pilote, rafraîchissement des modèles d'un harnais (CORE-79)
 
 - **`pdo-extension-api` 0.15.0**, sans rupture : l'opération `instance_settings` gagne le verbe

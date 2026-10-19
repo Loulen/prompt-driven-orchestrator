@@ -4,6 +4,7 @@
 //! legacy crate's router `oneshot` tests of `/settings`, moved.
 
 mod put;
+mod telemetry;
 mod view;
 
 use std::sync::Arc;
@@ -19,10 +20,10 @@ use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_settings::adapters::contexts::{ContextReferents, SandboxStagingProfiles};
 use pdo_settings::adapters::sections::{
     HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,
-    SandboxSection, SessionDefaults, TriggerDefaults,
+    SandboxSection, SessionDefaults, TelemetryDefaults, TriggerDefaults,
 };
 use pdo_settings::adapters::sqlite::{SqliteAgentProfiles, SqliteInstanceConfig};
-use pdo_settings::application::ports::{CatalogueEvents, UpdateChecks};
+use pdo_settings::application::ports::{CatalogueEvents, TelemetryReloads, UpdateChecks};
 use pdo_settings::{Settings, SettingsPorts};
 use sqlx::SqlitePool;
 use tower::ServiceExt;
@@ -32,6 +33,10 @@ struct NoChecks;
 
 impl UpdateChecks for NoChecks {
     fn check_now(&self) {}
+}
+
+impl TelemetryReloads for NoChecks {
+    fn reload(&self) {}
 }
 
 struct NoCatalogueEvents;
@@ -78,6 +83,7 @@ pub(super) async fn test_state() -> TestState {
             Arc::new(TriggerDefaults),
             Arc::new(ReviewDefaults),
             Arc::new(PlatformDefaults),
+            Arc::new(TelemetryDefaults),
             Arc::new(SandboxSection::new(
                 profiles.clone(),
                 Arc::new(ProcessDocker::from_override(None)),
@@ -90,6 +96,7 @@ pub(super) async fn test_state() -> TestState {
         catalogue_events: Arc::new(NoCatalogueEvents),
         staging_profiles: Arc::new(SandboxStagingProfiles(profiles)),
         update_checks: Arc::new(NoChecks),
+        telemetry: Arc::new(NoChecks),
         referents: Arc::new(ContextReferents {
             db: db.clone(),
             repo_root: home_dir.path().to_path_buf(),

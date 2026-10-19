@@ -83,6 +83,11 @@ vi.mock("../api/settings", () => ({
   fetchSettings: (...args: unknown[]) => fetchSettingsMock(...args),
   updateSettings: (...args: unknown[]) => updateSettingsMock(...args),
 }));
+// ADR-0090: Settings › Telemetry reads the export's status. Same Proxy trap.
+vi.mock("../api/telemetry", () => ({
+  fetchTelemetryStatus: vi.fn(() => new Promise(() => {})),
+  sendTestExport: vi.fn(),
+}));
 vi.mock("../api/agentProfiles", () => ({
   fetchAgentProfiles: (...args: unknown[]) => fetchAgentProfilesMock(...args),
   // #691: the agent-profiles panel is mounted inline; its writes must exist here too.
@@ -2201,6 +2206,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       "General",
       "Agents",
       "Sandbox & worktrees",
+      "Telemetry",
       "Diagnostics",
     ]);
     expect(screen.getByTestId("settings-category-general")).toHaveAttribute(
@@ -3517,7 +3523,13 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
   it("keeps the core's categories when no extension contributes", async () => {
     resetExtensions();
     render(<SettingsSurface open onClose={() => {}} />);
-    expect(await railLabels()).toEqual(["General", "Agents", "Sandbox & worktrees", "Diagnostics"]);
+    expect(await railLabels()).toEqual([
+      "General",
+      "Agents",
+      "Sandbox & worktrees",
+      "Telemetry",
+      "Diagnostics",
+    ]);
   });
 
   it("adds a rail row per page next to Extensions, which still lists the sections", async () => {
@@ -3529,6 +3541,7 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
         "General",
         "Agents",
         "Sandbox & worktrees",
+        "Telemetry",
         "Diagnostics",
         "Extensions",
         "Demo settings",

@@ -7,7 +7,8 @@
 //! the events, the `OperationApplied` record, the entity attributes), the shape an
 //! instance default is disclosed with, the names of the environment
 //! variables the instance defaults read, how a repository path matches a
-//! Projet's member, and the names of the Projets the extensions read.
+//! Projet's member, the names of the Projets the extensions read, and the count
+//! of the daemon's open WebSockets.
 //! Keep it small and stable: a concept that belongs to one context lives in that
 //! context's crate.
 
@@ -21,6 +22,7 @@ pub mod env;
 pub mod event_bus;
 pub mod extension_host;
 pub mod instance_default;
+pub mod live_connections;
 pub mod operation;
 pub mod project_names;
 pub mod registration;

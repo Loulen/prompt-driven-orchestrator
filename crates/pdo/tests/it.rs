@@ -186,6 +186,9 @@ mod update_apply;
 #[path = "update_check.rs"]
 mod update_check;
 
+#[path = "telemetry.rs"]
+mod telemetry;
+
 #[path = "docs_links.rs"]
 mod docs_links;
 

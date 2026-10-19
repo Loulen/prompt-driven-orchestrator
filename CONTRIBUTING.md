@@ -43,7 +43,7 @@ the history does. Reference the issue in the title.
 PDO is a modular monolith ([ADR-0079](docs/adr/0079-pdo-est-un-monolithe-modulaire-un-crate-par-bounded-context-hexagonal-a-l-interieur.md)).
 Each bounded context is a crate under `crates/` (`pdo-run`, `pdo-pipeline`, `pdo-review`,
 `pdo-session`, `pdo-harness`, `pdo-sandbox`, `pdo-skill`, `pdo-trigger`, `pdo-stats`,
-`pdo-workspace`, `pdo-settings`, `pdo-platform`), hexagonal inside (`domain/`, `application/`,
+`pdo-workspace`, `pdo-telemetry`, `pdo-settings`, `pdo-platform`), hexagonal inside (`domain/`, `application/`,
 `adapters/`). Next to them sit `pdo-kernel`, the shared kernel, and `pdo-extension-api`, the public
 contract of the extensions. `crates/pdo` is the composition root: it wires the contexts, carries
 the `pdo` binary and embeds the SPA. Its Cargo package is named `pdo-daemon`, because the installer

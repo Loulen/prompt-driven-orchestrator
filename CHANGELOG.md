@@ -10,6 +10,42 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.43.0 — Brouillon partagé d'un pipeline et présence (CORE-90)
+
+- Un pipeline du registre s'édite dans un brouillon partagé (ADR-0088) : un document Yjs par
+  pipeline, tenu par le daemon (SQLite) et synchronisé par `WS /pipelines/{id}/draft`. Les
+  modifications fusionnent au grain du champ, les prompts au caractère. Le brouillon survit au
+  redémarrage du daemon ; Save l'écrit dans le fichier et le remet à zéro.
+- Présence : avatars dans la barre d'onglets et sur la ligne de la liste Pipelines, sélection
+  des autres sur le canevas (contour et étiquette à leur couleur), saisie dans un prompt (caret
+  nommé, « X is typing »). `GET /pipelines` gagne `draft` (`changes`, `nodes`) : la ligne affiche
+  « draft: N changes » et compte les nœuds du brouillon.
+- Undo n'annule que ses propres changements, et son infobulle nomme le dernier.
+- Une Autorisation d'opération qui refuse `pipeline × update` fait rejoindre le brouillon en
+  lecture seule.
+- Un fichier écrit hors de PDO se fusionne dans le brouillon : la fenêtre de conflit disparaît.
+
+## 2.42.0 — Arbre de fichiers de la Review (CORE-84)
+
+- La liste des fichiers de la Review est un arbre de dossiers repliables. Une chaîne de dossiers
+  à un seul enfant tient sur une ligne, chaque dossier affiche le compte de ses commentaires non
+  résolus, et un bouton à côté du compteur replie ou déplie tout.
+- Les cartes du diff suivent l'ordre de l'arbre (dossiers avant fichiers).
+- Clavier : ←/→ replient et déplient le dossier du fichier courant, j/k sautent les fichiers d'un
+  dossier replié. Le filtre « / » garde l'arbre et ouvre les branches qui contiennent une
+  correspondance.
+
+## 2.41.0 — Pipeline validé pour tous et mis en tête pour des Projets (CORE-89)
+
+- La validation `all` d'un pipeline accepte une liste de Projets :
+  `{"kind":"all","project_ids":[…]}`. `{"kind":"all"}` reste valide (liste vide), sans
+  migration. Un Projet inconnu est refusé (`400`), un doublon est réduit.
+- Dans New Run, ces Projets voient le pipeline sous « Project pipelines », les autres sous
+  « Global pipelines ». Supprimer un Projet le retire de la liste et laisse le pipeline offert à
+  tous.
+- Modale Validate : sous « All projects », les cases des Projets restent actives (« Listed first
+  for ») ; le verdict tient en une phrase.
+
 ## 2.40.0 — Guide de lecture d'une page montée, Public URL (CORE-83)
 
 - `pdo page mount <name> <directory> --guide <file>` attache un guide de lecture (YAML ou JSON,

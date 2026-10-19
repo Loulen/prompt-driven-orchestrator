@@ -12,6 +12,7 @@ use pdo_skill::domain::error::SkillError;
 use pdo_skill::domain::selection::SkillRef;
 use pdo_skill::domain::sidecar::{SidecarImportReport, SidecarSkill};
 
+use crate::domain::draft::{DraftContent, DraftSummary};
 use crate::domain::library::LibraryEntry;
 use crate::domain::pipeline::PipelineDef;
 use crate::domain::validation::PipelineValidation;
@@ -100,6 +101,9 @@ pub trait PipelineEvents: Send + Sync {
     /// `pipeline_validation_changed`: the list, its indicators and the launch
     /// forms read the validation of `id` again.
     fn validation_changed(&self, id: &str);
+    /// `pipeline_draft_changed`: the list shows who has the draft of `id`
+    /// open, and its changes.
+    fn draft_changed(&self, id: &str, draft: &DraftSummary);
 }
 
 /// The validations the pipelines state (CONTEXT.md « Pipeline validé »), keyed
@@ -161,4 +165,59 @@ pub trait SkillBank: Send + Sync {
         references: Vec<SkillRef>,
         sidecar: &'a [SidecarSkill],
     ) -> BoxFuture<'a, Result<SidecarImportReport, SkillError>>;
+}
+
+/// A draft as the store keeps it across a restart (ADR-0088).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredDraft {
+    /// Drawn when the draft started from the file: a client holding a copy
+    /// of another generation drops it rather than merge two unrelated
+    /// histories.
+    pub generation: String,
+    /// The replicated document, encoded.
+    pub state: Vec<u8>,
+    /// The file the draft started from, or was last saved as.
+    pub baseline: DraftContent,
+    /// Its changes since `baseline`.
+    pub changes: u32,
+    /// The nodes it holds.
+    pub nodes: u32,
+}
+
+/// Where the drafts are kept.
+pub trait DraftStore: Send + Sync {
+    fn load<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Option<StoredDraft>, String>>;
+    fn save<'a>(&'a self, id: &'a str, draft: &'a StoredDraft)
+        -> BoxFuture<'a, Result<(), String>>;
+    fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), String>>;
+    /// A rename moved the pipeline `from` to `to`: its draft follows.
+    fn carry<'a>(&'a self, from: &'a str, to: &'a str) -> BoxFuture<'a, Result<(), String>>;
+    /// Every kept draft as the list shows it (nobody in it), by pipeline id.
+    fn summaries(&self) -> BoxFuture<'_, Result<HashMap<String, DraftSummary>, String>>;
+}
+
+/// The replicated document of a draft: it merges the changes of every
+/// participant field by field, and converges to the same state for all.
+pub trait DraftDocument: Send + Sync {
+    /// Its state now.
+    fn content(&self) -> DraftContent;
+    /// Apply an update a participant sent.
+    fn apply_update(&self, update: &[u8]) -> Result<(), String>;
+    /// Change the document from `from` to `to`, field by field; the update
+    /// that did it, for the participants.
+    fn change(&self, from: &DraftContent, to: &DraftContent) -> Vec<u8>;
+    /// The whole document, encoded.
+    fn encode(&self) -> Vec<u8>;
+    /// What it knows, as a state vector.
+    fn state_vector(&self) -> Vec<u8>;
+    /// What a peer with the state vector `state_vector` misses.
+    fn missing_for(&self, state_vector: &[u8]) -> Result<Vec<u8>, String>;
+}
+
+/// Makes the replicated documents.
+pub trait DraftDocuments: Send + Sync {
+    /// A new document holding `content`.
+    fn create(&self, content: &DraftContent) -> Box<dyn DraftDocument>;
+    /// A document from its encoding.
+    fn load(&self, state: &[u8]) -> Result<Box<dyn DraftDocument>, String>;
 }

@@ -16,12 +16,18 @@ fn projects(ids: &[&str]) -> PipelineValidation {
     }
 }
 
+fn all_listed_first_for(ids: &[&str]) -> PipelineValidation {
+    PipelineValidation::All {
+        project_ids: ids.iter().map(|id| id.to_string()).collect(),
+    }
+}
+
 #[tokio::test]
 async fn a_pipeline_that_states_nothing_is_validated_for_every_projet() {
     let world = World::new();
     world.registry.put("legacy", &pipeline_yaml("legacy"));
     assert_eq!(world.pipelines.validations().await.get("legacy"), None);
-    assert_eq!(PipelineValidation::default(), PipelineValidation::All);
+    assert_eq!(PipelineValidation::default(), PipelineValidation::all());
 }
 
 #[tokio::test]
@@ -89,18 +95,47 @@ async fn validating_replaces_announces_and_asks_the_validate_verb() {
 
     world
         .pipelines
-        .validate(&operator(), "shared", PipelineValidation::All)
+        .validate(&operator(), "shared", PipelineValidation::all())
         .await
         .unwrap();
     assert_eq!(
         world.validations.of("shared"),
-        Some(PipelineValidation::All)
+        Some(PipelineValidation::all())
     );
     assert_eq!(world.events.validations_changed(), ["shared"; 3]);
     assert_eq!(
         world.host.asked()[0],
         Operation::new(ResourceKind::Pipeline, Verb::Action("validate".into())).on("shared")
     );
+}
+
+#[tokio::test]
+async fn every_projet_is_stored_with_the_projets_it_is_listed_first_for() {
+    let world = World::new();
+    world.registry.put("shared", &pipeline_yaml("shared"));
+    world.projects.add("alpha");
+    world.projects.add("bravo");
+
+    let stored = world
+        .pipelines
+        .validate(
+            &operator(),
+            "shared",
+            all_listed_first_for(&["bravo", "alpha", "bravo"]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stored, all_listed_first_for(&["bravo", "alpha"]));
+    assert_eq!(world.validations.of("shared"), Some(stored));
+
+    match world
+        .pipelines
+        .validate(&operator(), "shared", all_listed_first_for(&["nope"]))
+        .await
+    {
+        Err(PipelineError::UnknownProject(id)) => assert_eq!(id, "nope"),
+        other => panic!("expected an unknown Projet, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -181,12 +216,18 @@ async fn a_deletion_forgets_the_validation() {
 }
 
 #[tokio::test]
-async fn a_deleted_projet_is_withdrawn_and_its_lone_pipelines_become_test_pipelines() {
+async fn a_deleted_projet_is_withdrawn_and_all_stays_all() {
     let world = World::new();
     world.validations.set("both", projects(&["alpha", "bravo"]));
     world.validations.set("alone", projects(&["alpha"]));
     world.validations.set("other", projects(&["bravo"]));
-    world.validations.set("global", PipelineValidation::All);
+    world.validations.set("global", PipelineValidation::all());
+    world
+        .validations
+        .set("first", all_listed_first_for(&["alpha", "bravo"]));
+    world
+        .validations
+        .set("first-alone", all_listed_first_for(&["alpha"]));
 
     world.pipelines.forget_project("alpha").await;
 
@@ -198,7 +239,19 @@ async fn a_deleted_projet_is_withdrawn_and_its_lone_pipelines_become_test_pipeli
     assert_eq!(world.validations.of("other"), Some(projects(&["bravo"])));
     assert_eq!(
         world.validations.of("global"),
-        Some(PipelineValidation::All)
+        Some(PipelineValidation::all())
     );
-    assert_eq!(world.events.validations_changed(), ["alone", "both"]);
+    assert_eq!(
+        world.validations.of("first"),
+        Some(all_listed_first_for(&["bravo"]))
+    );
+    assert_eq!(
+        world.validations.of("first-alone"),
+        Some(PipelineValidation::all()),
+        "every Projet stays every Projet"
+    );
+    assert_eq!(
+        world.events.validations_changed(),
+        ["alone", "both", "first", "first-alone"]
+    );
 }

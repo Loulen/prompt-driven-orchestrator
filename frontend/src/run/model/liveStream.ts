@@ -8,6 +8,7 @@
 import type { DaemonEvent } from "../../shared/generated/DaemonEvent";
 import type { Actor } from "../../shared/generated/Actor";
 import type { Presence } from "../../shared/generated/Presence";
+import type { DraftSummary } from "../../shared/generated/DraftSummary";
 
 export interface WsMessage {
   type:
@@ -24,6 +25,8 @@ export interface WsMessage {
     /** A harness's model catalogue was probed again (« Refresh models »). */
     | "harness_catalogue_changed"
     | "pipeline_validation_changed"
+    /** Who has a Pipeline's shared draft open, and its changes (ADR-0088). */
+    | "pipeline_draft_changed"
     | "cost_prices_synced"
     | "run_forgotten"
     /** An Actor opened a Run, or no longer has it open anywhere (API 0.12). */
@@ -35,6 +38,8 @@ export interface WsMessage {
     | "resync";
   event?: DaemonEvent;
   pipeline_id?: string;
+  /** Set on `pipeline_draft_changed`. */
+  draft?: DraftSummary;
   path?: string;
   ts?: string;
   /** Set on trigger_* messages (#160); a `trigger_updated` without it is

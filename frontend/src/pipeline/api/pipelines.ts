@@ -31,6 +31,7 @@ export function savePipeline(
   yaml: string,
   prompts: Record<string, string>,
   scope?: string,
+  draft?: { pipeline: unknown; prompts: Record<string, string> },
 ): Promise<{ ok: boolean; id?: string; renamed?: boolean }> {
   void scope;
   // #774 — the daemon answers with the FINAL id: a save whose `name:` field
@@ -39,7 +40,9 @@ export function savePipeline(
   return request<{ ok: boolean; id?: string; renamed?: boolean }>(
     "PUT",
     `/pipelines/${encodeURIComponent(id)}`,
-    { body: { yaml, prompts }, label: `PUT /pipelines/${id}` },
+    // ADR-0088: a tab's shared draft is saved with what it held, which the
+    // daemon then counts the draft's changes from.
+    { body: draft ? { yaml, prompts, draft } : { yaml, prompts }, label: `PUT /pipelines/${id}` },
   );
 }
 

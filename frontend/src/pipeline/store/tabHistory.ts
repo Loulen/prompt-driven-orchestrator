@@ -8,7 +8,8 @@ import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import { carriedPorts, withCarriedPorts } from "../../lib/edgePorts";
 import { requalifyWhen, renameWhenPorts } from "../../lib/whenClause";
 import { isEmergentInputNode } from "../../lib/anchorSide";
-import { hasUnsavedWork, isRunTabLocked } from "./editState";
+import { hasUnsavedWork, isTabLocked } from "./editState";
+import { noteDraftGesture } from "./draftGesture";
 import type { EditState, OpenPipeline, TabHistory } from "./editState";
 
 export function mutateActiveTab(
@@ -17,8 +18,9 @@ export function mutateActiveTab(
 ): Partial<EditState> {
   const idx = state.openTabs.findIndex((t) => t.id === state.activeTabId);
   if (idx < 0) return {};
-  // ADR-0085: a run tab in « pilotage » takes no definition change at all.
-  if (isRunTabLocked(state.openTabs[idx])) return {};
+  // ADR-0085: a run tab in « pilotage » takes no definition change at all;
+  // ADR-0088: nor does a pipeline tab reading its shared draft.
+  if (isTabLocked(state.openTabs[idx])) return {};
   const tabs = [...state.openTabs];
   const tab = { ...tabs[idx], pipeline: { ...tabs[idx].pipeline }, dirty: true };
   fn(tab);
@@ -67,7 +69,13 @@ export function mutateActiveTabWithHistory(
   opts: { coalesceKey?: string | null; track?: boolean } = {},
 ): Partial<EditState> {
   const idx = state.openTabs.findIndex((t) => t.id === state.activeTabId);
-  if (idx < 0 || isRunTabLocked(state.openTabs[idx])) return {};
+  if (idx < 0 || isTabLocked(state.openTabs[idx])) return {};
+  // ADR-0088: a shared draft keeps its own history, of my changes only; it
+  // learns how this gesture folds into it.
+  if (state.openTabs[idx].draft) {
+    noteDraftGesture(state.openTabs[idx].id, opts.coalesceKey ?? null, opts.track !== false);
+    return mutateActiveTab(state, fn);
+  }
   const before = state.openTabs[idx].pipeline; // immutable per the COW invariant
   const tabId = state.openTabs[idx].id;
   const mutated = mutateActiveTab(state, fn);

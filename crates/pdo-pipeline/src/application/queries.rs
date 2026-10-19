@@ -86,6 +86,11 @@ impl Pipelines {
         Ok(pipelines)
     }
 
+    /// Whether the registry holds the pipeline `id`.
+    pub fn exists(&self, id: &str) -> bool {
+        self.registry.exists(id)
+    }
+
     /// The pipeline `id`, parsed, with the prompts of its nodes.
     pub fn detail(&self, id: &str) -> Result<PipelineDetail, PipelineError> {
         let yaml = self.registry.read(id).ok_or(PipelineError::NotFound)?;

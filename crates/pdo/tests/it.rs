@@ -239,6 +239,9 @@ mod harness_freeze_resume;
 #[path = "harness_resume_frozen_gone.rs"]
 mod harness_resume_frozen_gone;
 
+#[path = "pipeline_draft.rs"]
+mod pipeline_draft;
+
 #[path = "hot_reload_conflict.rs"]
 mod hot_reload_conflict;
 

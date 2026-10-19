@@ -4,6 +4,7 @@ import { useEditStore } from "../pipeline/store/editStore";
 import { trailingWindow } from "../shared/lib/trailingWindow";
 import { refreshGestureRights } from "../run/store/gestureRightsStore";
 import { announceHarnessCatalogueChanged } from "../harness/store/useHarnessCatalog";
+import { announceLaunchOfferChanged } from "../run/store/useLaunchTargets";
 
 /** What the live stream refreshes. */
 export interface DaemonEventTargets {
@@ -34,6 +35,7 @@ export function useDaemonEvents({
   bumpFiresRefreshKey,
 }: DaemonEventTargets) {
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
+  const showListedDraft = useEditStore((s) => s.showListedDraft);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   // #368: mirror readable inside the stable WS callback (App.tsx subscribe
   // effect) without widening its deps — same latest-value idiom as
@@ -87,10 +89,16 @@ export function useDaemonEvents({
         loadPipelines();
         return;
       }
+      // ADR-0088: the list shows who has a shared draft open, live.
+      if (msg.type === "pipeline_draft_changed" && msg.pipeline_id && msg.draft) {
+        showListedDraft(msg.pipeline_id, msg.draft);
+        return;
+      }
       // A Pipeline's validation changed (another tab or client, or a Projet
       // deleted): the indicators and the launch forms read it from the list.
       if (msg.type === "pipeline_validation_changed") {
         loadPipelines();
+        announceLaunchOfferChanged();
         return;
       }
       // #348: global pause flip — reflect it live across every client. The
@@ -111,6 +119,7 @@ export function useDaemonEvents({
       // Triggers rows themselves are unchanged, so only the Projet list refetches.
       if (msg.type === "project_changed") {
         refreshProjects();
+        announceLaunchOfferChanged();
         gestures();
         return;
       }
@@ -164,6 +173,7 @@ export function useDaemonEvents({
     refreshTriggersPaused,
     refreshProjects,
     reloadPipeline,
+    showListedDraft,
     loadPipelines,
     bumpFiresRefreshKey,
   ]);

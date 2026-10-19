@@ -38,19 +38,17 @@ describe("ConfirmCloseTabsModal (#342)", () => {
     expect(screen.queryByText("flash.yaml")).not.toBeInTheDocument();
   });
 
-  it("counts a conflict / saveError tab as unsaved", () => {
+  it("counts a saveError tab as unsaved", () => {
     render(
       <ConfirmCloseTabsModal
         open
         tabs={[
-          tab("conf", { dirty: true, conflict: { pipeline: tab("x").pipeline, prompts: {}, diagnostics: [] } }),
           tab("err", { dirty: true, saveError: { message: "boom" } }),
         ]}
         onCancel={() => {}}
         onConfirm={() => {}}
       />,
     );
-    expect(screen.getByText("conf.yaml")).toBeInTheDocument();
     expect(screen.getByText("err.yaml")).toBeInTheDocument();
   });
 

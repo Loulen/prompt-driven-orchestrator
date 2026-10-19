@@ -6,7 +6,9 @@
 mod attributes;
 mod create_pipeline;
 mod delete_pipeline;
+pub mod drafts;
 mod duplicate_pipeline;
+mod editor_json;
 mod error;
 mod import_document;
 mod import_workflow;
@@ -20,6 +22,7 @@ mod rename_pipeline;
 mod save_pipeline;
 mod validation;
 
+pub use editor_json::editor_json;
 pub use error::PipelineError;
 pub use import_document::ImportedDocument;
 pub use import_workflow::{ImportedWorkflow, WorkflowImportError};

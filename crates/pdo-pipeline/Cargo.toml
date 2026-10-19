@@ -19,6 +19,8 @@ path = "src/lib.rs"
 
 [dependencies]
 pdo-kernel.workspace = true
+# The display of a draft's participants (`ActorDisplay`), sent to the frontend.
+pdo-extension-api = { workspace = true, features = ["ts"] }
 pdo-harness.workspace = true
 pdo-skill.workspace = true
 pdo-workspace.workspace = true
@@ -26,6 +28,7 @@ anyhow.workspace = true
 axum.workspace = true
 base64 = "0.22"
 chrono.workspace = true
+futures-util = "0.3"
 notify.workspace = true
 notify-debouncer-mini.workspace = true
 oxc_allocator.workspace = true
@@ -40,15 +43,14 @@ sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 ts-rs.workspace = true
+yrs.workspace = true
 
 [[test]]
 name = "use_cases"
 path = "tests/use_cases/main.rs"
 
 [dev-dependencies]
-# The in-memory extension host of the use-case tests implements the kernel's
-# `ExtensionHost`, whose signature names the API's types.
-pdo-extension-api.workspace = true
 pretty_assertions.workspace = true
 tempfile.workspace = true

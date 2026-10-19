@@ -90,6 +90,14 @@ pub(super) fn push_inputs(
                         "- `{}` (accumulated): no completed iterations yet — nothing to read.\n",
                         input.port_name
                     ));
+                } else if input.folder {
+                    preamble.push_str(&format!(
+                        "- `{}` (accumulated files): read every file in each of these folders:\n",
+                        input.port_name
+                    ));
+                    for path in &input.paths {
+                        preamble.push_str(&format!("  - {}/\n", path.display()));
+                    }
                 } else {
                     preamble.push_str(&format!(
                         "- `{}` (accumulated): read all of these files:\n",
@@ -105,7 +113,14 @@ pub(super) fn push_inputs(
                     .first()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                preamble.push_str(&format!("- `{}`: read `{}`\n", input.port_name, path));
+                if input.folder {
+                    preamble.push_str(&format!(
+                        "- `{}` (files): read every file in the folder `{}/`\n",
+                        input.port_name, path
+                    ));
+                } else {
+                    preamble.push_str(&format!("- `{}`: read `{}`\n", input.port_name, path));
+                }
             }
         }
         preamble.push('\n');
@@ -208,6 +223,18 @@ fn push_output_entry(preamble: &mut String, ctx: &AugmentContext<'_>, output: &O
             ));
             append_output_instructions(preamble, instructions);
             preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
+        }
+        PortType::Files => {
+            preamble.push_str(&format!(
+                "- `{}` (files): drop one or more files, of any format, in `{}`\n",
+                output.port_name,
+                output.path.display(),
+            ));
+            append_output_instructions(preamble, instructions);
+            preamble.push_str(
+                "  Every file of the folder is the output, and the nodes downstream \
+                 read the whole folder.\n",
+            );
         }
         PortType::Markdown => {
             preamble.push_str(&format!(

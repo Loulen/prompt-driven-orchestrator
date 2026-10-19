@@ -105,10 +105,17 @@ pub fn resolve(
     let mut input_index: HashMap<String, usize> = HashMap::new();
 
     for input in resolved {
+        // A `files` source hands over its folder: list the files in it.
         let mut files: Vec<FileInfo> = input
             .paths
             .iter()
-            .map(|p| file_info(artifacts_dir, p))
+            .flat_map(|p| {
+                if input.folder {
+                    list_port_files(artifacts_dir, p, |_| true)
+                } else {
+                    vec![file_info(artifacts_dir, p)]
+                }
+            })
             .collect();
         // #779: a Start-sourced input also exposes the run's non-image
         // attachments (`_input/<file>`), so the panel shows they arrived. Images
@@ -130,7 +137,11 @@ pub fn resolve(
                 inputs.push(PortIO {
                     port: input.port,
                     repeated: input.repeated,
-                    port_type: PortType::Markdown,
+                    port_type: if input.folder {
+                        PortType::Files
+                    } else {
+                        PortType::Markdown
+                    },
                     intermediate: false,
                     files,
                 });
@@ -165,14 +176,18 @@ pub fn resolve(
     let mut outputs: Vec<PortIO> = Vec::new();
     for output_port in &node.outputs {
         match output_port.port_type {
-            PortType::Image | PortType::ImageList => {
+            PortType::Image | PortType::ImageList | PortType::Files => {
                 let port_dir = crate::domain::blackboard::port_dir(
                     artifacts_dir,
                     node_id,
                     iter,
                     &output_port.name,
                 );
-                let mut files = list_image_files(artifacts_dir, &port_dir);
+                let mut files = if output_port.port_type == PortType::Files {
+                    list_port_files(artifacts_dir, &port_dir, |_| true)
+                } else {
+                    list_image_files(artifacts_dir, &port_dir)
+                };
                 mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
@@ -414,6 +429,49 @@ mod tests {
             grid_size: None,
             wait_for_started_nodes: false,
         }
+    }
+
+    #[test]
+    fn a_files_output_lists_every_file_and_its_consumer_gets_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("planner/iter-1/plan");
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        fs::write(dir.join("rows.csv"), "a,b\n").unwrap();
+        fs::write(dir.join("report.pdf"), b"%PDF").unwrap();
+        let mut pipeline = simple_pipeline();
+        pipeline.nodes[0].outputs[0].port_type = PortType::Files;
+        let mut state = run_state_with("planner", &[(1, NodeStatus::Completed)]);
+
+        let io = resolve(&pipeline, &artifacts, "planner", 1, &state);
+        assert_eq!(io.outputs[0].port_type, PortType::Files);
+        let paths: Vec<&str> = io.outputs[0]
+            .files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "planner/iter-1/plan/report.pdf",
+                "planner/iter-1/plan/rows.csv"
+            ]
+        );
+        assert_eq!(io.outputs[0].files[0].size, Some(4));
+
+        state
+            .nodes
+            .extend(run_state_with("implementer", &[(1, NodeStatus::Running)]).nodes);
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &state);
+        assert_eq!(io.inputs[0].port_type, PortType::Files);
+        let paths: Vec<&str> = io.inputs[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "planner/iter-1/plan/report.pdf",
+                "planner/iter-1/plan/rows.csv"
+            ]
+        );
     }
 
     #[test]

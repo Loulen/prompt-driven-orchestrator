@@ -45,6 +45,7 @@ uuid.workspace = true
 futures-util = "0.3"
 libc = "0.2"
 reqwest.workspace = true
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [[test]]
 name = "use_cases"

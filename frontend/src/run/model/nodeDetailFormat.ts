@@ -30,3 +30,15 @@ export function fileBadge(name: string): string {
   if (dot <= 0 || dot === name.length - 1) return "FILE";
   return name.slice(dot + 1).toUpperCase().slice(0, 4);
 }
+
+const TEXT_EXTENSIONS = new Set([
+  "md", "markdown", "txt", "csv", "tsv", "json", "yaml", "yml", "toml", "xml", "log",
+]);
+
+/** How a `files` port previews one of its files, by extension. */
+export function filesPreviewKind(path: string | undefined): "image" | "text" | "none" {
+  const ext = path?.split(".").pop()?.toLowerCase() ?? "";
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (TEXT_EXTENSIONS.has(ext)) return "text";
+  return "none";
+}

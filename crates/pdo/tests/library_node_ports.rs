@@ -1,6 +1,7 @@
 //! Layer 3a — POST a library node with fully-typed ports (frontmatter schemas,
-//! instructions, when clauses, repeated flag, side) → GET /library → assert every field
-//! round-trips through the daemon and on-disk YAML.  Regression test for #71.
+//! instructions, when clauses) → GET /library → assert every field round-trips
+//! through the daemon and on-disk YAML.  Regression test for #71. A port's retired
+//! `side` and `repeated`, still sent by an old client, are dropped.
 
 use crate::common::TestDaemon;
 
@@ -79,17 +80,18 @@ async fn library_node_preserves_all_port_fields() {
     let inputs = entry["inputs"].as_array().unwrap();
     assert_eq!(inputs.len(), 2);
     assert_eq!(inputs[0]["name"], "code");
-    assert_eq!(inputs[0]["repeated"], false);
-    assert_eq!(inputs[0]["side"], "left");
     assert_eq!(inputs[1]["name"], "reviews");
-    assert_eq!(inputs[1]["repeated"], true);
-    assert_eq!(inputs[1]["side"], "top");
+    for port in inputs {
+        assert!(port.get("side").is_none(), "{port}");
+        assert!(port.get("repeated").is_none(), "{port}");
+    }
 
     let outputs = entry["outputs"].as_array().unwrap();
     assert_eq!(outputs.len(), 1);
     let output = &outputs[0];
     assert_eq!(output["name"], "review");
-    assert_eq!(output["side"], "right");
+    assert!(output.get("side").is_none(), "{output}");
+    assert!(output.get("repeated").is_none(), "{output}");
 
     let frontmatter = &output["frontmatter"];
     assert!(!frontmatter.is_null(), "frontmatter should be present");

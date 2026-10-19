@@ -1,6 +1,5 @@
+import type { ReactNode } from "react";
 import type { PortDef } from "../../shared/generated/PortDef";
-import SidePicker from "./SidePicker";
-import { Tooltip } from "../../shared/ui/tooltip";
 
 interface InspectorPortRowProps {
   port: PortDef;
@@ -8,14 +7,21 @@ interface InspectorPortRowProps {
   isLast?: boolean;
   onUpdate: (updates: Partial<PortDef>) => void;
   onRemove: () => void;
+  /** Controls shown after the name, before the delete button (the output's type). */
+  children?: ReactNode;
 }
 
+/**
+ * The name row of a port. A port has no side (where a wire leaves belongs to the
+ * edge) nor accumulation flag (`repeated` belongs to the edge too).
+ */
 export default function InspectorPortRow({
   port,
   highlighted,
   isLast,
   onUpdate,
   onRemove,
+  children,
 }: InspectorPortRowProps) {
   return (
     <div
@@ -32,37 +38,7 @@ export default function InspectorPortRow({
         className="min-w-0 flex-1 bg-transparent text-fg outline-none"
         style={{ fontSize: "11px" }}
       />
-      <SidePicker
-        value={port.side ?? "left"}
-        onChange={(s) => onUpdate({ side: s })}
-      />
-      <Tooltip content="When on, reads all iter-N/<port>.md files (glob) for accumulating histories across loop iterations.">
-        <button
-          role="switch"
-          aria-checked={port.repeated}
-          aria-label="repeated"
-          onClick={() => onUpdate({ repeated: !port.repeated })}
-          className="flex cursor-pointer items-center gap-1"
-        >
-          <span
-            className={`transition-colors ${port.repeated ? "text-acc" : "text-fg-4"}`}
-            style={{ fontSize: "9px" }}
-          >
-            rpt
-          </span>
-          <span
-            className={`relative inline-block h-4 w-7 rounded-full transition-colors ${
-              port.repeated ? "bg-acc" : "bg-bg-5"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-fg transition-transform ${
-                port.repeated ? "translate-x-3" : "translate-x-0"
-              }`}
-            />
-          </span>
-        </button>
-      </Tooltip>
+      {children}
       <button
         onClick={onRemove}
         aria-label="Delete port"

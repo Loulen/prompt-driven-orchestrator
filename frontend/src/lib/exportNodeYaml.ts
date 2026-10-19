@@ -5,7 +5,6 @@
  * `serializePipeline.ts`).
  */
 import type { PortDef } from "../shared/generated/PortDef";
-import type { PortSide } from "../shared/generated/PortSide";
 import { foldNodeIntoHarnesses } from "../harness/model/nodeHarness";
 import { nodeIsolation } from "./nodeIsolation";
 import { hasProvisioningRules } from "../workspace/model/provisioning";
@@ -15,21 +14,13 @@ import { yamlStringify } from "./yamlDump";
 
 // Serialize one authored port to the node-library YAML shape (#345), mirroring
 // `pipelineToYamlObject`'s per-port emit: `name` always; the rest only when
-// non-default so a plain port stays a clean `- name: x`. `side` is omitted when
-// it equals the direction's default (left for inputs, right for outputs) — the
-// value the daemon/`libraryPortToPortDef` re-fill on import, so it round-trips
-// by absence.
-// NOT a duplicate of the inline per-port emit in `pipelineToYamlObject` above:
-// that one emits `side` whenever set and `when` on outputs only; this one omits
-// `side` when it equals the direction default (the value the daemon refills on
-// import, so it round-trips by absence) and emits `when` on both directions.
-// Unifying them strips `side:` from every pipeline file and flips every library
-// star to `diverged`. #355 makes `side` SEMANTIC.
-function portToYamlObject(port: PortDef, defaultSide: PortSide): Record<string, unknown> {
+// non-default so a plain port stays a clean `- name: x`. A port has no side nor
+// `repeated`. NOT a duplicate of the inline per-port emit in
+// `pipelineToYamlObject`: that one emits `when` on outputs only, this one on both
+// directions.
+function portToYamlObject(port: PortDef): Record<string, unknown> {
   const p: Record<string, unknown> = { name: port.name };
-  if (port.repeated) p.repeated = true;
   if (port.required) p.required = true;
-  if (port.side && port.side !== defaultSide) p.side = port.side;
   if (port.port_type && port.port_type !== "markdown") p.port_type = port.port_type;
   if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
   if (port.when) p.when = port.when;
@@ -118,10 +109,10 @@ export function exportNodeAsYaml(node: EditorNodeDef, prompt: string): string {
   // requires; regular nodes never set it, so its presence is the signal.
   if (node.max_iter !== undefined && node.max_iter !== null) obj.max_iter = node.max_iter;
   if (node.inputs.length > 0) {
-    obj.inputs = node.inputs.map((p) => portToYamlObject(p, "left"));
+    obj.inputs = node.inputs.map(portToYamlObject);
   }
   if (node.outputs.length > 0) {
-    obj.outputs = node.outputs.map((p) => portToYamlObject(p, "right"));
+    obj.outputs = node.outputs.map(portToYamlObject);
   }
   return `${yamlStringify(obj)}\n${promptToBlockScalar(prompt)}`;
 }

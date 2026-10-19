@@ -4,9 +4,11 @@ import type { PortSide } from "./PortSide";
 /**
  * Where on a card's side a wire leaves from or lands on (#844). The side is the
  * coarse choice `target_side` already carried; `offset` is the distance *along*
- * that side, in canvas px, from the side's start. Absent ⇒ the side's middle,
- * which is the pre-#844 geometry — so an untouched pipeline round-trips byte for
- * byte. Layout, like `mode`/`waypoints`/`target_side`: it persists in the file
- * and is excluded from the semantic pipeline-diff.
+ * that side, in canvas px, from the side's start. An absent anchor ⇒ the side's
+ * middle, which is the pre-#844 geometry — so an untouched pipeline round-trips
+ * byte for byte. An anchor without `offset` also sits at its side's middle: that
+ * is what an output's retired `side` converts into, since the file does not know
+ * the card's size. Layout, like `mode`/`waypoints`/`target_side`: it persists in
+ * the file and is excluded from the semantic pipeline-diff.
  */
-export type EdgeAnchor = { side: PortSide, offset: number, };
+export type EdgeAnchor = { side: PortSide, offset?: number | null, };

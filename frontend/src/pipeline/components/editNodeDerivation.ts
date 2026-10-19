@@ -94,10 +94,9 @@ export function deriveEditNodes(
         // editing (no run state) leaves the start node image-free.
         inputImages:
           n.type === "start" ? (runState?.start_node?.input_images ?? []) : undefined,
-        inputs: n.inputs.map((p) => ({ name: p.name, side: p.side ?? "left", description: p.description })),
+        inputs: n.inputs.map((p) => ({ name: p.name, description: p.description })),
         outputs: n.outputs.map((p) => ({
           name: p.name,
-          side: p.side ?? "right",
           description: p.description,
           ...(p.intermediate ? { intermediate: true } : {}),
         })),

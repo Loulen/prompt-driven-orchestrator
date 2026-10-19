@@ -95,6 +95,33 @@ pub fn parse_entry(contents: &str) -> Option<LibraryEntry> {
     Some(entry)
 }
 
+/// An entry file rewritten without its ports' retired `side` and `repeated`
+/// (`pdo migrate`). `Ok(None)` when it carries neither; a second pass is a no-op.
+/// An entry has no edges, so the keys simply go: where a wire leaves is decided
+/// on the canvas the node is dropped onto.
+pub fn migrate_entry_yaml(
+    contents: &str,
+) -> Result<Option<(String, pipeline::LegacyPortsReport)>, String> {
+    let mut doc: serde_yaml::Value =
+        serde_yaml::from_str(contents).map_err(|e| format!("YAML parse error: {e}"))?;
+    let mut report = pipeline::LegacyPortsReport::default();
+    for key in ["inputs", "outputs"] {
+        if let Some(ports) = doc
+            .get_mut(key)
+            .and_then(serde_yaml::Value::as_sequence_mut)
+        {
+            let (sides, repeated) = pipeline::strip_legacy_port_keys(ports);
+            report.sides_removed += sides;
+            report.repeated_removed += repeated;
+        }
+    }
+    if !report.changed() {
+        return Ok(None);
+    }
+    let yaml = serde_yaml::to_string(&doc).map_err(|e| format!("YAML serialize error: {e}"))?;
+    Ok(Some((yaml, report)))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SyncState {
@@ -166,5 +193,33 @@ pub fn sync_state(
         SyncState::Synced
     } else {
         SyncState::Diverged
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    const LEGACY_ENTRY: &str = "name: Reviewer\ntype: agent\ninputs:\n- name: code\n  repeated: true\n  side: left\noutputs:\n- name: review\n  repeated: true\n  side: bottom\n  port_type: markdown\nprompt: You review.\n";
+
+    #[test]
+    fn a_legacy_entry_still_reads_without_its_port_side_and_repeated() {
+        let entry = parse_entry(LEGACY_ENTRY).expect("a legacy entry parses");
+        assert_eq!(entry.outputs[0].name, "review");
+        let served = serde_json::to_value(&entry).unwrap();
+        assert!(served["outputs"][0].get("side").is_none());
+        assert!(served["outputs"][0].get("repeated").is_none());
+    }
+
+    #[test]
+    fn migrating_an_entry_drops_the_port_keys_once() {
+        let (yaml, report) = migrate_entry_yaml(LEGACY_ENTRY).unwrap().expect("migrated");
+        assert!(!yaml.contains("side"), "{yaml}");
+        assert!(!yaml.contains("repeated"), "{yaml}");
+        assert_eq!(report.sides_removed, 2);
+        assert_eq!(report.repeated_removed, 2);
+        assert_eq!(parse_entry(&yaml), parse_entry(LEGACY_ENTRY));
+        assert_eq!(migrate_entry_yaml(&yaml).unwrap(), None);
     }
 }

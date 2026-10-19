@@ -187,7 +187,7 @@ export default function NodeInspector({
     while (ports.some((p) => p.name === name)) {
       name = `out-${++counter}`;
     }
-    ports.push({ name, repeated: false, side: "right" });
+    ports.push({ name });
     updateNode(node!.id, { outputs: ports });
   }
 

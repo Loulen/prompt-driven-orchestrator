@@ -110,9 +110,9 @@ describe("declaredOutputs / inDeclarationOrder", () => {
     type: "agent",
     inputs: [],
     outputs: [
-      { name: "out", repeated: false, side: "right" },
-      { name: "spec", repeated: false, side: "right" },
-      { name: "notes", repeated: false, side: "right" },
+      { name: "out" },
+      { name: "spec" },
+      { name: "notes" },
     ],
     interactive: false,
   };
@@ -144,9 +144,9 @@ describe("Outputs intermédiaires never wired (CORE-45)", () => {
     type: "agent",
     inputs: [],
     outputs: [
-      { name: "preview", repeated: false, side: "right", intermediate: true },
-      { name: "out", repeated: false, side: "right" },
-      { name: "spec", repeated: false, side: "right" },
+      { name: "preview", intermediate: true },
+      { name: "out" },
+      { name: "spec" },
     ],
     interactive: false,
   };

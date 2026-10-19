@@ -19,9 +19,10 @@
  * reject the save and nothing persisted. Change an emit rule here only against
  * the Rust reader.
  *
- * The two per-port emitters are DELIBERATELY divergent — do not unify them, see
- * the comment on `portToYamlObject` (`exportNodeYaml.ts`).
+ * The two per-port emitters differ on `when` — see the comment on
+ * `portToYamlObject` (`exportNodeYaml.ts`).
  */
+import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
 import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
 import { foldNodeIntoHarnesses } from "../harness/model/nodeHarness";
@@ -153,11 +154,9 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
     if (n.inputs.length > 0)
       node.inputs = n.inputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
-        if (port.repeated) p.repeated = true;
-        // A port the completion refuses to leave empty. Emitted only when set,
-        // like `repeated`: dropping it here lost it on every editor save.
+        // A port the completion refuses to leave empty. Emitted only when set:
+        // dropping it here lost it on every editor save.
         if (port.required) p.required = true;
-        if (port.side) p.side = port.side;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
@@ -166,11 +165,9 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
     if (n.outputs.length > 0)
       node.outputs = n.outputs.map((port) => {
         const p: Record<string, unknown> = { name: port.name };
-        if (port.repeated) p.repeated = true;
-        // A port the completion refuses to leave empty. Emitted only when set,
-        // like `repeated`: dropping it here lost it on every editor save.
+        // A port the completion refuses to leave empty. Emitted only when set:
+        // dropping it here lost it on every editor save.
         if (port.required) p.required = true;
-        if (port.side) p.side = port.side;
         if (port.port_type && port.port_type !== "markdown")
           p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
@@ -193,6 +190,9 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
     // Switch node's output ports.
     if (e.when && Object.keys(e.when).length > 0) edge.when = e.when;
     if (e.else === true) edge.else = true;
+    // Loop accumulation (#149): the edge is the only place it lives, a port has
+    // no `repeated`. Dropping it here lost it on every editor save.
+    if (e.repeated === true) edge.repeated = true;
     // Routing (#154): only manually-pinned edges persist their route. Auto
     // edges recompute deterministically, so they store no `mode`/`waypoints` —
     // emitting them would be noise. A `manual` mode without waypoints is also
@@ -210,21 +210,11 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
     // Per-edge anchors (#844). Layout, like the three above: they say WHERE on a
     // card's border the wire leaves and lands, so a shared workflow keeps the
     // wiring it was drawn with. Absent ⇒ the side's middle (the pre-#844
-    // geometry), so an untouched edge round-trips byte for byte. The offset is
-    // rounded on persist — sub-pixel handle centres are what turn a straight wire
-    // into a three-segment path with two phantom handles.
-    if (e.source_anchor) {
-      edge.source_anchor = {
-        side: e.source_anchor.side,
-        offset: Math.round(e.source_anchor.offset),
-      };
-    }
-    if (e.target_anchor) {
-      edge.target_anchor = {
-        side: e.target_anchor.side,
-        offset: Math.round(e.target_anchor.offset),
-      };
-    }
+    // geometry), so an untouched edge round-trips byte for byte. An anchor
+    // without `offset` (an output's retired `side`, converted at parse) is the
+    // side's middle and keeps no offset.
+    if (e.source_anchor) edge.source_anchor = anchorToYamlObject(e.source_anchor);
+    if (e.target_anchor) edge.target_anchor = anchorToYamlObject(e.target_anchor);
     // Labels and draw order (#845). Layout again, and again emitted only when
     // NON-DEFAULT, so a pipeline nobody re-decorated saves back byte-identical:
     //  - `show_output_labels` has no constant default (it is derived from the
@@ -276,6 +266,15 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
   }
 
   return obj;
+}
+
+// The offset is rounded on persist (#844): sub-pixel handle centres are what turn
+// a straight wire into a three-segment path with two phantom handles. An anchor
+// without one stays without.
+function anchorToYamlObject(anchor: EdgeAnchor): Record<string, unknown> {
+  return anchor.offset == null
+    ? { side: anchor.side }
+    : { side: anchor.side, offset: Math.round(anchor.offset) };
 }
 
 export function serializePipeline(p: EditorPipelineDef): string {

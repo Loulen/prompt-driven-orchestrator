@@ -5,20 +5,6 @@ use std::path::Path;
 
 use pdo_pipeline::domain::pipeline::{self, FrontmatterFieldDecl, PipelineDef, Port, PortType};
 
-fn iter_dirs_containing(node_dir: &Path, port_name: &str) -> usize {
-    let entries = match std::fs::read_dir(node_dir) {
-        Ok(e) => e,
-        Err(_) => return 0,
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry.file_name().to_string_lossy().starts_with("iter-")
-                && entry.path().join(port_name).join("output.md").exists()
-        })
-        .count()
-}
-
 fn count_image_files(dir: &Path) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
@@ -95,22 +81,14 @@ pub fn validate(
                 }
             }
             PortType::Markdown => {
-                if port.repeated {
-                    let node_dir = artifacts_dir.join(node_id);
-                    let found = iter_dirs_containing(&node_dir, &port.name);
-                    if found == 0 {
-                        missing.push(port.name.clone());
-                    }
-                } else {
-                    let path = crate::domain::blackboard::artifact_path(
-                        artifacts_dir,
-                        node_id,
-                        iter,
-                        &port.name,
-                    );
-                    if !path.exists() {
-                        missing.push(port.name.clone());
-                    }
+                let path = crate::domain::blackboard::artifact_path(
+                    artifacts_dir,
+                    node_id,
+                    iter,
+                    &port.name,
+                );
+                if !path.exists() {
+                    missing.push(port.name.clone());
                 }
             }
             // Existence of `output.html` only: html carries no frontmatter, and
@@ -339,23 +317,6 @@ mod tests {
     fn port(name: &str) -> Port {
         Port {
             name: name.into(),
-            repeated: false,
-            side: None,
-            port_type: PortType::Markdown,
-            frontmatter: None,
-            when: None,
-            description: None,
-            instructions: None,
-            required: false,
-            intermediate: false,
-        }
-    }
-
-    fn repeated_port(name: &str) -> Port {
-        Port {
-            name: name.into(),
-            repeated: true,
-            side: None,
             port_type: PortType::Markdown,
             frontmatter: None,
             when: None,
@@ -369,8 +330,6 @@ mod tests {
     fn typed_port(name: &str, schema: HashMap<String, FrontmatterFieldDecl>) -> Port {
         Port {
             name: name.into(),
-            repeated: false,
-            side: None,
             port_type: PortType::Markdown,
             frontmatter: Some(schema),
             when: None,
@@ -415,7 +374,7 @@ mod tests {
                 port("report"),
                 intermediate(port("plan")),
                 html,
-                intermediate(repeated_port("notes")),
+                intermediate(port("notes")),
             ],
         )]);
         assert_eq!(validate(&pipeline, "writer", 1, artifacts), Ok(()));
@@ -488,21 +447,37 @@ mod tests {
     }
 
     #[test]
-    fn repeated_port_with_zero_files() {
-        let tmp = TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        let pipeline = make_pipeline(vec![make_node("impl", vec![repeated_port("patches")])]);
-        let result = validate(&pipeline, "impl", 1, artifacts);
-        assert!(matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["patches"]));
-    }
-
-    #[test]
-    fn repeated_port_with_one_file() {
+    fn a_legacy_repeated_output_is_checked_at_the_current_iteration_only() {
+        // The completion check no longer reads an output's `repeated`: the key is
+        // dropped at parse, and a file from an earlier iteration does not count.
+        let yaml = r#"
+name: legacy-repeated
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: impl
+    name: impl
+    type: agent
+    outputs:
+      - name: patches
+        repeated: true
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges: []
+"#;
+        let pipeline = pipeline::parse_pipeline(yaml).unwrap().pipeline;
         let tmp = TempDir::new().unwrap();
         let artifacts = tmp.path();
         write_artifact(artifacts, "impl", 1, "patches", "patch 1");
-        let pipeline = make_pipeline(vec![make_node("impl", vec![repeated_port("patches")])]);
         assert!(validate(&pipeline, "impl", 1, artifacts).is_ok());
+        let result = validate(&pipeline, "impl", 2, artifacts);
+        assert!(matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["patches"]));
     }
 
     #[test]
@@ -768,8 +743,6 @@ mod tests {
     fn image_port(name: &str) -> Port {
         Port {
             name: name.into(),
-            repeated: false,
-            side: None,
             port_type: PortType::Image,
             frontmatter: None,
             when: None,
@@ -783,8 +756,6 @@ mod tests {
     fn image_list_port(name: &str) -> Port {
         Port {
             name: name.into(),
-            repeated: false,
-            side: None,
             port_type: PortType::ImageList,
             frontmatter: None,
             when: None,
@@ -899,8 +870,6 @@ mod tests {
     fn html_port(name: &str) -> Port {
         Port {
             name: name.into(),
-            repeated: false,
-            side: None,
             port_type: PortType::Html,
             frontmatter: None,
             when: None,

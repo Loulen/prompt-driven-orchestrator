@@ -8,8 +8,8 @@ function makeNode(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {
     id: "n1",
     name: "Reviewer",
     type: "agent",
-    inputs: [{ name: "code", repeated: false, side: "left" }],
-    outputs: [{ name: "review", repeated: false, side: "right" }],
+    inputs: [{ name: "code" }],
+    outputs: [{ name: "review" }],
     interactive: false,
     view: { x: 100, y: 100 },
     ...overrides,
@@ -20,8 +20,8 @@ function makeEntry(overrides: Partial<LibraryEntry> = {}): LibraryEntry {
   return {
     name: "Reviewer",
     type: "agent",
-    inputs: [{ name: "code", repeated: false, side: "left" }],
-    outputs: [{ name: "review", repeated: false, side: "right" }],
+    inputs: [{ name: "code" }],
+    outputs: [{ name: "review" }],
     interactive: false,
     prompt: "You review code.",
     ...overrides,
@@ -110,11 +110,11 @@ describe("computeSyncState", () => {
 
   it("returns diverged when only an output's intermediate flag differs (CORE-45)", () => {
     const node = makeNode({
-      outputs: [{ name: "review", repeated: false, side: "right", intermediate: true }],
+      outputs: [{ name: "review", intermediate: true }],
     });
     expect(computeSyncState(node, "You review code.", [makeEntry()])).toBe("diverged");
     const flagged = makeEntry({
-      outputs: [{ name: "review", repeated: false, side: "right", intermediate: true }],
+      outputs: [{ name: "review", intermediate: true }],
     });
     expect(computeSyncState(node, "You review code.", [flagged])).toBe("synced");
   });
@@ -159,8 +159,8 @@ describe("computeSyncState", () => {
   it("returns diverged when port count differs", () => {
     const node = makeNode({
       inputs: [
-        { name: "code", repeated: false, side: "left" },
-        { name: "extra", repeated: false, side: "left" },
+        { name: "code" },
+        { name: "extra" },
       ],
     });
     const entries = [makeEntry()];
@@ -169,15 +169,7 @@ describe("computeSyncState", () => {
 
   it("returns diverged when port name differs", () => {
     const node = makeNode({
-      inputs: [{ name: "source", repeated: false, side: "left" }],
-    });
-    const entries = [makeEntry()];
-    expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
-  });
-
-  it("returns diverged when port repeated flag differs", () => {
-    const node = makeNode({
-      inputs: [{ name: "code", repeated: true, side: "left" }],
+      inputs: [{ name: "source" }],
     });
     const entries = [makeEntry()];
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
@@ -194,15 +186,13 @@ describe("computeSyncState", () => {
       outputs: [
         {
           name: "review",
-          repeated: false,
-          side: "right",
           frontmatter: { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } },
         },
       ],
     });
     const entries = [
       makeEntry({
-        outputs: [{ name: "review", repeated: false, side: "right" }],
+        outputs: [{ name: "review" }],
       }),
     ];
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");
@@ -212,13 +202,13 @@ describe("computeSyncState", () => {
     const fm = { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } };
     const node = makeNode({
       outputs: [
-        { name: "review", repeated: false, side: "right", frontmatter: fm },
+        { name: "review", frontmatter: fm },
       ],
     });
     const entries = [
       makeEntry({
         outputs: [
-          { name: "review", repeated: false, side: "right", frontmatter: fm },
+          { name: "review", frontmatter: fm },
         ],
       }),
     ];
@@ -230,15 +220,13 @@ describe("computeSyncState", () => {
       outputs: [
         {
           name: "pass",
-          repeated: false,
-          side: "right",
           when: { verdict: { eq: "PASS" } },
         },
       ],
     });
     const entries = [
       makeEntry({
-        outputs: [{ name: "pass", repeated: false, side: "right" }],
+        outputs: [{ name: "pass" }],
       }),
     ];
     expect(computeSyncState(node, "You review code.", entries)).toBe("diverged");

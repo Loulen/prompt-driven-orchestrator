@@ -5,13 +5,13 @@ nodes:
     name: Start
     type: start
     outputs:
-      - { name: user_prompt, side: right }
+      - { name: user_prompt }
     view: { x: 199, y: 47 }
   - id: end
     name: End
     type: end
     inputs:
-      - { name: result, side: left }
+      - { name: result }
     view: { x: 202, y: 218 }
   - id: implementer
     name: implementer
@@ -21,9 +21,9 @@ nodes:
     harnesses:
       claude: { model: claude-opus-5-5, effort: medium }
     inputs:
-      - { name: task, side: left }
+      - { name: task }
     outputs:
-      - { name: code, side: right }
+      - { name: code }
     view: { x: 196, y: 135 }
 edges:
   - source: { node: start, port: user_prompt }

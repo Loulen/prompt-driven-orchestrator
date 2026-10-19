@@ -71,8 +71,6 @@ impl Importer {
 
         let mut out_port = Port {
             name: "out".into(),
-            repeated: false,
-            side: None,
             port_type: crate::domain::pipeline::PortType::Markdown,
             frontmatter: None,
             when: None,

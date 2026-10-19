@@ -32,7 +32,7 @@ pub fn route<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pdo_pipeline::domain::pipeline::{NodeDef, NodeType, Port, PortSide, PortType};
+    use pdo_pipeline::domain::pipeline::{NodeDef, NodeType, Port, PortType};
     use pretty_assertions::assert_eq;
 
     fn yaml(s: &str) -> serde_yaml::Value {
@@ -48,8 +48,6 @@ mod tests {
             node_type: NodeType::Switch,
             inputs: vec![Port {
                 name: "in".into(),
-                repeated: false,
-                side: Some(PortSide::Left),
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -75,8 +73,6 @@ mod tests {
     fn port_with_when(name: &str, when_yaml: &str) -> Port {
         Port {
             name: name.into(),
-            repeated: false,
-            side: Some(PortSide::Right),
             port_type: PortType::Markdown,
             frontmatter: None,
             when: Some(yaml(when_yaml)),
@@ -90,8 +86,6 @@ mod tests {
     fn default_port() -> Port {
         Port {
             name: "default".into(),
-            repeated: false,
-            side: Some(PortSide::Right),
             port_type: PortType::Markdown,
             frontmatter: None,
             when: None,

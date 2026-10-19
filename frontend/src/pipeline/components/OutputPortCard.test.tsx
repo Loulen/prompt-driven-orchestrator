@@ -10,7 +10,7 @@ function Wrapper({ children }: { children: React.ReactNode }) {
 
 describe("OutputPortCard — O3 tab-head card", () => {
   const baseProps = {
-    port: { name: "out", repeated: false, side: "right" as const } as PortDef,
+    port: { name: "out" } as PortDef,
     highlighted: false,
     onUpdate: vi.fn(),
     onRemove: vi.fn(),
@@ -80,7 +80,7 @@ describe("OutputPortCard — O3 tab-head card", () => {
         <OutputPortCard {...baseProps} />
         <OutputPortCard
           {...baseProps}
-          port={{ name: "err", repeated: false, side: "right" }}
+          port={{ name: "err" }}
         />
       </Wrapper>,
     );
@@ -95,6 +95,22 @@ describe("OutputPortCard — O3 tab-head card", () => {
     render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
     const body = screen.getByTestId("output-port-card-out").querySelector(".op-body")!;
     expect(body.querySelector("[data-testid='output-schema-editor']")).toBeTruthy();
+  });
+
+  it("puts the type selector in the name row, where L/T/R/B and rpt used to be", () => {
+    render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
+    const card = screen.getByTestId("output-port-card-out");
+    const row = card.querySelector(".op-head .port-row")!;
+    expect(row.contains(screen.getByTestId("port-type-select"))).toBe(true);
+    expect(card.querySelector(".op-body")!.contains(screen.getByTestId("port-type-select"))).toBe(false);
+    expect(screen.queryByRole("switch", { name: /repeated/i })).toBeNull();
+    expect(screen.queryByTitle("top")).toBeNull();
+  });
+
+  it("keeps the type selector when the body is collapsed", () => {
+    render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByLabelText("Toggle output body"));
+    expect(screen.getByTestId("port-type-select")).toBeInTheDocument();
   });
 
   it("shows port type selector with default markdown", () => {
@@ -220,7 +236,7 @@ describe("OutputPortCard — O3 tab-head card", () => {
 describe("OutputPortCard — « intermediate » (CORE-45)", () => {
   const schema = { verdict: { type: "string" } };
   const props = (port: Partial<PortDef>, extra: Record<string, unknown> = {}) => ({
-    port: { name: "preview", repeated: false, side: "right" as const, ...port } as PortDef,
+    port: { name: "preview", ...port } as PortDef,
     highlighted: false,
     onUpdate: vi.fn(),
     onRemove: vi.fn(),

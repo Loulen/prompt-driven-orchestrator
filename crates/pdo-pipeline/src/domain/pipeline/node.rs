@@ -128,10 +128,6 @@ impl std::fmt::Display for PortSide {
 pub struct Port {
     pub name: String,
     #[serde(default)]
-    pub repeated: bool,
-    #[serde(default)]
-    pub side: Option<PortSide>,
-    #[serde(default)]
     // Always sent, but a port the editor creates omits it (markdown by default).
     #[ts(optional = nullable)]
     pub port_type: PortType,
@@ -161,7 +157,7 @@ pub struct Port {
     /// what the node produces during the Run. It is for humans only — the
     /// completion never checks it (neither presence nor frontmatter), a skip
     /// writes nothing for it, and no edge may carry it (refused at parse). Its
-    /// `frontmatter`, `when` and `repeated` have no effect. Omitted from the YAML
+    /// `frontmatter` and `when` have no effect. Omitted from the YAML
     /// when false. Semantic, not layout.
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(optional = nullable)]

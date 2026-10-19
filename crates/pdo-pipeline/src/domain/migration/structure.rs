@@ -1,27 +1,9 @@
-//! The structural passes: port sides, `halt` edges, the Start and End nodes,
+//! The structural passes: `halt` edges, the Start and End nodes,
 //! and the rewiring of node references after an id change.
 
 use std::collections::HashMap;
 
 use super::detect::{has_start_end_nodes, nodes_contain_type};
-
-pub(crate) fn backfill_port_sides(node: &mut serde_yaml::Value, key: &str, default_side: &str) {
-    let ports = match node.get_mut(key).and_then(|v| v.as_sequence_mut()) {
-        Some(seq) => seq,
-        None => return,
-    };
-    let side_key = serde_yaml::Value::String("side".into());
-    for port in ports.iter_mut() {
-        if let Some(m) = port.as_mapping_mut() {
-            if !m.contains_key(&side_key) {
-                m.insert(
-                    side_key.clone(),
-                    serde_yaml::Value::String(default_side.into()),
-                );
-            }
-        }
-    }
-}
 
 pub(crate) fn rewrite_halt_edge(edge: &mut serde_yaml::Value) {
     let target = match edge.get("target") {

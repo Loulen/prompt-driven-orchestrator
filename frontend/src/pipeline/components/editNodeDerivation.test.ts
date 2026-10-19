@@ -35,8 +35,8 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
       id,
       name: id,
       type,
-      inputs: inputs.map((name) => ({ name, repeated: false, side: "left" as const })),
-      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      inputs: inputs.map((name) => ({ name })),
+      outputs: outputs.map((name) => ({ name })),
       interactive: false,
     };
   }
@@ -84,34 +84,41 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
   });
 
   it.each<[PortSide]>([["bottom"], ["left"], ["top"]])(
-    "leaves an un-anchored edge by its output's declared %s side, not rightwards (#844 FP iter-2)",
+    "leaves by the middle of the %s side a legacy output converted into an anchor without offset",
     (side) => {
-      // A pipeline saved before #844 has no `source_anchor`. Its wires left from
-      // the output dot, which sat on the port's declared side. Defaulting them
-      // to the right rim sent every one out the wrong border, back across its
-      // own card and into the target from the opposite side.
-      const src: EditorNodeDef = {
-        ...node("src", "agent", [], []),
-        outputs: [
-          { name: "other", repeated: false, side: "right" },
-          { name: "plan", repeated: false, side },
-        ],
-      };
+      // A pipeline saved before #844 has no `source_anchor`; its outputs declared
+      // a side. The daemon's parse turns that side into a `source_anchor` without
+      // offset, so the wire leaves where the output dot used to sit.
       const p = pipeline(
-        [src, node("dst", "agent", [], ["code"])],
-        [{ source: { node: "src", port: "plan" }, target: { node: "dst", port: "plan" } }],
+        [node("src", "agent", [], ["other", "plan"]), node("dst", "agent", [], ["code"])],
+        [
+          {
+            source: { node: "src", port: "plan" },
+            target: { node: "dst", port: "plan" },
+            source_anchor: { side },
+          },
+        ],
       );
       const edges = deriveEditEdges(p);
       expect(edges[0].sourceHandle).toBe(`rim-${side}`);
       expect(edges[0].data?.sourceSide).toBe(side);
-      expect(edges[0].data?.sourceAnchor).toBeNull();
     },
   );
 
-  it("lets a drawn anchor win over the output's declared side", () => {
+  it("leaves an edge without anchor by the right side", () => {
+    const p = pipeline(
+      [node("src", "agent", [], ["plan"]), node("dst", "agent", [], ["code"])],
+      [{ source: { node: "src", port: "plan" }, target: { node: "dst", port: "plan" } }],
+    );
+    const edges = deriveEditEdges(p);
+    expect(edges[0].sourceHandle).toBe("rim-right");
+    expect(edges[0].data?.sourceAnchor).toBeNull();
+  });
+
+  it("leaves by a drawn anchor", () => {
     const src: EditorNodeDef = {
       ...node("src", "agent", [], []),
-      outputs: [{ name: "plan", repeated: false, side: "bottom" }],
+      outputs: [{ name: "plan" }],
     };
     const edges = deriveEditEdges(
       pipeline(
@@ -140,16 +147,19 @@ describe("deriveEditEdges targetHandle anchoring (#149)", () => {
     expect(edges[0].targetHandle).toBe("__anchor:left");
   });
 
-  it("routes a legacy (un-anchored) End edge to `result`'s declared side (#844, #840)", () => {
-    // An End edge saved before #840 carries no anchor and no `target_side`: it
-    // must reopen on the side it always landed on — the one `result` declares —
-    // not on the `left` that absence reads back as. Routing to `left` laid the
-    // perpendicular landing leg across a border the wire never touched.
-    const end = node("end", "end", ["result"], []);
-    end.inputs[0].side = "top";
+  it("routes a legacy End edge to the `target_side` its `result` side became (#844, #840)", () => {
+    // An End edge saved before #840 carries no anchor. The daemon's parse turned
+    // `result`'s retired side into the edge's `target_side`: it reopens on the
+    // side it always landed on.
     const p = pipeline(
-      [node("src", "agent", [], ["plan"]), end],
-      [{ source: { node: "src", port: "plan" }, target: { node: "end", port: "result" } }],
+      [node("src", "agent", [], ["plan"]), node("end", "end", ["result"], [])],
+      [
+        {
+          source: { node: "src", port: "plan" },
+          target: { node: "end", port: "result" },
+          target_side: "top",
+        },
+      ],
     );
     expect(deriveEditEdges(p)[0].data?.targetSide).toBe("top");
   });
@@ -218,8 +228,8 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
       name: id,
       type,
       // The vestigial declared `in` (side left) that real pipelines still carry.
-      inputs: [{ name: "in", repeated: false, side: "left" as const }],
-      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      inputs: [{ name: "in" }],
+      outputs: outputs.map((name) => ({ name })),
       interactive: false,
     };
   }
@@ -234,7 +244,7 @@ describe("deriveEditEdges — work node with a vestigial declared `in` still anc
           name: "src",
           type: "agent",
           inputs: [],
-          outputs: [{ name: "plan", repeated: false, side: "right" as const }],
+          outputs: [{ name: "plan" }],
           interactive: false,
         },
         workNode("dst", "agent", ["code"]),
@@ -273,7 +283,7 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
       name: id,
       type,
       inputs: [],
-      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      outputs: outputs.map((name) => ({ name })),
       interactive: false,
       view: { x: 200, y: 200 },
     };
@@ -449,7 +459,7 @@ describe("deriveEditEdges — multi-output edges (#843)", () => {
       name: id,
       type: "agent",
       inputs: [],
-      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      outputs: outputs.map((name) => ({ name })),
       interactive: false,
     };
   }
@@ -511,7 +521,7 @@ describe("deriveEditEdges — labels and draw order (#845)", () => {
       name: id,
       type: "agent",
       inputs: [],
-      outputs: outputs.map((name) => ({ name, repeated: false, side: "right" as const })),
+      outputs: outputs.map((name) => ({ name })),
       interactive: false,
     };
   }

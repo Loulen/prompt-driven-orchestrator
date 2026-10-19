@@ -6,26 +6,29 @@ nodes:
     name: Start
     type: start
     outputs:
-      - { name: user_prompt, side: bottom }
+      - { name: user_prompt }
     view: { x: 120, y: -80 }
   - id: reap
     name: Reclaim disk
     type: script
     isolated_worktree: false
     outputs:
-      - { name: out, side: bottom }
+      - { name: out }
     view: { x: 120, y: 40 }
   - id: end
     name: End
     type: end
     inputs:
-      - { name: result, side: top }
+      - { name: result }
     view: { x: 120, y: 160 }
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: reap, port: go }
+    source_anchor: { side: bottom }
   - source: { node: reap, port: out }
     target: { node: end, port: result }
+    source_anchor: { side: bottom }
+    target_side: top
 notes:
   - id: about
     content: >-

@@ -6,7 +6,6 @@ nodes:
   type: start
   outputs:
   - name: user_prompt
-    side: right
 - id: XBG5Cxkn
   name: implementer
   type: agent
@@ -16,7 +15,6 @@ nodes:
     y: 249
   outputs:
   - name: code
-    side: right
 - id: Qws9KzRZ
   name: reviewer
   type: agent
@@ -26,7 +24,6 @@ nodes:
     y: 100
   outputs:
   - name: review
-    side: right
     frontmatter:
       verdict:
         type: enum
@@ -40,7 +37,6 @@ nodes:
   type: end
   inputs:
   - name: result
-    side: left
 edges:
 - source:
     node: XBG5Cxkn

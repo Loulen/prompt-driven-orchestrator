@@ -258,8 +258,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
-                    side: None,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -273,8 +271,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
-                    side: None,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -306,8 +302,6 @@ mod tests {
             node_type: NodeType::Agent,
             inputs: vec![Port {
                 name: port_name.into(),
-                repeated: true,
-                side: None,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,
@@ -318,8 +312,6 @@ mod tests {
             }],
             outputs: vec![Port {
                 name: "out".into(),
-                repeated: false,
-                side: None,
                 port_type: PortType::Markdown,
                 frontmatter: None,
                 when: None,

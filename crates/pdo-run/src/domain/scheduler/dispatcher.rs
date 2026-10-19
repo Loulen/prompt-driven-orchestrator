@@ -64,8 +64,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
-                    side: None,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -79,8 +77,6 @@ mod tests {
                 .iter()
                 .map(|n| Port {
                     name: (*n).into(),
-                    repeated: false,
-                    side: None,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,

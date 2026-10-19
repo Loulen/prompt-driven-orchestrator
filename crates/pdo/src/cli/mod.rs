@@ -72,10 +72,12 @@ pub enum Commands {
         #[arg(long)]
         reason: String,
     },
-    /// Migrate legacy pipeline YAMLs on disk (ADR-0011): dissolve
-    /// `type: for-each` (and other retired control nodes) into `loops:`
-    /// regions, rewiring edges. Never auto-run at load — a migration is always
-    /// a deliberate act. A real run writes a `.bak` beside each migrated file.
+    /// Migrate legacy pipeline YAMLs and node-library entries on disk
+    /// (ADR-0011): dissolve `type: for-each` (and other retired control nodes)
+    /// into `loops:` regions, rewiring edges; move a port's `side` onto its edges
+    /// and drop its `repeated`. Never auto-run at load — a migration is always a
+    /// deliberate act. Reports what changed in each file. A real run writes a
+    /// `.bak` beside each migrated file.
     Migrate {
         /// Migrate only this directory of pipeline YAMLs. Default: the repo's
         /// `.pdo/pipelines`, `~/.pdo/pipelines`, and the library store.

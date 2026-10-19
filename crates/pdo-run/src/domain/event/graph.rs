@@ -20,13 +20,12 @@ pub struct EdgeInfo {
     pub when_clause: Option<serde_json::Value>,
 }
 
+/// A port as the Run's snapshot summarises it. A port has no side: an event log
+/// written before carries a `side` key, which reads back ignored.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PortBrief {
     pub name: String,
-    /// The port's side, or its default side when the pipeline sets none.
-    #[ts(as = "pdo_pipeline::domain::pipeline::PortSide")]
-    pub side: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub description: Option<String>,
@@ -75,13 +74,9 @@ pub struct NodeDefInfo {
     pub outputs: Vec<PortBrief>,
 }
 
-fn port_brief(p: &pipeline::Port, default_side: &str) -> PortBrief {
+fn port_brief(p: &pipeline::Port) -> PortBrief {
     PortBrief {
         name: p.name.clone(),
-        side: p
-            .side
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| default_side.into()),
         description: p.description.clone(),
         intermediate: p.intermediate,
     }
@@ -105,8 +100,8 @@ pub fn node_def_from_pipeline(n: &pipeline::NodeDef) -> NodeDefInfo {
         on_demand: n.on_demand,
         view_x: n.view.as_ref().map(|v| v.x),
         view_y: n.view.as_ref().map(|v| v.y),
-        inputs: n.inputs.iter().map(|p| port_brief(p, "left")).collect(),
-        outputs: n.outputs.iter().map(|p| port_brief(p, "right")).collect(),
+        inputs: n.inputs.iter().map(port_brief).collect(),
+        outputs: n.outputs.iter().map(port_brief).collect(),
     }
 }
 

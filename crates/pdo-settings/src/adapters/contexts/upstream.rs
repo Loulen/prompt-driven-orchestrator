@@ -121,23 +121,29 @@ impl pdo_platform::application::ports::UpdateCheckSetting for UpdateCheckOfPlatf
     }
 }
 
-/// The telemetry's OTLP export setting, `stored → env → default`.
-pub struct OtlpSettingOfTelemetry(pub Arc<dyn InstanceConfigStore>);
+/// The telemetry setting, `stored → env → default`.
+pub struct SettingOfTelemetry(pub Arc<dyn InstanceConfigStore>);
 
-impl pdo_telemetry::application::ports::OtlpSettingSource for OtlpSettingOfTelemetry {
-    fn otlp(
+impl pdo_telemetry::application::ports::TelemetrySettingSource for SettingOfTelemetry {
+    fn setting(
         &self,
-    ) -> pdo_telemetry::application::ports::BoxFuture<'_, pdo_telemetry::domain::setting::OtlpSetting>
-    {
+    ) -> pdo_telemetry::application::ports::BoxFuture<
+        '_,
+        pdo_telemetry::domain::setting::TelemetrySetting,
+    > {
         Box::pin(async move {
             // An unreadable store exports nothing rather than guess.
             let Ok(stored) = self.0.get().await else {
                 return Default::default();
             };
-            pdo_telemetry::adapters::env::otlp_setting(
-                stored.telemetry_otlp,
-                stored.telemetry_otlp_endpoint.as_deref(),
-                &stored.telemetry_otlp_headers,
+            pdo_telemetry::adapters::env::telemetry_setting(
+                pdo_telemetry::adapters::env::StoredTelemetry {
+                    otlp: stored.telemetry_otlp,
+                    otlp_endpoint: stored.telemetry_otlp_endpoint.as_deref(),
+                    otlp_headers: Some(&stored.telemetry_otlp_headers),
+                    prometheus: stored.telemetry_prometheus,
+                    include_actor: stored.telemetry_include_actor,
+                },
             )
         })
     }

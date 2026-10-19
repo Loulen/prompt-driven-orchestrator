@@ -255,7 +255,7 @@ async fn the_enter_that_follows_the_text_lifts_the_declared_wait() {
             RUN.to_string(),
             NODE.to_string(),
             1,
-            serde_json::json!({ "source": "pty_enter" })
+            serde_json::json!({ "source": "pty_enter", "actor": { "kind": "local_operator" } })
         )]
     );
 }

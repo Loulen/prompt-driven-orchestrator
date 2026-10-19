@@ -29,7 +29,7 @@ pub use referents::ContextReferents;
 pub use sandbox_referents::SandboxTierReferents;
 pub use skill_referents::SkillTierReferents;
 pub use upstream::{
-    OtlpSettingOfTelemetry, RunInstanceSettings, SettingsOfReview, SettingsOfTriggers,
+    RunInstanceSettings, SettingOfTelemetry, SettingsOfReview, SettingsOfTriggers,
     UpdateCheckOfPlatform,
 };
 

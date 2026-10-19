@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,29 +8,39 @@ use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
 use opentelemetry_sdk::trace::InMemorySpanExporter;
 use opentelemetry_sdk::Resource;
 use pdo_run::domain::event::{Event, EventKind};
+use pdo_telemetry::adapters::prometheus::PrometheusEndpoint;
 use pdo_telemetry::application::ports::{
-    BoxFuture, Builders, Exporters, OtlpSettingSource, RunCosts, RunFactsSource,
+    BoxFuture, Builders, Exporters, RunCosts, RunFactsSource, TelemetrySettingSource,
 };
 use pdo_telemetry::application::status::ExportStatus;
 use pdo_telemetry::domain::attributes::RunFacts;
 use pdo_telemetry::domain::cost::{CostSlice, Tokens};
-use pdo_telemetry::domain::setting::{ExportTarget, OtlpSetting};
+use pdo_telemetry::domain::setting::{ExportTarget, TelemetrySetting};
 use pdo_telemetry::{Identity, Telemetry};
 
 /// The setting as a test sets it.
 #[derive(Default)]
-pub struct Setting(pub Mutex<OtlpSetting>);
+pub struct Setting(pub Mutex<TelemetrySetting>);
 
 impl Setting {
+    /// The OTLP export's switch and collector.
     pub fn set(&self, enabled: bool, endpoint: Option<&str>) {
         let mut setting = self.0.lock().unwrap();
-        setting.enabled = enabled;
-        setting.endpoint = endpoint.map(Into::into);
+        setting.otlp.enabled = enabled;
+        setting.otlp.endpoint = endpoint.map(Into::into);
+    }
+
+    pub fn set_prometheus(&self, on: bool) {
+        self.0.lock().unwrap().prometheus = on;
+    }
+
+    pub fn set_include_actor(&self, on: bool) {
+        self.0.lock().unwrap().include_actor = on;
     }
 }
 
-impl OtlpSettingSource for Setting {
-    fn otlp(&self) -> BoxFuture<'_, OtlpSetting> {
+impl TelemetrySettingSource for Setting {
+    fn setting(&self) -> BoxFuture<'_, TelemetrySetting> {
         let setting = self.0.lock().unwrap().clone();
         Box::pin(async move { setting })
     }
@@ -44,6 +54,8 @@ pub struct InMemory {
     pub spans: InMemorySpanExporter,
     pub builds: AtomicUsize,
     pub targets: Mutex<Vec<ExportTarget>>,
+    /// Refuse to build, as an exporter that cannot be configured.
+    pub refuse: AtomicBool,
 }
 
 impl Exporters for InMemory {
@@ -54,6 +66,9 @@ impl Exporters for InMemory {
         _status: Arc<ExportStatus>,
         builders: Builders,
     ) -> Result<Builders, String> {
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err("refused".into());
+        }
         self.builds.fetch_add(1, Ordering::SeqCst);
         self.targets.lock().unwrap().push(target.clone());
         Ok(Builders {
@@ -140,6 +155,7 @@ impl RunFactsSource for Facts {
                 commit: Some("abc123".into()),
                 pipeline: Some("implement".into()),
                 harness: Some("run-harness".into()),
+                actor: Some("test:alice".into()),
             }
         })
     }
@@ -175,15 +191,18 @@ pub struct World {
 pub fn world() -> World {
     let setting = Arc::new(Setting::default());
     let exporters = Arc::new(InMemory::default());
-    let telemetry = Arc::new(Telemetry::new(
-        setting.clone(),
-        exporters.clone(),
-        Identity {
-            instance: "host:5272".into(),
-            version: "0.0.0".into(),
-        },
-        Duration::from_secs(3600),
-    ));
+    let telemetry = Arc::new(
+        Telemetry::new(
+            setting.clone(),
+            exporters.clone(),
+            Identity {
+                instance: "host:5272".into(),
+                version: "0.0.0".into(),
+            },
+            Duration::from_secs(3600),
+        )
+        .with_metrics_endpoint(Arc::new(PrometheusEndpoint)),
+    );
     World {
         setting,
         exporters,

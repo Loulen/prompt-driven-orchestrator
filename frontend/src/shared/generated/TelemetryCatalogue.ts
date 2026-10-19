@@ -16,4 +16,9 @@ run_attributes: Array<string>,
 /**
  * On the traces only.
  */
-trace_only: Array<string>, metrics: Array<string>, traces: Array<string>, };
+trace_only: Array<string>, 
+/**
+ * On the Run and node metrics and on the traces, only with « include the
+ * Actor ».
+ */
+with_actor: Array<string>, metrics: Array<string>, traces: Array<string>, };

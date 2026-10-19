@@ -233,7 +233,7 @@ async fn only_an_enter_after_typed_bytes_lifts_the_wait() {
             RUN.to_string(),
             "griller".to_string(),
             1,
-            serde_json::json!({ "source": "pty_enter" })
+            serde_json::json!({ "source": "pty_enter", "actor": { "kind": "local_operator" } })
         )]
     );
     let asked = world.host.asked();

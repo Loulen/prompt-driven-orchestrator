@@ -1747,6 +1747,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -1775,6 +1776,18 @@ dependencies = [
  "opentelemetry_sdk",
  "prost",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "opentelemetry-prometheus"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9b52a5722eb64d198d6b6f1189e6b75a3c5ddfd224f48ede00c4330e0f11c66"
+dependencies = [
+ "once_cell",
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "prometheus",
 ]
 
 [[package]]
@@ -2052,7 +2065,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-daemon"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2110,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-harness"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "aho-corasick",
  "filetime",
@@ -2127,7 +2140,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-kernel"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "chrono",
  "form_urlencoded",
@@ -2142,7 +2155,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-pipeline"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2174,7 +2187,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-platform"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2198,7 +2211,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-review"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2227,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-run"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2262,7 +2275,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-sandbox"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2284,7 +2297,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-session"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2305,7 +2318,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-settings"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2336,7 +2349,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-skill"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2358,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-stats"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2386,7 +2399,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-telemetry"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2395,10 +2408,12 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-otlp",
+ "opentelemetry-prometheus",
  "opentelemetry_sdk",
  "pdo-kernel",
  "pdo-run",
  "pretty_assertions",
+ "prometheus",
  "reqwest",
  "serde",
  "serde_json",
@@ -2410,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-trigger"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "axum",
  "chrono",
@@ -2440,7 +2455,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-workspace"
-version = "2.36.0"
+version = "2.38.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2674,6 +2689,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "prometheus"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ca5326d8d0b950a9acd87e6a3f94745394f62e4dae1b1ee22b2bc0c394af43a"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "memchr",
+ "parking_lot",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

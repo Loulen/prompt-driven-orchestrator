@@ -71,7 +71,11 @@ export function useRefreshModels() {
     if (inFlight.current.has(harness)) return;
     inFlight.current.add(harness);
     setProbing(new Set(inFlight.current));
-    setFailed(({ [harness]: _dropped, ...rest }) => rest);
+    setFailed((current) => {
+      const rest = { ...current };
+      delete rest[harness];
+      return rest;
+    });
     try {
       await refreshHarnessModels(harness);
       announceHarnessCatalogueChanged();

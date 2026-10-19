@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { useLaunchTargets } from "./useLaunchTargets";
+import { announceLaunchOfferChanged, useLaunchTargets } from "./useLaunchTargets";
 import * as pipelinesApi from "../../pipeline/api/pipelines";
 import * as repos from "../../workspace/api/repos";
 import type { BranchList } from "../../shared/generated/BranchList";
@@ -132,6 +132,19 @@ describe("useLaunchTargets — the pipelines", () => {
     const { result } = setup();
     await act(async () => {});
     expect(result.current.pipelines).toEqual([]);
+  });
+
+  it("re-reads the list when a Projet or a validation changes while open, not while closed", async () => {
+    const { rerender } = setup();
+    await waitFor(() => expect(pipelinesApi.fetchPipelines).toHaveBeenCalledTimes(1));
+
+    vi.mocked(pipelinesApi.fetchPipelines).mockResolvedValue([pipeline()]);
+    act(() => announceLaunchOfferChanged());
+    await waitFor(() => expect(pipelinesApi.fetchPipelines).toHaveBeenCalledTimes(2));
+
+    rerender({ open: false });
+    act(() => announceLaunchOfferChanged());
+    expect(pipelinesApi.fetchPipelines).toHaveBeenCalledTimes(2);
   });
 
   it("re-reads the list on demand", async () => {

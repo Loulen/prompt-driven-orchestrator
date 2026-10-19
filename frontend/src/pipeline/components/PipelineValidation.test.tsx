@@ -122,7 +122,7 @@ describe("ValidatePipelineModal", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("offers « All projects (current and future) », which covers every box", async () => {
+  it("offers « All projects (current and future) »", async () => {
     vi.mocked(api.setPipelineValidation).mockResolvedValue({
       ok: true,
       id: "my-pipe",
@@ -133,14 +133,61 @@ describe("ValidatePipelineModal", () => {
     expect(screen.getByTestId("validate-all-row")).toHaveTextContent(
       "All projects (current and future)",
     );
+    expect(screen.getByTestId("validate-projects-heading")).toHaveTextContent(/only offered to/i);
     fireEvent.click(screen.getByTestId("validate-all"));
-    expect(screen.getByTestId("validate-project-prj-alpha")).toBeChecked();
-    expect(screen.getByTestId("validate-project-prj-alpha")).toBeDisabled();
+    expect(screen.getByTestId("validate-project-prj-alpha")).not.toBeChecked();
+    expect(screen.getByTestId("validate-project-prj-alpha")).toBeEnabled();
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent(
+      "Offered to every project, including the ones created later.",
+    );
     fireEvent.click(screen.getByTestId("validate-save"));
 
     await waitFor(() =>
       expect(api.setPipelineValidation).toHaveBeenCalledWith("my-pipe", { kind: "all" }),
     );
+  });
+
+  it("lists it first for the Projets ticked under « All projects »", async () => {
+    vi.mocked(api.setPipelineValidation).mockResolvedValue({
+      ok: true,
+      id: "my-pipe",
+      validation: { kind: "all", project_ids: ["prj-bravo"] },
+    });
+    renderModal({ kind: "all" });
+
+    expect(screen.getByTestId("validate-projects-heading")).toHaveTextContent(/listed first for/i);
+    expect(screen.getByTestId("validate-projects-heading")).toHaveTextContent(
+      /already offered to every project/i,
+    );
+    fireEvent.click(screen.getByTestId("validate-project-prj-bravo"));
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent(
+      "Offered to every project, listed first for Bravo.",
+    );
+    fireEvent.click(screen.getByTestId("validate-save"));
+
+    await waitFor(() =>
+      expect(api.setPipelineValidation).toHaveBeenCalledWith("my-pipe", {
+        kind: "all",
+        project_ids: ["prj-bravo"],
+      }),
+    );
+  });
+
+  it("keeps the ticked boxes when « All projects » is toggled", () => {
+    renderModal({ kind: "projects", project_ids: ["prj-alpha"] });
+
+    fireEvent.click(screen.getByTestId("validate-all"));
+    expect(screen.getByTestId("validate-project-prj-alpha")).toBeChecked();
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent("listed first for Alpha");
+    fireEvent.click(screen.getByTestId("validate-all"));
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent("Offered to 1 project.");
+  });
+
+  it("starts from the Projets it is listed first for", () => {
+    renderModal({ kind: "all", project_ids: ["prj-alpha"] });
+    expect(screen.getByTestId("validate-all")).toBeChecked();
+    expect(screen.getByTestId("validate-project-prj-alpha")).toBeChecked();
+    expect(screen.getByTestId("validate-project-prj-bravo")).not.toBeChecked();
   });
 
   it("turns a validated pipeline back into a test pipeline when everything is unticked", async () => {
@@ -158,6 +205,26 @@ describe("ValidatePipelineModal", () => {
 
     await waitFor(() =>
       expect(api.setPipelineValidation).toHaveBeenCalledWith("my-pipe", { kind: "none" }),
+    );
+  });
+
+  it("keeps the Projets the actor cannot see under « All projects » too", async () => {
+    vi.mocked(api.setPipelineValidation).mockResolvedValue({
+      ok: true,
+      id: "my-pipe",
+      validation: { kind: "all", project_ids: ["prj-hidden"] },
+    });
+    renderModal({ kind: "all", project_ids: ["prj-alpha", "prj-hidden"] });
+
+    fireEvent.click(screen.getByTestId("validate-project-prj-alpha"));
+    expect(screen.getByTestId("validate-verdict")).toHaveTextContent("listed first for 1 hidden.");
+    fireEvent.click(screen.getByTestId("validate-save"));
+
+    await waitFor(() =>
+      expect(api.setPipelineValidation).toHaveBeenCalledWith("my-pipe", {
+        kind: "all",
+        project_ids: ["prj-hidden"],
+      }),
     );
   });
 

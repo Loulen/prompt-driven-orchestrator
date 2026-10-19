@@ -25,9 +25,11 @@ export function SelectedMarker() {
         aria-hidden
         className="absolute inset-y-1 left-0 w-[3px] rounded-full bg-acc"
       />
+      {/* `size-[13px]`, not just `size={13}`: the menu row sizes every svg
+          without a `size-*` class to 16 px, which pushes the check over the name. */}
       <Check
         size={13}
-        className="absolute left-1.5 top-1/2 -translate-y-1/2 text-acc"
+        className="absolute left-1.5 top-1/2 size-[13px] -translate-y-1/2 text-acc"
       />
     </>
   );

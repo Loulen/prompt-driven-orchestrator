@@ -59,6 +59,20 @@ describe("useDaemonEvents", () => {
     expect(targets.refreshTriggers).not.toHaveBeenCalled();
   });
 
+  it("tells the open launch forms on a project_changed and a pipeline_validation_changed", async () => {
+    const { LAUNCH_OFFER_CHANGED } = await import("../run/store/useLaunchTargets");
+    const heard = vi.fn();
+    window.addEventListener(LAUNCH_OFFER_CHANGED, heard);
+    try {
+      const { emit } = mount();
+      emit({ type: "project_changed", project_id: "p1" });
+      emit({ type: "pipeline_validation_changed", pipeline_id: "shared" });
+      expect(heard).toHaveBeenCalledTimes(2);
+    } finally {
+      window.removeEventListener(LAUNCH_OFFER_CHANGED, heard);
+    }
+  });
+
   it("tells the model pickers on a harness_catalogue_changed", async () => {
     const { HARNESS_CATALOGUE_CHANGED } = await import("../harness/store/useHarnessCatalog");
     const heard = vi.fn();

@@ -1,5 +1,5 @@
 import { useMemo, type SyntheticEvent } from "react";
-import { Copy, FolderInput, FolderPlus, Lock, MoreVertical, Pencil, Trash2 } from "lucide-react";
+import { Copy, Download, FolderInput, FolderPlus, Lock, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
 import type { SkillEntity } from "../../shared/extensions/contract";
 import {
@@ -37,6 +37,19 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
     };
     return { entity };
   }, [ref.kind, ref.id, name]);
+  const exportItem = (
+    <TreeMenuItem
+      icon={<Download size={12} />}
+      label="Export"
+      hint=".zip"
+      testid={`tree-menu-export-${ref.kind}-${ref.id}`}
+      onClick={() =>
+        void panel.exportBundle(
+          ref.kind === "folder" ? { skill_ids: [], folder_ids: [ref.id] } : { skill_ids: [ref.id], folder_ids: [] },
+        )
+      }
+    />
+  );
   const extensions = <ExtensionMenuGroups location="skill/menu" extra={extra} itemClassName={EXTENSION_ITEM} />;
   return (
     <>
@@ -78,6 +91,7 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
             <>
               <TreeMenuItem icon={<FolderPlus size={12} />} label="New subfolder" onClick={() => void panel.newFolder(ref.id)} />
               <TreeMenuItem icon={<Pencil size={12} />} label="Rename" hint="F2" onClick={() => panel.startRename(ref)} />
+              {exportItem}
               {extensions}
               <DropdownMenuSeparator />
               <TreeMenuItem icon={<Trash2 size={12} />} label="Delete folder" hint="⌫" danger onClick={() => void panel.askDelete(ref)} />
@@ -85,6 +99,7 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
           ) : lockedSkill ? (
             <>
               <TreeMenuItem icon={<Copy size={12} />} label="Copy id" onClick={() => void panel.copyId(ref.id)} />
+              {exportItem}
               {extensions}
               <DropdownMenuSeparator />
               <div
@@ -109,6 +124,7 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
                 }}
               />
               <TreeMenuItem icon={<Copy size={12} />} label="Copy id" onClick={() => void panel.copyId(ref.id)} />
+              {exportItem}
               {extensions}
               <DropdownMenuSeparator />
               <TreeMenuItem icon={<Trash2 size={12} />} label="Delete…" hint="⌫" danger onClick={() => void panel.askDelete(ref)} />
@@ -126,17 +142,20 @@ function TreeMenuItem({
   label,
   hint,
   danger,
+  testid,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
   hint?: string;
   danger?: boolean;
+  testid?: string;
   onClick: () => void;
 }) {
   return (
     <DropdownMenuItem
       variant={danger ? "destructive" : "default"}
+      data-testid={testid}
       onClick={onClick}
       className="cursor-pointer gap-2 px-2 py-1.5 text-[11.5px] text-fg-2"
     >

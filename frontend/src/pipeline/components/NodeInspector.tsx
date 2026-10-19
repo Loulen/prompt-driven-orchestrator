@@ -11,6 +11,7 @@ import { useAgentProfiles } from "../../settings/store/useAgentProfiles";
 import { useSkillBank } from "../../skill/store/useSkillBank";
 import { useSkillTiers } from "../../skill/store/useSkillTiers";
 import type { InheritedTier } from "../../skill/model/skillSelection";
+import { usePromptAddedSkills } from "../../skill/store/usePromptAddedSkills";
 import { findHarnessOption, effortOffer, resolveEditorHarness } from "../../harness/model/catalog";
 import { carriesIsolation, nodeIsolation } from "../../lib/nodeIsolation";
 import DestroyLoopModal from "./DestroyLoopModal";
@@ -119,6 +120,12 @@ export default function NodeInspector({
     [inheritedTiers, runSkills],
   );
 
+  // The skills the prompt's `/` completion added to this node: the « added »
+  // chips of its Skills and the line under its prompt.
+  const promptAdds = usePromptAddedSkills(node?.id ?? "", node?.skills ?? [], (skills) => {
+    if (node) updateNode(node.id, { skills });
+  });
+
   if (!tab || !node) return null;
   const resolvedHarness = resolveEditorHarness(node);
   const harnessOption = findHarnessOption(harnessCatalog, resolvedHarness);
@@ -179,6 +186,10 @@ export default function NodeInspector({
   function handleField(field: keyof EditorNodeDef, value: unknown) {
     updateNode(node!.id, { [field]: value } as Partial<EditorNodeDef>);
   }
+
+  // A NodeRun that spawned froze its skills, an archived run takes no edit: the
+  // completion still inserts, it adds nothing.
+  const addPromptSkill = readOnly || runNode?.skills != null ? undefined : promptAdds.add;
 
   function handleAddOutput() {
     const ports = [...node!.outputs];
@@ -298,6 +309,7 @@ export default function NodeInspector({
             resolvedHarness={resolvedHarness}
             harnessOption={harnessOption}
             effort={effort}
+            addedSkills={promptAdds.added}
           />
         )}
 
@@ -308,6 +320,11 @@ export default function NodeInspector({
           isOrchestrator={isOrchestrator}
           promptContent={promptContent}
           updatePrompt={updatePrompt}
+          skillBank={skillBank}
+          ownSkills={node.skills ?? []}
+          inheritedSkillTiers={inheritedSkillTiers}
+          onAddSkill={addPromptSkill}
+          lastAddedSkill={promptAdds.added[promptAdds.added.length - 1]?.name ?? null}
         />
 
         {/* Inputs — emergent (#149): derived from incoming edges, read-only.

@@ -70,7 +70,7 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo run create <pipeline> [options]` | Create a run through the daemon, with optional input, repository, harness, sandbox, and provisioning settings. `--input-file <path>` reads the prompt from a file; `--image <path>` / `--file <path>` (repeatable) attach files the entry node sees under `## Input Images` / `## Input Files` (one budget per run, `max_attachments_mb` in Settings). `--ext <id>.<key>=<value>` (repeatable) sends `extensions.<id>.<key>` = `"<value>"`, data PDO never interprets: the extension `<id>` checks it before the Run is created (a refusal prints its reason, exit 1) and receives it before the first node; an id no installed extension has is refused. |
 | `pdo run wait [--all] [--timeout <seconds>]` | From a node session, block until a child run of this node becomes terminal (`--all`: every child). Exit 0 with one JSON line per settled child (`run_id`, `name`, `status`, `reason`, `children_active`), or `{"noop":true}` when no child is active; exit 2 when `--timeout` elapses (nothing on stdout); exit 1 when the daemon is unreachable or outside a node session. |
 | `pdo run list [--json]` | List the runs the daemon knows, one tab-separated line per run (`run_id`, status, pipeline, name); `--json` prints the daemon's `GET /runs` answer as is. Exit 1 with the daemon's reason when it refuses the call. |
-| `pdo page mount <name> <directory>` | Serve a directory under `/pages/<name>/`. |
+| `pdo page mount <name> <directory> [--guide <file>]` | Serve a directory under `/pages/<name>/` and print its full address. `--guide` attaches a reading guide (see [below](#reading-guide-of-a-mounted-page)): PDO then shows the page in a tab with the guide beside it, and the command prints that view's address first. |
 | `pdo page list` | List active page mounts. |
 | `pdo page unmount <name>` | Remove a page mount. |
 | `pdo review list [--state <state>] [--run <id>]` | List review comments for a run. |
@@ -85,3 +85,38 @@ tokens) reads it. A daemon whose extension requires one refuses a call without i
 `{"error": "unauthenticated", …}`, which the command prints before it exits non-zero.
 
 Exposing the daemon beyond `localhost` is covered in [reverse-proxy.md](reverse-proxy.md).
+
+## Reading guide of a mounted page
+
+A guide is a YAML (or JSON) list of entries; `text` is optional:
+
+```yaml
+- title: Start with option A
+  text: The chosen layout. B and C stay for comparison.
+  link: "#option-a"
+- title: Where it plugs in
+  link: "#/runs/20261019-125310-885cb5c/nodes/designer"
+- title: The code of the prototype
+  link: /runs/20261019-125310-885cb5c/review?file=frontend/proto/
+```
+
+A link leads into PDO or into the page:
+
+| Link | Opens |
+| --- | --- |
+| `#/runs/<run>` | The Run |
+| `#/runs/<run>/nodes/<node>` | The node, selected on the Run's canvas |
+| `#/runs/<run>/nodes/<node>/artifacts/<port>` | The node's I/O, where its artifact is |
+| `/runs/<run>/review?file=<path>` | The Run's Review, on that file (or the first file under that folder) |
+| `#/ext/<extension>/…` | An extension's page |
+| `#<anchor>` | That anchor of the page |
+| `<relative path>` | That file of the page, beneath the mounted directory |
+
+The daemon checks the guide before mounting: at most 50 entries, a title on each, every Run and
+node named exists, every path is a file of the page. A guide it refuses mounts nothing, and the
+command prints why, for example ``guide entry 2: Run `r1` not found``. The guide is stored with the mount and
+goes with it: `pdo page unmount`, or the archive of the Run whose agent mounted the page.
+
+The printed addresses start at the instance's **Public URL** (Settings › General, or
+`PDO_PUBLIC_URL`; the stored setting wins), else at `PDO_DAEMON_URL`. A node session receives the
+Public URL as `PDO_PUBLIC_URL`, and its preamble names it.

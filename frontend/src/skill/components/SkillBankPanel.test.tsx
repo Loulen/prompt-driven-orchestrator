@@ -211,6 +211,7 @@ describe("SkillBankPanel (#668)", () => {
     expect(within(menu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual([
       expect.stringContaining("Paste SKILL.md…"),
       expect.stringContaining("Import from a source…"),
+      expect.stringContaining("Upload a zip…"),
     ]);
     fireEvent.click(screen.getByTestId("skill-paste"));
     expect(screen.getByTestId("paste-skill-modal")).toBeInTheDocument();
@@ -553,6 +554,7 @@ describe("SkillBankPanel (#668)", () => {
       expect.stringContaining("Rename"),
       expect.stringContaining("Move to…"),
       expect.stringContaining("Copy id"),
+      expect.stringContaining("Export"),
       expect.stringContaining("Delete…"),
     ]);
     fireEvent.click(screen.getByTestId("kebab-folder-f-i"));
@@ -560,6 +562,7 @@ describe("SkillBankPanel (#668)", () => {
     expect(within(folderMenu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual([
       expect.stringContaining("New subfolder"),
       expect.stringContaining("Rename"),
+      expect.stringContaining("Export"),
       expect.stringContaining("Delete folder"),
     ]);
   });

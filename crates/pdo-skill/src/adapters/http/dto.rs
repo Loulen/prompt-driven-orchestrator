@@ -76,3 +76,21 @@ pub(super) struct UpdateSkillFolderFromSourceRequest {
     pub scan_id: String,
     pub items: Vec<UpdateItem>,
 }
+
+/// `POST /settings/skills/export`: the skills, and the folders whose skills
+/// (sub-folders included) the zip carries.
+#[derive(Deserialize)]
+pub(super) struct ExportSkillsRequest {
+    #[serde(default)]
+    pub skill_ids: Vec<String>,
+    #[serde(default)]
+    pub folder_ids: Vec<String>,
+}
+
+/// `POST /settings/skills/upload?name=`: the uploaded file's name, which names
+/// the folder the new skills go to.
+#[derive(Deserialize)]
+pub(super) struct UploadSkillsQuery {
+    #[serde(default)]
+    pub name: Option<String>,
+}

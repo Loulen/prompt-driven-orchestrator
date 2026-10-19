@@ -12,6 +12,7 @@ import { useReviewEntries } from "../store/useReviewEntries";
 import { useReviewGestures } from "../store/useReviewGestures";
 import { useReviewKeyboard } from "../store/useReviewKeyboard";
 import { useReviewLayout } from "../store/useReviewLayout";
+import { useReviewFileLanding } from "../store/useReviewFileLanding";
 import { useReviewLive } from "../store/useReviewLive";
 import { useReviewRun } from "../store/useReviewRun";
 import ReviewBanners from "./ReviewBanners";
@@ -124,6 +125,7 @@ export default function ReviewPage({ runId }: Props) {
     registerEl,
     onScroll,
     goFile,
+    landOnFile,
     jumpTo,
     rows,
     toggleDir,
@@ -131,6 +133,7 @@ export default function ReviewPage({ runId }: Props) {
     allDirsCollapsed,
     hasDirs,
   } = layout;
+  useReviewFileLanding(files, landOnFile);
   const { choosePair } = r;
   const { setNodeDelivered } = live;
   const setPair = useCallback(

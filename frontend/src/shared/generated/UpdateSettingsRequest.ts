@@ -131,4 +131,10 @@ telemetry_prometheus?: boolean | null,
 /**
  * Set « include the Actor »; `None` leaves it untouched.
  */
-telemetry_include_actor?: boolean | null, };
+telemetry_include_actor?: boolean | null, 
+/**
+ * Set the Public URL: `Some("")` clears it back to unset (same
+ * `""`-sentinel as `default_model`); anything else must be an
+ * `http(s)://` address, stored normalized. `None` leaves it untouched.
+ */
+public_url?: string | null, };

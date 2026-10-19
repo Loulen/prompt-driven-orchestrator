@@ -5,6 +5,7 @@
 //! bodies, same statuses. The actor of each request comes from the `identify`
 //! middleware, which the composition root puts in front of every route.
 
+mod bundle;
 mod dto;
 mod files;
 mod folders;
@@ -51,6 +52,16 @@ pub fn router(skills: Arc<Skills>) -> Router {
         )
         .route("/settings/skills/import", post(import::import))
         .route("/settings/skills/sources/recent", get(import::recent))
+        // A bundle of the bank: export skills, a selection or folders as a zip
+        // of `<name>.skills/<id>/…`, and upload such a zip back (the sidecar's
+        // layout and import policy, ADR-0062).
+        .route("/settings/skills/export", post(bundle::export))
+        .route(
+            "/settings/skills/upload",
+            post(bundle::upload).route_layer(axum::extract::DefaultBodyLimit::max(
+                SKILL_UPLOAD_BODY_LIMIT,
+            )),
+        )
         .route("/settings/skill-folders/{id}/rescan", post(import::rescan))
         .route("/settings/skill-folders/{id}/update", post(import::update))
         // Reference files (#671): upload (multipart from the browser, or
@@ -110,7 +121,9 @@ pub fn skill_error_response(error: SkillError) -> Response {
         | E::EmptyLabel
         | E::FolderNotFound
         | E::EmptyFolderName
-        | E::FolderCycle => StatusCode::BAD_REQUEST,
+        | E::FolderCycle
+        | E::NothingToExport
+        | E::InvalidArchive(_) => StatusCode::BAD_REQUEST,
         E::Denied(_) => unreachable!("handled above"),
     };
     (status, Json(skill_error_body(&error))).into_response()

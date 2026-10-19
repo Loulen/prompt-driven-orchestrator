@@ -10,6 +10,30 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.40.0 — Guide de lecture d'une page montée, Public URL (CORE-83)
+
+- `pdo page mount <name> <directory> --guide <file>` attache un guide de lecture (YAML ou JSON,
+  au plus 50 entrées). Le daemon le valide avant de monter : un guide refusé ne monte rien et la
+  commande dit pourquoi. Le guide est stocké avec le montage et part avec lui (`unmount`, archive
+  du Run qui a monté la page).
+- La page guidée s'ouvre dans un onglet du panneau central, le guide dans le panneau droit. Un
+  lien de guide mène à un Run, un nœud, un artefact, un fichier de la Review
+  (`/runs/<run>/review?file=`), une page d'extension ou une ancre de la page.
+- Nouveau réglage **Public URL** (Settings › General, ou `PDO_PUBLIC_URL` ; le réglage stocké
+  l'emporte) : une origine `http(s)://hôte[:port]`. `PUT /settings` gagne `public_url` (`""`
+  l'efface). Une session de nœud la reçoit dans `PDO_PUBLIC_URL`, `pdo page mount` imprime ses
+  adresses sous elle, et Settings › Telemetry nomme l'adresse de `/metrics` avec elle.
+- Un lien `?file=` de la Review amène au fichier même sous la ligne de flottaison.
+## 2.39.0 — Complétion des skills dans les prompts, export et upload de skills (CORE-80)
+
+- `/` en début de mot dans le prompt d'un nœud ou de New Run ouvre la liste des skills au
+  curseur ; choisir un skill que le nœud (ou le Run) ne reçoit pas l'ajoute à son tier.
+- `POST /settings/skills/export` sert un zip au format du sidecar, nommé d'après le dossier, le
+  skill ou `selection` pour une sélection mixte.
+- `POST /settings/skills/upload?name=` importe un zip selon la politique d'import du sidecar :
+  les nouveaux skills arrivent dans un dossier nommé d'après le zip, à plat (la hiérarchie de
+  l'archive n'est pas reprise). L'Opération `skill.import` est demandée avant de lire l'archive.
+
 ## 2.38.0 — Recherche dans les transcripts du Run (CORE-82)
 
 - `GET /runs/{id}/transcripts/search?q=&client=` cherche dans le transcript de chaque itération

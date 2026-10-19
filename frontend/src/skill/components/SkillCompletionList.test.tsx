@@ -109,4 +109,30 @@ describe("the skills completion of a prompt", () => {
     expect(list.style.bottom).toBe(`${window.innerHeight - bottom + 2}px`);
     expect(list.style.top).toBe("");
   });
+
+  it("scrolls the rows to keep the option chosen with the arrows in sight", async () => {
+    render(<Prompt onAdd={vi.fn()} />);
+    const prompt = screen.getByTestId("prompt");
+    await userEvent.type(prompt, "/");
+    const rows = screen.getByTestId("skill-completion-rows");
+    vi.spyOn(rows, "getBoundingClientRect").mockReturnValue(DOMRect.fromRect({ x: 0, y: 100, width: 330, height: 60 }));
+    vi.spyOn(screen.getByTestId("skill-completion-option-review-checklist"), "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 120, width: 330, height: 20 }),
+    );
+    vi.spyOn(screen.getByTestId("skill-completion-option-tdd"), "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 170, width: 330, height: 20 }),
+    );
+    vi.spyOn(screen.getByTestId("skill-completion-option-code-review"), "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 0, y: 80, width: 330, height: 20 }),
+    );
+    rows.scrollTop = 10;
+
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(screen.getByTestId("skill-completion-option-tdd")).toHaveAttribute("aria-selected", "true");
+    expect(rows.scrollTop).toBe(40);
+
+    await userEvent.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("skill-completion-option-code-review")).toHaveAttribute("aria-selected", "true");
+    expect(rows.scrollTop).toBe(20);
+  });
 });

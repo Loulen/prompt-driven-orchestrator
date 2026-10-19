@@ -18,7 +18,8 @@ export type SkillCompletionScope = "node" | "run";
  * receives) then « Skill bank » (the folder as a hint, « adds it to the node »
  * as the detail), and the keys at the foot. A portal above everything, which
  * follows the page while it scrolls; it opens above the caret when the room
- * under it is short, and never leaves the viewport. A row is picked with a
+ * under it is short, and never leaves the viewport; its rows scroll to keep
+ * the option chosen with the arrows in sight. A row is picked with a
  * click; the textarea keeps the focus.
  */
 export default function SkillCompletionList({
@@ -64,6 +65,17 @@ export default function SkillCompletionList({
       window.removeEventListener("resize", measure);
     };
   }, [query, shown, textarea]);
+
+  // The option chosen with the arrows stays in sight while the rows scroll.
+  useLayoutEffect(() => {
+    const box = rows.current;
+    const active = box?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!box || !active) return;
+    const view = box.getBoundingClientRect();
+    const option = active.getBoundingClientRect();
+    if (option.top < view.top) box.scrollTop -= view.top - option.top;
+    else if (option.bottom > view.bottom) box.scrollTop += option.bottom - view.bottom;
+  }, [selected, shown]);
 
   if (!query || options.length === 0) return null;
   const received = options.filter((option) => option.received);
@@ -119,7 +131,7 @@ export default function SkillCompletionList({
         fontSize: "11px",
       }}
     >
-      <div ref={rows} className="min-h-0 overflow-y-auto py-1">
+      <div ref={rows} data-testid="skill-completion-rows" className="min-h-0 overflow-y-auto py-1">
         {received.length > 0 && <GroupHead label={`On this ${scope}`} />}
         {received.map((option, i) => row(option, i))}
         {rest.length > 0 && <GroupHead label="Skill bank" />}

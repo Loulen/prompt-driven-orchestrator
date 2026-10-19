@@ -5,10 +5,12 @@ import "@git-diff-view/react/styles/diff-view.css";
 import { filePath } from "../../run/model/runRefs";
 import type { RefPair } from "../../run/model/runRefs";
 import { sendDisabledReason as sendReasonOf } from "../model/commentStatus";
+import { treeOrder } from "../model/fileTree";
 import { useReviewCommentState } from "../store/useReviewCommentState";
 import { useReviewDiff } from "../store/useReviewDiff";
 import { useReviewEntries } from "../store/useReviewEntries";
 import { useReviewGestures } from "../store/useReviewGestures";
+import { useReviewKeyboard } from "../store/useReviewKeyboard";
 import { useReviewLayout } from "../store/useReviewLayout";
 import { useReviewFileLanding } from "../store/useReviewFileLanding";
 import { useReviewLive } from "../store/useReviewLive";
@@ -101,9 +103,10 @@ export default function ReviewPage({ runId }: Props) {
   });
 
   const { shown } = d;
-  const files = useMemo(() => (shown.kind === "ready" ? shown.diff.files : []), [shown]);
+  // CORE-84: the cards follow the list's folder tree.
+  const files = useMemo(() => (shown.kind === "ready" ? treeOrder(shown.diff.files, filePath) : []), [shown]);
+  const layout = useReviewLayout(files);
   const {
-    view,
     narrow,
     effectiveView,
     changeView,
@@ -123,9 +126,13 @@ export default function ReviewPage({ runId }: Props) {
     onScroll,
     goFile,
     landOnFile,
-    goHunk,
     jumpTo,
-  } = useReviewLayout(files);
+    rows,
+    toggleDir,
+    toggleAllDirs,
+    allDirsCollapsed,
+    hasDirs,
+  } = layout;
   useReviewFileLanding(files, landOnFile);
   const { choosePair } = r;
   const { setNodeDelivered } = live;
@@ -169,55 +176,8 @@ export default function ReviewPage({ runId }: Props) {
     jumpTo,
   });
 
-  // --- Keyboard ---------------------------------------------------------------
   const { jumpComment } = g;
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) {
-        if (e.key === "Escape") t.blur();
-        return;
-      }
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      switch (e.key) {
-        case "c":
-          jumpComment(1);
-          break;
-        case "C":
-          jumpComment(-1);
-          break;
-        case "j":
-          goFile(Math.min(files.length - 1, currentIdx + 1));
-          break;
-        case "k":
-          goFile(Math.max(0, currentIdx - 1));
-          break;
-        case "n":
-          goHunk(1);
-          break;
-        case "p":
-          goHunk(-1);
-          break;
-        case "u":
-          changeView(view === "split" ? "unified" : "split");
-          break;
-        case "[":
-          toggleList();
-          break;
-        case "/":
-          e.preventDefault();
-          if (!listOpen) toggleList();
-          window.setTimeout(() => filterRef.current?.focus(), 0);
-          break;
-        default:
-          return;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // The view and list toggles are re-created every render; they read state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files.length, currentIdx, view, listOpen, goFile, goHunk, jumpComment]);
+  useReviewKeyboard(layout, jumpComment);
 
   const reload = () => {
     setTipMoved(false);
@@ -280,6 +240,10 @@ export default function ReviewPage({ runId }: Props) {
         {listOpen ? (
           <ReviewFileList
             files={files}
+            rows={rows}
+            onToggleDir={toggleDir}
+            onToggleAllDirs={hasDirs ? toggleAllDirs : undefined}
+            allDirsCollapsed={allDirsCollapsed}
             filter={filter}
             onFilterChange={setFilter}
             filterRef={filterRef}

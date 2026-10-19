@@ -99,6 +99,12 @@ and unit tests beside the code.
   watcher does not announce it. The Runs a pipeline has in flight (`ActiveRuns`) are the run
   context's `adapters/pipeline_runs.rs`, the Stats absorption of a rename (`RenameLedger`) the stats
   context's `adapters/rename_ledger.rs`.
+  The shared draft of a pipeline (ADR-0088): its pure rules (the delta, the changes, the presence)
+  are `domain/draft/`, the open drafts and their participants `application/drafts/`, the
+  replicated document over `yrs` `adapters/draft_doc.rs` (behind `DraftDocuments`), the store
+  `adapters/sqlite_drafts.rs`, the socket `adapters/http/draft.rs`, and the follower of the
+  written files `adapters/draft_follow.rs`. The frontend's side is `pipeline/store/draftSession.ts`
+  over `yjs`.
 - `run` (`crates/pdo-run`, `frontend/src/run/`): a Run's events (`domain/event/`), its state
   (`domain/state/`) and the pure projection that folds one into the other (`domain/projection/`),
   with the rules a Run follows — the graph it walks, what it allows, its verdicts — and the

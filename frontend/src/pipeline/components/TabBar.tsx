@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BadgeCheck, Save, X } from "lucide-react";
 import { useEditStore } from "../store/editStore";
-import { hasUnsavedWork, isRunTabLocked } from "../store/editState";
+import { hasUnsavedWork, isTabLocked } from "../store/editState";
 import type { OpenPipeline } from "../store/editState";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
+import DraftPresence from "./DraftPresence";
 import RunSaveGroup from "./RunSaveGroup";
 import ValidationIndicator from "./ValidationIndicator";
 import ValidatePipelineModal from "./ValidatePipelineModal";
@@ -77,7 +78,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
   // ADR-0085: a Run tab in « pilotage » (or archived) has nothing to save, so no
   // Save is shown; in « Edit for this run » Save writes the Run's snapshot only.
   const activeTab = openTabs.find((t) => t.id === activeTabId);
-  const activeLocked = isRunTabLocked(activeTab);
+  const activeLocked = isTabLocked(activeTab);
   // Validate and the indicator belong to a Pipeline's own tab — never a Run's
   // (its snapshot is not what the launch forms offer), and only once the
   // Pipeline is in the list (saved at least once under this id).
@@ -160,6 +161,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
           <PageTabActions name={activePage} />
         ) : (
           <>
+            <DraftPresence />
             {savedAgo && (
               <span
                 className="whitespace-nowrap font-mono text-fg-4"

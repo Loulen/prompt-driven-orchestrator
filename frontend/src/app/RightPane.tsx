@@ -3,7 +3,7 @@ import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { NodeState } from "../shared/generated/NodeState";
-import { isRunTabLocked, type OpenPipeline } from "../pipeline/store/editState";
+import { isTabLocked, type OpenPipeline } from "../pipeline/store/editState";
 import type { TabId } from "../lib/infoPanelReconcile";
 import type { SettingsPosition } from "../settings/components/SettingsSurface";
 import type { useRightPaneRouter } from "../hooks/useRightPaneRouter";
@@ -108,8 +108,9 @@ export default function RightPane({
 
   const isEditingRun = editTab?.scope === "run";
   // ADR-0085: a Run tab in « pilotage » (or archived): the inspector reads,
-  // never writes — Config instead of Edit.
-  const runLocked = isRunTabLocked(editTab);
+  // never writes — Config instead of Edit. ADR-0088: so does a pipeline tab
+  // that only reads its shared draft.
+  const runLocked = isTabLocked(editTab);
   // #684: which pane a selected node gets. Markers (start/end) never reach the
   // generic `NodeInspector` — outside a run they get a read-only pane.
   const nodeInspectorKind = resolveNodeInspector({

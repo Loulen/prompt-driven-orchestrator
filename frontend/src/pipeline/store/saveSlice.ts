@@ -1,5 +1,5 @@
 /**
- * Undo and redo, and the pipeline on disk: save, rename, remove, reload, conflicts, the library binding.
+ * Undo and redo, and the pipeline on disk: save, rename, remove, reload, the library binding.
  */
 
 import type { StoreApi } from "zustand";
@@ -12,6 +12,7 @@ import { serializePipeline } from "../../lib/serializePipeline";
 import type { EditState } from "./editState";
 import { isRunTabLocked } from "./editState";
 import { clearedHistory, droppedHistory, rekeyTab } from "./tabHistory";
+import { draftSessionOf } from "./draftSessions";
 
 type Set = StoreApi<EditState>["setState"];
 type Get = StoreApi<EditState>["getState"];
@@ -20,6 +21,12 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
   void get;
   return {
   undo: () => set((s) => {
+    // ADR-0088: a shared draft undoes my own changes only.
+    const draft = draftSessionOf(s.activeTabId);
+    if (draft) {
+      draft.undoMine();
+      return {};
+    }
     const tabId = s.activeTabId;
     if (!tabId) return {};
     const h = s.history[tabId];
@@ -50,6 +57,11 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
   }),
 
   redo: () => set((s) => {
+    const draft = draftSessionOf(s.activeTabId);
+    if (draft) {
+      draft.redoMine();
+      return {};
+    }
     const tabId = s.activeTabId;
     if (!tabId) return {};
     const h = s.history[tabId];
@@ -136,7 +148,9 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
       } else {
         // Save back into the same store the tab was opened from, so a
         // `library`-scoped edit never overwrites a same-named repo file (#216).
-        const result = await savePipeline(id, yaml, tab.prompts, tab.scope);
+        // ADR-0088: a tab with a shared draft saves the draft as it holds it;
+        // the daemon then counts no change left.
+        const result = await savePipeline(id, yaml, tab.prompts, tab.scope, draftSessionOf(id)?.content());
         // #774 — the save may have RENAMED the pipeline (a `name:` edit moved
         // the file): rekey the tab to the daemon's final id in the same
         // gesture, so the store never keeps a tab pointing at a dead stem.
@@ -216,24 +230,11 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
   reloadPipeline: async (id: string) => {
     try {
       const tab = get().openTabs.find((t) => t.id === id);
+      // ADR-0088: the daemon lands a written file in the shared draft, field
+      // by field; the tab gets it from there, with no conflict to resolve.
+      // Without a shared draft, unsaved work stays as it is.
+      if (tab?.draft || tab?.dirty) return;
       const detail = await fetchPipeline(id, tab?.scope);
-      if (tab?.dirty) {
-        set((s) => ({
-          openTabs: s.openTabs.map((t) =>
-            t.id === id
-              ? {
-                  ...t,
-                  conflict: {
-                    pipeline: detail.pipeline,
-                    prompts: detail.prompts,
-                    diagnostics: detail.diagnostics ?? [],
-                  },
-                }
-              : t,
-          ),
-        }));
-        return;
-      }
       set((s) => ({
         openTabs: s.openTabs.map((t) =>
           t.id === id
@@ -261,35 +262,6 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
     } catch {
       // ignore
     }
-  },
-
-  resolveConflict: (id: string, resolution: "keep" | "take") => {
-    set((s) => {
-      const tab = s.openTabs.find((t) => t.id === id);
-      const hadConflict = tab?.conflict != null;
-      return {
-        openTabs: s.openTabs.map((t) => {
-          if (t.id !== id || !t.conflict) return t;
-          if (resolution === "keep") {
-            return { ...t, conflict: undefined };
-          }
-          return {
-            ...t,
-            pipeline: t.conflict.pipeline,
-            prompts: t.conflict.prompts,
-            diagnostics: t.conflict.diagnostics,
-            dirty: false,
-            conflict: undefined,
-          };
-        }),
-        // "Take theirs" replaces the pipeline → CLEAR. "Keep mine" leaves the
-        // local edits (and thus the undo stack) intact → KEEP (no change).
-        history:
-          resolution === "take" && hadConflict
-            ? clearedHistory(s.history, id)
-            : s.history,
-      };
-    });
   },
 
   setLibraryBinding: (tabId, libraryId, libraryScope) => {

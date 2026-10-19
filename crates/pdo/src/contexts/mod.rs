@@ -180,7 +180,10 @@ pub(crate) fn wire_over(
         .merge(sandbox)
         .merge(pdo_platform::router(platform.clone()))
         .merge(pdo_session::router(session.clone()))
-        .merge(pdo_pipeline::adapters::http::router(pipelines))
+        .merge(pdo_pipeline::adapters::http::router(
+            pipelines,
+            ws_origin(r.port, r.allowed_ws_origins.clone()),
+        ))
         .merge(pdo_review::router(review))
         .merge(pdo_stats::router(stats.clone()))
         .merge(pdo_trigger::router(triggers.clone()))
@@ -205,6 +208,12 @@ pub(crate) fn wire_over(
         telemetry,
         telemetry_runs,
     }
+}
+
+/// The Origin guard of the daemon's WebSocket upgrades, for a context that
+/// does not read the session context.
+fn ws_origin(port: u16, extra: Vec<String>) -> pdo_pipeline::adapters::http::draft::OriginCheck {
+    Arc::new(move |headers| pdo_session::adapters::http::origin::check_origin(headers, port, &extra))
 }
 
 /// The settings context's stores, which the upstream contexts read too.

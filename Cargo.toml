@@ -17,6 +17,7 @@ members = [
   "crates/pdo-trigger",
   "crates/pdo-stats",
   "crates/pdo-review",
+  "crates/pdo-telemetry",
   "crates/pdo-settings",
   "crates/pdo",
 ]
@@ -68,6 +69,13 @@ ignore = "0.4"
 # bindings land in frontend/src/shared/generated/ (`make types`); `make check`
 # fails when they drift from the Rust structs.
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
+# Telemetry export (ADR-0090): the OpenTelemetry SDK and its OTLP exporter over
+# HTTP/protobuf. No default features: the exporter's own HTTP client would pull
+# a second reqwest; `pdo-telemetry` hands it one built on the reqwest above.
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "metrics"] }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["http-proto", "trace", "metrics"] }
+opentelemetry-http = { version = "0.33.1", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
 pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.14.0" }
 pdo-kernel = { path = "crates/pdo-kernel" }
@@ -82,6 +90,7 @@ pdo-run = { path = "crates/pdo-run" }
 pdo-trigger = { path = "crates/pdo-trigger" }
 pdo-stats = { path = "crates/pdo-stats" }
 pdo-review = { path = "crates/pdo-review" }
+pdo-telemetry = { path = "crates/pdo-telemetry" }
 pdo-settings = { path = "crates/pdo-settings" }
 
 # --- Release packaging (dist / ex-cargo-dist) -------------------------------

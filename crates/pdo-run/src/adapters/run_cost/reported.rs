@@ -120,6 +120,7 @@ pub fn observed_slices_from_pi(text: &str) -> Vec<ModelEffortSlice> {
             unpriced_models: Vec::new(),
             missing_reasons: Vec::new(),
             provider: usage.provider,
+            tokens: None,
         })
         .collect()
 }
@@ -142,6 +143,7 @@ pub fn observed_slices_from_copilot(text: &str) -> Vec<ModelEffortSlice> {
             unpriced_models: Vec::new(),
             missing_reasons: Vec::new(),
             provider: None,
+            tokens: None,
         })
         .collect()
 }

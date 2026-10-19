@@ -11,7 +11,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_settings::application::ports::{
     AgentProfileStore, BoxFuture, Harnesses, InstanceConfigStore, ProfileReferents,
-    SettingsSection, StagingProfiles, Stored, UpdateChecks,
+    SettingsSection, StagingProfiles, Stored, TelemetryReloads, UpdateChecks,
 };
 use pdo_settings::domain::agent_profile::{AgentProfile, ProfileDraft, DEFAULT_PROFILE_ID};
 use pdo_settings::domain::instance_config::{InstanceConfig, UpdateInstanceConfig};
@@ -50,6 +50,9 @@ impl Default for InMemoryConfig {
                 manager_enabled: None,
                 manager_profile: None,
                 max_attachments_mb: None,
+                telemetry_otlp: None,
+                telemetry_otlp_endpoint: None,
+                telemetry_otlp_headers: BTreeMap::new(),
                 updated_at: "2026-01-01T00:00:00.000Z".into(),
             }),
             retired: Mutex::new(Vec::new()),
@@ -89,9 +92,16 @@ impl InstanceConfigStore for InMemoryConfig {
             macro_rules! set_with {
                 ($conv:ident: $($f:ident),*) => { $(if let Some(v) = e.$f { r.$f = $conv(v); })* };
             }
-            set_with!(text: default_model, default_sandbox, default_harness, manager_profile);
+            set_with!(text: default_model, default_sandbox, default_harness, manager_profile,
+                telemetry_otlp_endpoint);
             set_with!(flag: autocomplete_turn_end, default_auto_name, auto_fail, update_check,
-                review_agent_can_resolve, manager_enabled);
+                review_agent_can_resolve, manager_enabled, telemetry_otlp);
+            if let Some(v) = e.telemetry_otlp_headers {
+                r.telemetry_otlp_headers = v
+                    .into_iter()
+                    .map(|h| (h.name, h.value.unwrap_or_default()))
+                    .collect();
+            }
             if let Some(v) = e.default_harness_model {
                 r.default_harness_model = v;
             }
@@ -325,6 +335,13 @@ impl StagingProfiles for KnownProfiles {
 #[derive(Default)]
 pub struct Checks {
     pub now: Mutex<usize>,
+    pub telemetry_reloads: Mutex<usize>,
+}
+
+impl TelemetryReloads for Checks {
+    fn reload(&self) {
+        *self.telemetry_reloads.lock().unwrap() += 1;
+    }
 }
 
 impl UpdateChecks for Checks {
@@ -425,6 +442,7 @@ pub fn world_with(sections: Vec<Arc<dyn SettingsSection>>, referents: Referents)
         harnesses: harnesses.clone(),
         staging_profiles: Arc::new(KnownProfiles),
         update_checks: checks.clone(),
+        telemetry: checks.clone(),
         referents: Arc::new(referents),
         extensions: host.clone(),
     });

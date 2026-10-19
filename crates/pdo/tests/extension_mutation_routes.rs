@@ -154,6 +154,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
         call("DELETE", "/pages/{name}", "/pages/site".into(), None),
         call("POST", "/update/check", "/update/check".into(), None),
         call("POST", "/update/apply", "/update/apply".into(), None),
+        call(
+            "POST",
+            "/telemetry/test-export",
+            "/telemetry/test-export".into(),
+            None,
+        ),
         call("POST", "/repos/fetch", format!("/repos/fetch?{q}"), None),
         call(
             "POST",

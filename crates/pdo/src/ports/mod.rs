@@ -4,7 +4,8 @@
 //! registry), the page mounts an archive releases, the Runs as the platform
 //! sees them, the Triggers' fires the Stats count, the Projets' announcements,
 //! the shared pipelines a Run's snapshot overwrites, the Projets the
-//! pipelines' validations name.
+//! pipelines' validations name, the Runs' facts and cost the telemetry
+//! attaches its measures to.
 //!
 //! Some of them reach a context wired after the one that reads them (the
 //! session context is wired before the Runs, which read its tmux): they hold a
@@ -16,6 +17,7 @@ pub(crate) mod project_events;
 pub(crate) mod run_pages;
 pub(crate) mod session;
 pub(crate) mod source_pipelines;
+pub(crate) mod telemetry_runs;
 pub(crate) mod trigger_fires;
 
 use std::sync::{Arc, OnceLock, Weak};

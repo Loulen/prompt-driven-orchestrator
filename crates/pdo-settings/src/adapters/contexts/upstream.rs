@@ -120,3 +120,25 @@ impl pdo_platform::application::ports::UpdateCheckSetting for UpdateCheckOfPlatf
         })
     }
 }
+
+/// The telemetry's OTLP export setting, `stored → env → default`.
+pub struct OtlpSettingOfTelemetry(pub Arc<dyn InstanceConfigStore>);
+
+impl pdo_telemetry::application::ports::OtlpSettingSource for OtlpSettingOfTelemetry {
+    fn otlp(
+        &self,
+    ) -> pdo_telemetry::application::ports::BoxFuture<'_, pdo_telemetry::domain::setting::OtlpSetting>
+    {
+        Box::pin(async move {
+            // An unreadable store exports nothing rather than guess.
+            let Ok(stored) = self.0.get().await else {
+                return Default::default();
+            };
+            pdo_telemetry::adapters::env::otlp_setting(
+                stored.telemetry_otlp,
+                stored.telemetry_otlp_endpoint.as_deref(),
+                &stored.telemetry_otlp_headers,
+            )
+        })
+    }
+}

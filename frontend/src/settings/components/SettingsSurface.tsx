@@ -28,6 +28,7 @@ import { ConfirmCloseDialog } from "./settingsSurface/overlays";
 import SandboxSections from "./settingsSurface/SandboxSections";
 import Section from "./settingsSurface/Section";
 import SettingsFooter from "./settingsSurface/SettingsFooter";
+import TelemetrySections from "./settingsSurface/TelemetrySections";
 
 export interface SettingsPosition {
   category: SettingsCategoryId;
@@ -79,7 +80,7 @@ const EXTENSIONS = "extensions";
 
 /**
  * Instance-wide settings (#129, ADR-0015; full-window surface since #690 / CONTEXT.md
- * « Surface Settings »): the shell Stats uses, a rail of four categories, and per category
+ * « Surface Settings »): the shell Stats uses, a rail of categories, and per category
  * a scrollable page cut into sections that a second column lists and scroll-spies.
  *
  * Agents and Sandbox & worktrees (#691) mix two kinds of sections: fields of the instance
@@ -352,6 +353,9 @@ export default function SettingsSurface({
               ) : (
                 loading
               ))}
+
+            {item.id === "telemetry" &&
+              (formProps ? <TelemetrySections sections={item.sections} active={shownCategory === item.id} {...formProps} /> : loading)}
 
             {item.id === "diagnostics" &&
               (settings ? (

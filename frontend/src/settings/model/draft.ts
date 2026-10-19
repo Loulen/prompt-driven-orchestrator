@@ -10,9 +10,10 @@ import type { SkillRef } from "../../shared/generated/SkillRef";
 import type { UpdateSettingsRequest } from "../../shared/generated/UpdateSettingsRequest";
 import type { InstanceSettings } from "./settings";
 import type { SettingsFieldId } from "./settingsCategories";
+import { seedTelemetry, telemetryDirty, telemetryPatch, type TelemetryDraft } from "./telemetryDraft";
 
 /** The editable instance form, as strings/values the inputs hold. */
-export interface DraftValues {
+export interface DraftValues extends TelemetryDraft {
   capStr: string;
   ttlStr: string;
   guardStr: string;
@@ -50,6 +51,7 @@ export function seedFrom(settings: InstanceSettings): DraftValues {
     // "" = « Follow the Run » (the clear sentinel on the wire too).
     managerProfile: settings.manager_profile.stored ?? "",
     reviewAgentCanResolve: settings.review_agent_can_resolve.effective,
+    ...seedTelemetry(settings),
   };
 }
 
@@ -120,6 +122,7 @@ export function computeDirty(values: DraftValues, settings: InstanceSettings): S
   if (values.managerProfile !== (settings.manager_profile.stored ?? "")) {
     dirty.add("manager-profile");
   }
+  for (const field of telemetryDirty(values, settings)) dirty.add(field);
   return dirty;
 }
 
@@ -236,5 +239,8 @@ export function buildPatch(
   if (values.managerProfile !== (settings.manager_profile.stored ?? "")) {
     patch.manager_profile = values.managerProfile.trim();
   }
-  return { patch };
+  // ADR-0090: the OTLP export.
+  const telemetry = telemetryPatch(values, settings);
+  if ("error" in telemetry) return telemetry;
+  return { patch: { ...patch, ...telemetry.patch } };
 }

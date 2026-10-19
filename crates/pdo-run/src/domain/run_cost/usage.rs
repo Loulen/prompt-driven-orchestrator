@@ -101,6 +101,27 @@ pub fn parse_line(raw: &str) -> Option<Line> {
 pub struct ModelUsage {
     pub usd: f64,
     pub unpriced: BTreeSet<String>,
+    /// The model's tokens, priced or not.
+    pub tokens: TokenTotals,
+}
+
+/// A slice's tokens by kind: what the instance's telemetry counts. The two
+/// cache-creation buckets are one `cache_write` there.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenTotals {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+impl TokenTotals {
+    fn add(&mut self, usage: &Usage) {
+        self.input += usage.input;
+        self.output += usage.output;
+        self.cache_read += usage.cache_read;
+        self.cache_write += usage.cache_create_5m + usage.cache_create_1h;
+    }
 }
 
 /// The run-level aggregate plus the per-model ventilation the « By model » axis
@@ -121,6 +142,7 @@ pub fn aggregate_by_model(
             }
         }
         let entry = by_model.entry(l.model.clone()).or_default();
+        entry.tokens.add(&l.usage);
         match prices.price_for(&l.model) {
             Some(p) => {
                 let line_usd = line_cost(&l.usage, p.input, p.output);
@@ -151,4 +173,48 @@ pub fn aggregate_by_model(
         by_harness: Vec::new(),
     };
     (stat, by_model)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(model: &str, id: &str, input: u64, cache_5m: u64, cache_1h: u64) -> Line {
+        Line {
+            message_id: Some(id.to_string()),
+            request_id: None,
+            model: model.to_string(),
+            usage: Usage {
+                input,
+                output: 2,
+                cache_read: 3,
+                cache_create_5m: cache_5m,
+                cache_create_1h: cache_1h,
+            },
+        }
+    }
+
+    #[test]
+    fn each_model_counts_its_tokens_once_priced_or_not() {
+        let lines = vec![
+            line("unpriced-model", "m1", 10, 4, 1),
+            line("unpriced-model", "m1", 10, 4, 1),
+            line("unpriced-model", "m2", 5, 0, 0),
+        ];
+        let (_, by_model) = aggregate_by_model(
+            lines.into_iter(),
+            &PriceTable::default(),
+            &mut HashSet::new(),
+        );
+        assert_eq!(
+            by_model["unpriced-model"].tokens,
+            TokenTotals {
+                input: 15,
+                output: 4,
+                cache_read: 6,
+                cache_write: 5,
+            },
+            "the replayed message is not counted twice"
+        );
+    }
 }

@@ -1,7 +1,8 @@
 //! The Runs as the telemetry context sees them: what a Run's measures are
 //! attached to (its Projet, its repository named by its remote, git, its
-//! pipeline and harness), its cost and tokens once it ended, and the live
-//! sessions. Never the Actor: nothing here reads who launched or answered.
+//! pipeline and harness, who launched it), its cost and tokens once it ended,
+//! and the live sessions. Who launched the Run is read here; the recorder
+//! sends it only with « include the Actor ».
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,6 +67,7 @@ impl RunFactsSource for RunFactsOfRuns {
                 commit: launch.fork_sha,
                 pipeline: launch.pipeline,
                 harness: launch.harness,
+                actor: launch.created_by,
             }
         })
     }

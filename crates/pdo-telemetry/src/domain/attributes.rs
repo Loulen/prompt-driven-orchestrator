@@ -1,8 +1,11 @@
 //! What a measure is attached to (ADR-0090 §3): the instance, the Projet, the
 //! repository, git, the pipeline, the harness and the model. The Run and node
-//! ids, of unbounded cardinality, go on the traces only. The Actor is never an
-//! attribute: nothing here can name who launched a Run or answered it.
+//! ids, of unbounded cardinality, go on the traces only. The Actor (who
+//! launched a Run, who answered it) is an attribute only when the setting
+//! « include the Actor » is on (ADR-0090 §4): every method that builds the
+//! attributes is told whether it may name it.
 
+use pdo_kernel::Actor;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -23,6 +26,34 @@ pub mod keys {
     pub const RUN_ID: &str = "pdo.run.id";
     pub const NODE_ID: &str = "pdo.node.id";
     pub const ITERATION: &str = "pdo.node.iteration";
+    /// Only with « include the Actor ».
+    pub const ACTOR: &str = "pdo.actor";
+}
+
+/// Events of a node's span.
+pub mod events {
+    /// A person answered the node's declared wait.
+    pub const WAIT_ANSWERED: &str = "pdo.wait.answered";
+}
+
+/// How an Actor is named on a measure: the identifier an extension gives a
+/// person, the local operator, a Trigger. An agent is named by its kind only:
+/// its Run and node ids would make the metrics unbounded, and it is no person.
+pub fn actor_label(actor: &Actor) -> String {
+    match actor {
+        Actor::Identified { namespace, id } => format!("{namespace}:{id}"),
+        Actor::Trigger { trigger_id } => format!("trigger:{trigger_id}"),
+        other => other.kind().to_string(),
+    }
+}
+
+/// The Actor a stored payload names under `key`, labelled; `None` when it
+/// names none or one this version cannot read.
+pub fn actor_in(payload: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    let actor = payload?.get(key)?.clone();
+    serde_json::from_value::<Actor>(actor)
+        .ok()
+        .map(|actor| actor_label(&actor))
 }
 
 /// What a Run's measures are attached to, resolved once per Run.
@@ -38,11 +69,15 @@ pub struct RunFacts {
     pub pipeline: Option<String>,
     /// The Run's harness, when it chose one.
     pub harness: Option<String>,
+    /// Who launched the Run ([`actor_label`]), sent only when `include_actor`.
+    pub actor: Option<String>,
 }
 
 impl RunFacts {
-    /// The attributes of a Run's metrics: the facts that are known.
-    pub fn attributes(&self) -> Vec<(&'static str, String)> {
+    /// The attributes of a Run's metrics: the facts that are known, the Actor
+    /// only when `include_actor`.
+    pub fn attributes(&self, include_actor: bool) -> Vec<(&'static str, String)> {
+        let actor = self.actor.clone().filter(|_| include_actor);
         [
             (keys::PROJECT, &self.project),
             (keys::REPOSITORY, &self.repository),
@@ -50,6 +85,7 @@ impl RunFacts {
             (keys::COMMIT, &self.commit),
             (keys::PIPELINE, &self.pipeline),
             (keys::HARNESS, &self.harness),
+            (keys::ACTOR, &actor),
         ]
         .into_iter()
         .filter_map(|(key, value)| Some((key, value.clone()?)))
@@ -62,8 +98,9 @@ impl RunFacts {
         &self,
         harness: Option<&str>,
         model: Option<&str>,
+        include_actor: bool,
     ) -> Vec<(&'static str, String)> {
-        let mut attributes = self.attributes();
+        let mut attributes = self.attributes(include_actor);
         if let Some(harness) = harness.filter(|h| !h.is_empty()) {
             attributes.retain(|(key, _)| *key != keys::HARNESS);
             attributes.push((keys::HARNESS, harness.to_string()));
@@ -102,6 +139,9 @@ pub struct TelemetryCatalogue {
     pub run_attributes: Vec<String>,
     /// On the traces only.
     pub trace_only: Vec<String>,
+    /// On the Run and node metrics and on the traces, only with « include the
+    /// Actor ».
+    pub with_actor: Vec<String>,
     pub metrics: Vec<String>,
     pub traces: Vec<String>,
 }
@@ -120,6 +160,7 @@ pub fn catalogue() -> TelemetryCatalogue {
             keys::MODEL,
         ]),
         trace_only: owned(&[keys::RUN_ID, keys::NODE_ID]),
+        with_actor: owned(&[keys::ACTOR]),
         metrics: owned(&[
             metrics::RUNS_STARTED,
             metrics::RUNS_FINISHED,
@@ -151,12 +192,13 @@ mod tests {
             commit: Some("abc123".into()),
             pipeline: Some("implement".into()),
             harness: None,
+            actor: Some("test:alice".into()),
         }
     }
 
     #[test]
     fn a_run_carries_the_known_facts_only() {
-        let keys: Vec<&str> = facts().attributes().iter().map(|(k, _)| *k).collect();
+        let keys: Vec<&str> = facts().attributes(false).iter().map(|(k, _)| *k).collect();
         assert_eq!(
             keys,
             vec![
@@ -173,7 +215,7 @@ mod tests {
     fn a_node_adds_its_harness_and_model() {
         let mut run = facts();
         run.harness = Some("run-harness".into());
-        let attributes = run.node_attributes(Some("node-harness"), Some("model-x"));
+        let attributes = run.node_attributes(Some("node-harness"), Some("model-x"), false);
         assert!(attributes.contains(&(keys::HARNESS, "node-harness".into())));
         assert!(!attributes.contains(&(keys::HARNESS, "run-harness".into())));
         assert!(attributes.contains(&(keys::MODEL, "model-x".into())));
@@ -181,11 +223,63 @@ mod tests {
 
     #[test]
     fn no_metric_attribute_identifies_a_run_or_a_node() {
-        let attributes = facts().node_attributes(Some("h"), Some("m"));
+        let attributes = facts().node_attributes(Some("h"), Some("m"), true);
         assert!(attributes
             .iter()
             .all(|(k, _)| *k != keys::RUN_ID && *k != keys::NODE_ID));
         let sent = catalogue();
         assert!(!sent.run_attributes.contains(&keys::RUN_ID.to_string()));
+    }
+
+    #[test]
+    fn the_actor_is_named_only_when_it_may_be() {
+        let has_actor = |attributes: Vec<(&'static str, String)>| {
+            attributes.iter().any(|(k, _)| *k == keys::ACTOR)
+        };
+        assert!(!has_actor(facts().attributes(false)));
+        assert!(!has_actor(facts().node_attributes(Some("h"), None, false)));
+        assert!(facts()
+            .attributes(true)
+            .contains(&(keys::ACTOR, "test:alice".into())));
+        assert!(has_actor(facts().node_attributes(Some("h"), None, true)));
+        let sent = catalogue();
+        assert!(!sent.run_attributes.contains(&keys::ACTOR.to_string()));
+        assert_eq!(sent.with_actor, vec![keys::ACTOR.to_string()]);
+    }
+
+    #[test]
+    fn an_actor_is_labelled_by_who_it_is() {
+        assert_eq!(actor_label(&Actor::LocalOperator), "local_operator");
+        assert_eq!(
+            actor_label(&Actor::Identified {
+                namespace: "test".into(),
+                id: "alice".into()
+            }),
+            "test:alice"
+        );
+        assert_eq!(
+            actor_label(&Actor::Trigger {
+                trigger_id: "nightly".into()
+            }),
+            "trigger:nightly"
+        );
+        assert_eq!(
+            actor_label(&Actor::Agent {
+                run_id: "r1".into(),
+                node_id: "n1".into()
+            }),
+            "agent",
+            "an agent's ids never reach the metrics"
+        );
+        let payload = serde_json::json!({
+            "created_by": { "kind": "identified", "namespace": "test", "id": "bob" },
+            "other": { "kind": "from-a-later-version" },
+        });
+        assert_eq!(
+            actor_in(Some(&payload), "created_by").as_deref(),
+            Some("test:bob")
+        );
+        assert_eq!(actor_in(Some(&payload), "other"), None);
+        assert_eq!(actor_in(None, "created_by"), None);
     }
 }

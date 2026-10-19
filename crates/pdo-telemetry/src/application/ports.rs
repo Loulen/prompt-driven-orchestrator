@@ -12,17 +12,18 @@ use opentelemetry_sdk::trace::{SdkTracerProvider, TracerProviderBuilder};
 use super::status::ExportStatus;
 use crate::domain::attributes::RunFacts;
 use crate::domain::cost::CostSlice;
-use crate::domain::setting::{ExportTarget, OtlpSetting};
+use crate::domain::setting::{ExportTarget, TelemetrySetting};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// The OTLP export setting, every tier resolved, read fresh at each call.
-pub trait OtlpSettingSource: Send + Sync {
-    fn otlp(&self) -> BoxFuture<'_, OtlpSetting>;
+/// The telemetry setting, every tier resolved, read fresh at each call.
+pub trait TelemetrySettingSource: Send + Sync {
+    fn setting(&self) -> BoxFuture<'_, TelemetrySetting>;
 }
 
 /// What a Run's measures are attached to: the Projet, the repository named by
-/// its remote, git, the pipeline and the harness. Never the Actor.
+/// its remote, git, the pipeline and the harness, and who launched it, which
+/// the recorder sends only with « include the Actor ».
 pub trait RunFactsSource: Send + Sync {
     fn facts<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, RunFacts>;
 }
@@ -61,4 +62,19 @@ pub trait Exporters: Send + Sync {
         status: Arc<ExportStatus>,
         builders: Builders,
     ) -> Result<Builders, String>;
+}
+
+/// The channel read on `/metrics`: a pull reader plugged into the meters, and
+/// what renders what it holds at each scrape.
+pub trait MetricsEndpoint: Send + Sync {
+    fn attach(
+        &self,
+        meters: MeterProviderBuilder,
+    ) -> Result<(MeterProviderBuilder, Arc<dyn Scrape>), String>;
+}
+
+/// One scrape of `/metrics`: the measures as they stand now, in the
+/// endpoint's text format.
+pub trait Scrape: Send + Sync {
+    fn render(&self) -> Result<String, String>;
 }

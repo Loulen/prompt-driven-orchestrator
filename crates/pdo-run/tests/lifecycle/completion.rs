@@ -439,7 +439,7 @@ async fn release_refuses_noninteractive_and_dead_sessions() {
             .unwrap();
         }
 
-        let response = release_node_completion(&state.run, run_id, "worker", 1).await;
+        let response = release_node_completion(&state.run, run_id, "worker", 1, None).await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(response_json(response).await["error"], expected);
     }

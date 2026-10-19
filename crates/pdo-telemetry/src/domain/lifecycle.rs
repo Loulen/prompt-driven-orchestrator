@@ -3,7 +3,8 @@
 //! ended with its three durations (total, active, waiting). The declared wait
 //! follows the rule of Stats › Performance (ADR-0069): it opens on a
 //! `NodeAwaitingUser` of cause `declared` or `completion_not_released`, closes
-//! on the first lift or end of the same execution, and a restart resets it.
+//! on the first lift or end of the same execution, and a restart resets it. A
+//! lift says who answered, when its event names them.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,9 +14,11 @@ use pdo_run::domain::event::{Event, EventKind};
 use pdo_run::domain::state::{AWAITING_CAUSE_COMPLETION_NOT_RELEASED, AWAITING_CAUSE_DECLARED};
 use serde_json::Value;
 
+use super::attributes::actor_in;
+
 /// What the `RunStarted` payload tells of a Run: the raw facts the attributes
 /// are resolved from. The repository path is read to name the repository,
-/// never sent.
+/// never sent; who launched the Run is sent only with « include the Actor ».
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunLaunch {
     pub pipeline: Option<String>,
@@ -23,6 +26,9 @@ pub struct RunLaunch {
     pub source_branch: Option<String>,
     pub fork_sha: Option<String>,
     pub harness: Option<String>,
+    /// Who launched the Run, labelled
+    /// ([`actor_label`](super::attributes::actor_label)).
+    pub created_by: Option<String>,
 }
 
 impl RunLaunch {
@@ -46,6 +52,7 @@ impl RunLaunch {
             source_branch: text("source_branch"),
             fork_sha: text("fork_sha"),
             harness: text("harness").or(chosen_harness),
+            created_by: actor_in(payload, "created_by"),
         }
     }
 }
@@ -99,6 +106,12 @@ pub enum Observation {
     },
     WaitDeclared {
         execution: Execution,
+    },
+    /// The declared wait was lifted, by `actor` when the event names them.
+    WaitAnswered {
+        execution: Execution,
+        at: DateTime<Utc>,
+        actor: Option<String>,
     },
     NodeEnded {
         execution: Execution,
@@ -205,10 +218,15 @@ impl Lifecycle {
                 Some(Observation::WaitDeclared { execution })
             }
             EventKind::NodeResumed | EventKind::NodeCompletionReleased => {
-                if let Some(open) = self.open.get_mut(&execution) {
-                    close_wait(open, at);
-                }
-                None
+                // A lift with no wait open answered nothing.
+                let open = self.open.get_mut(&execution)?;
+                open.wait_opened_at?;
+                close_wait(open, at);
+                Some(Observation::WaitAnswered {
+                    execution,
+                    at,
+                    actor: actor_in(event.payload.as_ref(), "actor"),
+                })
             }
             kind => {
                 let outcome = node_outcome(kind)?;
@@ -329,22 +347,26 @@ mod tests {
         .iter()
         .filter_map(|e| life.observe(e))
         .collect();
-        assert_eq!(observed.len(), 5, "{observed:#?}");
+        assert_eq!(observed.len(), 6, "{observed:#?}");
+        assert!(matches!(
+            &observed[3],
+            Observation::WaitAnswered { actor: None, .. }
+        ));
         let Observation::NodeEnded {
             total,
             waiting,
             outcome,
             ..
-        } = &observed[3]
+        } = &observed[4]
         else {
-            panic!("{:?}", observed[3]);
+            panic!("{:?}", observed[4]);
         };
         assert_eq!(*total, Some(600.0));
         assert_eq!(*waiting, 180.0);
         assert_eq!(active_seconds(total.unwrap(), *waiting), 420.0);
         assert_eq!(*outcome, Outcome::Completed);
         assert!(matches!(
-            observed[4],
+            observed[5],
             Observation::RunEnded {
                 outcome: Outcome::Completed,
                 ..
@@ -388,7 +410,7 @@ mod tests {
             "source_branch": "main",
             "fork_sha": "abc",
             "agent_choice": {"harness": "h2"},
-            "created_by": "someone",
+            "created_by": {"kind": "identified", "namespace": "test", "id": "someone"},
         })));
         assert_eq!(
             launch,
@@ -398,7 +420,35 @@ mod tests {
                 source_branch: Some("main".into()),
                 fork_sha: Some("abc".into()),
                 harness: Some("h2".into()),
+                created_by: Some("test:someone".into()),
             }
         );
+    }
+
+    #[test]
+    fn a_lift_says_who_answered_and_only_a_lift_of_an_open_wait_counts() {
+        let mut life = Lifecycle::default();
+        life.observe(&event(1, EventKind::NodeStarted, Some("a"), json!({})));
+        assert_eq!(
+            life.observe(&event(2, EventKind::NodeResumed, Some("a"), json!({}))),
+            None,
+            "no wait was open"
+        );
+        life.observe(&event(
+            3,
+            EventKind::NodeAwaitingUser,
+            Some("a"),
+            json!({"cause": "declared"}),
+        ));
+        let lifted = life.observe(&event(
+            4,
+            EventKind::NodeCompletionReleased,
+            Some("a"),
+            json!({"actor": {"kind": "identified", "namespace": "test", "id": "bob"}}),
+        ));
+        let Some(Observation::WaitAnswered { actor, .. }) = lifted else {
+            panic!("{lifted:?}");
+        };
+        assert_eq!(actor.as_deref(), Some("test:bob"));
     }
 }

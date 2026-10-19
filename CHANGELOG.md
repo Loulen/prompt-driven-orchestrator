@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## Prochaine version — `/metrics` Prometheus et « inclure l'Acteur » (CORE-86)
+
+- Settings › Telemetry gagne la section « Prometheus /metrics » : `GET /metrics` sert les mêmes
+  métriques que l'export OTLP au format texte Prometheus (pas de traces), par son propre
+  interrupteur, **éteint par défaut** (`404` tant qu'il l'est). La route n'exige rien de plus
+  que le reste du daemon : qui joint l'instance la lit. Réglage `telemetry_prometheus`, env
+  `PDO_TELEMETRY_PROMETHEUS`.
+- Section « Identity » : « Include the Actor », **éteint par défaut** (`telemetry_include_actor`,
+  env `PDO_TELEMETRY_INCLUDE_ACTOR`). Allumé, `pdo.actor` (qui a lancé le Run) s'ajoute aux
+  métriques de Run et de nœud et aux spans, sur les deux voies, et la réponse à une attente
+  déclarée devient un événement `pdo.wait.answered` du span du nœud. Un agent est nommé
+  `agent`, sans ses ids. Coché, un avertissement rappelle l'information préalable des
+  personnes, la consultation du CSE et la base RGPD avant l'enregistrement.
+- Les événements `NodeResumed` (Entrée tapée dans le terminal) et `NodeCompletionReleased`
+  (bouton du nœud) portent désormais l'Acteur qui a répondu (`payload.actor`). Les événements
+  plus anciens n'en ont pas et se lisent comme avant.
+- `GET /telemetry/status` dit aussi `metrics_endpoint` et `include_actor` ; « What is sent »
+  liste `with_actor`. Tous les changements prennent effet sans redémarrage.
+
 ## 2.35.0 — Export OTLP des métriques et des traces (CORE-85)
 
 - Nouvelle catégorie « Telemetry » des Settings (ADR-0090) : le daemon pousse ses métriques et

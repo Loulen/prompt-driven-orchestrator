@@ -47,6 +47,8 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
             .unwrap_or(None)
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
+        telemetry_prometheus: row.try_get("telemetry_prometheus").unwrap_or(None),
+        telemetry_include_actor: row.try_get("telemetry_include_actor").unwrap_or(None),
         updated_at: row.get("updated_at"),
     }
 }
@@ -149,6 +151,12 @@ fn assignments(edit: UpdateInstanceConfig) -> Vec<(&'static str, Bound)> {
             .collect();
         let json = (!map.is_empty()).then(|| serde_json::to_string(&map).unwrap_or_default());
         sets.push(("telemetry_otlp_headers", Bound::Text(json)));
+    }
+    if let Some(v) = edit.telemetry_prometheus {
+        sets.push(("telemetry_prometheus", flag(v)));
+    }
+    if let Some(v) = edit.telemetry_include_actor {
+        sets.push(("telemetry_include_actor", flag(v)));
     }
     sets
 }

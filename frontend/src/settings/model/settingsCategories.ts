@@ -9,6 +9,7 @@ export type SettingsCategoryId = "general" | "agents" | "sandbox" | "diagnostics
 
 export type SettingsSectionId =
   | "interface"
+  | "public-url"
   | "runtime-limits"
   | "runs"
   | "version-update"
@@ -58,6 +59,12 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         id: "interface",
         label: "Interface",
         description: "How this browser talks to PDO. Saved on this device only.",
+      },
+      {
+        id: "public-url",
+        label: "Public URL",
+        description:
+          "The address other machines reach this PDO at. Agents and `pdo page mount` print their links with it.",
       },
       {
         id: "runtime-limits",
@@ -200,7 +207,8 @@ export type SettingsFieldId =
   | "default-sandbox"
   | "update-check"
   | "manager-enabled"
-  | "manager-profile";
+  | "manager-profile"
+  | "public-url";
 
 export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "session-cap": "runtime-limits",
@@ -219,6 +227,7 @@ export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "update-check": "version-update",
   "manager-enabled": "pipeline-manager",
   "manager-profile": "pipeline-manager",
+  "public-url": "public-url",
 };
 
 export function categoryOf(section: SettingsSectionId): SettingsCategory {

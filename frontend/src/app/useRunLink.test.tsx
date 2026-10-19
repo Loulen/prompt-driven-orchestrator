@@ -134,6 +134,23 @@ describe("#/runs/<id>", () => {
     expect(window.location.hash).toBe("#/ext/demo/topbar/end");
   });
 
+  it("toward a node selects the Run, then the node", async () => {
+    window.history.replaceState(null, "", "/#/runs/r1/nodes/designer");
+    const order: string[] = [];
+    function NodeShell() {
+      useRunLink(
+        async (runId) => {
+          order.push(`run:${runId}`);
+        },
+        (nodeId) => order.push(`node:${nodeId}`),
+      );
+      return null;
+    }
+    render(<NodeShell />);
+    await waitFor(() => expect(order).toEqual(["run:r1", "node:designer"]));
+    expect(window.location.hash).toBe("");
+  });
+
   it("followed twice in a row selects the Run each time", async () => {
     const onSelect = vi.fn();
     render(<Shell onSelect={onSelect} />);

@@ -107,6 +107,7 @@ vi.mock("../settings/api/settings", () => {
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness_model: { effective: {}, stored: {} },

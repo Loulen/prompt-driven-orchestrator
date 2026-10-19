@@ -55,6 +55,7 @@ vi.mock("../../settings/api/settings", () => ({
     reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
     guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
     max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
     default_model: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
     default_harness_model: { effective: {}, stored: {} },
@@ -1293,6 +1294,7 @@ describe("NewRunModal — image upload", () => {
     vi.mocked(fetchSettings).mockResolvedValueOnce({
       ...base,
       max_attachments_mb: { effective: 1, source: "stored", stored: 1, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
     });
     renderModal();
     await waitFor(() =>
@@ -1613,6 +1615,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -2356,6 +2359,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -2696,6 +2700,7 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -2914,6 +2919,7 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },
@@ -3265,6 +3271,7 @@ describe("NewRunModal — harness selector (#551)", () => {
       reaper_ttl_secs: { effective: 3600, source: "default", stored: null, env: null, default: 3600 },
       guard_timeout_secs: { effective: 60, source: "default", stored: null, env: null, default: 60 },
       max_attachments_mb: { effective: 50, source: "default", stored: null, env: null, default: 50 },
+      public_url: { effective: null, source: "default", stored: null, env: null, default: null },
       default_model: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness: { effective: null, source: "default", stored: null, env: null, default: null },
       default_harness_model: { effective: {}, stored: {} },

@@ -24,6 +24,7 @@ import CategoryPage from "./settingsSurface/CategoryPage";
 import { HarnessDescriptorRows, PriceTableRows } from "./settingsSurface/DiagnosticsRows";
 import { RunsSection, SessionsSection } from "./settingsSurface/GeneralSections";
 import InterfaceSection from "./settingsSurface/InterfaceSection";
+import PublicUrlSection from "./settingsSurface/PublicUrlSection";
 import { ConfirmCloseDialog } from "./settingsSurface/overlays";
 import SandboxSections from "./settingsSurface/SandboxSections";
 import Section from "./settingsSurface/Section";
@@ -281,17 +282,18 @@ export default function SettingsSurface({
                 <InterfaceSection section={item.sections[0]} />
                 {formProps ? (
                   <>
+                    <PublicUrlSection section={item.sections[1]} {...formProps} />
                     <SessionsSection
-                      section={item.sections[1]}
+                      section={item.sections[2]}
                       {...formProps}
                       liveSessions={liveSessions}
                     />
-                    <RunsSection section={item.sections[2]} {...formProps} />
+                    <RunsSection section={item.sections[3]} {...formProps} />
                   </>
                 ) : (
                   loading
                 )}
-                <Section section={item.sections[3]}>
+                <Section section={item.sections[4]}>
                   <VersionUpdateSection
                     onRequestUpdate={onRequestUpdate}
                     active={open}
@@ -301,14 +303,14 @@ export default function SettingsSurface({
                 </Section>
                 {/* #823 — guided tours. Every entry closes this surface first:
                     a tour points at the app, which is underneath it. */}
-                <Section section={item.sections[4]}>
+                <Section section={item.sections[5]}>
                   <TutorialsSection
                     onStartTour={(tourId) => startTourAfterClose(() => onStartTour?.(tourId))}
                     onStartFullTour={() => startTourAfterClose(() => onStartFullTour?.())}
                   />
                 </Section>
                 {/* #891 — Stats absorptions: saves as you go, whatever `GET /settings` said. */}
-                <Section section={item.sections[5]}>
+                <Section section={item.sections[6]}>
                   <StatsAbsorptionsPanel active={open} />
                 </Section>
               </>

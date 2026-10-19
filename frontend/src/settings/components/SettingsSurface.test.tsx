@@ -180,6 +180,7 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       env: null,
       default: 50,
     },
+    public_url: { effective: null, source: "default", stored: null, env: null, default: null },
     // Unset by default (account default): effective/stored/env/default all null.
     default_model: {
       effective: null,
@@ -548,6 +549,44 @@ describe("SettingsSurface", () => {
     expect(updateSettingsMock).toHaveBeenCalledWith({
       max_attachments_mb: 120,
     });
+  });
+
+  it("General › Public URL previews what `pdo page mount` prints, saves it and refuses a non-URL (CORE-83)", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    updateSettingsMock.mockResolvedValue(
+      sample({
+        public_url: {
+          effective: "https://pdo.example.net",
+          source: "stored",
+          stored: "https://pdo.example.net",
+          env: null,
+          default: null,
+        },
+      }),
+    );
+    render(<SettingsSurface open onClose={() => {}} />);
+    expect(await screen.findByTestId("settings-section-public-url")).toHaveTextContent("Public URL");
+    const field = await screen.findByTestId("setting-public-url");
+    expect(screen.getByTestId("setting-source-public-url")).toHaveTextContent(
+      "Source: none set (PDO_PUBLIC_URL unset).",
+    );
+
+    fireEvent.change(field, { target: { value: "pdo.example.net" } });
+    expect(screen.getByTestId("setting-public-url-invalid")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("settings-save"));
+    expect(await screen.findByTestId("settings-error")).toHaveTextContent(/http:\/\/ or https:\/\//);
+    expect(updateSettingsMock).not.toHaveBeenCalled();
+
+    fireEvent.change(field, { target: { value: "https://pdo.example.net/" } });
+    expect(screen.getByTestId("setting-public-url-preview")).toHaveTextContent(
+      "With its guide: https://pdo.example.net/#/pages/my-page",
+    );
+    expect(screen.getByTestId("setting-public-url-preview")).toHaveTextContent(
+      "Page alone: https://pdo.example.net/pages/my-page/",
+    );
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock).toHaveBeenCalledWith({ public_url: "https://pdo.example.net/" });
   });
 
   it("names both price paths even though neither file exists", async () => {
@@ -2223,6 +2262,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     // #823 added Tutorials as General's fifth section, #891 Stats absorptions.
     expect(entries()).toEqual([
       "Interface",
+      "Public URL",
       "Runtime limits",
       "Runs",
       "Version & update",

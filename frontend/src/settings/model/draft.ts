@@ -30,6 +30,8 @@ export interface DraftValues {
   managerProfile: string;
   /** #751: may an agent's `--resolved` reply resolve a review comment directly? */
   reviewAgentCanResolve: boolean;
+  /** The stored Public URL, as typed; `""` is unset. */
+  publicUrl: string;
 }
 
 export function seedFrom(settings: InstanceSettings): DraftValues {
@@ -50,7 +52,13 @@ export function seedFrom(settings: InstanceSettings): DraftValues {
     // "" = « Follow the Run » (the clear sentinel on the wire too).
     managerProfile: settings.manager_profile.stored ?? "",
     reviewAgentCanResolve: settings.review_agent_can_resolve.effective,
+    publicUrl: settings.public_url.stored ?? "",
   };
+}
+
+/** A Public URL the daemon will accept: `http(s)://host…`, no query nor fragment. */
+export function isPublicUrl(raw: string): boolean {
+  return /^https?:\/\/[^\s/?#:@][^\s/?#@]*(\/[^\s?#]*)?$/i.test(raw.trim());
 }
 
 /** The per-harness map the daemon will store: trimmed, empty entries dropped. */
@@ -120,6 +128,7 @@ export function computeDirty(values: DraftValues, settings: InstanceSettings): S
   if (values.managerProfile !== (settings.manager_profile.stored ?? "")) {
     dirty.add("manager-profile");
   }
+  if (values.publicUrl.trim() !== (settings.public_url.stored ?? "")) dirty.add("public-url");
   return dirty;
 }
 
@@ -235,6 +244,14 @@ export function buildPatch(
   }
   if (values.managerProfile !== (settings.manager_profile.stored ?? "")) {
     patch.manager_profile = values.managerProfile.trim();
+  }
+  // `""` clears the stored Public URL (the env tier, then none, decide again).
+  const publicUrl = values.publicUrl.trim();
+  if (publicUrl !== (settings.public_url.stored ?? "")) {
+    if (publicUrl !== "" && !isPublicUrl(publicUrl)) {
+      return { error: "Public URL must be an http:// or https:// address, without ? or #." };
+    }
+    patch.public_url = publicUrl;
   }
   return { patch };
 }

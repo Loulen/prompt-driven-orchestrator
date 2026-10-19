@@ -11,7 +11,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
     pipelines, selectedPipeline, selectedPipelineId, repoValid, mode, harness, setHarness,
     agentChoice, setAgentChoice, skills, setSkills, agentProfiles, skillBank,
     inheritedSkillTiers, handlePipelineChange, harnessCatalog, instanceDefaultHarness,
-    pipelineSections, repoProject,
+    pipelineSections, repoProject, promptAddedSkills,
   } = form;
   return (
     <div className="flex flex-col gap-3 py-4 border-b border-line">
@@ -104,6 +104,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
           bank={skillBank}
           label={mode === "trigger" ? "Skills — Trigger" : "Skills — New Run"}
           testId="run-skill-selector"
+          added={promptAddedSkills}
         />
         <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
           {mode === "trigger"

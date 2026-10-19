@@ -10,6 +10,7 @@ import { serializePipeline } from "../../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
 import type { EditorPipelineDef } from "../model/pipeline";
 import { useEditStore } from "../store/editStore";
+import { saveBlob } from "../../shared/lib/download";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 
 export function YamlTab({
@@ -97,15 +98,6 @@ export function YamlTab({
   }
 
   const pipelineName = pipeline.name || "pipeline";
-
-  function saveBlob(blob: Blob, filename: string) {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  }
 
   function downloadDocument() {
     saveBlob(new Blob([yaml], { type: "application/yaml" }), `${pipelineName}.pdo.yaml`);

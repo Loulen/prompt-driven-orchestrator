@@ -10,6 +10,16 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.39.0 — Complétion des skills dans les prompts, export et upload de skills (CORE-80)
+
+- `/` en début de mot dans le prompt d'un nœud ou de New Run ouvre la liste des skills au
+  curseur ; choisir un skill que le nœud (ou le Run) ne reçoit pas l'ajoute à son tier.
+- `POST /settings/skills/export` sert un zip au format du sidecar, nommé d'après le dossier, le
+  skill ou `selection` pour une sélection mixte.
+- `POST /settings/skills/upload?name=` importe un zip selon la politique d'import du sidecar :
+  les nouveaux skills arrivent dans un dossier nommé d'après le zip, à plat (la hiérarchie de
+  l'archive n'est pas reprise). L'Opération `skill.import` est demandée avant de lire l'archive.
+
 ## 2.38.0 — Recherche dans les transcripts du Run (CORE-82)
 
 - `GET /runs/{id}/transcripts/search?q=&client=` cherche dans le transcript de chaque itération

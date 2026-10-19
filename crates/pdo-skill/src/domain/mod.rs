@@ -1,5 +1,6 @@
 //! The pure rules of the skill context: no I/O, no process, no storage.
 
+pub mod bundle;
 pub mod delivery;
 pub mod error;
 pub mod extension_skill;

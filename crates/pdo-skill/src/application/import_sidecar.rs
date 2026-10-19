@@ -23,14 +23,33 @@ impl Skills {
         references: Vec<SkillRef>,
         sidecar: &[SidecarSkill],
     ) -> Result<SidecarImportReport, SkillError> {
-        let mut report = SidecarImportReport::default();
         if references.is_empty() {
-            return Ok(report);
+            return Ok(SidecarImportReport::default());
         }
+        self.authorize_import(actor)?;
+        self.import_carried(&import_folder_name(pipeline_name), references, sidecar)
+            .await
+    }
+
+    /// The Operation every import into the bank asks.
+    pub(crate) fn authorize_import(&self, actor: &Actor) -> Result<(), SkillError> {
         self.authorize(
             actor,
             Operation::new(ResourceKind::Skill, Verb::Action("import".into())),
         )?;
+        Ok(())
+    }
+
+    /// The import policy of [`crate::domain::sidecar`] for `references`,
+    /// filing the created skills under the root folder `folder_name`. The
+    /// caller has asked the Operation.
+    pub(crate) async fn import_carried(
+        &self,
+        folder_name: &str,
+        references: Vec<SkillRef>,
+        sidecar: &[SidecarSkill],
+    ) -> Result<SidecarImportReport, SkillError> {
+        let mut report = SidecarImportReport::default();
         for reference in references {
             let label = Some(reference.name.trim().to_string()).filter(|l| !l.is_empty());
             if let Some(existing) = self.skills.get(&reference.id).await? {
@@ -78,7 +97,7 @@ impl Skills {
             let folder = match &report.folder {
                 Some(folder) => folder.clone(),
                 None => {
-                    let folder = self.import_folder(pipeline_name).await?;
+                    let folder = self.import_folder(folder_name).await?;
                     report.folder = Some(folder.clone());
                     folder
                 }
@@ -117,9 +136,8 @@ impl Skills {
         Ok(report)
     }
 
-    /// The folder created skills are filed under, reused when it exists.
-    async fn import_folder(&self, pipeline_name: &str) -> Result<SkillFolder, SkillError> {
-        let name = import_folder_name(pipeline_name);
+    /// The root folder created skills are filed under, reused when it exists.
+    async fn import_folder(&self, name: &str) -> Result<SkillFolder, SkillError> {
         if let Some(existing) = self
             .folders
             .list()
@@ -129,7 +147,7 @@ impl Skills {
         {
             return Ok(existing);
         }
-        self.new_folder(&name, None).await
+        self.new_folder(name, None).await
     }
 
     /// A label the bank does not use yet: `name`, then `name-2`, `name-3`…

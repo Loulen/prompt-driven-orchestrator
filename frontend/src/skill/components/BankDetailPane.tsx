@@ -113,6 +113,7 @@ export default function BankDetailPane({
           onDelete={() => void panel.askDelete({ kind: "folder", id: selectedFolder.id })}
           onMoveTo={(parentId) => void panel.moveFolder(selectedFolder.id, parentId)}
           onUpdateFromSource={() => void panel.startUpdateFromSource(selectedFolder)}
+          onExport={() => void panel.exportBundle({ skill_ids: [], folder_ids: [selectedFolder.id] })}
           home={home}
         />
       ) : emptyBank ? (

@@ -1,4 +1,5 @@
 import type { NodeState } from "../../../shared/generated/NodeState";
+import type { SkillRef } from "../../../shared/generated/SkillRef";
 import type { AgentProfile } from "../../../shared/generated/AgentProfile";
 import AgentControl from "../../../settings/components/AgentControl";
 import SkillSelector from "../../../skill/components/SkillSelector";
@@ -27,6 +28,7 @@ export default function AgentSection({
   resolvedHarness,
   harnessOption,
   effort,
+  addedSkills,
 }: {
   node: EditorNodeDef;
   readOnly?: boolean;
@@ -39,6 +41,8 @@ export default function AgentSection({
   resolvedHarness: string;
   harnessOption: ReturnType<typeof findHarnessOption>;
   effort: ReturnType<typeof effortOffer>;
+  /** Skills the prompt's `/` completion just added: chips under the selector. */
+  addedSkills?: SkillRef[];
 }) {
   return (
     <>
@@ -67,6 +71,7 @@ export default function AgentSection({
         label="Skills"
         testId="node-skill-selector"
         readOnly={readOnly || runNode?.skills != null}
+        added={addedSkills}
       />
       {runNode?.skills && (
         <p className="text-fg-4" style={{ fontSize: 9.5 }} data-testid="node-skills-frozen">

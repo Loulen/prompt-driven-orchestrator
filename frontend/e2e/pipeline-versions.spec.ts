@@ -67,7 +67,12 @@ test("save versions, view and restore one, launch the last, keep the old as a pi
 
   // 1. Change the draft, Save… offers v2, ticked: save it.
   await page.getByTestId("toolbar-info").click();
-  await page.getByTestId("prompt-required-checkbox").uncheck();
+  // The tab takes no edit until its draft has arrived.
+  const promptRequired = page.getByTestId("prompt-required-checkbox");
+  await expect(async () => {
+    await promptRequired.uncheck({ timeout: 1_000 });
+    await expect(promptRequired).not.toBeChecked();
+  }).toPass({ timeout: 15_000 });
   await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
   await expect(page.getByTestId("draft-changes")).toContainText("since v1");
   await page.getByTestId("save-button").click();

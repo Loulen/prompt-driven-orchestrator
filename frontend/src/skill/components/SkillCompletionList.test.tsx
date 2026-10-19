@@ -95,4 +95,18 @@ describe("the skills completion of a prompt", () => {
     await userEvent.type(screen.getByTestId("prompt"), "src/re https://x.io/tdd");
     expect(screen.queryByTestId("skill-completion-list")).toBeNull();
   });
+
+  it("opens above the caret when the prompt sits at the bottom of the screen", async () => {
+    render(<Prompt onAdd={vi.fn()} />);
+    const prompt = screen.getByTestId("prompt");
+    const bottom = window.innerHeight - 2;
+    vi.spyOn(prompt, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 10, y: bottom, width: 300, height: 40 }),
+    );
+    await userEvent.type(prompt, "/");
+    const list = screen.getByTestId("skill-completion-list");
+    expect(list).toHaveAttribute("data-placement", "above");
+    expect(list.style.bottom).toBe(`${window.innerHeight - bottom + 2}px`);
+    expect(list.style.top).toBe("");
+  });
 });

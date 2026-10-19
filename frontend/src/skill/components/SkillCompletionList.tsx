@@ -1,11 +1,13 @@
-import { useLayoutEffect, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { CircleCheck, Sparkles } from "lucide-react";
 import { caretOffset } from "../../shared/lib/caretOffset";
+import { placeAtCaret, type CaretPlace } from "../../shared/lib/placeAtCaret";
 import type { SkillOption } from "../model/skillCompletion";
 import type { SkillCompletion } from "../store/useSkillPromptField";
 
 const WIDTH = 330;
+const MAX_HEIGHT = 280;
 
 /** Who receives the skills: the words of the groups and of the details. */
 export type SkillCompletionScope = "node" | "run";
@@ -15,8 +17,9 @@ export type SkillCompletionScope = "node" | "run";
  * editor's `CompletionList`: « On this node » (the skills it already
  * receives) then « Skill bank » (the folder as a hint, « adds it to the node »
  * as the detail), and the keys at the foot. A portal above everything, which
- * follows the page while it scrolls. A row is picked with a click; the
- * textarea keeps the focus.
+ * follows the page while it scrolls; it opens above the caret when the room
+ * under it is short, and never leaves the viewport. A row is picked with a
+ * click; the textarea keeps the focus.
  */
 export default function SkillCompletionList({
   completion,
@@ -30,7 +33,11 @@ export default function SkillCompletionList({
   scope: SkillCompletionScope;
 }) {
   const { query, options, selected } = completion;
-  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+  const [place, setPlace] = useState<CaretPlace | null>(null);
+  const rows = useRef<HTMLDivElement>(null);
+  const foot = useRef<HTMLDivElement>(null);
+  // What its height hangs on: the rows and the groups they fall in.
+  const shown = options.map((option) => `${option.skill.id}${option.received ? "+" : ""}`).join(" ");
 
   useLayoutEffect(() => {
     const el = textarea.current;
@@ -38,8 +45,16 @@ export default function SkillCompletionList({
     const measure = () => {
       const box = el.getBoundingClientRect();
       const caret = caretOffset(el, query.start);
-      const left = Math.max(4, Math.min(box.left + caret.left, window.innerWidth - WIDTH - 4));
-      setPlace({ top: box.top + caret.top + caret.height + 2, left });
+      const top = box.top + caret.top;
+      // Its height unclamped: the rows' full height, the foot, the borders.
+      const height = (rows.current?.scrollHeight ?? 0) + (foot.current?.offsetHeight ?? 0) + 2;
+      setPlace(
+        placeAtCaret(
+          { top, bottom: top + caret.height, left: box.left + caret.left },
+          { width: WIDTH, height, maxHeight: MAX_HEIGHT },
+          { width: window.innerWidth, height: window.innerHeight },
+        ),
+      );
     };
     measure();
     window.addEventListener("scroll", measure, true);
@@ -48,7 +63,7 @@ export default function SkillCompletionList({
       window.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
     };
-  }, [query, textarea]);
+  }, [query, shown, textarea]);
 
   if (!query || options.length === 0) return null;
   const received = options.filter((option) => option.received);
@@ -96,16 +111,21 @@ export default function SkillCompletionList({
       role="listbox"
       aria-label="Skills"
       data-testid="skill-completion-list"
-      className="fixed z-[60] flex max-h-[280px] flex-col rounded-md border border-line-strong bg-bg-2 font-sans shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
-      style={{ top: place?.top ?? 0, left: place?.left ?? 0, width: WIDTH, fontSize: "11px" }}
+      data-placement={place && "bottom" in place ? "above" : "below"}
+      className="fixed z-[60] flex flex-col rounded-md border border-line-strong bg-bg-2 font-sans shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
+      style={{
+        ...(place ?? { top: 0, left: 0, maxHeight: MAX_HEIGHT }),
+        width: WIDTH,
+        fontSize: "11px",
+      }}
     >
-      <div className="min-h-0 overflow-y-auto py-1">
+      <div ref={rows} className="min-h-0 overflow-y-auto py-1">
         {received.length > 0 && <GroupHead label={`On this ${scope}`} />}
         {received.map((option, i) => row(option, i))}
         {rest.length > 0 && <GroupHead label="Skill bank" />}
         {rest.map((option, i) => row(option, received.length + i))}
       </div>
-      <div className="border-t border-line px-2.5 py-1 text-fg-4" style={{ fontSize: "9.5px" }}>
+      <div ref={foot} className="border-t border-line px-2.5 py-1 text-fg-4" style={{ fontSize: "9.5px" }}>
         ↑↓ choose · ↵ insert · esc close
       </div>
     </div>,

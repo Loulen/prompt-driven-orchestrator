@@ -9,6 +9,7 @@ mod command;
 mod contribution;
 mod hosted;
 mod location;
+mod location_accepts;
 mod slot;
 mod when;
 

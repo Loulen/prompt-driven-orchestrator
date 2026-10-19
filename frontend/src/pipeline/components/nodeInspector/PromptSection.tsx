@@ -1,9 +1,22 @@
+import { useMemo } from "react";
 import { Lock } from "lucide-react";
 import { SectionHead } from "../InspectorPrimitives";
+import type { Skill } from "../../../shared/generated/Skill";
+import type { SkillRef } from "../../../shared/generated/SkillRef";
+import type { SkillBank } from "../../../skill/model/skill";
+import { resolveActiveSkills, type InheritedTier } from "../../../skill/model/skillSelection";
+import { useSkillPromptField } from "../../../skill/store/useSkillPromptField";
+import SkillCompletionList from "../../../skill/components/SkillCompletionList";
+import SkillPromptHint from "../../../skill/components/SkillPromptHint";
 
 /**
  * The node's prompt — or, for a script node (#248), its bash body — and the
  * invocation lines PDO files under it at spawn for the toggles that are on.
+ *
+ * An agentic prompt completes skills: `/` at the start of a word lists the
+ * bank's skills at the caret, those the node receives first; picking one the
+ * node does not receive adds it to the node's Skills (`onAddSkill`), and the
+ * line under the prompt says so.
  */
 export default function PromptSection({
   nodeId,
@@ -12,6 +25,11 @@ export default function PromptSection({
   isOrchestrator,
   promptContent,
   updatePrompt,
+  skillBank,
+  ownSkills,
+  inheritedSkillTiers,
+  onAddSkill,
+  lastAddedSkill,
 }: {
   nodeId: string;
   isScript: boolean;
@@ -19,7 +37,30 @@ export default function PromptSection({
   isOrchestrator: boolean;
   promptContent: string;
   updatePrompt: (nodeId: string, content: string) => void;
+  skillBank: SkillBank;
+  ownSkills: SkillRef[];
+  inheritedSkillTiers: InheritedTier[];
+  /** Absent when the node's skills cannot change (frozen at spawn, archived). */
+  onAddSkill?: (skill: Skill) => void;
+  /** The last skill the completion added to this node, for the line under the prompt. */
+  lastAddedSkill?: string | null;
 }) {
+  const received = useMemo(
+    () =>
+      new Set(
+        resolveActiveSkills("node", ownSkills, inheritedSkillTiers, skillBank)
+          .rows.filter((row) => !row.missing)
+          .map((row) => row.id),
+      ),
+    [ownSkills, inheritedSkillTiers, skillBank],
+  );
+  const { fieldProps, completion, pick } = useSkillPromptField({
+    value: promptContent,
+    onChange: (content) => updatePrompt(nodeId, content),
+    bank: skillBank,
+    received,
+    onAdd: onAddSkill,
+  });
   return (
     <>
         {/* Prompt / Script body. For a script node (#248) this textarea holds the
@@ -45,14 +86,18 @@ export default function PromptSection({
           // called, and what the script tests point at); the agentic prompt gets the
           // stable target the First pipeline tour types into.
           data-testid={isScript ? "script-body" : "node-prompt-input"}
-          value={promptContent}
-          onChange={(e) => updatePrompt(nodeId, e.target.value)}
+          {...(isScript
+            ? { value: promptContent, onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => updatePrompt(nodeId, e.target.value) }
+            : fieldProps)}
           className={`min-h-[120px] w-full resize-y rounded border border-line-strong bg-bg-3 px-2 py-1.5 font-mono text-fg outline-none focus:border-acc ${
             !isScript && (isOrchestrator || isInteractive) ? "rounded-b-none border-b-0 border-dashed" : ""
           }`}
           style={{ fontSize: "11px", lineHeight: "1.5" }}
           placeholder={isScript ? "#!/usr/bin/env bash\n# e.g. curl -X POST \"$DISCORD_WEBHOOK\" ..." : "Enter the node's role prompt..."}
         />
+        {!isScript && (
+          <SkillCompletionList completion={completion} textarea={fieldProps.ref} onPick={pick} scope="node" />
+        )}
 
         {/* #723 / #588 — the invocation lines PDO files at spawn for the toggles
             that are on, in spawn order (interactive, then orchestrate). Rendered,
@@ -75,6 +120,7 @@ export default function PromptSection({
             </pre>
           </div>
         )}
+        {!isScript && <SkillPromptHint scope="node" lastAdded={lastAddedSkill ?? null} testId="node-prompt-skill-hint" />}
     </>
   );
 }

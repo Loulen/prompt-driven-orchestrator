@@ -49,6 +49,11 @@ const NOT_MUTATIONS: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
+        "/settings/skills/export",
+        "zips skills of the bank for a download; stores nothing",
+    ),
+    (
+        "POST",
         "/authorize",
         "the question of authorization (CORE-5): asks the extensions about Operations without \
          running any; stores nothing",
@@ -507,6 +512,13 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             "/settings/skills/import",
             "/settings/skills/import".into(),
             Some(json!({ "scan_id": "scan-1", "source": SOURCE, "items": [] })),
+        ),
+        // Refused before the body is read as a zip.
+        call(
+            "POST",
+            "/settings/skills/upload",
+            "/settings/skills/upload?name=x.zip".into(),
+            Some(json!({})),
         ),
         call(
             "POST",

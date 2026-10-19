@@ -3,6 +3,7 @@
 //! startup seed and the delivery into a worktree (a transition of the
 //! scheduler, D10) go straight to the ports.
 
+mod bundle;
 mod create_folder;
 mod create_skill;
 mod delete_file;
@@ -24,6 +25,7 @@ mod update_from_source;
 mod update_skill;
 mod upload_files;
 
+pub use bundle::BankExport;
 pub use deliver::Delivered;
 pub use edit_file::SavedFile;
 pub use queries::{BankListing, FileContent, SkillDetail};

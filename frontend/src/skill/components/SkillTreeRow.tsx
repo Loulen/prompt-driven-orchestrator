@@ -18,6 +18,7 @@ export default function TreeRowView({
   onDoubleClick,
   actions,
   leading,
+  marked = false,
   draggable,
   isDragging,
   isDropTarget,
@@ -38,6 +39,8 @@ export default function TreeRowView({
   onDoubleClick: () => void;
   actions?: ReactNode;
   leading?: ReactNode;
+  /** Part of the tree's multiple selection: tinted like a selected row. */
+  marked?: boolean;
   draggable: boolean;
   isDragging: boolean;
   isDropTarget: boolean;
@@ -64,7 +67,9 @@ export default function TreeRowView({
           ? "bg-acc/15 outline outline-1 outline-acc"
           : selected
             ? "bg-acc/10 outline outline-1 outline-acc/40"
-            : "hover:bg-bg-5"
+            : marked
+              ? "bg-acc/10 hover:bg-acc/15"
+              : "hover:bg-bg-5"
       } ${isDragging ? "opacity-40" : ""}`}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -82,6 +87,7 @@ export default function TreeRowView({
         onDragStart={draggable ? onDragStart : undefined}
         onDragEnd={draggable ? onDragEnd : undefined}
       >
+        {leading}
         {isFolder ? (
           <button
             type="button"
@@ -97,7 +103,6 @@ export default function TreeRowView({
         ) : (
           <span className="h-4 w-4 shrink-0" />
         )}
-        {leading}
         {isFolder ? (
           row.expanded ? (
             <FolderOpen size={13} className="shrink-0 text-st-await" />

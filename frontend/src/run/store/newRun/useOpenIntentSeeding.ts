@@ -33,7 +33,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     setMaxConcurrent, setError, setProvisioning, setProvisioningValid, setProvisioningBlockReason,
     setSecondaryRepos,
     settings, setSettings, setSettingsFailed, setSandbox, setHarness, setAgentChoice,
-    setSkills, recentRepos,
+    setSkills, setPromptAddedSkills, recentRepos,
   } = s;
 
   // #386: the modal is always-mounted (`if (!open) return null` below), so its
@@ -283,7 +283,8 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     // #669: an `edit-trigger` round-trips the Trigger's own list; a run / new
     // trigger seeds empty (the inherited tiers stay labels, never copied).
     setSkills(openIntent.kind === "edit-trigger" ? openIntent.trigger.skills ?? [] : []);
-  }, [open, openIntent, setAgentChoice, setHarness, setSkills]);
+    setPromptAddedSkills([]);
+  }, [open, openIntent, setAgentChoice, setHarness, setSkills, setPromptAddedSkills]);
 
   // #338: seed the "Auto-generated" box once per open, ref-gated (same anti-reseed guard as
   // the sandbox selector, so a `settings` state surviving a close cannot re-seed a REOPEN

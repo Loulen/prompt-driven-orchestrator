@@ -342,6 +342,9 @@ mod sandbox_profiles;
 #[path = "skill_bank.rs"]
 mod skill_bank;
 
+#[path = "skill_bundle.rs"]
+mod skill_bundle;
+
 #[path = "skill_document.rs"]
 mod skill_document;
 

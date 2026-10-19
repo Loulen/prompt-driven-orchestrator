@@ -49,6 +49,10 @@ pub enum SkillError {
     Locked {
         id: String,
     },
+    /// An export that names no skill: nothing selected, or folders holding none.
+    NothingToExport,
+    /// An uploaded archive that is not a zip, or a zip that holds no skill.
+    InvalidArchive(String),
     /// An extension refused the Operation.
     Denied(Denied),
     Storage(String),
@@ -77,6 +81,8 @@ impl SkillError {
             Self::FileTooLarge { .. } => "file_too_large",
             Self::SourceNotAFile(_) => "source_not_a_file",
             Self::Locked { .. } => "locked",
+            Self::NothingToExport => "nothing_to_export",
+            Self::InvalidArchive(_) => "invalid_archive",
             Self::Denied(_) => "denied",
             Self::Storage(_) => "storage",
         }
@@ -167,6 +173,8 @@ impl fmt::Display for SkillError {
                  provides): it is recreated at every daemon start and locked against editing \
                  and deletion"
             ),
+            Self::NothingToExport => write!(f, "nothing to export: the selection holds no skill"),
+            Self::InvalidArchive(reason) => write!(f, "{reason}"),
             Self::Denied(denied) => write!(f, "{denied}"),
             Self::Storage(message) => write!(f, "{message}"),
         }

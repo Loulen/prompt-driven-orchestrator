@@ -45,6 +45,7 @@ export default function SkillSelector({
   label = "Skills",
   testId = "skill-selector",
   readOnly = false,
+  added = [],
 }: {
   tier: SkillTier;
   own: SkillRef[];
@@ -54,6 +55,9 @@ export default function SkillSelector({
   label?: string;
   testId?: string;
   readOnly?: boolean;
+  /** Skills a prompt's `/` completion just added to `own`: a chip each under
+   *  the button, « <name> · added », while they stay selected. */
+  added?: SkillRef[];
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
@@ -105,6 +109,7 @@ export default function SkillSelector({
     return map;
   }, [resolved, tier]);
   const ownIds = useMemo(() => new Set(own.map((skill) => skill.id)), [own]);
+  const addedChips = added.filter((skill) => ownIds.has(skill.id));
   const hasMissing = resolved.missing.length > 0;
   const missingMessage = missingSentence(resolved.missing);
 
@@ -175,6 +180,21 @@ export default function SkillSelector({
         )}
         <ChevronDown size={11} className="shrink-0 text-fg-4" />
       </button>
+
+      {addedChips.length > 0 && (
+        <ul className="mt-1 flex flex-wrap gap-1" data-testid={`${testId}-added`}>
+          {addedChips.map((skill) => (
+            <li
+              key={skill.id}
+              data-testid={`${testId}-added-${skill.id}`}
+              className="rounded border border-st-await/35 bg-st-await-bg px-1.5 py-0.5 font-mono text-st-await"
+              style={{ fontSize: 10 }}
+            >
+              {bank.skills.find((known) => known.id === skill.id)?.name ?? skill.name} · added
+            </li>
+          ))}
+        </ul>
+      )}
 
       {/* Read-only (a node whose spawn froze its skills, a Trigger's detail) opens
           the popover all the same: the reading is the point, and refusing to open

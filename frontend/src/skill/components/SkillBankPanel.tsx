@@ -8,6 +8,8 @@ import ImportSkillsModal from "./ImportSkillsModal";
 import BankToolbar from "./BankToolbar";
 import BankDetailPane from "./BankDetailPane";
 import TreeRowActions from "./TreeRowActions";
+import TreeRowCheck from "./TreeRowCheck";
+import ExportSelectionBar from "./ExportSelectionBar";
 
 interface Props {
   bank: SkillBank;
@@ -67,6 +69,8 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             }}
             onDropSkill={(skillId, folderId) => void panel.moveSkill(skillId, folderId)}
             renderActions={renderActions}
+            renderLeading={(row) => <TreeRowCheck row={row} bank={bank} panel={panel} />}
+            isMarked={(row) => row.ref.kind === "skill" && panel.checked.has(row.ref.id)}
             onRequestRename={panel.startRename}
             onRequestDelete={(ref) => void panel.askDelete(ref)}
             emptyState={
@@ -83,6 +87,9 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
           />
         </div>
 
+        {panel.checkedCount > 0 ? (
+          <ExportSelectionBar bank={bank} panel={panel} />
+        ) : (
         <div
           className="flex items-center justify-between gap-2 border-t border-line px-3 py-2 text-fg-4"
           style={{ fontSize: "10.5px" }}
@@ -98,6 +105,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             </span>
           )}
         </div>
+        )}
       </div>
 
       {/* Right: detail / confirmation / empty state */}

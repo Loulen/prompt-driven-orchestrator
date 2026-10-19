@@ -168,6 +168,22 @@ pub(super) fn push_source_edits(preamble: &mut String, ctx: &AugmentContext<'_>)
     }
 }
 
+/// The address humans open PDO at, when the instance sets one: every link the
+/// agent hands a human starts there, never at `localhost`.
+pub(super) fn push_public_url(preamble: &mut String, ctx: &AugmentContext<'_>) {
+    let Some(url) = ctx.public_url else {
+        return;
+    };
+    preamble.push_str("## Public URL\n\n");
+    preamble.push_str(&format!(
+        "Humans open this PDO at `{url}` (also in `PDO_PUBLIC_URL`). Start every link you \
+         give them there, never at `localhost`: this Run is `{url}/#/runs/{run}`, a node \
+         `{url}/#/runs/{run}/nodes/<node>`, its Review `{url}/runs/{run}/review`. \
+         `pdo page mount` prints the links of a mounted page under it.\n\n",
+        run = ctx.run_id
+    ));
+}
+
 /// How the node completes, fails, skips or waits on its user.
 pub(super) fn push_completion(preamble: &mut String) {
     // #588 / ADR-0069 §2: ONE Completion block for every agentic node. The

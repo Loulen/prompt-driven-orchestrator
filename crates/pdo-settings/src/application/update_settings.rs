@@ -9,7 +9,9 @@ use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use serde_json::Value;
 
 use super::SettingsError;
-use crate::domain::edit::{check_ranges, parse_edit, unknown_manager_profile};
+use crate::domain::edit::{
+    check_ranges, normalize_public_url, parse_edit, unknown_manager_profile,
+};
 use crate::domain::instance_config::UpdateInstanceConfig;
 use crate::Settings;
 
@@ -19,8 +21,9 @@ impl Settings {
             actor,
             &Operation::new(ResourceKind::InstanceSettings, Verb::Update),
         )?;
-        let edit = parse_edit(body).map_err(SettingsError::Invalid)?;
+        let mut edit = parse_edit(body).map_err(SettingsError::Invalid)?;
         check_ranges(&edit).map_err(SettingsError::Invalid)?;
+        normalize_public_url(&mut edit).map_err(SettingsError::Invalid)?;
         self.check_references(&edit).await?;
 
         let update_check = edit.update_check;

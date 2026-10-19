@@ -27,8 +27,8 @@ use application::list_audit::ListAudit;
 use application::mount_page::MountPage;
 use application::page_journal::PageMountLock;
 use application::ports::{
-    AuditLog, Installation, PageFiles, PageMountRepository, ReleaseSource, Runs, StorageError,
-    UpdateCheckSetting, UpdateExecutor, UpdateJournal,
+    AuditLog, Installation, PageFiles, PageMountRepository, PublicUrlSetting, ReleaseSource, Runs,
+    StorageError, UpdateCheckSetting, UpdateExecutor, UpdateJournal,
 };
 use application::read_attempt_log::ReadAttemptLog;
 use application::read_pages::ReadPages;
@@ -49,6 +49,8 @@ pub struct PlatformPorts {
     pub runs: Arc<dyn Runs>,
     /// The `update_check` setting (implemented by the `settings` context).
     pub update_setting: Arc<dyn UpdateCheckSetting>,
+    /// The `public_url` setting (implemented by the `settings` context).
+    pub public_url: Arc<dyn PublicUrlSetting>,
     pub release_source: Arc<dyn ReleaseSource>,
     pub update_journal: Arc<dyn UpdateJournal>,
     pub installation: Arc<dyn Installation>,
@@ -71,6 +73,7 @@ pub struct Platform {
     pub(crate) read_attempt_log: ReadAttemptLog,
     page_mounts: Arc<dyn PageMountRepository>,
     audit: Arc<dyn AuditLog>,
+    public_url: Arc<dyn PublicUrlSetting>,
     service_health: ServiceHealth,
 }
 
@@ -87,6 +90,7 @@ impl Platform {
             audit,
             runs,
             update_setting,
+            public_url,
             release_source,
             update_journal,
             installation,
@@ -133,6 +137,7 @@ impl Platform {
             read_attempt_log: ReadAttemptLog::new(context),
             page_mounts,
             audit,
+            public_url,
             service_health,
         })
     }
@@ -156,6 +161,11 @@ impl Platform {
     /// The version check, on demand, periodic, or right after it was turned on.
     pub fn check_for_update(&self) -> &CheckForUpdate {
         &self.check_for_update
+    }
+
+    /// The instance's Public URL, read fresh (`stored → env → none`).
+    pub async fn public_url(&self) -> Option<String> {
+        self.public_url.resolve().await
     }
 
     /// The persistent-service health observed at boot.

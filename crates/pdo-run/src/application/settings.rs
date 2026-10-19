@@ -53,6 +53,13 @@ pub async fn stored_default_harness_models(runs: &Runs) -> BTreeMap<String, Stri
     map
 }
 
+/// The address humans open PDO at, resolved `stored → env → none`: what a
+/// session launched now receives as `PDO_PUBLIC_URL`.
+pub async fn public_url(runs: &Runs) -> Option<String> {
+    let stored = runs.settings.defaults().await.and_then(|c| c.public_url);
+    pdo_kernel::public_url::resolve(stored.as_deref(), pdo_kernel::public_url::env_public_url())
+}
+
 /// Turn-end auto-completion, resolved the way the liveness sweep does. The hook
 /// and the sweep are one policy on ONE setting (ADR-0043) — there is
 /// deliberately no second toggle.

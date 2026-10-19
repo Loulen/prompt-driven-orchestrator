@@ -5,6 +5,7 @@ pub mod attempt;
 pub mod audit;
 pub mod changelog;
 pub mod install;
+pub mod page_guide;
 pub mod page_mount;
 pub mod release;
 pub mod release_channel;

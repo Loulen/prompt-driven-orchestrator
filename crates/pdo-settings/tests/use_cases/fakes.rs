@@ -50,6 +50,7 @@ impl Default for InMemoryConfig {
                 manager_enabled: None,
                 manager_profile: None,
                 max_attachments_mb: None,
+                public_url: None,
                 updated_at: "2026-01-01T00:00:00.000Z".into(),
             }),
             retired: Mutex::new(Vec::new()),
@@ -89,7 +90,8 @@ impl InstanceConfigStore for InMemoryConfig {
             macro_rules! set_with {
                 ($conv:ident: $($f:ident),*) => { $(if let Some(v) = e.$f { r.$f = $conv(v); })* };
             }
-            set_with!(text: default_model, default_sandbox, default_harness, manager_profile);
+            set_with!(text: default_model, default_sandbox, default_harness, manager_profile,
+                public_url);
             set_with!(flag: autocomplete_turn_end, default_auto_name, auto_fail, update_check,
                 review_agent_can_resolve, manager_enabled);
             if let Some(v) = e.default_harness_model {

@@ -44,6 +44,8 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("manager_profile", "TEXT"),
     // #779: the per-run attachment budget.
     ("max_attachments_mb", "INTEGER"),
+    // The address humans open PDO at; NULL keeps the env tier, then none.
+    ("public_url", "TEXT"),
 ];
 
 /// Create both tables if absent, seed the all-NULL singleton row and the

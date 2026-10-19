@@ -107,4 +107,10 @@ manager_profile?: string | null,
  * Set the per-run attachment budget in MB (#779). Set-only like the other
  * numeric knobs; `PUT /settings` refuses `< 1`.
  */
-max_attachments_mb?: number | null, };
+max_attachments_mb?: number | null, 
+/**
+ * Set the Public URL: `Some("")` clears it back to unset (same
+ * `""`-sentinel as `default_model`); anything else must be an
+ * `http(s)://` address, stored normalized. `None` leaves it untouched.
+ */
+public_url?: string | null, };

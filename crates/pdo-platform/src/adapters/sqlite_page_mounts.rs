@@ -1,4 +1,5 @@
-//! Page mounts in SQLite: the `page_mounts` table of `pdo.db`.
+//! Page mounts in SQLite: the `page_mounts` table of `pdo.db`. The guide is a
+//! JSON column of the mount's row, so it goes with the row.
 
 use sqlx::{Row, SqlitePool};
 
@@ -19,22 +20,47 @@ fn storage(error: sqlx::Error) -> StorageError {
     StorageError(error.to_string())
 }
 
+const COLUMNS: &str = "name, directory, run_id, node_id, created_at, guide";
+
 fn row_to_mount(row: &sqlx::sqlite::SqliteRow) -> Result<PageMount, sqlx::Error> {
+    let guide: Option<String> = row.try_get("guide")?;
+    let guide = guide
+        .map(|raw| serde_json::from_str(&raw))
+        .transpose()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(PageMount {
         name: row.try_get("name")?,
         directory: row.try_get("directory")?,
         run_id: row.try_get("run_id")?,
+        node_id: row.try_get("node_id")?,
         created_at: row.try_get("created_at")?,
+        guide,
     })
 }
 
 async fn get(db: &SqlitePool, name: &str) -> Result<Option<PageMount>, sqlx::Error> {
-    let row =
-        sqlx::query("SELECT name, directory, run_id, created_at FROM page_mounts WHERE name = ?")
-            .bind(name)
+    let row = sqlx::query(&format!(
+        "SELECT {COLUMNS} FROM page_mounts WHERE name = ?"
+    ))
+    .bind(name)
+    .fetch_optional(db)
+    .await?;
+    row.as_ref().map(row_to_mount).transpose()
+}
+
+/// Add `column` to `page_mounts` when a database older than it lacks it.
+async fn add_column(db: &SqlitePool, column: &str) -> Result<(), sqlx::Error> {
+    let present: Option<(String,)> =
+        sqlx::query_as("SELECT name FROM pragma_table_info('page_mounts') WHERE name = ?")
+            .bind(column)
             .fetch_optional(db)
             .await?;
-    row.as_ref().map(row_to_mount).transpose()
+    if present.is_none() {
+        sqlx::query(&format!("ALTER TABLE page_mounts ADD COLUMN {column} TEXT"))
+            .execute(db)
+            .await?;
+    }
+    Ok(())
 }
 
 impl PageMountRepository for SqlitePageMounts {
@@ -55,19 +81,28 @@ impl PageMountRepository for SqlitePageMounts {
                 .execute(&self.db)
                 .await
                 .map_err(storage)?;
+            for column in ["node_id", "guide"] {
+                add_column(&self.db, column).await.map_err(storage)?;
+            }
             Ok(())
         })
     }
 
     fn insert<'a>(&'a self, mount: &'a PageMount) -> BoxFuture<'a, Result<(), InsertError>> {
         Box::pin(async move {
-            let result = sqlx::query(
-                "INSERT INTO page_mounts (name, directory, run_id, created_at) VALUES (?, ?, ?, ?)",
-            )
+            let guide = match mount.guide.as_ref().map(serde_json::to_string).transpose() {
+                Ok(guide) => guide,
+                Err(e) => return Err(InsertError::Storage(StorageError(e.to_string()))),
+            };
+            let result = sqlx::query(&format!(
+                "INSERT INTO page_mounts ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)"
+            ))
             .bind(&mount.name)
             .bind(&mount.directory)
             .bind(&mount.run_id)
+            .bind(&mount.node_id)
             .bind(&mount.created_at)
+            .bind(guide)
             .execute(&self.db)
             .await;
             match result {
@@ -86,9 +121,9 @@ impl PageMountRepository for SqlitePageMounts {
 
     fn list(&self) -> BoxFuture<'_, Result<Vec<PageMount>, StorageError>> {
         Box::pin(async move {
-            let rows = sqlx::query(
-                "SELECT name, directory, run_id, created_at FROM page_mounts ORDER BY name ASC",
-            )
+            let rows = sqlx::query(&format!(
+                "SELECT {COLUMNS} FROM page_mounts ORDER BY name ASC"
+            ))
             .fetch_all(&self.db)
             .await
             .map_err(storage)?;
@@ -131,6 +166,7 @@ impl PageMountRepository for SqlitePageMounts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::page_guide::GuideEntry;
 
     async fn repository() -> SqlitePageMounts {
         let db = sqlx::sqlite::SqlitePoolOptions::new()
@@ -149,7 +185,9 @@ mod tests {
             name: name.into(),
             directory: format!("/srv/{name}"),
             run_id: run_id.map(str::to_string),
+            node_id: run_id.map(|_| "n1".to_string()),
             created_at: "2026-09-26T00:00:00.000Z".into(),
+            guide: None,
         }
     }
 
@@ -168,6 +206,46 @@ mod tests {
             .map(|m| m.name)
             .collect();
         assert_eq!(names, ["a", "b"], "listed by name");
+    }
+
+    #[tokio::test]
+    async fn the_guide_is_kept_with_its_mount_and_goes_with_it() {
+        let repo = repository().await;
+        let mut guided = mount("g", Some("r1"));
+        guided.guide = Some(vec![GuideEntry {
+            title: "Start here".into(),
+            text: "The chosen option.".into(),
+            link: "#a".into(),
+        }]);
+        repo.insert(&guided).await.unwrap();
+        assert_eq!(repo.get("g").await.unwrap(), Some(guided.clone()));
+        assert_eq!(repo.list().await.unwrap(), vec![guided]);
+        assert_eq!(repo.remove_for_run("r1").await.unwrap(), 1);
+        assert_eq!(repo.get("g").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_table_older_than_the_guide_gains_its_columns() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE page_mounts (name TEXT PRIMARY KEY, directory TEXT NOT NULL, \
+             run_id TEXT, created_at TEXT NOT NULL)",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO page_mounts VALUES ('old', '/srv/old', NULL, 'then')")
+            .execute(&db)
+            .await
+            .unwrap();
+        let repo = SqlitePageMounts::new(db);
+        repo.init().await.unwrap();
+        let old = repo.get("old").await.unwrap().unwrap();
+        assert_eq!((old.node_id, old.guide), (None, None));
     }
 
     #[tokio::test]

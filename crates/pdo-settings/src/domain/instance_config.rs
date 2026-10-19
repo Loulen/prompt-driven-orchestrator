@@ -162,6 +162,11 @@ pub struct InstanceConfig {
     /// run » modal through `GET /settings`, so the client-side gate and the
     /// daemon's refusal cannot disagree.
     pub max_attachments_mb: Option<i64>,
+    /// Stored Public URL, the address humans open PDO at, or `None` when unset
+    /// (`stored → env PDO_PUBLIC_URL → none`, resolved by
+    /// [`pdo_kernel::public_url::resolve`]). Stored normalized: `http(s)://host[:port][/path]`
+    /// without a trailing `/`.
+    pub public_url: Option<String>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -248,6 +253,10 @@ pub struct UpdateInstanceConfig {
     /// Set the per-run attachment budget in MB (#779). Set-only like the other
     /// numeric knobs; `PUT /settings` refuses `< 1`.
     pub max_attachments_mb: Option<i64>,
+    /// Set the Public URL: `Some("")` clears it back to unset (same
+    /// `""`-sentinel as `default_model`); anything else must be an
+    /// `http(s)://` address, stored normalized. `None` leaves it untouched.
+    pub public_url: Option<String>,
 }
 
 impl UpdateInstanceConfig {
@@ -270,5 +279,6 @@ impl UpdateInstanceConfig {
             && self.manager_enabled.is_none()
             && self.manager_profile.is_none()
             && self.max_attachments_mb.is_none()
+            && self.public_url.is_none()
     }
 }

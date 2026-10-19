@@ -92,6 +92,8 @@ pub trait Runs: Send + Sync {
     ) -> BoxFuture<'a, Result<(), String>>;
     /// How many Runs are live (running, awaiting the user, paused).
     fn count_live(&self) -> BoxFuture<'_, usize>;
+    /// The ids of the nodes of `run_id`; `None` when there is no such Run.
+    fn node_ids<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Option<Vec<String>>>;
 }
 
 /// The out-of-Run audit journal.
@@ -112,6 +114,13 @@ pub trait UpdateCheckSetting: Send + Sync {
     /// Whether the version check may run, resolved fresh (`stored → env →
     /// default`) so a toggle takes effect without a restart.
     fn enabled(&self) -> BoxFuture<'_, bool>;
+}
+
+/// The `public_url` instance setting. Implemented by the `settings` context.
+pub trait PublicUrlSetting: Send + Sync {
+    /// The address humans open PDO at, resolved fresh (`stored → env → none`)
+    /// so a change takes effect without a restart.
+    fn resolve(&self) -> BoxFuture<'_, Option<String>>;
 }
 
 /// The release source.

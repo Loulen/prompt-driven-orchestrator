@@ -38,9 +38,13 @@ impl World {
     }
 
     fn mount(&self) -> MountPage {
+        self.mount_over(Files::default())
+    }
+
+    fn mount_over(&self, files: Files) -> MountPage {
         MountPage::new(
             self.pages.clone(),
-            Arc::new(Files::default()),
+            Arc::new(files),
             self.runs.clone(),
             RecordAudit::new(self.audit.clone()),
             self.host.clone() as Arc<dyn ExtensionHost>,
@@ -63,8 +67,37 @@ fn command(name: &str, directory: &str) -> MountPageCommand {
     MountPageCommand {
         name: name.into(),
         directory: PathBuf::from(directory),
+        guide: None,
         hint: ActorHint::Cli,
     }
+}
+
+fn guided(guide: &str) -> MountPageCommand {
+    MountPageCommand {
+        guide: Some(guide.into()),
+        ..command("demo", "/srv/demo")
+    }
+}
+
+/// A world where Run `r1` has the nodes `n1` and `design`, and the page has
+/// `index.html` and `sub/b.html`.
+fn guided_world() -> (World, Files) {
+    let runs = FakeRuns {
+        live_sessions: vec![("r1".into(), "n1".into())],
+        nodes: [("r1".to_string(), vec!["n1".to_string(), "design".to_string()])]
+            .into_iter()
+            .collect(),
+        ..FakeRuns::default()
+    };
+    let files = Files(
+        [
+            ("/srv/demo/index.html".to_string(), b"i".to_vec()),
+            ("/srv/demo/sub/b.html".to_string(), b"b".to_vec()),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    (World::new(runs, Host::allowing()), files)
 }
 
 fn agent() -> Actor {
@@ -293,4 +326,68 @@ async fn files_are_read_beneath_their_mount_only() {
     assert!(read.file("demo", "../demo/a.html").await.unwrap().is_none());
     assert!(read.file("nope", "a.html").await.unwrap().is_none());
     assert_eq!(read.list().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_guide_is_mounted_with_its_page_and_its_author() {
+    let (w, files) = guided_world();
+    let guide = "\
+- title: Start with option A
+  text: The chosen snap.
+  link: '#snap-a'
+- title: Where it plugs
+  link: '#/runs/r1/nodes/design'
+- title: Before
+  link: '#/runs/r1/nodes/design/artifacts/before'
+- title: The code
+  link: /runs/r1/review?file=src%2Fa.ts
+- title: The other page
+  link: sub/b.html#x
+";
+    let mount = w.mount_over(files).execute(&agent(), guided(guide)).await.unwrap();
+    let entries = mount.guide.expect("a guide");
+    assert_eq!(entries.len(), 5);
+    assert_eq!(entries[0].title, "Start with option A");
+    assert_eq!(entries[0].text, "The chosen snap.");
+    assert_eq!(entries[3].link, "/runs/r1/review?file=src%2Fa.ts");
+    assert_eq!(mount.node_id.as_deref(), Some("n1"));
+    let stored = w.pages.0.lock().unwrap()["demo"].clone();
+    assert_eq!(stored.guide.unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn an_invalid_guide_is_refused_with_its_reason_and_nothing_is_mounted() {
+    for (guide, reason) in [
+        ("not: a list", "guide is not a list"),
+        ("- title: t\n  link: 'https://x'\n", "guide entry 1: link `https://x` leads nowhere"),
+        ("- title: t\n  link: '#/runs/r9'\n", "guide entry 1: Run `r9` not found"),
+        (
+            "- title: t\n  link: '#a'\n- title: u\n  link: '#/runs/r1/nodes/ghost'\n",
+            "guide entry 2: node `ghost` not found in Run `r1`",
+        ),
+        ("- title: t\n  link: missing.html\n", "guide entry 1: `missing.html` is not a file of the page"),
+        ("- title: t\n  link: /runs/r9/review\n", "guide entry 1: Run `r9` not found"),
+    ] {
+        let (w, files) = guided_world();
+        let err = w.mount_over(files).execute(&agent(), guided(guide)).await.unwrap_err();
+        match err {
+            MountPageError::Invalid(MountError::Invalid(message)) => {
+                assert!(message.starts_with(reason), "{message:?} should start with {reason:?}")
+            }
+            other => panic!("expected a refusal for {guide:?}, got {other:?}"),
+        }
+        assert!(w.pages.0.lock().unwrap().is_empty(), "nothing mounted for {guide:?}");
+        assert!(w.runs.commands.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_page_without_a_guide_has_none() {
+    let w = World::allowing();
+    let mount = w
+        .mount()
+        .execute(&Actor::LocalOperator, command("demo", "/srv/demo"))
+        .await
+        .unwrap();
+    assert_eq!((mount.guide, mount.node_id), (None, None));
 }

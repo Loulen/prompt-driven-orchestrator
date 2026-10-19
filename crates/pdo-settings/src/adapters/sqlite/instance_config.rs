@@ -39,6 +39,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         manager_enabled: row.try_get("manager_enabled").unwrap_or(None),
         manager_profile: row.try_get("manager_profile").unwrap_or(None),
         max_attachments_mb: row.try_get("max_attachments_mb").unwrap_or(None),
+        public_url: row.try_get("public_url").unwrap_or(None),
         updated_at: row.get("updated_at"),
     }
 }
@@ -125,6 +126,9 @@ fn assignments(edit: UpdateInstanceConfig) -> Vec<(&'static str, Bound)> {
     }
     if let Some(v) = edit.max_attachments_mb {
         sets.push(("max_attachments_mb", Bound::Int(Some(v))));
+    }
+    if let Some(v) = edit.public_url {
+        sets.push(("public_url", text(v)));
     }
     sets
 }

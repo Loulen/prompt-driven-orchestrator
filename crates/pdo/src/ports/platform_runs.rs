@@ -1,9 +1,11 @@
 //! The Runs, as the platform context sees them: a page mount's session claim,
-//! the command it records, the live Runs an update's confirm counts.
+//! the command it records, the Runs and nodes its guide links to, the live
+//! Runs an update's confirm counts.
 
 use std::sync::Arc;
 
 use pdo_platform::application::ports::{BoxFuture, Runs as PlatformRuns};
+use pdo_run::application::events::reload_run_state_with;
 use pdo_run::application::session_claim::{verify_session_claim, SessionClaim};
 use pdo_run::domain::event::{Event, EventKind};
 use pdo_run::Runs;
@@ -55,6 +57,13 @@ impl PlatformRuns for RunsOfPlatform {
             .await
             .map(|_| ())
             .map_err(|e| format!("{e:#}"))
+        })
+    }
+
+    fn node_ids<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Option<Vec<String>>> {
+        Box::pin(async move {
+            let (_, run) = reload_run_state_with(&self.0, run_id).await?;
+            Some(run.node_defs.into_iter().map(|def| def.id).collect())
         })
     }
 

@@ -1,4 +1,5 @@
-//! Mount a directory as a live page (`pdo page mount`, `POST /pages`).
+//! Mount a directory as a live page (`pdo page mount`, `POST /pages`), with an
+//! optional reading guide checked before anything is stored.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,11 +12,14 @@ use super::page_journal::{journal, PageMountLock, SessionClaim};
 use super::ports::{InsertError, PageFiles, PageMountRepository, Runs, StorageError};
 use super::record_audit::RecordAudit;
 use crate::domain::audit::ActorHint;
+use crate::domain::page_guide::{self, GuideEntry, GuideLink};
 use crate::domain::page_mount::{check_mountable, validate_name, MountError, PageMount};
 
 pub struct MountPageCommand {
     pub name: String,
     pub directory: PathBuf,
+    /// The guide file's text, as written (YAML or JSON), if the page has one.
+    pub guide: Option<String>,
     /// The origin the caller declared, for the audit row.
     pub hint: ActorHint,
 }
@@ -84,11 +88,21 @@ impl MountPage {
             .canonical_directory(&command.directory)
             .map_err(MountPageError::Invalid)?;
         check_mountable(&directory).map_err(MountPageError::Invalid)?;
+        let guide = match &command.guide {
+            Some(raw) => Some(
+                self.checked_guide(raw, &directory)
+                    .await
+                    .map_err(|why| MountPageError::Invalid(MountError::Invalid(why)))?,
+            ),
+            None => None,
+        };
         let mount = PageMount {
             name: command.name.clone(),
             directory: directory.to_string_lossy().into_owned(),
             run_id: session.as_ref().map(|claim| claim.run_id.clone()),
+            node_id: session.as_ref().map(|claim| claim.node_id.clone()),
             created_at: pdo_kernel::clock::now_iso(),
+            guide,
         };
         match self.pages.insert(&mount).await {
             Ok(()) => {}
@@ -118,5 +132,45 @@ impl MountPage {
             return Err(MountPageError::Journal(error));
         }
         Ok(mount)
+    }
+
+    /// The guide's entries, once its format is right and every link leads
+    /// somewhere: a Run and node that exist, a file beneath the mount.
+    async fn checked_guide(
+        &self,
+        raw: &str,
+        directory: &std::path::Path,
+    ) -> Result<Vec<GuideEntry>, String> {
+        let entries = page_guide::parse(raw)?;
+        for (index, (entry, link)) in entries.iter().enumerate() {
+            let at = |why: String| format!("guide entry {}: {why}", index + 1);
+            let (run_id, node_id) = match link {
+                GuideLink::Run { run_id } | GuideLink::Review { run_id } => (run_id, None),
+                GuideLink::Node { run_id, node_id } | GuideLink::Artifact { run_id, node_id, .. } => {
+                    (run_id, Some(node_id))
+                }
+                GuideLink::Path(components) => {
+                    let found = self
+                        .files
+                        .read(directory, components)
+                        .await
+                        .map_err(|e| at(e.to_string()))?;
+                    if found.is_none() {
+                        return Err(at(format!("`{}` is not a file of the page", entry.link)));
+                    }
+                    continue;
+                }
+                GuideLink::Extension | GuideLink::Anchor => continue,
+            };
+            let Some(nodes) = self.runs.node_ids(run_id).await else {
+                return Err(at(format!("Run `{run_id}` not found")));
+            };
+            if let Some(node_id) = node_id {
+                if !nodes.iter().any(|n| n == node_id) {
+                    return Err(at(format!("node `{node_id}` not found in Run `{run_id}`")));
+                }
+            }
+        }
+        Ok(entries.into_iter().map(|(entry, _)| entry).collect())
     }
 }

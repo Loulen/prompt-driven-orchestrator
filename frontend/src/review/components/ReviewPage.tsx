@@ -122,10 +122,11 @@ export default function ReviewPage({ runId }: Props) {
     registerEl,
     onScroll,
     goFile,
+    landOnFile,
     goHunk,
     jumpTo,
   } = useReviewLayout(files);
-  useReviewFileLanding(files, goFile);
+  useReviewFileLanding(files, landOnFile);
   const { choosePair } = r;
   const { setNodeDelivered } = live;
   const setPair = useCallback(

@@ -28,6 +28,7 @@ import VersionBanner from "./VersionBanner";
 import RunSearchHost from "../../run/components/runSearch/RunSearchHost";
 import WaitingForStartedNodesBanner, { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
 import DragConnectionLine from "./DragConnectionLine";
+import CanvasZoomBadge from "./CanvasZoomBadge";
 import { DragHighlightProvider } from "./DragHighlightContext";
 import { useWiringGridStep } from "../../hooks/useWiringGrid";
 import { useWiringStore } from "../../stores/wiringStore";
@@ -39,7 +40,7 @@ import { useCanvasContextMenu } from "../store/useCanvasContextMenu";
 import { useCanvasLint } from "../store/useCanvasLint";
 import { useCanvasPlacement } from "../store/useCanvasPlacement";
 import { useCanvasReveal } from "../store/useCanvasReveal";
-import { CANVAS_FIT_VIEW_OPTIONS, usePaneToggleReframe } from "../store/usePaneToggleReframe";
+import { CANVAS_FIT_VIEW_OPTIONS, CANVAS_MIN_ZOOM, usePaneToggleReframe } from "../store/usePaneToggleReframe";
 import { useCanvasRunActions } from "../store/useCanvasRunActions";
 import { useCanvasWiring } from "../store/useCanvasWiring";
 import { useCanvasNodeDragStop } from "../store/useCanvasNodeDragStop";
@@ -311,6 +312,8 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           connectionLineComponent={DragConnectionLine}
           deleteKeyCode={null}
           fitView
+          // CORE-88: down to 25 %, where the rim and the snap still hold.
+          minZoom={CANVAS_MIN_ZOOM}
           // #825: never magnify (see CANVAS_FIT_VIEW_OPTIONS).
           fitViewOptions={CANVAS_FIT_VIEW_OPTIONS}
           proOptions={{ hideAttribution: true }}
@@ -324,6 +327,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           {/* Decorative background — pure chrome, but drawn at the wiring grid's
               pitch (#877) so a 30px step does not fall out of phase with it. */}
           <Background color="var(--color-line-soft)" gap={gridStep} size={1} />
+          <CanvasZoomBadge />
           {/* #844: the wiring grid lives in FLOW space. Drawn inside the viewport
               portal, it shares the path's coordinate system exactly, so a dot is
               always a point the trace snaps to — at any zoom, and after a Shift

@@ -19,7 +19,24 @@ type Set = StoreApi<EditState>["setState"];
 type Get = StoreApi<EditState>["getState"];
 
 export function saveSlice(set: Set, get: Get): Partial<EditState> {
-  void get;
+  // The lint above the canvas is the daemon's parse of the file as it was
+  // opened: once a save has written the fix (a broken edge deleted, CORE-88),
+  // re-read it, or the banner keeps naming what is gone until a reload. Only
+  // when there is lint to clear; a failed read keeps it, the save stands.
+  const refreshStaleLint = async (id: string) => {
+    const tab = get().openTabs.find((t) => t.id === id);
+    if (!tab || tab.diagnostics.length === 0) return;
+    try {
+      const detail = tab.runId ? await fetchRunPipeline(tab.runId) : await fetchPipeline(id, tab.scope);
+      set((s) => ({
+        openTabs: s.openTabs.map((t) =>
+          t.id === id ? { ...t, diagnostics: detail.diagnostics ?? [] } : t,
+        ),
+      }));
+    } catch {
+      // keep the lint
+    }
+  };
   return {
   undo: () => set((s) => {
     // ADR-0088: a shared draft undoes my own changes only.
@@ -147,6 +164,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
           ),
           lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
         }));
+        await refreshStaleLint(id);
         return { ok: true, id };
       } else {
         // Save back into the same store the tab was opened from, so a
@@ -178,6 +196,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
             lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
           }));
         }
+        await refreshStaleLint(newId ?? id);
         // The list shows the new version, and the pipeline it kept.
         if (result?.version || result?.kept) void get().loadPipelines();
         return result;

@@ -7,6 +7,7 @@ import type { EditorPipelineDef } from "../model/pipeline";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import { carriedPorts, withCarriedPorts } from "../../lib/edgePorts";
 import { requalifyWhen, renameWhenPorts } from "../../lib/whenClause";
+import { isEmergentInputNode } from "../../lib/anchorSide";
 import { hasUnsavedWork, isTabLocked } from "./editState";
 import { noteDraftGesture } from "./draftGesture";
 import type { EditState, OpenPipeline, TabHistory } from "./editState";
@@ -225,8 +226,18 @@ export function propagatePortChangesToEdges(
     const renamed = ports.map((p) => renameMap.get(p) ?? p);
     const next = renamed.filter((p) => newPortNames.has(p));
     if (next.length === 0) continue;
+    // An emergent input is named after the output it carries (#149): renaming
+    // the output renames that input downstream (CORE-88). A declared input
+    // (End's `result`, a switch's `in`) keeps its own name.
+    const targetType = tab.pipeline.nodes.find((n) => n.id === edge.target.node)?.type;
+    const inputRename = ports.includes(edge.target.port) ? renameMap.get(edge.target.port) : undefined;
+    const target =
+      inputRename && targetType && isEmergentInputNode(targetType)
+        ? { ...edge.target, port: inputRename }
+        : edge.target;
     kept.push({
       ...edge,
+      target,
       source: withCarriedPorts(edge.source, next),
       when: requalifyWhen(renameWhenPorts(edge.when, ports, renameMap), renamed, next),
     });

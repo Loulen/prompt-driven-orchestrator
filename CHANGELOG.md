@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## Versions de pipeline (CORE-91)
+## 2.45.0 — Versions de pipeline (CORE-91)
 
 - Save fige le brouillon partagé en version (ADR-0088), numérotée et titrée (`vN` par défaut) :
   fenêtre « Save… » avec « Save as a new version » (décochée, la dernière version est remplacée
@@ -31,6 +31,19 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - API : `GET /pipelines/{id}/versions`, `GET /pipelines/{id}/versions/{n}` ; `PUT /pipelines/{id}`
   prend `version` (`new_version`, `title`, `keep_old`) et répond `version` et `kept` ;
   `GET /pipelines` gagne `version`. Les Résumés de Run (version 3) se reconstruisent au boot.
+
+## 2.44.0 — Canevas : bord saisissable à tout zoom, renommage d'output validé (CORE-88)
+
+- Le bord d'un nœud est saisissable à tout zoom : 8 px à l'écran, dont au plus 3 px (et 25 % de
+  la carte) à l'intérieur. L'edge part du pixel pressé. Dézoom jusqu'à 25 %, zoom affiché en bas
+  à gauche du canevas.
+- L'accroche suit le zoom : pas du pipeline × 2, 4, 8… tant qu'une maille fait moins de 16 px à
+  l'écran, pastille « snap ×4 · 120px » au curseur. Le tracé enregistré ne dépend pas du zoom.
+- Le renommage d'un output s'applique à ↵ ou à la sortie du champ, Échap l'annule. Un nom pris
+  ou vide est refusé. Les edges suivent et l'input émergent aval prend le nouveau nom.
+- Une edge vers un port absent s'affiche en rouge pointillé, « <port> · port absent », et se
+  supprime directement. Après l'enregistrement, le lint est relu.
+- Hors Run, l'inspecteur n'a plus d'onglet « Run ».
 
 ## 2.43.0 — Brouillon partagé d'un pipeline et présence (CORE-90)
 

@@ -13,6 +13,7 @@
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EdgeSource } from "../shared/generated/EdgeSource";
 import type { EditorNodeDef, EditorPipelineDef } from "../pipeline/model/pipeline";
+import { isEmergentInputNode } from "./anchorSide";
 
 /**
  * The ports this edge carries, in authored order. Never empty for a parsed
@@ -115,6 +116,46 @@ export function edgeCarryingOutput(
   if (!edge) return null;
   const name = (id: string) => pipeline.nodes.find((n) => n.id === id)?.name || id;
   return `${name(edge.source.node)}.${carriedPorts(edge.source).join("+")} -> ${name(edge.target.node)}.${edge.target.port}`;
+}
+
+/**
+ * What renaming output `port` of `nodeId` takes with it (CORE-88): the edges
+ * carrying it, and the nodes downstream whose emergent input is named after it —
+ * the input the rename renames too. Node names, deduplicated, in edge order.
+ */
+export interface RenameImpact {
+  /** Edges carrying the output. */
+  edges: number;
+  /** Names of the downstream nodes whose input is renamed with it. */
+  inputsOf: string[];
+}
+
+export function outputRenameImpact(
+  pipeline: EditorPipelineDef,
+  nodeId: string,
+  port: string,
+): RenameImpact {
+  const carrying = pipeline.edges.filter((e) => e.source.node === nodeId && carries(e.source, port));
+  const inputsOf: string[] = [];
+  for (const edge of carrying) {
+    const target = pipeline.nodes.find((n) => n.id === edge.target.node);
+    if (!target || !isEmergentInputNode(target.type) || edge.target.port !== port) continue;
+    const name = target.name || target.id;
+    if (!inputsOf.includes(name)) inputsOf.push(name);
+  }
+  return { edges: carrying.length, inputsOf };
+}
+
+/**
+ * The ports `edge` carries that its source node does not declare (CORE-88): a
+ * port renamed or removed in the file while the edge still names it. Such an
+ * edge is drawn « cassé ». Empty when the source node itself is unknown — that
+ * edge has no card to leave from at all.
+ */
+export function missingCarriedPorts(pipeline: EditorPipelineDef, edge: EdgeDef): string[] {
+  const source = pipeline.nodes.find((n) => n.id === edge.source.node);
+  if (!source) return [];
+  return carriedPorts(edge.source).filter((p) => !source.outputs.some((o) => o.name === p));
 }
 
 /**

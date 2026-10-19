@@ -24,7 +24,7 @@ import WorkspaceSection from "./nodeInspector/WorkspaceSection";
 import { NodeConfigSections } from "./ExtensionInspectorSections";
 import { derivePooledInputs } from "../../lib/derivePooledInputs";
 import type { PooledInputSource } from "../../lib/derivePooledInputs";
-import { carriedPorts, edgeCarryingOutput, withCarriedPorts } from "../../lib/edgePorts";
+import { carriedPorts, edgeCarryingOutput, outputRenameImpact, withCarriedPorts } from "../../lib/edgePorts";
 import { requalifyWhen } from "../../lib/whenClause";
 import { regionsDestroyedByEdgeRemoval } from "../../lib/loopRegions";
 import type { LibraryEntry } from "../model/library";
@@ -370,6 +370,8 @@ export default function NodeInspector({
               onSchemaChange={(fm) => handleUpdateOutput(i, { frontmatter: fm ?? null })}
               allowInstructions={node.type === "agent"}
               wiredBy={edgeCarryingOutput(tab.pipeline, node.id, port.name)}
+              takenNames={node.outputs.filter((_, j) => j !== i).map((p) => p.name)}
+              wiring={outputRenameImpact(tab.pipeline, node.id, port.name)}
             />
           ))}
         </div>

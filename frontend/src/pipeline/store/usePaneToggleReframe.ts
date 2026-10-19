@@ -15,6 +15,9 @@ import { useEditStore } from "./editStore";
  */
 export const CANVAS_FIT_VIEW_OPTIONS = { maxZoom: 1 } as const;
 
+/** The farthest the canvas dezooms (CORE-88): 25 %. xyflow's own floor is 50 %. */
+export const CANVAS_MIN_ZOOM = 0.25;
+
 export function usePaneToggleReframe(
   reactFlowRef: React.RefObject<HTMLDivElement | null>,
   reactFlow: ReactFlowInstance,

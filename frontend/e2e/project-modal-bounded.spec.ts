@@ -137,6 +137,18 @@ test("Edit project with provisioning open stays in the window; the body scrolls 
     data: { path: repos[0] },
   });
   expect(attach.status()).toBeLessThan(300);
+  // ADR-0087 — a Trigger is listed under the Projet recorded on it, never the
+  // one its repo joined since: give the Projet a group of its own.
+  const inProject = await page.request.post(`${baseURL}/triggers`, {
+    data: {
+      name: `${PREFIX}in-project`,
+      pipeline_id: PIPELINE_NAME,
+      cron: "0 0 1 1 *",
+      target_repo: repos[0],
+      project_id: project.id,
+    },
+  });
+  expect(inProject.status()).toBe(201);
 
   await openTriggersTab(page);
   await openPencil(page, PROJECT_NAME);
@@ -146,8 +158,9 @@ test("Edit project with provisioning open stays in the window; the body scrolls 
   await expect(modal.getByText("Edit project", { exact: true })).toBeInViewport();
   await expect(page.getByTestId("project-edit-save")).toBeInViewport();
 
-  await modal.getByRole("button", { name: "Configure worktree provisioning…" }).click();
-  await expect(modal.getByTestId("provisioning-project")).toBeVisible();
+  // The provisioning block renders collapsed; its header opens it.
+  await modal.getByTestId("provisioning-toggle").click();
+  await expect(modal.getByTestId("provisioning-body")).toBeVisible();
 
   // The panel never leaves the window: bounded to 85vh (510px at 600px).
   const box = (await modal.boundingBox())!;
@@ -174,11 +187,18 @@ test("Edit project with provisioning open stays in the window; the body scrolls 
   await page.getByTestId("project-edit-save").click();
   await expect(modal).toHaveCount(0);
 
-  // The repo now sits under the Projet's group in the Triggers list.
+  // The repo is now a member of the Projet; its Trigger, recorded in no
+  // Projet, stays in its own group (ADR-0087).
+  const saved = (await (await page.request.get(`${baseURL}/projects`)).json()) as Array<{
+    id: string;
+    members: string[];
+  }>;
+  expect(saved.find((p) => p.id === project.id)?.members).toContain(repos[REPO_COUNT - 1]);
   const group = page
     .getByTestId("trigger-repo-group")
     .filter({ has: page.getByTestId("trigger-repo-label").getByText(PROJECT_NAME, { exact: true }) });
-  await expect(group.getByText(`${PREFIX}t${REPO_COUNT - 1}`)).toBeVisible();
+  await expect(group.getByText(`${PREFIX}in-project`)).toBeVisible();
+  await expect(group.getByText(`${PREFIX}t${REPO_COUNT - 1}`, { exact: true })).toHaveCount(0);
 });
 
 test("Name project with short content: no scrollbar, rendered as before", async ({ page }) => {

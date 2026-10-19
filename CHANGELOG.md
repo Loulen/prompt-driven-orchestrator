@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## À venir — Lancer dans un Projet ; un dépôt dans plusieurs Projets (CORE-95)
+## 2.47.0 — Lancer dans un Projet ; un dépôt dans plusieurs Projets (CORE-95)
 
 - **Cassant (ADR-0087).** Le Projet d'un Run est choisi au lancement et enregistré sur le Run,
   jamais déduit de son dépôt. `POST /runs` et `POST|PATCH /triggers` acceptent `project_id` ; un

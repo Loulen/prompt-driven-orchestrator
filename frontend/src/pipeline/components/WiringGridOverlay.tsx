@@ -14,11 +14,14 @@
 import { useStore } from "@xyflow/react";
 import type { Point } from "../../lib/orthogonalRouter";
 import { WIRE } from "../../lib/wiringColors";
-import { crispOffset } from "../../lib/wiringGrid";
+import { crispOffset, snapStepAtZoom } from "../../lib/wiringGrid";
 
-/** Half-extent of the overlay, in flow px. A multiple of every step so the
- *  lattice stays in phase with the origin at the div's own edges. */
+/** Least half-extent of the overlay, in flow px. The one drawn is rounded up to a
+ *  multiple of the step, so the lattice stays in phase with the origin at the
+ *  div's own edges, and grown when zoomed out so it still covers the viewport. */
 const HALF = 4000;
+/** Screen px the overlay must reach on each side of its origin. */
+const HALF_SCREEN = 2500;
 
 /** Line width and dot radius, in SCREEN pixels — the width they have to keep,
  *  whatever the zoom, to survive rasterisation. */
@@ -36,7 +39,10 @@ export function ViewportWiringGridOverlay(props: { origin: Point; step: number; 
   const zoom = useStore((s) => s.transform[2]);
   const tx = useStore((s) => s.transform[0]);
   const ty = useStore((s) => s.transform[1]);
-  return <WiringGridOverlay {...props} zoom={zoom} translate={{ x: tx, y: ty }} />;
+  // The lattice the gesture snaps to at this zoom (CORE-88): dezoomed, a
+  // multiple of the step, so a dot is still a point the trace can land on.
+  const step = snapStepAtZoom(props.step, zoom).step;
+  return <WiringGridOverlay {...props} step={step} zoom={zoom} translate={{ x: tx, y: ty }} />;
 }
 
 export default function WiringGridOverlay({
@@ -68,8 +74,9 @@ export default function WiringGridOverlay({
   const half = step / 2;
   const line = LINE_PX * px;
   const dot = DOT_PX * px;
-  const left = origin.x - HALF;
-  const top = origin.y - HALF;
+  const extent = step * Math.ceil(Math.max(HALF, HALF_SCREEN * px) / step);
+  const left = origin.x - extent;
+  const top = origin.y - extent;
   const nudgeX = crispOffset(left, translate.x, zoom);
   const nudgeY = crispOffset(top, translate.y, zoom);
   const style: React.CSSProperties =
@@ -97,8 +104,8 @@ export default function WiringGridOverlay({
         // Anchored ON the origin, so the lattice passes exactly through it.
         left,
         top,
-        width: HALF * 2,
-        height: HALF * 2,
+        width: extent * 2,
+        height: extent * 2,
         pointerEvents: "none",
         // UNDER the edges and the cards, as in the validated prototype. The
         // viewport portal comes last in the viewport, so without this the grid

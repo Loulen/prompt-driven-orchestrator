@@ -2,7 +2,7 @@ import { useCallback, useRef } from "react";
 import { useReactFlow } from "@xyflow/react";
 import { dragSegmentKeepingRun, storableWaypoints } from "../../lib/polylineCleanup";
 import { enforcePerpendicularEnds } from "../../lib/anchorLanding";
-import { mergeAlignedSegments } from "../../lib/wiringGrid";
+import { mergeAlignedSegments, snapStepAtZoom } from "../../lib/wiringGrid";
 import { useWiringStore } from "../../stores/wiringStore";
 import { useEditStore } from "../store/editStore";
 import type { EdgeRoute } from "./useEdgeRoute";
@@ -18,7 +18,7 @@ export function useSegmentDrag(
   route: EdgeRoute,
 ): (segmentIndex: number, orientation: "horizontal" | "vertical") => (e: React.PointerEvent) => void {
   const updateEdge = useEditStore((s) => s.updateEdge);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, getZoom } = useReactFlow();
   const { points, srcSide, tgtSide, step, leg, tgtRect } = route;
   // Shift state during a segment drag, read off the live event (the pointer is
   // captured, so a keyboard listener would be the only other way in).
@@ -37,6 +37,9 @@ export function useSegmentDrag(
         // to the gesture in progress (a Shift release inside it re-origins), and
         // freezing it here keeps the snap stable for the whole drag.
         const origin = useWiringStore.getState().origin;
+        // Zoomed out, the segment snaps to a multiple of the step (CORE-88), so
+        // a cell stays big enough to aim at and still lies on the step's lattice.
+        const snapStep = snapStepAtZoom(step, getZoom()).step;
         let latest = points;
         let accepted = false;
         const move = (ev: PointerEvent) => {
@@ -49,7 +52,7 @@ export function useSegmentDrag(
             points,
             segmentIndex,
             coord,
-            { origin, step, free: ev.shiftKey },
+            { origin, step: snapStep, free: ev.shiftKey },
             (pts) => enforcePerpendicularEnds(pts, srcSide, tgtSide, leg, tgtRect ?? undefined),
             tgtRect ?? undefined,
           );
@@ -99,7 +102,7 @@ export function useSegmentDrag(
         window.addEventListener("pointermove", move);
         window.addEventListener("pointerup", up);
       },
-    [edgeIndex, points, screenToFlowPosition, updateEdge, srcSide, tgtSide, step, leg, tgtRect],
+    [edgeIndex, points, screenToFlowPosition, getZoom, updateEdge, srcSide, tgtSide, step, leg, tgtRect],
   );
   return onHandleDrag;
 }

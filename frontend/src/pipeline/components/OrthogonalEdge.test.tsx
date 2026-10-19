@@ -181,3 +181,31 @@ describe("OrthogonalEdge segment-handle visibility (#178)", () => {
     expect(handleCount(container)).toBe(0);
   });
 });
+
+// CORE-88: an edge naming an output its source no longer declares.
+describe("OrthogonalEdge — a broken edge (CORE-88)", () => {
+  it("draws red and dashed, names the absent port and deletes in one click", () => {
+    const deleteEdge = vi.fn();
+    const original = useEditStore.getState().deleteEdge;
+    useEditStore.setState({ deleteEdge });
+    try {
+      const { container, getByTestId } = render(
+        <OrthogonalEdge {...edgeProps(2, { missingPorts: ["draft"] })} />,
+        { wrapper: Wrapper },
+      );
+      expect(edgeStroke(container)).toContain("--color-st-failed");
+      const path = container.querySelector<SVGPathElement>(".react-flow__edge-path")!;
+      expect(path.style.strokeDasharray).not.toBe("");
+      expect(getByTestId("edge-broken-label-e-2").textContent).toContain("draft · port absent");
+      fireEvent.click(getByTestId("edge-broken-delete-e-2"));
+      expect(deleteEdge).toHaveBeenCalledWith(2);
+    } finally {
+      useEditStore.setState({ deleteEdge: original });
+    }
+  });
+
+  it("an intact edge has no broken label", () => {
+    const { queryByTestId } = render(<OrthogonalEdge {...edgeProps(0)} />, { wrapper: Wrapper });
+    expect(queryByTestId("edge-broken-label-e-0")).toBeNull();
+  });
+});

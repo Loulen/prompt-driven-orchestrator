@@ -1,6 +1,7 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import type { PortDef } from "../../shared/generated/PortDef";
 import type { RenameImpact } from "../../lib/edgePorts";
+import { usePortNameDraft, type PortNameDraft } from "./usePortNameDraft";
 
 interface InspectorPortRowProps {
   port: PortDef;
@@ -13,6 +14,10 @@ interface InspectorPortRowProps {
   /** What a rename of this port takes with it: the edges carrying it and the
    *  downstream nodes whose input is named after it (`outputRenameImpact`). */
   wiring?: RenameImpact;
+  /** A draft owned by the caller, which then shows the notices itself
+   *  (`PortRenameNotices`) where its layout wants them. Absent ⇒ the row owns
+   *  its draft and shows them under the name. */
+  nameDraft?: PortNameDraft;
   /** Controls shown after the name, before the delete button (the output's type). */
   children?: ReactNode;
 }
@@ -21,10 +26,8 @@ interface InspectorPortRowProps {
  * The name row of a port. A port has no side (where a wire leaves belongs to the
  * edge) nor accumulation flag (`repeated` belongs to the edge too).
  *
- * The name is a DRAFT until it is validated (CORE-88): nothing moves while typing
- * — every keystroke used to rename the port, and its edges, on the spot — and ↵
- * or leaving the field applies it, Escape cancels it. A name another port of the
- * node already has, or an empty one, is refused and the old name stays.
+ * ↵ or leaving the field applies the name draft (`usePortNameDraft`), Escape
+ * cancels it.
  */
 export default function InspectorPortRow({
   port,
@@ -34,39 +37,14 @@ export default function InspectorPortRow({
   onRemove,
   takenNames = [],
   wiring,
+  nameDraft,
   children,
 }: InspectorPortRowProps) {
-  // `null` while not editing: the field shows the port's own name, so a rename
-  // coming from elsewhere (undo, another editor) shows at once.
-  const [draft, setDraft] = useState<string | null>(null);
-  const [refusal, setRefusal] = useState<string | null>(null);
+  const ownDraft = usePortNameDraft(port.name, takenNames, (name) => onUpdate({ name }));
+  const name = nameDraft ?? ownDraft;
   // Escape blurs the field, and that blur runs before the cancel has rendered:
   // without this it would apply the very draft Escape is cancelling.
   const cancelling = useRef(false);
-  const value = draft ?? port.name;
-  const pending = draft != null && draft.trim() !== "" && draft.trim() !== port.name ? draft.trim() : null;
-
-  /** Applies the draft; returns false when it was refused. */
-  const commit = (): boolean => {
-    if (draft == null) return true;
-    const next = draft.trim();
-    if (next === port.name) {
-      setDraft(null);
-      return true;
-    }
-    if (next === "") {
-      setRefusal("Un output doit avoir un nom : l'ancien nom reste.");
-      return false;
-    }
-    if (takenNames.includes(next)) {
-      setRefusal(`« ${next} » existe déjà sur ce nœud : nom refusé, l'ancien nom reste.`);
-      return false;
-    }
-    setDraft(null);
-    setRefusal(null);
-    onUpdate({ name: next });
-    return true;
-  };
 
   return (
     <div className="flex min-w-0 flex-1 flex-col">
@@ -79,21 +57,17 @@ export default function InspectorPortRow({
       >
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-fg-4" />
         <input
-          value={value}
+          value={name.value}
           aria-label="Port name"
-          aria-invalid={refusal != null}
-          onChange={(e) => {
-            setDraft(e.target.value);
-            setRefusal(null);
-          }}
+          aria-invalid={name.refusal != null}
+          onChange={(e) => name.change(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
-              commit();
+              name.commit();
             } else if (e.key === "Escape") {
               e.stopPropagation();
-              setDraft(null);
-              setRefusal(null);
+              name.cancel();
               cancelling.current = true;
               e.currentTarget.blur();
               cancelling.current = false;
@@ -103,10 +77,10 @@ export default function InspectorPortRow({
           // say why.
           onBlur={() => {
             if (cancelling.current) return;
-            if (!commit()) setDraft(null);
+            if (!name.commit()) name.reset();
           }}
           className={`min-w-0 flex-1 rounded bg-transparent text-fg outline-none ${
-            refusal ? "ring-1 ring-st-failed" : ""
+            name.refusal ? "ring-1 ring-st-failed" : ""
           }`}
           style={{ fontSize: "11px" }}
         />
@@ -120,28 +94,44 @@ export default function InspectorPortRow({
           ×
         </button>
       </div>
-      {refusal && (
-        <p role="alert" className="px-1 pb-1 text-st-failed" style={{ fontSize: "10px" }} data-testid="port-rename-refusal">
-          {refusal}
-        </p>
-      )}
-      {pending && !refusal && wiring && wiring.edges > 0 && (
-        <div
-          className="mx-1 mb-1 rounded border border-line bg-bg-3 px-2 py-1.5 text-fg-3"
-          style={{ fontSize: "10px" }}
-          data-testid="port-rename-pending"
-        >
-          <div className="text-fg-2">
-            Renommage en attente : <span className="font-mono">{port.name}</span> →{" "}
-            <span className="font-mono font-medium text-fg">{pending}</span>
-          </div>
-          <div>{renameConsequence(port.name, wiring)}</div>
-        </div>
-      )}
+      {!nameDraft && <PortRenameNotices portName={port.name} draft={ownDraft} wiring={wiring} />}
     </div>
   );
 }
 
+/** Under the name: why a rename was refused, or what a pending one of a wired
+ *  port takes with it. */
+export function PortRenameNotices({
+  portName,
+  draft,
+  wiring,
+}: {
+  portName: string;
+  draft: PortNameDraft;
+  wiring?: RenameImpact;
+}) {
+  if (draft.refusal) {
+    return (
+      <p role="alert" className="px-1 pb-1 text-st-failed" style={{ fontSize: "10px" }} data-testid="port-rename-refusal">
+        {draft.refusal}
+      </p>
+    );
+  }
+  if (!draft.pending || !wiring || wiring.edges === 0) return null;
+  return (
+    <div
+      className="mx-1 mb-1 rounded border border-line bg-bg-3 px-2 py-1.5 text-fg-3"
+      style={{ fontSize: "10px" }}
+      data-testid="port-rename-pending"
+    >
+      <div className="text-fg-2">
+        Renommage en attente : <span className="font-mono">{portName}</span> →{" "}
+        <span className="font-mono font-medium text-fg">{draft.pending}</span>
+      </div>
+      <div>{renameConsequence(portName, wiring)}</div>
+    </div>
+  );
+}
 /** « À la validation (↵ ou sortie du champ) : 2 edges suivent, l'input spec de
  *  builder et de reviewer est renommé. Échap annule. » */
 function renameConsequence(name: string, wiring: RenameImpact): string {

@@ -921,6 +921,64 @@ describe("editStore.save", () => {
   });
 });
 
+describe("editStore.save refreshes a stale lint (CORE-88)", () => {
+  const mockFetchPipeline = vi.mocked(fetchPipeline);
+  const mockFetchRunPipeline = vi.mocked(fetchRunPipeline);
+  const detail = (diagnostics: string[]) => ({
+    scope: "repo",
+    pipeline: makePipeline(),
+    prompts: {},
+    diagnostics,
+  });
+
+  function seedWithDiagnostics(diagnostics: string[], runId?: string) {
+    seedTab("p1", true);
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({ ...t, diagnostics, runId })),
+    }));
+  }
+
+  it("re-reads the diagnostics once the file the lint was about is saved", async () => {
+    seedWithDiagnostics(["edge 'a.x -> b.x': source port 'x' not found on node 'a'"]);
+    mockFetchPipeline.mockResolvedValueOnce(detail([]) as never);
+
+    await useEditStore.getState().save("p1");
+
+    expect(mockFetchPipeline).toHaveBeenCalledWith("p1", "repo");
+    expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([]);
+  });
+
+  it("does the same for a run tab", async () => {
+    seedWithDiagnostics(["stale"], "run-1");
+    mockFetchRunPipeline.mockResolvedValueOnce(detail([]) as never);
+
+    await useEditStore.getState().save("p1");
+
+    expect(mockFetchRunPipeline).toHaveBeenCalledWith("run-1");
+    expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([]);
+  });
+
+  it("costs no read when there was no lint to clear", async () => {
+    seedTab("p1", true);
+
+    await useEditStore.getState().save("p1");
+
+    expect(mockFetchPipeline).not.toHaveBeenCalled();
+  });
+
+  it("keeps the lint when the re-read fails", async () => {
+    seedWithDiagnostics(["kept"]);
+    mockFetchPipeline.mockRejectedValueOnce(new Error("offline"));
+
+    await useEditStore.getState().save("p1");
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.diagnostics).toEqual(["kept"]);
+    expect(tab.dirty).toBe(false);
+    expect(tab.saveError).toBeUndefined();
+  });
+});
+
 describe("editStore.flushPendingSaves", () => {
   it("resolves only after all dirty tabs are clean", async () => {
     useEditStore.setState({

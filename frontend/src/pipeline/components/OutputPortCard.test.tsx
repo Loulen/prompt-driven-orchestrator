@@ -285,3 +285,45 @@ describe("OutputPortCard — « intermediate » (CORE-45)", () => {
     expect(screen.getByTestId("port-intermediate-checkbox")).not.toBeChecked();
   });
 });
+
+describe("OutputPortCard — rename notices under the card (CORE-88)", () => {
+  const baseProps = {
+    port: { name: "spec" } as PortDef,
+    onUpdate: vi.fn(),
+    onRemove: vi.fn(),
+    schema: null,
+    onSchemaChange: vi.fn(),
+    takenNames: ["verdict"],
+    wiring: { edges: 2, inputsOf: ["builder", "reviewer"] },
+  };
+
+  it("shows the pending rename below the card, not in its head", () => {
+    render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
+    fireEvent.change(screen.getByDisplayValue("spec"), { target: { value: "spec-v2" } });
+    const notice = screen.getByTestId("port-rename-pending");
+    expect(screen.getByTestId("output-port-card-spec").contains(notice)).toBe(false);
+    expect(screen.getByTestId("output-port-notices-spec").contains(notice)).toBe(true);
+  });
+
+  it("shows a refused name below the card and keeps the old one", () => {
+    const onUpdate = vi.fn();
+    render(<OutputPortCard {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
+    const input = screen.getByDisplayValue("spec");
+    fireEvent.change(input, { target: { value: "verdict" } });
+    fireEvent.blur(input);
+    expect(onUpdate).not.toHaveBeenCalled();
+    const refusal = screen.getByTestId("port-rename-refusal");
+    expect(screen.getByTestId("output-port-card-spec").contains(refusal)).toBe(false);
+    expect(screen.getByTestId("output-port-notices-spec").contains(refusal)).toBe(true);
+    expect(screen.getByDisplayValue("spec")).toBeTruthy();
+  });
+
+  it("applies the name on Enter", () => {
+    const onUpdate = vi.fn();
+    render(<OutputPortCard {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
+    const input = screen.getByDisplayValue("spec");
+    fireEvent.change(input, { target: { value: "spec-v2" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onUpdate).toHaveBeenCalledWith({ name: "spec-v2" });
+  });
+});

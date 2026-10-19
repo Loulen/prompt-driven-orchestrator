@@ -206,6 +206,8 @@ test("renaming a wired output applies on validation, its edges and inputs follow
   // Nothing moves while typing.
   await expect(page.getByTestId("edge-output-label-e-0-spec")).toBeVisible();
   await expect(page.getByTestId("port-rename-pending")).toContainText("2 edges suivent");
+  // Under the card, as in the design, not in its head.
+  await expect(page.getByTestId("output-port-notices-spec").getByTestId("port-rename-pending")).toBeVisible();
   await field.press("Enter");
 
   await expect(page.getByTestId("edge-output-label-e-0-spec-v2")).toBeVisible();
@@ -223,4 +225,37 @@ test("renaming a wired output applies on validation, its edges and inputs follow
   await expect(page.getByTestId("port-rename-refusal")).toContainText("« verdict » existe déjà");
   await again.press("Escape");
   await expect(page.getByTestId("output-port-card-spec-v2")).toBeVisible();
+});
+
+test("a broken edge is deleted from the canvas, and its lint goes with the save", async ({ page }) => {
+  const name = `${PIPELINE_NAME}-broken`;
+  const file = path.join(PIPELINE_DIR, `${name}.yaml`);
+  const prompts = path.join(PIPELINE_DIR, `${name}.prompts`);
+  await fs.mkdir(prompts, { recursive: true });
+  await fs.writeFile(
+    file,
+    SEED_YAML.replace(`name: ${PIPELINE_NAME}`, `name: ${name}`) +
+      `  - source: { node: reviewer, port: draft }\n    target: { node: end, port: result }\n`,
+  );
+  for (const id of ["designer", "builder", "reviewer"]) {
+    await fs.writeFile(path.join(prompts, `${id}.md`), `Do ${id}.\n`);
+  }
+  try {
+    await page.goto("/");
+    await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+    await openPipelineForEdit(page, name);
+    const lint = page.getByTestId("lint-banner").getByText(/port 'draft'/);
+    await expect(lint).toHaveCount(1);
+
+    await expect(page.getByTestId("edge-broken-label-e-3")).toContainText("draft · port absent");
+    await page.getByTestId("edge-broken-delete-e-3").click();
+    await expect(page.getByTestId("edge-broken-label-e-3")).toHaveCount(0);
+    await page.getByTestId("save-button").click();
+
+    await expect(lint).toHaveCount(0);
+    expect(await fs.readFile(file, "utf8")).not.toContain("draft");
+  } finally {
+    await fs.rm(file, { force: true });
+    await fs.rm(prompts, { recursive: true, force: true });
+  }
 });

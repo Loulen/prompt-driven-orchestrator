@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { Trash2 } from "lucide-react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -23,6 +22,7 @@ import type { EdgeWaypoint } from "../../shared/generated/EdgeWaypoint";
 import type { PortSide } from "../../shared/generated/PortSide";
 import { EDGE_LABELS_ABOVE_NODES, EDGE_LABELS_UNDER_NODES } from "./editEdgeDerivation";
 import { useEdgeRoute } from "./useEdgeRoute";
+import BrokenEdgeLabel from "./BrokenEdgeLabel";
 import { useSegmentDrag } from "./useSegmentDrag";
 
 
@@ -195,6 +195,8 @@ export default function OrthogonalEdge({
     y: mid.y + midOffset.y,
   };
 
+  // On the wire, as in the design; pushed to the other side of it when a
+  // condition pill sits at `mid + midOffset`, so neither hides the other.
   const brokenAt: Point = data?.label
     ? { x: mid.x - 2 * midOffset.x, y: mid.y - 2 * midOffset.y }
     : mid;
@@ -290,51 +292,15 @@ export default function OrthogonalEdge({
               </div>
             );
           })}
-        {/* CORE-88: a broken edge says which port is gone, at its midpoint,
-            with a direct delete (Undo restores it). Hidden on a locked canvas. */}
         {broken && (
-          <div
-            className="nodrag nopan"
-            data-testid={`edge-broken-label-${id}`}
+          <BrokenEdgeLabel
+            edgeId={id}
+            ports={missingPorts}
+            at={brokenAt}
+            zIndex={labelZ}
+            onDelete={!locked && edgeIndex != null ? () => deleteEdge(edgeIndex) : undefined}
             onContextMenu={onLabelContextMenu}
-            style={{
-              position: "absolute",
-              // On the wire, as in the design; pushed to the other side of it when
-              // a condition pill sits at `mid + midOffset`, so neither hides the other.
-              transform: `translate(-50%, -50%) translate(${brokenAt.x}px, ${brokenAt.y}px)`,
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              fontFamily: "var(--font-mono, monospace)",
-              fontSize: 10,
-              color: "var(--color-st-failed)",
-              background: "var(--color-st-failed-bg)",
-              border: "1px solid var(--color-st-failed)",
-              borderRadius: 4,
-              padding: "2px 6px",
-              pointerEvents: "all",
-              zIndex: labelZ,
-              whiteSpace: "nowrap",
-            }}
-          >
-            <span>{missingPorts.join(", ")} · port absent</span>
-            {!locked && edgeIndex != null && (
-              <button
-                type="button"
-                aria-label="Delete broken edge"
-                title="Delete this edge"
-                data-testid={`edge-broken-delete-${id}`}
-                onPointerDown={(ev) => ev.stopPropagation()}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  deleteEdge(edgeIndex);
-                }}
-                style={{ display: "flex", cursor: "pointer", color: "inherit" }}
-              >
-                <Trash2 size={11} />
-              </button>
-            )}
-          </div>
+          />
         )}
         {/* Conditional pill (ADR-0011) — always visible, draggable since #845. */}
         {data?.label && (

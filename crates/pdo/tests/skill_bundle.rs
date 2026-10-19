@@ -182,7 +182,7 @@ async fn a_folder_exported_then_uploaded_into_another_bank_comes_back_whole() {
 }
 
 /// One skill names the zip after itself; a selection of skills and folders is
-/// `skills.skills.zip`, each skill once.
+/// `selection.skills.zip`, each skill once.
 #[tokio::test]
 async fn a_skill_or_a_selection_exports_with_its_reference_files() {
     let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
@@ -213,7 +213,7 @@ async fn a_skill_or_a_selection_exports_with_its_reference_files() {
     .await;
     assert_eq!(resp.headers()["x-pdo-skills"], "2");
     let names = zip_names(&resp.bytes().await.unwrap());
-    assert!(names.iter().all(|n| n.starts_with("skills.skills/")), "{names:?}");
+    assert!(names.iter().all(|n| n.starts_with("selection.skills/")), "{names:?}");
     assert_eq!(names.len(), 3, "{names:?}");
 }
 

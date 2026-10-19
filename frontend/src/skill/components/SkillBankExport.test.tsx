@@ -88,6 +88,15 @@ describe("the bank's export and upload", () => {
     expect(screen.getByTestId("skill-bank-footer")).toBeInTheDocument();
   });
 
+  it("tints a checked row, a folder once all its skills are checked", () => {
+    setup();
+    fireEvent.click(screen.getByTestId("tree-check-skill-s-rn"));
+    expect(screen.getByTestId("tree-skill-s-rn")).toHaveAttribute("data-marked", "true");
+    expect(screen.getByTestId("tree-folder-f-t")).not.toHaveAttribute("data-marked");
+    fireEvent.click(screen.getByTestId("tree-check-folder-f-t"));
+    expect(screen.getByTestId("tree-folder-f-t")).toHaveAttribute("data-marked", "true");
+  });
+
   it("a selection that is exactly one folder exports the folder", async () => {
     setup();
     fireEvent.click(screen.getByTestId("tree-check-folder-f-t"));

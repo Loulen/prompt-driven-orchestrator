@@ -37,7 +37,7 @@ export async function exportSkills(body: { skill_ids: string[]; folder_ids: stri
   const blob = await sidecarBlob(resp, label);
   return {
     blob: blob ?? new Blob([], { type: "application/zip" }),
-    fileName: attachmentFileName(resp.headers.get("content-disposition"), "skills.skills.zip"),
+    fileName: attachmentFileName(resp.headers.get("content-disposition"), "selection.skills.zip"),
     count: Number(resp.headers.get("x-pdo-skills") ?? 0),
   };
 }

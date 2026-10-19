@@ -1,5 +1,6 @@
 import type { SkillBank } from "../model/skill";
 import type { TreeRow } from "../model/skillTree";
+import { checkState, skillIdsOf } from "../model/skillExport";
 import { useSkillBankPanel } from "../store/useSkillBankPanel";
 import { tildify } from "../../lib/homePath";
 import SkillTree from "./SkillTree";
@@ -70,7 +71,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             onDropSkill={(skillId, folderId) => void panel.moveSkill(skillId, folderId)}
             renderActions={renderActions}
             renderLeading={(row) => <TreeRowCheck row={row} bank={bank} panel={panel} />}
-            isMarked={(row) => row.ref.kind === "skill" && panel.checked.has(row.ref.id)}
+            isMarked={(row) => checkState(panel.checked, skillIdsOf(row.ref, bank)) === "all"}
             onRequestRename={panel.startRename}
             onRequestDelete={(ref) => void panel.askDelete(ref)}
             emptyState={

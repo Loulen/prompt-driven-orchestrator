@@ -61,6 +61,7 @@ export default function TreeRowView({
       aria-expanded={isFolder ? row.expanded : undefined}
       data-testid={`tree-${row.ref.kind}-${row.ref.id}`}
       data-selected={selected || undefined}
+      data-marked={marked || undefined}
       data-drop-target={isDropTarget || undefined}
       className={`group relative flex flex-col rounded-md ${
         isDropTarget

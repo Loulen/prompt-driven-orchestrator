@@ -6,8 +6,8 @@
 //!
 //! An export names skills and folders; a folder stands for every skill under
 //! it at this instant, sub-folders included (a gesture, as in a selector). The
-//! zip's name says what was exported: the folder, the skill, or `skills` for a
-//! mixed selection. An upload files the skills it creates under a root folder
+//! zip's name says what was exported: the folder, the skill, or `selection`
+//! for a mixed selection. An upload files the skills it creates under a root folder
 //! named after the zip, each labelled with its `SKILL.md` `name`: the zip
 //! carries no bank label, so a skill relabelled in the bank comes back under
 //! its frontmatter name.
@@ -20,8 +20,10 @@ use super::selection::SkillRef;
 use super::sidecar::SIDECAR_SUFFIX;
 use super::skill::{Skill, SkillFolder};
 
-/// The name of a mixed selection's zip, and of an upload's folder when the
-/// file name says nothing.
+/// The name of a mixed selection's zip.
+pub const SELECTION_BUNDLE_NAME: &str = "selection";
+
+/// The name of an upload's folder when the file name says nothing.
 pub const DEFAULT_BUNDLE_NAME: &str = "skills";
 
 /// What an export ships: the zip's name and the skills, in bank order.
@@ -77,7 +79,7 @@ pub fn bundle_selection(
         ([_], []) => picked.first().map(|s| s.name.clone()),
         _ => None,
     }
-    .unwrap_or_else(|| DEFAULT_BUNDLE_NAME.to_string());
+    .unwrap_or_else(|| SELECTION_BUNDLE_NAME.to_string());
     Ok(BundleSelection {
         name,
         skills: picked,
@@ -178,7 +180,7 @@ mod tests {
             bundle_selection(&skills, &folders, &["d".into(), "b".into()], &["sub".into()])
                 .unwrap();
         assert_eq!(ids(&selection), vec!["b", "d"]);
-        assert_eq!(selection.name, DEFAULT_BUNDLE_NAME);
+        assert_eq!(selection.name, SELECTION_BUNDLE_NAME);
     }
 
     #[test]

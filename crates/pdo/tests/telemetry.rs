@@ -161,6 +161,17 @@ async fn the_switch_and_the_collector_take_effect_without_a_restart() {
 
     put_settings(&daemon, json!({ "telemetry_otlp": false })).await;
     wait_exporting(&daemon, false).await;
+    // What left before the switch went off may still land: wait for the
+    // collectors to go quiet before listening for what follows.
+    let mut seen = usize::MAX;
+    for _ in 0..50 {
+        let now = first.requests().len() + second.requests().len();
+        if now == seen {
+            break;
+        }
+        seen = now;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
     first.clear();
     second.clear();
     reqwest::get(format!("{}/settings", daemon.url()))

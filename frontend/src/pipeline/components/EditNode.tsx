@@ -24,6 +24,7 @@ import { Bookmark, Play, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import { ChildCountPills } from "../../run/components/OrchestrationTab";
 import { totalChildren } from "../../run/model/orchestration";
 import type { ChildCounts } from "../../run/model/orchestration";
+import SearchMatchBadge from "../../run/components/runSearch/SearchMatchBadge";
 // The four emergent body anchor handles (#168), each pinned to its side-centre
 // with the matching xyflow `Position` so a bound incoming edge arrives from that
 // side. `transform` re-centres the 1px handle on the edge midpoint.
@@ -304,6 +305,8 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           (the End marker), or only Outputs intermédiaires, starts no wire and
           grows no rim. */}
       {wireable > 0 && <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} />}
+      {/* While the Run's transcripts are searched: the node's count of hits. */}
+      {data.inRun && <SearchMatchBadge nodeId={data.nodeId} />}
     </NodeCard>
     {/* ADR-0086: the ▶ — start an on-demand node, or run a skipped branch as
         if it had been taken. Outside the card so the greyed card does not dim

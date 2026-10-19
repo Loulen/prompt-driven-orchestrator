@@ -16,6 +16,8 @@
 //!   input or the output themselves.
 //! - **views** — a page of entries ([`TranscriptPage`]) and one tool call's
 //!   detail ([`ToolCallDetail`]), re-read from its two spans only.
+//! - **search** — the entries whose visible text holds a query
+//!   ([`TranscriptIndex::search`]), each with an excerpt ([`TranscriptHit`]).
 //!
 //! The adapter that owns the file handle and the per-file memo is
 //! `crate::adapters::transcript_reader`.
@@ -25,6 +27,7 @@ mod copilot;
 mod diff;
 mod index;
 mod pi;
+mod search;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -35,6 +38,9 @@ pub(crate) use copilot::records as copilot_records;
 pub use diff::{diff_of, diff_stat, DiffLine, DiffOp, DiffStat};
 pub use index::{tool_detail, ToolSpans, TranscriptIndex};
 pub(crate) use pi::records as pi_records;
+pub use search::{
+    snippet, IndexSearch, Needle, Snippet, TranscriptHit, SNIPPET_AFTER, SNIPPET_BEFORE,
+};
 
 /// Who speaks in a visible message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

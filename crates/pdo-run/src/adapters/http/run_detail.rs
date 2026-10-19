@@ -1,14 +1,16 @@
-//! `GET /runs/{run_id}` and `GET /runs/{run_id}/events`.
+//! `GET /runs/{run_id}`, `GET /runs/{run_id}/events` and the search over the
+//! Run's transcripts, `GET /runs/{run_id}/transcripts/search`.
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 use pdo_kernel::attributes;
 use pdo_kernel::ResourceKind;
+use serde::Deserialize;
 
 use crate::domain::event::{Event, EventKind};
 use crate::Runs;
@@ -29,6 +31,24 @@ pub(super) async fn detail(State(runs): State<Arc<Runs>>, Path(run_id): Path<Str
             Json(response).into_response()
         }
     }
+}
+
+/// The query of a search over the Run's transcripts: the text, and the search
+/// box asking (its next search cancels this one).
+#[derive(Deserialize)]
+pub(super) struct TranscriptSearchQuery {
+    #[serde(default)]
+    q: String,
+    client: Option<String>,
+}
+
+pub(super) async fn transcript_search(
+    State(runs): State<Arc<Runs>>,
+    Path(run_id): Path<String>,
+    Query(query): Query<TranscriptSearchQuery>,
+) -> Response {
+    crate::application::transcript_search::search(&runs, &run_id, &query.q, query.client.as_deref())
+        .await
 }
 
 pub(super) async fn events(State(runs): State<Arc<Runs>>, Path(run_id): Path<String>) -> Response {

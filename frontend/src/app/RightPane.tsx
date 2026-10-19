@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
 import type { Trigger } from "../shared/generated/Trigger";
@@ -21,6 +22,7 @@ import TriggerDetailPanel from "../trigger/components/TriggerDetailPanel";
 import { resolveNodeInspector } from "../lib/structuralMarkers";
 import { deriveEdgeTrigger } from "../lib/edgeTrigger";
 import { useInspectorTab } from "../hooks/useInspectorTab";
+import { useOnHitChosen } from "../run/store/runSearchStore";
 import { useEditStore } from "../pipeline/store/editStore";
 import { NoRunPlaceholder, RunTabPlaceholder } from "./RunPanePlaceholders";
 
@@ -112,6 +114,8 @@ export default function RightPane({
 
   const { activeTab: inspectorTab, setActiveTab: setInspectorTab } =
     useInspectorTab(editActiveTabId, isEditingRun);
+  // A hit chosen in the Run's search lands on the node's Run view.
+  useOnHitChosen(useCallback(() => setInspectorTab("run"), [setInspectorTab]));
   const nodeInspectorProvisioningProps = {
     provisioningRepository: isEditingRun ? selectedRun?.target_repo ?? "" : "",
     provisioningFrozenAt:

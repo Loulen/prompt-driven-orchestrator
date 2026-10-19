@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build test check lint fmt clean types types-check support-table readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
+.PHONY: help dev build test bench-transcript-search check lint fmt clean types types-check support-table readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -36,6 +36,7 @@ help:
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
 	@echo "  make build   cargo build (build.rs runs pnpm run build, frontend embedded into daemon)"
 	@echo "  make test    cargo nextest + doctests + vitest"
+	@echo "  make bench-transcript-search [RELEASE=1]  Bench 15 concurrent searches over a Run's transcripts"
 	@echo "  make check   cargo check + generated TS types current + tsc --noEmit + the harness support table (docs/reference/harnesses.md) is current"
 	@echo "  make types   Regenerate the TS types of the daemon's DTOs into $(GENERATED_TS)"
 	@echo "  make lint    cargo clippy + eslint"
@@ -87,6 +88,14 @@ test:
 	$(NO_PDO_ENV) cargo test --workspace --doc
 	cd frontend && pnpm test
 	node --disable-warning=ExperimentalWarning --test 'scripts/readme-media/test/*.test.mjs'
+
+# The bench of the search over a Run's transcripts (CORE-82): 15 searches at once
+# on a realistic Run, against the list of the Runs and the opening of a node.
+# Ignored by `make test`; the numbers are printed. RELEASE=1 measures an
+# optimized build.
+bench-transcript-search:
+	$(NO_PDO_ENV) cargo nextest run -p pdo-daemon --test it $(if $(RELEASE),--release) \
+	  --run-ignored only --no-capture bench_fifteen_concurrent_searches
 
 check:
 	cargo check --workspace

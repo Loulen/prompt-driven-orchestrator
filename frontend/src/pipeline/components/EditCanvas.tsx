@@ -24,6 +24,7 @@ import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
 import LintBanner from "./LintBanner";
+import RunSearchHost from "../../run/components/runSearch/RunSearchHost";
 import WaitingForStartedNodesBanner, { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
 import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider } from "./DragHighlightContext";
@@ -253,6 +254,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           deliberate trade-off ratified at PR time. `tab` is non-null here (early
           return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
       <WaitingForStartedNodesBanner run={activeRunState} />
+      <RunSearchHost run={activeRunState} onCloseInfo={onCloseInfo} />
       {visibleItems.length > 0 && tab.runId == null && (
         <div className="absolute left-0 right-0 top-10 z-10">
           <LintBanner items={visibleItems} onDismiss={dismiss} />

@@ -11,7 +11,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-enum Indexed {
+pub(super) enum Indexed {
     Message {
         speaker: Speaker,
         text: String,
@@ -27,9 +27,9 @@ enum Indexed {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct IndexedEntry {
-    at: Option<String>,
-    body: Indexed,
+pub(super) struct IndexedEntry {
+    pub(super) at: Option<String>,
+    pub(super) body: Indexed,
 }
 
 /// The incremental index of one transcript file.
@@ -39,7 +39,7 @@ struct IndexedEntry {
 /// parsed. `records` is the harness's line reader.
 #[derive(Debug, Clone, Default)]
 pub struct TranscriptIndex {
-    entries: Vec<IndexedEntry>,
+    pub(super) entries: Vec<IndexedEntry>,
     /// Where the next feed starts: the end of the last complete line.
     parsed_to: u64,
     seen_keys: HashSet<String>,

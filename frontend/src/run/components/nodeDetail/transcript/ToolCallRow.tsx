@@ -6,10 +6,12 @@ import type { TranscriptDiffStat } from "../../../../shared/generated/Transcript
 import type { TranscriptToolStatus } from "../../../../shared/generated/TranscriptToolStatus";
 import { fetchToolCallDetail } from "../../../api/transcript";
 import { formatBytes } from "../../../model/transcript";
+import { useFocusUnfold } from "../../../store/runSearchStore";
 
 /** A tool call of the transcript, folded on one line (name, summary, lines
  *  changed, output size); its input — or its diff, for a call that replaces
- *  text — and its output are read when it is unfolded, not before. */
+ *  text — and its output are read when it is unfolded, not before. The hit
+ *  of the Run's search chosen on it unfolds and outlines it (`focusNonce`). */
 export default function ToolCallRow({
   runId,
   nodeId,
@@ -20,6 +22,7 @@ export default function ToolCallRow({
   status,
   outputBytes,
   diff,
+  focusNonce,
 }: {
   runId: string;
   nodeId: string;
@@ -30,6 +33,7 @@ export default function ToolCallRow({
   status: TranscriptToolStatus;
   outputBytes?: number;
   diff?: TranscriptDiffStat;
+  focusNonce?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<ToolCallDetail | null>(null);
@@ -50,6 +54,15 @@ export default function ToolCallRow({
     if (next && (detail === null || detail.output === undefined)) void read();
   };
 
+  // The search's hit lands here: unfold, read the call.
+  useFocusUnfold(focusNonce, () => setOpen(true));
+  useEffect(() => {
+    if (focusNonce === undefined) return;
+    void read();
+    // `read` is rebuilt each render; a new choice is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusNonce]);
+
   // An unfolded call that settles under the reader's eyes shows its output.
   const lastStatus = useRef(status);
   useEffect(() => {
@@ -64,7 +77,11 @@ export default function ToolCallRow({
     <div
       data-testid="transcript-tool"
       data-status={status}
-      className="rounded-md border border-line bg-bg-1"
+      data-entry={index}
+      data-focused={focusNonce !== undefined || undefined}
+      className={`rounded-md border ${
+        focusNonce !== undefined ? "border-st-await bg-st-await-bg" : "border-line bg-bg-1"
+      }`}
     >
       <button
         type="button"

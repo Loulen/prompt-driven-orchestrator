@@ -31,9 +31,13 @@ vi.mock("../api/document", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   fetchPipelineDocument: vi.fn().mockRejectedValue(new Error("offline")),
 }));
+vi.mock("../../shared/lib/download", () => ({ saveBlob: vi.fn() }));
+vi.mock("../../shared/lib/clipboard", () => ({ copyToClipboard: vi.fn().mockResolvedValue(true) }));
 
 import PipelineInfoPanel from "./PipelineInfoPanel";
 import { fetchPipelineDocument } from "../api/document";
+import { saveBlob } from "../../shared/lib/download";
+import { copyToClipboard } from "../../shared/lib/clipboard";
 
 function seedTab() {
   useEditStore.setState({
@@ -401,6 +405,25 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
   });
 });
 
+describe("Pipeline info — Info tab on a version is read-only (ADR-0088)", () => {
+  it("shows the metadata of a version tab as text, with no input", () => {
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({
+        ...t,
+        id: "__version__p1@1",
+        version: { pipelineId: "p1", number: 1, title: "1.0", author: null, savedAt: "2026-10-19T00:00:00Z" },
+      })),
+      activeTabId: "__version__p1@1",
+    }));
+    render(<StorePanel assistantId="p1" />);
+
+    const meta = screen.getByTestId("pipeline-meta");
+    expect(meta).toHaveAttribute("data-readonly", "true");
+    expect(screen.queryByTestId("prompt-required-checkbox")).not.toBeInTheDocument();
+    expect(within(meta).queryByRole("textbox")).not.toBeInTheDocument();
+  });
+});
+
 describe("Pipeline info — YAML tab reflects an unsaved edit (#948)", () => {
   it("shows the edit buffer while the tab is dirty, and the saved document once it is clean", async () => {
     vi.mocked(fetchPipelineDocument).mockResolvedValue("pdo_pipeline: 1\npipeline:\n  name: My Pipeline\n");
@@ -411,13 +434,34 @@ describe("Pipeline info — YAML tab reflects an unsaved edit (#948)", () => {
     const yaml = screen.getByTestId("info-yaml-content");
     expect(yaml).toHaveTextContent("prompt_required: false");
     expect(screen.getByTestId("yaml-unsaved-note")).toBeInTheDocument();
-    expect(fetchPipelineDocument).not.toHaveBeenCalled();
 
     // Save lands: the tab is clean again → the saved portable document is back.
     useEditStore.setState((s) => ({ openTabs: s.openTabs.map((t) => ({ ...t, dirty: false })) }));
     await waitFor(() => expect(screen.getByTestId("info-yaml-content")).toHaveTextContent("pdo_pipeline: 1"));
     expect(fetchPipelineDocument).toHaveBeenCalledWith("p1");
     expect(screen.queryByTestId("yaml-unsaved-note")).not.toBeInTheDocument();
+  });
+
+  it("exports the last saved version, not the draft, when the tab opens on unsaved edits", async () => {
+    const saved = "pdo_pipeline: 1\npipeline:\n  name: My Pipeline\n  prompt_required: true\n";
+    vi.mocked(fetchPipelineDocument).mockResolvedValue(saved);
+    vi.mocked(fetchPipelineDocument).mockClear();
+    vi.mocked(saveBlob).mockClear();
+    vi.mocked(copyToClipboard).mockClear();
+    render(<StorePanel assistantId="p1" />);
+
+    // The draft differs from the last version before the YAML tab mounts.
+    fireEvent.click(screen.getByTestId("prompt-required-checkbox"));
+    fireEvent.click(screen.getByTestId("info-tab-yaml"));
+    expect(screen.getByTestId("info-yaml-content")).toHaveTextContent("prompt_required: false");
+    await waitFor(() => expect(fetchPipelineDocument).toHaveBeenCalledWith("p1"));
+
+    fireEvent.click(screen.getByRole("button", { name: /Download/ }));
+    await waitFor(() => expect(saveBlob).toHaveBeenCalled());
+    expect(await vi.mocked(saveBlob).mock.calls[0][0].text()).toBe(saved);
+
+    fireEvent.click(screen.getByRole("button", { name: /Copy/ }));
+    await waitFor(() => expect(copyToClipboard).toHaveBeenCalledWith(saved));
   });
 });
 

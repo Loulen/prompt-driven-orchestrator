@@ -174,7 +174,8 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
         ) : (
           <>
             <DraftPresence />
-            {savedAgo && (
+            {/* Unsaved changes make « Saved … ago » stale: the draft line says them. */}
+            {savedAgo && !activeTab?.dirty && (
               <span
                 className="whitespace-nowrap font-mono text-fg-4"
                 style={{ fontSize: "10px" }}

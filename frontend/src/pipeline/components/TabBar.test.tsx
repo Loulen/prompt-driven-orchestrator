@@ -225,6 +225,16 @@ describe("TabBar Save on a run tab (ADR-0085)", () => {
     await waitFor(() => expect(screen.queryByTestId("save-version-modal")).toBeNull());
   });
 
+  it("« Saved … ago » shows on a clean tab only, never beside unsaved changes", () => {
+    seed([tab("tpl")], "tpl");
+    useEditStore.setState({ lastSavedAt: { tpl: Date.now() } });
+    const { rerender } = render(<TabBar />);
+    expect(screen.getByTestId("saved-ago")).toHaveTextContent("Saved just now");
+    useEditStore.setState((s) => ({ openTabs: s.openTabs.map((t) => ({ ...t, dirty: true })) }));
+    rerender(<TabBar />);
+    expect(screen.queryByTestId("saved-ago")).toBeNull();
+  });
+
   it("a version shown read only is named after its pipeline and has no Save (ADR-0088)", () => {
     const version = { pipelineId: "tpl", number: 5, title: "v5", author: null, savedAt: "2026-10-14T10:00:00Z" };
     seed([tab("__version__tpl@5", { version })], "__version__tpl@5");

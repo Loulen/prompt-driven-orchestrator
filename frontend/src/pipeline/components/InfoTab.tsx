@@ -100,6 +100,10 @@ export function InfoTab({
   const durationLabel = formatDuration(durationMs);
   const durationTicking = run != null && run.completed_at == null && isLiveRun(run.status);
   const pipelines = useEditStore((s) => s.pipelines);
+  // ADR-0088: a version shown in its own tab is read only, like a Run.
+  const viewingVersion = useEditStore(
+    (s) => s.openTabs.find((t) => t.id === s.activeTabId)?.version != null,
+  );
 
   return (
     <>
@@ -244,8 +248,8 @@ export function InfoTab({
 
       {/* Notion #6 / #948: Pipeline info is the only surface of the pipeline's
           metadata — editable on a template, read-only on a Run (active or
-          archived). Order: header → Identity → Variables → Canvas → Stats → note. */}
-      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null} />}
+          archived) and on a version. Order: header → Identity → Variables → Canvas → Stats → note. */}
+      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null || viewingVersion} />}
 
       {(run || pipeline) && (
         <div

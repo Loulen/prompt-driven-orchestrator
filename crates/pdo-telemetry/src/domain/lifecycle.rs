@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
+use pdo_run::domain::declared_wait::{self, awaiting_cause};
 use pdo_run::domain::event::{Event, EventKind};
-use pdo_run::domain::state::{AWAITING_CAUSE_COMPLETION_NOT_RELEASED, AWAITING_CAUSE_DECLARED};
 use serde_json::Value;
 
 use super::attributes::actor_in;
@@ -266,14 +266,11 @@ fn parse_ts(ts: &str) -> Option<DateTime<Utc>> {
         .map(|t| t.with_timezone(&Utc))
 }
 
+/// Which causes open a declared wait is the rule of
+/// [`pdo_run::domain::declared_wait`], shared with Stats › Performance and the
+/// Run projection.
 fn opens_declared_wait(payload: Option<&Value>) -> bool {
-    let cause = payload
-        .and_then(|p| p.get("cause").or_else(|| p.get("reason")))
-        .and_then(Value::as_str);
-    matches!(
-        cause,
-        Some(AWAITING_CAUSE_DECLARED) | Some(AWAITING_CAUSE_COMPLETION_NOT_RELEASED)
-    )
+    awaiting_cause(payload).is_some_and(declared_wait::opens_declared_wait)
 }
 
 /// The events that end a Run for good. `RunInterrupted` does not: the Run can

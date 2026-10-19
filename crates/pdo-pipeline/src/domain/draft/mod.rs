@@ -44,7 +44,9 @@ impl DraftContent {
 
     /// How many nodes it holds.
     pub fn node_count(&self) -> u32 {
-        self.pipeline["nodes"].as_array().map_or(0, |nodes| nodes.len() as u32)
+        self.pipeline["nodes"]
+            .as_array()
+            .map_or(0, |nodes| nodes.len() as u32)
     }
 }
 

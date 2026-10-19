@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { loadChildRunsExpanded, loadTabsDisabled, saveChildRunsExpanded, saveTabsDisabled } from "./uiPrefs";
+import {
+  loadChildRunsExpanded,
+  loadNodeDurationMode,
+  loadTabsDisabled,
+  saveChildRunsExpanded,
+  saveNodeDurationMode,
+  saveTabsDisabled,
+} from "./uiPrefs";
 
 beforeEach(() => {
   localStorage.clear();
@@ -71,5 +78,26 @@ describe("uiPrefs — childRunsExpanded (#783)", () => {
     expect(loadChildRunsExpanded()).toBe(true);
     localStorage.setItem("pdo.ui.childRunsExpanded", JSON.stringify("false"));
     expect(loadChildRunsExpanded()).toBe(true);
+  });
+});
+
+describe("uiPrefs — nodeDurationMode", () => {
+  it("defaults to total when the key is absent", () => {
+    expect(loadNodeDurationMode()).toBe("total");
+  });
+
+  it("round-trips active/total under pdo.ui.nodeDurationMode", () => {
+    saveNodeDurationMode("active");
+    expect(localStorage.getItem("pdo.ui.nodeDurationMode")).toBe('"active"');
+    expect(loadNodeDurationMode()).toBe("active");
+    saveNodeDurationMode("total");
+    expect(loadNodeDurationMode()).toBe("total");
+  });
+
+  it("falls back to total on garbage or an unknown mode", () => {
+    localStorage.setItem("pdo.ui.nodeDurationMode", "not-json{");
+    expect(loadNodeDurationMode()).toBe("total");
+    localStorage.setItem("pdo.ui.nodeDurationMode", JSON.stringify("waiting"));
+    expect(loadNodeDurationMode()).toBe("total");
   });
 });

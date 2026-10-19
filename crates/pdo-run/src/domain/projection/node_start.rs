@@ -60,6 +60,8 @@ pub(super) fn node_started(state: &mut RunState, event: &Event) {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
             completion_released: false,
+            waited_ms: 0,
+            open_wait_since: None,
         };
         let node = state
             .nodes

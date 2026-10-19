@@ -6,7 +6,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "../../../shared/ui/dropdown-menu";
-import { formatTime } from "../../model/nodeDetailFormat";
+import { useNodeDurationMode } from "../../store/nodeDurationModeStore";
+import { IterOptionDuration } from "./IterationDuration";
 import { STATUS_DOTS } from "./labels";
 
 export default function IterSelector({
@@ -18,6 +19,10 @@ export default function IterSelector({
   selectedIter: number;
   onSelect: (iter: number) => void;
 }) {
+  // Each iteration's duration reads in the Mode de durée on screen.
+  const durationMode = useNodeDurationMode((st) => st.mode);
+  // The latest iteration first: it is the one the user usually looks for.
+  const latestFirst = [...iterations].sort((a, b) => b.iter - a.iter);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -32,7 +37,7 @@ export default function IterSelector({
         side="bottom"
         align="start"
       >
-        {iterations.map((it) => (
+        {latestFirst.map((it) => (
           <DropdownMenuItem
             key={it.iter}
             className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4 ${
@@ -50,8 +55,7 @@ export default function IterSelector({
               className="ml-auto font-mono text-fg-4"
               style={{ fontSize: "10px" }}
             >
-              {it.started_at ? formatTime(it.started_at) : ""}
-              {it.completed_at ? ` – ${formatTime(it.completed_at)}` : ""}
+              <IterOptionDuration timing={it} mode={durationMode} />
             </span>
           </DropdownMenuItem>
         ))}

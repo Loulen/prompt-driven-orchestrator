@@ -50,6 +50,8 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("telemetry_otlp_headers", "TEXT"),
     ("telemetry_prometheus", "INTEGER"),
     ("telemetry_include_actor", "INTEGER"),
+    // The address humans open PDO at; NULL keeps the env tier, then none.
+    ("public_url", "TEXT"),
 ];
 
 /// Create both tables if absent, seed the all-NULL singleton row and the

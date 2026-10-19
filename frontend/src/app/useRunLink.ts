@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { fetchRun } from "../run/api/runs";
 import { dismissTransientOverlays } from "../lib/overlays";
-import { formatDeepLink, parseRunLink, usePages } from "../shared/extensions/deepLink";
+import { formatDeepLink, parseRunLink, parseRunTarget, usePages } from "../shared/extensions/deepLink";
 import { ApiError } from "../shared/http/client";
 import { toast } from "../shared/ui/toast";
 
@@ -12,20 +12,27 @@ import { toast } from "../shared/ui/toast";
  * open extension page, gives way to any transient overlay and is selected as a
  * click in the list would; an unknown one says so in an error toast and changes
  * nothing. Either way the link leaves the address bar: the app keeps no Run in
- * its URL, and a stale one would outlive the next selection.
+ * its URL, and a stale one would outlive the next selection. A link toward a
+ * node (`#/runs/<id>/nodes/<node>`) selects it once its Run is shown.
  */
-export function useRunLink(onSelectRun: (runId: string) => void): void {
+export function useRunLink(
+  onSelectRun: (runId: string) => void | Promise<void>,
+  onSelectNode?: (nodeId: string) => void,
+): void {
   const selectRef = useRef(onSelectRun);
+  const nodeRef = useRef(onSelectNode);
   useEffect(() => {
     selectRef.current = onSelectRun;
-  }, [onSelectRun]);
+    nodeRef.current = onSelectNode;
+  }, [onSelectRun, onSelectNode]);
 
   useEffect(() => {
     // Only the last link followed counts: a late answer for an earlier one is dropped.
     let latest = 0;
     const follow = async () => {
-      const runId = parseRunLink(window.location.hash);
-      if (!runId) return;
+      const target = parseRunTarget(window.location.hash);
+      if (!target) return;
+      const { runId, nodeId } = target;
       const attempt = ++latest;
       let failure: string | null = null;
       try {
@@ -38,14 +45,15 @@ export function useRunLink(onSelectRun: (runId: string) => void): void {
       }
       if (attempt !== latest || parseRunLink(window.location.hash) !== runId) return;
       const open = usePages.getState().open;
+      const { pathname, search } = window.location;
       if (failure === null) {
         usePages.setState({ open: null, requested: null });
         dismissTransientOverlays();
-        selectRef.current(runId);
+        const selected = selectRef.current(runId);
+        if (nodeId) void Promise.resolve(selected).then(() => nodeRef.current?.(nodeId));
       } else {
         toast(failure, "error");
       }
-      const { pathname, search } = window.location;
       const back = failure !== null && open ? formatDeepLink(open.extension, open.location, open.path) : `${pathname}${search}`;
       window.history.replaceState(window.history.state, "", back);
     };

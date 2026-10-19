@@ -117,6 +117,13 @@ impl PageFiles for Files {
         }
         Ok(directory.to_path_buf())
     }
+    fn exists<'a>(&'a self, root: &'a Path, components: &'a [OsString]) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            let mut path = root.to_path_buf();
+            path.extend(components);
+            self.0.contains_key(&path.display().to_string())
+        })
+    }
     fn read<'a>(
         &'a self,
         root: &'a Path,
@@ -140,6 +147,8 @@ pub struct FakeRuns {
     pub commands: Mutex<Vec<(String, String, String, serde_json::Value)>>,
     pub journal_fails: bool,
     pub live: usize,
+    /// The Runs that exist, with their nodes.
+    pub nodes: BTreeMap<String, Vec<String>>,
 }
 
 impl Runs for FakeRuns {
@@ -180,6 +189,9 @@ impl Runs for FakeRuns {
     }
     fn count_live(&self) -> BoxFuture<'_, usize> {
         Box::pin(async move { self.live })
+    }
+    fn node_ids<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Option<Vec<String>>> {
+        Box::pin(async move { self.nodes.get(run_id).cloned() })
     }
 }
 

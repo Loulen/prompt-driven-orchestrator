@@ -5,7 +5,7 @@
  */
 
 import { TriangleAlert } from "lucide-react";
-import type { InstanceSettings, StringSettingField } from "../../model/settings";
+import type { InstanceSettings } from "../../model/settings";
 import { telemetryFlagSourceNote } from "../../model/sourceNotes";
 import { CheckboxRow } from "./fields";
 import type { FormSectionProps } from "./GeneralSections";
@@ -55,7 +55,7 @@ export function Switch({
  * address this page was opened at.
  */
 function publicOrigin(settings: InstanceSettings): string {
-  const named = (settings as { public_url?: StringSettingField }).public_url?.effective;
+  const named = settings.public_url.effective;
   return (named || window.location.origin).replace(/\/+$/, "");
 }
 

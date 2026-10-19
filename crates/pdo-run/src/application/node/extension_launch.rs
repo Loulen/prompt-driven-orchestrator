@@ -1,12 +1,15 @@
 //! What the extensions contribute to the launch of a Node (API 0.8) and of the
 //! Run's Pipeline Manager (API 0.13): the variables added to its environment
 //! and the text placed at the top of its prompt, asked once per launch with who
-//! starts the session, who created the Run and in which Projet.
+//! starts the session, who created the Run and in which Projet. The core adds
+//! the instance's Public URL (`PDO_PUBLIC_URL`) when one is set, read fresh at
+//! every launch.
 
 use pdo_extension_api::{
     Actor, NodeKind, NodeLaunch, SessionKind, SessionLaunch, SessionRef, TriggerProvenance,
 };
 use pdo_kernel::extension_host::NodeContribution;
+use pdo_kernel::public_url::PUBLIC_URL_ENV;
 use pdo_session::domain::names::{manager_session_name, node_session_name};
 
 use crate::application::paths::effective_repo_root;
@@ -29,7 +32,17 @@ pub async fn contribution(
     kind: NodeKind,
 ) -> NodeContribution {
     let launch = session_launch(runs, run, node_id, iter, kind).await;
-    without_sandbox_names(runs.extensions().session_launch(&launch), run)
+    let contribution = without_sandbox_names(runs.extensions().session_launch(&launch), run);
+    with_public_url(contribution, runs).await
+}
+
+/// `contribution` with the instance's Public URL, which no extension
+/// overrides; unchanged when none is set.
+async fn with_public_url(mut contribution: NodeContribution, runs: &Runs) -> NodeContribution {
+    if let Some(url) = crate::application::settings::public_url(runs).await {
+        contribution.env.insert(PUBLIC_URL_ENV.to_string(), url);
+    }
+    contribution
 }
 
 /// What the extensions add to the launch of `run`'s Pipeline Manager, started
@@ -48,7 +61,8 @@ pub async fn manager_contribution(
     if let Some(actor) = started_by {
         launch = launch.started_by(actor);
     }
-    without_sandbox_names(runs.extensions().session_launch(&launch), run)
+    let contribution = without_sandbox_names(runs.extensions().session_launch(&launch), run);
+    with_public_url(contribution, runs).await
 }
 
 /// The launch of a Node's session as the extensions see it: the Node's

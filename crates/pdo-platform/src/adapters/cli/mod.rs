@@ -17,7 +17,18 @@ use crate::domain::service_unit::DEFAULT_PORT;
 #[derive(Subcommand, Debug)]
 pub enum PageAction {
     /// Bind a name to a directory and serve it under `/pages/<name>/`.
-    Mount { name: String, directory: PathBuf },
+    Mount {
+        name: String,
+        directory: PathBuf,
+        /// A reading guide (YAML or JSON): a list of entries `{title, text,
+        /// link}`, shown beside the page in PDO. A link leads into PDO
+        /// (`#/runs/<run>`, `#/runs/<run>/nodes/<node>`,
+        /// `#/runs/<run>/nodes/<node>/artifacts/<port>`,
+        /// `/runs/<run>/review?file=<path>`) or into the page (`#anchor`, a
+        /// relative path).
+        #[arg(long, value_name = "FILE")]
+        guide: Option<PathBuf>,
+    },
     /// List active page mounts.
     List,
     /// Remove a page mount.

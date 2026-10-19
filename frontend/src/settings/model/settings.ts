@@ -84,6 +84,9 @@ export interface InstanceSettings {
   /** #779: images + files budget per Run, in MB (`stored → env → default 50`). Bounds the
    *  multipart body of `POST /runs` and drives the « New run » modal's client-side gate. */
   max_attachments_mb: SettingField;
+  /** The address humans open PDO at (`stored → env PDO_PUBLIC_URL → none`). Agents receive
+   *  it and `pdo page mount` prints its links under it; `null` keeps them on localhost. */
+  public_url: StringSettingField;
   default_model: StringSettingField;
   /** #550/ADR-0046: instance-wide default harness (`stored → env → floor claude`).
    *  `effective: null` ⇒ the `claude` floor applies at resolve. */

@@ -8,12 +8,12 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{Extension, Json};
 use pdo_kernel::Actor;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::{error, OriginHint};
 use crate::application::mount_page::{MountPageCommand, MountPageError};
 use crate::application::unmount_page::UnmountPageError;
-use crate::domain::page_mount::MountError;
+use crate::domain::page_mount::{MountError, PageMount};
 use crate::Platform;
 
 const STORAGE_ERROR: &str = "page mount storage error";
@@ -23,6 +23,18 @@ const EVENT_LOG_ERROR: &str = "page mount event log error";
 pub(super) struct CreatePageMountRequest {
     name: String,
     directory: PathBuf,
+    /// The guide file's text (YAML or JSON), checked before the mount.
+    #[serde(default)]
+    guide: Option<String>,
+}
+
+/// The mount, and the instance's Public URL its links are printed under
+/// (`null` when unset: the caller's own daemon address).
+#[derive(Serialize)]
+struct MountedPage {
+    #[serde(flatten)]
+    mount: PageMount,
+    public_url: Option<String>,
 }
 
 pub(super) async fn list(State(platform): State<Arc<Platform>>) -> Response {
@@ -44,10 +56,14 @@ pub(super) async fn mount(
     let command = MountPageCommand {
         name: request.name,
         directory: request.directory,
+        guide: request.guide,
         hint,
     };
     match platform.mount_page.execute(&actor, command).await {
-        Ok(mount) => (StatusCode::CREATED, Json(mount)).into_response(),
+        Ok(mount) => {
+            let public_url = platform.public_url().await;
+            (StatusCode::CREATED, Json(MountedPage { mount, public_url })).into_response()
+        }
         Err(MountPageError::Refused(denied)) => denied.into_response(),
         Err(MountPageError::SessionRefused(message)) => error(StatusCode::FORBIDDEN, message),
         Err(MountPageError::Invalid(MountError::Invalid(message))) => {

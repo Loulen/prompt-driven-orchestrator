@@ -92,7 +92,6 @@ pub fn secondary_repo_contexts(
 pub struct AugmentContext<'a> {
     pub pipeline: &'a PipelineDef,
     pub node: &'a NodeDef,
-    #[allow(dead_code)]
     pub run_id: &'a str,
     pub iter: i64,
     pub artifacts_dir: &'a Path,
@@ -155,6 +154,9 @@ pub struct AugmentContext<'a> {
     /// The text the extensions place at the very top of the preamble (API
     /// 0.8), before `# PDO Runtime Preamble`; `None` when they give none.
     pub extension_preamble: Option<&'a str>,
+    /// The instance's Public URL the session receives as `PDO_PUBLIC_URL`;
+    /// `None` when unset, and the preamble says nothing of it.
+    pub public_url: Option<&'a str>,
 }
 
 pub fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String {
@@ -274,6 +276,7 @@ mod tests {
             interrupted_git_ops: &[],
             partial_outputs: &[],
             extension_preamble: None,
+            public_url: None,
         }
     }
 
@@ -1081,6 +1084,32 @@ mod tests {
         assert!(full.contains("# PDO Runtime Preamble"));
         assert!(full.contains("You are a planner. Plan well."));
         assert!(full.contains("---"));
+    }
+
+    /// The Public URL is named to the agent, with the links it opens; unset,
+    /// the preamble says nothing of it.
+    #[test]
+    fn the_public_url_is_given_to_the_agent_when_set() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let plain = build_preamble(&sample_ctx(&pipeline, node, &vars));
+        assert!(!plain.contains("Public URL"), "{plain}");
+
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.public_url = Some("https://pdo.example.net");
+        let preamble = build_preamble(&ctx);
+        assert!(preamble.contains("## Public URL"), "{preamble}");
+        assert!(preamble.contains("`https://pdo.example.net`"), "{preamble}");
+        assert!(preamble.contains("`PDO_PUBLIC_URL`"), "{preamble}");
+        assert!(
+            preamble.contains("https://pdo.example.net/#/runs/20260101-120000-abc1234"),
+            "{preamble}"
+        );
+        assert!(
+            preamble.find("## Public URL") < preamble.find("## Completion"),
+            "before the completion"
+        );
     }
 
     /// API 0.8: the extensions' text opens the prompt, before anything of

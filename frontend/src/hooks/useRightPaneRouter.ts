@@ -39,6 +39,10 @@ export interface RightPaneRouterArgs {
   pipelines: PipelineListEntry[];
   /** The selected run — used to synthesize a pending run-pane node. */
   selectedRun: RunState | null;
+  /** A mounted page's tab is shown in the centre: the pane is its guide. */
+  pageOpen?: boolean;
+  /** That page has a guide, unfolded. */
+  guideShown?: boolean;
 }
 
 export interface RightPaneRouterResult {
@@ -91,6 +95,8 @@ export function useRightPaneRouter(
     triggers,
     pipelines,
     selectedRun,
+    pageOpen = false,
+    guideShown = false,
   } = args;
 
   // #320 canvas-reclaim. A Trigger detail and a canvas selection compete for the
@@ -180,6 +186,7 @@ export function useRightPaneRouter(
     triggerSelected: selectedTrigger != null,
     infoPanelOpen,
     hasEditTab,
+    pageOpen,
   });
 
   // The Run-pane node. A node present in the pipeline (canvas) but absent from
@@ -236,6 +243,7 @@ export function useRightPaneRouter(
     selectionKind: selection.kind,
     runPanelShown: isRunTab && selectedRun != null,
     legacyHasContent,
+    guideShown,
   });
 
   return { paneOwner, selectedTrigger, triggerPromptRequired, runNode, collapsed };

@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import type { RunState } from "../shared/generated/RunState";
 import { useEditStore } from "../pipeline/store/editStore";
+import { useMountedPages } from "../platform/store/mountedPages";
 
 /** What a navigation to a Run clears of the shell's other selections. */
 export interface RunNavigationTargets {
@@ -48,6 +49,8 @@ export function useRunNavigation({
       // while the child run is the selected one.)
       setOrchestratorReturn(null);
       setLandOnOrchestration(null);
+      // A Run takes the center back from a mounted page's tab (which stays open).
+      useMountedPages.getState().showPage(null);
       setSelectedTriggerId(null);
       setSelectedRunId(runId);
       selectRun(runId);

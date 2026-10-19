@@ -52,7 +52,9 @@ impl Client {
         };
         client.welcome = client.text_of("welcome").await;
         // Ask for the draft, with an empty copy: the whole draft comes back.
-        let empty = YDraftDocuments.create(&DraftContent::default()).state_vector();
+        let empty = YDraftDocuments
+            .create(&DraftContent::default())
+            .state_vector();
         client.send(SYNC_REQUEST, &empty).await;
         let reply = client.binary_of(SYNC_REPLY).await;
         client.doc = YDraftDocuments.load(&reply).unwrap();
@@ -62,7 +64,10 @@ impl Client {
     async fn send(&mut self, tag: u8, payload: &[u8]) {
         let mut frame = vec![tag];
         frame.extend_from_slice(payload);
-        self.socket.send(Message::Binary(frame.into())).await.unwrap();
+        self.socket
+            .send(Message::Binary(frame.into()))
+            .await
+            .unwrap();
     }
 
     /// Change the copy and send the change.
@@ -124,10 +129,14 @@ impl Client {
 }
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
-    flow::write_pipeline(repo, "draft-target", &flow::solo_pipeline_yaml("draft-target", false))
+    flow::write_pipeline(
+        repo,
+        "draft-target",
+        &flow::solo_pipeline_yaml("draft-target", false),
+    )
 }
 
-fn worker<'a>(content: &'a DraftContent) -> &'a Value {
+fn worker(content: &DraftContent) -> &Value {
     content.pipeline["nodes"]
         .as_array()
         .unwrap()
@@ -225,7 +234,10 @@ async fn the_draft_survives_a_restart_of_the_daemon() {
     let daemon = TestDaemon::spawn_at(repo.path()).await.unwrap();
     let again = Client::join(&daemon, "draft-target", None).await;
     assert_eq!(again.welcome["generation"], generation);
-    assert_eq!(worker(&again.doc.content())["view"], json!({"x": 1, "y": 2}));
+    assert_eq!(
+        worker(&again.doc.content())["view"],
+        json!({"x": 1, "y": 2})
+    );
 }
 
 #[tokio::test]

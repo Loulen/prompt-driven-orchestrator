@@ -93,7 +93,12 @@ fn zip_entry(bytes: &[u8], name: &str) -> String {
 }
 
 fn write_reference(daemon: &TestDaemon, id: &str, rel: &str, text: &str) {
-    let path = daemon.repo_root().join(".pdo").join("skills").join(id).join(rel);
+    let path = daemon
+        .repo_root()
+        .join(".pdo")
+        .join("skills")
+        .join(id)
+        .join(rel);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
 }
@@ -213,7 +218,10 @@ async fn a_skill_or_a_selection_exports_with_its_reference_files() {
     .await;
     assert_eq!(resp.headers()["x-pdo-skills"], "2");
     let names = zip_names(&resp.bytes().await.unwrap());
-    assert!(names.iter().all(|n| n.starts_with("selection.skills/")), "{names:?}");
+    assert!(
+        names.iter().all(|n| n.starts_with("selection.skills/")),
+        "{names:?}"
+    );
     assert_eq!(names.len(), 3, "{names:?}");
 }
 

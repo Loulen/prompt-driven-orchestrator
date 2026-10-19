@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.43.0 — Brouillon partagé d'un pipeline et présence (CORE-90)
+
+- Un pipeline du registre s'édite dans un brouillon partagé (ADR-0088) : un document Yjs par
+  pipeline, tenu par le daemon (SQLite) et synchronisé par `WS /pipelines/{id}/draft`. Les
+  modifications fusionnent au grain du champ, les prompts au caractère. Le brouillon survit au
+  redémarrage du daemon ; Save l'écrit dans le fichier et le remet à zéro.
+- Présence : avatars dans la barre d'onglets et sur la ligne de la liste Pipelines, sélection
+  des autres sur le canevas (contour et étiquette à leur couleur), saisie dans un prompt (caret
+  nommé, « X is typing »). `GET /pipelines` gagne `draft` (`changes`, `nodes`) : la ligne affiche
+  « draft: N changes » et compte les nœuds du brouillon.
+- Undo n'annule que ses propres changements, et son infobulle nomme le dernier.
+- Une Autorisation d'opération qui refuse `pipeline × update` fait rejoindre le brouillon en
+  lecture seule.
+- Un fichier écrit hors de PDO se fusionne dans le brouillon : la fenêtre de conflit disparaît.
+
 ## 2.42.0 — Arbre de fichiers de la Review (CORE-84)
 
 - La liste des fichiers de la Review est un arbre de dossiers repliables. Une chaîne de dossiers

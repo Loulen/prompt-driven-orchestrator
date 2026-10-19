@@ -26,7 +26,7 @@ function makeNode(id: string): EditorNodeDef {
     name: id,
     type: "agent",
     inputs: [],
-    outputs: [{ name: "out", repeated: false, side: "right" }],
+    outputs: [{ name: "out" }],
     interactive: false,
   };
 }

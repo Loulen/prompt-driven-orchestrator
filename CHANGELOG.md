@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.33.0 — Ports sans côté ni `repeated` (CORE-87)
+
+- **Changement de format du pipeline.** Un port n'a plus de côté (`side`) ni de `repeated` :
+  l'inspecteur d'un output n'offre plus `L/T/R/B` ni `rpt`, et son type passe dans la ligne
+  du nom. Où un fil part appartient à l'edge, l'accumulation aussi. Au chargement, le `side`
+  d'un output devient une `source_anchor` sans `offset` (milieu du côté) sur ses edges, celui
+  du `result` d'un End un `target_side`, et le `repeated` d'un port est ignoré ; la
+  vérification de fin de nœud ne cherche plus un output dans les itérations précédentes (un
+  Run en cours dont un output `repeated` n'a été écrit qu'à une itération antérieure doit le
+  réécrire pour terminer l'itération courante). Le
+  fichier n'est réécrit qu'à la sauvegarde : lancer `pdo migrate` pour convertir le registre
+  (`~/.pdo/pipelines`) et la bibliothèque de nœuds (`~/.pdo/library`) ; la commande dit, par
+  fichier, ce qu'elle a changé, et une seconde passe ne change rien.
+- `EdgeAnchor.offset` devient optionnel ; `PortDef` perd `side` et `repeated`, `PortBrief`
+  perd `side`. Le `side` d'un `PortBrief` d'un event log antérieur est ignoré à la lecture.
+  Bump mineur : tout fichier et tout Run écrits avant se relisent sans erreur.
+- L'éditeur écrit désormais le `repeated` d'une edge : une sauvegarde depuis le canevas le
+  perdait.
+
 ## 2.32.0 — Auteur Acteur des commentaires de Review, sources d'autocomplétion du compositeur (CORE-63)
 
 - **`pdo-extension-api` 0.14.0** : nouvel Emplacement d'UI `review/composer` (le compositeur de

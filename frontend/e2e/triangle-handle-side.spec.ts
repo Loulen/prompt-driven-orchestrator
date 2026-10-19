@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { runMultipart } from "./helpers";
 
 // Layer 4 — a declared output `side` places NO canvas handle any more (#40, #844).
@@ -13,19 +13,18 @@ import { runMultipart } from "./helpers";
 // Since #844 there is no per-output handle at all: a wire starts from any point
 // of the card's BORDER, through four rim source strips, and the side it leaves by
 // is the side the author pressed — recorded per edge as `source_anchor`, not
-// declared per port. `side` survives in the document (it is semantic, and the
-// node library treats it as identity) but places nothing on the canvas. So the
-// spec now asserts exactly that: no `result` handle anywhere, and the four rim
-// strips instead.
+// declared per port. A port has no side any more: a legacy `side` is read off
+// the document at parse (onto the edge's `source_anchor`) and places no handle.
+// So the spec asserts exactly that: no `result` handle anywhere, and the four
+// rim strips instead.
 //
 // The daemon refuses to load a pipeline without exactly one start + one end node
 // (crates/pdo-pipeline/src/domain/pipeline/), so the seed wraps the checker between a
 // start and an end. `POST /runs` is multipart/form-data post-refonte.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-triangle-side-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance registry (`~/.pdo/pipelines`), where the daemon lists pipelines.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 

@@ -36,6 +36,8 @@ pub struct FileInfo {
 #[ts(export)]
 pub struct PortIO {
     pub port: String,
+    /// An input that pools several files: fed by a `repeated` edge, or by two
+    /// edges of the same name. Always `false` on an output.
     pub repeated: bool,
     pub port_type: PortType,
     /// An *Output intermédiaire*: the agent writes it while it works, nothing
@@ -174,8 +176,8 @@ pub fn resolve(
                 mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
-                    // `repeated` has no effect on an Output intermédiaire.
-                    repeated: output_port.repeated && !output_port.intermediate,
+                    // An output never accumulates: that belongs to the edge.
+                    repeated: false,
                     port_type: output_port.port_type,
                     intermediate: output_port.intermediate,
                     files,
@@ -192,8 +194,8 @@ pub fn resolve(
                 mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
-                    // `repeated` has no effect on an Output intermédiaire.
-                    repeated: output_port.repeated && !output_port.intermediate,
+                    // An output never accumulates: that belongs to the edge.
+                    repeated: false,
                     port_type: output_port.port_type,
                     intermediate: output_port.intermediate,
                     files,
@@ -211,8 +213,8 @@ pub fn resolve(
                 mark_inherited(artifacts_dir, &mut files, not_before, &tracked);
                 outputs.push(PortIO {
                     port: output_port.name.clone(),
-                    // `repeated` has no effect on an Output intermédiaire.
-                    repeated: output_port.repeated && !output_port.intermediate,
+                    // An output never accumulates: that belongs to the edge.
+                    repeated: false,
                     port_type: output_port.port_type,
                     intermediate: output_port.intermediate,
                     files,
@@ -327,8 +329,6 @@ mod tests {
                     node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "task".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -339,8 +339,6 @@ mod tests {
                     }],
                     outputs: vec![Port {
                         name: "plan".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -368,8 +366,6 @@ mod tests {
                     node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "plan".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -380,8 +376,6 @@ mod tests {
                     }],
                     outputs: vec![Port {
                         name: "summary".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -539,8 +533,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "review".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -568,8 +560,6 @@ mod tests {
                     node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "reviews".into(),
-                        repeated: true,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -580,8 +570,6 @@ mod tests {
                     }],
                     outputs: vec![Port {
                         name: "code".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -774,8 +762,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "out".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -804,8 +790,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "out".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -833,8 +817,6 @@ mod tests {
                     node_type: NodeType::Agent,
                     inputs: vec![Port {
                         name: "docs".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -928,8 +910,6 @@ mod tests {
                     inputs: vec![],
                     outputs: vec![Port {
                         name: "plan".into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -1021,8 +1001,6 @@ mod tests {
             outputs: if has_out {
                 vec![Port {
                     name: "plan".into(),
-                    repeated: false,
-                    side: None,
                     port_type: PortType::Markdown,
                     frontmatter: None,
                     when: None,
@@ -1110,8 +1088,6 @@ mod tests {
                 .map(|o| {
                     vec![Port {
                         name: o.into(),
-                        repeated: false,
-                        side: None,
                         port_type: PortType::Markdown,
                         frontmatter: None,
                         when: None,
@@ -1201,8 +1177,6 @@ mod tests {
                 inputs: vec![],
                 outputs: vec![Port {
                     name: "report".into(),
-                    repeated: false,
-                    side: None,
                     port_type: PortType::Html,
                     frontmatter: None,
                     when: None,

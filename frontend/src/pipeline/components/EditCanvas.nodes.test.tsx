@@ -46,8 +46,8 @@ function markerProps({ nodeType, reached = false, status = "pending", inputImage
     status,
     reached,
     inputImages,
-    inputs: nodeType === "end" ? [{ name: "in", side: "left" as const }] : [],
-    outputs: nodeType === "start" ? [{ name: "out", side: "right" as const }] : [],
+    inputs: nodeType === "end" ? [{ name: "in" }] : [],
+    outputs: nodeType === "start" ? [{ name: "out" }] : [],
     interactive: false,
   };
   return {
@@ -120,7 +120,7 @@ describe("EditNode slim card (issue #149)", () => {
       status: "pending" as NodeStatus,
       reached: false,
       inputs: [],
-      outputs: [{ name: "out", side: "right" as const }],
+      outputs: [{ name: "out" }],
       interactive: overrides.interactive ?? false,
       isolated: overrides.isolated ?? false,
     };
@@ -190,7 +190,7 @@ describe("EditNode slim card (issue #149)", () => {
 describe("EditNode emergent anchoring keyed on node type (issue #175)", () => {
   function nodeProps(
     nodeType: NodeType,
-    inputs: { name: string; side: "left" | "right" | "top" | "bottom" }[],
+    inputs: { name: string }[],
   ) {
     return {
       ...markerProps({ nodeType }),
@@ -215,7 +215,7 @@ describe("EditNode emergent anchoring keyed on node type (issue #175)", () => {
     // edge could anchor by drop and they all snapped to the left. Anchoring is
     // keyed on node TYPE now, so the per-side anchors appear regardless.
     const { container } = render(
-      <EditNode {...nodeProps("agent", [{ name: "in", side: "left" }])} />,
+      <EditNode {...nodeProps("agent", [{ name: "in" }])} />,
       { wrapper: Wrapper },
     );
     const handleIds = Array.from(container.querySelectorAll(".react-flow__handle")).map((h) =>
@@ -231,7 +231,7 @@ describe("EditNode emergent anchoring keyed on node type (issue #175)", () => {
     // anchors: a wire could land on its declared side only. `result` is the
     // edge's port, not a place on the card — End anchors by drop like a work node.
     const { container } = render(
-      <EditNode {...nodeProps("end", [{ name: "result", side: "top" }])} />,
+      <EditNode {...nodeProps("end", [{ name: "result" }])} />,
       { wrapper: Wrapper },
     );
     const handleIds = Array.from(container.querySelectorAll(".react-flow__handle")).map((h) =>
@@ -256,7 +256,7 @@ describe("EditNode script node card (#248)", () => {
         status: "pending" as NodeStatus,
         reached: false,
         inputs: [],
-        outputs: [{ name: "out", side: "right" as const }],
+        outputs: [{ name: "out" }],
         interactive: false,
       },
     } as unknown as Parameters<typeof EditNode>[0];
@@ -309,7 +309,7 @@ describe("EditNode Start marker — input images on the canvas (issue #145)", ()
 });
 
 describe("EditNode rim drag-source (#844)", () => {
-  function workProps(outputs: { name: string; side: "left" | "right" | "top" | "bottom" }[]) {
+  function workProps(outputs: { name: string }[]) {
     return {
       ...markerProps({ nodeType: "agent" }),
       id: "nd_4f2a",
@@ -329,7 +329,7 @@ describe("EditNode rim drag-source (#844)", () => {
 
   it("renders NO output dot — the card names no port any more", () => {
     const { container } = render(
-      <EditNode {...workProps([{ name: "out", side: "right" }, { name: "spec", side: "right" }])} />,
+      <EditNode {...workProps([{ name: "out" }, { name: "spec" }])} />,
       { wrapper: Wrapper },
     );
     expect(container.querySelectorAll(".port-dot")).toHaveLength(0);
@@ -339,7 +339,7 @@ describe("EditNode rim drag-source (#844)", () => {
   });
 
   it("makes the whole border a connection source: one source strip per side", () => {
-    const { container } = render(<EditNode {...workProps([{ name: "out", side: "right" }])} />, {
+    const { container } = render(<EditNode {...workProps([{ name: "out" }])} />, {
       wrapper: Wrapper,
     });
     for (const side of ["top", "bottom", "left", "right"]) {
@@ -360,7 +360,7 @@ describe("EditNode rim drag-source (#844)", () => {
   });
 
   it("draws a thin 4.5px rim on all four sides, in canvas space (#936)", () => {
-    render(<EditNode {...workProps([{ name: "out", side: "right" }])} />, { wrapper: Wrapper });
+    render(<EditNode {...workProps([{ name: "out" }])} />, { wrapper: Wrapper });
     expect((screen.getByTestId("rim-source-top") as HTMLElement).style.height).toBe("4.5px");
     expect((screen.getByTestId("rim-source-bottom") as HTMLElement).style.height).toBe("4.5px");
     expect((screen.getByTestId("rim-source-left") as HTMLElement).style.width).toBe("4.5px");
@@ -373,7 +373,7 @@ describe("EditNode rim drag-source (#844)", () => {
   });
 
   it("arms the gesture with an amber ring while the rim is hovered", () => {
-    const { container } = render(<EditNode {...workProps([{ name: "out", side: "right" }])} />, {
+    const { container } = render(<EditNode {...workProps([{ name: "out" }])} />, {
       wrapper: Wrapper,
     });
     const card = container.firstElementChild as HTMLElement;
@@ -393,21 +393,18 @@ describe("EditNode rim drag-source (#844)", () => {
 
 const SIDES: PortSide[] = ["top", "right", "bottom", "left"];
 
-function endNode(declaredSide: PortSide = "left"): EditorNodeDef {
+function endNode(): EditorNodeDef {
   return {
     id: "end",
     name: "End",
     type: "end",
-    inputs: [{ name: "result", repeated: false, side: declaredSide }],
+    inputs: [{ name: "result" }],
     outputs: [],
     interactive: false,
   };
 }
 
-function pipelineToEnd(
-  edge: Partial<EditorPipelineDef["edges"][number]>,
-  declaredSide: PortSide = "left",
-): EditorPipelineDef {
+function pipelineToEnd(edge: Partial<EditorPipelineDef["edges"][number]>): EditorPipelineDef {
   return {
     name: "p",
     variables: {},
@@ -417,10 +414,10 @@ function pipelineToEnd(
         name: "src",
         type: "agent",
         inputs: [],
-        outputs: [{ name: "plan", repeated: false, side: "right" }],
+        outputs: [{ name: "plan" }],
         interactive: false,
       },
-      endNode(declaredSide),
+      endNode(),
     ],
     edges: [
       {
@@ -453,20 +450,21 @@ describe("End marker accepts an incoming edge on any of its four borders (#840)"
     expect(edge.data?.targetAnchor).toEqual(anchor);
   });
 
-  it("lets the saved anchor win over the declared side when the drop was on the left", () => {
-    // `target_side: left` is never written (it is the default), so a left drop on
-    // an End declared `top` survives only through its anchor.
-    const [edge] = deriveEditEdges(
-      pipelineToEnd({ target_anchor: { side: "left", offset: 20 } }, "top"),
-    );
+  it("lands a left drop through its anchor alone", () => {
+    // `target_side: left` is never written (it is the default), so a left drop
+    // survives only through its anchor.
+    const [edge] = deriveEditEdges(pipelineToEnd({ target_anchor: { side: "left", offset: 20 } }));
     expect(edge.targetHandle).toBe("__anchor:left");
     expect(edge.data?.targetSide).toBe("left");
   });
 
-  it.each(SIDES)("keeps a legacy End edge (no anchor) on its declared %s side", (declared) => {
-    // Pipelines saved before this fix carry no anchor on their End edges: they
-    // reopen exactly where they used to land, on `result`'s declared side.
-    const [edge] = deriveEditEdges(pipelineToEnd({}, declared));
+  it.each(SIDES)("keeps a legacy End edge (no anchor) on its %s side", (declared) => {
+    // Pipelines saved before #840 carry no anchor on their End edges. The parse
+    // turned `result`'s retired side into the edge's `target_side` (absent for
+    // the default `left`): they reopen exactly where they used to land.
+    const [edge] = deriveEditEdges(
+      pipelineToEnd(declared === "left" ? {} : { target_side: declared }),
+    );
     expect(edge.targetHandle).toBe(`__anchor:${declared}`);
     expect(edge.data?.targetSide).toBe(declared);
   });
@@ -543,7 +541,7 @@ describe("End marker accepts an incoming edge on any of its four borders (#840)"
         nodeType: "end",
         status: "pending" as NodeStatus,
         reached: false,
-        inputs: [{ name: "result", side: "left" as const }],
+        inputs: [{ name: "result" }],
         outputs: [],
         interactive: false,
       },

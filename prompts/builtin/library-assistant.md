@@ -48,10 +48,9 @@ nodes:
     type: agent
     isolated_worktree: true
     inputs:                       # emergent for work nodes — usually omit; named by edges
-      - { name: in, side: left }
-    outputs:
+      - { name: in }
+    outputs:                      # a port has no side nor `repeated`: both belong to the edge
       - name: out
-        side: bottom              # left | right | top | bottom
         port_type: markdown       # markdown (default) | image | image_list | html
         frontmatter:              # optional typed frontmatter the node must emit
           Verdict:
@@ -109,6 +108,8 @@ edges:
   - source: { node: implement, port: out }
     target: { node: review, port: in }
     target_side: top              # optional; which side the arrow lands on
+    source_anchor: { side: bottom } # optional; which side the wire leaves from (default right)
+    repeated: true                # optional; the target reads every iteration of the source
 
   # One edge may CARRY SEVERAL outputs of the same source node (ADR-0073). It is
   # still one edge: it fires once and drops one input per carried port on the

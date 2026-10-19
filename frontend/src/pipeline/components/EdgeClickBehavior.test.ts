@@ -41,8 +41,8 @@ function makeNode(overrides: Partial<EditorNodeDef> = {}): EditorNodeDef {
     id: "default",
     name: "Default",
     type: "agent",
-    inputs: [{ name: "in", repeated: false }],
-    outputs: [{ name: "out", repeated: false }],
+    inputs: [{ name: "in" }],
+    outputs: [{ name: "out" }],
     interactive: false,
     view: { x: 100, y: 100 },
     ...overrides,
@@ -94,7 +94,7 @@ describe("edge click selects the edge", () => {
   });
 
   it("sets an edge selection carrying the clicked edge's index", () => {
-    const nodeA = makeNode({ id: "aaaaaaaa", outputs: [{ name: "result", repeated: false }] });
+    const nodeA = makeNode({ id: "aaaaaaaa", outputs: [{ name: "result" }] });
     const nodeB = makeNode({ id: "bbbbbbbb" });
     const edge: EdgeDef = {
       source: { node: "aaaaaaaa", port: "result" },

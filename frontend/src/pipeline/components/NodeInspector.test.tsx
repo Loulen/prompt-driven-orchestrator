@@ -118,8 +118,8 @@ function seedTabWithReviewer(dirty: boolean, prompt = "Review this code.") {
               name: "reviewer",
               type: "agent",
               interactive: false,
-              inputs: [{ name: "in", repeated: false, side: "left" }],
-              outputs: [{ name: "out", repeated: false, side: "right" }],
+              inputs: [{ name: "in" }],
+              outputs: [{ name: "out" }],
               view: { x: 0, y: 0 },
             },
           ],
@@ -153,7 +153,7 @@ function seedPooledReviewPipeline() {
               type: "agent",
               interactive: false,
               inputs: [],
-              outputs: [{ name: "review", repeated: false, side: "right" }],
+              outputs: [{ name: "review" }],
               view: { x: 0, y: 0 },
             },
             {
@@ -162,7 +162,7 @@ function seedPooledReviewPipeline() {
               type: "agent",
               interactive: false,
               inputs: [],
-              outputs: [{ name: "review", repeated: false, side: "right" }],
+              outputs: [{ name: "review" }],
               view: { x: 0, y: 100 },
             },
             {
@@ -174,8 +174,6 @@ function seedPooledReviewPipeline() {
               outputs: [
                 {
                   name: "diff",
-                  repeated: false,
-                  side: "right",
                   frontmatter: { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } },
                 },
               ],
@@ -215,7 +213,7 @@ function seedTabWithScript(prompt = "echo hi\n") {
               type: "script",
               interactive: false,
               inputs: [],
-              outputs: [{ name: "out", repeated: false, side: "right" }],
+              outputs: [{ name: "out" }],
               view: { x: 0, y: 0 },
             },
           ],
@@ -514,7 +512,7 @@ function seedSelfFeedPipeline() {
               type: "agent",
               interactive: false,
               inputs: [],
-              outputs: [{ name: "in", repeated: false, side: "right" }],
+              outputs: [{ name: "in" }],
               view: { x: 0, y: 0 },
             },
           ],
@@ -553,8 +551,8 @@ function seedMultiPortPipeline() {
               interactive: false,
               inputs: [],
               outputs: [
-                { name: "out", repeated: false, side: "right" },
-                { name: "spec", repeated: false, side: "right" },
+                { name: "out" },
+                { name: "spec" },
               ],
               view: { x: 0, y: 0 },
             },
@@ -564,7 +562,7 @@ function seedMultiPortPipeline() {
               type: "agent",
               interactive: false,
               inputs: [],
-              outputs: [{ name: "diff", repeated: false, side: "right" }],
+              outputs: [{ name: "diff" }],
               view: { x: 200, y: 0 },
             },
           ],
@@ -704,8 +702,8 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
     expect(mockSave).toHaveBeenCalledWith({
       name: "reviewer",
       type: "agent",
-      inputs: [{ name: "in", repeated: false, side: "left" }],
-      outputs: [{ name: "out", repeated: false, side: "right" }],
+      inputs: [{ name: "in" }],
+      outputs: [{ name: "out" }],
       interactive: false,
       // #345/#296: the library is model-aware; a model-less node sends null.
       model: null,
@@ -738,7 +736,7 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
     const node = useEditStore.getState().openTabs[0].pipeline.nodes[0];
     node.outputs = [
       { ...node.outputs[0], instructions: "Return a concise verdict." },
-      { name: "empty", repeated: false, side: "right", instructions: "   " },
+      { name: "empty", instructions: "   " },
     ];
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
 
@@ -747,11 +745,9 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
     expect(mockSave.mock.calls[0][0].outputs).toEqual([
       {
         name: "out",
-        repeated: false,
-        side: "right",
         instructions: "Return a concise verdict.",
       },
-      { name: "empty", repeated: false, side: "right" },
+      { name: "empty" },
     ]);
   });
 
@@ -782,8 +778,8 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
     const diverged: LibraryEntry = {
       name: "reviewer",
       type: "agent",
-      inputs: [{ name: "in", repeated: false, side: "left" }],
-      outputs: [{ name: "out", repeated: false, side: "right" }],
+      inputs: [{ name: "in" }],
+      outputs: [{ name: "out" }],
       interactive: false,
       isolated_worktree: false,
       prompt: "Review this code.",
@@ -805,8 +801,8 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
     const synced: LibraryEntry = {
       name: "reviewer",
       type: "agent",
-      inputs: [{ name: "in", repeated: false, side: "left" }],
-      outputs: [{ name: "out", repeated: false, side: "right" }],
+      inputs: [{ name: "in" }],
+      outputs: [{ name: "out" }],
       interactive: false,
       prompt: "Review this code.",
     };
@@ -840,8 +836,8 @@ function seedNode(node: Record<string, unknown>) {
               name: "worker",
               type: "agent",
               interactive: false,
-              inputs: [{ name: "in", repeated: false, side: "left" }],
-              outputs: [{ name: "out", repeated: false, side: "right" }],
+              inputs: [{ name: "in" }],
+              outputs: [{ name: "out" }],
               view: { x: 0, y: 0 },
               ...node,
             },
@@ -924,7 +920,7 @@ describe("NodeInspector — the model field does not follow the selection (#617)
       type: "agent" as const,
       interactive: false,
       inputs: [],
-      outputs: [{ name: "out", repeated: false, side: "right" as const }],
+      outputs: [{ name: "out" }],
       view: { x: 0, y: 0 },
     };
     useEditStore.setState({

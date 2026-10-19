@@ -1,17 +1,16 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { openPipelineForEdit } from "./helpers";
 
 // Layer 3b — Library node round-trip preserves inputs/outputs (#71).
 // Verifies: configure a node with 2 inputs + 1 typed output, save to library,
 // reload UI, drag back from library → ports + frontmatter schemas preserved.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-lib-ports-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance registry (`~/.pdo/pipelines`), where the daemon lists pipelines.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -117,7 +116,8 @@ test("save node to library preserves ports and frontmatter schema", async ({
   expect(inputs).toHaveLength(2);
   expect(inputs[0].name).toBe("code");
   expect(inputs[1].name).toBe("context");
-  expect(inputs[1].repeated).toBe(true);
+  // A port has no `repeated` any more: the seed's legacy flag is dropped.
+  expect(inputs[1].repeated).toBeUndefined();
 
   // Assert output frontmatter preserved
   const outputs = entry!.outputs as Array<Record<string, unknown>>;
@@ -147,13 +147,12 @@ test("instantiating from library restores ports and frontmatter", async ({
         name: "reviewer",
         type: "agent",
         inputs: [
-          { name: "code", repeated: false },
-          { name: "context", repeated: true },
+          { name: "code" },
+          { name: "context" },
         ],
         outputs: [
           {
             name: "review",
-            repeated: false,
             frontmatter: {
               verdict: { type: "enum", allowed: ["PASS", "FAIL"] },
               score: { type: "int" },
@@ -188,5 +187,5 @@ test("instantiating from library restores ports and frontmatter", async ({
 
   const inputs = spec.inputs as Array<Record<string, unknown>>;
   expect(inputs).toHaveLength(2);
-  expect(inputs[1].repeated).toBe(true);
+  expect(inputs[1].name).toBe("context");
 });

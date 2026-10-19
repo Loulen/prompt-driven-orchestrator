@@ -181,7 +181,10 @@ mod tests {
         let store = SqliteDrafts::new(db);
         store.save("p", &draft(2, 5)).await.unwrap();
         let kept = store.load("p").await.unwrap().unwrap();
-        assert_eq!((kept.changes, kept.nodes, kept.state), (2, 5, vec![1, 2, 3]));
+        assert_eq!(
+            (kept.changes, kept.nodes, kept.state),
+            (2, 5, vec![1, 2, 3])
+        );
         let listed = store.summaries().await.unwrap();
         assert_eq!((listed["p"].changes, listed["p"].nodes), (2, 5));
     }

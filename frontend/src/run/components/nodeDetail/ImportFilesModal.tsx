@@ -8,7 +8,10 @@ import {
   DEFAULT_MAX_ATTACHMENTS_MB,
   formatAttachmentSize,
 } from "../../model/attachments";
-import { importedFilesText, stageImportFiles } from "../../model/nodeImport";
+import { importedFilesText, notPilotRefusal, stageImportFiles } from "../../model/nodeImport";
+import { requestTakeControl, TAKE_CONTROL_LABEL } from "../../../session/model/terminalRole";
+import ActorLabel from "../../../shared/actors/ActorLabel";
+import { showToast } from "../../../shared/ui/toast";
 import { copyToClipboard } from "../../../shared/lib/clipboard";
 import { useSettings } from "../../../settings/store/useSettings";
 import { useFileDropTarget } from "../../../skill/store/useFileDropTarget";
@@ -20,15 +23,19 @@ interface Props {
   nodeId: string;
   /** The node's current iteration: the one whose session receives the files. */
   iter: number;
+  /** The tmux session of the terminal: where « Take control » goes when the
+   *  daemon refuses the send to a spectator. */
+  session: string;
   /** Files dropped on the terminal; empty when opened from the Import button,
    *  which then opens the file picker straight away. */
   initialFiles: File[];
   /** Set when the node cannot receive files (no live session): the modal says
    *  why and Import stays off. The daemon refuses the same cases anyway. */
   blockedReason?: string | null;
-  /** Set when this browser may not write into the terminal (ADR-0075: another
-   *  browser has control): « Copy & send to terminal » stays off and says why,
-   *  Copy still works. */
+  /** Set when this browser only watches the terminal (ADR-0075: another
+   *  browser has control): said beside « Copy & send to terminal ». The daemon
+   *  decides: a refused send writes nothing and says who pilots, in a toast
+   *  offering to take control. */
   sendBlockedReason?: string | null;
   /** Closes the modal: Cancel, Done, Escape, the backdrop, or once the text
    *  went into the terminal. */
@@ -59,6 +66,7 @@ export default function ImportFilesModal({
   runId,
   nodeId,
   iter,
+  session,
   initialFiles,
   blockedReason,
   sendBlockedReason,
@@ -133,7 +141,6 @@ export default function ImportFilesModal({
 
 
   const copyAndSend = async () => {
-    if (sendBlockedReason) return;
     setSend({ kind: "sending" });
     // Copy first: it is the fallback when the terminal write does not land.
     const copied = await copyToClipboard(text);
@@ -141,6 +148,24 @@ export default function ImportFilesModal({
       await sendTextToNodeTerminal(runId, nodeId, iter, text);
       onClose();
     } catch (cause) {
+      const refused = notPilotRefusal(cause);
+      if (refused) {
+        // Another browser pilots: nothing was written. The modal stays, to
+        // send again once this browser has taken control.
+        setSend({ kind: "idle" });
+        showToast({
+          kind: "warning",
+          title: `Not sent to ${nodeId}`,
+          message: (
+            <>
+              {refused.pilot ? <ActorLabel actor={refused.pilot} /> : "Another browser"} pilots this terminal. Take
+              control to write into the agent's input.
+            </>
+          ),
+          action: { label: TAKE_CONTROL_LABEL, run: () => requestTakeControl(session) },
+        });
+        return;
+      }
       const message = cause instanceof Error ? cause.message : "Send failed";
       setSend({ kind: "failed", message, copied });
     }
@@ -334,7 +359,7 @@ export default function ImportFilesModal({
               <button
                 type="button"
                 onClick={() => void copyAndSend()}
-                disabled={send.kind === "sending" || !!sendBlockedReason}
+                disabled={send.kind === "sending"}
                 title={
                   sendBlockedReason ??
                   "Writes the text into the agent's input without submitting it, and copies it"

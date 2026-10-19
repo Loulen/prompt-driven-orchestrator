@@ -9,6 +9,7 @@ pub mod agent_profiles;
 pub mod boot;
 pub mod ports;
 pub mod read_settings;
+pub mod refresh_catalogue;
 pub mod settings;
 pub mod update_settings;
 

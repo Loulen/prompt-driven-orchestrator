@@ -59,6 +59,21 @@ describe("useDaemonEvents", () => {
     expect(targets.refreshTriggers).not.toHaveBeenCalled();
   });
 
+  it("tells the model pickers on a harness_catalogue_changed", async () => {
+    const { HARNESS_CATALOGUE_CHANGED } = await import("../harness/store/useHarnessCatalog");
+    const heard = vi.fn();
+    window.addEventListener(HARNESS_CATALOGUE_CHANGED, heard);
+    try {
+      const { targets, emit } = mount();
+      emit({ type: "harness_catalogue_changed", harness: "claude" });
+      expect(heard).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1_000);
+      expect(targets.refreshRuns).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(HARNESS_CATALOGUE_CHANGED, heard);
+    }
+  });
+
   it("reads the Pipelines again on a pipeline_validation_changed", async () => {
     const { useEditStore } = await import("../pipeline/store/editStore");
     const original = useEditStore.getState().loadPipelines;

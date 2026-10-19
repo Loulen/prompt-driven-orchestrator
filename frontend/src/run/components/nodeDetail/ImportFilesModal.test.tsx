@@ -26,6 +26,9 @@ vi.mock("../../../shared/lib/clipboard", () => ({
 }));
 
 import ImportFilesModal from "./ImportFilesModal";
+import Toaster from "../../../shared/ui/Toaster";
+import { resetToasts } from "../../../shared/ui/toast";
+import { TAKE_CONTROL_REQUESTED } from "../../../session/model/terminalRole";
 
 const PATH = ".pdo/artifacts/_attachments/grill/contrat.pdf";
 const TEXT = `I imported a file for you: \`${PATH}\` (path relative to the worktree root).`;
@@ -41,6 +44,7 @@ function setup(props: Partial<React.ComponentProps<typeof ImportFilesModal>> = {
       runId="run-1"
       nodeId="grill"
       iter={2}
+      session="pdo-run-1-grill-iter-2"
       initialFiles={[pdf()]}
       onClose={onClose}
       {...props}
@@ -164,19 +168,43 @@ describe("ImportFilesModal", () => {
     expect(screen.getByTestId("import-text")).not.toHaveClass("break-all");
   });
 
-  it("a browser that only watches the terminal can copy the text, not send it", async () => {
+  it("a send the daemon refuses to a watching browser writes nothing and offers to take control", async () => {
+    resetToasts();
+    render(<Toaster />);
     importMock.mockResolvedValue({ iter: 2, files: [{ name: "contrat.pdf", path: PATH, size: 4 }] });
+    sendMock.mockRejectedValue(
+      new ApiError("another poste has the terminal of grill", {
+        status: 409,
+        body: {
+          error: "not_pilot",
+          message: "another poste has the terminal of grill",
+          pilot: { kind: "identified", namespace: "test", id: "alice" },
+        },
+      }),
+    );
     const { onClose } = setup({ sendBlockedReason: "Another browser has control of the terminal." });
     fireEvent.click(screen.getByTestId("import-submit"));
     await screen.findByTestId("import-done");
-    const send = screen.getByTestId("import-send");
-    expect(send).toBeDisabled();
     expect(screen.getByTestId("import-send-blocked")).toHaveTextContent("Another browser has control");
+    // The daemon decides: the button sends.
+    const send = screen.getByTestId("import-send");
+    expect(send).toBeEnabled();
     fireEvent.click(send);
-    fireEvent.click(screen.getByTestId("import-copy"));
-    await waitFor(() => expect(clipboardMock).toHaveBeenCalledWith(TEXT));
-    expect(sendMock).not.toHaveBeenCalled();
+
+    const toast = await screen.findByTestId("toast-warning");
+    expect(toast).toHaveTextContent("Not sent to grill");
+    expect(toast).toHaveTextContent("alice (test) pilots this terminal");
+    expect(screen.queryByTestId("import-send-failed")).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("import-send")).toBeEnabled();
+
+    const asked: string[] = [];
+    const listen = (e: Event) => asked.push((e as CustomEvent<{ session: string }>).detail.session);
+    window.addEventListener(TAKE_CONTROL_REQUESTED, listen);
+    fireEvent.click(screen.getByTestId("toast-action"));
+    window.removeEventListener(TAKE_CONTROL_REQUESTED, listen);
+    expect(asked).toEqual(["pdo-run-1-grill-iter-2"]);
+    expect(screen.queryByTestId("toast-warning")).toBeNull();
   });
 
   it("Escape closes the modal", () => {

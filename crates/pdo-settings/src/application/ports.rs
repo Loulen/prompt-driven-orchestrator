@@ -83,6 +83,16 @@ pub trait Harnesses: Send + Sync {
     /// Probe every installed harness's catalogue once, so the first page
     /// answers warm.
     fn warm(&self) -> BoxFuture<'_, ()>;
+    /// Probe the catalogue of `name` again now, at the same binary version or
+    /// not, and answer its entry of the page's `harness_descriptors.harnesses`;
+    /// `None` when no harness is called `name`.
+    fn refresh<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Option<serde_json::Value>>;
+}
+
+/// Who hears that a harness's catalogue was probed again: every open page
+/// reads it anew.
+pub trait CatalogueEvents: Send + Sync {
+    fn catalogue_refreshed(&self, harness: &str);
 }
 
 /// The staging profiles (the sandbox context).

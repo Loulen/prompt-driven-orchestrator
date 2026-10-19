@@ -22,7 +22,7 @@ use pdo_settings::adapters::sections::{
     SandboxSection, SessionDefaults, TriggerDefaults,
 };
 use pdo_settings::adapters::sqlite::{SqliteAgentProfiles, SqliteInstanceConfig};
-use pdo_settings::application::ports::UpdateChecks;
+use pdo_settings::application::ports::{CatalogueEvents, UpdateChecks};
 use pdo_settings::{Settings, SettingsPorts};
 use sqlx::SqlitePool;
 use tower::ServiceExt;
@@ -32,6 +32,12 @@ struct NoChecks;
 
 impl UpdateChecks for NoChecks {
     fn check_now(&self) {}
+}
+
+struct NoCatalogueEvents;
+
+impl CatalogueEvents for NoCatalogueEvents {
+    fn catalogue_refreshed(&self, _harness: &str) {}
 }
 
 pub(super) struct TestState {
@@ -81,6 +87,7 @@ pub(super) async fn test_state() -> TestState {
             Arc::new(PriceTableSection { home }),
         ],
         harnesses,
+        catalogue_events: Arc::new(NoCatalogueEvents),
         staging_profiles: Arc::new(SandboxStagingProfiles(profiles)),
         update_checks: Arc::new(NoChecks),
         referents: Arc::new(ContextReferents {
@@ -117,6 +124,24 @@ pub(super) async fn get_settings_json(state: &TestState) -> serde_json::Value {
         .await
         .unwrap();
     serde_json::from_slice(&body).unwrap()
+}
+
+pub(super) async fn post_json(state: &TestState, uri: &str) -> (StatusCode, serde_json::Value) {
+    let resp = app(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
 }
 
 pub(super) async fn put_settings_resp(

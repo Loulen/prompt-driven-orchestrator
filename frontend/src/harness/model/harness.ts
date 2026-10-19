@@ -57,4 +57,7 @@ export interface HarnessListItem {
   /** #616/ADR-0053: the probed binary version the catalogue was read at, for the
    *  picker's provenance line. `null` when the binary answered no `--version`. */
   version?: string | null;
+  /** When the daemon last ran the catalogue probe of this harness (RFC 3339),
+   *  a « Refresh models » included. `null` when never probed (not installed). */
+  probed_at?: string | null;
 }

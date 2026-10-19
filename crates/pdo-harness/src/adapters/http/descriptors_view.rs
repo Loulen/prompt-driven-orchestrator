@@ -79,6 +79,9 @@ pub fn offer_entry(
         "model_efforts": cached.catalogue.model_efforts,
         "efforts": cached.catalogue.efforts,
         "has_effort": has_effort,
+        // When the catalogue ladder last ran: the « probed … » line of the
+        // pickers and of Settings › Diagnostics. `null` when never probed.
+        "probed_at": cached.probed_at,
     })
 }
 
@@ -132,6 +135,7 @@ mod tests {
             &CachedCatalogue {
                 version: Some("pi 0.85.1".to_string()),
                 catalogue,
+                probed_at: Some("2026-10-19T08:00:00.000Z".to_string()),
             },
             true,
         );
@@ -150,5 +154,6 @@ mod tests {
         );
         assert_eq!(entry["model_contexts"]["openrouter/openai/gpt-5.4"], "400K");
         assert_eq!(entry["efforts"].as_array().map(Vec::len), Some(7));
+        assert_eq!(entry["probed_at"], "2026-10-19T08:00:00.000Z");
     }
 }

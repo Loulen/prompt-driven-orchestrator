@@ -80,7 +80,9 @@ async fn attaching_a_window_or_a_terminal_and_taking_control_are_in_the_runs_pro
         .await
         .is_err());
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    let joined = terminals.registry().join(&session, None, tx);
+    let joined = terminals
+        .registry()
+        .join(&session, None, Actor::LocalOperator, tx);
     assert!(
         !terminals
             .take_control(&Actor::LocalOperator, &session, joined.id)

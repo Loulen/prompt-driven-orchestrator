@@ -2,13 +2,16 @@
 //! the live PTY-bridge connections (their poste, their arrival order, their
 //! last size) and the pilot poste. It decides roles; the bridge applies them —
 //! a spectator's client carries `ignore-size`, flipped live through the
-//! [`Tmux`] port (never a re-attach), and its input frames are dropped.
+//! [`Tmux`] port (never a re-attach), and its input frames are dropped. It
+//! also answers who pilots a terminal, for the gestures that write into it
+//! without going through the bridge.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use pdo_kernel::Actor;
 use tokio::sync::{mpsc, watch};
 use tracing::warn;
 
@@ -30,9 +33,18 @@ pub struct Membership {
     pub took_the_hand: bool,
 }
 
+/// The pilot of a shared terminal: its poste, and the Actor of its latest
+/// connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pilot {
+    pub poste: String,
+    pub actor: Actor,
+}
+
 struct Connection {
     id: ConnId,
     poste: String,
+    actor: Actor,
     /// Arrival order, daemon-wide and monotonic.
     arrived: u64,
     size: TermSize,
@@ -65,6 +77,20 @@ impl SessionPresence {
         }
         firsts.sort_by_key(|(_, arrived)| *arrived);
         firsts.into_iter().map(|(p, _)| p).collect()
+    }
+
+    /// The pilot, with the Actor of its latest connection; `None` while solo.
+    fn pilot(&self) -> Option<Pilot> {
+        let poste = self.pilot.as_ref()?;
+        let latest = self
+            .connections
+            .iter()
+            .filter(|c| &c.poste == poste)
+            .max_by_key(|c| c.arrived)?;
+        Some(Pilot {
+            poste: poste.clone(),
+            actor: latest.actor.clone(),
+        })
     }
 
     /// The poste whose keystrokes reach the pane: the pilot, or the one poste
@@ -146,13 +172,15 @@ pub struct SharedTerminalRegistry {
 }
 
 impl SharedTerminalRegistry {
-    /// Register a new connection on `session`. `poste: None` (no or invalid
-    /// query parameter) makes the socket a poste of its own. Role frames for
-    /// this connection are sent on `role_tx`, starting with its first role.
+    /// Register a new connection of `actor` on `session`. `poste: None` (no or
+    /// invalid query parameter) makes the socket a poste of its own. Role
+    /// frames for this connection are sent on `role_tx`, starting with its
+    /// first role.
     pub fn join(
         &self,
         session: &str,
         poste: Option<String>,
+        actor: Actor,
         role_tx: mpsc::UnboundedSender<String>,
     ) -> Membership {
         let mut inner = self.inner.lock().unwrap();
@@ -165,6 +193,7 @@ impl SharedTerminalRegistry {
         presence.connections.push(Connection {
             id,
             poste: poste.clone(),
+            actor,
             arrived: id,
             size: INITIAL_SIZE,
             resized: 0,
@@ -181,6 +210,23 @@ impl SharedTerminalRegistry {
             ignore_size: ignore_rx,
             took_the_hand: driver_after.as_ref() == Some(&poste) && driver_before != driver_after,
         }
+    }
+
+    /// Who pilots `session`: `None` while no one shows it, or while a single
+    /// poste does (solo).
+    pub fn pilot(&self, session: &str) -> Option<Pilot> {
+        self.inner.lock().unwrap().sessions.get(session)?.pilot()
+    }
+
+    /// The pilot of `session` when `poste` watches it as a spectator; `None`
+    /// when `poste` pilots it, is alone on it, or does not show it.
+    pub fn spectated_pilot(&self, session: &str, poste: &str) -> Option<Pilot> {
+        let inner = self.inner.lock().unwrap();
+        let presence = inner.sessions.get(session)?;
+        if !presence.connections.iter().any(|c| c.poste == poste) {
+            return None;
+        }
+        presence.pilot().filter(|pilot| pilot.poste != poste)
     }
 
     /// The connection resized its PTY. Only a pilot's size matters: spectators
@@ -311,7 +357,7 @@ mod tests {
 
     fn join(reg: &SharedTerminalRegistry, poste: Option<&str>) -> Probe {
         let (tx, rx) = mpsc::unbounded_channel();
-        let m = reg.join("s", poste.map(str::to_string), tx);
+        let m = reg.join("s", poste.map(str::to_string), Actor::LocalOperator, tx);
         Probe { m, rx }
     }
 
@@ -509,9 +555,9 @@ mod tests {
         let mut a = join(&reg, Some("A"));
         let b = join(&reg, Some("B"));
         let (ta, mut rxa) = mpsc::unbounded_channel();
-        let other_a = reg.join("other", Some("A".into()), ta);
+        let other_a = reg.join("other", Some("A".into()), Actor::LocalOperator, ta);
         let (tb, mut rxb) = mpsc::unbounded_channel();
-        let other_b = reg.join("other", Some("B".into()), tb);
+        let other_b = reg.join("other", Some("B".into()), Actor::LocalOperator, tb);
         while rxa.try_recv().is_ok() {}
         while rxb.try_recv().is_ok() {}
 
@@ -527,7 +573,7 @@ mod tests {
         let reg = SharedTerminalRegistry::default();
         let mut a = join(&reg, Some("A"));
         let (tx, mut rx) = mpsc::unbounded_channel();
-        reg.join("other", Some("B".into()), tx);
+        reg.join("other", Some("B".into()), Actor::LocalOperator, tx);
         assert_eq!(a.last().unwrap()["role"], "solo");
         let f: serde_json::Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
         assert_eq!(f["role"], "solo");
@@ -544,5 +590,50 @@ mod tests {
         assert!(!b.m.took_the_hand, "a spectator takes nothing");
         let c = join(&reg, None);
         assert!(!c.m.took_the_hand, "a third poste is a spectator too");
+    }
+
+    fn alice() -> Actor {
+        Actor::Identified {
+            namespace: "test".into(),
+            id: "alice".into(),
+        }
+    }
+
+    #[test]
+    fn the_registry_says_who_pilots_a_terminal() {
+        let reg = SharedTerminalRegistry::default();
+        assert_eq!(reg.pilot("s"), None, "no one shows it");
+        let (tx, _rx_a) = mpsc::unbounded_channel();
+        let a = reg.join("s", Some("A".into()), alice(), tx);
+        assert_eq!(reg.pilot("s"), None, "solo: no pilot");
+        let b = join(&reg, Some("B"));
+        let pilot = reg.pilot("s").unwrap();
+        assert_eq!(pilot.poste, "A");
+        assert_eq!(pilot.actor, alice());
+
+        assert!(reg.take_control("s", b.m.id));
+        assert_eq!(reg.pilot("s").unwrap().poste, "B");
+        assert_eq!(reg.pilot("s").unwrap().actor, Actor::LocalOperator);
+        reg.leave("s", a.id);
+        assert_eq!(reg.pilot("s"), None, "back to solo");
+    }
+
+    #[test]
+    fn only_a_poste_watching_as_spectator_has_a_spectated_pilot() {
+        let reg = SharedTerminalRegistry::default();
+        let (tx, _rx_a) = mpsc::unbounded_channel();
+        let _a = reg.join("s", Some("A".into()), alice(), tx);
+        assert_eq!(reg.spectated_pilot("s", "A"), None, "alone: solo");
+        let _b = join(&reg, Some("B"));
+        let pilot = reg.spectated_pilot("s", "B").unwrap();
+        assert_eq!(pilot.poste, "A");
+        assert_eq!(pilot.actor, alice());
+        assert_eq!(reg.spectated_pilot("s", "A"), None, "the pilot itself");
+        assert_eq!(
+            reg.spectated_pilot("s", "C"),
+            None,
+            "a poste not showing it"
+        );
+        assert_eq!(reg.spectated_pilot("other", "B"), None, "another session");
     }
 }

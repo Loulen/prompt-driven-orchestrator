@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use pdo_kernel::{Actor, ResourceKind, Verb};
 use pdo_session::application::declared_wait::{LiftWait, TypedInput};
+use pdo_session::application::shared_terminal::SharedTerminalRegistry;
 use pdo_session::application::terminal_text::{
     SendTerminalText, SendTerminalTextCommand, SendTextError, TERMINAL_TEXT_MAX_BYTES,
 };
@@ -12,6 +13,7 @@ use pdo_session::domain::declared_wait::{
     AwaitingMarker, IterationFacts, NodeWaitFacts, WaitFacts, WaitRefusal,
 };
 use pdo_session::domain::names::node_session_name;
+use tokio::sync::mpsc;
 
 use crate::fakes::{FakeTmux, Host, Waits};
 
@@ -45,6 +47,7 @@ struct World {
     tmux: Arc<FakeTmux>,
     host: Arc<Host>,
     typed: Arc<TypedInput>,
+    terminals: Arc<SharedTerminalRegistry>,
 }
 
 impl World {
@@ -55,7 +58,21 @@ impl World {
             tmux: FakeTmux::with_sessions(&[&node_session_name(RUN, NODE, iter)]),
             host,
             typed: Arc::new(TypedInput::default()),
+            terminals: Arc::default(),
         }
+    }
+
+    /// `poste` shows the terminal of the node's iteration `iter`, as `actor`;
+    /// the receiver keeps its connection's role frames.
+    fn show(&self, iter: i64, poste: &str, actor: Actor) -> mpsc::UnboundedReceiver<String> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.terminals.join(
+            &node_session_name(RUN, NODE, iter),
+            Some(poste.into()),
+            actor,
+            tx,
+        );
+        rx
     }
 
     fn send(&self) -> SendTerminalText {
@@ -65,6 +82,7 @@ impl World {
             self.typed.clone(),
             self.host.clone(),
         )
+        .with_terminals(self.terminals.clone())
     }
 
     fn lift(&self) -> LiftWait {
@@ -82,6 +100,7 @@ fn command(text: &str, iter: Option<i64>) -> SendTerminalTextCommand {
         node_id: NODE.into(),
         iter,
         text: text.into(),
+        poste: None,
     }
 }
 
@@ -253,4 +272,100 @@ async fn a_line_break_never_reaches_the_pane_as_an_enter() {
         .await
         .unwrap();
     assert_eq!(world.pasted()[0].1, "first second third ");
+}
+
+fn from(poste: &str, text: &str) -> SendTerminalTextCommand {
+    SendTerminalTextCommand {
+        poste: Some(poste.into()),
+        ..command(text, None)
+    }
+}
+
+fn alice() -> Actor {
+    Actor::Identified {
+        namespace: "test".into(),
+        id: "alice".into(),
+    }
+}
+
+#[tokio::test]
+async fn a_spectator_poste_writes_nothing_and_learns_who_pilots() {
+    let world = World::new(facts(true, false, 1, false), Host::allowing());
+    let _a = world.show(1, "A", alice());
+    let _b = world.show(1, "B", Actor::LocalOperator);
+    let outcome = world
+        .send()
+        .execute(&Actor::LocalOperator, from("B", "hello"))
+        .await;
+    match outcome {
+        Err(SendTextError::NotPilot(pilot)) => {
+            assert_eq!(pilot.poste, "A");
+            assert_eq!(pilot.actor, alice());
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(world.pasted().is_empty(), "the input is unchanged");
+}
+
+#[tokio::test]
+async fn the_pilot_or_a_lone_poste_pastes_without_enter() {
+    let world = World::new(facts(true, false, 1, false), Host::allowing());
+    let _a = world.show(1, "A", alice());
+    let send = world.send();
+    assert_eq!(
+        send.execute(&Actor::LocalOperator, from("A", "solo")).await,
+        Ok(1)
+    );
+    let _b = world.show(1, "B", Actor::LocalOperator);
+    assert_eq!(
+        send.execute(&Actor::LocalOperator, from("A", "pilot"))
+            .await,
+        Ok(1)
+    );
+    let pasted: Vec<String> = world.pasted().into_iter().map(|(_, t)| t).collect();
+    assert_eq!(pasted, vec!["solo", "pilot"]);
+    assert!(
+        world.tmux.pasted.lock().unwrap().is_empty(),
+        "never an Enter"
+    );
+}
+
+#[tokio::test]
+async fn a_request_from_no_poste_passes_even_with_a_pilot() {
+    let world = World::new(facts(true, false, 1, false), Host::allowing());
+    let _a = world.show(1, "A", alice());
+    let _b = world.show(1, "B", Actor::LocalOperator);
+    assert_eq!(
+        world
+            .send()
+            .execute(&Actor::LocalOperator, command("from the CLI", None))
+            .await,
+        Ok(1)
+    );
+    assert_eq!(world.pasted().len(), 1);
+}
+
+#[tokio::test]
+async fn a_poste_that_does_not_show_this_terminal_writes() {
+    let world = World::new(facts(true, false, 1, false), Host::allowing());
+    let _a = world.show(1, "A", alice());
+    let _b = world.show(1, "B", Actor::LocalOperator);
+    let send = world.send();
+    // No terminal of this node open on poste C: as before.
+    assert_eq!(
+        send.execute(&Actor::LocalOperator, from("C", "elsewhere"))
+            .await,
+        Ok(1)
+    );
+    // A spectator's role on another node's terminal does not count here.
+    let world2 = World::new(facts(true, false, 2, false), Host::allowing());
+    let _a1 = world2.show(1, "A", alice());
+    let _b1 = world2.show(1, "B", Actor::LocalOperator);
+    assert_eq!(
+        world2
+            .send()
+            .execute(&Actor::LocalOperator, from("B", "iter 2"))
+            .await,
+        Ok(2)
+    );
 }

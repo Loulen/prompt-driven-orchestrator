@@ -544,13 +544,20 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             "/settings/cost-prices/sync".into(),
             None,
         ),
-        // The settings context (#929): an edit of the instance settings and the
-        // agentic profiles' gestures ask before they validate or read anything.
+        // The settings context (#929): an edit of the instance settings, a
+        // harness's models probed again and the agentic profiles' gestures ask
+        // before they validate or read anything.
         call(
             "PUT",
             "/settings",
             "/settings".into(),
             Some(json!({ "session_cap": 3 })),
+        ),
+        call(
+            "POST",
+            "/settings/harnesses/{name}/refresh",
+            "/settings/harnesses/claude/refresh".into(),
+            None,
         ),
         call(
             "POST",

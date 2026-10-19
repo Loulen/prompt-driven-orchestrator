@@ -10,13 +10,16 @@
 //! - « Copy & send to terminal » writes the text into the session's input
 //!   **without** Enter, two concurrent texts never mix, and the Enter the user
 //!   then types lifts a declared wait;
+//! - a poste that watches the node's terminal as a spectator is refused the
+//!   text (`409 not_pilot`, the pilot named), the pilot and a request from no
+//!   poste are not;
 //! - an extension refusing `Node × import_files` or `Node × send_text` gets
 //!   its refusal.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use pdo::extension_api::{ResourceKind, Verb};
 use pdo_session::domain::names::node_session_name;
 use serde_json::{json, Value};
@@ -141,12 +144,26 @@ async fn import(
 }
 
 async fn send_text(daemon: &TestDaemon, run_id: &str, node: &str, text: &str) -> (u16, Value) {
+    send_text_from(daemon, run_id, node, text, None).await
+}
+
+async fn send_text_from(
+    daemon: &TestDaemon,
+    run_id: &str,
+    node: &str,
+    text: &str,
+    poste: Option<&str>,
+) -> (u16, Value) {
+    let mut body = json!({ "text": text });
+    if let Some(poste) = poste {
+        body["poste"] = json!(poste);
+    }
     let resp = reqwest::Client::new()
         .post(format!(
             "{}/runs/{run_id}/nodes/{node}/terminal-text",
             daemon.url()
         ))
-        .json(&json!({ "text": text }))
+        .json(&body)
         .send()
         .await
         .unwrap();
@@ -591,4 +608,79 @@ async fn an_extension_refusing_the_verbs_refuses_the_gestures() {
     assert_eq!(body["error"], "operation_refused");
     let (status, body) = import(&daemon, &run_id, NODE, &[("a.pdf", b"x".to_vec())]).await;
     assert_eq!(status, 201, "{body}");
+}
+
+type Terminal =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The terminal of `session`, opened by `poste`.
+async fn open_terminal(daemon: &TestDaemon, session: &str, poste: &str) -> Terminal {
+    let url = format!("ws://{}/sessions/{session}/pty?poste={poste}", daemon.addr);
+    tokio_tungstenite::connect_async(&url)
+        .await
+        .expect("the terminal socket opens")
+        .0
+}
+
+/// Read the terminal's frames until its role is `role`.
+async fn wait_role(terminal: &mut Terminal, role: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, terminal.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let frame: Value = serde_json::from_str(&text).unwrap();
+                if frame["type"] == "role" && frame["role"] == role {
+                    return;
+                }
+            }
+            Ok(Some(Ok(_))) => {}
+            other => panic!("the terminal never became {role}: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_spectator_poste_is_refused_the_text_and_the_pilot_is_not() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = running_import_run(&daemon).await;
+    let session = node_session_name(&run_id, NODE, 1);
+    let mut a = open_terminal(&daemon, &session, "posteA").await;
+    wait_role(&mut a, "solo").await;
+    let mut b = open_terminal(&daemon, &session, "posteB").await;
+    wait_role(&mut b, "spectator").await;
+    wait_role(&mut a, "pilot").await;
+
+    let (status, body) =
+        send_text_from(&daemon, &run_id, NODE, "spectator-text", Some("posteB")).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"], "not_pilot");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("another poste has the terminal"),
+        "{body}"
+    );
+    assert_eq!(body["pilot"]["kind"], "local_operator", "{body}");
+
+    // The pilot's text, then one from no poste, reach the input; the
+    // spectator's never does.
+    let (status, body) = send_text_from(&daemon, &run_id, NODE, "pilot-text", Some("posteA")).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = send_text(&daemon, &run_id, NODE, "cli-text").await;
+    assert_eq!(status, 200, "{body}");
+    let pane = pane_with(&daemon, &session, &["pilot-text", "cli-text"]).await;
+    assert!(!pane.contains("spectator-text"), "{pane:?}");
+
+    // Once it takes control, the former spectator writes.
+    b.send(Message::Text(r#"{"type":"take_control"}"#.into()))
+        .await
+        .unwrap();
+    wait_role(&mut b, "pilot").await;
+    let (status, body) = send_text_from(&daemon, &run_id, NODE, "taken-text", Some("posteB")).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = send_text_from(&daemon, &run_id, NODE, "late-text", Some("posteA")).await;
+    assert_eq!(status, 409, "the former pilot now watches: {body}");
+    pane_with(&daemon, &session, &["taken-text"]).await;
 }

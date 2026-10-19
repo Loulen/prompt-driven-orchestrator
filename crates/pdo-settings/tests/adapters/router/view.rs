@@ -1,9 +1,12 @@
-//! `GET /settings`: the page's shape, each section's tiers.
+//! `GET /settings`: the page's shape, each section's tiers; `POST
+//! /settings/harnesses/{name}/refresh`: one harness probed again.
 
 use pdo_settings::adapters::sqlite::instance_config;
 use pdo_settings::domain::instance_config::UpdateInstanceConfig;
 
-use super::{get_settings_json, test_state};
+use axum::http::StatusCode;
+
+use super::{get_settings_json, post_json, test_state};
 
 #[tokio::test]
 async fn settings_view_discloses_the_autocomplete_tiers() {
@@ -227,4 +230,22 @@ async fn get_settings_surfaces_sandbox_docker_probe() {
         sd["checked_at"].is_string(),
         "checked_at must be a string: {sd}"
     );
+}
+
+#[tokio::test]
+async fn refresh_models_answers_the_harness_entry_or_404() {
+    let state = test_state().await;
+    let (status, entry) = post_json(&state, "/settings/harnesses/opencode/refresh").await;
+    assert_eq!(status, StatusCode::OK, "{entry}");
+    assert_eq!(entry["name"], "opencode");
+    assert!(entry["models"].is_array(), "{entry}");
+    assert!(entry["installed"].is_boolean(), "{entry}");
+    assert!(
+        entry["probed_at"].is_string() || entry["probed_at"].is_null(),
+        "{entry}"
+    );
+
+    let (status, body) = post_json(&state, "/settings/harnesses/ghost/refresh").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body["error"].as_str().unwrap().contains("ghost"), "{body}");
 }

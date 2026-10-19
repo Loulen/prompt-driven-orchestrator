@@ -101,8 +101,13 @@ export function useEdgeRoute(
   const targetAnchor = data?.targetAnchor ?? null;
   const srcRect = endpointRects.source;
   const tgtRect = endpointRects.target;
-  const srcAnchored =
-    srcRect && sourceAnchor ? anchorPoint(srcRect, sourceAnchor, sourceAnchor.side) : null;
+  // An edge without a source anchor leaves from the middle of its side, read off
+  // the card — never off xyflow's handle position: the rim strip reaches outside
+  // the card by a width that depends on the zoom (CORE-88), and the wire would
+  // start further out the more one dezooms.
+  const srcAnchored = srcRect
+    ? anchorPoint(srcRect, sourceAnchor, sourceAnchor?.side ?? data?.sourceSide ?? "right")
+    : null;
   const tgtAnchored =
     tgtRect && targetAnchor ? anchorPoint(tgtRect, targetAnchor, targetAnchor.side) : null;
   // Rounded to whole flow pixels: xyflow's handle centres are sub-pixel and differ

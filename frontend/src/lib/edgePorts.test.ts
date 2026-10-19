@@ -8,6 +8,8 @@ import {
   edgeCarryingOutput,
   emergentInputs,
   inDeclarationOrder,
+  missingCarriedPorts,
+  outputRenameImpact,
   primaryPort,
   wireableOutputs,
   withCarriedPorts,
@@ -195,5 +197,45 @@ describe("canonicalizeCarriedPorts", () => {
   it("leaves the single-port form untouched", () => {
     const obj = { edges: [{ source: { node: "design", port: "out" }, target: {} }] };
     expect(canonicalizeCarriedPorts(structuredClone(obj))).toEqual(obj);
+  });
+});
+
+describe("output rename and broken edges (CORE-88)", () => {
+  const node = (id: string, type: EditorNodeDef["type"], outputs: string[] = []): EditorNodeDef => ({
+    id,
+    name: id,
+    type,
+    inputs: [],
+    outputs: outputs.map((name) => ({ name })),
+    interactive: false,
+  });
+  const pipeline: EditorPipelineDef = {
+    name: "p",
+    version: "1.0",
+    variables: {},
+    nodes: [node("designer", "agent", ["spec", "verdict"]), node("builder", "agent"), node("reviewer", "agent"), node("end", "end")],
+    edges: [
+      { source: { node: "designer", port: "spec" }, target: { node: "builder", port: "spec" } },
+      { source: { node: "designer", ports: ["spec", "verdict"] }, target: { node: "reviewer", port: "spec" } },
+      { source: { node: "designer", port: "spec" }, target: { node: "end", port: "spec" } },
+      { source: { node: "designer", port: "draft" }, target: { node: "builder", port: "draft" } },
+    ],
+  };
+
+  it("counts the edges carrying the output and names the emergent inputs it renames", () => {
+    expect(outputRenameImpact(pipeline, "designer", "spec")).toEqual({
+      edges: 3,
+      inputsOf: ["builder", "reviewer"],
+    });
+    expect(outputRenameImpact(pipeline, "designer", "verdict")).toEqual({ edges: 1, inputsOf: [] });
+    expect(outputRenameImpact(pipeline, "builder", "spec")).toEqual({ edges: 0, inputsOf: [] });
+  });
+
+  it("lists the carried ports the source no longer declares", () => {
+    expect(missingCarriedPorts(pipeline, pipeline.edges[3])).toEqual(["draft"]);
+    expect(missingCarriedPorts(pipeline, pipeline.edges[1])).toEqual([]);
+    expect(
+      missingCarriedPorts(pipeline, { source: { node: "ghost", port: "x" }, target: { node: "builder", port: "x" } }),
+    ).toEqual([]);
   });
 });

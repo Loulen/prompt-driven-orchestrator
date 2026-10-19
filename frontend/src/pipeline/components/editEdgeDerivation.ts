@@ -6,7 +6,7 @@ import type { EdgeWaypoint } from "../../shared/generated/EdgeWaypoint";
 import type { PortSide } from "../../shared/generated/PortSide";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
 import { anchorHandleId, landsByDrop, rimHandleId } from "../../lib/anchorSide";
-import { carriedPorts, declaredOutputs, primaryPort } from "../../lib/edgePorts";
+import { carriedPorts, declaredOutputs, missingCarriedPorts, primaryPort } from "../../lib/edgePorts";
 import { outputLabelSlots, resolveOutputLabels } from "../../lib/edgeLabels";
 import type { EditorPipelineDef } from "../model/pipeline";
 
@@ -260,6 +260,8 @@ export function deriveEditEdges(pipeline: EditorPipelineDef): Edge<EditEdgeData>
         conditionLabelPos: e.condition_label_pos ?? null,
         outputLabelSlot: labelSlots[i],
         belowNodes: e.below_nodes === true,
+        // CORE-88: drawn « cassé » rather than as a wire that looks sound.
+        missingPorts: missingCarriedPorts(pipeline, e),
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,

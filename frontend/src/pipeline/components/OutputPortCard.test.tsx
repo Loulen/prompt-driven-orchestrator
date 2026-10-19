@@ -63,7 +63,9 @@ describe("OutputPortCard — O3 tab-head card", () => {
   it("passes port updates through to onUpdate", () => {
     const onUpdate = vi.fn();
     render(<OutputPortCard {...baseProps} onUpdate={onUpdate} />, { wrapper: Wrapper });
-    fireEvent.change(screen.getByDisplayValue("out"), { target: { value: "review" } });
+    const input = screen.getByDisplayValue("out");
+    fireEvent.change(input, { target: { value: "review" } });
+    fireEvent.blur(input);
     expect(onUpdate).toHaveBeenCalledWith({ name: "review" });
   });
 

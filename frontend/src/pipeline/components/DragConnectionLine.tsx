@@ -1,7 +1,8 @@
 // The live wiring preview (#844). No longer a single orthogonal L recomputed from
 // the cursor: a trace that GROWS on the wiring grid, one segment per crossed cell.
 // Shift frees the pending segment, and releasing Shift re-origins the grid on the
-// current point (ADR-0072).
+// current point (ADR-0072). Zoomed out, the cells it snaps to are a multiple of
+// the pipeline's step (CORE-88), named by a badge at the cursor.
 //
 // The gesture's own logic lives in `lib/wiringGesture.ts`; this component only
 // feeds it pointer and key events, publishes the drawn polyline for
@@ -11,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   useConnection,
   useReactFlow,
+  useStore,
   useStoreApi,
   type ConnectionLineComponentProps,
 } from "@xyflow/react";
@@ -19,6 +21,7 @@ import type { Point } from "../../lib/orthogonalRouter";
 import type { PortSide } from "../../shared/generated/PortSide";
 import { sideFromRimHandle } from "../../lib/anchorSide";
 import { useWiringGridStep } from "../../hooks/useWiringGrid";
+import { snapBadgeText, snapStepAtZoom } from "../../lib/wiringGrid";
 import {
   advanceGesture,
   gesturePath,
@@ -44,6 +47,11 @@ export default function DragConnectionLine({
   // The step in effect when the gesture starts (#877). A size change mid-drag is
   // not a gesture anyone performs; the lattice of a trace never changes under it.
   const step = useWiringGridStep();
+  // The lattice the cursor snaps to (CORE-88): the step, multiplied while zoomed
+  // out so a cell stays big enough to aim at. The legs and the landing keep the
+  // pipeline's step, so nothing drawn depends on the zoom.
+  const zoom = useStore((s) => s.transform[2]);
+  const { step: snapStep, factor: snapFactor } = snapStepAtZoom(step, zoom);
 
   const pressedSide = sideFromRimHandle(connection.fromHandle?.id);
 
@@ -80,7 +88,8 @@ export default function DragConnectionLine({
         cursor,
         shift,
         overTarget: landing != null,
-        step: step_,
+        // Read live, so a zoom in the middle of a gesture re-steps the snap.
+        step: snapStepAtZoom(step_, state.transform[2]).step,
       });
       latest.current = next;
       // Published synchronously: `onConnectEnd` fires on the very next event and
@@ -143,8 +152,8 @@ export default function DragConnectionLine({
       {/* Over a target: an arrowhead on the border, at the exact spot the wire will
           be pinned. Otherwise: the snap indicator — a ring on the cell the tip has
           locked onto, hollow and dashed while Shift frees it, so the two modes are
-          told apart at a glance. That indicator IS the Shift feedback; no cursor
-          badge chases the pointer. */}
+          told apart at a glance. The badge at the cursor names the lattice in
+          use (CORE-88). */}
       {landing ? (
         <polygon
           points={arrowHead(landing.point, landing.anchor.side)}
@@ -162,6 +171,13 @@ export default function DragConnectionLine({
           strokeDasharray={gesture.shift ? "2 2" : undefined}
           data-testid="wiring-snap-indicator"
           data-snapped={gesture.shift ? "false" : "true"}
+        />
+      )}
+      {!landing && (
+        <SnapBadge
+          at={gesture.cursor}
+          zoom={zoom}
+          text={gesture.shift ? "free" : snapBadgeText(snapFactor, snapStep)}
         />
       )}
     </g>
@@ -182,4 +198,32 @@ function arrowHead(p: Point, side: PortSide): string {
     case "bottom":
       return `${p.x},${p.y} ${p.x - W},${p.y + L} ${p.x + W},${p.y + L}`;
   }
+}
+
+/**
+ * The cursor badge (CORE-88): drawn in flow space like the trace, but scaled by
+ * the inverse of the zoom so it keeps its screen size, and offset up-right of
+ * the pointer so it never hides the tip.
+ */
+function SnapBadge({ at, zoom, text }: { at: Point; zoom: number; text: string }) {
+  const k = 1 / Math.max(zoom, 0.05);
+  const width = text.length * 6 + 10;
+  return (
+    <g
+      transform={`translate(${at.x} ${at.y}) scale(${k}) translate(12 -26)`}
+      data-testid="wiring-snap-badge"
+      pointerEvents="none"
+    >
+      <rect width={width} height={16} rx={4} fill="var(--color-bg-2)" stroke={WIRE} strokeOpacity={0.6} />
+      <text
+        x={width / 2}
+        y={11.5}
+        textAnchor="middle"
+        fill={WIRE}
+        style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 10 }}
+      >
+        {text}
+      </text>
+    </g>
+  );
 }

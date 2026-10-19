@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileText } from "lucide-react";
 import type { PortDef } from "../../shared/generated/PortDef";
+import type { RenameImpact } from "../../lib/edgePorts";
 import type { PortType } from "../../shared/generated/PortType";
 import type { FrontmatterFieldDecl } from "../../shared/generated/FrontmatterFieldDecl";
 import InspectorPortRow from "./InspectorPortRow";
@@ -33,6 +34,10 @@ interface OutputPortCardProps {
    * refused, naming the edge to change first.
    */
   wiredBy?: string | null;
+  /** CORE-88: the names of the node's other outputs — a rename onto one is refused. */
+  takenNames?: string[];
+  /** CORE-88: what a rename of this output takes with it (`outputRenameImpact`). */
+  wiring?: RenameImpact;
 }
 
 export default function OutputPortCard({
@@ -45,6 +50,8 @@ export default function OutputPortCard({
   onSchemaChange,
   allowInstructions = false,
   wiredBy = null,
+  takenNames,
+  wiring,
 }: OutputPortCardProps) {
   const [collapsed, setCollapsed] = useState(false);
   // CORE-45: why the last tick of « intermediate » was refused, until the next try.
@@ -100,6 +107,8 @@ export default function OutputPortCard({
           isLast
           onUpdate={onUpdate}
           onRemove={onRemove}
+          takenNames={takenNames}
+          wiring={wiring}
         >
           {/* The type sits in the name row, where the side (L/T/R/B) and rpt were. */}
           <select

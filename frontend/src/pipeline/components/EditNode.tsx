@@ -304,7 +304,9 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           inside the rim the card still drags. A node that declares no output
           (the End marker), or only Outputs intermédiaires, starts no wire and
           grows no rim. */}
-      {wireable > 0 && <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} />}
+      {wireable > 0 && (
+        <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} border={awaitingPlay ? 2 : 1} />
+      )}
       {/* While the Run's transcripts are searched: the node's count of hits. */}
       {data.inRun && <SearchMatchBadge nodeId={data.nodeId} />}
     </NodeCard>

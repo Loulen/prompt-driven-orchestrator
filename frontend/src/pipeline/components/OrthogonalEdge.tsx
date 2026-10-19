@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { Trash2 } from "lucide-react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -65,6 +66,9 @@ export interface OrthogonalEdgeData extends Record<string, unknown> {
   /** `below_nodes` (#845): the edge — and so its labels and handles — draws
    *  under the node cards. */
   belowNodes?: boolean;
+  /** CORE-88: the carried ports its source no longer declares. Non-empty ⇒ the
+   *  edge is « cassé »: red, dashed, named, and deletable from the canvas. */
+  missingPorts?: string[];
 }
 
 /**
@@ -89,6 +93,7 @@ export default function OrthogonalEdge({
   data,
 }: EdgeProps<Edge<OrthogonalEdgeData>>) {
   const updateEdge = useEditStore((s) => s.updateEdge);
+  const deleteEdge = useEditStore((s) => s.deleteEdge);
   // Selection drives the stroke color (#177). The store is the source of truth
   // the edge detail panel keys off, so reading it here (mirroring `EditNode`'s
   // own `isSelected` derivation) keeps the orange stroke and the open panel in
@@ -169,9 +174,13 @@ export default function OrthogonalEdge({
   // The override flows through to the condition pill border and segment handles
   // below, which both read `strokeColor`, so the whole edge reads as selected.
   const isSelected = selection.kind === "edge" && selection.edgeIndex === edgeIndex;
+  const missingPorts = data?.missingPorts ?? [];
+  const broken = missingPorts.length > 0;
   const strokeColor = isSelected
     ? "var(--color-edge-selected, #fdba74)"
-    : data?.strokeColor ?? "var(--color-fg-4)";
+    : broken
+      ? "var(--color-st-failed)"
+      : data?.strokeColor ?? "var(--color-fg-4)";
 
   // Anchor the condition pill at the path's arc-length midpoint (#176) — the
   // median vertex drifts off-center on unbalanced routes and stacks sibling
@@ -185,6 +194,10 @@ export default function OrthogonalEdge({
     x: mid.x + midOffset.x,
     y: mid.y + midOffset.y,
   };
+
+  const brokenAt: Point = data?.label
+    ? { x: mid.x - 2 * midOffset.x, y: mid.y - 2 * midOffset.y }
+    : mid;
 
   // Output labels (#845): one per carried port, near the departure, alternating
   // around the base of the arrow until the author drags them elsewhere.
@@ -210,7 +223,7 @@ export default function OrthogonalEdge({
         style={{
           stroke: strokeColor,
           strokeWidth: isSelected ? 2.5 : 1.5,
-          strokeDasharray: data?.dashed ? "6 3" : undefined,
+          strokeDasharray: broken ? "4 3" : data?.dashed ? "6 3" : undefined,
         }}
       />
       {/* Wide invisible hit area to make click-to-select forgiving. */}
@@ -277,6 +290,52 @@ export default function OrthogonalEdge({
               </div>
             );
           })}
+        {/* CORE-88: a broken edge says which port is gone, at its midpoint,
+            with a direct delete (Undo restores it). Hidden on a locked canvas. */}
+        {broken && (
+          <div
+            className="nodrag nopan"
+            data-testid={`edge-broken-label-${id}`}
+            onContextMenu={onLabelContextMenu}
+            style={{
+              position: "absolute",
+              // On the wire, as in the design; pushed to the other side of it when
+              // a condition pill sits at `mid + midOffset`, so neither hides the other.
+              transform: `translate(-50%, -50%) translate(${brokenAt.x}px, ${brokenAt.y}px)`,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontFamily: "var(--font-mono, monospace)",
+              fontSize: 10,
+              color: "var(--color-st-failed)",
+              background: "var(--color-st-failed-bg)",
+              border: "1px solid var(--color-st-failed)",
+              borderRadius: 4,
+              padding: "2px 6px",
+              pointerEvents: "all",
+              zIndex: labelZ,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span>{missingPorts.join(", ")} · port absent</span>
+            {!locked && edgeIndex != null && (
+              <button
+                type="button"
+                aria-label="Delete broken edge"
+                title="Delete this edge"
+                data-testid={`edge-broken-delete-${id}`}
+                onPointerDown={(ev) => ev.stopPropagation()}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  deleteEdge(edgeIndex);
+                }}
+                style={{ display: "flex", cursor: "pointer", color: "inherit" }}
+              >
+                <Trash2 size={11} />
+              </button>
+            )}
+          </div>
+        )}
         {/* Conditional pill (ADR-0011) — always visible, draggable since #845. */}
         {data?.label && (
           <div

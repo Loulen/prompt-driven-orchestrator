@@ -1511,6 +1511,64 @@ describe("updateNode propagates port changes to edges", () => {
     expect(tab.pipeline.edges[0].target).toEqual({ node: "bbbbbbbb", port: "in" });
   });
 
+  // CORE-88: an emergent input is named after the output it carries, so the
+  // rename reaches the downstream input too — on every edge carrying it.
+  it("renames the downstream input with the output it carries, on every edge", () => {
+    const designer = makeNode({ id: "aaaaaaaa", outputs: [{ name: "spec" }, { name: "verdict" }] });
+    const builder = makeNode({ id: "bbbbbbbb", inputs: [] });
+    const reviewer = makeNode({ id: "cccccccc", inputs: [] });
+    const edges: EdgeDef[] = [
+      { source: { node: "aaaaaaaa", port: "spec" }, target: { node: "bbbbbbbb", port: "spec" } },
+      { source: { node: "aaaaaaaa", port: "spec" }, target: { node: "cccccccc", port: "spec" } },
+      { source: { node: "aaaaaaaa", port: "verdict" }, target: { node: "cccccccc", port: "verdict" } },
+    ];
+    seedTabWithPipeline(makePipeline([designer, builder, reviewer], edges));
+
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [{ name: "spec-v2" }, { name: "verdict" }],
+    });
+
+    const kept = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(kept.map(({ source, target }) => ({ source, target }))).toEqual([
+      { source: { node: "aaaaaaaa", port: "spec-v2" }, target: { node: "bbbbbbbb", port: "spec-v2" } },
+      { source: { node: "aaaaaaaa", port: "spec-v2" }, target: { node: "cccccccc", port: "spec-v2" } },
+      { source: { node: "aaaaaaaa", port: "verdict" }, target: { node: "cccccccc", port: "verdict" } },
+    ]);
+  });
+
+  it("leaves an input alone when its edge carries another output of the same name's node", () => {
+    const designer = makeNode({ id: "aaaaaaaa", outputs: [{ name: "spec" }, { name: "verdict" }] });
+    const builder = makeNode({ id: "bbbbbbbb", inputs: [] });
+    seedTabWithPipeline(
+      makePipeline(
+        [designer, builder],
+        [{ source: { node: "aaaaaaaa", port: "verdict" }, target: { node: "bbbbbbbb", port: "spec" } }],
+      ),
+    );
+
+    useEditStore.getState().updateNode("aaaaaaaa", { outputs: [{ name: "spec2" }, { name: "verdict" }] });
+
+    const [edge] = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(edge.target).toEqual({ node: "bbbbbbbb", port: "spec" });
+  });
+
+  it("keeps a declared input's name: only an emergent input follows the rename", () => {
+    const designer = makeNode({ id: "aaaaaaaa", outputs: [{ name: "result" }] });
+    const end = makeNode({ id: "eeeeeeee", type: "end", inputs: [{ name: "result" }], outputs: [] });
+    seedTabWithPipeline(
+      makePipeline(
+        [designer, end],
+        [{ source: { node: "aaaaaaaa", port: "result" }, target: { node: "eeeeeeee", port: "result" } }],
+      ),
+    );
+
+    useEditStore.getState().updateNode("aaaaaaaa", { outputs: [{ name: "report" }] });
+
+    const [edge] = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(edge.source).toEqual({ node: "aaaaaaaa", port: "report" });
+    expect(edge.target).toEqual({ node: "eeeeeeee", port: "result" });
+  });
+
   // #843 / ADR-0073: an edge can carry SEVERAL outputs. A port rename must reach
   // every carried port, and losing one of two must not take the arrow with it.
   it("renames a carried port inside a multi-port edge", () => {

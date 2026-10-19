@@ -10,6 +10,16 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.42.0 — Arbre de fichiers de la Review (CORE-84)
+
+- La liste des fichiers de la Review est un arbre de dossiers repliables. Une chaîne de dossiers
+  à un seul enfant tient sur une ligne, chaque dossier affiche le compte de ses commentaires non
+  résolus, et un bouton à côté du compteur replie ou déplie tout.
+- Les cartes du diff suivent l'ordre de l'arbre (dossiers avant fichiers).
+- Clavier : ←/→ replient et déplient le dossier du fichier courant, j/k sautent les fichiers d'un
+  dossier replié. Le filtre « / » garde l'arbre et ouvre les branches qui contiennent une
+  correspondance.
+
 ## 2.41.0 — Pipeline validé pour tous et mis en tête pour des Projets (CORE-89)
 
 - La validation `all` d'un pipeline accepte une liste de Projets :

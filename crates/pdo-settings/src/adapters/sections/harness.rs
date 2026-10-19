@@ -5,7 +5,8 @@
 
 use pdo_harness::adapters::descriptor_file::{load, load_or_builtin};
 use pdo_harness::adapters::http::descriptors_view::descriptors_view;
-use pdo_harness::application::harness_offers::{list_offers, warm_catalogues};
+use pdo_harness::adapters::http::descriptors_view::offer_entry;
+use pdo_harness::application::harness_offers::{list_offers, refresh_offer, warm_catalogues};
 use pdo_harness::application::read_catalogue::CatalogueReader;
 use serde_json::{Map, Value};
 
@@ -56,6 +57,21 @@ impl Harnesses for HarnessCatalogue {
         Box::pin(async move {
             let home = self.home.path();
             warm_catalogues(&self.reader, &load_or_builtin(home.as_deref())).await;
+        })
+    }
+
+    fn refresh<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Option<Value>> {
+        Box::pin(async move {
+            let home = self.home.path();
+            let registry = load_or_builtin(home.as_deref());
+            let o = refresh_offer(&self.reader, &registry, name).await?;
+            Some(offer_entry(
+                &o.name,
+                o.source.as_str(),
+                o.installed,
+                &o.cached,
+                o.has_effort,
+            ))
         })
     }
 }

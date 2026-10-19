@@ -10,6 +10,7 @@ import {
   parseRoleFrame,
   SOLO,
   TAKE_CONTROL_FRAME,
+  TAKE_CONTROL_REQUESTED,
   TAKEN_OVER_NOTICE_MS,
   type TerminalRole,
 } from "../model/terminalRole";
@@ -104,6 +105,16 @@ export function useXtermSession(
   const takeControl = useCallback(() => {
     wsRef.current?.send(TAKE_CONTROL_FRAME);
   }, []);
+
+  // The same gesture asked from outside the terminal: the toast of a send the
+  // daemon refused because this browser only watches.
+  useEffect(() => {
+    const onRequest = (event: Event) => {
+      if ((event as CustomEvent<{ session?: string }>).detail?.session === session) takeControl();
+    };
+    window.addEventListener(TAKE_CONTROL_REQUESTED, onRequest);
+    return () => window.removeEventListener(TAKE_CONTROL_REQUESTED, onRequest);
+  }, [session, takeControl]);
 
   useEffect(() => {
     if (!containerRef.current) return;

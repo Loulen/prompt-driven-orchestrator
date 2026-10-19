@@ -4,5 +4,5 @@
  * against another major is not loaded (`store.ts`), as for React. A daemon test
  * (`crates/pdo/src/extensions.rs`) fails when these lines drift from the API.
  */
-export const UI_MODULE_VERSION = "0.14.0";
+export const UI_MODULE_VERSION = "0.15.0";
 export const UI_MODULE_MAJOR = 0;

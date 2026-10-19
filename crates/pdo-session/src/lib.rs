@@ -43,6 +43,7 @@ use application::ports::{
 };
 use application::read_pane::ReadPane;
 use application::session_ledger::SessionLedger;
+use application::shared_terminal::SharedTerminalRegistry;
 use application::status::ReadStatus;
 use application::sweep::{ReaperGauge, SweepOrphans};
 use application::terminal::Terminals;
@@ -123,6 +124,7 @@ impl Session {
             projects,
         } = ports;
         let typed = Arc::new(TypedInput::default());
+        let shared_terminals = Arc::new(SharedTerminalRegistry::default());
         let focus = Arc::new(FocusCell::default());
         let reaper = Arc::new(ReaperGauge::default());
         let ledger = Arc::new(SessionLedger::new(tmux.clone(), extensions.clone()));
@@ -145,14 +147,16 @@ impl Session {
                 typed.clone(),
                 extensions.clone(),
             )
-            .with_projects(projects.clone()),
+            .with_projects(projects.clone())
+            .with_terminals(shared_terminals.clone()),
             terminals: Terminals::new(
                 tmux.clone(),
                 LiftWait::new(waits, typed, extensions.clone()),
                 extensions.clone(),
             )
             .with_projects(projects.clone())
-            .with_ledger(ledger.clone()),
+            .with_ledger(ledger.clone())
+            .with_registry(shared_terminals),
             sweep: SweepOrphans::new(tmux.clone(), owners, focus.clone(), reaper.clone()),
             read_status: ReadStatus::new(gauges, reaper),
             read_pane: ReadPane::new(panes, tmux.clone(), extensions.clone())

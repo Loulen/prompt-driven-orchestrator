@@ -107,7 +107,9 @@ async fn bridge(
     // spectator's client is born with `ignore-size` and never weighs on the
     // window, not even for the instant before a `refresh-client` would land.
     let (role_tx, mut role_rx) = mpsc::unbounded_channel::<String>();
-    let mut membership = terminals.registry().join(&session_id, poste, role_tx);
+    let mut membership = terminals
+        .registry()
+        .join(&session_id, poste, actor.clone(), role_tx);
     let conn_id = membership.id;
     let attach_ignoring_size = *membership.ignore_size.borrow_and_update();
 

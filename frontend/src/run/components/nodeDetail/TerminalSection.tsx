@@ -187,6 +187,7 @@ export default function TerminalSection({
           runId={runId}
           nodeId={node.node_id}
           iter={node.iter}
+          session={sessionName}
           initialFiles={importFiles}
           blockedReason={importReason}
           sendBlockedReason={terminalSpectating ? SEND_NEEDS_CONTROL : null}

@@ -1,4 +1,7 @@
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, RefreshCw } from "lucide-react";
+import { modelCount, probedAgo } from "../../../harness/model/catalog";
+import type { HarnessListItem } from "../../../harness/model/harness";
+import { useRefreshModels } from "../../../harness/store/useHarnessCatalog";
 import { KeyValueRow } from "../../../shared/ui/key-value-row";
 import type { InstanceSettings } from "../../model/settings";
 import type { StatsOpenIntent } from "../SettingsSurface";
@@ -69,19 +72,33 @@ export function PriceTableRows({
 /**
  * Harness descriptors (#553/ADR-0045) — the disk tier. Always named (nothing is seeded);
  * a broken/refused descriptor is named here, the only place, since a hand-edited file
- * passes through no validator.
+ * passes through no validator. One row per harness: its version, how many models it
+ * offers and when they were probed, and « Refresh models », which probes them again
+ * even at the same version; every open browser gets the new list.
  */
 export function HarnessDescriptorRows({ settings }: { settings: InstanceSettings }) {
+  const { probing, failed, refresh } = useRefreshModels();
   const view = settings.harness_descriptors;
   if (!view) return null;
+  // A daemon predating the per-harness entries only names them.
+  const harnesses: HarnessListItem[] =
+    view.harnesses ?? view.names.map((name) => ({ name, source: "builtin", installed: true }));
   return (
     <div className="flex flex-col gap-1.5" data-testid="setting-harness-descriptors">
       <KeyValueRow label="Descriptor file" testId="setting-harness-descriptors-path">
         <span className="font-mono">{view.path ?? "— (HOME unset)"}</span>
       </KeyValueRow>
-      <KeyValueRow label="Harnesses" testId="setting-harness-descriptors-names">
-        <span className="font-mono">{view.names.join(" · ")}</span>
-      </KeyValueRow>
+      <div className="flex flex-col gap-1.5" data-testid="setting-harness-descriptors-names">
+        {harnesses.map((h) => (
+          <HarnessRow
+            key={h.name}
+            harness={h}
+            probing={probing.has(h.name)}
+            failure={failed[h.name] ?? null}
+            onRefresh={() => void refresh(h.name)}
+          />
+        ))}
+      </div>
       {(view.rejected ?? []).map((item) => (
         <KeyValueRow
           key={item.name}
@@ -97,6 +114,74 @@ export function HarnessDescriptorRows({ settings }: { settings: InstanceSettings
           {view.reason}
         </KeyValueRow>
       )}
+      <p className="px-0.5 text-fg-4" style={{ fontSize: "10.5px" }}>
+        A refresh re-reads the models a harness offers, even at the same version; every open browser
+        gets the new list.
+      </p>
+    </div>
+  );
+}
+
+function HarnessRow({
+  harness,
+  probing,
+  failure,
+  onRefresh,
+}: {
+  harness: HarnessListItem;
+  probing: boolean;
+  failure: string | null;
+  onRefresh: () => void;
+}) {
+  const models = harness.models ?? [];
+  // Installed, yet the binary answered no version: its probe failed.
+  const probeFailed = harness.installed && harness.version === null;
+  const probed = probedAgo(harness.probed_at);
+  const fresh = probed === "probed just now";
+  return (
+    <div
+      className="flex items-center gap-3 rounded bg-bg-3 px-2.5 py-1.5 text-fg-3"
+      style={{ fontSize: "10.5px" }}
+      data-testid={`setting-harness-row-${harness.name}`}
+    >
+      <span className="w-20 shrink-0 truncate font-mono text-fg-2">{harness.name}</span>
+      {!harness.installed ? (
+        <span className="text-fg-4">not installed</span>
+      ) : (
+        <>
+          <span className="shrink-0 font-mono text-fg-4">{harness.version ?? "—"}</span>
+          <span className="shrink-0 font-mono text-fg-2" data-testid={`setting-harness-models-${harness.name}`}>
+            {modelCount(models.length)}
+          </span>
+        </>
+      )}
+      <span className="flex-1" />
+      {failure ? (
+        <span className="min-w-0 truncate text-st-failed" role="alert" data-testid={`setting-harness-failed-${harness.name}`}>
+          {failure}
+        </span>
+      ) : probeFailed ? (
+        <span className="text-st-failed" data-testid={`setting-harness-failed-${harness.name}`}>
+          probe failed
+        </span>
+      ) : (
+        harness.installed && (
+          <span className={fresh ? "text-acc" : "text-fg-4"} data-testid={`setting-harness-probed-${harness.name}`}>
+            {probed}
+          </span>
+        )
+      )}
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={probing || !harness.installed}
+        title={harness.installed ? "Probe the models of this harness again" : "Its binary is not installed"}
+        className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-2 px-2 py-0.5 text-fg-2 hover:border-acc disabled:opacity-50"
+        data-testid={`setting-harness-refresh-${harness.name}`}
+      >
+        <RefreshCw size={10} className={probing ? "animate-spin" : undefined} />
+        {probing ? "Probing…" : "Refresh models"}
+      </button>
     </div>
   );
 }

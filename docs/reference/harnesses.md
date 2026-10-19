@@ -41,6 +41,22 @@ Custom descriptors in `~/.pdo/harnesses/descriptors.yaml` can launch, attach, re
 
 Outside sandboxed runs, PDO does not stage any harness's home.
 
+## Model catalogue
+
+The models and efforts a picker offers come from the installed binary: PDO reads them once,
+then again only when the binary's `--version` changes. A binary can change what it offers
+without changing its version. **Refresh models** probes the catalogue again anyway: in
+Settings › Diagnostics › Harness descriptors (one row per harness, with its version, its number
+of models and when they were probed), or with ↻ beside the model of an agentic profile. A refresh
+asked while a probe of the same harness runs waits for that probe instead of starting another,
+and every open browser reads the new list.
+
+API: `POST /settings/harnesses/<name>/refresh` answers the harness's entry of
+`GET /settings → harness_descriptors.harnesses` (`probed_at` included), `404` for a harness
+PDO does not resolve. It runs the harness's binary on demand: an extension of rights authorizes it
+as `instance_settings` × `refresh_catalogue`. The event stream (`/ws`) then carries
+`{"type": "harness_catalogue_changed", "harness": "<name>"}`.
+
 Inside a sandbox, the image and profile define the available harness configuration.
 
 ## See also

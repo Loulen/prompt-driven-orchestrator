@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { createAgentProfile, updateAgentProfile } from "../api/agentProfiles";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
 import ModelPicker from "../../harness/components/ModelPicker";
 import EffortPicker from "../../harness/components/EffortPicker";
 import HarnessSelect from "../../harness/components/HarnessSelect";
-import { findHarnessOption, effortOffer } from "../../harness/model/catalog";
-import { useHarnessCatalog } from "../../harness/store/useHarnessCatalog";
+import { findHarnessOption, effortOffer, modelCount, probedAgo } from "../../harness/model/catalog";
+import { useHarnessCatalog, useRefreshModels } from "../../harness/store/useHarnessCatalog";
 
 /**
  * The agent profile editor (#899): one modal for both a row's **Edit** pencil
@@ -38,6 +39,10 @@ export default function AgentProfileModal({
   const [error, setError] = useState<string | null>(null);
   const catalog = useHarnessCatalog();
   const harnessOption = findHarnessOption(catalog, draft.harness);
+  // « ↻ »: probe the harness's models again; the catalogue above reads them
+  // anew once the daemon answers, here and in every other browser.
+  const { probing, failed, refresh } = useRefreshModels();
+  const refreshing = probing.has(draft.harness);
   // #798: the effort offer is read against the model the form has selected — a
   // per-model key in the served `model_efforts` is authoritative for it
   // (`[]` included), a missing key retains the harness's global efforts. When
@@ -125,17 +130,48 @@ export default function AgentProfileModal({
         </label>
         {draft.harness && (
           <>
-            <label className="block text-fg-3" style={{ fontSize: 10 }}>
-              Model <span className="text-fg-4">optional</span>
-              <ModelPicker
-                value={draft.model}
-                onChange={(model) => setDraft({ ...draft, model })}
-                models={harnessOption?.models ?? []}
-                contexts={harnessOption?.modelContexts}
-                testid="agent-profile-model"
-                subject={profile?.id ?? "new"}
-              />
-            </label>
+            <div className="block text-fg-3" style={{ fontSize: 10 }}>
+              <div className="flex items-center gap-2">
+                <span>
+                  Model <span className="text-fg-4">optional</span>
+                </span>
+                <span className="flex-1" />
+                {failed[draft.harness] ? (
+                  <span className="truncate text-st-failed" role="alert" data-testid="agent-profile-models-failed">
+                    {failed[draft.harness]}
+                  </span>
+                ) : (
+                  harnessOption?.installed && (
+                    <span className="text-fg-4" data-testid="agent-profile-models-probed">
+                      {refreshing
+                        ? "Probing…"
+                        : `${modelCount(harnessOption.models.length)} · ${probedAgo(harnessOption.probedAt)}`}
+                    </span>
+                  )
+                )}
+                <button
+                  type="button"
+                  onClick={() => void refresh(draft.harness)}
+                  disabled={refreshing || !(harnessOption?.installed ?? false)}
+                  aria-label="Refresh models"
+                  title="Probe the models of this harness again"
+                  className="grid h-4 w-4 place-items-center rounded text-fg-3 hover:text-fg disabled:opacity-40"
+                  data-testid="agent-profile-models-refresh"
+                >
+                  <RefreshCw size={11} className={refreshing ? "animate-spin" : undefined} />
+                </button>
+              </div>
+              <div className="mt-1">
+                <ModelPicker
+                  value={draft.model}
+                  onChange={(model) => setDraft({ ...draft, model })}
+                  models={harnessOption?.models ?? []}
+                  contexts={harnessOption?.modelContexts}
+                  testid="agent-profile-model"
+                  subject={profile?.id ?? "new"}
+                />
+              </div>
+            </div>
             <label className="block text-fg-3" style={{ fontSize: 10 }}>
               Effort <span className="text-fg-4">optional</span>
               <EffortPicker

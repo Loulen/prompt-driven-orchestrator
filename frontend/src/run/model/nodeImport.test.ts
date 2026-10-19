@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { importBlockedReason, importedFilesText, stageImportFiles } from "./nodeImport";
+import { importBlockedReason, importedFilesText, notPilotRefusal, stageImportFiles } from "./nodeImport";
+import { ApiError } from "../../shared/http/client";
 
 const file = (name: string, body = "x") => new File([body], name);
 
@@ -42,5 +43,20 @@ describe("importBlockedReason", () => {
     expect(importBlockedReason({ ...live, isArchived: true })).toContain("archived");
     expect(importBlockedReason({ ...live, selectedIter: 1 })).toContain("iter 2");
     expect(importBlockedReason({ ...live, status: "completed" })).toContain("no live session");
+  });
+});
+
+describe("notPilotRefusal", () => {
+  it("reads the pilot of a 409 not_pilot, and nothing else", () => {
+    const alice = { kind: "identified", namespace: "test", id: "alice" } as const;
+    expect(
+      notPilotRefusal(new ApiError("x", { status: 409, body: { error: "not_pilot", pilot: alice } })),
+    ).toEqual({ pilot: alice });
+    expect(notPilotRefusal(new ApiError("x", { status: 409, body: { error: "not_pilot" } }))).toEqual({
+      pilot: null,
+    });
+    expect(notPilotRefusal(new ApiError("x", { status: 409, body: { error: "node_session_not_live" } }))).toBeNull();
+    expect(notPilotRefusal(new ApiError("x", { status: 502 }))).toBeNull();
+    expect(notPilotRefusal(new Error("x"))).toBeNull();
   });
 });

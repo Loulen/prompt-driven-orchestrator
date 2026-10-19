@@ -10,8 +10,8 @@ use pdo_harness::agent_choice::ResolvedCombo;
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_settings::application::ports::{
-    AgentProfileStore, BoxFuture, Harnesses, InstanceConfigStore, ProfileReferents,
-    SettingsSection, StagingProfiles, Stored, UpdateChecks,
+    AgentProfileStore, BoxFuture, CatalogueEvents, Harnesses, InstanceConfigStore,
+    ProfileReferents, SettingsSection, StagingProfiles, Stored, UpdateChecks,
 };
 use pdo_settings::domain::agent_profile::{AgentProfile, ProfileDraft, DEFAULT_PROFILE_ID};
 use pdo_settings::domain::instance_config::{InstanceConfig, UpdateInstanceConfig};
@@ -290,10 +290,13 @@ impl SettingsSection for FailingSection {
     }
 }
 
-/// The harnesses `claude` and `opencode`, and whether a warm-up ran.
+/// The harnesses `claude` and `opencode`, whether a warm-up ran, which
+/// catalogues were probed again and which of those were announced.
 #[derive(Default)]
 pub struct KnownHarnesses {
     pub warmed: Mutex<usize>,
+    pub refreshed: Mutex<Vec<String>>,
+    pub announced: Mutex<Vec<String>>,
 }
 
 impl Harnesses for KnownHarnesses {
@@ -307,6 +310,22 @@ impl Harnesses for KnownHarnesses {
     fn warm(&self) -> BoxFuture<'_, ()> {
         *self.warmed.lock().unwrap() += 1;
         Box::pin(ready(()))
+    }
+
+    fn refresh<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Option<Value>> {
+        let known = self.check_default(name).is_ok();
+        if known {
+            self.refreshed.lock().unwrap().push(name.to_string());
+        }
+        Box::pin(ready(
+            known.then(|| json!({ "name": name, "models": ["opus"] })),
+        ))
+    }
+}
+
+impl CatalogueEvents for KnownHarnesses {
+    fn catalogue_refreshed(&self, harness: &str) {
+        self.announced.lock().unwrap().push(harness.to_string());
     }
 }
 
@@ -423,6 +442,7 @@ pub fn world_with(sections: Vec<Arc<dyn SettingsSection>>, referents: Referents)
         profiles: profiles.clone(),
         sections,
         harnesses: harnesses.clone(),
+        catalogue_events: harnesses.clone(),
         staging_profiles: Arc::new(KnownProfiles),
         update_checks: checks.clone(),
         referents: Arc::new(referents),

@@ -1,6 +1,8 @@
 //! « Copy & send to terminal »: write a text into the input of a node's live
 //! session **without** pressing Enter. The user completes and submits it in the
-//! terminal; PDO never starts an agent turn on its own.
+//! terminal; PDO never starts an agent turn on its own. A poste that watches
+//! the terminal as a spectator may not write into it (ADR-0075); a request that
+//! names no poste (the CLI, an extension) is not one.
 
 use std::sync::Arc;
 
@@ -11,6 +13,7 @@ use tracing::info;
 
 use crate::application::declared_wait::{node_target, TypedInput};
 use crate::application::ports::{NoRunProjects, NodeWaits, RunProjects, Tmux};
+use crate::application::shared_terminal::{Pilot, SharedTerminalRegistry};
 use crate::domain::declared_wait::{live_target, WaitRefusal};
 use crate::domain::names::node_session_name;
 
@@ -25,6 +28,9 @@ pub struct SendTerminalTextCommand {
     /// when absent.
     pub iter: Option<i64>,
     pub text: String,
+    /// The poste (browser) the request comes from, `None` for a request from
+    /// no poste.
+    pub poste: Option<String>,
 }
 
 /// Why nothing was written.
@@ -40,6 +46,9 @@ pub enum SendTextError {
     TooLong,
     /// tmux refused the buffer or the paste into this session.
     PasteFailed(String),
+    /// The poste watches the terminal as a spectator: another poste, this one,
+    /// pilots it.
+    NotPilot(Pilot),
 }
 
 pub struct SendTerminalText {
@@ -48,6 +57,7 @@ pub struct SendTerminalText {
     typed: Arc<TypedInput>,
     host: Arc<dyn ExtensionHost>,
     projects: Arc<dyn RunProjects>,
+    terminals: Arc<SharedTerminalRegistry>,
 }
 
 impl SendTerminalText {
@@ -63,7 +73,14 @@ impl SendTerminalText {
             typed,
             host,
             projects: Arc::new(NoRunProjects),
+            terminals: Arc::default(),
         }
+    }
+
+    /// The same use case, reading who pilots each terminal in `terminals`.
+    pub fn with_terminals(mut self, terminals: Arc<SharedTerminalRegistry>) -> Self {
+        self.terminals = terminals;
+        self
     }
 
     /// The same use case, its Operations in the Projets `projects` gives.
@@ -99,6 +116,11 @@ impl SendTerminalText {
         )
         .await
         .map_err(|(refusal, iter)| SendTextError::Session(refusal, iter))?;
+        if let Some(poste) = &command.poste {
+            if let Some(pilot) = self.terminals.spectated_pilot(&session, poste) {
+                return Err(SendTextError::NotPilot(pilot));
+            }
+        }
         // A line break would submit where the program in the pane did not ask
         // for bracketed paste: the text stays on one line.
         let text = one_line(&command.text);

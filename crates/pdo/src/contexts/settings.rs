@@ -18,7 +18,9 @@ use pdo_settings::adapters::sections::{
     HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,
     SandboxSection, SessionDefaults, TriggerDefaults,
 };
+use pdo_settings::application::ports::CatalogueEvents;
 use pdo_settings::{Settings, SettingsPorts};
+use tokio::sync::broadcast;
 
 use super::{ContextResources, StoredSettings};
 
@@ -55,6 +57,7 @@ pub(super) fn settings(
             Arc::new(PriceTableSection { home }),
         ],
         harnesses,
+        catalogue_events: Arc::new(BusCatalogueEvents(r.bus_tx.clone())),
         staging_profiles: Arc::new(SandboxStagingProfiles(profiles)),
         update_checks: Arc::new(PlatformUpdateChecks(platform.clone())),
         referents: Arc::new(ContextReferents {
@@ -63,4 +66,18 @@ pub(super) fn settings(
         }),
         extensions: host,
     })
+}
+
+/// A harness's catalogue probed again, announced on the raw channel of the
+/// kernel's bus, which `/ws` relays to every open page.
+struct BusCatalogueEvents(broadcast::Sender<serde_json::Value>);
+
+impl CatalogueEvents for BusCatalogueEvents {
+    fn catalogue_refreshed(&self, harness: &str) {
+        // No listener (no page open) is not a failure.
+        let _ = self.0.send(serde_json::json!({
+            "type": "harness_catalogue_changed",
+            "harness": harness,
+        }));
+    }
 }

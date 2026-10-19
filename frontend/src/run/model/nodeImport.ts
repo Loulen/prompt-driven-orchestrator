@@ -1,6 +1,8 @@
 /** « Fichier importé en cours de Run »: the pure rules of the import modal. */
 
+import type { Actor } from "../../shared/generated/Actor";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
+import { ApiError } from "../../shared/http/client";
 
 /** The phrase the modal hands the user for one imported file. The path is
  *  relative to the Run's worktree root. */
@@ -15,10 +17,21 @@ export function importedFilesText(paths: string[]): string {
   return paths.map(importedFilePhrase).join(" ");
 }
 
-/** Why « Copy & send to terminal » is off on a browser that is only watching
- *  the terminal (ADR-0075): writing into the agent's input is the pilot's. */
+/** Said beside « Copy & send to terminal » on a browser that is only watching
+ *  the terminal (ADR-0075): writing into the agent's input is the pilot's, and
+ *  the daemon refuses the send. */
 export const SEND_NEEDS_CONTROL =
   "Another browser has control of the terminal: take control with the ✋ icon to send the text, or copy it.";
+
+/** The daemon's refusal of a send from a spectator poste (`409 not_pilot`),
+ *  with the pilot it names (`null` when it names none); `null` for any other
+ *  failure. */
+export function notPilotRefusal(error: unknown): { pilot: Actor | null } | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null;
+  const body = error.body as { error?: unknown; pilot?: Actor } | null | undefined;
+  if (body?.error !== "not_pilot") return null;
+  return { pilot: body.pilot ?? null };
+}
 
 /** Add `incoming` to the files staged for an import. A file with the same name
  *  replaces the staged one (the user picked it again). */

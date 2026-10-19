@@ -221,8 +221,8 @@ fn core_entry(
         ),
         ResourceKind::InstanceSettings => (
             "Instance settings",
-            "Change the settings of the instance",
-            &[UPDATE],
+            "Change the settings of the instance; probe the models of a harness again",
+            &[UPDATE, "refresh_catalogue"],
         ),
         ResourceKind::PageMount => (
             "Mounted pages",

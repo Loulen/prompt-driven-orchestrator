@@ -90,7 +90,11 @@ pub fn bundle_selection(
 /// `.zip` and `.skills` (`PDO.skills.zip` → `PDO`), [`DEFAULT_BUNDLE_NAME`]
 /// when nothing is left.
 pub fn bundle_name_of_file(file_name: &str) -> String {
-    let base = file_name.rsplit(['/', '\\']).next().unwrap_or_default().trim();
+    let base = file_name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or_default()
+        .trim();
     let base = strip_suffix_ignore_case(base, ".zip");
     let base = strip_suffix_ignore_case(base, SIDECAR_SUFFIX).trim();
     if base.is_empty() {
@@ -176,9 +180,13 @@ mod tests {
     #[test]
     fn a_mixed_selection_is_deduplicated_in_bank_order() {
         let (skills, folders) = bank();
-        let selection =
-            bundle_selection(&skills, &folders, &["d".into(), "b".into()], &["sub".into()])
-                .unwrap();
+        let selection = bundle_selection(
+            &skills,
+            &folders,
+            &["d".into(), "b".into()],
+            &["sub".into()],
+        )
+        .unwrap();
         assert_eq!(ids(&selection), vec!["b", "d"]);
         assert_eq!(selection.name, SELECTION_BUNDLE_NAME);
     }

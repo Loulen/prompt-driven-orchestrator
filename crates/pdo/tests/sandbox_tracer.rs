@@ -135,11 +135,15 @@ async fn get_run(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
     daemon.get_json(&format!("/runs/{run_id}")).await
 }
 
+/// How long a Run may take to reach a state: a sandboxed start takes some 25 s
+/// on an idle machine, much more on a loaded one.
+const STATE_DEADLINE: Duration = Duration::from_secs(120);
+
 async fn wait_until<F>(mut pred: F) -> bool
 where
     F: FnMut() -> bool,
 {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + STATE_DEADLINE;
     while Instant::now() < deadline {
         if pred() {
             return true;
@@ -150,7 +154,7 @@ where
 }
 
 async fn wait_run_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + STATE_DEADLINE;
     let mut last = serde_json::Value::Null;
     while Instant::now() < deadline {
         let run = get_run(daemon, run_id).await;
@@ -164,7 +168,7 @@ async fn wait_run_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> s
 }
 
 async fn wait_node_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + STATE_DEADLINE;
     let mut last = serde_json::Value::Null;
     while Instant::now() < deadline {
         let run = get_run(daemon, run_id).await;
@@ -1270,7 +1274,7 @@ async fn create_trigger(daemon: &TestDaemon, sandbox: Option<&str>) -> String {
 async fn fire_trigger_and_get_run(daemon: &TestDaemon, trigger_id: &str) -> String {
     daemon.force_trigger_due(trigger_id).await;
     daemon.run_trigger_tick().await;
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + STATE_DEADLINE;
     while Instant::now() < deadline {
         let runs = reqwest::get(format!("{}/runs", daemon.url()))
             .await

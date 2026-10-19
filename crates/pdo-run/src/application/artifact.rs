@@ -130,6 +130,10 @@ impl Runs {
                     ),
                     (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
                     (
+                        header::X_CONTENT_TYPE_OPTIONS,
+                        HeaderValue::from_static("nosniff"),
+                    ),
+                    (
                         header::CONTENT_DISPOSITION,
                         attachment(&format!("{}.zip", readable_stem(&query.path))),
                     ),

@@ -1,13 +1,6 @@
 //! Declared wait and active duration (#810, ADR-0069): what opens and closes a
 //! wait, and the three readings of one wall-clock.
 
-use std::collections::HashMap;
-
-use serde_json::Value;
-
-use pdo_run::domain::event::{Event, EventKind};
-use pdo_run::domain::state::{AWAITING_CAUSE_COMPLETION_NOT_RELEASED, AWAITING_CAUSE_DECLARED};
-
 pub fn parse_ts(ts: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
     chrono::DateTime::parse_from_rfc3339(ts).ok()
 }
@@ -20,84 +13,14 @@ pub fn duration_millis(started_at: &str, completed_at: &str) -> Option<f64> {
 
 // --- Declared wait / active duration (#810, ADR-0069) --------------------------
 
-/// The cause a `NodeAwaitingUser` carries. `declared_wait` writes `cause`; the
-/// orchestrator binding's marker writes `reason` (ADR-0064) — the projection
-/// reads both keys, and so does this. `None` = an event with no cause at all:
-/// **ignored**, never a wait. Only a pre-#810 spawn event could be in that
-/// shape (the primitive no longer writes one), and projecting it as a wait
-/// would subtract time nobody waited.
-pub fn awaiting_cause(payload: Option<&Value>) -> Option<&str> {
-    payload
-        .and_then(|p| p.get("cause").or_else(|| p.get("reason")))
-        .and_then(|v| v.as_str())
-}
-
-/// Does this cause open a declared wait? `children_pending` does not: an
-/// orchestrator parked on `pdo run wait` is working, not waiting on a human
-/// (CONTEXT.md § Durée active). Nor does `child_awaiting`, which is derived at
-/// read and never written to the log.
-pub fn opens_declared_wait(cause: &str) -> bool {
-    cause == AWAITING_CAUSE_DECLARED || cause == AWAITING_CAUSE_COMPLETION_NOT_RELEASED
-}
-
-/// The declared wait of every execution `(node_id, iter)` of one Run, in
-/// milliseconds — what [`StatsHarnessPerformance::active_duration`] subtracts
-/// from the wall-clock.
-///
-/// An interval opens on a `NodeAwaitingUser` of cause `declared` or
-/// `completion_not_released` and closes on the FIRST `NodeResumed`,
-/// `NodeCompletionReleased` or terminal event of the same key. A repeated
-/// `NodeAwaitingUser` with no lift in between does not reopen it (a refreshed
-/// question is the same wait). An interval still open when the log ends
-/// contributes nothing — that execution never completed, so it is not an
-/// observation either.
-///
-/// A `NodeStarted` on a key **resets** it: a stopped-then-restarted attempt
-/// runs at the same `(node, iter)`, and the wait of the attempt that was thrown
-/// away is not the wait of the one that succeeded. The Infrastructure row sums
-/// these same per-execution waits, so a run's active duration always agrees
-/// with the nodes shown under it.
-pub fn declared_waits(events: &[Event]) -> HashMap<(String, i64), f64> {
-    let mut open: HashMap<(String, i64), String> = HashMap::new();
-    let mut waited: HashMap<(String, i64), f64> = HashMap::new();
-    for event in events {
-        let Some(node_id) = event.node_id.clone() else {
-            continue;
-        };
-        let key = (node_id, event.iter.unwrap_or(1));
-        match event.kind {
-            EventKind::NodeStarted => {
-                open.remove(&key);
-                waited.remove(&key);
-            }
-            EventKind::NodeAwaitingUser => {
-                let Some(cause) = awaiting_cause(event.payload.as_ref()) else {
-                    continue;
-                };
-                if !opens_declared_wait(cause) {
-                    continue;
-                }
-                open.entry(key).or_insert_with(|| event.ts.clone());
-            }
-            EventKind::NodeResumed
-            | EventKind::NodeCompletionReleased
-            | EventKind::NodeCompleted
-            | EventKind::NodeAutoCompleted
-            | EventKind::NodeFailed
-            | EventKind::NodeStopped
-            | EventKind::NodeInterrupted
-            | EventKind::NodeStale => {
-                if let Some(started_at) = open.remove(&key) {
-                    if let Some(millis) = duration_millis(&started_at, &event.ts) {
-                        *waited.entry(key).or_insert(0.0) += millis.max(0.0);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    waited
-}
+/// The rule itself — what opens and closes a declared wait, per execution
+/// `(node_id, iter)` — lives once, in [`pdo_run::domain::declared_wait`]: the
+/// Run projection exposes the same figure per iteration
+/// (`IterationInfo::waited_ms`), so the node panel and this report always agree.
+/// [`declared_waits`] is what [`StatsHarnessPerformance::active_duration`]
+/// subtracts from the wall-clock; the Infrastructure row sums these same
+/// per-execution waits, so a run's active duration agrees with its nodes.
+pub use pdo_run::domain::declared_wait::declared_waits;
 
 /// One execution's wall-clock minus its declared wait, floored at zero (a clock
 /// skew between two events must not produce a negative duration).
@@ -114,8 +37,13 @@ mod tests {
     //! These sit on the same seam the handler uses, one level below it.
     use super::super::acc::{DurationReading, HarnessAcc};
     use super::*;
-    use pdo_run::domain::state::AWAITING_CAUSE_CHILD_AWAITING;
+    use pdo_run::domain::event::{Event, EventKind};
+    use pdo_run::domain::state::{
+        AWAITING_CAUSE_CHILD_AWAITING, AWAITING_CAUSE_COMPLETION_NOT_RELEASED,
+        AWAITING_CAUSE_DECLARED,
+    };
     use pretty_assertions::assert_eq;
+    use serde_json::Value;
 
     const MIN: f64 = 60_000.0;
 

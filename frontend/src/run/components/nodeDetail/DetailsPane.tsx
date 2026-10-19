@@ -11,6 +11,7 @@ import LiveSection from "./LiveSection";
 import type { LiveArtifactIO } from "../../../shared/generated/LiveArtifactIO";
 import PromptSection from "./PromptSection";
 import TranscriptTab from "./transcript/TranscriptTab";
+import { nodeIterationTimings } from "../../model/iterationDuration";
 import ExtensionDetailTab from "../../../shared/extensions/ExtensionDetailTab";
 import { useDetailTabs } from "../../../shared/extensions/catalogue";
 
@@ -151,7 +152,7 @@ export default function DetailsPane({
           runId={runId}
           nodeId={node.node_id}
           iter={selectedIter}
-          iterations={node.iterations ?? []}
+          iterations={nodeIterationTimings(node)}
           onSelectIter={onSelectIter}
           live={iterLive}
         />

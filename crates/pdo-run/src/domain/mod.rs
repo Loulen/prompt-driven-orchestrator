@@ -21,6 +21,7 @@ pub mod blackboard;
 pub mod child_awaiting;
 pub mod completion_refusal;
 pub mod condition;
+pub mod declared_wait;
 pub mod edge_router;
 pub mod event;
 pub mod graph_resolver;

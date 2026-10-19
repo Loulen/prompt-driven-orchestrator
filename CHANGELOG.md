@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.45.0 — Artefacts live (CORE-93)
+## 2.46.0 — Artefacts live (CORE-93)
 
 - **Format de pipeline** : l'output intermédiaire devient l'artefact live (ADR-0089), hors des
   outputs. Un nœud `agent` ou `script` gagne `live_artifacts` (`name`, `port_type`,
@@ -29,6 +29,19 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - `GET /runs/{id}/nodes/{node}/io` perd `intermediate` sur les ports et gagne `live` : les
   artefacts déclarés puis libres, avec leurs fichiers, `schema_warnings` et `updated_at`. Le
   `PortBrief` des `node_defs` d'un Run perd `intermediate`.
+
+## 2.45.0 — Durée Total ou Active d'un nœud (CORE-99)
+
+- L'état d'itération expose `waited_ms` (attentes déclarées closes) et `open_wait_since`
+  (attente en cours). Les deux champs sont absents du wire quand ils sont vides. La règle des
+  attentes déclarées (`pdo_run::domain::declared_wait`) est partagée par la projection, Stats ›
+  Performance et la télémétrie de cycle de vie.
+- La ligne méta du panneau d'un nœud affiche la durée de l'itération, qui défile tant qu'elle
+  tourne. Un clic (ou Entrée, Espace) bascule entre Total et Active ; le choix est retenu
+  (`pdo.ui.nodeDurationMode`) et vaut aussi pour les menus d'itérations. Active reste figée
+  pendant une attente déclarée et Total = Active + Waiting à la seconde affichée. Le tooltip
+  donne le début, la fin et la ventilation Total / Active / Waiting.
+- Le menu des itérations met la plus récente en tête.
 
 ## 2.44.0 — Canevas : bord saisissable à tout zoom, renommage d'output validé (CORE-88)
 

@@ -303,6 +303,8 @@ mod tests {
                             completed_at: None,
                             interactive: false,
                             completion_released: false,
+                            waited_ms: 0,
+                            open_wait_since: None,
                         })
                         .collect(),
                     frontmatter_retries: 0,

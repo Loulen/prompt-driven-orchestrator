@@ -183,4 +183,20 @@ pub struct IterationInfo {
     pub interactive: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub completion_released: bool,
+    /// The **closed** Attentes déclarées of this iteration, in milliseconds:
+    /// the rule Stats › Performance subtracts (`DeclaredWaitLedger`). A wait
+    /// still open is not counted: the node panel adds it from `open_wait_since`.
+    /// Absent from the wire when `0`, so an iteration that never waited
+    /// serializes byte-identically.
+    #[serde(default, skip_serializing_if = "is_zero_ms")]
+    pub waited_ms: i64,
+    /// When the declared wait still open on this iteration began, by the same
+    /// rule: its FIRST marker (a refreshed question is the same wait). Absent
+    /// when no declared wait is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_wait_since: Option<String>,
+}
+
+fn is_zero_ms(ms: &i64) -> bool {
+    *ms == 0
 }

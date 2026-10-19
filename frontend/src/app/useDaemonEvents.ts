@@ -33,6 +33,7 @@ export function useDaemonEvents({
   bumpFiresRefreshKey,
 }: DaemonEventTargets) {
   const reloadPipeline = useEditStore((s) => s.reloadPipeline);
+  const showListedDraft = useEditStore((s) => s.showListedDraft);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   // #368: mirror readable inside the stable WS callback (App.tsx subscribe
   // effect) without widening its deps — same latest-value idiom as
@@ -84,6 +85,11 @@ export function useDaemonEvents({
       if (msg.type === "pipeline_changed" && msg.pipeline_id) {
         reloadPipeline(msg.pipeline_id);
         loadPipelines();
+        return;
+      }
+      // ADR-0088: the list shows who has a shared draft open, live.
+      if (msg.type === "pipeline_draft_changed" && msg.pipeline_id && msg.draft) {
+        showListedDraft(msg.pipeline_id, msg.draft);
         return;
       }
       // A Pipeline's validation changed (another tab or client, or a Projet
@@ -157,6 +163,7 @@ export function useDaemonEvents({
     refreshTriggersPaused,
     refreshProjects,
     reloadPipeline,
+    showListedDraft,
     loadPipelines,
     bumpFiresRefreshKey,
   ]);

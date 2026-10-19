@@ -3,6 +3,8 @@
  * every gesture the store answers.
  */
 
+import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
+import type { DraftSummary } from "../../shared/generated/DraftSummary";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { LoopRegion } from "../../shared/generated/LoopRegion";
@@ -40,15 +42,31 @@ export interface Selection {
   noteId?: string;
 }
 
-export interface ConflictData {
-  pipeline: EditorPipelineDef;
-  prompts: Record<string, string>;
-  diagnostics: string[];
-}
-
 export interface SaveErrorData {
   message: string;
   line?: number;
+}
+
+/**
+ * The shared draft of a pipeline tab (ADR-0088): the tab edits it with every
+ * other participant. Absent on a run tab, which edits the Run's snapshot.
+ */
+export interface DraftTabState {
+  /** The socket: opening, open, or down (edits stay local until it is back). */
+  status: "connecting" | "live" | "offline";
+  /** The draft arrived at least once; before, the tab takes no edit. */
+  synced: boolean;
+  /** When it may not update the pipeline, the tab reads. */
+  canWrite: boolean;
+  /** This tab's connection among the participants. */
+  connection: string | null;
+  participants: DraftParticipant[];
+  /** The draft's changes since the file; 0 is nothing to save. */
+  changes: number;
+  canUndo: boolean;
+  canRedo: boolean;
+  /** The words of my last change, for the Undo tooltip. */
+  undoLabel: string | null;
 }
 
 export interface OpenPipeline {
@@ -67,8 +85,9 @@ export interface OpenPipeline {
    * always editable.
    */
   runEditing?: boolean;
-  conflict?: ConflictData;
   saveError?: SaveErrorData;
+  /** ADR-0088: the shared draft a pipeline tab edits. */
+  draft?: DraftTabState;
   /** @deprecated Pipeline library bindings were removed with scoped pipelines. */
   libraryId?: string | null;
   /** @deprecated Pipeline library bindings were removed with scoped pipelines. */
@@ -77,14 +96,13 @@ export interface OpenPipeline {
 
 /**
  * A tab holds unsaved work that a close/replace would silently discard (#342).
- * `conflict`/`saveError` both imply `dirty` (a conflict is only recorded inside
- * `if (tab.dirty)`, a save-error follows a failed save that leaves `dirty`), but
- * we spell them out so the guard reads as "would we lose anything the user can't
- * get back". `externalDirty` is intentionally excluded — it's the transient
- * 2 s hot-reload flash, not user work.
+ * `saveError` implies `dirty` (it follows a failed save that leaves `dirty`),
+ * but we spell it out so the guard reads as "would we lose anything the user
+ * can't get back". `externalDirty` is intentionally excluded — it's the
+ * transient 2 s hot-reload flash, not user work.
  */
 export function hasUnsavedWork(t: OpenPipeline): boolean {
-  return t.dirty || t.conflict != null || t.saveError != null;
+  return t.dirty || t.saveError != null;
 }
 
 /**
@@ -96,9 +114,18 @@ export function isRunTabLocked(t: OpenPipeline | undefined | null): boolean {
   return t?.runId != null && !t.runEditing;
 }
 
-/** The active tab is a locked run tab (point-of-use selector). */
+/**
+ * A tab that takes no definition change: a locked run tab, or a pipeline tab
+ * whose shared draft has not arrived yet or that only reads it (ADR-0088).
+ */
+export function isTabLocked(t: OpenPipeline | undefined | null): boolean {
+  if (isRunTabLocked(t)) return true;
+  return t?.draft != null && (!t.draft.synced || !t.draft.canWrite);
+}
+
+/** The active tab takes no edit (point-of-use selector). */
 export function selectActiveTabLocked(s: { openTabs: OpenPipeline[]; activeTabId: string | null }): boolean {
-  return isRunTabLocked(s.openTabs.find((t) => t.id === s.activeTabId));
+  return isTabLocked(s.openTabs.find((t) => t.id === s.activeTabId));
 }
 
 /**
@@ -162,6 +189,8 @@ export interface EditState {
   pendingSingleTab: PendingSingleTab | null;
 
   loadPipelines: () => Promise<void>;
+  /** ADR-0088: the shared draft of the listed pipeline `id`, as announced. */
+  showListedDraft: (id: string, draft: DraftSummary) => void;
   openPipeline: (id: string, scope?: PipelineScope) => Promise<void>;
   openRunPipeline: (runId: string) => Promise<void>;
   closeRunPipeline: (runId: string) => void;
@@ -258,7 +287,6 @@ export interface EditState {
   clearSaveError: (id: string) => void;
 
   reloadPipeline: (id: string) => Promise<void>;
-  resolveConflict: (id: string, resolution: "keep" | "take") => void;
 
   // Library pipeline sync — overwrite this tab's pipeline with the library
   // YAML and re-fetch the parsed form. Used by the "Reload changes" action

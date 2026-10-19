@@ -10,6 +10,7 @@ import { savePipeline, fetchPipeline, fetchPipelines, deletePipeline, renamePipe
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../model/pipeline";
 import { legacyScope } from "../../test/legacy";
+import { INITIAL_DRAFT_STATE } from "./draftSession";
 
 vi.mock("../../settings/api/settings", async (importOriginal) => ({
   // Keep the real `ApiError` (a value the store reads via `instanceof`) while
@@ -1326,7 +1327,7 @@ const EXTERNAL_PIPELINE: EditorPipelineDef = {
   edges: [],
 };
 
-describe("reloadPipeline conflict detection", () => {
+describe("reloadPipeline", () => {
   it("silently re-renders when tab is NOT dirty", async () => {
     seedTab("my-pipe", false);
 
@@ -1346,92 +1347,31 @@ describe("reloadPipeline conflict detection", () => {
     expect(tab.pipeline.name).toBe("externally-modified");
     expect(tab.dirty).toBe(false);
     expect(tab.externalDirty).toBe(true);
-    expect(tab.conflict).toBeUndefined();
   });
 
-  it("sets conflict state instead of overwriting when tab IS dirty", async () => {
+  it("keeps unsaved work as it is", async () => {
     seedTab("my-pipe", true);
-
-    mockFetchPipeline.mockResolvedValueOnce({
-      id: "my-pipe",
-      scope: "repo",
-      path: "/test/my-pipe.yaml",
-      yaml: "",
-      pipeline: EXTERNAL_PIPELINE,
-      prompts: { "ext-node": "external prompt" },
-      diagnostics: ["diag1"],
-    });
 
     await useEditStore.getState().reloadPipeline("my-pipe");
 
     const tab = useEditStore.getState().openTabs[0];
-    // Canvas should NOT be overwritten
     expect(tab.pipeline.name).toBe("test");
     expect(tab.dirty).toBe(true);
-    // Conflict data should be stored
-    expect(tab.conflict).toBeDefined();
-    expect(tab.conflict!.pipeline.name).toBe("externally-modified");
-    expect(tab.conflict!.prompts["ext-node"]).toBe("external prompt");
-    expect(tab.conflict!.diagnostics).toEqual(["diag1"]);
+    expect(mockFetchPipeline).not.toHaveBeenCalled();
   });
-});
 
-describe("resolveConflict", () => {
-  it("'keep' discards external data and keeps canvas", () => {
-    seedTab("my-pipe", true);
-
+  it("leaves a tab with a shared draft to the draft (ADR-0088)", async () => {
+    seedTab("my-pipe", false);
     useEditStore.setState((s) => ({
-      openTabs: s.openTabs.map((t) =>
-        t.id === "my-pipe"
-          ? {
-              ...t,
-              conflict: {
-                pipeline: EXTERNAL_PIPELINE,
-                prompts: { "ext-node": "ext" },
-                diagnostics: [],
-              },
-            }
-          : t,
-      ),
+      openTabs: s.openTabs.map((t) => ({ ...t, draft: { ...INITIAL_DRAFT_STATE, synced: true, canWrite: true } })),
     }));
 
-    useEditStore.getState().resolveConflict("my-pipe", "keep");
+    await useEditStore.getState().reloadPipeline("my-pipe");
 
-    const tab = useEditStore.getState().openTabs[0];
-    expect(tab.conflict).toBeUndefined();
-    expect(tab.pipeline.name).toBe("test");
-    expect(tab.dirty).toBe(true);
-  });
-
-  it("'take' applies external data and clears dirty+conflict", () => {
-    seedTab("my-pipe", true);
-
-    useEditStore.setState((s) => ({
-      openTabs: s.openTabs.map((t) =>
-        t.id === "my-pipe"
-          ? {
-              ...t,
-              conflict: {
-                pipeline: EXTERNAL_PIPELINE,
-                prompts: { "ext-node": "ext" },
-                diagnostics: ["d1"],
-              },
-            }
-          : t,
-      ),
-    }));
-
-    useEditStore.getState().resolveConflict("my-pipe", "take");
-
-    const tab = useEditStore.getState().openTabs[0];
-    expect(tab.conflict).toBeUndefined();
-    expect(tab.pipeline.name).toBe("externally-modified");
-    expect(tab.prompts["ext-node"]).toBe("ext");
-    expect(tab.diagnostics).toEqual(["d1"]);
-    expect(tab.dirty).toBe(false);
+    expect(mockFetchPipeline).not.toHaveBeenCalled();
+    expect(useEditStore.getState().openTabs[0].pipeline.name).toBe("test");
   });
 });
-
 describe("createCollectionRegion (#151 / #269)", () => {
   it("creates a collection region with a minted id, over and members, and marks dirty", () => {
     const a = makeNode({ id: "aaaa1111", name: "worker" });
@@ -1780,7 +1720,20 @@ describe("scope-qualified pipeline ops", () => {
       expect.any(String),
       {},
       "library",
+      false,
     );
+  });
+
+  it("saves a tab's shared draft as the draft (ADR-0088)", async () => {
+    seedTab("my-pipe", true);
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({ ...t, draft: { ...INITIAL_DRAFT_STATE, synced: true, canWrite: true } })),
+    }));
+    mockSavePipeline.mockResolvedValueOnce({ ok: true });
+
+    await useEditStore.getState().save("my-pipe");
+
+    expect(mockSavePipeline).toHaveBeenCalledWith("my-pipe", expect.any(String), expect.anything(), expect.anything(), true);
   });
 });
 
@@ -2105,39 +2058,10 @@ describe("undo/redo history (ADR-0014 / #226)", () => {
       expect(useEditStore.getState().history["my-pipe"].future).toHaveLength(0);
     });
 
-    it("KEEP: a dirty external reload (conflict) keeps the stack", async () => {
+    it("KEEP: a dirty external reload keeps the tab and its stack", async () => {
       seedWithHistory("my-pipe", true);
-      mockFetchPipeline.mockResolvedValueOnce({
-        id: "my-pipe", scope: "repo", path: "/p.yaml", yaml: "",
-        pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [],
-      });
       await useEditStore.getState().reloadPipeline("my-pipe");
-      // The conflict branch was taken (pipeline not overwritten); history kept.
       expect(useEditStore.getState().history["my-pipe"].past.length).toBeGreaterThan(0);
-    });
-
-    it("CLEAR: resolveConflict('take') clears; KEEP: ('keep') keeps", () => {
-      seedWithHistory("my-pipe", true);
-      useEditStore.setState((s) => ({
-        openTabs: s.openTabs.map((t) =>
-          t.id === "my-pipe"
-            ? { ...t, conflict: { pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [] } }
-            : t,
-        ),
-      }));
-      useEditStore.getState().resolveConflict("my-pipe", "keep");
-      expect(useEditStore.getState().history["my-pipe"].past.length).toBeGreaterThan(0);
-
-      // Re-arm a conflict and take theirs.
-      useEditStore.setState((s) => ({
-        openTabs: s.openTabs.map((t) =>
-          t.id === "my-pipe"
-            ? { ...t, conflict: { pipeline: EXTERNAL_PIPELINE, prompts: {}, diagnostics: [] } }
-            : t,
-        ),
-      }));
-      useEditStore.getState().resolveConflict("my-pipe", "take");
-      expect(useEditStore.getState().history["my-pipe"].past).toHaveLength(0);
     });
 
     it("CLEAR: reloadFromLibrary clears the stack", async () => {
@@ -2429,16 +2353,6 @@ describe("single-tab mode (#342)", () => {
       expect(s.pendingSingleTab).toBeNull();
       expect(s.openTabs.map((t) => t.id)).toEqual(["a"]);
       expect(s.openTabs[0].dirty).toBe(true);
-    });
-
-    it("parks when the evicted tab carries an unresolved conflict (implies dirty)", async () => {
-      useEditStore.setState({
-        singleTabMode: true,
-        openTabs: [mkTab("a", { dirty: true, conflict: { pipeline: makePipeline(), prompts: {}, diagnostics: [] } })],
-        activeTabId: "a",
-      });
-      await useEditStore.getState().openPipeline("pipe-b");
-      expect(useEditStore.getState().pendingSingleTab).not.toBeNull();
     });
 
     it("ignores externalDirty (a hot-reload flash is not unsaved work)", async () => {

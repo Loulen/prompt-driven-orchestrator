@@ -31,6 +31,7 @@ export function savePipeline(
   yaml: string,
   prompts: Record<string, string>,
   scope?: string,
+  fromDraft = false,
 ): Promise<{ ok: boolean; id?: string; renamed?: boolean }> {
   void scope;
   // #774 — the daemon answers with the FINAL id: a save whose `name:` field
@@ -39,7 +40,7 @@ export function savePipeline(
   return request<{ ok: boolean; id?: string; renamed?: boolean }>(
     "PUT",
     `/pipelines/${encodeURIComponent(id)}`,
-    { body: { yaml, prompts }, label: `PUT /pipelines/${id}` },
+    { body: fromDraft ? { yaml, prompts, from_draft: true } : { yaml, prompts }, label: `PUT /pipelines/${id}` },
   );
 }
 

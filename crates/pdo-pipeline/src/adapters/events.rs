@@ -3,6 +3,7 @@
 use tokio::sync::broadcast;
 
 use crate::application::ports::PipelineEvents;
+use crate::domain::draft::DraftSummary;
 
 /// The daemon's broadcast channel of JSON messages (the `/ws` stream).
 pub struct BroadcastPipelineEvents(pub broadcast::Sender<serde_json::Value>);
@@ -20,6 +21,14 @@ impl PipelineEvents for BroadcastPipelineEvents {
         let _ = self.0.send(serde_json::json!({
             "type": "pipeline_validation_changed",
             "pipeline_id": id,
+        }));
+    }
+
+    fn draft_changed(&self, id: &str, draft: &DraftSummary) {
+        let _ = self.0.send(serde_json::json!({
+            "type": "pipeline_draft_changed",
+            "pipeline_id": id,
+            "draft": draft,
         }));
     }
 }

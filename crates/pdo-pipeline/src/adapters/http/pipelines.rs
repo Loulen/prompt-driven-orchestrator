@@ -13,8 +13,7 @@ use super::dto::{
     CreatePipelineRequest, PipelineListEntry, RenamePipelineRequest, SavePipelineRequest,
 };
 use super::{common_response, error, error_with_message, structured_parse_error};
-use crate::application::{Created, PipelineError, Pipelines, RenameOutcome};
-use crate::domain::pipeline::PipelineDef;
+use crate::application::{editor_json, Created, PipelineError, Pipelines, RenameOutcome};
 use crate::domain::validation::PipelineValidation;
 
 /// `GET /pipelines[?attr.<id>/<key>=<value>…]`.
@@ -26,11 +25,13 @@ pub(super) async fn list(
     match pipelines.list_carrying(filter).await {
         Ok(list) => {
             let mut validations = pipelines.validations().await;
+            let mut drafts = pipelines.draft_summaries().await;
             Json(
                 list.into_iter()
                     .map(|(summary, attributes)| {
                         let validation = validations.remove(&summary.id).unwrap_or_default();
-                        PipelineListEntry::from((summary, attributes, validation))
+                        let draft = drafts.remove(&summary.id);
+                        PipelineListEntry::from((summary, attributes, validation, draft))
                     })
                     .collect::<Vec<_>>(),
             )
@@ -52,7 +53,7 @@ pub(super) async fn detail(
         }
         Err(e) => return fallback(e),
     };
-    let pipeline = match pipeline_json_with_node_provisioning(&detail.pipeline, &detail.yaml) {
+    let pipeline = match editor_json(&detail) {
         Ok(pipeline) => pipeline,
         Err(e) => {
             return error(
@@ -71,43 +72,6 @@ pub(super) async fn detail(
         "diagnostics": detail.diagnostics,
     }))
     .into_response()
-}
-
-/// The parsed pipeline as JSON, each node carrying the `provisioning` rules
-/// its YAML declares (the parsed [`PipelineDef`] does not keep them).
-fn pipeline_json_with_node_provisioning(
-    pipeline: &PipelineDef,
-    yaml: &str,
-) -> anyhow::Result<serde_json::Value> {
-    let mut json = serde_json::to_value(pipeline)?;
-    let source: serde_yaml::Value = serde_yaml::from_str(yaml)?;
-    let Some(source_nodes) = source.get("nodes").and_then(serde_yaml::Value::as_sequence) else {
-        return Ok(json);
-    };
-    let Some(response_nodes) = json
-        .get_mut("nodes")
-        .and_then(serde_json::Value::as_array_mut)
-    else {
-        return Ok(json);
-    };
-
-    for source_node in source_nodes {
-        let Some(node_id) = source_node.get("id").and_then(serde_yaml::Value::as_str) else {
-            continue;
-        };
-        let Some(raw_rules) = source_node.get("provisioning") else {
-            continue;
-        };
-        let rules: pdo_workspace::domain::provisioning::ProvisioningRules =
-            serde_yaml::from_value(raw_rules.clone())?;
-        if let Some(response_node) = response_nodes
-            .iter_mut()
-            .find(|node| node.get("id").and_then(serde_json::Value::as_str) == Some(node_id))
-        {
-            response_node["provisioning"] = serde_json::to_value(rules)?;
-        }
-    }
-    Ok(json)
 }
 
 pub(super) async fn create(
@@ -133,10 +97,16 @@ pub(super) async fn save(
     AxumPath(pipeline_id): AxumPath<String>,
     Json(req): Json<SavePipelineRequest>,
 ) -> Response {
-    match pipelines
-        .save(&actor, &pipeline_id, &req.yaml, &req.prompts)
-        .await
-    {
+    let saved = if req.from_draft {
+        pipelines
+            .save_draft(&actor, &pipeline_id, &req.yaml, &req.prompts)
+            .await
+    } else {
+        pipelines
+            .save(&actor, &pipeline_id, &req.yaml, &req.prompts)
+            .await
+    };
+    match saved {
         Ok(saved) => (
             StatusCode::OK,
             Json(serde_json::json!({ "ok": true, "id": saved.id, "renamed": saved.renamed })),

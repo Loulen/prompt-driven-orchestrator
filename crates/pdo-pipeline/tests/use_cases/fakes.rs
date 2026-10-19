@@ -8,6 +8,8 @@ use pdo_extension_api::{Authorization, RequestParts};
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_pipeline::application::ports::*;
+use pdo_pipeline::adapters::draft_doc::YDraftDocuments;
+use pdo_pipeline::domain::draft::DraftSummary;
 use pdo_pipeline::domain::library::LibraryEntry;
 use pdo_pipeline::domain::pipeline::{split_live_prompts, PipelineDef};
 use pdo_pipeline::domain::validation::PipelineValidation;
@@ -246,14 +248,30 @@ impl NodeLibrary for Library {
     }
 }
 
-/// Every `pipeline_changed` announced, as `(id, path)`, and every
-/// `pipeline_validation_changed`, as the id.
+/// Every `pipeline_changed` announced, as `(id, path)`, every
+/// `pipeline_validation_changed`, as the id, and every
+/// `pipeline_draft_changed`.
 #[derive(Default)]
-pub struct Events(pub Mutex<Vec<(String, String)>>, pub Mutex<Vec<String>>);
+pub struct Events(
+    pub Mutex<Vec<(String, String)>>,
+    pub Mutex<Vec<String>>,
+    pub Mutex<Vec<(String, DraftSummary)>>,
+);
 
 impl Events {
     pub fn validations_changed(&self) -> Vec<String> {
         self.1.lock().unwrap().clone()
+    }
+
+    /// The last draft announced for `id`.
+    pub fn last_draft(&self, id: &str) -> Option<DraftSummary> {
+        self.2
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(of, _)| of == id)
+            .map(|(_, draft)| draft.clone())
     }
 }
 
@@ -266,6 +284,38 @@ impl PipelineEvents for Events {
     }
     fn validation_changed(&self, id: &str) {
         self.1.lock().unwrap().push(id.to_string());
+    }
+    fn draft_changed(&self, id: &str, draft: &DraftSummary) {
+        self.2.lock().unwrap().push((id.to_string(), draft.clone()));
+    }
+}
+
+/// The kept drafts, by pipeline id.
+#[derive(Default)]
+pub struct Drafts(pub Mutex<HashMap<String, StoredDraft>>);
+
+impl DraftStore for Drafts {
+    fn load<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Option<StoredDraft>, String>> {
+        ready(Ok(self.0.lock().unwrap().get(id).cloned()))
+    }
+    fn save<'a>(&'a self, id: &'a str, draft: &'a StoredDraft) -> BoxFuture<'a, Result<(), String>> {
+        self.0.lock().unwrap().insert(id.to_string(), draft.clone());
+        ready(Ok(()))
+    }
+    fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        self.0.lock().unwrap().remove(id);
+        ready(Ok(()))
+    }
+    fn carry<'a>(&'a self, from: &'a str, to: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        let mut all = self.0.lock().unwrap();
+        if let Some(draft) = all.remove(from) {
+            all.insert(to.to_string(), draft);
+        }
+        ready(Ok(()))
+    }
+    fn changes(&self) -> BoxFuture<'_, Result<HashMap<String, u32>, String>> {
+        let all = self.0.lock().unwrap();
+        ready(Ok(all.iter().map(|(id, d)| (id.clone(), d.changes)).collect()))
     }
 }
 
@@ -403,6 +453,7 @@ pub struct World {
     pub bank: Arc<Bank>,
     pub validations: Arc<Validations>,
     pub projects: Arc<Projects>,
+    pub drafts: Arc<Drafts>,
 }
 
 impl World {
@@ -415,13 +466,34 @@ impl World {
     }
 
     pub fn with(host: Host, registry: Registry, bank: Bank) -> Self {
-        let host = Arc::new(host);
-        let registry = Arc::new(registry);
+        Self::over(Arc::new(host), Arc::new(registry), Arc::new(bank), Arc::default())
+    }
+
+    /// The same registry and drafts, as a restarted daemon finds them.
+    pub fn restarted(&self) -> Self {
+        Self::over(
+            self.host.clone(),
+            self.registry.clone(),
+            self.bank.clone(),
+            self.drafts.clone(),
+        )
+    }
+
+    /// The same files and drafts, seen by an Acteur `host` refuses.
+    pub fn refusing_over(&self, reason: &str) -> Self {
+        Self::over(
+            Arc::new(Host::refusing(reason)),
+            self.registry.clone(),
+            self.bank.clone(),
+            self.drafts.clone(),
+        )
+    }
+
+    fn over(host: Arc<Host>, registry: Arc<Registry>, bank: Arc<Bank>, drafts: Arc<Drafts>) -> Self {
         let library = Arc::new(Library::default());
         let events = Arc::new(Events::default());
         let runs = Arc::new(Runs::default());
         let renames = Arc::new(Renames::default());
-        let bank = Arc::new(bank);
         let validations = Arc::new(Validations::default());
         let projects = Arc::new(Projects::default());
         let pipelines = Pipelines::new(PipelinesPorts {
@@ -433,6 +505,8 @@ impl World {
             skills: bank.clone(),
             validations: validations.clone(),
             projects: projects.clone(),
+            drafts: drafts.clone(),
+            documents: Arc::new(YDraftDocuments),
             extensions: host.clone(),
         });
         Self {
@@ -446,6 +520,7 @@ impl World {
             bank,
             validations,
             projects,
+            drafts,
         }
     }
 

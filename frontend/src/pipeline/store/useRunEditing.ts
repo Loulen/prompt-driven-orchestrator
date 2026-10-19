@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { RunState } from "../../shared/generated/RunState";
 import { fetchRunPipelineOverwritePreview } from "../../run/api/runPipeline";
 import type { RunEdit } from "../components/RunEditControl";
-import { hasUnsavedWork, isRunTabLocked, type OpenPipeline } from "./editState";
+import { hasUnsavedWork, isRunTabLocked, isTabLocked, type OpenPipeline } from "./editState";
 import { useEditStore } from "./editStore";
 
 /** The three ways out of the confirmation, `null` while it is closed. */
@@ -42,7 +42,7 @@ export function useRunEditing(tab: OpenPipeline | undefined, activeRunState: Run
   // worktree and pipeline.yaml are gone). ADR-0085: every Run tab is read-only
   // the same way while followed; « Edit for this run » unlocks it.
   const archived = activeRunState?.status === "archived";
-  const readOnly = archived || isRunTabLocked(tab);
+  const readOnly = archived || isTabLocked(tab);
 
   // A Run archived while edited for itself has nothing left to save into: the
   // tab goes back to « pilotage » (its unsaved edits with it), so the Save, the

@@ -118,7 +118,6 @@ export default function App() {
   const isArchived = selectedRun?.status === "archived";
   const isActiveRunArchived =
     isEditingRun && editTab?.runId === selectedRun?.run_id && isArchived;
-  const conflictTab = openTabs.find((t) => t.conflict != null);
   const saveErrorTab = openTabs.find((t) => t.saveError != null);
   // What the info panel offers (#938): a Run's tabs, or a template's Assistant.
   const infoHasRun = isEditingRun && selectedRun != null;
@@ -365,7 +364,6 @@ export default function App() {
       {/* After the full-window surfaces, which it must paint over. */}
       <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
       <EditorModals
-        conflictTab={conflictTab}
         saveErrorTab={saveErrorTab}
         onViewYaml={info.handleViewYaml}
       />

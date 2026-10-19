@@ -68,6 +68,10 @@ ignore = "0.4"
 # bindings land in frontend/src/shared/generated/ (`make types`); `make check`
 # fails when they drift from the Rust structs.
 ts-rs = { version = "12", features = ["no-serde-warnings"] }
+# The shared draft of a pipeline (ADR-0088, CORE-90): the Rust implementation of
+# the Yjs CRDT, binary-compatible (update format v1) with the `yjs` package of
+# the frontend.
+yrs = "0.28"
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
 pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.14.0" }
 pdo-kernel = { path = "crates/pdo-kernel" }

@@ -1,0 +1,58 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import DraftPresence from "./DraftPresence";
+import { useEditStore } from "../store/editStore";
+import { INITIAL_DRAFT_STATE } from "../store/draftSession";
+import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
+import type { DraftTabState } from "../store/editState";
+
+function participant(connection: string, name: string): DraftParticipant {
+  return {
+    connection,
+    actor: { kind: "identified", namespace: "test", id: name },
+    display: { name, avatar_url: null },
+    color: Number(connection),
+    can_write: true,
+    selection: null,
+    typing: null,
+  };
+}
+
+function show(draft: Partial<DraftTabState>) {
+  useEditStore.setState({
+    activeTabId: "flow",
+    openTabs: [
+      {
+        id: "flow",
+        scope: "instance",
+        pipeline: { name: "flow", version: "1", variables: {}, nodes: [], edges: [] },
+        prompts: {},
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+        draft: { ...INITIAL_DRAFT_STATE, synced: true, canWrite: true, connection: "1", ...draft },
+      },
+    ],
+  });
+}
+
+afterEach(() => useEditStore.setState({ openTabs: [], activeTabId: null }));
+
+describe("DraftPresence", () => {
+  it("shows the others, not me, and the draft's changes", () => {
+    show({ participants: [participant("1", "Me"), participant("2", "Alice Martin")], changes: 3 });
+    render(<DraftPresence />);
+    const avatars = screen.getAllByTestId("draft-participant");
+    expect(avatars).toHaveLength(1);
+    expect(avatars[0]).toHaveTextContent("AM");
+    expect(avatars[0]).toHaveAttribute("title", "Alice Martin");
+    expect(screen.getByTestId("draft-changes")).toHaveTextContent("draft · 3 changes");
+  });
+
+  it("says when the tab only reads, and hides the changes when there are none", () => {
+    show({ canWrite: false, changes: 0 });
+    render(<DraftPresence />);
+    expect(screen.getByTestId("draft-read-only")).toBeInTheDocument();
+    expect(screen.queryByTestId("draft-changes")).not.toBeInTheDocument();
+  });
+});

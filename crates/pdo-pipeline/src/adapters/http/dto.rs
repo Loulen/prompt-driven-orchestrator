@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::application::PipelineSummary;
+use crate::domain::draft::DraftSummary;
 use crate::domain::library::LibraryEntry;
 use crate::domain::pipeline::{self, VariableDef};
 use crate::domain::validation::PipelineValidation;
@@ -53,11 +54,23 @@ pub(super) struct PipelineListEntry {
     /// The Projets the launch forms offer it to (CONTEXT.md « Pipeline
     /// validé »); `all` when it states none.
     validation: PipelineValidation,
+    /// Its shared draft (ADR-0088): who has it open and its changes; absent
+    /// when nobody does and it is the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    draft: Option<DraftSummary>,
 }
 
-impl From<(PipelineSummary, Attributes, PipelineValidation)> for PipelineListEntry {
+impl From<(PipelineSummary, Attributes, PipelineValidation, Option<DraftSummary>)>
+    for PipelineListEntry
+{
     fn from(
-        (summary, attributes, validation): (PipelineSummary, Attributes, PipelineValidation),
+        (summary, attributes, validation, draft): (
+            PipelineSummary,
+            Attributes,
+            PipelineValidation,
+            Option<DraftSummary>,
+        ),
     ) -> Self {
         Self {
             id: summary.id,
@@ -74,6 +87,7 @@ impl From<(PipelineSummary, Attributes, PipelineValidation)> for PipelineListEnt
             prompt_required: summary.prompt_required,
             attributes,
             validation,
+            draft,
         }
     }
 }
@@ -91,6 +105,10 @@ pub(super) struct SavePipelineRequest {
     pub(super) yaml: String,
     #[serde(default)]
     pub(super) prompts: HashMap<String, String>,
+    /// The editor saves the shared draft as it holds it (ADR-0088): the
+    /// draft is the file afterwards, with no change left.
+    #[serde(default)]
+    pub(super) from_draft: bool,
 }
 
 #[derive(Deserialize)]

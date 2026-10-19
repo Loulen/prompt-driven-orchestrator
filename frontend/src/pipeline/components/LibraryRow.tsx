@@ -5,6 +5,8 @@ import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
 import type { PipelineEntity } from "../../shared/extensions/contract";
 import { DropdownMenuSeparator } from "../../shared/ui/dropdown-menu";
 import RowMenu, { ROW_MENU_EXTENSION_ITEM, RowMenuItem } from "../../shared/ui/RowMenu";
+import type { DraftSummary } from "../../shared/generated/DraftSummary";
+import { ParticipantStack } from "./ParticipantAvatar";
 
 interface Props {
   name: string;
@@ -63,6 +65,8 @@ interface Props {
    * the delete. Only the Pipelines tab's rows offer it.
    */
   menuEntity?: PipelineEntity;
+  /** ADR-0088: its shared draft, who has it open and its changes. */
+  draft?: DraftSummary;
 }
 
 /**
@@ -95,6 +99,7 @@ export default function LibraryRow({
   decorations,
   indicator,
   menuEntity,
+  draft,
 }: Props) {
   const body = (
     <>
@@ -136,6 +141,12 @@ export default function LibraryRow({
         >
           <span className="min-w-0 truncate">
             <span>{nodeCount} nodes</span>
+            {/* ADR-0088: before the date, which truncates first. */}
+            {draft && draft.changes > 0 && (
+              <span data-testid="library-row-draft">
+                {" · "}draft: {draft.changes === 1 ? "1 change" : `${draft.changes} changes`}
+              </span>
+            )}
             {modified && (
               <>
                 <span> · </span>
@@ -152,6 +163,7 @@ export default function LibraryRow({
           when the icons appear. */}
       <div className="flex shrink-0 flex-col items-end justify-between gap-1">
       <div className="flex h-4 items-center gap-2" data-testid="library-row-actions">
+      {draft && <ParticipantStack participants={draft.participants} size={14} />}
       {onRenameStart && !renaming && (
         <span
           className="hidden shrink-0 group-hover:inline-flex"

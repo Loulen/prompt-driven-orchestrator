@@ -27,7 +27,39 @@ impl Pipelines {
     /// of a rename. Only a save that actually changes `name:` is a rename
     /// (#886): a stem that is not the slug of its name (`Mixed-Case.yaml`)
     /// stays where it is.
+    ///
+    /// A draft of the pipeline takes the saved file in, field by field.
     pub async fn save(
+        &self,
+        actor: &Actor,
+        id: &str,
+        yaml: &str,
+        prompts: &HashMap<String, String>,
+    ) -> Result<SaveOutcome, PipelineError> {
+        let saved = self.write_saved(actor, id, yaml, prompts).await?;
+        if saved.renamed {
+            self.draft_moved(id, &saved.id, true).await;
+        } else {
+            self.draft_file_changed(&saved.id).await;
+        }
+        Ok(saved)
+    }
+
+    /// Save the draft of `id` as the editor serialized it (ADR-0088): the
+    /// draft is the file now, with no change left.
+    pub async fn save_draft(
+        &self,
+        actor: &Actor,
+        id: &str,
+        yaml: &str,
+        prompts: &HashMap<String, String>,
+    ) -> Result<SaveOutcome, PipelineError> {
+        let saved = self.write_saved(actor, id, yaml, prompts).await?;
+        self.draft_saved(id, &saved.id).await;
+        Ok(saved)
+    }
+
+    async fn write_saved(
         &self,
         actor: &Actor,
         id: &str,

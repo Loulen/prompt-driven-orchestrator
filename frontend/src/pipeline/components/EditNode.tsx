@@ -13,6 +13,9 @@ import type { NodeType } from "../../shared/generated/NodeType";
 import type { PortBrief } from "../../shared/generated/PortBrief";
 import type { PortSide } from "../../shared/generated/PortSide";
 import { useEditStore } from "../store/editStore";
+import { useSelectedByOther } from "../store/useDraftPresence";
+import { presenceColor } from "../model/presence";
+import { SelectedByLabel } from "./ParticipantAvatar";
 import NodeRimHandles from "./NodeRimHandles";
 import { NodeTypeIcon, IsolationMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
@@ -85,6 +88,9 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   // lights the accent ring during a drag, not just the last-clicked one the
   // Zustand single-selection tracks.
   const isSelected = selected || (selection.kind === "node" && selection.id === id);
+  // ADR-0088: another participant of the shared draft selected this node.
+  const selectedBy = useSelectedByOther("node", id);
+  const selectedByColor = selectedBy ? presenceColor(selectedBy) : null;
   const isDropTarget = useIsDropTarget(id);
   // ADR-0081 (#31): what the `canvas/node` decorations mark.
   const decorated = useMemo(
@@ -147,8 +153,12 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         ...(isWireTarget
           ? { boxShadow: `0 0 0 1px var(--color-bg-1), 0 0 0 2.5px ${WIRE}` }
           : null),
+        ...(selectedByColor && !isSelected
+          ? { borderColor: selectedByColor, boxShadow: `0 0 0 1px ${selectedByColor}` }
+          : null),
       }}
     >
+      {selectedBy && <SelectedByLabel participant={selectedBy} />}
       {/* Emergent inputs (#149): NO input dots. An incoming arrow lands anywhere
           on the node body. A single invisible target handle covers the card and
           carries the drop highlight. A lands-by-drop node (work nodes, End since

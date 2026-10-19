@@ -39,7 +39,8 @@ export default defineConfig({
       '/ws': { target: daemonTarget, ws: true, rewriteWsOrigin: true },
       '/sessions': { target: daemonTarget, ws: true, rewriteWsOrigin: true },
       '/runs': daemonTarget,
-      '/pipelines': daemonTarget,
+      // ADR-0088: `/pipelines/{id}/draft` is the shared draft's WebSocket.
+      '/pipelines': { target: daemonTarget, ws: true, rewriteWsOrigin: true },
       '/library': daemonTarget,
       // #345: POST /nodes/parse — a top-level route, so it needs its own proxy
       // entry (else dev GET/POST lie: SPA 200 / POST 404).

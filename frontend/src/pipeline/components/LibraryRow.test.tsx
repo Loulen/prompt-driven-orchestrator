@@ -267,3 +267,41 @@ describe("LibraryRow inline rename", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 });
+
+describe("LibraryRow shared draft (ADR-0088)", () => {
+  it("shows who has the draft open and its changes", () => {
+    render(
+      <LibraryRow
+        name="flow"
+        nodeCount={5}
+        showDuplicate={false}
+        onDelete={() => {}}
+        deleteTitle="Delete pipeline"
+        draft={{
+          changes: 3,
+          participants: [
+            {
+              connection: "4",
+              actor: { kind: "local_operator" },
+              display: null,
+              color: 1,
+              can_write: true,
+              selection: null,
+              typing: null,
+            },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByTestId("library-row-draft")).toHaveTextContent("draft: 3 changes");
+    expect(screen.getAllByTestId("draft-participant")).toHaveLength(1);
+  });
+
+  it("shows nothing of a draft that is the file", () => {
+    render(
+      <LibraryRow name="flow" nodeCount={5} showDuplicate={false} onDelete={() => {}} deleteTitle="Delete" draft={{ changes: 0, participants: [] }} />,
+    );
+    expect(screen.queryByTestId("library-row-draft")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("draft-participant")).not.toBeInTheDocument();
+  });
+});

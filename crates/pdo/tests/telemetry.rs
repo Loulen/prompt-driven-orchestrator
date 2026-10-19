@@ -14,16 +14,19 @@ use serde_json::{json, Value};
 
 use crate::common::TestDaemon;
 
+/// The requests a collector received: each one's path and body.
+type Received = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
 /// A collector that keeps every request it receives: its path and its body.
 #[derive(Clone, Default)]
 struct Collector {
-    received: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
+    received: Received,
     url: String,
 }
 
 impl Collector {
     async fn start() -> Self {
-        let received: Arc<Mutex<Vec<(String, Vec<u8>)>>> = Arc::default();
+        let received: Received = Arc::default();
         let kept = received.clone();
         let app = Router::new().fallback(move |uri: Uri, body: Bytes| {
             let kept = kept.clone();
@@ -157,6 +160,17 @@ async fn the_switch_and_the_collector_take_effect_without_a_restart() {
 
     put_settings(&daemon, json!({ "telemetry_otlp": false })).await;
     wait_exporting(&daemon, false).await;
+    // What left before the switch went off may still land: wait for the
+    // collectors to go quiet before listening for what follows.
+    let mut seen = usize::MAX;
+    for _ in 0..50 {
+        let now = first.requests().len() + second.requests().len();
+        if now == seen {
+            break;
+        }
+        seen = now;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
     first.clear();
     second.clear();
     reqwest::get(format!("{}/settings", daemon.url()))

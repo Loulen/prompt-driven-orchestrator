@@ -36,6 +36,9 @@ export default function TranscriptTab({
   const scrollRef = useRef<HTMLDivElement>(null);
   const { pinnedRef, handleScroll, scrollToBottom } = usePinToBottom(scrollRef, nodeId, iter);
   const more = remaining(view);
+  const counts = `${view.messages} ${view.messages === 1 ? "message" : "messages"} · ${view.toolCalls} ${
+    view.toolCalls === 1 ? "tool call" : "tool calls"
+  }`;
 
   // The reader at the end of a fully loaded transcript follows what arrives;
   // one reading higher up stays where they are.
@@ -81,24 +84,29 @@ export default function TranscriptTab({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="transcript-tab">
-      <div className="flex shrink-0 items-center gap-2 px-3 py-1.5" style={{ fontSize: "10.5px" }}>
+      {/* One line down to a narrow pane: under 400px the shortcut and the
+          « folded » word give way, the counts truncate last. */}
+      <div
+        className="@container flex shrink-0 items-center gap-2 px-3 py-1.5"
+        style={{ fontSize: "10.5px" }}
+      >
         {iterations.length > 1 ? (
-          <span className="rounded border border-line-strong bg-bg-3">
+          <span className="shrink-0 rounded border border-line-strong bg-bg-3">
             <IterSelector iterations={iterations} selectedIter={iter} onSelect={onSelectIter} />
           </span>
         ) : (
           <span
-            className="rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-mono text-fg-3"
+            className="shrink-0 whitespace-nowrap rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-mono text-fg-3"
             style={{ fontSize: "10px" }}
           >
             iter {iter}
           </span>
         )}
-        <span className="truncate text-fg-4" data-testid="transcript-counts">
-          {view.messages} {view.messages === 1 ? "message" : "messages"} · {view.toolCalls}{" "}
-          {view.toolCalls === 1 ? "tool call" : "tool calls"} folded
+        <span className="min-w-0 truncate text-fg-4" data-testid="transcript-counts" title={counts}>
+          {counts}
+          <span className="@max-[400px]:hidden"> folded</span>
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-2">
+        <span className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
           {live && (
             <span className="flex items-center gap-1 text-fg-4" data-testid="transcript-live">
               <span className="h-1.5 w-1.5 rounded-full bg-st-running" />
@@ -109,12 +117,12 @@ export default function TranscriptTab({
             type="button"
             data-testid="transcript-search-run"
             onClick={() => openRunSearch(runId)}
-            title="Search the transcripts of the whole Run"
+            title="Search the transcripts of the whole Run (⌘⇧F)"
             className="flex cursor-pointer items-center gap-1 rounded border border-line-strong px-1.5 py-0.5 text-fg-3 hover:bg-bg-4 hover:text-fg-2"
           >
             <Search size={10} />
             Search run
-            <span className="font-mono text-fg-4">⌘⇧F</span>
+            <span className="font-mono text-fg-4 @max-[400px]:hidden">⌘⇧F</span>
           </button>
         </span>
       </div>
@@ -148,6 +156,7 @@ export default function TranscriptTab({
               summary={entry.summary}
               status={entry.status}
               outputBytes={entry.output_bytes}
+              diff={entry.diff}
             />
           ),
         )}

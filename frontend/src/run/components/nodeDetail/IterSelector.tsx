@@ -21,7 +21,7 @@ export default function IterSelector({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="flex cursor-pointer items-center gap-0.5 rounded px-1 py-0.5 font-mono text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+        className="flex cursor-pointer items-center gap-0.5 whitespace-nowrap rounded px-1 py-0.5 font-mono text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
         style={{ fontSize: "10px" }}
       >
         iter {selectedIter}

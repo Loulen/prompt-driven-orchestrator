@@ -83,6 +83,7 @@ describe("TranscriptTab", () => {
     fetchDetail.mockResolvedValue({
       name: "Read",
       input: '{\n  "file_path": "spec.md"\n}',
+      diff: [],
       output: "Add a debounce.",
       is_error: false,
       truncated: false,
@@ -94,6 +95,43 @@ describe("TranscriptTab", () => {
     expect(screen.getByTestId("transcript-tool-detail").textContent).toContain('"file_path": "spec.md"');
     fireEvent.click(screen.getByTestId("transcript-tool-toggle"));
     expect(screen.queryByTestId("transcript-tool-detail")).toBeNull();
+  });
+
+  it("counts an edit's lines folded and shows its colored diff unfolded", async () => {
+    const path = "/a/very/long/absolute/path/to/src/search/useSearch.ts";
+    fetchPage.mockResolvedValue({
+      ...PAGE,
+      total: 1,
+      messages: 0,
+      tool_calls: 1,
+      entries: [
+        { kind: "tool", index: 0, name: "Edit", summary: path, status: "ok", output_bytes: 40, diff: { added: 1, removed: 1 } },
+      ],
+    });
+    fetchDetail.mockResolvedValue({
+      name: "Edit",
+      input: '{\n  "file_path": "useSearch.ts"\n}',
+      diff: [
+        { op: "remove", text: "return fetchResults(query)" },
+        { op: "add", text: "const debounced = useDebounce(query, 250)" },
+      ],
+      output: "The file has been updated.",
+      is_error: false,
+      truncated: false,
+    });
+    renderTab();
+    // The counts and the size sit out of the summary's ellipsis.
+    expect((await screen.findByTestId("transcript-tool-diffstat")).textContent).toBe("+1 −1");
+    expect(screen.getByTestId("transcript-tool-size").textContent).toBe("· 40 B");
+    expect(screen.getByTitle(path).textContent).toBe(path);
+    fireEvent.click(screen.getByTestId("transcript-tool-toggle"));
+    const diff = await screen.findByTestId("transcript-tool-diff");
+    const lines = Array.from(diff.children).map((l) => [l.getAttribute("data-op"), l.textContent]);
+    expect(lines).toEqual([
+      ["remove", "- return fetchResults(query)"],
+      ["add", "+ const debounced = useDebounce(query, 250)"],
+    ]);
+    expect(screen.getByTestId("transcript-tool-detail").textContent).not.toContain("Input");
   });
 
   it("says a harness without a reader is unavailable", async () => {

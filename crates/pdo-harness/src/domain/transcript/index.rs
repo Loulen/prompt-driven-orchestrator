@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 use serde_json::Value;
 
 use super::{
-    summarize, Span, Speaker, ToolCallDetail, ToolStatus, TranscriptEntry, TranscriptPage,
-    TranscriptRecord, DETAIL_OUTPUT_CAP,
+    diff_of, diff_stat, summarize, DiffStat, Span, Speaker, ToolCallDetail, ToolStatus,
+    TranscriptEntry, TranscriptPage, TranscriptRecord, DETAIL_OUTPUT_CAP,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +20,7 @@ enum Indexed {
         call_id: String,
         name: String,
         summary: String,
+        diff: Option<DiffStat>,
         call: Span,
         result: Option<(Span, bool, u64)>,
     },
@@ -118,6 +119,7 @@ impl TranscriptIndex {
                     body: Indexed::Tool {
                         call_id,
                         summary: summarize(&input),
+                        diff: diff_stat(&input),
                         name,
                         call: span,
                         result: None,
@@ -169,6 +171,7 @@ impl TranscriptIndex {
                     Indexed::Tool {
                         name,
                         summary,
+                        diff,
                         result,
                         ..
                     } => TranscriptEntry::Tool {
@@ -181,6 +184,7 @@ impl TranscriptIndex {
                             Some((_, false, _)) => ToolStatus::Ok,
                         },
                         output_bytes: result.map(|(_, _, bytes)| bytes),
+                        diff: *diff,
                         at: entry.at.clone(),
                     },
                 }
@@ -252,6 +256,7 @@ pub fn tool_detail(
             _ => None,
         })
     });
+    let diff = diff_of(&input);
     let input = match input {
         Value::String(s) => s,
         other => serde_json::to_string_pretty(&other).unwrap_or_default(),
@@ -273,6 +278,7 @@ pub fn tool_detail(
     Some(ToolCallDetail {
         name,
         input,
+        diff,
         output,
         is_error,
         truncated,

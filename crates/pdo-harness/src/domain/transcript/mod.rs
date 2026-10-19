@@ -22,6 +22,7 @@
 
 mod claude;
 mod copilot;
+mod diff;
 mod index;
 mod pi;
 
@@ -31,6 +32,7 @@ use ts_rs::TS;
 
 pub(crate) use claude::records as claude_records;
 pub(crate) use copilot::records as copilot_records;
+pub use diff::{diff_of, diff_stat, DiffLine, DiffOp, DiffStat};
 pub use index::{tool_detail, ToolSpans, TranscriptIndex};
 pub(crate) use pi::records as pi_records;
 
@@ -113,6 +115,10 @@ pub enum TranscriptEntry {
         #[ts(optional)]
         #[serde(skip_serializing_if = "Option::is_none")]
         output_bytes: Option<u64>,
+        /// The lines a call that replaces text adds and removes.
+        #[ts(optional)]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        diff: Option<DiffStat>,
         #[ts(optional)]
         #[serde(skip_serializing_if = "Option::is_none")]
         at: Option<String>,
@@ -175,6 +181,9 @@ pub struct ToolCallDetail {
     pub name: String,
     /// The input, pretty-printed JSON (a bare string stays as is).
     pub input: String,
+    /// The line diff of a call that replaces text, shown instead of its input;
+    /// empty for any other call.
+    pub diff: Vec<DiffLine>,
     /// The output, or `None` while the tool runs.
     #[ts(optional)]
     #[serde(skip_serializing_if = "Option::is_none")]

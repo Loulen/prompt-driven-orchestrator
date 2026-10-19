@@ -286,3 +286,29 @@ fn summaries_prefer_what_names_the_call_and_stay_one_line() {
     assert_eq!(long.chars().count(), 120);
     assert!(long.ends_with('…'));
 }
+
+#[test]
+fn an_edit_counts_its_lines_folded_and_shows_its_diff_unfolded() {
+    let page = whole(CLAUDE, CLAUDE_FIXTURE);
+    let diffs: Vec<_> = page
+        .entries
+        .iter()
+        .filter_map(|e| match e {
+            TranscriptEntry::Tool { name, diff, .. } => Some((name.as_str(), *diff)),
+            TranscriptEntry::Message { .. } => None,
+        })
+        .collect();
+    let one_each = DiffStat {
+        added: 1,
+        removed: 1,
+    };
+    assert_eq!(
+        diffs,
+        [("Read", None), ("Bash", None), ("Edit", Some(one_each))]
+    );
+
+    let edit = detail_of(CLAUDE, CLAUDE_FIXTURE, 6);
+    let lines: Vec<_> = edit.diff.iter().map(|l| (l.op, l.text.as_str())).collect();
+    assert_eq!(lines, [(DiffOp::Remove, "a"), (DiffOp::Add, "b")]);
+    assert!(detail_of(CLAUDE, CLAUDE_FIXTURE, 1).diff.is_empty());
+}

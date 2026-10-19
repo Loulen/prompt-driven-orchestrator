@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Wrench } from "lucide-react";
 import type { ToolCallDetail } from "../../../../shared/generated/ToolCallDetail";
+import type { TranscriptDiffLine } from "../../../../shared/generated/TranscriptDiffLine";
+import type { TranscriptDiffStat } from "../../../../shared/generated/TranscriptDiffStat";
 import type { TranscriptToolStatus } from "../../../../shared/generated/TranscriptToolStatus";
 import { fetchToolCallDetail } from "../../../api/transcript";
 import { formatBytes } from "../../../model/transcript";
 
-/** A tool call of the transcript, folded on one line (name, summary); its
- *  input and output are read when it is unfolded, not before. */
+/** A tool call of the transcript, folded on one line (name, summary, lines
+ *  changed, output size); its input — or its diff, for a call that replaces
+ *  text — and its output are read when it is unfolded, not before. */
 export default function ToolCallRow({
   runId,
   nodeId,
@@ -16,6 +19,7 @@ export default function ToolCallRow({
   summary,
   status,
   outputBytes,
+  diff,
 }: {
   runId: string;
   nodeId: string;
@@ -25,6 +29,7 @@ export default function ToolCallRow({
   summary: string;
   status: TranscriptToolStatus;
   outputBytes?: number;
+  diff?: TranscriptDiffStat;
 }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<ToolCallDetail | null>(null);
@@ -78,8 +83,18 @@ export default function ToolCallRow({
         <span className="shrink-0 font-mono font-medium text-fg-2">{name}</span>
         <span className="min-w-0 truncate font-mono text-fg-4" title={summary}>
           {summary}
-          {outputBytes !== undefined && ` · ${formatBytes(outputBytes)}`}
         </span>
+        {/* Out of the ellipsis: a long path never hides what the call did. */}
+        {diff && (
+          <span className="shrink-0 font-mono text-fg-4" data-testid="transcript-tool-diffstat">
+            +{diff.added} −{diff.removed}
+          </span>
+        )}
+        {outputBytes !== undefined && (
+          <span className="shrink-0 whitespace-nowrap font-mono text-fg-4" data-testid="transcript-tool-size">
+            · {formatBytes(outputBytes)}
+          </span>
+        )}
         {status === "error" && (
           <span className="ml-auto shrink-0 text-st-failed" style={{ fontSize: "10px" }}>
             error
@@ -103,7 +118,11 @@ export default function ToolCallRow({
             </div>
           ) : (
             <>
-              <Block label="Input" text={detail.input} />
+              {detail.diff.length > 0 ? (
+                <Diff lines={detail.diff} />
+              ) : (
+                <Block label="Input" text={detail.input} />
+              )}
               <Block
                 label={detail.is_error ? "Output (error)" : "Output"}
                 text={detail.output ?? "No output yet: the tool is running."}
@@ -120,6 +139,34 @@ export default function ToolCallRow({
         </div>
       )}
     </div>
+  );
+}
+
+/** The colored line diff of a call that replaces text. */
+function Diff({ lines }: { lines: TranscriptDiffLine[] }) {
+  return (
+    <pre
+      data-testid="transcript-tool-diff"
+      className="max-h-64 overflow-auto rounded bg-bg-0 py-1.5 font-mono"
+      style={{ fontSize: "10.5px", lineHeight: 1.5 }}
+    >
+      {lines.map((line, i) => (
+        <div
+          key={i}
+          data-op={line.op}
+          className={`whitespace-pre-wrap break-words px-1.5 ${
+            line.op === "add"
+              ? "text-st-done"
+              : line.op === "remove"
+                ? "text-st-failed"
+                : "text-fg-4"
+          }`}
+        >
+          {line.op === "add" ? "+ " : line.op === "remove" ? "- " : "  "}
+          {line.text}
+        </div>
+      ))}
+    </pre>
   );
 }
 

@@ -922,6 +922,64 @@ describe("editStore.save", () => {
   });
 });
 
+describe("editStore.save refreshes a stale lint (CORE-88)", () => {
+  const mockFetchPipeline = vi.mocked(fetchPipeline);
+  const mockFetchRunPipeline = vi.mocked(fetchRunPipeline);
+  const detail = (diagnostics: string[]) => ({
+    scope: "repo",
+    pipeline: makePipeline(),
+    prompts: {},
+    diagnostics,
+  });
+
+  function seedWithDiagnostics(diagnostics: string[], runId?: string) {
+    seedTab("p1", true);
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({ ...t, diagnostics, runId })),
+    }));
+  }
+
+  it("re-reads the diagnostics once the file the lint was about is saved", async () => {
+    seedWithDiagnostics(["edge 'a.x -> b.x': source port 'x' not found on node 'a'"]);
+    mockFetchPipeline.mockResolvedValueOnce(detail([]) as never);
+
+    await useEditStore.getState().save("p1");
+
+    expect(mockFetchPipeline).toHaveBeenCalledWith("p1", "repo");
+    expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([]);
+  });
+
+  it("does the same for a run tab", async () => {
+    seedWithDiagnostics(["stale"], "run-1");
+    mockFetchRunPipeline.mockResolvedValueOnce(detail([]) as never);
+
+    await useEditStore.getState().save("p1");
+
+    expect(mockFetchRunPipeline).toHaveBeenCalledWith("run-1");
+    expect(useEditStore.getState().openTabs[0].diagnostics).toEqual([]);
+  });
+
+  it("costs no read when there was no lint to clear", async () => {
+    seedTab("p1", true);
+
+    await useEditStore.getState().save("p1");
+
+    expect(mockFetchPipeline).not.toHaveBeenCalled();
+  });
+
+  it("keeps the lint when the re-read fails", async () => {
+    seedWithDiagnostics(["kept"]);
+    mockFetchPipeline.mockRejectedValueOnce(new Error("offline"));
+
+    await useEditStore.getState().save("p1");
+
+    const tab = useEditStore.getState().openTabs[0];
+    expect(tab.diagnostics).toEqual(["kept"]);
+    expect(tab.dirty).toBe(false);
+    expect(tab.saveError).toBeUndefined();
+  });
+});
+
 describe("editStore.flushPendingSaves", () => {
   it("resolves only after all dirty tabs are clean", async () => {
     useEditStore.setState({
@@ -1449,6 +1507,64 @@ describe("updateNode propagates port changes to edges", () => {
     expect(tab.pipeline.edges).toHaveLength(1);
     expect(tab.pipeline.edges[0].source.port).toBe("screen");
     expect(tab.pipeline.edges[0].target).toEqual({ node: "bbbbbbbb", port: "in" });
+  });
+
+  // CORE-88: an emergent input is named after the output it carries, so the
+  // rename reaches the downstream input too — on every edge carrying it.
+  it("renames the downstream input with the output it carries, on every edge", () => {
+    const designer = makeNode({ id: "aaaaaaaa", outputs: [{ name: "spec" }, { name: "verdict" }] });
+    const builder = makeNode({ id: "bbbbbbbb", inputs: [] });
+    const reviewer = makeNode({ id: "cccccccc", inputs: [] });
+    const edges: EdgeDef[] = [
+      { source: { node: "aaaaaaaa", port: "spec" }, target: { node: "bbbbbbbb", port: "spec" } },
+      { source: { node: "aaaaaaaa", port: "spec" }, target: { node: "cccccccc", port: "spec" } },
+      { source: { node: "aaaaaaaa", port: "verdict" }, target: { node: "cccccccc", port: "verdict" } },
+    ];
+    seedTabWithPipeline(makePipeline([designer, builder, reviewer], edges));
+
+    useEditStore.getState().updateNode("aaaaaaaa", {
+      outputs: [{ name: "spec-v2" }, { name: "verdict" }],
+    });
+
+    const kept = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(kept.map(({ source, target }) => ({ source, target }))).toEqual([
+      { source: { node: "aaaaaaaa", port: "spec-v2" }, target: { node: "bbbbbbbb", port: "spec-v2" } },
+      { source: { node: "aaaaaaaa", port: "spec-v2" }, target: { node: "cccccccc", port: "spec-v2" } },
+      { source: { node: "aaaaaaaa", port: "verdict" }, target: { node: "cccccccc", port: "verdict" } },
+    ]);
+  });
+
+  it("leaves an input alone when its edge carries another output of the same name's node", () => {
+    const designer = makeNode({ id: "aaaaaaaa", outputs: [{ name: "spec" }, { name: "verdict" }] });
+    const builder = makeNode({ id: "bbbbbbbb", inputs: [] });
+    seedTabWithPipeline(
+      makePipeline(
+        [designer, builder],
+        [{ source: { node: "aaaaaaaa", port: "verdict" }, target: { node: "bbbbbbbb", port: "spec" } }],
+      ),
+    );
+
+    useEditStore.getState().updateNode("aaaaaaaa", { outputs: [{ name: "spec2" }, { name: "verdict" }] });
+
+    const [edge] = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(edge.target).toEqual({ node: "bbbbbbbb", port: "spec" });
+  });
+
+  it("keeps a declared input's name: only an emergent input follows the rename", () => {
+    const designer = makeNode({ id: "aaaaaaaa", outputs: [{ name: "result" }] });
+    const end = makeNode({ id: "eeeeeeee", type: "end", inputs: [{ name: "result" }], outputs: [] });
+    seedTabWithPipeline(
+      makePipeline(
+        [designer, end],
+        [{ source: { node: "aaaaaaaa", port: "result" }, target: { node: "eeeeeeee", port: "result" } }],
+      ),
+    );
+
+    useEditStore.getState().updateNode("aaaaaaaa", { outputs: [{ name: "report" }] });
+
+    const [edge] = useEditStore.getState().openTabs[0].pipeline.edges;
+    expect(edge.source).toEqual({ node: "aaaaaaaa", port: "report" });
+    expect(edge.target).toEqual({ node: "eeeeeeee", port: "result" });
   });
 
   // #843 / ADR-0073: an edge can carry SEVERAL outputs. A port rename must reach

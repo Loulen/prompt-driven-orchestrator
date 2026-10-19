@@ -12,6 +12,8 @@ import {
   segmentAxis,
   snapPolyline,
   snapToGrid,
+  snapStepAtZoom,
+  snapBadgeText,
   startTrace,
   DEFAULT_GRID_SIZE,
   GRID_SIZES,
@@ -317,5 +319,45 @@ describe("snapPolyline — the auto route, aligned on the grid", () => {
       { x: 3, y: 2 },
     ];
     expect(snapPolyline(straight, ORIGIN, STEP)).toBe(straight);
+  });
+});
+
+describe("snapStepAtZoom — the gesture's lattice at any zoom (CORE-88, option A)", () => {
+  it("keeps the pipeline step while a cell is at least 16px on screen", () => {
+    expect(snapStepAtZoom(30, 1)).toEqual({ step: 30, factor: 1 });
+    expect(snapStepAtZoom(20, 0.8)).toEqual({ step: 20, factor: 1 });
+  });
+
+  it("never subdivides the step when zoomed in: no half-step", () => {
+    expect(snapStepAtZoom(30, 2)).toEqual({ step: 30, factor: 1 });
+    expect(snapStepAtZoom(20, 4)).toEqual({ step: 20, factor: 1 });
+  });
+
+  it("doubles the step until a cell reaches 16px on screen when zoomed out", () => {
+    // 30 × 0.25 = 7.5px → ×2 = 15px, still short → ×4 = 30px.
+    expect(snapStepAtZoom(30, 0.25)).toEqual({ step: 120, factor: 4 });
+    expect(snapStepAtZoom(30, 0.5)).toEqual({ step: 60, factor: 2 });
+    expect(snapStepAtZoom(20, 0.4)).toEqual({ step: 40, factor: 2 });
+  });
+
+  it("only ever picks multiples, so every snapped point stays on the pipeline lattice", () => {
+    const origin = { x: 7, y: -3 };
+    for (const zoom of [0.1, 0.25, 0.33, 0.5, 0.75, 1, 1.5, 2]) {
+      const { step } = snapStepAtZoom(30, zoom);
+      expect(step % 30).toBe(0);
+      const p = snapToGrid({ x: 123.4, y: 456.7 }, origin, step);
+      expect(Math.abs((p.x - origin.x) % 30)).toBe(0);
+      expect(Math.abs((p.y - origin.y) % 30)).toBe(0);
+    }
+  });
+
+  it("names the lattice in the cursor badge", () => {
+    expect(snapBadgeText(4, 120)).toBe("snap ×4 · 120px");
+    expect(snapBadgeText(1, 30)).toBe("snap ×1");
+  });
+
+  it("falls back to the pipeline step for a degenerate zoom", () => {
+    expect(snapStepAtZoom(30, 0)).toEqual({ step: 30, factor: 1 });
+    expect(snapStepAtZoom(30, Number.NaN)).toEqual({ step: 30, factor: 1 });
   });
 });

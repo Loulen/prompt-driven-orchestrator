@@ -49,7 +49,14 @@ impl DeclareFocus {
         let session = libassist_session_name_of(actor);
         let operation = Operation::new(ResourceKind::Session, Verb::Update).on(session.clone());
         authorize(self.host.as_ref(), actor, &operation)?;
-        let Some(pipeline_id) = pipeline_id.filter(|id| !id.is_empty()) else {
+        let pipeline_id = pipeline_id.filter(|id| !id.is_empty());
+        // ADR-0088: the assistant sits in the draft it saved into while its
+        // Actor has that template open, and leaves it with the focus.
+        let previous = self.focus.get(&session).map(|focus| focus.pipeline_id);
+        if let Some(previous) = previous.filter(|previous| pipeline_id.as_ref() != Some(previous)) {
+            self.templates.left(actor, &previous);
+        }
+        let Some(pipeline_id) = pipeline_id else {
             self.focus.set(&session, None);
             return Ok(serde_json::json!({ "ok": true, "pipeline_id": null }));
         };

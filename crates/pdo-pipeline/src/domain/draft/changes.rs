@@ -105,6 +105,126 @@ fn changed_prompts(
         .count() as u32
 }
 
+/// What changed from `baseline` to `draft`, in words, in the order of the
+/// pipeline: what the notice of a write names (« prompt of reviewer »,
+/// « edge reviewer → fixer »). Empty when nothing did.
+pub fn changed_fields(baseline: &DraftContent, draft: &DraftContent) -> Vec<String> {
+    let empty = serde_json::Map::new();
+    let old = baseline.pipeline.as_object().unwrap_or(&empty);
+    let new = draft.pipeline.as_object().unwrap_or(&empty);
+    let mut fields = Vec::new();
+    let mut other_keys: Vec<&String> = old.keys().chain(new.keys()).collect();
+    other_keys.sort();
+    other_keys.dedup();
+    for key in other_keys {
+        if !BY_ID.contains(&key.as_str()) && key.as_str() != EDGES && old.get(key) != new.get(key) {
+            fields.push(key.clone());
+        }
+    }
+    fields.extend(changed_nodes(
+        baseline,
+        draft,
+        old.get("nodes"),
+        new.get("nodes"),
+    ));
+    fields.extend(changed_edge_words(old.get(EDGES), new.get(EDGES)));
+    for (key, word) in [("notes", "note"), ("loops", "loop region")] {
+        let (_, changed) = changed_by_id(old.get(key), new.get(key));
+        let (before, after) = (by_id(old.get(key)), by_id(new.get(key)));
+        for id in changed {
+            fields.push(match (before.contains_key(&id), after.contains_key(&id)) {
+                (false, _) => format!("new {word}"),
+                (_, false) => format!("{word} removed"),
+                _ => word.to_string(),
+            });
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    fields.retain(|field| seen.insert(field.clone()));
+    fields
+}
+
+/// The nodes added, removed, and the fields (and prompt) of the others that
+/// changed, by node id.
+fn changed_nodes(
+    baseline: &DraftContent,
+    draft: &DraftContent,
+    old: Option<&Value>,
+    new: Option<&Value>,
+) -> Vec<String> {
+    let before = by_id(old);
+    let after = by_id(new);
+    let mut words = Vec::new();
+    for (id, node) in &after {
+        let Some(was) = before.get(id) else {
+            words.push(format!("new node {id}"));
+            continue;
+        };
+        if was != node {
+            let empty = serde_json::Map::new();
+            let was = was.as_object().unwrap_or(&empty);
+            let node = node.as_object().unwrap_or(&empty);
+            let mut keys: Vec<&String> = was.keys().chain(node.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for key in keys
+                .into_iter()
+                .filter(|key| was.get(*key) != node.get(*key))
+            {
+                let field = if key == "view" {
+                    "position"
+                } else {
+                    key.as_str()
+                };
+                words.push(format!("{field} of {id}"));
+            }
+        }
+        let prompt = |content: &DraftContent| content.prompts.get(id).cloned().unwrap_or_default();
+        if prompt(baseline) != prompt(draft) {
+            words.push(format!("prompt of {id}"));
+        }
+    }
+    for id in before.keys().filter(|id| !after.contains_key(*id)) {
+        words.push(format!("node {id} removed"));
+    }
+    words
+}
+
+/// The edges added and removed, by their ends: an edge edited in place is
+/// named once.
+fn changed_edge_words(old: Option<&Value>, new: Option<&Value>) -> Vec<String> {
+    let mut remaining: Vec<&Value> = old
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    let mut added = Vec::new();
+    for edge in new.and_then(Value::as_array).into_iter().flatten() {
+        match remaining
+            .iter()
+            .position(|old| canonical(old) == canonical(edge))
+        {
+            Some(i) => {
+                remaining.remove(i);
+            }
+            None => added.push(edge_words(edge)),
+        }
+    }
+    let removed: Vec<String> = remaining
+        .into_iter()
+        .map(edge_words)
+        .filter(|words| !added.contains(words))
+        .map(|words| format!("{words} removed"))
+        .collect();
+    added.into_iter().chain(removed).collect()
+}
+
+/// « edge a → b ».
+fn edge_words(edge: &Value) -> String {
+    let end = |side: &str| edge[side]["node"].as_str().unwrap_or("?").to_string();
+    format!("edge {} \u{2192} {}", end("source"), end("target"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +277,44 @@ mod tests {
         let before = content(base(), &[("b", "x")]);
         let after = content(base(), &[("b", "y")]);
         assert_eq!(change_count(&before, &after), 1);
+    }
+
+    #[test]
+    fn the_changed_fields_are_named() {
+        let before = content(base(), &[("b", "x")]);
+        let mut pipeline = base();
+        pipeline["nodes"][0] = json!({"id": "a", "name": "A2", "view": {"x": 1}});
+        pipeline["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "c"}));
+        pipeline["edges"] = json!([{"source": {"node": "b"}, "target": {"node": "c"}}]);
+        pipeline["name"] = json!("renamed");
+        let after = content(pipeline, &[("b", "y")]);
+        assert_eq!(
+            changed_fields(&before, &after),
+            vec![
+                "name",
+                "name of a",
+                "position of a",
+                "prompt of b",
+                "new node c",
+                "edge b \u{2192} c",
+                "edge ? \u{2192} ? removed",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_edge_edited_in_place_is_named_once_and_nothing_changed_is_empty() {
+        let edge =
+            |when: Value| json!({"source": {"node": "a"}, "target": {"node": "b"}, "when": when});
+        let mut before = base();
+        before["edges"] = json!([edge(json!(1))]);
+        let mut after = base();
+        after["edges"] = json!([edge(json!(2))]);
+        let (before, after) = (content(before, &[]), content(after, &[]));
+        assert_eq!(changed_fields(&before, &after), vec!["edge a \u{2192} b"]);
+        assert!(changed_fields(&before, &before.clone()).is_empty());
     }
 }

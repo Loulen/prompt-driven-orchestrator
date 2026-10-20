@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use tokio::sync::broadcast;
 
 use crate::application::ports::{DraftDocument, StoredDraft};
-use crate::domain::draft::changes::change_count;
+use crate::domain::draft::changes::{change_count, changed_fields};
+use crate::domain::draft::notice::DraftNotice;
 use crate::domain::draft::presence::{next_color, DraftParticipant, PresenceState};
 use crate::domain::draft::{DraftContent, DraftSummary};
 
@@ -32,6 +33,8 @@ pub enum DraftMessage {
     Moved { to: String },
     /// The pipeline was deleted.
     Removed,
+    /// Someone outside the canvas changed the draft.
+    Notice(DraftNotice),
 }
 
 pub(super) struct RoomState {
@@ -120,8 +123,24 @@ impl Room {
         }
     }
 
+    /// Whether anyone but an assistant has it open: an assistant alone does
+    /// not keep a draft open.
     pub(super) fn has_participants(&self) -> bool {
-        !self.lock().participants.is_empty()
+        self.lock().participants.values().any(|p| !p.assistant)
+    }
+
+    pub(super) fn is_seated(&self, connection: u64) -> bool {
+        self.lock().participants.contains_key(&connection)
+    }
+
+    /// What the draft holds now.
+    pub(super) fn content(&self) -> DraftContent {
+        self.lock().doc.content()
+    }
+
+    /// The file the draft counts its changes from.
+    pub(super) fn baseline(&self) -> DraftContent {
+        self.lock().baseline.clone()
     }
 
     /// Seat a participant; its color.
@@ -184,18 +203,19 @@ impl Room {
     }
 
     /// The file is now `file`: what changed in it since the draft's baseline
-    /// lands in the draft, field by field, and it becomes the baseline.
-    /// Whether anything changed.
-    pub(super) fn follow(&self, file: &DraftContent) -> bool {
-        let update = {
+    /// lands in the draft, field by field, and it becomes the baseline. The
+    /// fields that changed in the file, `None` when it did not.
+    pub(super) fn follow(&self, file: &DraftContent) -> Option<Vec<String>> {
+        let (update, fields) = {
             let mut state = self.lock();
             if &state.baseline == file {
-                return false;
+                return None;
             }
+            let fields = changed_fields(&state.baseline, file);
             let update = state.doc.change(&state.baseline.clone(), file);
             state.baseline = file.clone();
             recount(&mut state);
-            update
+            (update, fields)
         };
         self.send(DraftMessage::Update {
             from: DAEMON,
@@ -204,7 +224,34 @@ impl Room {
         self.send(DraftMessage::Status {
             changes: self.changes(),
         });
+        Some(fields)
+    }
+
+    /// `connection` changes the draft from `from` to `to`, field by field:
+    /// what someone else changed meanwhile, elsewhere, stays. Passed on to
+    /// the others. Whether the document changed.
+    pub(super) fn change_as(
+        &self,
+        connection: u64,
+        from: &DraftContent,
+        to: &DraftContent,
+    ) -> bool {
+        let (update, moved) = {
+            let mut state = self.lock();
+            let before = state.doc.state_vector();
+            let update = state.doc.change(from, to);
+            if state.doc.state_vector() == before {
+                return false;
+            }
+            (update, recount(&mut state))
+        };
+        self.pass_on(connection, &update, moved);
         true
+    }
+
+    /// Tell every participant.
+    pub(super) fn notify(&self, notice: DraftNotice) {
+        self.send(DraftMessage::Notice(notice));
     }
 
     /// The draft was saved as `saved` (what the editor serialized): that is

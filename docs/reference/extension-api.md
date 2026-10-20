@@ -349,9 +349,11 @@ manager's preamble goes before its runtime preamble, the assistant's before
 assistant, create-if-absent (`pdo-libassist-shared` for the local operator, so a daemon without
 an extension that identifies its callers has the one it always had). Opening it is the Operation
 `pipeline` × `open_assistant`, untargeted, in no Projet: an extension of rights maps it to the
-right to write the Pipelines. Its focus (`PUT`/`GET /sessions/libassist/focus`), its save
-(`POST /sessions/libassist/save`) and its close (`DELETE /sessions/libassist`) are the caller's
-own: the assistant calls back with the identity of its Actor. Its runtime preamble has it send
+right to write the Pipelines. Its focus (`PUT`/`GET /sessions/libassist/focus`), its read of
+the focused pipeline's shared draft (`GET /sessions/libassist/draft`, `pipeline` × `read`), its
+save into that draft (`POST /sessions/libassist/save`, `pipeline` × `update`, ADR-0088: a
+participant of its Actor, never the file) and its close (`DELETE /sessions/libassist`) are the
+caller's own: the assistant calls back with the identity of its Actor. Its runtime preamble has it send
 `PDO_TOKEN` on every call, as the hook that injects the focus does: an extension that identifies
 callers by a token hands one to the assistant through `session_env`, or the assistant's calls
 read as the local operator's.

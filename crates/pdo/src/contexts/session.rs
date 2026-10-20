@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use pdo_kernel::extension_host::ExtensionHost;
+use pdo_pipeline::Pipelines;
 use pdo_platform::Platform;
 use pdo_run::Runs;
 use pdo_session::adapters::terminal_window::OsTerminalWindow;
@@ -20,6 +21,7 @@ pub(super) fn session(
     tmux: Arc<dyn Tmux>,
     runs: &Late<Runs>,
     platform: &Late<Platform>,
+    pipelines: &Late<Pipelines>,
     host: Arc<dyn ExtensionHost>,
 ) -> Arc<Session> {
     let run = SessionRunPorts::over(RunSide {
@@ -27,8 +29,7 @@ pub(super) fn session(
         platform: platform.clone(),
         db: r.db.clone(),
         repo_root: r.repo_root.clone(),
-        self_writes: r.self_writes.clone(),
-        bus_tx: r.bus_tx.clone(),
+        pipelines: pipelines.clone(),
         docker_cmd_override: r.docker_cmd_override.clone(),
     });
     Session::new(

@@ -5,6 +5,7 @@
 
 import type { Actor } from "../../shared/generated/Actor";
 import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
+import type { DraftNotice } from "../../shared/generated/DraftNotice";
 import type { DraftSummary } from "../../shared/generated/DraftSummary";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
@@ -70,6 +71,17 @@ export interface DraftTabState {
   canRedo: boolean;
   /** The words of my last change, for the Undo tooltip. */
   undoLabel: string | null;
+  /**
+   * What changed the draft from outside the canvas (a file written outside
+   * PDO, the library assistant), oldest first, until dismissed.
+   */
+  notices: DraftNoticeEntry[];
+}
+
+/** A notice of the draft, as the tab keeps it until it is dismissed. */
+export interface DraftNoticeEntry {
+  id: number;
+  notice: DraftNotice;
 }
 
 /**

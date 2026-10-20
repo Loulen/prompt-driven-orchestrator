@@ -12,7 +12,7 @@ use std::sync::Mutex;
 
 pub use focus::DeclareFocus;
 pub use lifecycle::{AssistantLaunch, CloseAssistant, OpenAssistant, OpenAssistantError, Opened};
-pub use save::{SaveFocused, SaveFocusedError, Saved};
+pub use save::{Read, SaveFocused, SaveFocusedError, Saved};
 
 use crate::domain::libassist::LibassistFocus;
 

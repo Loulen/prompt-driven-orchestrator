@@ -1,4 +1,4 @@
-//! The library assistant: open, focus, save, close.
+//! The library assistant: open, focus, read and save its draft, close.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,6 +29,7 @@ fn templates(root: &Path, invalid: Option<TemplateSaveError>) -> Arc<Templates> 
         root: root.join(".pdo").join("pipelines"),
         saved: Mutex::new(Vec::new()),
         invalid,
+        left: Mutex::new(Vec::new()),
     })
 }
 
@@ -144,8 +145,24 @@ fn the_focus_names_the_file_the_daemon_resolved() {
         .unwrap();
     assert_eq!(focus.get(LIBASSIST_SESSION_NAME).unwrap().path, None);
 
-    // Leaving every edit view clears it.
+    // The assistant left the draft of the template the focus moved from;
+    // the same focus again leaves nothing.
+    uc.execute(&Actor::LocalOperator, Some("draft".into()))
+        .unwrap();
+    assert_eq!(
+        templates.left.lock().unwrap().as_slice(),
+        [(Actor::LocalOperator, "review".to_string())]
+    );
+
+    // Leaving every edit view clears it, and the assistant leaves its draft.
     let cleared = uc.execute(&Actor::LocalOperator, None).unwrap();
+    assert_eq!(
+        templates.left.lock().unwrap().as_slice(),
+        [
+            (Actor::LocalOperator, "review".to_string()),
+            (Actor::LocalOperator, "draft".to_string())
+        ]
+    );
     assert_eq!(
         cleared,
         serde_json::json!({ "ok": true, "pipeline_id": null })
@@ -153,8 +170,8 @@ fn the_focus_names_the_file_the_daemon_resolved() {
     assert_eq!(focus.get(LIBASSIST_SESSION_NAME), None);
 }
 
-#[test]
-fn saving_writes_the_focused_template_and_never_a_guess() {
+#[tokio::test]
+async fn saving_writes_the_focused_template_and_never_a_guess() {
     let root = tempfile::tempdir().unwrap();
     let templates = templates(root.path(), None);
     let focus = Arc::new(FocusCell::default());
@@ -163,7 +180,11 @@ fn saving_writes_the_focused_template_and_never_a_guess() {
     let prompts: HashMap<String, String> = [("n1".to_string(), "prompt".to_string())].into();
 
     assert_eq!(
-        uc.execute(&Actor::LocalOperator, "name: x", &prompts),
+        uc.execute(&Actor::LocalOperator, "name: x", &prompts).await,
+        Err(SaveFocusedError::NoFocus)
+    );
+    assert_eq!(
+        uc.read(&Actor::LocalOperator).await,
         Err(SaveFocusedError::NoFocus)
     );
     assert!(templates.saved.lock().unwrap().is_empty());
@@ -171,11 +192,18 @@ fn saving_writes_the_focused_template_and_never_a_guess() {
     DeclareFocus::new(focus.clone(), templates.clone(), host.clone())
         .execute(&Actor::LocalOperator, Some("review".into()))
         .unwrap();
+    let read = uc.read(&Actor::LocalOperator).await.unwrap();
+    assert_eq!(read.pipeline_id, "review");
+    assert_eq!(read.draft.yaml, "name: review\n");
+    let read_op = host.asked().last().cloned().unwrap();
+    assert_eq!(read_op.resource, ResourceKind::Pipeline);
+    assert_eq!(read_op.verb, Verb::Read);
     let saved = uc
         .execute(&Actor::LocalOperator, "name: x", &prompts)
+        .await
         .unwrap();
     assert_eq!(saved.pipeline_id, "review");
-    assert_eq!(saved.path, templates.root.join("review.yaml"));
+    assert_eq!(saved.saved.fields, vec!["name"]);
     assert_eq!(
         templates.saved.lock().unwrap().as_slice(),
         [("review".to_string(), "name: x".to_string(), prompts.clone())]
@@ -186,8 +214,8 @@ fn saving_writes_the_focused_template_and_never_a_guess() {
     assert_eq!(save_op.target.as_deref(), Some("review"));
 }
 
-#[test]
-fn an_invalid_template_or_a_refusal_is_not_written() {
+#[tokio::test]
+async fn an_invalid_template_or_a_refusal_is_not_written() {
     let root = tempfile::tempdir().unwrap();
     let invalid = TemplateSaveError::Invalid {
         error: "invalid YAML: bad".into(),
@@ -200,19 +228,15 @@ fn an_invalid_template_or_a_refusal_is_not_written() {
         .execute(&Actor::LocalOperator, Some("review".into()))
         .unwrap();
     assert_eq!(
-        SaveFocused::new(focus.clone(), templates.clone(), Host::allowing()).execute(
-            &Actor::LocalOperator,
-            "::",
-            &HashMap::new()
-        ),
+        SaveFocused::new(focus.clone(), templates.clone(), Host::allowing())
+            .execute(&Actor::LocalOperator, "::", &HashMap::new())
+            .await,
         Err(SaveFocusedError::Save(invalid))
     );
     assert!(matches!(
-        SaveFocused::new(focus, templates, Host::refusing()).execute(
-            &Actor::LocalOperator,
-            "name: x",
-            &HashMap::new()
-        ),
+        SaveFocused::new(focus, templates, Host::refusing())
+            .execute(&Actor::LocalOperator, "name: x", &HashMap::new())
+            .await,
         Err(SaveFocusedError::Refused(_))
     ));
 }
@@ -230,8 +254,15 @@ fn closing_reaps_the_session_and_clears_the_focus_in_one_gesture() {
         }),
     );
     let host = Host::allowing();
-    let uc = CloseAssistant::new(tmux.clone(), focus.clone(), host.clone());
+    let root = tempfile::tempdir().unwrap();
+    let templates = templates(root.path(), None);
+    let uc = CloseAssistant::new(tmux.clone(), focus.clone(), templates.clone(), host.clone());
     assert_eq!(uc.execute(&Actor::LocalOperator), Ok(true));
+    assert_eq!(
+        templates.left.lock().unwrap().as_slice(),
+        [(Actor::LocalOperator, "review".to_string())],
+        "the assistant leaves the draft it saved into"
+    );
     assert!(!tmux.has(LIBASSIST_SESSION_NAME));
     assert_eq!(focus.get(LIBASSIST_SESSION_NAME), None);
     assert_eq!(host.asked()[0].verb, Verb::Delete);
@@ -325,8 +356,8 @@ async fn an_actor_refused_on_the_pipelines_opens_no_assistant() {
     assert!(host.events().is_empty());
 }
 
-#[test]
-fn each_assistant_saves_what_its_own_actor_has_open() {
+#[tokio::test]
+async fn each_assistant_saves_what_its_own_actor_has_open() {
     let root = tempfile::tempdir().unwrap();
     let templates = templates(root.path(), None);
     let focus = Arc::new(FocusCell::default());
@@ -346,10 +377,12 @@ fn each_assistant_saves_what_its_own_actor_has_open() {
     let save = SaveFocused::new(focus.clone(), templates.clone(), host);
     let saved = save
         .execute(&person("bob"), "name: x", &HashMap::new())
+        .await
         .unwrap();
     assert_eq!(saved.pipeline_id, "deploy");
     assert_eq!(
-        save.execute(&Actor::LocalOperator, "name: x", &HashMap::new()),
+        save.execute(&Actor::LocalOperator, "name: x", &HashMap::new())
+            .await,
         Err(SaveFocusedError::NoFocus),
         "the local operator has nothing open"
     );
@@ -357,6 +390,7 @@ fn each_assistant_saves_what_its_own_actor_has_open() {
     CloseAssistant::new(
         Arc::new(FakeTmux::default()),
         focus.clone(),
+        templates.clone(),
         Host::allowing(),
     )
     .execute(&person("alice"))

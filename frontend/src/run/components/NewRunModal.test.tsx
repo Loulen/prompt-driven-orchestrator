@@ -3784,6 +3784,7 @@ describe("NewRunModal — a draft that differs from the last version (ADR-0088)"
             canUndo: false,
             canRedo: false,
             undoLabel: null,
+            notices: [],
           },
         },
       ],

@@ -178,7 +178,12 @@ impl Session {
                 launch,
             )
             .with_ledger(ledger.clone()),
-            close_assistant: CloseAssistant::new(tmux.clone(), focus.clone(), extensions.clone()),
+            close_assistant: CloseAssistant::new(
+                tmux.clone(),
+                focus.clone(),
+                templates.clone(),
+                extensions.clone(),
+            ),
             declare_focus: DeclareFocus::new(focus.clone(), templates.clone(), extensions.clone()),
             save_focused: SaveFocused::new(focus.clone(), templates, extensions),
             tmux,

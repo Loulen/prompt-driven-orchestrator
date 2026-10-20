@@ -316,10 +316,12 @@ async fn two_actors_open_two_library_assistants() {
     .await;
     assert_eq!(focus["pipeline_id"], "solo");
 
-    // The assistant saves with its Actor's identity: Alice's save writes the
-    // template Alice has open, Bob's the one Bob has open.
+    // The assistant saves with its Actor's identity: Alice's save lands in the
+    // draft of the template Alice has open, Bob's in the one Bob has open.
     let yaml =
         std::fs::read_to_string(daemon.repo_root().join(".pdo/pipelines/solo.yaml")).unwrap();
+    // Bob's template has a file, so a draft to save into (ADR-0088).
+    std::fs::write(daemon.repo_root().join(".pdo/pipelines/draft.yaml"), &yaml).unwrap();
     let (status, saved) = call_as(
         &daemon,
         reqwest::Method::POST,

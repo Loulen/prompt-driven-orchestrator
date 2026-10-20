@@ -22,13 +22,21 @@ export function presenceColor(participant: Pick<DraftParticipant, "color">): str
   return PRESENCE_COLORS[participant.color % PRESENCE_COLORS.length];
 }
 
-/** Its name: the extension's display name, else the core's label. */
+/**
+ * Its name: the extension's display name, else the core's label; a library
+ * assistant is its Actor's.
+ */
 export function participantName(participant: DraftParticipant): string {
-  return participant.display?.name ?? actorLabel(participant.actor);
+  const name = participant.display?.name ?? actorLabel(participant.actor);
+  return participant.assistant ? `${name}'s library assistant` : name;
 }
 
-/** Its first name, as the canvas labels it (« Alice is typing »). */
+/**
+ * Its first name, as the canvas labels it (« Alice is typing »); « Library »
+ * for a library assistant.
+ */
 export function firstName(participant: DraftParticipant): string {
+  if (participant.assistant) return "Library";
   const name = participantName(participant).trim();
   return name.split(/\s+/)[0] || name;
 }

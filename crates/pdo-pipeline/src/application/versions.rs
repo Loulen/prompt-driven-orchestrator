@@ -20,6 +20,7 @@ use crate::domain::naming::{available_identity, copy_name};
 use crate::domain::pipeline::parse_pipeline;
 use crate::domain::version::{
     default_title, first_title, kept_name, PipelineVersion, PipelineVersionRef, VersionMeta,
+    EXTERNAL_EDIT,
 };
 
 /// A version as the history lists it.
@@ -197,6 +198,59 @@ impl Pipelines {
             warn!("version {number} of pipeline {id}: not kept: {e}");
         }
         reference
+    }
+
+    /// The file of `id` was written outside PDO: what it holds now is a
+    /// version « external edit », with no author, unless the last version
+    /// already holds it (the same write heard twice) or it does not read (a
+    /// write caught half-way, a conflicted merge: the next write that reads
+    /// is kept). The version the file is; `None` when there is none to tell.
+    pub(crate) async fn record_external_version(&self, id: &str) -> Option<PipelineVersionRef> {
+        let _one_at_a_time = self.version_writes.lock().await;
+        let listed = match self.versions.list(id).await {
+            Ok(listed) => listed,
+            Err(e) => {
+                warn!("versions of pipeline {id}: unreadable: {e}");
+                return None;
+            }
+        };
+        // No version yet: the file, as written, becomes v1.
+        let Some(last) = listed.last() else {
+            return self
+                .ensure_versions(id)
+                .await
+                .ok()?
+                .last()
+                .map(VersionMeta::reference);
+        };
+        let yaml = self.registry.read(id)?;
+        parse_pipeline(&yaml).ok()?;
+        let prompts = live_prompts(&yaml, &self.registry.prompts(id));
+        if let Ok(Some(kept)) = self.versions.get(id, last.number).await {
+            if kept.yaml == yaml && kept.prompts == prompts {
+                return Some(last.reference());
+            }
+        }
+        let version = PipelineVersion {
+            meta: VersionMeta {
+                number: last.number + 1,
+                title: EXTERNAL_EDIT.to_string(),
+                author: None,
+                saved_at: pdo_kernel::clock::now_iso(),
+                external: true,
+            },
+            prompts,
+            yaml,
+        };
+        if let Err(e) = self.versions.put(id, &version).await {
+            warn!(
+                "version {} of pipeline {id}: not kept: {e}",
+                version.meta.number
+            );
+            return None;
+        }
+        self.events.version_changed(id);
+        Some(version.meta.reference())
     }
 
     /// The file of `id` was written by PDO outside a Save (a rename, an

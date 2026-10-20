@@ -1,11 +1,12 @@
+import { Bot } from "lucide-react";
 import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
 import { initials } from "../../shared/actors/initials";
 import { firstName, participantName, presenceColor } from "../model/presence";
 
 /**
  * A participant of a shared draft (ADR-0088): the extension's image or the
- * initials of its name, ringed in its color; its name (and whether it only
- * reads) on hover.
+ * initials of its name, ringed in its color; a robot for a library
+ * assistant. Its name (and whether it only reads) on hover.
  */
 export function ParticipantAvatar({ participant, size = 16 }: { participant: DraftParticipant; size?: number }) {
   const color = presenceColor(participant);
@@ -17,6 +18,20 @@ export function ParticipantAvatar({ participant, size = 16 }: { participant: Dra
     fontSize: Math.max(7, Math.round(size * 0.42)),
     boxShadow: `0 0 0 1.5px ${color}`,
   };
+  if (participant.assistant) {
+    return (
+      <span
+        title={title}
+        aria-label={title}
+        className="grid shrink-0 place-items-center rounded-full text-bg-0"
+        style={{ ...style, background: color }}
+        data-testid="draft-participant"
+        data-assistant="true"
+      >
+        <Bot size={Math.max(8, Math.round(size * 0.62))} />
+      </span>
+    );
+  }
   return participant.display?.avatar_url ? (
     <img
       src={participant.display.avatar_url}
@@ -61,10 +76,11 @@ export function ParticipantStack({ participants, size = 16 }: { participants: Dr
 export function SelectedByLabel({ participant }: { participant: DraftParticipant }) {
   return (
     <span
-      className="pointer-events-none absolute z-[5] whitespace-nowrap rounded-t px-1 font-medium text-bg-0"
+      className="pointer-events-none absolute z-[5] flex items-center gap-0.5 whitespace-nowrap rounded-t px-1 font-medium text-bg-0"
       style={{ top: -15, left: -1.5, fontSize: "9.5px", lineHeight: "14px", background: presenceColor(participant) }}
       data-testid="selected-by"
     >
+      {participant.assistant && <Bot size={9} />}
       {firstName(participant)}
     </span>
   );

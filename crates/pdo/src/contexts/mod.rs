@@ -133,7 +133,14 @@ pub(crate) fn wire_over(
     let workspace = workspace::workspace(&r, &late_pipelines, &stored, host.clone());
     let skills = skill::skills(&r.db, &r.repo_root, host.clone());
     let sandbox = sandbox::router(&r, host.clone());
-    let session = session::session(&r, tmux, &late_runs, &late_platform, host.clone());
+    let session = session::session(
+        &r,
+        tmux,
+        &late_runs,
+        &late_platform,
+        &late_pipelines,
+        host.clone(),
+    );
     let run = run::run(run::RunWiring {
         r: &r,
         session: &session,

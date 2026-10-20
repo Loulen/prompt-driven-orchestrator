@@ -18,6 +18,7 @@ import {
   type ProjectOfRun,
   type RunFilterValue,
 } from "../model/runFilter";
+import RunDateFilterMenu from "./RunDateFilterMenu";
 
 /* #336 — client-side filters for the Runs list. The filter model
    (`RunFilterValue`, `runMatchesFilter`, sentinels, per-axis keys) lives in
@@ -166,56 +167,62 @@ export default function RunFilters({
   const anyActive = isFilterActive(value);
 
   return (
-    <div className="flex shrink-0 items-center gap-1 border-b border-line px-2 py-1.5">
-      <FilterDropdown
-        axis="project"
-        placeholder="Project"
-        options={projectOptions}
-        selected={value.repo}
-        onSelect={(repo) => onChange({ ...value, repo })}
-      />
-      <FilterDropdown
-        axis="pipeline"
-        placeholder="Pipeline"
-        options={pipelineOptions}
-        selected={value.pipeline}
-        onSelect={(pipeline) => onChange({ ...value, pipeline })}
-      />
-      <FilterDropdown
-        axis="trigger"
-        placeholder="Trigger"
-        options={triggerOptions}
-        selected={value.trigger}
-        onSelect={(trigger) => onChange({ ...value, trigger })}
-      />
-      {/* #783 — expand / collapse all, in the slot the #725 GitFork chip held.
-          NOT a filter: neutral colours (never accent), never part of
-          `isFilterActive`, so it never summons the clear ✕. `ChevronsDownUp`
-          when every visible parent is open (click collapses), `ChevronsUpDown`
-          otherwise (click expands). */}
-      {treeToggle && (
-        <button
-          type="button"
-          data-testid="run-tree-toggle-all"
-          data-state={treeToggle.allExpanded ? "expanded" : "collapsed"}
-          title={treeToggle.allExpanded ? "Collapse all child runs" : "Expand all child runs"}
-          aria-label={treeToggle.allExpanded ? "Collapse all child runs" : "Expand all child runs"}
-          className="flex shrink-0 cursor-pointer items-center rounded border border-line-strong bg-bg-3 px-2 py-[3px] text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2"
-          onClick={treeToggle.onToggle}
-        >
-          {treeToggle.allExpanded ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
-        </button>
-      )}
-      {anyActive && (
-        <button
-          data-testid="run-filter-clear"
-          title="Clear filters"
-          className="grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg"
-          onClick={() => onChange(EMPTY_RUN_FILTER)}
-        >
-          <X size={10} />
-        </button>
-      )}
+    // A narrow strip (the left panel's default width) gives the Date axis a
+    // row of its own: its label never truncates, nor do the three axes.
+    <div className="@container shrink-0 border-b border-line px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-1">
+        <FilterDropdown
+          axis="project"
+          placeholder="Project"
+          options={projectOptions}
+          selected={value.repo}
+          onSelect={(repo) => onChange({ ...value, repo })}
+        />
+        <FilterDropdown
+          axis="pipeline"
+          placeholder="Pipeline"
+          options={pipelineOptions}
+          selected={value.pipeline}
+          onSelect={(pipeline) => onChange({ ...value, pipeline })}
+        />
+        <FilterDropdown
+          axis="trigger"
+          placeholder="Trigger"
+          options={triggerOptions}
+          selected={value.trigger}
+          onSelect={(trigger) => onChange({ ...value, trigger })}
+        />
+        <div aria-hidden className="hidden h-0 basis-full @max-[400px]:block" />
+        <RunDateFilterMenu value={value.date} onChange={(date) => onChange({ ...value, date })} />
+        {/* #783 — expand / collapse all, in the slot the #725 GitFork chip held.
+            NOT a filter: neutral colours (never accent), never part of
+            `isFilterActive`, so it never summons the clear ✕. `ChevronsDownUp`
+            when every visible parent is open (click collapses), `ChevronsUpDown`
+            otherwise (click expands). */}
+        {treeToggle && (
+          <button
+            type="button"
+            data-testid="run-tree-toggle-all"
+            data-state={treeToggle.allExpanded ? "expanded" : "collapsed"}
+            title={treeToggle.allExpanded ? "Collapse all child runs" : "Expand all child runs"}
+            aria-label={treeToggle.allExpanded ? "Collapse all child runs" : "Expand all child runs"}
+            className="flex shrink-0 cursor-pointer items-center rounded border border-line-strong bg-bg-3 px-2 py-[3px] text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2"
+            onClick={treeToggle.onToggle}
+          >
+            {treeToggle.allExpanded ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
+          </button>
+        )}
+        {anyActive && (
+          <button
+            data-testid="run-filter-clear"
+            title="Clear filters"
+            className="grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg"
+            onClick={() => onChange(EMPTY_RUN_FILTER)}
+          >
+            <X size={10} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }

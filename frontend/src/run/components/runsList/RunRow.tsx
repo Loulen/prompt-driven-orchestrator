@@ -14,6 +14,7 @@ import RunRowMenu from "./RunRowMenu";
 import RunParentLink from "./RunParentLink";
 import RunRowPeople from "./RunRowPeople";
 import type { RunGesture } from "../../model/runGestures";
+import { startDateLabel } from "../../model/runDateFilter";
 
 interface Props {
   node: RunTreeNode;
@@ -83,6 +84,9 @@ export default function RunRow({
   const canRename = may("rename_run");
   const canForget = isArchived && may("delete");
   const isRenaming = renamingRunId === run.run_id;
+  // Its start date, top-right, unless it started today; the hover actions
+  // take its place.
+  const startDate = startDateLabel(run.started_at, new Date());
   // #110 — gate on EXPLICIT statuses, never isLiveRun/isTerminalRun: the former
   // includes `paused` (would wrongly show Pause on a paused run → 409); the
   // latter includes `archived` (would wrongly show Retry-all on archived → 409).
@@ -234,12 +238,23 @@ export default function RunRow({
           <RunRowPeople run={run} />
         </div>
       </div>
-      {/* Right column (#783): line 1 = the hover-revealed action icons, line 2
-          = the aggregated child counts, always visible, bottom-right. The
+      {/* Right column (#783): line 1 = the start date at rest, the
+          hover-revealed action icons in its place; line 2 = the aggregated
+          child counts, always visible, bottom-right. The
           actions row keeps its height at rest so the pills never move when the
           icons appear. */}
       <div className="flex shrink-0 flex-col items-end justify-between gap-1">
       <div className="flex h-4 items-center">
+      {startDate && (
+        <span
+          className="shrink-0 font-mono text-fg-4 group-hover:hidden"
+          style={{ fontSize: "10px" }}
+          title={run.started_at ? `Started ${new Date(run.started_at).toLocaleString()}` : undefined}
+          data-testid="run-start-date"
+        >
+          {startDate}
+        </span>
+      )}
       {!isRenaming && canRename && (
         <span
           role="button"

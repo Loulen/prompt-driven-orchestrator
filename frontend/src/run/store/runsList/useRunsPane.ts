@@ -7,7 +7,7 @@ import { useSelectionStore } from "../../../stores/selectionStore";
 import { useRecentReposStore } from "../../../stores/recentReposStore";
 import { type BulkItem, type BulkOutcome } from "../../../lib/bulk";
 import { groupByProject, type ProjectRef } from "../../../lib/groupByRepo";
-import { cascadeImpact, flattenVisible, type RunTreeNode } from "../../model/runTree";
+import { cascadeImpact, flattenAll, flattenVisible, type RunTreeNode } from "../../model/runTree";
 import { projectLookup } from "../../../workspace/model/projectLookup";
 import { projectsEntryOf, type ProjectsEntry } from "../../../workspace/model/projectsSettings";
 import { RETRYABLE } from "../../components/runsList/runsListTables";
@@ -15,6 +15,7 @@ import { useRunRowActions } from "./useRunRowActions";
 import { useRunTreeView } from "./useRunTreeView";
 import { useGestureRightsStore, useListedRunGestures } from "../gestureRightsStore";
 import { mayOnRun, type RunGesture } from "../../model/runGestures";
+import { loadCollapsedRunGroups, saveCollapsedRunGroups } from "../../../lib/uiPrefs";
 
 /**
  * All the state of the Runs tab. It lives in `UnifiedLeftPanel` (not in the
@@ -93,8 +94,42 @@ export function useRunsPane({
     (n) => n.run.effective_repo,
     (n) => projectOfRun(n.run.project_id),
   );
+  // The Projet groups folded by their header's chevron: per browser, kept in
+  // the local storage, so a fold survives a reload and a new tab.
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(
+    () => new Set(loadCollapsedRunGroups()),
+  );
+  const isGroupCollapsed = useCallback((key: string) => collapsedGroups.has(key), [collapsedGroups]);
+  // Re-read the stored folds first: another tab may have changed them.
+  const setGroupCollapsed = useCallback((key: string, collapsed: boolean) => {
+    const next = new Set(loadCollapsedRunGroups());
+    if (collapsed) next.add(key);
+    else next.delete(key);
+    saveCollapsedRunGroups([...next]);
+    setCollapsedGroups(next);
+  }, []);
+  const toggleGroup = useCallback(
+    (key: string) => setGroupCollapsed(key, !collapsedGroups.has(key)),
+    [collapsedGroups, setGroupCollapsed],
+  );
+  // A Run selected from elsewhere (URL, notification, Orchestration tab) in a
+  // folded group unfolds it, so its row shows: once per change of selection,
+  // React's reset-on-prop pattern, so a later fold sticks.
+  const [prevSelectedForGroup, setPrevSelectedForGroup] = useState(selectedRunId);
+  if (prevSelectedForGroup !== selectedRunId) {
+    setPrevSelectedForGroup(selectedRunId);
+    const folded = runGroups?.find(
+      (g) =>
+        collapsedGroups.has(g.key) && flattenAll(g.items).some((r) => r.run_id === selectedRunId),
+    );
+    if (folded) setGroupCollapsed(folded.key, false);
+  }
+  // A folded group's rows are not visible: out of a shift-range and of
+  // select-all-visible.
   const orderedActive: RunTreeNode[] =
-    runGroups === null ? activeTree : runGroups.flatMap((g) => g.items);
+    runGroups === null
+      ? activeTree
+      : runGroups.filter((g) => !collapsedGroups.has(g.key)).flatMap((g) => g.items);
 
   // #577 — Runs multi-select derivations. `visibleRunIds` is the flattened visible
   // order (grouped active list, then the archived section only when expanded),
@@ -153,6 +188,8 @@ export function useRunsPane({
     projectOf,
     availableRepos,
     runGroups,
+    isGroupCollapsed,
+    toggleGroup,
     visibleRunIds,
     cleanupItems,
     retryItems,

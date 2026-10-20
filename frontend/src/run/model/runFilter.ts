@@ -1,5 +1,6 @@
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
 import type { ProjectRef } from "../../lib/groupByRepo";
+import { ANY_TIME, runMatchesDate, type RunDateFilter } from "./runDateFilter";
 
 /* #336 — the client-side filter model for the Runs list. Option sets are
    derived from the runs themselves (never from the live library/trigger
@@ -23,6 +24,8 @@ export interface RunFilterValue {
   pipeline: string | null;
   /** A trigger id, or MANUAL_TRIGGER for manually launched runs. */
   trigger: string | null;
+  /** The Date axis (`runDateFilter.ts`): Active / Started over a range. */
+  date: RunDateFilter;
 }
 
 /* #783 — the #725 `showOrchestrated` axis is gone: children are no longer a
@@ -33,6 +36,7 @@ export const EMPTY_RUN_FILTER: RunFilterValue = {
   repo: null,
   pipeline: null,
   trigger: null,
+  date: ANY_TIME,
 };
 
 /** The filter key for a run on each axis (empty/missing values bucket to a sentinel). */
@@ -62,7 +66,8 @@ export function triggerKey(r: RunListEntry): string {
 }
 
 /**
- * AND predicate over the three axes; a null axis means "All". On the tree
+ * AND predicate over the four axes; a null axis means "All", a Date axis with
+ * no range "any time" (`now` places its presets). On the tree
  * (#783) this is the per-run match: `filterRunTree` keeps a non-matching
  * parent as long as a descendant matches.
  */
@@ -70,11 +75,12 @@ export function runMatchesFilter(
   r: RunListEntry,
   f: RunFilterValue,
   projectOf: ProjectOfRun = NO_PROJECT_KNOWN,
+  now: Date = new Date(),
 ): boolean {
   if (f.repo !== null && projectKey(r, projectOf) !== f.repo) return false;
   if (f.pipeline !== null && pipelineKey(r) !== f.pipeline) return false;
   if (f.trigger !== null && triggerKey(r) !== f.trigger) return false;
-  return true;
+  return runMatchesDate(r, f.date, now);
 }
 
 /**
@@ -82,5 +88,5 @@ export function runMatchesFilter(
  * clear ✕ (and the empty state's).
  */
 export function isFilterActive(f: RunFilterValue): boolean {
-  return f.repo !== null || f.pipeline !== null || f.trigger !== null;
+  return f.repo !== null || f.pipeline !== null || f.trigger !== null || f.date.range !== null;
 }

@@ -16,6 +16,7 @@ use ts_rs::TS;
 
 use crate::application::paths::effective_repo_of;
 use crate::domain::child_awaiting;
+use crate::domain::run_activity::ActivitySpan;
 use crate::domain::state::RunStatus;
 use crate::Runs;
 
@@ -80,6 +81,14 @@ pub struct RunListEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub project_id: Option<String>,
+    /// The instant of its last activity, and its spans of activity, oldest
+    /// first: what the date filter of the list reads (« Active » mode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_activity_at: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<ActivitySpan>>", optional)]
+    pub activity: Vec<ActivitySpan>,
     /// The entity attributes the extensions stamped on it (CONTEXT.md §
     /// *Extensions*); absent when none.
     #[serde(skip_serializing_if = "Attributes::is_empty")]
@@ -128,6 +137,8 @@ impl Runs {
                     parent_node_id: summary.parent_node_id,
                     effective_repo,
                     project_id: summary.project_id,
+                    last_activity_at: summary.last_activity_at,
+                    activity: summary.activity,
                     attributes,
                 }
             })

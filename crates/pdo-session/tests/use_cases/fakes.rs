@@ -444,11 +444,13 @@ impl DaemonGauges for Gauges {
 /// A save the assistant asked for: the template id, its YAML, its prompts.
 pub type Save = (String, String, HashMap<String, String>);
 
-/// The templates the assistant writes.
+/// The templates the assistant reads and saves into.
 pub struct Templates {
     pub root: PathBuf,
     pub saved: Mutex<Vec<Save>>,
     pub invalid: Option<TemplateSaveError>,
+    /// The Actors whose assistant left a draft, and which.
+    pub left: Mutex<Vec<(Actor, String)>>,
 }
 
 impl pdo_session::application::ports::Templates for Templates {
@@ -456,20 +458,46 @@ impl pdo_session::application::ports::Templates for Templates {
         self.root.join(format!("{pipeline_id}.yaml"))
     }
 
-    fn save(
-        &self,
-        pipeline_id: &str,
-        yaml: &str,
-        prompts: &HashMap<String, String>,
-    ) -> Result<PathBuf, TemplateSaveError> {
-        if let Some(e) = &self.invalid {
-            return Err(e.clone());
-        }
-        self.saved
+    fn read<'a>(
+        &'a self,
+        _actor: &'a Actor,
+        pipeline_id: &'a str,
+    ) -> BoxFuture<'a, Result<TemplateDraft, TemplateSaveError>> {
+        let draft = TemplateDraft {
+            yaml: format!("name: {pipeline_id}\n"),
+            prompts: Default::default(),
+        };
+        Box::pin(async move { Ok(draft) })
+    }
+
+    fn save<'a>(
+        &'a self,
+        _actor: &'a Actor,
+        pipeline_id: &'a str,
+        yaml: &'a str,
+        prompts: &'a HashMap<String, String>,
+    ) -> BoxFuture<'a, Result<TemplateSaved, TemplateSaveError>> {
+        let saved = match &self.invalid {
+            Some(e) => Err(e.clone()),
+            None => {
+                self.saved
+                    .lock()
+                    .unwrap()
+                    .push((pipeline_id.into(), yaml.into(), prompts.clone()));
+                Ok(TemplateSaved {
+                    fields: vec!["name".to_string()],
+                    version: None,
+                })
+            }
+        };
+        Box::pin(async move { saved })
+    }
+
+    fn left(&self, actor: &Actor, pipeline_id: &str) {
+        self.left
             .lock()
             .unwrap()
-            .push((pipeline_id.into(), yaml.into(), prompts.clone()));
-        Ok(self.path_of(pipeline_id))
+            .push((actor.clone(), pipeline_id.to_string()));
     }
 }
 

@@ -2,7 +2,8 @@
 //! WebSocket, `WS /pipelines/{id}/draft`, with two clients: a change of one
 //! reaches the other, concurrent changes of two fields both stay, presence
 //! comes and goes, a client that may not update the pipeline reads, and the draft survives a
-//! restart of the daemon.
+//! restart of the daemon. The library assistant saves into it, live; a file
+//! written outside PDO is a version merged into it.
 
 use std::time::Duration;
 
@@ -136,6 +137,14 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     )
 }
 
+fn pipeline_path(daemon: &TestDaemon) -> std::path::PathBuf {
+    daemon
+        .repo_root()
+        .join(".pdo")
+        .join("pipelines")
+        .join("draft-target.yaml")
+}
+
 fn worker(content: &DraftContent) -> &Value {
     content.pipeline["nodes"]
         .as_array()
@@ -261,4 +270,126 @@ async fn an_unknown_pipeline_has_no_draft() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let url = format!("ws://{}/pipelines/nope/draft", daemon.addr);
     assert!(tokio_tungstenite::connect_async(url).await.is_err());
+}
+
+/// ADR-0088: the library assistant saves into the draft, live on every
+/// canvas, as a participant of its Actor; the file does not change.
+#[tokio::test]
+async fn the_assistant_saves_into_the_draft_live_and_signed() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let path = pipeline_path(&daemon);
+    let file = std::fs::read_to_string(&path).unwrap();
+    let mut alice = Client::join(&daemon, "draft-target", None).await;
+    let client = reqwest::Client::new();
+    client
+        .put(format!("{}/sessions/libassist/focus", daemon.url()))
+        .json(&json!({"pipeline_id": "draft-target"}))
+        .send()
+        .await
+        .unwrap();
+
+    let saved = client
+        .post(format!("{}/sessions/libassist/save", daemon.url()))
+        .json(&json!({
+            "yaml": file.replace("name: Worker", "name: Builder"),
+            "prompts": {"worker": "Build it."},
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), 200);
+
+    let seen = alice.participants(2).await;
+    let assistant = seen.iter().find(|p| p["assistant"] == true).unwrap();
+    assert_eq!(assistant["actor"]["kind"], "local_operator");
+    let notice = alice.text_of("notice").await;
+    assert_eq!(notice["notice"]["kind"], "assistant");
+    assert_eq!(
+        notice["notice"]["fields"],
+        json!(["name of worker", "prompt of worker"])
+    );
+    let fresh = Client::join(&daemon, "draft-target", None).await;
+    assert_eq!(worker(&fresh.doc.content())["name"], "Builder");
+    assert_eq!(fresh.doc.content().prompts["worker"], "Build it.");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        file,
+        "no file written"
+    );
+}
+
+/// ADR-0088: a file written outside PDO is a version « external edit », merged
+/// into the draft beside its unsaved change, and the participants are told.
+#[tokio::test]
+async fn a_file_written_outside_is_a_version_merged_into_the_draft() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // The list numbers the file v1, as the editor's list does.
+    daemon.get_json("/pipelines").await;
+    let mut alice = Client::join(&daemon, "draft-target", None).await;
+    let i = worker_index(&alice.doc.content());
+    alice
+        .edit(|c| c.pipeline["nodes"][i]["view"] = json!({"x": 640, "y": 80}))
+        .await;
+    assert_eq!(alice.text_of("status").await["changes"], 1);
+
+    let path = pipeline_path(&daemon);
+    let file = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, file.replace("name: Worker", "name: Reviewer")).unwrap();
+
+    let notice = alice.text_of("notice").await;
+    assert_eq!(notice["notice"]["kind"], "external_edit");
+    assert_eq!(notice["notice"]["file"], "draft-target.yaml");
+    assert_eq!(
+        notice["notice"]["version"],
+        json!({"number": 2, "title": "external edit"})
+    );
+    assert_eq!(notice["notice"]["fields"], json!(["name of worker"]));
+
+    let fresh = Client::join(&daemon, "draft-target", None).await;
+    let node = worker(&fresh.doc.content()).clone();
+    assert_eq!(node["name"], "Reviewer");
+    assert_eq!(
+        node["view"],
+        json!({"x": 640, "y": 80}),
+        "the draft's change stays"
+    );
+    let history = daemon.get_json("/pipelines/draft-target/versions").await;
+    let versions = &history["versions"];
+    assert_eq!(versions[0]["number"], 2);
+    assert_eq!(versions[0]["title"], "external edit");
+    assert_eq!(versions[0]["external"], true);
+    assert_eq!(versions[0]["author"], Value::Null);
+}
+
+/// PDO's own writes are not outside ones: a Save numbers its version, and no
+/// « external edit » follows it.
+#[tokio::test]
+async fn a_save_by_pdo_is_no_outside_write() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    daemon.get_json("/pipelines").await;
+    let path = pipeline_path(&daemon);
+    let yaml = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("name: Worker", "name: Saved");
+    let saved = reqwest::Client::new()
+        .put(format!("{}/pipelines/draft-target", daemon.url()))
+        .json(&json!({"yaml": yaml}))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        saved.status().is_success(),
+        "{}",
+        saved.text().await.unwrap()
+    );
+    // Past the watcher's debounce.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let history = daemon.get_json("/pipelines/draft-target/versions").await;
+    let titles: Vec<&str> = history["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["v2", "1.0"]);
 }

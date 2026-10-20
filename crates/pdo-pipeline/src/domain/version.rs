@@ -82,6 +82,9 @@ impl SaveAs {
     }
 }
 
+/// The title of a version a write outside PDO made.
+pub const EXTERNAL_EDIT: &str = "external edit";
+
 /// The title a version gets when none is given.
 pub fn default_title(number: u32) -> String {
     format!("v{number}")

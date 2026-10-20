@@ -13,6 +13,7 @@ function participant(connection: string, name: string): DraftParticipant {
     display: { name, avatar_url: null },
     color: Number(connection),
     can_write: true,
+    assistant: false,
     selection: null,
     typing: null,
   };

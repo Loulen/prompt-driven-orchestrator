@@ -1,5 +1,6 @@
 //! The watcher of the instance registry and of the Runs' own pipelines: an
-//! outside edit of a registry file is announced as `pipeline_changed`, an edit
+//! outside edit of a registry file is announced as `pipeline_changed`, marked
+//! `outside`, an edit
 //! of a Run's `pipeline.yaml` or prompt is handed to the Run.
 
 mod debouncer;
@@ -110,10 +111,13 @@ pub fn spawn_watcher(
                     pipeline_id
                 };
 
+                // `outside`: not one of the daemon's own writes, which it
+                // announces itself (ADR-0088: kept as a version, then merged).
                 let msg = serde_json::json!({
                     "type": "pipeline_changed",
                     "pipeline_id": pipeline_id,
                     "path": path.to_string_lossy(),
+                    "outside": true,
                 });
 
                 let _ = tx.send(msg);

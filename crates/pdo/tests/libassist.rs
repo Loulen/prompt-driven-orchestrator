@@ -82,9 +82,12 @@ fn seed_repo_template(daemon: &TestDaemon, id: &str) -> std::path::PathBuf {
     let dir = daemon.repo_root().join(".pdo").join("pipelines");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{id}.yaml"));
-    std::fs::write(&path, "name: seeded\nnodes: []\nedges: []\n").unwrap();
+    std::fs::write(&path, SEEDED_YAML).unwrap();
     path
 }
+
+/// A valid template, so that it has a shared draft (ADR-0088).
+const SEEDED_YAML: &str = "name: seeded\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\nedges: []\n";
 
 #[tokio::test]
 async fn open_assistant_creates_session() {
@@ -558,18 +561,23 @@ async fn post_save(daemon: &TestDaemon, body: serde_json::Value) -> reqwest::Res
         .unwrap()
 }
 
-/// **The FP-6 regression.** The assistant used to persist through
+async fn get_draft(daemon: &TestDaemon) -> reqwest::Response {
+    reqwest::get(format!("{}/sessions/libassist/draft", daemon.url()))
+        .await
+        .unwrap()
+}
+
+/// **The FP-6 regression**, and ADR-0088. The assistant used to persist through
 /// `POST /library/pipelines`, echoing the focus scope back at it — but that
 /// endpoint reads `scope` in the *library store's* vocabulary. A `repo` template
 /// "saved" that way landed in `.pdo/library/pipelines/` as a duplicate, the edited
-/// file never moved, the canvas never changed, and the assistant reported success.
-///
-/// Both halves are asserted, because only the pair is the property: the edited
-/// file changed, **and** no copy appeared in the other store.
+/// template never moved, and the assistant reported success. Now its save lands
+/// in the shared draft of the open template, and no file is written at all.
 #[tokio::test]
-async fn save_writes_the_focused_template_in_place() {
+async fn save_lands_in_the_draft_of_the_focused_template_and_writes_no_file() {
     let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
     let path = seed_repo_template(&daemon, "alpha");
+    let before = std::fs::read_to_string(&path).unwrap();
     put_focus(
         &daemon,
         serde_json::json!({"pipeline_id": "alpha", "scope": "repo"}),
@@ -577,16 +585,32 @@ async fn save_writes_the_focused_template_in_place() {
     .await;
 
     let resp = post_save(&daemon, serde_json::json!({"yaml": SAVED_YAML})).await;
-    assert_eq!(resp.status(), 200, "saving the open template succeeds");
+    let status = resp.status();
     let body = resp.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(status, 200, "saving the open template succeeds: {body}");
     assert_eq!(body["id"], serde_json::json!("alpha"));
+    assert_eq!(body["draft"], serde_json::json!(true));
     assert!(body.get("scope").is_none());
-    assert_eq!(body["path"], serde_json::json!(path.to_string_lossy()));
+    assert!(
+        body["fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("new node gamma")),
+        "the save names what changed: {body}"
+    );
 
-    let on_disk = std::fs::read_to_string(&path).unwrap();
     assert_eq!(
-        on_disk, SAVED_YAML,
-        "the edited file is the one that changed"
+        std::fs::read_to_string(&path).unwrap(),
+        before,
+        "the file is the last version: a person saves the draft as a new one"
+    );
+    let draft = get_draft(&daemon).await;
+    assert_eq!(draft.status(), 200);
+    let draft = draft.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(draft["pipeline_id"], "alpha");
+    assert!(
+        draft["yaml"].as_str().unwrap().contains("GAMMA"),
+        "the draft holds the save: {draft}"
     );
 
     let library_dir = daemon
@@ -600,10 +624,9 @@ async fn save_writes_the_focused_template_in_place() {
     );
 }
 
-/// Node prompts ride along the YAML, under the canonical `<id>.prompts/` sibling
-/// the rest of the codebase reads.
+/// Node prompts ride along the YAML, into the draft; no prompt file is written.
 #[tokio::test]
-async fn save_writes_node_prompts_beside_the_template() {
+async fn save_puts_node_prompts_in_the_draft() {
     let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
     let path = seed_repo_template(&daemon, "alpha");
     put_focus(
@@ -619,11 +642,15 @@ async fn save_writes_node_prompts_beside_the_template() {
     .await;
     assert_eq!(resp.status(), 200);
 
-    let prompt = path.with_extension("prompts").join("gamma.md");
-    assert_eq!(
-        std::fs::read_to_string(&prompt).unwrap(),
-        "You are GAMMA.",
-        "the node prompt lands next to the template"
+    let draft = get_draft(&daemon)
+        .await
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(draft["prompts"]["gamma"], "You are GAMMA.");
+    assert!(
+        !path.with_extension("prompts").join("gamma.md").exists(),
+        "no prompt file is written"
     );
 }
 
@@ -638,6 +665,7 @@ async fn save_ignores_a_retired_library_scope() {
     std::fs::create_dir_all(&library_dir).unwrap();
     let library_path = library_dir.join("alpha.yaml");
     std::fs::write(&library_path, "name: seeded\nnodes: []\nedges: []\n").unwrap();
+    seed_repo_template(&daemon, "alpha");
 
     put_focus(
         &daemon,
@@ -653,22 +681,19 @@ async fn save_ignores_a_retired_library_scope() {
         "name: seeded\nnodes: []\nedges: []\n",
         "the legacy library is not a write target"
     );
-    assert_eq!(
-        std::fs::read_to_string(
-            daemon
-                .repo_root()
-                .join(".pdo")
-                .join("pipelines")
-                .join("alpha.yaml")
-        )
-        .unwrap(),
-        SAVED_YAML,
-        "the instance registry receives the save"
+    let draft = get_draft(&daemon)
+        .await
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert!(
+        draft["yaml"].as_str().unwrap().contains("GAMMA"),
+        "the draft of the instance registry's template receives the save"
     );
 }
 
 /// Saving into a guess is exactly what the focus mechanism exists to prevent, so
-/// "no template open" is a refusal, not a default.
+/// "no template open" is a refusal, not a default — for a read as well.
 #[tokio::test]
 async fn save_without_a_focus_is_refused() {
     let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
@@ -680,10 +705,43 @@ async fn save_without_a_focus_is_refused() {
         body["error"].as_str().unwrap().contains("open"),
         "the refusal says why: {body}"
     );
+    assert_eq!(get_draft(&daemon).await.status(), 409);
 }
 
-/// Same gate as `PUT /pipelines/{id}`: unparseable YAML must not reach the disk
-/// the canvas is reading from.
+/// A template with no file yet has no draft to save into.
+#[tokio::test]
+async fn save_into_a_template_with_no_file_is_not_found() {
+    let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
+    put_focus(&daemon, serde_json::json!({"pipeline_id": "never-saved"})).await;
+    let resp = post_save(&daemon, serde_json::json!({"yaml": SAVED_YAML})).await;
+    assert_eq!(resp.status(), 404);
+}
+
+/// A file that does not read has no draft (the editor edits it without one):
+/// the assistant's save is then a version of its Actor, as the editor's is.
+#[tokio::test]
+async fn save_into_a_file_that_does_not_read_is_a_version() {
+    let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
+    let path = seed_repo_template(&daemon, "alpha");
+    std::fs::write(&path, "name: alpha\nnodes: []\n").unwrap();
+    put_focus(&daemon, serde_json::json!({"pipeline_id": "alpha"})).await;
+    let draft = get_draft(&daemon)
+        .await
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(draft["yaml"], "name: alpha\nnodes: []\n", "the file itself");
+
+    let resp = post_save(&daemon, serde_json::json!({"yaml": SAVED_YAML})).await;
+    assert_eq!(resp.status(), 200);
+    let body = resp.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(body["draft"], false);
+    assert!(body["version"].as_u64().is_some(), "{body}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), SAVED_YAML);
+}
+
+/// Same gate as `PUT /pipelines/{id}`: unparseable YAML must not reach the
+/// draft every canvas reads from.
 #[tokio::test]
 async fn save_rejects_yaml_that_does_not_parse() {
     let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
@@ -702,15 +760,19 @@ async fn save_rejects_yaml_that_does_not_parse() {
         before,
         "a rejected save leaves the file alone"
     );
+    let draft = get_draft(&daemon)
+        .await
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(draft["yaml"].as_str().unwrap(), before, "and the draft too");
 }
 
-/// The canvas re-reads on save, and it learns about the write from the daemon —
-/// not from the file watcher, which is suppressed for the daemon's own writes and
-/// does not watch the library store at all. Without this event the user sees the
-/// assistant announce a save and the canvas sit unchanged, which reads exactly
-/// like the bug that is being fixed.
+/// The pipeline lists learn the assistant's change from the daemon: the draft
+/// of the template now has a change to save. (Its canvas hears it on the
+/// draft's socket: `pipeline_draft.rs`.)
 #[tokio::test]
-async fn save_tells_the_canvas_to_re_read() {
+async fn save_tells_the_lists_the_draft_changed() {
     use futures_util::StreamExt;
 
     let daemon = TestDaemon::spawn_nested(|_| Ok(())).await.unwrap();
@@ -729,8 +791,9 @@ async fn save_tells_the_canvas_to_re_read() {
             let msg = ws.next().await?.ok()?;
             let text = crate::common::ws_text(&msg)?.to_string();
             let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-            if value["type"] == serde_json::json!("pipeline_changed")
+            if value["type"] == serde_json::json!("pipeline_draft_changed")
                 && value["pipeline_id"] == serde_json::json!("alpha")
+                && value["draft"]["changes"].as_u64() > Some(0)
             {
                 return Some(value);
             }
@@ -742,6 +805,6 @@ async fn save_tells_the_canvas_to_re_read() {
 
     assert!(
         found.is_some(),
-        "the save broadcasts pipeline_changed for the template it wrote"
+        "the save announces the changed draft of the template"
     );
 }

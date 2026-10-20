@@ -103,7 +103,9 @@ and unit tests beside the code.
   are `domain/draft/`, the open drafts and their participants `application/drafts/`, the
   replicated document over `yrs` `adapters/draft_doc.rs` (behind `DraftDocuments`), the store
   `adapters/sqlite_drafts.rs`, the socket `adapters/http/draft.rs`, and the follower of the
-  written files `adapters/draft_follow.rs`. The frontend's side is `pipeline/store/draftSession.ts`
+  written files `adapters/draft_follow.rs` (a write the watcher marks `outside` is a version
+  « external edit » first). The library assistant's reads and saves into a draft are
+  `application/drafts/assistant.rs`; the notice its participants get, `domain/draft/notice.rs`. The frontend's side is `pipeline/store/draftSession.ts`
   over `yjs`.
   The versions a Save freezes (ADR-0088): their rules (numbering, titles, the name of a kept
   version) are `domain/version.rs`, the use cases `application/versions.rs` and

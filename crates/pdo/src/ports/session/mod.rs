@@ -11,7 +11,7 @@ mod runs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use pdo_pipeline::adapters::self_writes::SelfWrites;
+use pdo_pipeline::Pipelines;
 use pdo_platform::Platform;
 use pdo_run::domain::event::{Event, EventKind};
 use pdo_run::domain::projection::project;
@@ -21,7 +21,6 @@ use pdo_session::application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunLookup, RunProjects, RunShells,
     SessionOwners, Templates,
 };
-use tokio::sync::broadcast;
 
 use super::Late;
 
@@ -31,12 +30,11 @@ pub(crate) struct RunSide {
     pub(crate) runs: Late<Runs>,
     pub(crate) platform: Late<Platform>,
     pub(crate) db: sqlx::SqlitePool,
-    /// The daemon's repo root, where the templates land.
+    /// The pipeline context, whose drafts the library assistant reads and
+    /// saves into (ADR-0088).
+    pub(crate) pipelines: Late<Pipelines>,
+    /// The daemon's repo root, where the templates live.
     pub(crate) repo_root: PathBuf,
-    /// The daemon's own writes, which the pipeline watcher does not announce.
-    pub(crate) self_writes: SelfWrites,
-    /// The raw channel of the kernel's bus, where a template write is announced.
-    pub(crate) bus_tx: broadcast::Sender<serde_json::Value>,
     /// The `docker` binary a sandboxed run shell execs into.
     pub(crate) docker_cmd_override: Option<String>,
 }

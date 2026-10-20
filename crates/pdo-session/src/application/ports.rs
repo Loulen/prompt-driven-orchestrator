@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use pdo_harness::registry::HarnessDescriptor;
+use pdo_kernel::Actor;
 
 use crate::domain::declared_wait::WaitFacts;
 use crate::domain::launch::ContainerExec;
@@ -201,7 +202,7 @@ pub trait DaemonGauges: Send + Sync {
     fn service_health(&self) -> serde_json::Value;
 }
 
-/// Why the assistant could not save the focused template.
+/// Why the assistant could not read or save the focused template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TemplateSaveError {
     /// The YAML does not parse: the message, and its line when known.
@@ -210,24 +211,57 @@ pub enum TemplateSaveError {
         message: String,
         line: Option<usize>,
     },
-    /// The file could not be written.
+    /// The template has no file yet: it has no draft either.
+    NotFound,
+    /// The draft could not be read or changed.
     Write(String),
 }
 
-/// The pipeline templates the library assistant works on (ADR-0051).
-/// Implemented by the `pipeline` side.
+/// The draft of a template, as the library assistant reads it: its YAML and
+/// the prompts of its nodes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateDraft {
+    pub yaml: String,
+    pub prompts: std::collections::BTreeMap<String, String>,
+}
+
+/// Where the assistant's save landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateSaved {
+    /// What changed in the draft.
+    pub fields: Vec<String>,
+    /// A file that does not read has no draft: the save was this version,
+    /// as the editor's is on such a file.
+    pub version: Option<u32>,
+}
+
+/// The pipeline templates the library assistant works on (ADR-0051), through
+/// their shared drafts (ADR-0088): it never writes a file. Implemented by the
+/// `pipeline` side.
 pub trait Templates: Send + Sync {
     /// The file of template `pipeline_id` (it may not exist yet).
     fn path_of(&self, pipeline_id: &str) -> PathBuf;
 
-    /// Write the whole template (YAML and prompts) and announce it to the
-    /// canvas. Returns the file written.
-    fn save(
-        &self,
-        pipeline_id: &str,
-        yaml: &str,
-        prompts: &std::collections::HashMap<String, String>,
-    ) -> Result<PathBuf, TemplateSaveError>;
+    /// The draft of `pipeline_id`, as `actor`'s assistant reads it.
+    fn read<'a>(
+        &'a self,
+        actor: &'a Actor,
+        pipeline_id: &'a str,
+    ) -> BoxFuture<'a, Result<TemplateDraft, TemplateSaveError>>;
+
+    /// Save the whole template (YAML and prompts) into its draft, as `actor`'s
+    /// assistant, live for every participant.
+    fn save<'a>(
+        &'a self,
+        actor: &'a Actor,
+        pipeline_id: &'a str,
+        yaml: &'a str,
+        prompts: &'a std::collections::HashMap<String, String>,
+    ) -> BoxFuture<'a, Result<TemplateSaved, TemplateSaveError>>;
+
+    /// `actor`'s assistant left `pipeline_id` (its focus moved, it closed):
+    /// it leaves the draft of it, if it sat there.
+    fn left(&self, actor: &Actor, pipeline_id: &str);
 }
 
 /// What the library assistant launches on: the instance's default harness,

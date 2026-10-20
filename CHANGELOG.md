@@ -10,6 +10,17 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.52.0 — L'assistant de bibliothèque et les écritures externes passent par le brouillon (CORE-92)
+
+- L'assistant de bibliothèque n'écrit plus de fichier (ADR-0088) : `POST /sessions/libassist/save`
+  s'applique au brouillon partagé du pipeline focalisé, comme un participant de son Acteur, et
+  répond `draft`, `fields` (les champs changés) et `version`. Il lit ce brouillon par
+  `GET /sessions/libassist/draft`. Seul un pipeline dont le fichier ne se lit pas, et qui n'a donc
+  pas de brouillon, est encore enregistré, en version signée de l'Acteur.
+- Un fichier écrit hors de PDO devient une version « external edit » (sans auteur) avant de se
+  fusionner dans le brouillon ; le flux `/ws` marque son `pipeline_changed` d'un `outside: true`
+  et le socket du brouillon envoie une `notice` aux participants.
+
 ## 2.51.0 — Settings › Projects (CORE-96)
 
 - Nouvelle catégorie « Projects » dans Settings : créer, renommer et supprimer un Projet, ajouter

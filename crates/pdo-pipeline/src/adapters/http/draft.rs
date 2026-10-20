@@ -12,7 +12,7 @@
 //!
 //! Text frames are JSON: [`DraftServerMessage`] from the daemon (the
 //! welcome, the participants, the changes, the heartbeat every
-//! [`HEARTBEAT`], a rename, a deletion), [`DraftClientMessage`] from the
+//! [`HEARTBEAT`], a rename, a deletion, a notice), [`DraftClientMessage`] from the
 //! client (its presence). A participant the Autorisation d'opération does
 //! not let update the pipeline reads: its updates are dropped.
 //!
@@ -36,6 +36,7 @@ use ts_rs::TS;
 
 use crate::application::drafts::{DraftJoin, DraftMessage};
 use crate::application::Pipelines;
+use crate::domain::draft::notice::DraftNotice;
 use crate::domain::draft::presence::{DraftParticipant, PresenceState};
 
 /// « Here is what I know »: a state vector follows.
@@ -88,6 +89,11 @@ pub enum DraftServerMessage {
     /// without it.
     Unavailable {
         message: String,
+    },
+    /// Someone outside the canvas changed the draft: a file written outside
+    /// PDO, the library assistant.
+    Notice {
+        notice: DraftNotice,
     },
     Heartbeat,
 }
@@ -241,6 +247,9 @@ async fn serve(mut socket: WebSocket, pipelines: &Pipelines, join: DraftJoin) {
                 }
                 Ok(DraftMessage::Status { changes }) => {
                     vec![text(&DraftServerMessage::Status { changes })]
+                }
+                Ok(DraftMessage::Notice(notice)) => {
+                    vec![text(&DraftServerMessage::Notice { notice })]
                 }
                 Ok(DraftMessage::Moved { to }) => {
                     let _ = socket.send(text(&DraftServerMessage::Moved { to })).await;

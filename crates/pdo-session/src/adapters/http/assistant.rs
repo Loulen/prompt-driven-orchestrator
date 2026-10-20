@@ -130,36 +130,66 @@ pub(super) async fn save(
     match session
         .save_focused()
         .execute(&actor, &req.yaml, &req.prompts)
+        .await
     {
         Ok(saved) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "ok": true,
                 "id": saved.pipeline_id,
-                "path": saved.path.to_string_lossy(),
+                "draft": saved.saved.version.is_none(),
+                "fields": saved.saved.fields,
+                "version": saved.saved.version,
             })),
         )
             .into_response(),
-        Err(SaveFocusedError::Refused(denied)) => denied.into_response(),
-        Err(SaveFocusedError::NoFocus) => error(
+        Err(e) => refused(e),
+    }
+}
+
+/// `GET /sessions/libassist/draft`: the shared draft of the open template
+/// (ADR-0088), what the assistant reads before it changes it.
+pub(super) async fn draft(
+    State(session): State<Arc<Session>>,
+    Extension(actor): Extension<Actor>,
+) -> Response {
+    match session.save_focused().read(&actor).await {
+        Ok(read) => Json(serde_json::json!({
+            "pipeline_id": read.pipeline_id,
+            "yaml": read.draft.yaml,
+            "prompts": read.draft.prompts,
+        }))
+        .into_response(),
+        Err(e) => refused(e),
+    }
+}
+
+fn refused(e: SaveFocusedError) -> Response {
+    match e {
+        SaveFocusedError::Refused(denied) => denied.into_response(),
+        SaveFocusedError::NoFocus => error(
             StatusCode::CONFLICT,
             "no pipeline template is open in the UI — ask the user which one to \
              work on instead of guessing a file",
         ),
         // Same gate as `PUT /pipelines/{id}`: a template that does not parse
-        // must not reach disk, where it breaks the canvas the user is looking at.
-        Err(SaveFocusedError::Save(TemplateSaveError::Invalid {
+        // must not reach the draft, where it breaks the canvas of everyone in it.
+        SaveFocusedError::Save(TemplateSaveError::Invalid {
             error,
             message,
             line,
-        })) => {
+        }) => {
             let mut body = serde_json::json!({ "error": error, "message": message });
             if let Some(l) = line {
                 body["line"] = serde_json::json!(l);
             }
             (StatusCode::BAD_REQUEST, Json(body)).into_response()
         }
-        Err(SaveFocusedError::Save(TemplateSaveError::Write(msg))) => (
+        SaveFocusedError::Save(TemplateSaveError::NotFound) => error(
+            StatusCode::NOT_FOUND,
+            "the open template has no file yet — ask the user to save it once first",
+        ),
+        SaveFocusedError::Save(TemplateSaveError::Write(msg)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": msg.clone(), "message": msg })),
         )

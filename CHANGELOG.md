@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.53.0 — Cloner un dépôt distant depuis Settings › Projects et New Run (CORE-97)
+
+- « Add repository » d'un Projet propose « Clone from a URL… » : le dépôt est cloné en entier
+  dans le dossier des clones, avec sa progression et un Cancel, puis rejoint le Projet. Le clone
+  continue Settings fermé. New Run accepte aussi une URL : « Clone and launch » clone puis lance
+  le Run sur le clone ; une URL déjà clonée est réutilisée (« Launch »).
+- Nouvelles routes `POST`/`GET /repos/clones`, `GET`/`DELETE /repos/clones/{id}` (annule un
+  clone en cours, oublie un clone fini) et `GET /repos/clone-target`. Le clone se fait dans un
+  dossier caché voisin, renommé une fois complet : un échec ou une annulation ne laisse rien.
+- Nouveau réglage d'instance `clones_folder` (défaut `~/pdo/repos`), section « Clones folder »
+  de Settings › Projects.
+
 ## 2.52.0 — L'assistant de bibliothèque et les écritures externes passent par le brouillon (CORE-92)
 
 - L'assistant de bibliothèque n'écrit plus de fichier (ADR-0088) : `POST /sessions/libassist/save`

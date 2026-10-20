@@ -86,13 +86,13 @@ impl CloneJobs {
     }
 
     /// Records a running clone, unless one into the same folder runs already:
-    /// that one, then also for the Projets of `job`, is the answer. One lock
+    /// that one, then also for the Projets of `job`, is returned. One lock
     /// for both, so two asks at once never start two clones of one folder.
     pub(super) fn start(
         &self,
         job: CloneJob,
         cancel: tokio::sync::oneshot::Sender<()>,
-    ) -> Result<(), CloneJob> {
+    ) -> Option<CloneJob> {
         let mut entries = self.lock();
         if let Some(entry) = entries
             .iter_mut()
@@ -103,10 +103,10 @@ impl CloneJobs {
                     entry.job.project_ids.push(id);
                 }
             }
-            return Err(entry.job.clone());
+            return Some(entry.job.clone());
         }
         push(&mut entries, job, Some(cancel));
-        Ok(())
+        None
     }
 
     pub(super) fn push(&self, job: CloneJob, cancel: Option<tokio::sync::oneshot::Sender<()>>) {
@@ -184,9 +184,9 @@ mod tests {
     fn a_second_start_of_one_folder_joins_the_first() {
         let jobs = CloneJobs::default();
         let (tx, _rx) = tokio::sync::oneshot::channel();
-        jobs.start(job("a", "p1"), tx).unwrap();
+        assert_eq!(jobs.start(job("a", "p1"), tx), None);
         let (tx, _rx) = tokio::sync::oneshot::channel();
-        let running = jobs.start(job("b", "p2"), tx).unwrap_err();
+        let running = jobs.start(job("b", "p2"), tx).unwrap();
         assert_eq!(running.id, "a");
         assert_eq!(
             running.project_ids,

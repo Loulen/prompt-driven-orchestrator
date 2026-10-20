@@ -190,7 +190,7 @@ impl Workspace {
         }
 
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-        if let Err(running) = self.clones.start(job.clone(), cancel_tx) {
+        if let Some(running) = self.clones.start(job.clone(), cancel_tx) {
             // Asked at the same moment as another clone of this folder.
             return Ok(running);
         }

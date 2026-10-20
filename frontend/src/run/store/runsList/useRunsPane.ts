@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { isLiveRun } from "../../model/runStatus";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
+import type { DeletedProject } from "../../../shared/generated/DeletedProject";
 import type { Project } from "../../../workspace/model/project";
 import { useSelectionStore } from "../../../stores/selectionStore";
 import { useRecentReposStore } from "../../../stores/recentReposStore";
@@ -8,25 +9,13 @@ import { type BulkItem, type BulkOutcome } from "../../../lib/bulk";
 import { groupByProject, type ProjectRef } from "../../../lib/groupByRepo";
 import { cascadeImpact, flattenAll, flattenVisible, type RunTreeNode } from "../../model/runTree";
 import { projectLookup } from "../../../workspace/model/projectLookup";
+import { projectsEntryOf, type ProjectsEntry } from "../../../workspace/model/projectsSettings";
 import { RETRYABLE } from "../../components/runsList/runsListTables";
 import { useRunRowActions } from "./useRunRowActions";
 import { useRunTreeView } from "./useRunTreeView";
 import { useGestureRightsStore, useListedRunGestures } from "../gestureRightsStore";
 import { mayOnRun, type RunGesture } from "../../model/runGestures";
 import { loadCollapsedRunGroups, saveCollapsedRunGroups } from "../../../lib/uiPrefs";
-
-export interface ProjectEditorState {
-  project: Project | null;
-  name: string;
-  memberPaths: string[];
-}
-
-export interface ProjectEditorTarget {
-  kind: "project" | "path";
-  key: string;
-  repoPath: string;
-  label: string;
-}
 
 /**
  * All the state of the Runs tab. It lives in `UnifiedLeftPanel` (not in the
@@ -38,17 +27,19 @@ export function useRunsPane({
   selectedRunId,
   onSelectRun,
   projects,
+  deletedProjects,
+  onOpenProjectSettings,
 }: {
   runs: RunListEntry[];
   selectedRunId: string | null;
   onSelectRun: (runId: string) => void;
   projects: Project[];
+  /** The deleted Projets the Runs still name (CORE-96). */
+  deletedProjects?: DeletedProject[];
+  /** CORE-96: the group-header pencil opens Settings › Projects there. */
+  onOpenProjectSettings?: (entry?: ProjectsEntry) => void;
 }) {
   const actions = useRunRowActions(onSelectRun);
-  // #552 — the group-header pencil. Holds the Projet being edited (or `null` for
-  // a fresh one, when the header is a derived path group) plus the pre-fill.
-  const [projectEditor, setProjectEditor] = useState<ProjectEditorState | null>(null);
-
   const recentRepos = useRecentReposStore((s) => s.recentRepos);
 
   // #577 — multi-select. The per-tab sets live in the shared store (so a tab's
@@ -63,7 +54,7 @@ export function useRunsPane({
   const runSel = useMemo(() => new Set(runSelIds), [runSelIds]);
   const [runBulkKind, setRunBulkKind] = useState<"cleanup" | "retry" | "pause" | null>(null);
 
-  const view = useRunTreeView(runs, selectedRunId, projects);
+  const view = useRunTreeView(runs, selectedRunId, projects, deletedProjects);
 
   // CORE-42: the gestures of each row the caller may make, asked once per
   // Run; a refused one is hidden from the row, its menu and the bulk bar.
@@ -175,32 +166,16 @@ export function useRunsPane({
     [deselect],
   );
 
-  // Open the pencil on a group header: an existing Projet pre-fills its record;
-  // a derived path group pre-fills the label + its own path as the sole member.
-  const openProjectEditor = (group: ProjectEditorTarget) => {
-    if (group.kind === "project") {
-      const id = group.key.slice("project:".length);
-      const project = projects.find((p) => p.id === id) ?? null;
-      setProjectEditor({
-        project,
-        name: project?.name ?? group.label,
-        memberPaths: project?.members ?? [],
-      });
-    } else {
-      setProjectEditor({
-        project: null,
-        name: group.label,
-        memberPaths: group.repoPath ? [group.repoPath] : [],
-      });
-    }
-  };
+  // The pencil on a group header (#552): Settings › Projects on its Projet, or
+  // on a new one holding the group's repository (CORE-96).
+  const openProjectSettings = (group?: Parameters<typeof projectsEntryOf>[0]) =>
+    onOpenProjectSettings?.(group && projectsEntryOf(group));
 
   return {
     ...actions,
     ...view,
-    projectEditor,
-    setProjectEditor,
-    openProjectEditor,
+    openProjectSettings,
+    canOpenProjectSettings: onOpenProjectSettings !== undefined,
     runSelIds,
     runSel,
     toggleSel,

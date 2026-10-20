@@ -546,12 +546,10 @@ describe("ReviewPage — file tree (CORE-84)", () => {
   it("← / → fold and unfold the folders around the current file; j / k skip a folded folder's files", async () => {
     render(<ReviewPage runId={RUN_ID} />);
     await waitFor(() => expect(screen.getAllByTestId("review-file-row")).toHaveLength(5));
-    // The page may still settle after its rows show (a late load puts the
-    // first file back as current): step until `j` holds.
-    await waitFor(() => {
-      if (currentRow() !== "src/core/a.ts") fireEvent.keyDown(window, { key: "j" });
-      expect(currentRow()).toBe("src/core/a.ts");
-    });
+    // The first file becomes the current one once the page settled: `j` moves from it.
+    await waitFor(() => expect(currentRow()).toBe("lib/x/y/z.ts"));
+    fireEvent.keyDown(window, { key: "j" });
+    expect(currentRow()).toBe("src/core/a.ts");
     fireEvent.keyDown(window, { key: "ArrowLeft" });
     expect(dirRow("src/core")).toHaveAttribute("data-open", "false");
     fireEvent.keyDown(window, { key: "j" });

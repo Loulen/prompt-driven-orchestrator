@@ -7,6 +7,8 @@ import type { PipelineListEntry } from "../shared/generated/PipelineListEntry";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { Project } from "../workspace/model/project";
+import type { ProjectsEntry } from "../workspace/model/projectsSettings";
+import type { DeletedProject } from "../shared/generated/DeletedProject";
 import type { ExtensionEntry } from "../shared/generated/ExtensionEntry";
 import type { UiContribution } from "../shared/generated/UiContribution";
 import { resetExtensions, setBundleLoader } from "../shared/extensions/store";
@@ -365,12 +367,16 @@ function renderPanel({
   selectedRunId = null,
   triggers,
   projects,
+  deletedProjects,
+  onOpenProjectSettings,
 }: {
   runs?: RunListEntry[];
   libraryPipelines?: LibraryPipelineEntry[];
   selectedRunId?: string | null;
   triggers?: TriggerListEntry[];
   projects?: Project[];
+  deletedProjects?: DeletedProject[];
+  onOpenProjectSettings?: (entry?: ProjectsEntry) => void;
 } = {}) {
   return render(
     <UnifiedLeftPanel
@@ -382,6 +388,8 @@ function renderPanel({
       onLibraryPipelinesChanged={noop}
       triggers={triggers}
       projects={projects}
+      deletedProjects={deletedProjects}
+      onOpenProjectSettings={onOpenProjectSettings}
     />,
   );
 }
@@ -738,25 +746,63 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
   });
 
-  it("opens project onboarding from a flat single-repository list", () => {
+  it("opens Settings › Projects to name a Projet for a flat single-repository list", () => {
     const runs: RunListEntry[] = [
       { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
     ];
-    renderPanel({ runs });
+    const onOpenProjectSettings = vi.fn();
+    renderPanel({ runs, onOpenProjectSettings });
 
     fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
-    expect(screen.getByTestId("project-edit-modal")).toBeInTheDocument();
-    expect(screen.getByTestId("project-members-list")).toHaveTextContent("/repos/foo");
+    expect(onOpenProjectSettings).toHaveBeenCalledWith({ draft: { name: "foo", members: ["/repos/foo"] } });
   });
 
-  it("opens project onboarding from a recent repository before the first Run", () => {
+  it("opens Settings › Projects from a recent repository before the first Run", () => {
     useRecentReposStore.setState({ recentRepos: ["/repos/fresh"] });
-    renderPanel({ runs: [] });
+    const onOpenProjectSettings = vi.fn();
+    renderPanel({ runs: [], onOpenProjectSettings });
 
     fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
 
-    expect(screen.getByTestId("project-edit-modal")).toBeInTheDocument();
-    expect(screen.getByTestId("project-members-list")).toHaveTextContent("/repos/fresh");
+    expect(onOpenProjectSettings).toHaveBeenCalledWith({ draft: { name: "fresh", members: ["/repos/fresh"] } });
+  });
+
+  it("opens Settings › Projects on the Projet of a group header's pencil (CORE-96)", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo", project_id: "p1" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/bar" },
+    ];
+    const onOpenProjectSettings = vi.fn();
+    renderPanel({
+      runs,
+      projects: [{ id: "p1", name: "Checkout", members: ["/repos/foo"] }],
+      onOpenProjectSettings,
+    });
+
+    const groups = screen.getAllByTestId("run-repo-group");
+    // Ranked by label: « Checkout » before « bar ».
+    fireEvent.click(within(groups[0]).getByTestId("run-group-pencil"));
+    expect(onOpenProjectSettings).toHaveBeenLastCalledWith({ projectId: "p1" });
+    fireEvent.click(within(groups[1]).getByTestId("run-group-pencil"));
+    expect(onOpenProjectSettings).toHaveBeenLastCalledWith({ draft: { name: "bar", members: ["/repos/bar"] } });
+  });
+
+  it("ranks a Run under its deleted Projet, marked so (CORE-96)", () => {
+    const runs: RunListEntry[] = [
+      { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, name: "Kept", effective_repo: "/repos/foo", project_id: "gone" },
+      { stalled: false, run_id: "r2", pipeline_name: "p", status: "running", started_at: null, name: "Hidden", effective_repo: "/repos/bar", project_id: "hidden" },
+    ];
+    renderPanel({ runs, deletedProjects: [{ id: "gone", name: "Mobile" }], onOpenProjectSettings: vi.fn() });
+
+    const label = screen.getByText("Mobile (deleted)");
+    expect(label).toHaveAttribute("data-deleted", "true");
+    const group = label.closest<HTMLElement>('[data-testid="run-repo-group"]')!;
+    expect(group).toHaveAttribute("data-project", "true");
+    expect(within(group).getByText("Kept")).toBeInTheDocument();
+    expect(within(group).queryByTestId("run-group-pencil")).not.toBeInTheDocument();
+    // A Projet the caller may not read is not called deleted: its Run falls back to its repository.
+    const hidden = screen.getByText("Hidden").closest<HTMLElement>('[data-testid="run-repo-group"]')!;
+    expect(hidden).toHaveAttribute("data-project", "false");
   });
 
   it("renders one repo-group header per distinct repo, alphabetical, when ≥ 2 repos", () => {

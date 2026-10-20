@@ -148,3 +148,20 @@ impl<A, S> PatchProjectRequest<A, S> {
 pub(crate) struct ProjectMemberRequest {
     pub path: String,
 }
+
+/// The remote of a repository (`GET /repos/remote`), its credentials dropped;
+/// `null` for a repository without a remote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct RepoRemote {
+    pub remote: Option<String>,
+}
+
+/// A deleted Projet (`GET /projects/deleted`, CORE-96): its id and its last
+/// name, so the Runs launched in it still name it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export, rename = "DeletedProject")]
+pub struct DeletedProjectDto {
+    pub id: String,
+    pub name: String,
+}

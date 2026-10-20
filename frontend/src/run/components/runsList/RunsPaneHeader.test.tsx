@@ -17,9 +17,8 @@ vi.mock("../../../shared/extensions/ExtensionActions", () => ({
 
 const pane = {
   availableRepos: [],
-  setProjectEditor: vi.fn(),
   projectOf: () => null,
-  openProjectEditor: vi.fn(),
+  openProjectSettings: vi.fn(),
 } as unknown as RunsPaneState;
 
 const P1 = { id: "p1", name: "PDO", members: ["/r"] } as unknown as Project;

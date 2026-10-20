@@ -13,7 +13,9 @@ use tracing::error;
 use crate::application::{MemberRemoved, WorkspaceError};
 use crate::domain::project::Project;
 
-use super::dto::{CreateProjectRequest, PatchProjectRequest, ProjectDto, ProjectMemberRequest};
+use super::dto::{
+    CreateProjectRequest, DeletedProjectDto, PatchProjectRequest, ProjectDto, ProjectMemberRequest,
+};
 use super::{error as error_body, Http, ProjectSettings};
 
 fn store_error() -> Response {
@@ -68,6 +70,29 @@ pub(super) async fn list<S: ProjectSettings>(
         .into_response(),
         Err(e) => {
             error!("failed to list projects: {e}");
+            store_error()
+        }
+    }
+}
+
+/// `GET /projects/deleted`: the deleted Projets the caller may read (CORE-96).
+pub(super) async fn deleted<S: ProjectSettings>(
+    State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
+) -> Response {
+    match http.workspace.readable_deleted_projects(&actor).await {
+        Ok(projects) => Json(
+            projects
+                .into_iter()
+                .map(|p| DeletedProjectDto {
+                    id: p.id,
+                    name: p.name,
+                })
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => {
+            error!("failed to list deleted projects: {e}");
             store_error()
         }
     }

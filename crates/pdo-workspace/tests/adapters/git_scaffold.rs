@@ -98,6 +98,7 @@ fn a_second_call_reuses_the_repo_without_committing_again() {
 fn refuses_an_existing_folder_that_is_not_a_repo() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir(tmp.path().join("pdo-tutorial")).unwrap();
+    std::fs::write(tmp.path().join("pdo-tutorial/notes.txt"), "mine").unwrap();
 
     let err = create_repo(tmp.path().to_str().unwrap(), "pdo-tutorial", &[]).unwrap_err();
 
@@ -115,10 +116,48 @@ fn a_folder_inside_another_repo_is_not_a_repo_root() {
     let tmp = tempfile::tempdir().unwrap();
     let outer = create_repo(tmp.path().to_str().unwrap(), "outer", &[file("a.txt", "a")]).unwrap();
     std::fs::create_dir(outer.path.join("inner")).unwrap();
+    std::fs::write(outer.path.join("inner/b.txt"), "b").unwrap();
 
     // `rev-parse --git-dir` would say yes here; `--show-toplevel` says outer.
     let err = create_repo(outer.path.to_str().unwrap(), "inner", &[]).unwrap_err();
     assert!(err.ends_with("exists and is not a git repository"), "{err}");
+}
+
+#[test]
+fn an_empty_existing_folder_becomes_a_repo_with_a_first_commit() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("fresh")).unwrap();
+
+    let outcome = create_repo(tmp.path().to_str().unwrap(), "fresh", &[]).unwrap();
+
+    assert!(outcome.created);
+    assert_eq!(outcome.path, tmp.path().join("fresh"));
+    assert_eq!(head_branch(&outcome.path), "main");
+    assert_eq!(commit_count(&outcome.path), 1);
+}
+
+#[test]
+fn a_new_repo_without_files_still_gets_its_first_commit() {
+    let tmp = tempfile::tempdir().unwrap();
+
+    let outcome = create_repo(tmp.path().to_str().unwrap(), "empty", &[]).unwrap();
+
+    assert!(outcome.created);
+    assert_eq!(commit_count(&outcome.path), 1);
+}
+
+#[test]
+fn an_empty_folder_inside_another_repo_becomes_a_repo_of_its_own() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outer = create_repo(tmp.path().to_str().unwrap(), "outer", &[file("a.txt", "a")]).unwrap();
+    std::fs::create_dir(outer.path.join("inner")).unwrap();
+
+    let inner = create_repo(outer.path.to_str().unwrap(), "inner", &[]).unwrap();
+
+    assert!(inner.created);
+    assert!(inner.path.join(".git").exists());
+    assert_eq!(commit_count(&inner.path), 1);
+    assert_eq!(commit_count(&outer.path), 1);
 }
 
 #[test]

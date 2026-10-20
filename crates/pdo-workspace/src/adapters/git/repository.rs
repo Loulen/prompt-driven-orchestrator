@@ -3,15 +3,14 @@
 
 use std::path::{Path, PathBuf};
 
+/// The refusals name the folder, never the API field: they reach the UI as is.
 pub fn validate_target_repo(path: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(path);
     if !p.is_absolute() {
-        return Err("target_repo must be an absolute path".into());
+        return Err(format!("repository must be an absolute path: {path}"));
     }
     if !p.is_dir() {
-        return Err(format!(
-            "target_repo does not exist or is not a directory: {path}"
-        ));
+        return Err(format!("{path} does not exist or is not a directory"));
     }
     let output = std::process::Command::new("git")
         .args(["rev-parse", "--git-dir"])
@@ -19,8 +18,29 @@ pub fn validate_target_repo(path: &str) -> Result<PathBuf, String> {
         .output();
     match output {
         Ok(o) if o.status.success() => Ok(p),
-        _ => Err(format!("target_repo is not a git repository: {path}")),
+        _ => Err(format!("{path} is not a git repository")),
     }
+}
+
+/// The URL of `origin`, else of the first remote; `None` without a remote, or
+/// when git cannot tell.
+pub fn remote_url(repo: &Path) -> Option<String> {
+    let read = |args: &[&str]| -> Option<String> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    read(&["remote", "get-url", "origin"]).or_else(|| {
+        let first = read(&["remote"])?.lines().next()?.to_string();
+        read(&["remote", "get-url", &first])
+    })
 }
 
 /// Accept exactly a local branch OR a remote-tracking ref as a Run source, probing

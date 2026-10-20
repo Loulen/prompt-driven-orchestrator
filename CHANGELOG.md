@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## Unreleased — L'assistant de bibliothèque et les écritures externes passent par le brouillon (CORE-92)
+## 2.52.0 — L'assistant de bibliothèque et les écritures externes passent par le brouillon (CORE-92)
 
 - L'assistant de bibliothèque n'écrit plus de fichier (ADR-0088) : `POST /sessions/libassist/save`
   s'applique au brouillon partagé du pipeline focalisé, comme un participant de son Acteur, et
@@ -20,6 +20,20 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - Un fichier écrit hors de PDO devient une version « external edit » (sans auteur) avant de se
   fusionner dans le brouillon ; le flux `/ws` marque son `pipeline_changed` d'un `outside: true`
   et le socket du brouillon envoie une `notice` aux participants.
+
+## 2.51.0 — Settings › Projects (CORE-96)
+
+- Nouvelle catégorie « Projects » dans Settings : créer, renommer et supprimer un Projet, ajouter
+  un dépôt (récent, dossier local, nouveau dépôt vide), le retirer, choisir le dépôt primaire
+  par défaut que New Run présélectionne. Les changements se voient en direct dans les autres
+  navigateurs.
+- `GET /repos/remote?path=` rend le remote d'un dépôt, sans ses identifiants (`null` sans
+  remote). `GET /projects/deleted` rend les Projets supprimés (id et dernier nom), gardés dans
+  la table `deleted_projects` pour que leurs Runs les nomment encore (« <nom> (deleted) »).
+- `POST /repos/create` accepte un dossier vide et fait le premier commit même sans fichier.
+- Les refus de `/repos/validate` et de la création de Run nomment le dossier plutôt que le champ
+  `target_repo` : `<chemin> is not a git repository`, `<chemin> does not exist or is not a
+  directory`, `repository must be an absolute path: <chemin>`.
 
 ## 2.50.0 — Liste des Runs : filtre de date, repli d'un Projet (CORE-98)
 

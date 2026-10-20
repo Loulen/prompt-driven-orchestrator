@@ -82,6 +82,11 @@ async fn projects_are_listed_then_deleted_with_their_members() {
     let list = daemon.get_json("/projects").await;
     assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
     assert_eq!(list[0]["id"], beta["id"]);
+    // CORE-96: what stays of it, for the Runs launched in it.
+    assert_eq!(
+        daemon.get_json("/projects/deleted").await,
+        serde_json::json!([{ "id": alpha_id, "name": listed_alpha["name"] }])
+    );
 
     // The detached path is free again for another Projet.
     let beta_id = beta["id"].as_str().unwrap();

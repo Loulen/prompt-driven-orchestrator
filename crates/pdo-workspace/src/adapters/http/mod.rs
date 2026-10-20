@@ -82,6 +82,8 @@ pub fn router<S: ProjectSettings>(workspace: Arc<Workspace>) -> Router {
         .route("/repos/fetch", post(repos::fetch::<S>))
         .route("/repos/fast-forward", post(repos::fast_forward::<S>))
         .route("/repos/validate", get(repos::validate::<S>))
+        // Settings › Projects shows each member repository with its remote.
+        .route("/repos/remote", get(repos::remote::<S>))
         // #824 — create a repository from a parent + a name + initial files. The
         // only write-a-new-repo verb in the crate; knows nothing about tours.
         .route("/repos/create", post(repos::create::<S>))
@@ -103,6 +105,8 @@ pub fn router<S: ProjectSettings>(workspace: Arc<Workspace>) -> Router {
             "/projects",
             get(projects::list::<S>).post(projects::create::<S>),
         )
+        // CORE-96: the deleted Projets, which the Runs launched in them keep.
+        .route("/projects/deleted", get(projects::deleted::<S>))
         .route(
             "/projects/{project_id}",
             get(projects::get::<S>)

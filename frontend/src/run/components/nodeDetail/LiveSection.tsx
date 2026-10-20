@@ -3,7 +3,7 @@ import { Download, TriangleAlert } from "lucide-react";
 import type { LiveArtifactIO } from "../../../shared/generated/LiveArtifactIO";
 import type { SchemaWarning } from "../../../shared/generated/SchemaWarning";
 import type { FileInfo } from "../../api/nodes";
-import { artifactUrl } from "../../api/artifacts";
+import { artifactDownloadUrl, artifactUrl, portZipUrl } from "../../api/artifacts";
 import ImageLightbox from "../../../shared/ui/ImageLightbox";
 import { formatSize, isImageFile } from "../../model/nodeDetailFormat";
 import { liveDisplayPath, liveUpdatedAgo, newestUpdate } from "../../model/liveArtifacts";
@@ -84,8 +84,17 @@ function LiveRow({
   if (isFolder && produced) {
     const count = current.length;
     const noun = images.length === count ? "image" : "file";
-    subline = `${subline} · ${count} ${noun}${count === 1 ? "" : "s"}`;
+    const counted = `${count} ${noun}${count === 1 ? "" : "s"}`;
+    // A folder of files names them, as a `files` output does.
+    subline =
+      artifact.port_type === "files"
+        ? `${counted} · ${current.map((f) => f.path.split("/").pop() ?? f.path).join(", ")}`
+        : `${subline} · ${counted}`;
   }
+  // A single file downloads as itself, a folder as its zip.
+  let downloadHref: string | null = null;
+  if (single) downloadHref = artifactDownloadUrl(runId, single.path);
+  else if (isFolder) downloadHref = portZipUrl(runId, artifact.path.replace(/\/$/, ""));
 
   const gridStyle = { gridTemplateColumns: "8px 1fr auto", fontSize: "11.5px" };
 
@@ -160,10 +169,10 @@ function LiveRow({
               {formatSize(totalSize)}
             </span>
           )}
-          {single && (
+          {downloadHref && (
             <a
-              href={artifactUrl(runId, single.path)}
-              download={single.path.split("/").pop()}
+              href={downloadHref}
+              download
               onClick={(e) => e.stopPropagation()}
               className="relative text-fg-4 hover:text-fg"
               aria-label={`Download ${artifact.name}`}

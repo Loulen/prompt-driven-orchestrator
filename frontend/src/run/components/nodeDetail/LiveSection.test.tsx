@@ -4,6 +4,10 @@ import type { LiveArtifactIO } from "../../../shared/generated/LiveArtifactIO";
 
 vi.mock("../../api/artifacts", () => ({
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
+  artifactDownloadUrl: (runId: string, path: string) =>
+    `/runs/${runId}/artifact?path=${encodeURIComponent(path)}&download=true`,
+  portZipUrl: (runId: string, folder: string) =>
+    `/runs/${runId}/artifact/zip?path=${encodeURIComponent(folder)}`,
 }));
 
 import LiveSection from "./LiveSection";
@@ -111,8 +115,32 @@ describe("LiveSection (ADR-0089)", () => {
     expect(onOpen).toHaveBeenCalledWith(progress);
     expect(screen.getByTestId("live-download")).toHaveAttribute(
       "href",
-      `/runs/run-1/artifact?path=${encodeURIComponent("designer/iter-1/live/progress.md")}`,
+      `/runs/run-1/artifact?path=${encodeURIComponent("designer/iter-1/live/progress.md")}&download=true`,
     );
+  });
+
+  it("downloads a folder artifact as the zip of its folder", () => {
+    render(<LiveSection live={[screens]} runId="run-1" onOpen={vi.fn()} />);
+    expect(screen.getByTestId("live-download")).toHaveAttribute(
+      "href",
+      `/runs/run-1/artifact/zip?path=${encodeURIComponent("designer/iter-1/live/draft-screens")}`,
+    );
+  });
+
+  it("lists the files of a files artifact by name", () => {
+    const exports: LiveArtifactIO = {
+      ...screens,
+      name: "exports",
+      port_type: "files",
+      path: "designer/iter-1/live/exports/",
+      files: [
+        { path: "designer/iter-1/live/exports/report.pdf", exists: true, size: 200, frontmatter: null },
+        { path: "designer/iter-1/live/exports/rows.csv", exists: true, size: 300, frontmatter: null },
+      ],
+    };
+    render(<LiveSection live={[exports]} runId="run-1" onOpen={vi.fn()} />);
+    expect(screen.getByText(/2 files · report\.pdf, rows\.csv/)).toBeInTheDocument();
+    expect(screen.queryByTestId("live-thumbnails")).not.toBeInTheDocument();
   });
 });
 

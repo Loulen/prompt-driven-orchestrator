@@ -167,14 +167,14 @@ describe("ProjectsPanel", () => {
   });
 
   it("adds a local folder once it is validated as a repository, else says why", async () => {
-    api.validateRepo.mockResolvedValueOnce({ valid: false, error: "not a git repository: /home/me/code/picked" });
+    api.validateRepo.mockResolvedValueOnce({ valid: false, error: "/home/me/code/picked is not a git repository" });
     renderPanel({ entry: { projectId: "p1" } });
 
     fireEvent.click(screen.getByTestId("project-add-repo"));
     fireEvent.click(screen.getByTestId("project-add-repo-local"));
     fireEvent.click(screen.getByTestId("explorer-pick"));
     expect(await screen.findByTestId("project-detail-error")).toHaveTextContent(
-      "not a git repository: /home/me/code/picked",
+      "/home/me/code/picked is not a git repository",
     );
     expect(api.addProjectMember).not.toHaveBeenCalled();
 

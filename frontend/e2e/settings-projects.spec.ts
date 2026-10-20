@@ -96,6 +96,15 @@ test("create a Projet, add a local and a new empty repository, choose the defaul
   // The first repository is the default primary until another is chosen.
   await expect(repoRow(page, LOCAL).getByTestId("project-repo-primary")).toBeVisible();
 
+  // A local folder that is not a repository is refused in the folder's words.
+  await page.getByTestId("project-add-repo").click();
+  await page.getByTestId("project-add-repo-local").click();
+  await page.getByTestId("fs-browse-entry").filter({ hasText: path.basename(ROOT) }).click();
+  await page.getByTestId("fs-browse-entry").filter({ hasText: "occupied" }).click();
+  await page.getByTestId("fs-browse-select").click();
+  await expect(page.getByTestId("project-detail-error")).toHaveText(`${OCCUPIED} is not a git repository`);
+  await expect(repoRow(page, OCCUPIED)).toHaveCount(0);
+
   // A folder that holds something and is not a repository is refused, by name.
   await page.getByTestId("project-add-repo").click();
   await page.getByTestId("project-add-repo-new").click();

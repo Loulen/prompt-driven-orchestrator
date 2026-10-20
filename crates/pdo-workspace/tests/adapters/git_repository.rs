@@ -16,16 +16,22 @@ fn validate_target_repo_rejects_relative_path() {
 #[test]
 fn validate_target_repo_rejects_nonexistent_path() {
     let result = validate_target_repo("/nonexistent/path/that/does/not/exist");
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("does not exist"));
+    assert_eq!(
+        result.unwrap_err(),
+        "/nonexistent/path/that/does/not/exist does not exist or is not a directory"
+    );
 }
 
 #[test]
 fn validate_target_repo_rejects_non_git_dir() {
     let tmp = tempfile::tempdir().unwrap();
-    let result = validate_target_repo(tmp.path().to_str().unwrap());
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not a git repository"));
+    let path = tmp.path().to_str().unwrap();
+    let result = validate_target_repo(path);
+    // The phrase reaches the UI as is: it names the folder, not an API field.
+    assert_eq!(
+        result.unwrap_err(),
+        format!("{path} is not a git repository")
+    );
 }
 
 #[test]

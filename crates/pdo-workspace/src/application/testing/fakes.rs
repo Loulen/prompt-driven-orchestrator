@@ -42,7 +42,7 @@ impl Git for FakeGit {
         if path.starts_with('/') {
             Ok(PathBuf::from(path))
         } else {
-            Err("target_repo must be an absolute path".into())
+            Err(format!("repository must be an absolute path: {path}"))
         }
     }
     fn branches(&self, _repo: &Path) -> Result<BranchList, String> {

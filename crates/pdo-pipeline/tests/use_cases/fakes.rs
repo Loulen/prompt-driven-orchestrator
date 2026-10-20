@@ -13,6 +13,7 @@ use pdo_pipeline::domain::draft::DraftSummary;
 use pdo_pipeline::domain::library::LibraryEntry;
 use pdo_pipeline::domain::pipeline::{split_live_prompts, PipelineDef};
 use pdo_pipeline::domain::validation::PipelineValidation;
+use pdo_pipeline::domain::version::{PipelineVersion, PipelineVersionRef, VersionMeta};
 use pdo_pipeline::{Pipelines, PipelinesPorts};
 use pdo_skill::domain::error::SkillError;
 use pdo_skill::domain::selection::SkillRef;
@@ -249,13 +250,14 @@ impl NodeLibrary for Library {
 }
 
 /// Every `pipeline_changed` announced, as `(id, path)`, every
-/// `pipeline_validation_changed`, as the id, and every
-/// `pipeline_draft_changed`.
+/// `pipeline_validation_changed`, as the id, every `pipeline_draft_changed`,
+/// and every `pipeline_version_changed`, as the id.
 #[derive(Default)]
 pub struct Events(
     pub Mutex<Vec<(String, String)>>,
     pub Mutex<Vec<String>>,
     pub Mutex<Vec<(String, DraftSummary)>>,
+    pub Mutex<Vec<String>>,
 );
 
 impl Events {
@@ -287,6 +289,9 @@ impl PipelineEvents for Events {
     }
     fn draft_changed(&self, id: &str, draft: &DraftSummary) {
         self.2.lock().unwrap().push((id.to_string(), draft.clone()));
+    }
+    fn version_changed(&self, id: &str) {
+        self.3.lock().unwrap().push(id.to_string());
     }
 }
 
@@ -388,9 +393,13 @@ impl KnownProjects for Projects {
     }
 }
 
-/// How many Runs in flight use each pipeline.
+/// How many Runs in flight use each pipeline, and how many launched each
+/// of its versions.
 #[derive(Default)]
-pub struct Runs(pub Mutex<HashMap<String, usize>>);
+pub struct Runs(
+    pub Mutex<HashMap<String, usize>>,
+    pub Mutex<HashMap<String, HashMap<u32, usize>>>,
+);
 
 impl ActiveRuns for Runs {
     fn using<'a>(&'a self, pipeline_id: &'a str) -> BoxFuture<'a, usize> {
@@ -402,6 +411,113 @@ impl ActiveRuns for Runs {
                 .copied()
                 .unwrap_or(0),
         )
+    }
+    fn per_version<'a>(&'a self, pipeline_id: &'a str) -> BoxFuture<'a, HashMap<u32, usize>> {
+        ready(
+            self.1
+                .lock()
+                .unwrap()
+                .get(pipeline_id)
+                .cloned()
+                .unwrap_or_default(),
+        )
+    }
+}
+
+/// The versions, in memory: `id → number → version`.
+#[derive(Default)]
+pub struct Versions(pub Mutex<BTreeMap<String, BTreeMap<u32, PipelineVersion>>>);
+
+impl Versions {
+    /// The numbers and titles of `id`, oldest first.
+    pub fn titles(&self, id: &str) -> Vec<(u32, String)> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|versions| {
+                versions
+                    .values()
+                    .map(|v| (v.meta.number, v.meta.title.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn of(&self, id: &str, number: u32) -> Option<PipelineVersion> {
+        self.0.lock().unwrap().get(id)?.get(&number).cloned()
+    }
+}
+
+impl PipelineVersions for Versions {
+    fn list<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Vec<VersionMeta>, String>> {
+        let listed = self
+            .0
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|versions| versions.values().map(|v| v.meta.clone()).collect())
+            .unwrap_or_default();
+        ready(Ok(listed))
+    }
+    fn get<'a>(
+        &'a self,
+        id: &'a str,
+        number: u32,
+    ) -> BoxFuture<'a, Result<Option<PipelineVersion>, String>> {
+        ready(Ok(self.of(id, number)))
+    }
+    fn put<'a>(
+        &'a self,
+        id: &'a str,
+        version: &'a PipelineVersion,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        self.0
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .insert(version.meta.number, version.clone());
+        ready(Ok(()))
+    }
+    fn put_first<'a>(
+        &'a self,
+        id: &'a str,
+        version: &'a PipelineVersion,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        let mut all = self.0.lock().unwrap();
+        let versions = all.entry(id.to_string()).or_default();
+        if versions.is_empty() {
+            versions.insert(version.meta.number, version.clone());
+        }
+        ready(Ok(()))
+    }
+    fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        self.0.lock().unwrap().remove(id);
+        ready(Ok(()))
+    }
+    fn carry<'a>(&'a self, from: &'a str, to: &'a str) -> BoxFuture<'a, Result<(), String>> {
+        let mut all = self.0.lock().unwrap();
+        all.remove(to);
+        if let Some(versions) = all.remove(from) {
+            all.insert(to.to_string(), versions);
+        }
+        ready(Ok(()))
+    }
+    fn lasts(&self) -> BoxFuture<'_, Result<HashMap<String, PipelineVersionRef>, String>> {
+        let lasts = self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(id, versions)| {
+                versions
+                    .values()
+                    .last()
+                    .map(|v| (id.clone(), v.meta.reference()))
+            })
+            .collect();
+        ready(Ok(lasts))
     }
 }
 
@@ -468,6 +584,7 @@ pub struct World {
     pub validations: Arc<Validations>,
     pub projects: Arc<Projects>,
     pub drafts: Arc<Drafts>,
+    pub versions: Arc<Versions>,
 }
 
 impl World {
@@ -485,6 +602,7 @@ impl World {
             Arc::new(registry),
             Arc::new(bank),
             Arc::default(),
+            Arc::default(),
         )
     }
 
@@ -495,6 +613,7 @@ impl World {
             self.registry.clone(),
             self.bank.clone(),
             self.drafts.clone(),
+            self.versions.clone(),
         )
     }
 
@@ -505,6 +624,7 @@ impl World {
             self.registry.clone(),
             self.bank.clone(),
             self.drafts.clone(),
+            self.versions.clone(),
         )
     }
 
@@ -513,6 +633,7 @@ impl World {
         registry: Arc<Registry>,
         bank: Arc<Bank>,
         drafts: Arc<Drafts>,
+        versions: Arc<Versions>,
     ) -> Self {
         let library = Arc::new(Library::default());
         let events = Arc::new(Events::default());
@@ -531,6 +652,7 @@ impl World {
             projects: projects.clone(),
             drafts: drafts.clone(),
             documents: Arc::new(YDraftDocuments),
+            versions: versions.clone(),
             extensions: host.clone(),
         });
         Self {
@@ -545,12 +667,24 @@ impl World {
             validations,
             projects,
             drafts,
+            versions,
         }
     }
 
     /// `count` Runs in flight use `id`.
     pub fn busy(&self, id: &str, count: usize) {
         self.runs.0.lock().unwrap().insert(id.to_string(), count);
+    }
+
+    /// `count` Runs launched the version `number` of `id`.
+    pub fn launched(&self, id: &str, number: u32, count: usize) {
+        self.runs
+            .1
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_default()
+            .insert(number, count);
     }
 }
 

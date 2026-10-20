@@ -85,7 +85,6 @@ export default function PipelineMetaSections({
         {readOnly ? (
           <>
             <ReadOnlyRow label="Name" testid="pipeline-meta-name">{pipeline.name}</ReadOnlyRow>
-            <ReadOnlyRow label="Version" testid="pipeline-meta-version">{pipeline.version ?? "—"}</ReadOnlyRow>
             <ReadOnlyRow label="Prompt required" testid="pipeline-meta-prompt-required">
               {promptRequired ? "Yes" : "No"}
             </ReadOnlyRow>
@@ -103,15 +102,7 @@ export default function PipelineMetaSections({
                 data-testid="pipeline-name-input"
               />
             </Field>
-            <Field label="Version">
-              <input
-                value={pipeline.version ?? ""}
-                onChange={(e) => updateMeta({ version: e.target.value || null })}
-                className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
-                placeholder="1.0"
-                data-testid="pipeline-version-input"
-              />
-            </Field>
+            {/* ADR-0088: no free « Version » field: a Save numbers the versions. */}
             {/* Prompt-required toggle (#158). Checked by default — unchecking lets a
                 Run launch without a prompt; the entry node sources its own work. */}
             <label className="flex items-center gap-2 text-fg-2" style={{ fontSize: "11px" }}>

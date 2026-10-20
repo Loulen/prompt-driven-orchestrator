@@ -1,8 +1,8 @@
 /**
  * The shared drafts of the open pipeline tabs (ADR-0088): one
  * {@link DraftSession} per pipeline tab (never a run tab, which edits the
- * Run's snapshot), opened with the tab and closed with it, kept in step with
- * the editor's store.
+ * Run's snapshot, nor a version shown read only), opened with the tab and
+ * closed with it, kept in step with the editor's store.
  */
 
 import type { StoreApi } from "zustand";
@@ -103,7 +103,8 @@ function presenceSelection(selection: Selection): PresenceState["selection"] {
 export function startDraftSessions(store: StoreApi<EditState>): () => void {
   const host = hostOf(store);
   const sync = (state: EditState, previous: EditState | null) => {
-    const pipelineTabs = state.openTabs.filter((t) => t.runId == null);
+    // A version shown read only has no draft (ADR-0088).
+    const pipelineTabs = state.openTabs.filter((t) => t.runId == null && t.version == null);
     const open = new Set(pipelineTabs.map((t) => t.id));
     for (const [tabId, session] of sessions) {
       if (!open.has(tabId)) {

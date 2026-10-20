@@ -27,6 +27,8 @@ export interface WsMessage {
     | "pipeline_validation_changed"
     /** Who has a Pipeline's shared draft open, and its changes (ADR-0088). */
     | "pipeline_draft_changed"
+    /** A Save numbered a new version of a Pipeline (ADR-0088). */
+    | "pipeline_version_changed"
     | "cost_prices_synced"
     | "run_forgotten"
     /** An Actor opened a Run, or no longer has it open anywhere (API 0.12). */

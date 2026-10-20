@@ -67,6 +67,8 @@ interface Props {
   menuEntity?: PipelineEntity;
   /** ADR-0088: its shared draft, who has it open and its changes. */
   draft?: DraftSummary;
+  /** ADR-0088: the number of its last version, the file. */
+  version?: number;
 }
 
 /**
@@ -100,6 +102,7 @@ export default function LibraryRow({
   indicator,
   menuEntity,
   draft,
+  version,
 }: Props) {
   const body = (
     <>
@@ -143,6 +146,7 @@ export default function LibraryRow({
             {/* ADR-0088: a draft with changes counts its own nodes (none
                 counted yet for a draft kept before the count). */}
             <span>{draft && draft.changes > 0 && draft.nodes > 0 ? draft.nodes : nodeCount} nodes</span>
+            {version != null && <span data-testid="library-row-version">{" · "}v{version}</span>}
             {/* ADR-0088: before the date, which truncates first. */}
             {draft && draft.changes > 0 && (
               <span data-testid="library-row-draft">

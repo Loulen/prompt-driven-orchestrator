@@ -125,7 +125,11 @@ impl Runs {
             None => None,
         };
         let target = target::resolve(self, &req, parent.as_ref())?;
-        let launchable = target::load_pipeline(self, &req)?;
+        let version = target::version_of(self, &req).await;
+        let launchable = target::Launchable {
+            version,
+            ..target::load_pipeline(self, &req)?
+        };
         let project = project::resolve(self, &req, parent.as_ref()).await?;
         let provisioning = freeze::provisioning(self, &req, &target, project.as_deref()).await?;
 

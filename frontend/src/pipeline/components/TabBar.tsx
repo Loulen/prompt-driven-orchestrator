@@ -8,7 +8,9 @@ import DraftPresence from "./DraftPresence";
 import RunSaveGroup from "./RunSaveGroup";
 import ValidationIndicator from "./ValidationIndicator";
 import ValidatePipelineModal from "./ValidatePipelineModal";
+import SaveVersionModal from "./SaveVersionModal";
 import { validationOf } from "../model/pipelineValidation";
+import { lastVersionOf } from "../model/versions";
 import type { Project } from "../../workspace/model/project";
 import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
 import type { PipelineEntity } from "../../shared/extensions/contract";
@@ -42,6 +44,9 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
   const closeTab = useEditStore((s) => s.closeTab);
   const closeTabs = useEditStore((s) => s.closeTabs);
   const save = useEditStore((s) => s.save);
+  const requestSave = useEditStore((s) => s.requestSave);
+  const saveVersionFor = useEditStore((s) => s.saveVersionFor);
+  const closeSaveVersion = useEditStore((s) => s.closeSaveVersion);
   const lastSavedAt = useEditStore((s) => s.lastSavedAt);
   const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const pipelines = useEditStore((s) => s.pipelines);
@@ -83,7 +88,12 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
   // (its snapshot is not what the launch forms offer), and only once the
   // Pipeline is in the list (saved at least once under this id).
   const activeEntry =
-    activeTab && activeTab.runId == null ? pipelines.find((p) => p.id === activeTab.id) : undefined;
+    activeTab && activeTab.runId == null && activeTab.version == null
+      ? pipelines.find((p) => p.id === activeTab.id)
+      : undefined;
+  // ADR-0088: a shared draft is saved as a version, through the « Save… » window.
+  const activeDraft = activeTab?.draft != null;
+  const saveVersionTab = saveVersionFor ? openTabs.find((t) => t.id === saveVersionFor) : undefined;
   const activeValidation = validationOf(activeEntry);
   const activeLastSaved = activeTabId ? lastSavedAt[activeTabId] : undefined;
   const savedAgo = useRelativeTime(activeLastSaved);
@@ -116,7 +126,9 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
       >
         {openTabs.map((tab) => {
           const isActive = tab.id === activeTabId && activePage == null;
-          const label = tab.dirty ? `• ${tab.id}.yaml` : `${tab.id}.yaml`;
+          // ADR-0088: a version shown read only is named after its pipeline.
+          const file = tab.version ? `${tab.version.pipelineId}.yaml @ v${tab.version.number}` : `${tab.id}.yaml`;
+          const label = tab.dirty ? `• ${file}` : file;
           return (
             <button
               key={tab.id}
@@ -162,7 +174,8 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
         ) : (
           <>
             <DraftPresence />
-            {savedAgo && (
+            {/* Unsaved changes make « Saved … ago » stale: the draft line says them. */}
+            {savedAgo && !activeTab?.dirty && (
               <span
                 className="whitespace-nowrap font-mono text-fg-4"
                 style={{ fontSize: "10px" }}
@@ -194,14 +207,14 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
               <RunSaveGroup tab={{ ...activeTab, runId: activeTab.runId }} />
             ) : activeLocked ? null : (
               <button
-                onClick={() => { if (activeTabId) save(activeTabId); }}
-                disabled={!anyDirty}
+                onClick={() => { if (activeTabId) requestSave(activeTabId); }}
+                disabled={activeDraft ? !activeTab?.dirty : !anyDirty}
                 className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
                 style={{ fontSize: "11px" }}
                 data-testid="save-button"
               >
                 <Save size={11} />
-                Save
+                {activeDraft ? "Save…" : "Save"}
               </button>
             )}
           </>
@@ -235,6 +248,19 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
           onClose={() => setValidateOpen(false)}
           onSaved={() => {
             void loadPipelines();
+          }}
+        />
+      )}
+
+      {saveVersionTab && (
+        <SaveVersionModal
+          key={saveVersionTab.id}
+          pipelineName={saveVersionTab.pipeline.name}
+          last={lastVersionOf(pipelines, saveVersionTab.id)}
+          onClose={closeSaveVersion}
+          onSave={async (saveAs) => {
+            await save(saveVersionTab.id, saveAs);
+            closeSaveVersion();
           }}
         />
       )}

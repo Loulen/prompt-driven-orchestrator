@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openPipelineForEdit, runMultipart, E2E_TARGET_REPO } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit, runMultipart, E2E_TARGET_REPO } from "./helpers";
 import type { Page } from "@playwright/test";
 
 // The dirty edit canvas raises an "External edit conflict" modal when the
@@ -133,7 +133,8 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
   // #948: on a Run the metadata is read-only — shown, never editable.
   const meta = page.getByTestId("pipeline-meta");
   await expect(meta).toHaveAttribute("data-readonly", "true");
-  await expect(page.getByTestId("pipeline-meta-version")).toContainText("1.0");
+  // ADR-0088: the version the Run launched, its title the free field of v1.
+  await expect(page.getByTestId("info-panel-version")).toContainText("v1 · 1.0");
   await expect(page.getByTestId("pipeline-meta-prompt-required")).toContainText("Yes");
   await expect(page.getByTestId("pipeline-meta-grid-size")).toBeVisible();
   await expect(meta.locator("input, select")).toHaveCount(0);
@@ -248,6 +249,7 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
   // node appears there once the pipeline is saved.
   await dismissConflictIfPresent(page);
   await page.getByTestId("save-button").click();
+  await confirmSaveVersion(page);
   await expect(page.getByTestId("saved-ago")).toBeVisible({ timeout: 5_000 });
 
   // Re-open the info panel and check YAML tab reflects the new node
@@ -282,8 +284,9 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   await expect(page.getByTestId("pipeline-meta")).toHaveAttribute("data-readonly", "false");
   await expect(infoPanel).not.toContainText("Description");
 
-  // Edit version, Prompt required, a new variable and the grid size.
-  await page.getByTestId("pipeline-version-input").fill("2.5");
+  // Edit Prompt required, a new variable and the grid size (no free
+  // « Version » field since ADR-0088: a Save numbers the versions).
+  await expect(page.getByTestId("pipeline-version-input")).toHaveCount(0);
   const promptRequired = page.getByTestId("prompt-required-checkbox");
   await expect(promptRequired).toBeChecked();
   await promptRequired.uncheck();
@@ -308,10 +311,10 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   await expect(yamlView).toContainText("prompt_required: false", { timeout: 3_000 });
   await expect(yamlView).toContainText("grid_size: S");
   await expect(yamlView).toContainText("target_env");
-  await expect(yamlView).toContainText("2.5");
 
   // Save writes it to the pipeline file.
   await page.getByTestId("save-button").click();
+  await confirmSaveVersion(page);
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`, { timeout: 3_000 });
   await expect
     .poll(async () => fs.readFile(PIPELINE_PATH, "utf8"), { timeout: 3_000 })
@@ -319,7 +322,6 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   const saved = await fs.readFile(PIPELINE_PATH, "utf8");
   expect(saved).toContain("grid_size: S");
   expect(saved).toContain("target_env");
-  expect(saved).toMatch(/version: ["']?2\.5/);
 
   // Restore the seed so the other cases keep a prompt-required pipeline.
   await fs.writeFile(PIPELINE_PATH, SEED_YAML);

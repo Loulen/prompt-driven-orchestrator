@@ -2,6 +2,7 @@
 import type { DraftSummary } from "./DraftSummary";
 import type { PipelineValidation } from "./PipelineValidation";
 import type { PipelineVariableInfo } from "./PipelineVariableInfo";
+import type { PipelineVersionRef } from "./PipelineVersionRef";
 
 export type PipelineListEntry = { id: string, name: string, scope: "instance", path: string, node_count: number, modified: string | null, variables: { [key in string]: PipelineVariableInfo }, 
 /**
@@ -23,4 +24,9 @@ validation: PipelineValidation,
  * Its shared draft (ADR-0088): who has it open and its changes; absent
  * when nobody does and it is the file.
  */
-draft?: DraftSummary, };
+draft?: DraftSummary, 
+/**
+ * Its last version (ADR-0088): the file, which New Run and the Triggers
+ * launch.
+ */
+version?: PipelineVersionRef, };

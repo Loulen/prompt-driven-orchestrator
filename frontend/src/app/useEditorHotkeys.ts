@@ -9,7 +9,8 @@ import { selectActiveTabLocked } from "../pipeline/store/editState";
 export function useEditorHotkeys(hasEditTab: boolean, isActiveRunArchived: boolean) {
   const locked = useEditStore(selectActiveTabLocked);
   const off = !hasEditTab || isActiveRunArchived || locked;
-  const editSave = useEditStore((s) => s.save);
+  // ADR-0088: a shared draft opens its « Save… » window.
+  const editSave = useEditStore((s) => s.requestSave);
   const editUndo = useEditStore((s) => s.undo);
   const editRedo = useEditStore((s) => s.redo);
   const editActiveTabId = useEditStore((s) => s.activeTabId);

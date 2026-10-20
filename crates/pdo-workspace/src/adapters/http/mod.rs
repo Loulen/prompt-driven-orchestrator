@@ -87,6 +87,17 @@ pub fn router<S: ProjectSettings>(workspace: Arc<Workspace>) -> Router {
         // #824 — create a repository from a parent + a name + initial files. The
         // only write-a-new-repo verb in the crate; knows nothing about tours.
         .route("/repos/create", post(repos::create::<S>))
+        // CORE-97 — a repository added by its URL: where its clone goes, and
+        // the clones running in the background.
+        .route("/repos/clone-target", get(repos::clone_target::<S>))
+        .route(
+            "/repos/clones",
+            get(repos::clones::<S>).post(repos::start_clone::<S>),
+        )
+        .route(
+            "/repos/clones/{id}",
+            get(repos::clone_job::<S>).delete(repos::cancel_clone::<S>),
+        )
         .route("/repos/recent", get(repos::recent::<S>))
         .route(
             "/repos/provisioning/preview",

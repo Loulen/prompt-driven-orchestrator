@@ -85,7 +85,9 @@ mod tests {
     use super::*;
     use crate::application::ports::Projects;
     use pdo_workspace::adapters::{fs, git, sqlite};
-    use pdo_workspace::application::ports::{ProjectDeletions, ProjectEvents, ProjectRepository};
+    use pdo_workspace::application::ports::{
+        ClonesFolder, ProjectDeletions, ProjectEvents, ProjectRepository,
+    };
     use pdo_workspace::application::WorkspacePorts;
     use pdo_workspace::domain::project::StoredSetting;
 
@@ -98,6 +100,14 @@ mod tests {
     impl ProjectDeletions for Silent {
         fn project_deleted<'a>(&'a self, _project_id: &'a str) -> BoxFuture<'a, ()> {
             Box::pin(async {})
+        }
+    }
+    impl ClonesFolder for Silent {
+        fn folder(&self) -> BoxFuture<'_, Result<std::path::PathBuf, String>> {
+            Box::pin(async { Err("no clones here".into()) })
+        }
+        fn home(&self) -> Option<std::path::PathBuf> {
+            None
         }
     }
 
@@ -118,6 +128,7 @@ mod tests {
                 git: Arc::new(git::GitCli),
                 source_tree: Arc::new(fs::FsSourceTree),
                 files: Arc::new(fs::FsBrowser::new("/")),
+                clones_folder: Arc::new(Silent),
             },
             Arc::new(pdo_kernel::extension_host::NoExtensions),
         ));

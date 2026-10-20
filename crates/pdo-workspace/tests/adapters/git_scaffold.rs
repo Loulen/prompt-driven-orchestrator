@@ -177,11 +177,17 @@ fn refuses_a_relative_parent() {
 }
 
 #[test]
-fn refuses_a_parent_that_does_not_exist() {
+fn creates_a_parent_that_does_not_exist_and_refuses_one_that_is_a_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let missing = tmp.path().join("nope");
-    let err = create_repo(missing.to_str().unwrap(), "r", &[]).unwrap_err();
-    assert!(err.contains("does not exist"), "{err}");
+    let missing = tmp.path().join("code/nested");
+    let outcome = create_repo(missing.to_str().unwrap(), "r", &[]).unwrap();
+    assert!(outcome.created);
+    assert!(missing.join("r/.git").is_dir());
+
+    let file = tmp.path().join("a-file");
+    std::fs::write(&file, "x").unwrap();
+    let err = create_repo(file.to_str().unwrap(), "r", &[]).unwrap_err();
+    assert!(err.contains("not a directory"), "{err}");
 }
 
 #[test]

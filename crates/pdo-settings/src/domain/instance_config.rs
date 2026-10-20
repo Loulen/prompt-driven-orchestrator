@@ -188,6 +188,10 @@ pub struct InstanceConfig {
     /// [`pdo_kernel::public_url::resolve`]). Stored normalized: an origin `http(s)://host[:port]`
     /// without a trailing `/`.
     pub public_url: Option<String>,
+    /// Stored clones folder, where a repository given by its URL is cloned,
+    /// or `None` for the default `~/pdo/repos` (CORE-97). `~` stands for the
+    /// daemon's home; stored without a trailing `/`.
+    pub clones_folder: Option<String>,
     /// RFC3339-millis UTC timestamp of the last write (or the seed).
     pub updated_at: String,
 }
@@ -291,6 +295,10 @@ pub struct UpdateInstanceConfig {
     /// `""`-sentinel as `default_model`); anything else must be an
     /// `http(s)://` address, stored normalized. `None` leaves it untouched.
     pub public_url: Option<String>,
+    /// Set the clones folder (CORE-97): `Some("")` clears it back to the
+    /// default; anything else must be an absolute path or start with `~/`.
+    /// `None` leaves it untouched.
+    pub clones_folder: Option<String>,
 }
 
 impl UpdateInstanceConfig {
@@ -324,5 +332,6 @@ impl UpdateInstanceConfig {
             && self.max_attachments_mb.is_none()
             && !self.touches_telemetry()
             && self.public_url.is_none()
+            && self.clones_folder.is_none()
     }
 }

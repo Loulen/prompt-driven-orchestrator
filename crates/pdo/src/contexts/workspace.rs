@@ -2,16 +2,19 @@
 //! repositories over SQLite, git through its CLI, the source tree and the file
 //! browser of the daemon's repo root, the Projets' announcements on the bus
 //! and their names for the extensions, and the pipelines' validations and
-//! Triggers a deleted Projet leaves.
+//! Triggers a deleted Projet leaves, and the clones folder of the stored
+//! settings.
 
 use std::sync::Arc;
 
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_pipeline::Pipelines;
+use pdo_settings::adapters::contexts::ClonesFolderOfWorkspace;
+use pdo_settings::adapters::sections::HostHome;
 use pdo_workspace::adapters::{fs, git, sqlite};
 use pdo_workspace::application::{Workspace, WorkspacePorts};
 
-use super::ContextResources;
+use super::{ContextResources, StoredSettings};
 use crate::ports::pipeline_projects::ForgetDeletedProjects;
 use crate::ports::project_events::BusProjectEvents;
 use crate::ports::Late;
@@ -19,8 +22,14 @@ use crate::ports::Late;
 pub(super) fn workspace(
     r: &ContextResources,
     pipelines: &Late<Pipelines>,
+    stored: &StoredSettings,
     host: Arc<dyn ExtensionHost>,
 ) -> Arc<Workspace> {
+    // `~` of the clones folder: the home the settings page names.
+    let home = HostHome {
+        override_home: r.sandbox_home_override.clone(),
+    }
+    .path();
     let projects = Arc::new(sqlite::SqliteProjects::new(r.db.clone()));
     Arc::new(Workspace::new(
         WorkspacePorts {
@@ -40,6 +49,10 @@ pub(super) fn workspace(
             git: Arc::new(git::GitCli),
             source_tree: Arc::new(fs::FsSourceTree),
             files: Arc::new(fs::FsBrowser::new(&r.repo_root)),
+            clones_folder: Arc::new(ClonesFolderOfWorkspace {
+                config: stored.config.clone(),
+                home,
+            }),
         },
         host,
     ))

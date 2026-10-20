@@ -152,6 +152,8 @@ mod routes_pipeline;
 #[path = "routes_pipeline_validation.rs"]
 mod routes_pipeline_validation;
 
+#[path = "routes_clones.rs"]
+mod routes_clones;
 #[path = "routes_repos.rs"]
 mod routes_repos;
 

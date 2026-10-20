@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use crate::application::ports::*;
 use crate::domain::branches::{BranchEntry, BranchKind, BranchList, FetchError};
 use crate::domain::browse::BrowseRootError;
+use crate::domain::clone::CloneFailure;
 use crate::domain::fast_forward::{FastForwardDone, FastForwardRefusal, FastForwardRefused};
 use crate::domain::provisioning::{ProvisioningPlan, ScopedRules};
 use crate::domain::scaffold::{ScaffoldFile, ScaffoldOutcome};
@@ -20,6 +21,9 @@ pub struct FakeGit {
     fetched: Mutex<Vec<String>>,
     moved: Mutex<Vec<String>>,
     created: Mutex<Vec<PathBuf>>,
+    cloned: Mutex<Vec<PathBuf>>,
+    /// The clones wait for their cancel instead of ending.
+    hold: std::sync::atomic::AtomicBool,
 }
 
 impl FakeGit {
@@ -34,6 +38,12 @@ impl FakeGit {
     }
     pub fn created(&self) -> Vec<PathBuf> {
         self.created.lock().unwrap().clone()
+    }
+    pub fn cloned(&self) -> Vec<PathBuf> {
+        self.cloned.lock().unwrap().clone()
+    }
+    pub fn hold_clones(&self) {
+        self.hold.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -111,6 +121,42 @@ impl Git for FakeGit {
             path,
             created: true,
         })
+    }
+    /// Clones at once, its progress at 100 %, unless held (then it waits for
+    /// its cancel); a URL naming `denied` is refused its credentials.
+    fn clone_repository<'a>(
+        &'a self,
+        url: &'a str,
+        dest: &'a Path,
+        on_progress: Box<dyn Fn(&str) + Send + Sync + 'a>,
+        cancel: tokio::sync::oneshot::Receiver<()>,
+    ) -> BoxFuture<'a, Result<(), CloneFailure>> {
+        Box::pin(async move {
+            if self.hold.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = cancel.await;
+                return Err(CloneFailure::Cancelled);
+            }
+            if url.contains("denied") {
+                return Err(CloneFailure::Failed(
+                    "fatal: Authentication failed for the URL".into(),
+                ));
+            }
+            on_progress("Receiving objects: 100% (3/3), 1.00 KiB | 1.00 KiB/s, done.");
+            self.cloned.lock().unwrap().push(dest.to_path_buf());
+            Ok(())
+        })
+    }
+}
+
+/// The clones folder `/clones`, the home `/home/me`.
+pub struct FixedClonesFolder;
+
+impl ClonesFolder for FixedClonesFolder {
+    fn folder(&self) -> BoxFuture<'_, Result<PathBuf, String>> {
+        ready(Ok(PathBuf::from("/clones")))
+    }
+    fn home(&self) -> Option<PathBuf> {
+        Some(PathBuf::from("/home/me"))
     }
 }
 

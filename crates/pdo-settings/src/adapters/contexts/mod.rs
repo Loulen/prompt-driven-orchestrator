@@ -29,8 +29,8 @@ pub use referents::ContextReferents;
 pub use sandbox_referents::SandboxTierReferents;
 pub use skill_referents::SkillTierReferents;
 pub use upstream::{
-    PublicUrlOfPlatform, RunInstanceSettings, SettingOfTelemetry, SettingsOfReview,
-    SettingsOfTriggers, UpdateCheckOfPlatform,
+    ClonesFolderOfWorkspace, PublicUrlOfPlatform, RunInstanceSettings, SettingOfTelemetry,
+    SettingsOfReview, SettingsOfTriggers, UpdateCheckOfPlatform,
 };
 
 use crate::application::ports::{BoxFuture, StagingProfiles, TelemetryReloads, UpdateChecks};

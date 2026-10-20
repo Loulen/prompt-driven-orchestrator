@@ -97,6 +97,7 @@ fn build_with(host: RecordingHost) -> Fixture {
             git: git.clone(),
             source_tree: source_tree.clone(),
             files: Arc::new(NoFiles),
+            clones_folder: Arc::new(FixedClonesFolder),
         },
         host.clone(),
     );

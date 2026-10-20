@@ -11,7 +11,8 @@ use serde_json::Value;
 
 use super::SettingsError;
 use crate::domain::edit::{
-    check_ranges, normalize_public_url, parse_edit, unknown_manager_profile,
+    check_ranges, normalize_clones_folder, normalize_public_url, parse_edit,
+    unknown_manager_profile,
 };
 use crate::domain::instance_config::UpdateInstanceConfig;
 use crate::Settings;
@@ -25,6 +26,7 @@ impl Settings {
         let mut edit = parse_edit(body).map_err(SettingsError::Invalid)?;
         check_ranges(&edit).map_err(SettingsError::Invalid)?;
         normalize_public_url(&mut edit).map_err(SettingsError::Invalid)?;
+        normalize_clones_folder(&mut edit).map_err(SettingsError::Invalid)?;
         self.check_references(&edit).await?;
         self.resolve_kept_headers(&mut edit).await?;
 

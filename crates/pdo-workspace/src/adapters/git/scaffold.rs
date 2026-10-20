@@ -76,10 +76,10 @@ pub fn create_repo(
     if !parent_path.is_absolute() {
         return Err(format!("parent must be an absolute path: {parent}"));
     }
-    if !parent_path.is_dir() {
-        return Err(format!(
-            "parent does not exist or is not a directory: {parent}"
-        ));
+    // A missing parent is created with the repository (`~/code/new-repository`
+    // with no `~/code` yet); one that is a file is refused.
+    if parent_path.exists() && !parent_path.is_dir() {
+        return Err(format!("parent is not a directory: {parent}"));
     }
 
     let trimmed = check_name(name)?;

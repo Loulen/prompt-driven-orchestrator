@@ -122,6 +122,31 @@ impl pdo_platform::application::ports::PublicUrlSetting for PublicUrlOfPlatform 
     }
 }
 
+/// The clones folder of the workspace (CORE-97), `stored → ~/pdo/repos`, on
+/// disk under `home`.
+pub struct ClonesFolderOfWorkspace {
+    pub config: Arc<dyn InstanceConfigStore>,
+    pub home: Option<std::path::PathBuf>,
+}
+
+impl pdo_workspace::application::ports::ClonesFolder for ClonesFolderOfWorkspace {
+    fn folder(
+        &self,
+    ) -> pdo_workspace::application::ports::BoxFuture<'_, Result<std::path::PathBuf, String>> {
+        Box::pin(async move {
+            let stored = self.config.get().await.ok().and_then(|c| c.clones_folder);
+            pdo_workspace::adapters::instance_defaults::clones_folder_on_disk(
+                stored.as_deref(),
+                self.home.as_deref(),
+            )
+        })
+    }
+
+    fn home(&self) -> Option<std::path::PathBuf> {
+        self.home.clone()
+    }
+}
+
 /// The platform's `update_check`, `stored → env → default`.
 pub struct UpdateCheckOfPlatform(pub Arc<dyn InstanceConfigStore>);
 

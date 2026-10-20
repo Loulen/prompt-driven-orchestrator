@@ -71,9 +71,10 @@ pub async fn clone_shallow(
 /// The daemon's git credentials apply (its credential helpers, its ssh keys
 /// and agent), but nothing prompts: `GIT_TERMINAL_PROMPT=0` and a batch-mode
 /// ssh make a missing credential fail with git's own message. The parent of
-/// `dest` is created when missing. On a failure or a cancel nothing is left
-/// half-done: `dest` is removed when it did not exist before, emptied when it
-/// was an empty folder.
+/// `dest` is created when missing. git clones into a hidden folder beside
+/// `dest`, renamed `dest` once complete: a failure, a cancel or a daemon
+/// stopped mid-clone never leaves a half clone where a clone is looked for.
+/// `dest` may be an empty folder, replaced then.
 pub async fn clone_full(
     url: &str,
     dest: &Path,
@@ -82,12 +83,19 @@ pub async fn clone_full(
 ) -> Result<(), CloneFailure> {
     use tokio::io::AsyncReadExt;
 
-    let existed = dest.exists();
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            CloneFailure::Failed(format!("could not create {}: {e}", parent.display()))
-        })?;
-    }
+    let (Some(parent), Some(name)) = (dest.parent(), dest.file_name()) else {
+        return Err(CloneFailure::Failed(format!(
+            "{} names no folder to clone into",
+            dest.display()
+        )));
+    };
+    std::fs::create_dir_all(parent)
+        .map_err(|e| CloneFailure::Failed(format!("could not create {}: {e}", parent.display())))?;
+    let staging = parent.join(format!(
+        ".{}.cloning-{}",
+        name.to_string_lossy(),
+        uuid::Uuid::new_v4().simple()
+    ));
     // Keep an operator's own `GIT_SSH_COMMAND`, only adding the batch flag
     // (the precedent of the fetch).
     let ssh_command = match std::env::var("GIT_SSH_COMMAND") {
@@ -97,7 +105,7 @@ pub async fn clone_full(
     let mut cmd = tokio::process::Command::new("git");
     cmd.args(["clone", "--progress", "--"])
         .arg(url)
-        .arg(dest)
+        .arg(&staging)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("SSH_ASKPASS_REQUIRE", "never")
         .env("GIT_SSH_COMMAND", ssh_command)
@@ -155,26 +163,29 @@ pub async fn clone_full(
             Err(CloneFailure::Cancelled)
         }
         Some(said) => match child.wait().await {
-            Ok(status) if status.success() => Ok(()),
+            Ok(status) if status.success() => into_place(&staging, dest),
             Ok(_) => Err(CloneFailure::Failed(said)),
             Err(e) => Err(CloneFailure::Failed(format!("git clone failed: {e}"))),
         },
     };
     if outcome.is_err() {
-        if existed {
-            if let Ok(entries) = std::fs::read_dir(dest) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let _ = if path.is_dir() {
-                        std::fs::remove_dir_all(&path)
-                    } else {
-                        std::fs::remove_file(&path)
-                    };
-                }
-            }
-        } else {
-            let _ = std::fs::remove_dir_all(dest);
-        }
+        let _ = std::fs::remove_dir_all(&staging);
     }
     outcome
+}
+
+/// The complete clone at `staging` becomes `dest` (an empty `dest` folder
+/// gives it its place).
+fn into_place(staging: &Path, dest: &Path) -> Result<(), CloneFailure> {
+    if dest.is_dir() {
+        // Only an empty folder goes: `remove_dir` refuses any other.
+        std::fs::remove_dir(dest)
+            .map_err(|e| CloneFailure::Failed(format!("{} is not empty: {e}", dest.display())))?;
+    }
+    std::fs::rename(staging, dest).map_err(|e| {
+        CloneFailure::Failed(format!(
+            "could not move the clone to {}: {e}",
+            dest.display()
+        ))
+    })
 }

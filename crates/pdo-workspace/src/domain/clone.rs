@@ -13,14 +13,15 @@ use super::remote::shown_remote;
 pub const DEFAULT_CLONES_FOLDER: &str = "~/pdo/repos";
 
 /// Whether `text` names a remote repository rather than a path on disk: a
-/// `scheme://` URL git can clone (`https`, `http`, `ssh`, `git`, `file`), or
+/// `scheme://` URL git can clone (`https`, `http`, `ssh`, `git`, `file`,
+/// `git+ssh`), or
 /// an scp-like `user@host:path`.
 pub fn is_remote_url(text: &str) -> bool {
     let text = text.trim();
     if let Some((scheme, rest)) = text.split_once("://") {
-        let known = ["https", "http", "ssh", "git", "file"].iter().any(|s| {
-            scheme.eq_ignore_ascii_case(s) || scheme.eq_ignore_ascii_case(&format!("git+{s}"))
-        });
+        let known = ["https", "http", "ssh", "git", "file", "git+ssh", "ssh+git"]
+            .iter()
+            .any(|s| scheme.eq_ignore_ascii_case(s));
         return known && !rest.trim_matches('/').is_empty();
     }
     // scp-like: `user@host:path`, no slash before the colon.
@@ -87,13 +88,25 @@ pub fn expand_home(folder: &str, home: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// Whether two remotes name the same repository: compared without the
-/// credentials, the case of the host aside, a trailing `/` or `.git` aside.
+/// credentials, the case of the scheme and the host aside, a trailing `/` or
+/// `.git` aside. The path keeps its case.
 pub fn same_remote(a: &str, b: &str) -> bool {
     fn key(url: &str) -> String {
         let shown = shown_remote(url);
         let trimmed = shown.trim_end_matches('/');
         let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
-        trimmed.to_ascii_lowercase()
+        // `scheme://host/path`, or the scp-like `user@host:path`.
+        let (head, path) = match trimmed.split_once("://") {
+            Some((scheme, rest)) => {
+                let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+                (format!("{scheme}://{host}"), format!("/{path}"))
+            }
+            None => match trimmed.split_once(':') {
+                Some((host, path)) => (host.to_string(), format!(":{path}")),
+                None => (String::new(), trimmed.to_string()),
+            },
+        };
+        format!("{}{path}", head.to_ascii_lowercase())
     }
     key(a) == key(b)
 }
@@ -163,7 +176,9 @@ pub fn clone_failure(url: &str, stderr: &str) -> String {
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with("Cloning into"))
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" ")
+        // git may quote the URL it was given, credentials included.
+        .replace(url.trim(), &shown);
     let lower = detail.to_ascii_lowercase();
     let reason = if [
         "authentication failed",
@@ -213,6 +228,7 @@ mod tests {
             "git://host/app.git",
             "file:///srv/git/app.git",
             "git@github.com:acme/app.git",
+            "git+ssh://git@host/app.git",
             "me@host:app",
         ] {
             assert!(is_remote_url(url), "{url}");
@@ -224,6 +240,7 @@ mod tests {
             "C:/repo",
             "https://",
             "ftp://host/app",
+            "git+https://host/app",
             "git@host:",
             "",
             "@host:app",
@@ -296,6 +313,11 @@ mod tests {
             "https://github.com/acme/app",
             "https://github.com/acme/other"
         ));
+        assert!(!same_remote("file:///srv/App", "file:///srv/app"));
+        assert!(same_remote(
+            "git@GitHub.com:acme/App.git",
+            "git@github.com:acme/App"
+        ));
     }
 
     #[test]
@@ -344,6 +366,11 @@ mod tests {
             "{auth}"
         );
         assert!(!auth.contains("tok"), "{auth}");
+        let quoted = clone_failure(
+            "https://me:tok@host/acme/app.git",
+            "fatal: unable to access 'https://me:tok@host/acme/app.git/': Could not resolve host",
+        );
+        assert!(!quoted.contains("tok"), "{quoted}");
         let missing = clone_failure(
             "file:///nowhere",
             "fatal: '/nowhere' does not appear to be a git repository",

@@ -85,24 +85,32 @@ impl CloneJobs {
         Some(entry.job.clone())
     }
 
-    pub(super) fn push(&self, job: CloneJob, cancel: Option<tokio::sync::oneshot::Sender<()>>) {
+    /// Records a running clone, unless one into the same folder runs already:
+    /// that one, then also for the Projets of `job`, is the answer. One lock
+    /// for both, so two asks at once never start two clones of one folder.
+    pub(super) fn start(
+        &self,
+        job: CloneJob,
+        cancel: tokio::sync::oneshot::Sender<()>,
+    ) -> Result<(), CloneJob> {
         let mut entries = self.lock();
-        entries.push(Entry { job, cancel });
-        let finished = entries
-            .iter()
-            .filter(|e| e.job.state != CloneState::Running)
-            .count();
-        if finished > FINISHED_KEPT {
-            let mut drop = finished - FINISHED_KEPT;
-            entries.retain(|e| {
-                if drop > 0 && e.job.state != CloneState::Running {
-                    drop -= 1;
-                    false
-                } else {
-                    true
+        if let Some(entry) = entries
+            .iter_mut()
+            .find(|e| e.job.state == CloneState::Running && e.job.path == job.path)
+        {
+            for id in job.project_ids {
+                if !entry.job.project_ids.contains(&id) {
+                    entry.job.project_ids.push(id);
                 }
-            });
+            }
+            return Err(entry.job.clone());
         }
+        push(&mut entries, job, Some(cancel));
+        Ok(())
+    }
+
+    pub(super) fn push(&self, job: CloneJob, cancel: Option<tokio::sync::oneshot::Sender<()>>) {
+        push(&mut self.lock(), job, cancel);
     }
 
     pub(super) fn update(&self, id: &str, change: impl FnOnce(&mut CloneJob)) {
@@ -132,5 +140,71 @@ impl CloneJobs {
             let _ = cancel.send(());
         }
         Some(entry.job.clone())
+    }
+}
+
+/// Adds `job`, dropping the oldest finished clones beyond [`FINISHED_KEPT`].
+fn push(entries: &mut Vec<Entry>, job: CloneJob, cancel: Option<tokio::sync::oneshot::Sender<()>>) {
+    entries.push(Entry { job, cancel });
+    let finished = entries
+        .iter()
+        .filter(|e| e.job.state != CloneState::Running)
+        .count();
+    if finished > FINISHED_KEPT {
+        let mut drop = finished - FINISHED_KEPT;
+        entries.retain(|e| {
+            if drop > 0 && e.job.state != CloneState::Running {
+                drop -= 1;
+                false
+            } else {
+                true
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job(id: &str, project: &str) -> CloneJob {
+        CloneJob {
+            id: id.into(),
+            url: "https://h/acme/app".into(),
+            path: "/clones/app".into(),
+            project_ids: vec![project.into()],
+            state: CloneState::Running,
+            reused: false,
+            progress: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn a_second_start_of_one_folder_joins_the_first() {
+        let jobs = CloneJobs::default();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        jobs.start(job("a", "p1"), tx).unwrap();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let running = jobs.start(job("b", "p2"), tx).unwrap_err();
+        assert_eq!(running.id, "a");
+        assert_eq!(
+            running.project_ids,
+            vec!["p1".to_string(), "p2".to_string()]
+        );
+        assert_eq!(jobs.list().len(), 1);
+    }
+
+    #[test]
+    fn only_the_last_finished_clones_are_kept() {
+        let jobs = CloneJobs::default();
+        for i in 0..FINISHED_KEPT + 5 {
+            let mut done = job(&i.to_string(), "p");
+            done.state = CloneState::Done;
+            jobs.push(done, None);
+        }
+        let listed = jobs.list();
+        assert_eq!(listed.len(), FINISHED_KEPT);
+        assert_eq!(listed[0].id, (FINISHED_KEPT + 4).to_string());
     }
 }

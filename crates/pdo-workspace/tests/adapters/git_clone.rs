@@ -101,6 +101,13 @@ async fn a_full_clone_takes_every_commit_into_a_new_parent_and_reports_progress(
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&remote.stdout).trim(), url);
     assert!(!lines.lock().unwrap().is_empty());
+
+    // An empty folder takes the clone.
+    let empty = dest.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    let (_tx, rx) = tokio::sync::oneshot::channel();
+    clone_full(&url, &empty, &|_: &str| {}, rx).await.unwrap();
+    assert!(empty.join("second.txt").is_file());
 }
 
 #[tokio::test]
@@ -133,6 +140,13 @@ async fn a_failed_or_cancelled_full_clone_leaves_nothing() {
         .unwrap_err();
     assert_eq!(err, CloneFailure::Cancelled);
     assert!(!target.exists());
+    // No hidden half clone either.
+    let left: Vec<_> = std::fs::read_dir(dest.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 #[test]

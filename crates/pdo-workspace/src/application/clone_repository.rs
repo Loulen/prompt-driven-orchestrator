@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use pdo_kernel::authorization::authorize_read;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use serde::Serialize;
 use ts_rs::TS;
@@ -19,6 +20,7 @@ use crate::domain::remote::shown_remote;
 
 use super::error::{WorkspaceError, WorkspaceResult};
 use super::ports::{Git, ProjectEvents, ProjectRepository};
+use super::read_access::read_project;
 use super::workspace::Workspace;
 
 /// Where the clone of a URL goes (`GET /repos/clone-target`).
@@ -57,15 +59,36 @@ impl Workspace {
         })
     }
 
-    /// The clones, newest first.
+    /// The clones `actor` may see, newest first: a clone for Projets shows
+    /// to who may read one of them (naming those only), as the Projets do
+    /// (CORE-5).
     pub fn clone_jobs(&self, actor: &Actor) -> WorkspaceResult<Vec<CloneJob>> {
         self.authorize(actor, Operation::new(ResourceKind::Repository, Verb::Read))?;
-        Ok(self.clones.list())
+        Ok(self
+            .clones
+            .list()
+            .into_iter()
+            .filter_map(|job| self.seen_by(actor, job))
+            .collect())
     }
 
     pub fn clone_job(&self, actor: &Actor, id: &str) -> WorkspaceResult<CloneJob> {
         self.authorize(actor, Operation::new(ResourceKind::Repository, Verb::Read))?;
-        self.clones.get(id).ok_or(WorkspaceError::NotFound)
+        self.clones
+            .get(id)
+            .and_then(|job| self.seen_by(actor, job))
+            .ok_or(WorkspaceError::NotFound)
+    }
+
+    /// `job` as `actor` sees it: without the Projets it may not read; `None`
+    /// when it was for Projets only and it may read none of them.
+    fn seen_by(&self, actor: &Actor, mut job: CloneJob) -> Option<CloneJob> {
+        if job.project_ids.is_empty() {
+            return Some(job);
+        }
+        job.project_ids
+            .retain(|id| authorize_read(self.host(), actor, &read_project(id)).is_ok());
+        (!job.project_ids.is_empty()).then_some(job)
     }
 
     /// Stop a running clone; what it wrote is removed. A finished one stays
@@ -75,6 +98,10 @@ impl Workspace {
             actor,
             Operation::new(ResourceKind::Repository, Verb::Create),
         )?;
+        self.clones
+            .get(id)
+            .and_then(|job| self.seen_by(actor, job))
+            .ok_or(WorkspaceError::NotFound)?;
         self.clones.cancel(id).ok_or(WorkspaceError::NotFound)
     }
 
@@ -163,7 +190,10 @@ impl Workspace {
         }
 
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-        self.clones.push(job.clone(), Some(cancel_tx));
+        if let Err(running) = self.clones.start(job.clone(), cancel_tx) {
+            // Asked at the same moment as another clone of this folder.
+            return Ok(running);
+        }
         let run = Running {
             git: self.git.clone(),
             projects: self.projects.clone(),
@@ -473,6 +503,62 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, WorkspaceError::Denied(_)));
         assert!(f.git.cloned().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_clone_for_projets_shows_to_who_may_read_one() {
+        let f = crate::application::testing::denying_reads_in(&["secret"]);
+        f.projects.seed(Project::named("secret", "Secret"));
+        f.projects.seed(Project::named("open", "Open"));
+        f.git.hold_clones();
+        let actor = Actor::LocalOperator;
+        let secret = f
+            .workspace
+            .clone_repository(
+                &actor,
+                CloneRequest {
+                    project_id: Some("secret".into()),
+                    ..request("https://h/acme/hidden")
+                },
+            )
+            .await;
+        // Only the reads are refused in « secret »: the clone starts.
+        let secret = secret.unwrap();
+        let both = f
+            .workspace
+            .clone_repository(
+                &actor,
+                CloneRequest {
+                    project_id: Some("open".into()),
+                    ..request("https://h/acme/shared")
+                },
+            )
+            .await
+            .unwrap();
+        f.workspace
+            .clone_repository(
+                &actor,
+                CloneRequest {
+                    project_id: Some("secret".into()),
+                    ..request("https://h/acme/shared")
+                },
+            )
+            .await
+            .unwrap();
+        let seen = f.workspace.clone_jobs(&actor).unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            (seen[0].id.as_str(), seen[0].project_ids.as_slice()),
+            (both.id.as_str(), &["open".to_string()][..])
+        );
+        assert_eq!(
+            f.workspace.clone_job(&actor, &secret.id).unwrap_err(),
+            WorkspaceError::NotFound
+        );
+        assert_eq!(
+            f.workspace.cancel_clone(&actor, &secret.id).unwrap_err(),
+            WorkspaceError::NotFound
+        );
     }
 
     #[test]

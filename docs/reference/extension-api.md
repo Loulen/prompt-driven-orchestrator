@@ -112,6 +112,7 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 | `GET /projects` | `project` × `read`, per Projet | the Projet is absent |
 | `GET /projects/{id}` | `project` × `read` | `403` |
 | `GET /fs/browse` (the loupe, the explorers) | `repository` × `read`, no target, in no Projet | `403` |
+| `GET /repos/clone-target`, `/repos/clones`, `/repos/clones/{id}` (a repository added by its URL) | `repository` × `read`, no target, in no Projet | `403` |
 | `GET /runs/presences` (0.12) | `run` × `read`, targeted, per Run listed | the Run is absent |
 | `/ws`, a Presence (0.12) | `run` × `read` on the Run a `presence_arrived` or `presence_left` is about, per connection (answer kept 5 s) | the message is not sent to that connection |
 | `GET /repos/recent` (the New Run prefill) | `run` × `read` on the last Run of each repository, in the repository's Projet | the repository is absent |

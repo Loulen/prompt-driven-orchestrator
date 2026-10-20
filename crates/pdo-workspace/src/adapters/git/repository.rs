@@ -23,6 +23,27 @@ pub fn validate_target_repo(path: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// The URL of `origin`, else of the first remote; `None` without a remote, or
+/// when git cannot tell.
+pub fn remote_url(repo: &Path) -> Option<String> {
+    let read = |args: &[&str]| -> Option<String> {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    read(&["remote", "get-url", "origin"]).or_else(|| {
+        let first = read(&["remote"])?.lines().next()?.to_string();
+        read(&["remote", "get-url", &first])
+    })
+}
+
 /// Accept exactly a local branch OR a remote-tracking ref as a Run source, probing
 /// each namespace with an exact-ref lookup.
 ///

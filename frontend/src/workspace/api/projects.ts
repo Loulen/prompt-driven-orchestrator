@@ -5,11 +5,17 @@
 
 import { request } from "../../shared/http/client";
 import type { AgentChoice } from "../../shared/generated/AgentChoice";
+import type { DeletedProject } from "../../shared/generated/DeletedProject";
 import type { SkillRef } from "../../shared/generated/SkillRef";
 import type { Project } from "../model/project";
 
 export function fetchProjects(): Promise<Project[]> {
   return request<Project[]>("GET", "/projects");
+}
+
+/** The deleted Projets the caller may read (CORE-96): the Runs launched in one keep it. */
+export function fetchDeletedProjects(): Promise<DeletedProject[]> {
+  return request<DeletedProject[]>("GET", "/projects/deleted");
 }
 
 /**

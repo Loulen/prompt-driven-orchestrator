@@ -110,6 +110,17 @@ async fn init_projects(db: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(db)
         .await?;
 
+    // CORE-96: what stays of a deleted Projet, so its Runs still name it.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS deleted_projects (
+            id         TEXT PRIMARY KEY,
+            name       TEXT NOT NULL,
+            deleted_at TEXT NOT NULL
+        )",
+    )
+    .execute(db)
+    .await?;
+
     Ok(())
 }
 

@@ -90,7 +90,8 @@ pub fn create_repo(
     let target = parent_path.join(trimmed);
     let shown = target.display().to_string();
 
-    if target.exists() {
+    let existed = target.exists();
+    if existed {
         if !target.is_dir() {
             return Err(format!("{shown} exists and is not a directory"));
         }
@@ -102,25 +103,51 @@ pub fn create_repo(
                 created: false,
             });
         }
-        // Outcome 3: refuse, by name. This exact sentence reaches the user.
-        return Err(format!("{shown} exists and is not a git repository"));
+        if !is_empty_dir(&target) {
+            // Outcome 3: refuse, by name. This exact sentence reaches the user.
+            return Err(format!("{shown} exists and is not a git repository"));
+        }
+        // Outcome 1 on an empty folder: nothing in it is anyone's yet.
+    } else {
+        std::fs::create_dir_all(&target).map_err(|e| format!("could not create {shown}: {e}"))?;
     }
-
-    std::fs::create_dir_all(&target).map_err(|e| format!("could not create {shown}: {e}"))?;
 
     // From here on a failure leaves a half-built directory behind, which would
     // make the NEXT call take the "exists and is not a git repository" branch and
     // refuse forever. Unwind instead: this directory did not exist a moment ago,
-    // so removing it takes nothing that was not ours.
+    // or was empty, so removing what is in it takes nothing that was not ours.
     match scaffold_into(&target, files) {
         Ok(()) => Ok(ScaffoldOutcome {
             path: target,
             created: true,
         }),
         Err(e) => {
-            let _ = std::fs::remove_dir_all(&target);
+            if existed {
+                empty_dir(&target);
+            } else {
+                let _ = std::fs::remove_dir_all(&target);
+            }
             Err(e)
         }
+    }
+}
+
+fn is_empty_dir(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|mut entries| entries.next().is_none())
+}
+
+/// Remove what a failed scaffold wrote into a folder that was empty before it.
+fn empty_dir(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let _ = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
     }
 }
 
@@ -150,6 +177,17 @@ fn scaffold_into(target: &Path, files: &[ScaffoldFile]) -> Result<(), String> {
     git(target, &["add", "-A"])?;
     // `--no-verify` because a global `core.hooksPath` would otherwise run the
     // user's hooks inside a repository they have never seen.
-    git(target, &["commit", "--no-verify", "-m", "Initial commit"])?;
+    // `--allow-empty`: a repository asked for without files still starts with
+    // its first commit, so it has a branch to cut a Run from.
+    git(
+        target,
+        &[
+            "commit",
+            "--no-verify",
+            "--allow-empty",
+            "-m",
+            "Initial commit",
+        ],
+    )?;
     Ok(())
 }

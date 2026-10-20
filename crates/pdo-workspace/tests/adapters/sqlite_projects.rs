@@ -257,6 +257,32 @@ async fn rename_and_delete_free_the_members() {
 }
 
 #[tokio::test]
+async fn a_deleted_projet_keeps_its_id_and_last_name() {
+    let db = mem_db().await;
+    let store = SqliteProjects::new(db.clone());
+    assert!(store.deleted().await.unwrap().is_empty());
+    let a = store.create("Alpha").await.unwrap();
+    let b = store.create("Beta").await.unwrap();
+    store.rename(&a.id, "Renamed").await.unwrap();
+
+    store.delete(&a.id).await.unwrap();
+    store.delete(&b.id).await.unwrap();
+    init(&db).await.unwrap();
+
+    let deleted: Vec<_> = store
+        .deleted()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.id, p.name))
+        .collect();
+    assert_eq!(
+        deleted,
+        [(b.id, "Beta".to_string()), (a.id, "Renamed".to_string())]
+    );
+}
+
+#[tokio::test]
 async fn remove_member_frees_the_path() {
     let db = mem_db().await;
     let store = SqliteProjects::new(db.clone());

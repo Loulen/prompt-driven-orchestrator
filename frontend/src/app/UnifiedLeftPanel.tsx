@@ -3,6 +3,8 @@ import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
 import type { Project } from "../workspace/model/project";
+import type { ProjectsEntry } from "../workspace/model/projectsSettings";
+import type { DeletedProject } from "../shared/generated/DeletedProject";
 import type { LibraryPipelineEntry } from "../pipeline/api/libraryPipelines";
 import { useEditStore } from "../pipeline/store/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -40,7 +42,10 @@ interface Props {
    *  truth. Optional so existing callers/tests keep working (no Projet → the
    *  #258 per-path grouping, unchanged). */
   projects?: Project[];
-  onProjectsChanged?: () => void;
+  /** The deleted Projets the Runs still name (CORE-96). */
+  deletedProjects?: DeletedProject[];
+  /** CORE-96: a group header's pencil opens Settings › Projects there. */
+  onOpenProjectSettings?: (entry?: ProjectsEntry) => void;
 }
 
 export default function UnifiedLeftPanel({
@@ -58,7 +63,8 @@ export default function UnifiedLeftPanel({
   triggersPaused = false,
   onTogglePause,
   projects = [],
-  onProjectsChanged,
+  deletedProjects,
+  onOpenProjectSettings,
 }: Props) {
   const [activeTab, setActiveTab] = useState<LeftTab>("runs");
 
@@ -76,7 +82,14 @@ export default function UnifiedLeftPanel({
 
   // The Runs tab's state (list, filters, tree, selection, confirms) — kept here,
   // above the tab switch, so it survives switching tabs.
-  const runsPane = useRunsPane({ runs, selectedRunId, onSelectRun, projects });
+  const runsPane = useRunsPane({
+    runs,
+    selectedRunId,
+    onSelectRun,
+    projects,
+    deletedProjects,
+    onOpenProjectSettings,
+  });
 
   const tabs: { id: LeftTab; label: string }[] = [
     { id: "runs", label: "Runs" },
@@ -154,7 +167,7 @@ export default function UnifiedLeftPanel({
             paused={triggersPaused}
             onTogglePause={onTogglePause ?? (() => {})}
             projects={projects}
-            onProjectsChanged={onProjectsChanged}
+            onOpenProjectSettings={onOpenProjectSettings}
           />
         </div>
       )}
@@ -162,12 +175,7 @@ export default function UnifiedLeftPanel({
       {/* Library pane */}
       {activeTab === "library" && <PipelinesPane projects={projects} />}
 
-      <RunsModals
-        pane={runsPane}
-        runs={runs}
-        projects={projects}
-        onProjectsChanged={onProjectsChanged}
-      />
+      <RunsModals pane={runsPane} runs={runs} />
     </aside>
   );
 }

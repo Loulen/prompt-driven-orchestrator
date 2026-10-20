@@ -1,10 +1,8 @@
 import { isLiveRun } from "../../model/runStatus";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
-import type { Project } from "../../../workspace/model/project";
 import { cascadeImpact } from "../../model/runTree";
 import CleanupConfirmModal from "../CleanupConfirmModal";
 import ForgetRunModal from "../ForgetRunModal";
-import ProjectEditModal from "../../../workspace/components/ProjectEditModal";
 import RunShellModal from "../../../session/components/RunShellModal";
 import RetryAllConfirmModal from "./RetryAllConfirmModal";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
@@ -12,18 +10,16 @@ import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 interface Props {
   pane: RunsPaneState;
   runs: RunListEntry[];
-  projects: Project[];
-  onProjectsChanged?: () => void;
 }
 
 /**
- * The Runs tab's overlays: the per-row confirms, the run shell and the Projet
- * editor. Rendered at the panel's root, whatever the active tab.
+ * The Runs tab's overlays: the per-row confirms and the run shell. Rendered at
+ * the panel's root, whatever the active tab.
  */
-export default function RunsModals({ pane, runs, projects, onProjectsChanged }: Props) {
+export default function RunsModals({ pane, runs }: Props) {
   const {
     confirmCleanup, setConfirmCleanup, handleCleanup, confirmForget, setConfirmForget, handleForget,
-    runShell, projectEditor, setProjectEditor, availableRepos, confirmRetryAll, setConfirmRetryAll,
+    runShell, confirmRetryAll, setConfirmRetryAll,
     handleRetryAll,
   } = pane;
   return (
@@ -49,18 +45,6 @@ export default function RunsModals({ pane, runs, projects, onProjectsChanged }: 
 
       {runShell.shell && (
         <RunShellModal session={runShell.shell.session} onClose={runShell.close} />
-      )}
-
-      {projectEditor && (
-        <ProjectEditModal
-          initialProject={projectEditor.project}
-          initialName={projectEditor.name}
-          initialMemberPaths={projectEditor.memberPaths}
-          availableRepos={availableRepos}
-          projects={projects}
-          onClose={() => setProjectEditor(null)}
-          onSaved={() => onProjectsChanged?.()}
-        />
       )}
 
       {confirmRetryAll && (

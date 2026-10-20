@@ -1,9 +1,10 @@
 import { useCallback, useState } from "react";
 import { fetchRuns } from "../run/api/runs";
-import { fetchProjects } from "../workspace/api/projects";
+import { fetchDeletedProjects, fetchProjects } from "../workspace/api/projects";
 import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { Project } from "../workspace/model/project";
+import type { DeletedProject } from "../shared/generated/DeletedProject";
 
 // The instance-wide lists the app shell holds: the Runs and the Projets.
 
@@ -31,6 +32,8 @@ export function useRuns() {
 // CORE-5: each new list is also asked where a Run may be created.
 export function useProjects() {
   const [projects, setProjects] = useState<Project[]>([]);
+  // CORE-96: the deleted Projets, which the Runs launched in them keep.
+  const [deleted, setDeleted] = useState<DeletedProject[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -40,7 +43,12 @@ export function useProjects() {
     } catch {
       // ignore
     }
+    try {
+      setDeleted(await fetchDeletedProjects());
+    } catch {
+      // keep the last list: a Run of a Projet not listed falls back to its repository
+    }
   }, []);
 
-  return { projects, refresh };
+  return { projects, deleted, refresh };
 }

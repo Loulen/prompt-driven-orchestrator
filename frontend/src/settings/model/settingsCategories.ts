@@ -5,7 +5,13 @@
  * rollups and the confirm-close copy are all derived from this one list.
  */
 
-export type SettingsCategoryId = "general" | "agents" | "sandbox" | "telemetry" | "diagnostics";
+export type SettingsCategoryId =
+  | "general"
+  | "agents"
+  | "sandbox"
+  | "projects"
+  | "telemetry"
+  | "diagnostics";
 
 export type SettingsSectionId =
   | "interface"
@@ -22,6 +28,7 @@ export type SettingsSectionId =
   | "sandbox"
   | "staging-profiles"
   | "worktree-provisioning"
+  | "projects"
   | "otlp-export"
   | "prometheus-metrics"
   | "identity"
@@ -164,6 +171,20 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         label: "Worktree provisioning",
         description:
           "Repository paths copied, hard-linked or symlinked into a Run's worktrees when Git leaves them absent.",
+        ownPersistence: true,
+      },
+    ],
+  },
+  {
+    // CORE-96 (ADR-0087): the Projets and their repositories.
+    id: "projects",
+    label: "Projects",
+    sections: [
+      {
+        id: "projects",
+        label: "Projects",
+        description:
+          "A Project groups repositories. A repository can belong to several Projects; a Run stays in the Project it was launched in.",
         ownPersistence: true,
       },
     ],

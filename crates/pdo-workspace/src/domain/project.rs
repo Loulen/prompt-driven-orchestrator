@@ -29,6 +29,14 @@ impl StoredSetting {
     }
 }
 
+/// What stays of a deleted Projet (CORE-96): its id and its last name. The
+/// Runs launched in it keep it (ADR-0087), and the lists still name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedProject {
+    pub id: String,
+    pub name: String,
+}
+
 /// A persisted Projet: a named group of member paths and the optional settings
 /// it carries. Each optional setting is `None` when the Projet states none: the
 /// tier is then transparent to resolution.

@@ -1,6 +1,7 @@
 /**
  * Repositories over HTTP: validate one, list and refresh its branches,
- * fast-forward one (#802, #803), create one (#824), and the recent ones.
+ * fast-forward one (#802, #803), read its remote, create one (#824), and the
+ * recent ones.
  */
 
 import { apiErrorMessage, request } from "../../shared/http/client";
@@ -8,6 +9,7 @@ import type { BranchList } from "../../shared/generated/BranchList";
 import type { CreateRepoFile } from "../../shared/generated/CreateRepoFile";
 import type { FastForwardRefusal } from "../../shared/generated/FastForwardRefusal";
 import type { FastForwardResult } from "../../shared/generated/FastForwardResult";
+import type { RepoRemote } from "../../shared/generated/RepoRemote";
 import type { FastForwardOutcome } from "../model/branches";
 
 export interface ValidateRepoResponse {
@@ -37,8 +39,9 @@ export interface CreateRepoResponse {
  * Create a git repository at `<parent>/<name>` with `files` and one commit on
  * `main` (#824) — a generic verb, not a tour one. Idempotent: an existing
  * repository at that path is handed back as is, with no second commit and no
- * write over what the user did in it. An existing *non*-repository is refused,
- * and the {@link ApiError} carries the daemon's sentence for quoting verbatim.
+ * write over what the user did in it. An existing empty folder becomes the
+ * repository; any other existing *non*-repository is refused, and the
+ * {@link ApiError} carries the daemon's sentence for quoting verbatim.
  *
  * The created path is deliberately NOT added to recent repositories — that list
  * is built from Runs, and nothing has run here yet.
@@ -51,6 +54,13 @@ export function createRepo(
   return request<CreateRepoResponse>("POST", "/repos/create", {
     body: { parent, name, files },
     label: "POST /repos/create",
+  });
+}
+
+/** The remote of the repository at `path`, credentials dropped; `null` without one. */
+export function fetchRepoRemote(path: string): Promise<RepoRemote> {
+  return request<RepoRemote>("GET", `/repos/remote?path=${encodeURIComponent(path)}`, {
+    label: "GET /repos/remote",
   });
 }
 

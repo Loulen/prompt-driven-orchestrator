@@ -93,3 +93,29 @@ fn validate_source_branch_does_not_glob() {
     let err = validate_source_branch(tmp.path(), "mai*").unwrap_err();
     assert!(err.contains("does not exist"), "message was: {err}");
 }
+
+#[test]
+fn remote_url_reads_origin_else_the_first_remote() {
+    use pdo_workspace::adapters::git::repository::remote_url;
+    let tmp = tempfile::tempdir().unwrap();
+    init_test_repo(tmp.path());
+    assert_eq!(remote_url(tmp.path()), None);
+
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+    };
+    git(&["remote", "add", "upstream", "https://example.com/up.git"]);
+    assert_eq!(
+        remote_url(tmp.path()).as_deref(),
+        Some("https://example.com/up.git")
+    );
+    git(&["remote", "add", "origin", "git@example.com:acme/app.git"]);
+    assert_eq!(
+        remote_url(tmp.path()).as_deref(),
+        Some("git@example.com:acme/app.git")
+    );
+}

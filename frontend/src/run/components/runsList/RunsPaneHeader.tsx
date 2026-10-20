@@ -21,7 +21,7 @@ interface Props {
 /** The Runs tab's title bar: the extensions' `runs/header` actions (#30), the
  *  « Project » configurator and « New Run ». */
 export default function RunsPaneHeader({ pane, onNewRun }: Props) {
-  const { availableRepos, setProjectEditor, projectOf, openProjectEditor } = pane;
+  const { availableRepos, projectOf, openProjectSettings, canOpenProjectSettings } = pane;
   // CORE-5: disabled, with its reason, when no Projet allows creating a Run.
   const canCreate = useRunCreationRightsStore((s) => canCreateSomeRun(s.rights));
   useRecheckRunCreationRights(!canCreate);
@@ -38,22 +38,20 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
         extra={NO_EXTRA}
         className="mr-1.5 flex items-center gap-0.5"
       />
-      {availableRepos.length > 0 && (
+      {availableRepos.length > 0 && canOpenProjectSettings && (
         <button
           type="button"
           aria-label="Configure project"
           onClick={() => {
+            // CORE-96: Settings › Projects — on the one repository's Projet, or
+            // naming one for it; with several repositories, the page as it is.
             if (availableRepos.length > 1) {
-              setProjectEditor({
-                project: null,
-                name: "Project",
-                memberPaths: [],
-              });
+              openProjectSettings();
               return;
             }
             const path = availableRepos[0];
             const project = projectOf(path);
-            openProjectEditor(
+            openProjectSettings(
               project
                 ? {
                     kind: "project",
@@ -79,7 +77,7 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
         <button
           onClick={onNewRun}
           data-testid="new-run-button"
-          className={`${availableRepos.length > 0 ? "ml-1.5" : ""} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
+          className={`${availableRepos.length > 0 && canOpenProjectSettings ? "ml-1.5" : ""} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
           style={{ fontSize: "10.5px" }}
         >
           <Plus size={10} />
@@ -89,7 +87,7 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
         <Tooltip content={NO_RUN_ANYWHERE}>
           {/* A disabled button fires no pointer event: the span carries the tooltip. */}
           <span
-            className={`${availableRepos.length > 0 ? "ml-1.5" : ""} inline-flex`}
+            className={`${availableRepos.length > 0 && canOpenProjectSettings ? "ml-1.5" : ""} inline-flex`}
             tabIndex={0}
             data-testid="new-run-disabled"
           >

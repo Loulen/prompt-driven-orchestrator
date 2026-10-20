@@ -1,5 +1,5 @@
 //! `/repos*`: validate a repository, list and refresh its branches,
-//! fast-forward one, create a repository, and the recent ones.
+//! fast-forward one, read its remote, create a repository, and the recent ones.
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -12,6 +12,7 @@ use tracing::error;
 use crate::application::{FastForwarded, WorkspaceError};
 use crate::domain::scaffold::ScaffoldFile;
 
+use super::dto::RepoRemote;
 use super::{error as error_body, Http, ProjectSettings};
 
 #[derive(Deserialize)]
@@ -94,6 +95,18 @@ pub(super) async fn fast_forward<S: ProjectSettings>(
         Ok(FastForwarded::Refused(refused)) => {
             (StatusCode::CONFLICT, Json(refused)).into_response()
         }
+        Err(e) => failure(e),
+    }
+}
+
+/// `GET /repos/remote?path=`: `{"remote": url}` for the repository at `path`,
+/// its credentials dropped; `null` for a repository without a remote.
+pub(super) async fn remote<S: ProjectSettings>(
+    State(http): State<Http<S>>,
+    Query(q): Query<RepoPathQuery>,
+) -> Response {
+    match http.workspace.repository_remote(&q.path) {
+        Ok(remote) => Json(RepoRemote { remote }).into_response(),
         Err(e) => failure(e),
     }
 }

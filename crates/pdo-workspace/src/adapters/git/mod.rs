@@ -52,6 +52,10 @@ impl Git for GitCli {
         fast_forward::fast_forward_branch(repo, branch)
     }
 
+    fn remote_url(&self, repo: &Path) -> Option<String> {
+        repository::remote_url(repo)
+    }
+
     fn create_repository(
         &self,
         parent: &str,

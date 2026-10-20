@@ -37,7 +37,12 @@ export default function ConfirmDeleteModal({
   useEffect(() => {
     if (!open) return;
     function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        // Closes this dialog alone: a full-window surface under it skips a
+        // handled Escape.
+        e.preventDefault();
+        onClose();
+      }
       // Capture the latest checkbox state — `cascade` is in the dep array so
       // the Enter path doesn't confirm with a stale `false`.
       if (e.key === "Enter") onConfirm(cascade);

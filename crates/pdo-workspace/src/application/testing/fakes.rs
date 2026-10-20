@@ -93,6 +93,9 @@ impl Git for FakeGit {
             moved_checkout: None,
         })
     }
+    fn remote_url(&self, repo: &Path) -> Option<String> {
+        (repo == Path::new("/repo")).then(|| "https://me:token@example.com/acme/repo.git".into())
+    }
     fn create_repository(
         &self,
         parent: &str,

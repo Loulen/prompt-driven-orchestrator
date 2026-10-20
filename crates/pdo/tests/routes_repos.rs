@@ -11,6 +11,62 @@ fn seed(repo: &Path) -> anyhow::Result<()> {
     flow::git_init(repo)
 }
 
+// --- GET /repos/remote ---------------------------------------------------------
+
+#[tokio::test]
+async fn remote_shows_the_url_of_origin_without_its_credentials() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let repo = tempfile::tempdir().unwrap();
+    flow::git_init(repo.path()).unwrap();
+    let path = repo.path().to_string_lossy().to_string();
+
+    let (status, body) = remote(&daemon, &path).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body, serde_json::json!({ "remote": null }));
+
+    flow::git(
+        repo.path(),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://me:tok@example.com/acme/app.git",
+        ],
+    );
+    let (status, body) = remote(&daemon, &path).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({ "remote": "https://example.com/acme/app.git" })
+    );
+
+    let (status, _) = remote(&daemon, "relative/dir").await;
+    assert_eq!(status, 400);
+}
+
+async fn remote(daemon: &TestDaemon, path: &str) -> (u16, serde_json::Value) {
+    let resp = reqwest::get(format!(
+        "{}/repos/remote?path={}",
+        daemon.url(),
+        urlencode(path)
+    ))
+    .await
+    .unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap_or_default())
+}
+
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 // --- POST /repos/create --------------------------------------------------------
 
 #[tokio::test]

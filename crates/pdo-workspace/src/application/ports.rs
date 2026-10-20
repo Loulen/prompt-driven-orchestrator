@@ -8,7 +8,7 @@ use std::pin::Pin;
 use crate::domain::branches::{BranchList, FetchError};
 use crate::domain::browse::{BrowseEntry, BrowseRootError};
 use crate::domain::fast_forward::{FastForwardDone, FastForwardRefused};
-use crate::domain::project::{Project, StoredSetting};
+use crate::domain::project::{DeletedProject, Project, StoredSetting};
 use crate::domain::provisioning::{
     ProvisioningPlan, ProvisioningRules, ProvisioningScope, ScopedRules,
 };
@@ -70,8 +70,11 @@ pub trait ProjectRepository: Send + Sync {
     fn add_member<'a>(&'a self, id: &'a str, path: &'a str) -> BoxFuture<'a, StoreResult<()>>;
     /// Detach `path` from the Projet `id`, and from no other.
     fn remove_member<'a>(&'a self, id: &'a str, path: &'a str) -> BoxFuture<'a, StoreResult<()>>;
-    /// Delete the Projet and free its members. `false` when there was none.
+    /// Delete the Projet and free its members, keeping its id and its name
+    /// among the deleted ones. `false` when there was none.
     fn delete<'a>(&'a self, id: &'a str) -> BoxFuture<'a, StoreResult<bool>>;
+    /// The Projets deleted so far, most recent first.
+    fn deleted(&self) -> BoxFuture<'_, StoreResult<Vec<DeletedProject>>>;
 }
 
 /// Where the provisioning rules of each scope live.
@@ -152,6 +155,8 @@ pub trait Git: Send + Sync {
         repo: &Path,
         branch: &str,
     ) -> Result<FastForwardDone, FastForwardRefused>;
+    /// The URL of `origin`, else of the first remote; `None` without one.
+    fn remote_url(&self, repo: &Path) -> Option<String>;
     /// Create (or reuse) `<parent>/<name>` as a repository holding `files`.
     fn create_repository(
         &self,

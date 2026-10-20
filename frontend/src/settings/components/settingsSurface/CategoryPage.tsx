@@ -18,6 +18,7 @@ export default function CategoryPage({
   highlight,
   dirtySections,
   onSectionChange,
+  wide = false,
   children,
 }: {
   categoryId: SettingsCategoryId;
@@ -33,6 +34,8 @@ export default function CategoryPage({
   highlight?: boolean;
   dirtySections: Set<SettingsSectionId>;
   onSectionChange: (section: SettingsSectionId) => void;
+  /** A page laid out in columns (Settings › Projects) takes more width. */
+  wide?: boolean;
   children: ReactNode;
 }) {
   const category = findCategory(categoryId);
@@ -137,7 +140,9 @@ export default function CategoryPage({
         className="min-w-0 flex-1 overflow-y-auto px-7 py-5"
         data-testid={`settings-scroll-${categoryId}`}
       >
-        <div className="flex max-w-[640px] flex-col gap-7 pb-10">{children}</div>
+        <div className={`flex ${wide ? "max-w-[920px]" : "max-w-[640px]"} flex-col gap-7 pb-10`}>
+          {children}
+        </div>
       </div>
     </div>
   );

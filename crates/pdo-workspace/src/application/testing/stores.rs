@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use crate::application::ports::*;
-use crate::domain::project::{Project, StoredSetting};
+use crate::domain::project::{DeletedProject, Project, StoredSetting};
 use crate::domain::provisioning::{ProvisioningRules, ProvisioningScope};
 
 use super::ready;
@@ -12,6 +12,7 @@ use super::ready;
 #[derive(Default)]
 pub struct InMemoryProjects {
     projects: Mutex<Vec<Project>>,
+    deleted: Mutex<Vec<DeletedProject>>,
     next: Mutex<u32>,
 }
 
@@ -112,9 +113,21 @@ impl ProjectRepository for InMemoryProjects {
     }
     fn delete<'a>(&'a self, id: &'a str) -> BoxFuture<'a, StoreResult<bool>> {
         let mut projects = self.projects.lock().unwrap();
-        let before = projects.len();
-        projects.retain(|p| p.id != id);
-        ready(Ok(projects.len() < before))
+        let Some(at) = projects.iter().position(|p| p.id == id) else {
+            return ready(Ok(false));
+        };
+        let gone = projects.remove(at);
+        self.deleted.lock().unwrap().insert(
+            0,
+            DeletedProject {
+                id: gone.id,
+                name: gone.name,
+            },
+        );
+        ready(Ok(true))
+    }
+    fn deleted(&self) -> BoxFuture<'_, StoreResult<Vec<DeletedProject>>> {
+        ready(Ok(self.deleted.lock().unwrap().clone()))
     }
 }
 

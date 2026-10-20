@@ -39,7 +39,7 @@ export default function RunTreeList({
   const {
     runsScrollRef, visibleRunIds, runSelIds, selectVisible, clearSel, cleanupItems, setRunBulkKind,
     filterActive, filteredRuns, setRunFilter, runGroups, activeTree, isExpanded, runSel, selectGroup,
-    openProjectEditor, archivedCount, archivedOpen, setArchivedOpen, archivedTree, setAttributeFilter,
+    openProjectSettings, canOpenProjectSettings, archivedCount, archivedOpen, setArchivedOpen, archivedTree, setAttributeFilter,
     setProjectFilter,
   } = pane;
   const renderRunRow = (node: RunTreeNode) => (
@@ -138,12 +138,17 @@ export default function RunTreeList({
                   }
                   testId="run-group-select-all"
                 />
-                <span className="truncate" data-testid="run-repo-label">
+                <span
+                  className={`truncate ${group.deleted ? "italic text-fg-4" : ""}`}
+                  data-testid="run-repo-label"
+                  data-deleted={group.deleted ? "true" : undefined}
+                >
                   {group.label}
                 </span>
-                {/* #552 — the pencil that names / renames the Projet. */}
+                {/* #552 — the pencil: Settings › Projects on this group (CORE-96). */}
+                {!group.deleted && canOpenProjectSettings && (
                 <button
-                  onClick={() => openProjectEditor(group)}
+                  onClick={() => openProjectSettings(group)}
                   className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/hdr:inline-flex"
                   title={group.kind === "project" ? "Edit project" : "Name project"}
                   aria-label={group.kind === "project" ? "Edit project" : "Name project"}
@@ -151,6 +156,7 @@ export default function RunTreeList({
                 >
                   <Pencil size={10} />
                 </button>
+                )}
               </div>
               {flattenVisible(group.items, isExpanded).map(renderRunRow)}
             </div>

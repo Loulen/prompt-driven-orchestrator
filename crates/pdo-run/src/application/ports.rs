@@ -247,15 +247,15 @@ pub trait NodeSkills: Send + Sync {
     fn withdraw(&self, repo_root: &Path, run_id: &str) -> anyhow::Result<()>;
 }
 
-/// The Projets a Run's repositories belong to (the workspace context).
+/// The Projets a Run is launched in (the workspace context, ADR-0087).
 pub trait Projects: Send + Sync {
-    /// The Projet that owns `path`, compared verbatim (ADR-0033).
-    fn owner_of<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>>;
-    /// The provisioning rules a Run in `repository` freezes: the instance's,
-    /// the Projet's, then `run`'s own (ADR-0063).
+    /// The Projet `id`; `None` when there is none.
+    fn project<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>>;
+    /// The provisioning rules a Run launched in `project` freezes: the
+    /// instance's, the Projet's, then `run`'s own (ADR-0063).
     fn provisioning_rules<'a>(
         &'a self,
-        repository: &'a str,
+        project: Option<&'a str>,
         run: ProvisioningRules,
     ) -> BoxFuture<'a, Result<Vec<ScopedRules>, String>>;
 }

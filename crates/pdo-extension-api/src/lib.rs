@@ -101,5 +101,6 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 0.11 only added `Host::project_name` and `Host::triggers_changed`; 0.12
 /// only added the Presences, `Host::presences`, `Host::run_cost` and the
 /// `run/item/people` location; 0.13 only added the launch hooks of every
-/// session, `session_env` and `session_preamble`, and the session events).
+/// session, `session_env` and `session_preamble`, and the session events; 0.16
+/// only added `NewRun::project_id`, the Projet a Run is launched in).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

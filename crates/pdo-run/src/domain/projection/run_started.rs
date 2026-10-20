@@ -272,6 +272,12 @@ pub(super) fn apply_run_started(state: &mut RunState, event: &Event) {
         if let Some(pid) = payload.get("pipeline_id").and_then(|v| v.as_str()) {
             state.pipeline_id = Some(pid.to_string());
         }
+        // ADR-0087: the Projet recorded at launch; `null` (or, before the
+        // migration, absent) ⇒ in no Projet.
+        state.project_id = payload
+            .get("project_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
 
         let string_list = |key: &str| -> Vec<String> {
             payload

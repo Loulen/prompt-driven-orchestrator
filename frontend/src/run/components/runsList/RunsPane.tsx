@@ -42,6 +42,7 @@ export default function RunsPane({
           triggers={triggers}
           value={runFilter}
           onChange={setRunFilter}
+          projectOf={pane.projectOfRun}
           treeToggle={
             allParentIds.length > 0
               ? { allExpanded, onToggle: () => setAllExpanded(!allExpanded) }

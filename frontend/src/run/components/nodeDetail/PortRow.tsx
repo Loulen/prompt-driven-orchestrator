@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { PortItemContext } from "../../../shared/extensions/contract";
-import { artifactUrl, fetchArtifact } from "../../api/artifacts";
+import { artifactDownloadUrl, artifactUrl, fetchArtifact } from "../../api/artifacts";
 import type { PortIO } from "../../api/nodes";
 import ImageLightbox from "../../../shared/ui/ImageLightbox";
-import { fileBadge, formatSize, isImageFile } from "../../model/nodeDetailFormat";
+import { formatSize, isImageFile } from "../../model/nodeDetailFormat";
 import CopyButton from "../artifacts/CopyButton";
+import FileChip from "./FileChip";
+import PortDownloads from "./PortDownloads";
 import { useCopyToClipboard } from "../../store/useCopyToClipboard";
 
 export default function PortRow({
@@ -50,10 +52,12 @@ export default function PortRow({
   // #333: an html port shows a type badge for parity with image ports (its
   // artifact is otherwise a single markdown-like file row).
   const isHtml = portType === "html";
+  // A `files` port: one file or more, of any format, each its own chip.
+  const isFiles = portType === "files";
   // #41: an output row copies its main file (`output.*`, the first existing
   // one) of the iter the panel shows — `port.files` IS that iter's listing.
   // Images are out of scope, and a port with nothing on disk has nothing to copy.
-  const copyTarget = kind === "output" && !isImage ? existing[0] : undefined;
+  const copyTarget = kind === "output" && !isImage && !isFiles ? existing[0] : undefined;
   const { status: copyStatus, error: copyError, copy } = useCopyToClipboard();
 
   let dotClass = "bg-fg-5";
@@ -69,12 +73,19 @@ export default function PortRow({
   if (port.files.length > 1 && (port.repeated || isImage)) {
     displayPath = `${port.files.length} files`;
   }
+  if (isFiles) {
+    const names = existing.map((f) => f.path.split("/").pop() ?? f.path);
+    displayPath =
+      names.length === 0
+        ? "no file yet"
+        : `${names.length} ${names.length === 1 ? "file" : "files"} · ${names.join(", ")}`;
+  }
 
   const totalSize = port.files.reduce((sum, f) => sum + (f.size ?? 0), 0);
 
   // An inherited file's frontmatter is a previous execution's verdict: no chip.
   const frontmatter =
-    showFrontmatter && !isImage && firstFile?.frontmatter && !firstFile.inherited
+    showFrontmatter && !isImage && !isFiles && firstFile?.frontmatter && !firstFile.inherited
       ? firstFile.frontmatter
       : null;
 
@@ -85,7 +96,7 @@ export default function PortRow({
   // the prompt (`_input/<file>`). A single (non-repeated) port otherwise has
   // exactly one file, so anything past the first here IS an attachment.
   const attachmentFiles =
-    !isImage && !port.repeated && port.files.length > 1
+    !isImage && !isFiles && !port.repeated && port.files.length > 1
       ? port.files.slice(1).filter((f) => f.exists && !isImageFile(f.path))
       : [];
 
@@ -113,7 +124,7 @@ export default function PortRow({
               repeated
             </span>
           )}
-          {(isImage || isHtml) && (
+          {(isImage || isHtml || isFiles) && (
             <span
               className="rounded border border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-4"
               style={{ fontSize: "9px" }}
@@ -181,6 +192,13 @@ export default function PortRow({
             }}
           />
         )}
+        <PortDownloads
+          runId={runId}
+          existing={existing}
+          isImage={isImage}
+          isFiles={isFiles}
+          repeated={port.repeated}
+        />
         {anyExists && (
           <span
             className="font-mono text-fg-3"
@@ -236,6 +254,21 @@ export default function PortRow({
         </div>
       )}
 
+      {/* A `files` port: one chip per file, each downloading it */}
+      {isFiles && existing.length > 0 && (
+        <div className="col-span-3 mt-1 flex flex-wrap gap-1.5" data-testid="port-files">
+          {existing.map((f) => (
+            <FileChip
+              key={f.path}
+              file={f}
+              href={artifactDownloadUrl(runId, f.path)}
+              download
+              testId="port-file-chip"
+            />
+          ))}
+        </div>
+      )}
+
       {/* #779: input files — the chips of the New run dialog, read-only */}
       {attachmentFiles.length > 0 && (
         <div className="col-span-3 mt-1 flex flex-col gap-1" data-testid="input-files">
@@ -243,39 +276,14 @@ export default function PortRow({
             Input files
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {attachmentFiles.map((f) => {
-              const name = f.path.split("/").pop() ?? f.path;
-              return (
-                <a
-                  key={f.path}
-                  href={artifactUrl(runId, f.path)}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="relative flex h-9 max-w-[220px] items-center gap-1.5 rounded border border-line bg-bg-0 px-1.5 transition-colors hover:border-fg-4"
-                  title={name}
-                  data-testid="input-file-chip"
-                >
-                  <span
-                    className="grid h-6 w-6 flex-shrink-0 place-items-center rounded border border-line bg-bg-3 font-mono font-medium text-fg-3"
-                    style={{ fontSize: "7.5px" }}
-                    aria-hidden="true"
-                  >
-                    {fileBadge(name)}
-                  </span>
-                  <span className="flex min-w-0 flex-col leading-tight">
-                    <span className="truncate text-fg-2" style={{ fontSize: "10.5px" }}>
-                      {name}
-                    </span>
-                    {f.size != null && (
-                      <span className="font-mono text-fg-4" style={{ fontSize: "9px" }}>
-                        {formatSize(f.size)}
-                      </span>
-                    )}
-                  </span>
-                </a>
-              );
-            })}
+            {attachmentFiles.map((f) => (
+              <FileChip
+                key={f.path}
+                file={f}
+                href={artifactUrl(runId, f.path)}
+                testId="input-file-chip"
+              />
+            ))}
           </div>
         </div>
       )}

@@ -3,32 +3,28 @@ import {
   defaultPipeline,
   isOffered,
   pipelineSections,
-  projectOfRepo,
 } from "../../../pipeline/model/pipelineValidation";
+import type { Project } from "../../../workspace/model/project";
 import type { NewRunState } from "./useNewRunState";
 
 /**
  * What the Pipeline menu of New Run / Trigger offers (CONTEXT.md « Pipeline
- * validé »): the Pipelines of the primary repository's Projet first, then the
- * global ones; test Pipelines wait behind « Show test pipelines ». The Projet is
- * matched on the path verbatim. Filtering is the form's only: the daemon launches
- * any Pipeline it is given.
+ * validé »): the Pipelines of the Projet the Run is launched in first (ADR-0087),
+ * then the global ones; test Pipelines wait behind « Show test pipelines ».
+ * Filtering is the form's only: the daemon launches any Pipeline it is given.
  *
  * Also holds the selection to it, during render (the form's own pattern): a
  * Pipeline validated for other Projets only is dropped, and until the user picks
  * one the selection follows the default — the Projet's first Pipeline, else the
  * first global one, never a test one.
  */
-export function usePipelineOffer(open: boolean, state: NewRunState) {
+export function usePipelineOffer(open: boolean, state: NewRunState, launchProject: Project | null) {
   const {
-    pipelines, projects, repoValid, targetRepo, selectedPipeline, selectedPipelineId,
+    pipelines, projects, repoValid, selectedPipeline, selectedPipelineId,
     setSelectedPipelineId, pipelineChosen, setPipelineChosen, setOverrides,
   } = state;
 
-  const repoProject = useMemo(
-    () => (repoValid && projects ? projectOfRepo(projects, targetRepo) : null),
-    [projects, repoValid, targetRepo],
-  );
+  const repoProject = launchProject;
   const sections = useMemo(
     () => pipelineSections(pipelines, repoProject?.id ?? null),
     [pipelines, repoProject],

@@ -91,8 +91,9 @@ Decisions: [ADR-0002](adr/0002-mechanical-conditionals-only.md),
 
 Each node declares its output ports: what it hands over. A port can be markdown with a frontmatter
 schema (the `verdict` a routing edge reads), an `image_list` (annotated screenshots, shown as
-thumbnails and opened in a lightbox), `html` (rendered in a sandboxed frame), or files. Markdown
-renders with its Mermaid diagrams.
+thumbnails and opened in a lightbox), `html` (rendered in a sandboxed frame), or `files` (one file or more, of any format; the
+node downstream reads the whole folder). Markdown renders with its Mermaid diagrams. Every artifact
+of the run view downloads, and a `files` port downloads as one zip.
 
 PDO validates each output when the node completes. A missing file or a frontmatter field that breaks
 the schema refuses the completion, and the agent is told why in its own session, before the next node

@@ -35,42 +35,32 @@ pub(super) async fn harness(
     } else {
         let default_harness = stored_default_harness(deps.runs).await;
         let default_models = stored_default_harness_models(deps.runs).await;
-        // #552/ADR-0046: the Projet tier — the harness carried by the Projet that
-        // owns this Run's **primary** repo. The primary is `target_repo` (else the
-        // daemon repo root — the same `effective_repo` key the lists group and
-        // attach by). A secondary repo (ADR-0042) lives in `target_repos` and is
-        // never consulted, so adding or removing one changes neither the Projet nor
-        // the resolved harness. A DB error degrades the tier to transparent — a
+        // #552/ADR-0046: the Projet tier — the harness carried by the Projet the
+        // Run was launched in (ADR-0087), recorded on the Run and never worked out
+        // from a repository. A DB error degrades the tier to transparent — a
         // Projet lookup never fails a spawn.
-        let primary_repo = projected
-            .and_then(|s| s.target_repo.clone())
-            .unwrap_or_else(|| spawn_ctx.repo_root.to_string_lossy().into_owned());
-        let project_harness =
-            match crate::application::node::project_tiers::project_harness_for_path(
-                deps.runs,
-                &primary_repo,
-            )
-            .await
-            {
-                Ok(h) => h,
-                Err(e) => {
-                    warn!("project harness lookup failed for {primary_repo}: {e}");
-                    None
-                }
-            };
+        let project = projected.and_then(|s| s.project_id.as_deref());
+        let project_harness = match crate::application::node::project_tiers::project_harness(
+            deps.runs, project,
+        )
+        .await
+        {
+            Ok(h) => h,
+            Err(e) => {
+                warn!("project harness lookup failed for {project:?}: {e}");
+                None
+            }
+        };
         // #563/ADR-0057: the Projet's `AgentChoice`, read alongside its legacy
-        // `harness` above — same primary-repo key, same "a DB error degrades the
-        // tier to transparent" posture.
+        // `harness` above — same Projet, same "a DB error degrades the tier to
+        // transparent" posture.
         let project_choice =
-            match crate::application::node::project_tiers::project_agent_choice_for_path(
-                deps.runs,
-                &primary_repo,
-            )
-            .await
+            match crate::application::node::project_tiers::project_agent_choice(deps.runs, project)
+                .await
             {
                 Ok(c) => c,
                 Err(e) => {
-                    warn!("project agent_choice lookup failed for {primary_repo}: {e}");
+                    warn!("project agent_choice lookup failed for {project:?}: {e}");
                     None
                 }
             };
@@ -98,8 +88,8 @@ pub(super) async fn harness(
             // A pinned node still ignores it; a free node follows it (ADR-0046).
             run_choice: projected.and_then(|s| s.agent_choice.as_ref()),
             run_harness: projected.and_then(|s| s.harness.as_deref()),
-            // #552: the Projet tier — resolved just above from this Run's primary
-            // repo. Sits below the Run and above the instance default (ADR-0046).
+            // #552: the Projet tier — resolved just above from this Run's Projet.
+            // Sits below the Run and above the instance default (ADR-0046).
             project_choice: project_choice.as_ref(),
             project_harness: project_harness.as_deref(),
             instance_choice: instance_choice.as_ref(),
@@ -128,8 +118,7 @@ pub(super) async fn skills(
     // additive union of the four tiers, resolved HERE at spawn like the harness
     // (ADR-0046 sharing: editing a tier reaches a node not yet launched, never a
     // live one). The Run tier is the list FROZEN on `RunStarted`; the Projet and
-    // instance tiers are read fresh, keyed by the same primary repo as the harness
-    // above; the Node tier is the document's `skills`. The bank snapshot is taken
+    // instance tiers are read fresh, the Projet being the Run's (ADR-0087); the Node tier is the document's `skills`. The bank snapshot is taken
     // ONCE so every id resolves against the same point in time. A DB error
     // degrades a tier to empty — a skill lookup never fails a spawn. A `script`
     // node carries none (refused at parse) and launches no agent: `None`.
@@ -193,22 +182,18 @@ pub(super) async fn skills(
                 by_tier
             }
             None => {
-                let primary_repo = projected
-                    .and_then(|s| s.target_repo.clone())
-                    .unwrap_or_else(|| spawn_ctx.repo_root.to_string_lossy().into_owned());
-                let project_skills =
-                    match crate::application::node::project_tiers::project_skills_for_path(
-                        deps.runs,
-                        &primary_repo,
-                    )
-                    .await
-                    {
-                        Ok(skills) => skills,
-                        Err(e) => {
-                            warn!("project skills lookup failed for {primary_repo}: {e}");
-                            Vec::new()
-                        }
-                    };
+                let project = projected.and_then(|s| s.project_id.as_deref());
+                let project_skills = match crate::application::node::project_tiers::project_skills(
+                    deps.runs, project,
+                )
+                .await
+                {
+                    Ok(skills) => skills,
+                    Err(e) => {
+                        warn!("project skills lookup failed for {project:?}: {e}");
+                        Vec::new()
+                    }
+                };
                 let instance_skills = deps
                     .runs
                     .settings

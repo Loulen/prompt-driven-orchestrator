@@ -257,6 +257,24 @@ function renderModal() {
   );
 }
 
+/** Pick a Projet in New Run › Where (ADR-0087); `null` for « No project ». */
+async function chooseProject(name: string | null) {
+  fireEvent.click(screen.getByTestId("project-combobox"));
+  const option =
+    name === null
+      ? screen.getByTestId("project-option-none")
+      : screen.getAllByTestId("project-option").find((o) => o.textContent?.includes(name));
+  if (!option) throw new Error(`no project option ${name}`);
+  fireEvent.mouseDown(option);
+}
+
+/** Let the repository the form now holds be validated and its branches read. */
+async function settleRepo(value: string) {
+  await vi.advanceTimersByTimeAsync(500);
+  await waitFor(() => expect(validateRepo).toHaveBeenCalledWith(value));
+  await waitFor(() => expect(listBranches).toHaveBeenCalledWith(value));
+}
+
 async function enterValidRepo(value = "/home/user/project") {
   const repoInput = screen.getByLabelText(/target repository/i);
   fireEvent.change(repoInput, { target: { value } });
@@ -577,9 +595,149 @@ describe("NewRunModal — pipeline filter", () => {
  * Projet's Pipelines first, then the global ones; test Pipelines wait behind « Show
  * test pipelines ».
  */
+describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
+  const checkout = {
+    id: "prj-checkout",
+    name: "Checkout",
+    members: ["/code/shop-web", "/code/shop-api", "/code/design-system"],
+    primary_repo: "/code/shop-web",
+  };
+  const mobile = {
+    id: "prj-mobile",
+    name: "Mobile",
+    members: ["/code/shop-app", "/code/design-system"],
+    primary_repo: "/code/shop-app",
+  };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    vi.mocked(fetchProjects).mockResolvedValue([checkout, mobile]);
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", prompt_required: false }),
+    ]);
+  });
+
+  afterEach(() => {
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+  });
+
+  it("opens on a Projet, preselects its default primary and marks it", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    expect(screen.getByTestId("project-combobox")).toHaveTextContent("Checkout");
+    expect(screen.getByTestId("project-combobox")).toHaveTextContent("3 repos");
+    expect(screen.getByTestId("project-default-badge")).toHaveTextContent("project default");
+
+    fireEvent.click(screen.getByTestId("project-combobox"));
+    const options = screen.getAllByTestId("project-option");
+    expect(options.map((o) => o.textContent)).toEqual([
+      "Checkoutshop-web · shop-api · design-system",
+      "Mobileshop-app · design-system",
+    ]);
+    expect(screen.getByTestId("project-option-none")).toBeInTheDocument();
+  });
+
+  it("offers the Projet's other repositories, read-only once checked, and launches in the Projet", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    const offered = screen.getAllByTestId("project-repo-unchecked").map((r) => r.getAttribute("data-path"));
+    expect(offered).toEqual(["/code/shop-api", "/code/design-system"]);
+    expect(screen.getByTestId("add-secondary-repo")).toHaveTextContent("+ Add a repository outside Checkout");
+
+    fireEvent.click(within(screen.getAllByTestId("project-repo-unchecked")[0]).getByRole("checkbox"));
+    await settleRepo("/code/shop-api");
+    expect(screen.getByTestId("project-repo-readonly-0")).toHaveAttribute("aria-checked", "true");
+
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    await waitFor(() =>
+      expect(createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          project_id: "prj-checkout",
+          target_repo: "/code/shop-web",
+          target_repos: [
+            { repo: "/code/shop-web", base_branch: "main" },
+            { repo: "/code/shop-api", base_branch: "main", read_only: true },
+          ],
+        }),
+      ),
+    );
+    expect(window.localStorage.getItem("pdo.newRun.lastProject")).toBeNull();
+  });
+
+  it("switches to another Projet's default primary and remembers the choice", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    await chooseProject("Mobile");
+    await settleRepo("/code/shop-app");
+    expect(screen.getByLabelText(/target repository/i)).toHaveValue("/code/shop-app");
+    expect(window.localStorage.getItem("pdo.newRun.lastProject")).toBe("prj-mobile");
+    expect(screen.getAllByTestId("project-repo-unchecked").map((r) => r.getAttribute("data-path"))).toEqual([
+      "/code/design-system",
+    ]);
+  });
+
+  it("refuses a primary repository outside the Projet, and launches in no Projet when asked", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    await enterValidRepo("/code/elsewhere");
+    expect(screen.getByTestId("primary-outside-project")).toHaveTextContent(
+      "/code/elsewhere is not a repository of Checkout.",
+    );
+    expect(screen.getByTestId("launch-button")).toBeDisabled();
+
+    await chooseProject(null);
+    expect(screen.queryByTestId("primary-outside-project")).toBeNull();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("launch-button"));
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+    expect(vi.mocked(createRun).mock.calls[0][0].project_id).toBeUndefined();
+  });
+
+  it("shows an edited Trigger's Projet repository once, among the Projet's, and keeps its Projet", async () => {
+    const trigger: Trigger = {
+      id: "trg-shop",
+      name: "Shop nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/code/shop-web",
+      project_id: "prj-checkout",
+      target_repos: JSON.stringify([
+        { repo: "/code/shop-web" },
+        { repo: "/code/shop-api", read_only: true },
+      ]),
+      source_branch: "main",
+      input_template: "go",
+      variables: {},
+      cron: "0 9 * * *",
+      overlap_policy: "skip",
+      auto_name: true,
+      enabled: true,
+    };
+    render(
+      <NewRunModal open={true} onClose={noop} onCreated={noop} openIntent={{ kind: "edit-trigger", trigger }} />,
+    );
+    await settleRepo("/code/shop-web");
+    await waitFor(() => expect(screen.getByTestId("project-combobox")).toHaveTextContent("Checkout"));
+    // Checked among the Projet's repositories, never again « outside ».
+    expect(screen.getByTestId("project-repo-check-0")).toBeChecked();
+    expect(screen.getAllByTestId("project-repo-unchecked").map((r) => r.getAttribute("data-path"))).toEqual([
+      "/code/design-system",
+    ]);
+    expect(screen.queryByTestId("secondary-repo-row-0")).toBeNull();
+    // Checking it again from the list adds no second line.
+    fireEvent.click(within(screen.getAllByTestId("project-repo-unchecked")[0]).getByRole("checkbox"));
+    await settleRepo("/code/design-system");
+    expect(screen.getByTestId("project-repo-check-1")).toBeChecked();
+    expect(screen.queryAllByTestId(/^project-repo-row-/)).toHaveLength(2);
+  });
+});
+
 describe("NewRunModal — pipeline sections", () => {
-  const alpha = { id: "prj-alpha", name: "Alpha", members: ["/repos/alpha"] };
-  const bravo = { id: "prj-bravo", name: "Bravo", members: ["/repos/bravo"] };
+  const alpha = { id: "prj-alpha", name: "Alpha", members: ["/repos/alpha"], primary_repo: "/repos/alpha" };
+  const bravo = { id: "prj-bravo", name: "Bravo", members: ["/repos/bravo"], primary_repo: "/repos/bravo" };
   const mixed = [
     makePipeline({ id: "common", name: "common", validation: { kind: "all" } }),
     makePipeline({ id: "legacy", name: "legacy" }),
@@ -600,6 +758,7 @@ describe("NewRunModal — pipeline sections", () => {
   }
 
   beforeEach(() => {
+    window.localStorage.clear();
     vi.mocked(fetchProjects).mockResolvedValue([alpha, bravo]);
     vi.mocked(fetchPipelines).mockResolvedValue(mixed);
   });
@@ -653,7 +812,9 @@ describe("NewRunModal — pipeline sections", () => {
       }),
     ]);
     renderModal();
-    await enterValidRepo("/repos/bravo");
+    await settleRepo("/repos/alpha");
+    await chooseProject("Bravo");
+    await settleRepo("/repos/bravo");
     // The Projet's first pipeline is the default, as for one validated for it only.
     await waitFor(() => expect(selectedPipeline()).toBe("featured"));
 
@@ -662,7 +823,7 @@ describe("NewRunModal — pipeline sections", () => {
     expect(sectionIds("global")).toEqual(["common", "legacy"]);
     await menuUser().keyboard("{Escape}");
 
-    await enterValidRepo("/repos/alpha");
+    await chooseProject("Alpha");
     await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
     await openPipelineMenu();
     expect(sectionIds("project")).toEqual(["alpha-only"]);
@@ -671,7 +832,9 @@ describe("NewRunModal — pipeline sections", () => {
 
   it("does not offer a pipeline validated for another Projet", async () => {
     renderModal();
-    await enterValidRepo("/repos/bravo");
+    await settleRepo("/repos/alpha");
+    await chooseProject("Bravo");
+    await settleRepo("/repos/bravo");
     await waitFor(() => expect(selectedPipeline()).toBe("common"));
 
     await openPipelineMenu();
@@ -682,38 +845,44 @@ describe("NewRunModal — pipeline sections", () => {
     expect(screen.queryByTestId("pipeline-select-option-alpha-only")).not.toBeInTheDocument();
   });
 
-  it("drops a choice that the new repository's Projet is not offered", async () => {
+  it("drops a choice that the new Projet is not offered", async () => {
     renderModal();
-    await enterValidRepo("/repos/alpha");
+    await settleRepo("/repos/alpha");
     await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
 
-    await enterValidRepo("/repos/bravo");
+    await chooseProject("Bravo");
     await waitFor(() => expect(selectedPipeline()).toBe("common"));
   });
 
   it("moves a default selection to the Projet's pipeline once one is offered", async () => {
     renderModal();
+    await settleRepo("/repos/alpha");
+    await chooseProject(null);
     await enterValidRepo("/repos/elsewhere");
     await waitFor(() => expect(selectedPipeline()).toBe("common"));
 
-    await enterValidRepo("/repos/alpha");
+    await chooseProject("Alpha");
     await waitFor(() => expect(selectedPipeline()).toBe("alpha-only"));
   });
 
   it("keeps a pipeline the user picked, even when the Projet offers its own", async () => {
     renderModal();
+    await settleRepo("/repos/alpha");
+    await chooseProject(null);
     await enterValidRepo("/repos/elsewhere");
     await openPipelineMenu();
     await menuUser().click(screen.getByTestId("pipeline-select-option-legacy"));
     expect(selectedPipeline()).toBe("legacy");
 
-    await enterValidRepo("/repos/alpha");
+    await chooseProject("Alpha");
     await waitFor(() => expect(screen.getByTestId("pipeline-select")).not.toBeDisabled());
     expect(selectedPipeline()).toBe("legacy");
   });
 
-  it("gives a repository without a Projet the global pipelines and the test ones", async () => {
+  it("gives a Run in no Projet the global pipelines and the test ones", async () => {
     renderModal();
+    await settleRepo("/repos/alpha");
+    await chooseProject(null);
     await enterValidRepo("/repos/elsewhere");
     await openPipelineMenu();
 

@@ -14,6 +14,8 @@ export interface RunPayloadInput {
   input: string;
   variables: Record<string, unknown>;
   targetRepo: string;
+  /** ADR-0087: the Projet the Run is launched in; `null` for none. */
+  projectId?: string | null;
   sourceBranch: string;
   autoName: boolean;
   runName: string;
@@ -34,6 +36,7 @@ export function buildRunPayload({
   input,
   variables,
   targetRepo,
+  projectId,
   sourceBranch,
   autoName,
   runName,
@@ -51,6 +54,8 @@ export function buildRunPayload({
     variables,
     pipeline_id: selectedPipeline.id,
     target_repo: targetRepo.trim() || undefined,
+    // ADR-0087: the Projet the Run is launched in; omitted for none.
+    project_id: projectId || undefined,
     // #465: send the full list only when there is ≥1 secondary — a mono-repo Run
     // keeps the request byte-identical (the key is omitted).
     target_repos: targetRepos,
@@ -89,6 +94,8 @@ export interface TriggerPayloadInput {
   input: string;
   guardCommand: string;
   targetRepo: string;
+  /** ADR-0087: the Projet its Runs are launched in; `null` for none. */
+  projectId?: string | null;
   sourceBranch: string;
   allowOverlap: boolean;
   maxConcurrent: string;
@@ -116,6 +123,7 @@ export function buildTriggerUpdatePayload({
   input,
   guardCommand,
   targetRepo,
+  projectId,
   sourceBranch,
   allowOverlap,
   maxConcurrent,
@@ -133,6 +141,8 @@ export function buildTriggerUpdatePayload({
     input_template: input.trim(),
     guard_command: guardCommand.trim() || null,
     target_repo: targetRepo.trim() || null,
+    // ADR-0087: `null` launches its Runs in no Projet.
+    project_id: projectId || null,
     // #465: an array sets the secondaries; `null` clears back to mono-repo.
     target_repos: targetRepos ?? null,
     source_branch: sourceBranch || null,
@@ -162,6 +172,7 @@ export function buildTriggerCreatePayload({
   input,
   guardCommand,
   targetRepo,
+  projectId,
   sourceBranch,
   allowOverlap,
   maxConcurrent,
@@ -179,6 +190,8 @@ export function buildTriggerCreatePayload({
     input_template: input.trim() || undefined,
     guard_command: guardCommand.trim() || undefined,
     target_repo: targetRepo.trim() || undefined,
+    // ADR-0087: the Projet its Runs are launched in; omitted for none.
+    project_id: projectId || undefined,
     // #465: send the secondaries only when there is ≥1 (else omit → mono-repo).
     target_repos: targetRepos,
     source_branch: sourceBranch || undefined,

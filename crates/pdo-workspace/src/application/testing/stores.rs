@@ -33,10 +33,11 @@ impl InMemoryProjects {
             .map(f)
     }
 
-    fn owner(&self, path: &str) -> Option<Project> {
+    fn containing(&self, path: &str) -> Vec<Project> {
         self.all()
             .into_iter()
-            .find(|p| p.members.iter().any(|m| m == path))
+            .filter(|p| p.has_member(path))
+            .collect()
     }
 }
 
@@ -47,8 +48,8 @@ impl ProjectRepository for InMemoryProjects {
     fn get<'a>(&'a self, id: &'a str) -> BoxFuture<'a, StoreResult<Option<Project>>> {
         ready(Ok(self.all().into_iter().find(|p| p.id == id)))
     }
-    fn owner_of<'a>(&'a self, path: &'a str) -> BoxFuture<'a, StoreResult<Option<Project>>> {
-        ready(Ok(self.owner(path)))
+    fn containing<'a>(&'a self, path: &'a str) -> BoxFuture<'a, StoreResult<Vec<Project>>> {
+        ready(Ok(InMemoryProjects::containing(self, path)))
     }
     fn create<'a>(&'a self, name: &'a str) -> BoxFuture<'a, StoreResult<Project>> {
         let mut next = self.next.lock().unwrap();
@@ -93,14 +94,20 @@ impl ProjectRepository for InMemoryProjects {
         self.with(id, |p| p.skills = skills);
         ready(Ok(()))
     }
+    fn set_primary_repo<'a>(
+        &'a self,
+        id: &'a str,
+        repo: Option<&'a str>,
+    ) -> BoxFuture<'a, StoreResult<()>> {
+        self.with(id, |p| p.primary_repo = repo.map(str::to_string));
+        ready(Ok(()))
+    }
     fn add_member<'a>(&'a self, id: &'a str, path: &'a str) -> BoxFuture<'a, StoreResult<()>> {
         self.with(id, |p| p.members.push(path.to_string()));
         ready(Ok(()))
     }
-    fn remove_member<'a>(&'a self, path: &'a str) -> BoxFuture<'a, StoreResult<()>> {
-        for project in self.projects.lock().unwrap().iter_mut() {
-            project.members.retain(|m| m != path);
-        }
+    fn remove_member<'a>(&'a self, id: &'a str, path: &'a str) -> BoxFuture<'a, StoreResult<()>> {
+        self.with(id, |p| p.members.retain(|m| m != path));
         ready(Ok(()))
     }
     fn delete<'a>(&'a self, id: &'a str) -> BoxFuture<'a, StoreResult<bool>> {

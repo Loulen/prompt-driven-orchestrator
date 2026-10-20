@@ -4,11 +4,12 @@ import { REMARK_PLUGINS } from "../../../shared/markdown/plugins";
 import type { Components } from "react-markdown";
 import type { FileInfo } from "../../api/nodes";
 import type { PortType } from "../../../shared/generated/PortType";
+import { artifactDownloadUrl, artifactUrl } from "../../api/artifacts";
 import FrontmatterRow from "./FrontmatterRow";
 import ImageBody from "./ImageBody";
 
-/** The artifact viewer's body: the images, the html in its sandbox, or the
- *  frontmatter card and the rendered markdown. */
+/** The artifact viewer's body: the images, the html in its sandbox, one file
+ *  of a `files` port, or the frontmatter card and the rendered markdown. */
 export default function ArtifactBody({
   runId,
   portName,
@@ -16,6 +17,7 @@ export default function ArtifactBody({
   isImage,
   isHtml,
   isInline,
+  filePreview = null,
   files,
   filesLoading,
   fileIndex,
@@ -33,6 +35,8 @@ export default function ArtifactBody({
   isImage: boolean;
   isHtml: boolean;
   isInline: boolean;
+  /** A `files` port's file: how it previews (null for any other port). */
+  filePreview?: "image" | "text" | "none" | null;
   files: FileInfo[];
   filesLoading: boolean;
   fileIndex: number;
@@ -47,7 +51,53 @@ export default function ArtifactBody({
   const frontmatter = file?.frontmatter;
   return (
     <div className="flex-1 overflow-auto p-4">
-      {isImage ? (
+      {filePreview && filePreview !== "text" ? (
+        filesLoading ? (
+          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+            Loading...
+          </span>
+        ) : !file?.exists ? (
+          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+            No file yet.
+          </span>
+        ) : filePreview === "image" ? (
+          <img
+            src={artifactUrl(runId, file.path)}
+            alt={file.path.split("/").pop() ?? ""}
+            className="max-w-full cursor-zoom-in rounded border border-line"
+            onClick={() => onZoom([artifactUrl(runId, file.path)], 0)}
+            data-testid="files-image"
+          />
+        ) : (
+          <div className="flex flex-col items-start gap-2" data-testid="files-no-preview">
+            <span className="text-fg-3" style={{ fontSize: "11px" }}>
+              No preview for this format.
+            </span>
+            <a
+              href={artifactDownloadUrl(runId, file.path)}
+              download
+              className="rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 hover:border-fg-4 hover:text-fg"
+              style={{ fontSize: "11px" }}
+            >
+              Download {file.path.split("/").pop()}
+            </a>
+          </div>
+        )
+      ) : filePreview === "text" && !/\.(md|markdown)$/i.test(file?.path ?? "") ? (
+        filesLoading || loading ? (
+          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+            Loading...
+          </span>
+        ) : (
+          <pre
+            className="whitespace-pre-wrap break-words font-mono text-fg-2"
+            style={{ fontSize: "11px" }}
+            data-testid="files-text"
+          >
+            {content ?? (file?.exists ? "Could not load content." : "No file yet.")}
+          </pre>
+        )
+      ) : isImage ? (
         <ImageBody
           runId={runId}
           files={files}

@@ -1305,6 +1305,28 @@ describe("the Tutorial project the intro card prepares", () => {
       kind: "projects",
       project_ids: ["prj-tuto"],
     });
+    // ADR-0087: New Run opens on the Tutorial Projet.
+    expect(window.localStorage.getItem("pdo.newRun.lastProject")).toBe("prj-tuto");
+  });
+
+  it("prefers the Projet named Tutorial when the training repository is in several", async () => {
+    const api = await import("../../pipeline/api/pipelines");
+    const projects = await import("../../workspace/api/projects");
+    vi.mocked(projects.fetchProjects).mockResolvedValueOnce([
+      { id: "prj-mine", name: "Sandbox", members: [TUTORIAL_REPO_PATH] },
+      { id: "prj-tuto-old", name: TUTORIAL_PROJECT_NAME, members: [TUTORIAL_REPO_PATH] },
+    ]);
+    vi.mocked(api.fetchPipelines).mockResolvedValueOnce([{ id: TUTORIAL_RUN_PIPELINE_ID } as never]);
+    vi.mocked(projects.addProjectMember).mockClear();
+
+    await project().run();
+
+    expect(projects.addProjectMember).not.toHaveBeenCalled();
+    expect(api.setPipelineValidation).toHaveBeenLastCalledWith(TUTORIAL_RUN_PIPELINE_ID, {
+      kind: "projects",
+      project_ids: ["prj-tuto-old"],
+    });
+    expect(window.localStorage.getItem("pdo.newRun.lastProject")).toBe("prj-tuto-old");
   });
 
   it("reuses the Projet that already holds the training repository, without a second one", async () => {

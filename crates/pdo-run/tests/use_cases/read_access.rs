@@ -1,6 +1,6 @@
 //! The reads of the Runs go through the Autorisation d'opération (CORE-5): a
 //! list keeps the Runs the actor may read, one Run is refused, both in the
-//! Projet of the Run's primary repository.
+//! Projet recorded on the Run (ADR-0087).
 
 use axum::body::to_bytes;
 use axum::response::Response;
@@ -17,13 +17,20 @@ async fn json(response: Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// A Run started in `repo`, child of `parent` when given.
-async fn seed_in(w: &World, run_id: &str, repo: &std::path::Path, parent: Option<&str>) {
+/// A Run started in `repo`, in `project`, child of `parent` when given.
+async fn seed_in(
+    w: &World,
+    run_id: &str,
+    repo: &std::path::Path,
+    project: Option<&str>,
+    parent: Option<&str>,
+) {
     let mut started = event(run_id, EventKind::RunStarted, None);
     let mut payload = serde_json::json!({
         "pipeline_name": "relay",
         "input": "go",
         "target_repo": repo.to_string_lossy(),
+        "project_id": project,
     });
     if let Some(parent) = parent {
         payload["parent_run_id"] = parent.into();
@@ -33,7 +40,7 @@ async fn seed_in(w: &World, run_id: &str, repo: &std::path::Path, parent: Option
     w.runs.append_event().execute(&started).await.unwrap();
 }
 
-/// Two Projets: `p1` owns the world's repository, `p2` another one. `r1` runs
+/// Two Projets: `p1` holds the world's repository, `p2` another one. `r1` runs
 /// in `p1`, `r2` in `p2`, `r3` (a child of `r1`) in `p2`, `r4` in no Projet.
 async fn two_projets() -> (World, tempfile::TempDir, tempfile::TempDir) {
     let w = world();
@@ -44,10 +51,10 @@ async fn two_projets() -> (World, tempfile::TempDir, tempfile::TempDir) {
     let mut p2 = Project::named("p2", "Beta");
     p2.members = vec![other.path().to_string_lossy().into_owned()];
     w.projects.0.lock().unwrap().extend([p1, p2]);
-    seed_in(&w, "r1", w.repo.path(), None).await;
-    seed_in(&w, "r2", other.path(), None).await;
-    seed_in(&w, "r3", other.path(), Some("r1")).await;
-    seed_in(&w, "r4", outside.path(), None).await;
+    seed_in(&w, "r1", w.repo.path(), Some("p1"), None).await;
+    seed_in(&w, "r2", other.path(), Some("p2"), None).await;
+    seed_in(&w, "r3", other.path(), Some("p2"), Some("r1")).await;
+    seed_in(&w, "r4", outside.path(), None, None).await;
     (w, other, outside)
 }
 
@@ -97,7 +104,7 @@ async fn the_list_keeps_only_the_runs_the_actor_may_read() {
 }
 
 #[tokio::test]
-async fn one_run_is_refused_in_the_projet_of_its_repository() {
+async fn one_run_is_refused_in_the_projet_recorded_on_it() {
     let (w, _other, _outside) = two_projets().await;
     *w.host.refuse_reads_in.lock().unwrap() = vec!["p2".into()];
     let actor = Actor::LocalOperator;

@@ -276,6 +276,13 @@ parent_run_id?: string,
  */
 parent_node_id?: string, 
 /**
+ * The Projet the Run was launched in (ADR-0087): chosen at launch, or
+ * inherited from the parent Run, frozen into `RunStarted` and never
+ * recomputed. `None` for a Run launched in no Projet. The Projet of
+ * every Operation on the Run, its nodes and sessions.
+ */
+project_id?: string, 
+/**
  * The library pipeline id this Run was created from (#377). Written to the
  * `RunStarted` payload going forward; consumers (aggregated "by pipeline"
  * stats) fall back to `pipeline_name` when it is absent — historical runs,

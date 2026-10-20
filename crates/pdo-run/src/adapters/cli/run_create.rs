@@ -84,6 +84,7 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
         harness,
         sandbox,
         target_repo,
+        project,
         target_repos,
         source_branch,
         name,
@@ -130,6 +131,9 @@ pub fn run_run_create(action: RunAction) -> Result<()> {
     }
     if let Some(v) = target_repo {
         body.insert("target_repo".into(), serde_json::json!(v));
+    }
+    if let Some(v) = project {
+        body.insert("project_id".into(), serde_json::json!(v));
     }
     if let Some(v) = target_repos {
         body.insert("target_repos".into(), parse_json_arg("target-repos", &v)?);

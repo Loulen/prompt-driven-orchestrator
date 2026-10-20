@@ -91,6 +91,14 @@ pub(super) fn push_inputs(
                         "- `{}` (accumulated): no completed iterations yet — nothing to read.\n",
                         input.port_name
                     ));
+                } else if input.folder {
+                    preamble.push_str(&format!(
+                        "- `{}` (accumulated files): read every file in each of these folders:\n",
+                        input.port_name
+                    ));
+                    for path in &input.paths {
+                        preamble.push_str(&format!("  - {}/\n", path.display()));
+                    }
                 } else {
                     preamble.push_str(&format!(
                         "- `{}` (accumulated): read all of these files:\n",
@@ -106,7 +114,14 @@ pub(super) fn push_inputs(
                     .first()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                preamble.push_str(&format!("- `{}`: read `{}`\n", input.port_name, path));
+                if input.folder {
+                    preamble.push_str(&format!(
+                        "- `{}` (files): read every file in the folder `{}/`\n",
+                        input.port_name, path
+                    ));
+                } else {
+                    preamble.push_str(&format!("- `{}`: read `{}`\n", input.port_name, path));
+                }
             }
         }
         preamble.push('\n');
@@ -178,6 +193,12 @@ fn push_output_entry(preamble: &mut String, ctx: &AugmentContext<'_>, output: &O
         port.and_then(|p| p.frontmatter.as_ref())
             .map(|schema| ("Required YAML frontmatter", schema)),
     );
+    if output.port_type == PortType::Files {
+        preamble.push_str(
+            "  Every file of the folder is the output, and the nodes downstream \
+             read the whole folder.\n",
+        );
+    }
 }
 
 /// The node's live artifacts (ADR-0089): the `live/` folder of its iteration,
@@ -202,7 +223,10 @@ pub(super) fn push_live_artifacts(preamble: &mut String, ctx: &AugmentContext<'_
     for live in &node.live_artifacts {
         let path = live_dir.join(live.relative_path());
         let mut path = path.display().to_string();
-        if matches!(live.port_type, PortType::Image | PortType::ImageList) {
+        if matches!(
+            live.port_type,
+            PortType::Image | PortType::ImageList | PortType::Files
+        ) {
             path = path.trim_end_matches('/').to_string();
         }
         let instructions = (node.node_type == NodeType::Agent)
@@ -223,7 +247,7 @@ pub(super) fn push_live_artifacts(preamble: &mut String, ctx: &AugmentContext<'_
         preamble.push_str(
             "You may also publish live artifacts nobody declared, in the same folder: \
              one file per artifact (`<name>.md`, `<name>.html`, an image), or a folder of \
-             images. Name them after what they show.\n",
+             images or files. Name them after what they show.\n",
         );
     }
     preamble.push('\n');
@@ -257,6 +281,12 @@ fn push_file_entry(
             ));
             append_output_instructions(preamble, instructions);
             preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
+        }
+        PortType::Files => {
+            preamble.push_str(&format!(
+                "- `{name}` (files): drop one or more files, of any format, in `{path}`\n"
+            ));
+            append_output_instructions(preamble, instructions);
         }
         PortType::Markdown => {
             preamble.push_str(&format!("- `{name}`: write to `{path}`\n"));

@@ -90,6 +90,7 @@ function answerAsBob(questions: OperationQuestion[]): Decision[] {
 
 beforeEach(() => {
   vi.mocked(askAuthorization).mockReset();
+  window.localStorage.clear();
   useRunCreationRightsStore.setState({ rights: UNKNOWN_RIGHTS, projects: [PDO, EXT, SECRET] });
   useRecentReposStore.setState({ recentRepos: [] });
 });
@@ -114,17 +115,25 @@ describe("New Run under the rights of the caller (CORE-5)", () => {
     expect(screen.getByTestId("repo-help")).toHaveTextContent(
       "A new repository goes through an administrator.",
     );
+    // ADR-0087: the allowed Projets head the form, « No project » is not offered
+    // (no Run in no Projet), and the hidden one is said.
+    fireEvent.click(screen.getByTestId("project-combobox"));
+    expect(screen.getAllByTestId("project-option").map((o) => o.getAttribute("data-project-id"))).toEqual([
+      "p1",
+      "p2",
+    ]);
+    expect(screen.queryByTestId("project-option-none")).toBeNull();
+    expect(screen.getByTestId("project-combobox-note")).toHaveTextContent(
+      "1 Project(s) hidden: you can't create Runs there.",
+    );
+    // The repository field offers the chosen Projet's repositories.
     fireEvent.click(screen.getByTestId("repo-groups-trigger"));
     const groups = screen.getAllByTestId("repo-group").map((g) => g.getAttribute("aria-label"));
-    expect(groups).toEqual(["PDO", "pdo-widgets"]);
+    expect(groups).toEqual(["PDO"]);
     expect(screen.getAllByTestId("repo-group-item").map((i) => i.textContent)).toEqual([
       "~/code/PDO-v2",
       "~/code/pdo-docs",
-      "~/code/pdo-widgets",
     ]);
-    expect(screen.getByTestId("repo-groups-note")).toHaveTextContent(
-      "1 Project(s) hidden: you can't create Runs there.",
-    );
   });
 
   it("keeps the form as it was when everything is allowed", async () => {
@@ -138,18 +147,20 @@ describe("New Run under the rights of the caller (CORE-5)", () => {
     expect(screen.queryByTestId("repo-help")).toBeNull();
   });
 
-  it("tells the run/new sections the Projet of the target repository", async () => {
+  it("tells the run/new sections the Projet the Run is launched in", async () => {
     vi.mocked(askAuthorization).mockImplementation(async (q) => answerAsBob(q));
     renderModal();
     const context = () => JSON.parse(screen.getByTestId("run-new-context").textContent ?? "{}");
-    expect(context().targetProject).toBeNull();
-    fireEvent.change(screen.getByTestId("target-repo-input"), {
-      target: { value: "/home/bob/code/pdo-docs" },
-    });
     await waitFor(() =>
       expect(context().targetProject).toEqual({ id: "p1", name: "PDO", attributes: {} }),
     );
-    expect(context().repository).toBe("/home/bob/code/pdo-docs");
+    fireEvent.click(screen.getByTestId("project-combobox"));
+    fireEvent.mouseDown(
+      screen.getAllByTestId("project-option").find((o) => o.getAttribute("data-project-id") === "p2")!,
+    );
+    await waitFor(() =>
+      expect(context().targetProject).toEqual({ id: "p2", name: "pdo-widgets", attributes: {} }),
+    );
   });
 
   describe("the repository the form opens on", () => {

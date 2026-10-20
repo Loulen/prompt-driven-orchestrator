@@ -44,30 +44,6 @@ fn action(name: &str) -> Verb {
     Verb::Action(name.into())
 }
 
-/// The world's repository as a git repository holding the `relay` pipeline.
-fn relay_repository(w: &World) {
-    let repo = w.repo.path();
-    let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(repo)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {out:?}");
-    };
-    git(&["init", "-q", "-b", "main"]);
-    git(&["config", "user.email", "test@test.com"]);
-    git(&["config", "user.name", "Test"]);
-    std::fs::write(repo.join(".gitignore"), ".pdo/\n").unwrap();
-    git(&["add", "."]);
-    git(&["commit", "-q", "-m", "init"]);
-    let pipelines = repo.join(".pdo").join("pipelines");
-    std::fs::create_dir_all(pipelines.join("relay.prompts")).unwrap();
-    std::fs::write(pipelines.join("relay.yaml"), RELAY).unwrap();
-    std::fs::write(pipelines.join("relay.prompts/worker.md"), "Do the work.\n").unwrap();
-    std::fs::write(pipelines.join("relay.prompts/second.md"), "Do the rest.\n").unwrap();
-}
-
 #[tokio::test]
 async fn every_mutation_of_a_run_is_refused_before_anything_is_written() {
     let w = world();

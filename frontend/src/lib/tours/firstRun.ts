@@ -123,7 +123,7 @@ const STEPS: TourStep[] = [
   {
     id: "pick-pipeline",
     title: `Choose ${TUTORIAL_RUN_PIPELINE_ID}`,
-    body: `Pick ${TUTORIAL_RUN_PIPELINE_ID}, under Project pipelines. The menu lists the pipelines validated for the repository's project first; this one has a single node that waits for you instead of running on its own.`,
+    body: `Pick ${TUTORIAL_RUN_PIPELINE_ID}, under Project pipelines. The menu lists the pipelines validated for the run's project first; this one has a single node that waits for you instead of running on its own.`,
     target: (o) => (o.present(PIPELINE_OPTION) ? [PIPELINE_OPTION] : [PIPELINE_TRIGGER]),
     soft: true,
     waitingFor: "the Pipeline menu",

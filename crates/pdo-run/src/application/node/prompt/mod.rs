@@ -34,6 +34,8 @@ pub struct InputResolution {
     /// Sourced from the Start node's user prompt (`_input/output.md`); the entry
     /// node's prompt label adapts to `prompt_required`.
     pub from_start: bool,
+    /// The source is a `files` output: each path is a folder to read whole.
+    pub folder: bool,
 }
 
 pub struct OutputDeclaration {
@@ -827,6 +829,86 @@ mod tests {
         assert_eq!(
             inputs[0].paths[0],
             PathBuf::from("/repo/.pdo/artifacts/planner/iter-1/plan/output.md")
+        );
+    }
+
+    /// A consumer of `files` output, wired with `repeated` as asked.
+    fn files_consumer_pipeline(repeated: bool) -> PipelineDef {
+        let mut pipeline = sample_pipeline();
+        pipeline.nodes[0].outputs[0].port_type = PortType::Files;
+        pipeline.nodes.push(NodeDef {
+            outputs: vec![],
+            inputs: vec![],
+            id: "implementer".into(),
+            name: "implementer".into(),
+            ..pipeline.nodes[0].clone()
+        });
+        pipeline.edges.push(EdgeDef {
+            source: EdgeSource::single("planner", "plan"),
+            target: EdgeEndpoint {
+                node: "implementer".into(),
+                port: "plan".into(),
+            },
+            repeated,
+            ..Default::default()
+        });
+        pipeline
+    }
+
+    #[test]
+    fn files_output_preamble_says_one_or_more_files_of_any_format() {
+        let mut pipeline = sample_pipeline();
+        pipeline.nodes[0].outputs[0].port_type = PortType::Files;
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
+        assert!(
+            preamble.contains(
+                "- `plan` (files): drop one or more files, of any format, in \
+                 `/repo/.pdo/artifacts/planner/iter-1/plan`"
+            ),
+            "{preamble}"
+        );
+        assert!(!preamble.contains("plan/output.md"), "{preamble}");
+    }
+
+    #[test]
+    fn a_files_input_reads_the_whole_port_folder() {
+        let pipeline = files_consumer_pipeline(false);
+        let node = &pipeline.nodes[1];
+        let vars = HashMap::new();
+        let ctx = sample_ctx(&pipeline, node, &vars);
+        let inputs = resolve_input_paths(&ctx);
+        assert!(inputs[0].folder);
+        assert_eq!(
+            inputs[0].paths,
+            vec![PathBuf::from("/repo/.pdo/artifacts/planner/iter-1/plan")]
+        );
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains(
+                "- `plan` (files): read every file in the folder \
+                 `/repo/.pdo/artifacts/planner/iter-1/plan/`"
+            ),
+            "{preamble}"
+        );
+    }
+
+    #[test]
+    fn an_accumulated_files_input_lists_one_folder_per_iteration() {
+        let pipeline = files_consumer_pipeline(true);
+        let node = &pipeline.nodes[1];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.repeated_iters = HashMap::from([("planner".to_string(), vec![1, 2])]);
+        let preamble = build_preamble(&ctx);
+        assert!(
+            preamble.contains(
+                "- `plan` (accumulated files): read every file in each of these folders:\n  \
+                 - /repo/.pdo/artifacts/planner/iter-1/plan/\n  \
+                 - /repo/.pdo/artifacts/planner/iter-2/plan/\n"
+            ),
+            "{preamble}"
         );
     }
 
@@ -1649,6 +1731,7 @@ mod tests {
             (PortType::Image, "Accepted extensions:"),
             (PortType::ImageList, "Accepted extensions:"),
             (PortType::Html, "Inline all CSS"),
+            (PortType::Files, "read the whole folder"),
         ];
 
         for (port_type, format_constraint) in cases {

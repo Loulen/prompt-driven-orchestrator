@@ -27,7 +27,7 @@ pub(super) async fn open(repo_root: &Path) -> Result<(sqlx::SqlitePool, std::pat
         .await
         .context("failed to open SQLite database")?;
 
-    init_db(&db).await?;
+    init_db(&db, repo_root).await?;
     Ok((db, db_path))
 }
 
@@ -144,20 +144,45 @@ async fn seed_extension_skills(seeding: &pdo_skill::Skills, host: &dyn Extension
     }
 }
 
-pub(crate) async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
+pub(crate) async fn init_db(db: &sqlx::SqlitePool, repo_root: &Path) -> Result<()> {
     // The event log and the tombstones of the forgotten Runs (ADR-0024), with
     // the Résumés de Run (ADR-0084), rebuilt from the log unless they are its
     // own — before the daemon serves anything.
     pdo_run::adapters::sqlite_event_store::init(db).await?;
-    let events = pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone());
-    pdo_run::application::run_summary::ensure_summaries(&events)
+
+    // The Projets and their members come before the Résumés: the one
+    // migration of the Runs reads the members (ADR-0087).
+    pdo_workspace::adapters::sqlite::init(db)
         .await
-        .context("failed to rebuild the run summaries")?;
+        .context("failed to create project and provisioning rules tables")?;
+    let recorded =
+        pdo_run::adapters::sqlite_event_store::record_legacy_projects(db, repo_root, |path| {
+            let db = db.clone();
+            async move {
+                Ok(pdo_workspace::adapters::sqlite::first_project_containing(&db, &path).await?)
+            }
+        })
+        .await
+        .context("failed to record the project of the existing runs")?;
+    let events = pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone());
+    if recorded > 0 {
+        info!("project recorded on {recorded} existing runs (ADR-0087)");
+        pdo_run::application::run_summary::rebuild_summaries(&events)
+            .await
+            .context("failed to rebuild the run summaries")?;
+    } else {
+        pdo_run::application::run_summary::ensure_summaries(&events)
+            .await
+            .context("failed to rebuild the run summaries")?;
+    }
 
     // The Triggers' tables belong to the trigger context (#927).
     pdo_trigger::adapters::sqlite::init(db)
         .await
         .context("failed to create trigger tables")?;
+    record_legacy_trigger_projects(db)
+        .await
+        .context("failed to record the project of the existing triggers")?;
 
     // The stored instance settings and the agentic profiles (seeded with the
     // reserved `Default`) belong to the settings context (#929).
@@ -173,11 +198,6 @@ pub(crate) async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
 
     // The audit journal (ADR-0044) and the page mounts belong to the platform
     // context, which creates its own tables (`Platform::init`).
-
-    // Materialised on demand — nothing seeded.
-    pdo_workspace::adapters::sqlite::init(db)
-        .await
-        .context("failed to create project and provisioning rules tables")?;
 
     // The validations of the pipelines (CONTEXT.md « Pipeline validé »): no
     // row is every Projet, so nothing is seeded.
@@ -205,4 +225,190 @@ pub(crate) async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     Ok(())
 }
 
+/// ADR-0087's one migration of the existing Triggers: each one still pending
+/// receives the Projet the rule before ADR-0087 gave its Runs — the first
+/// Projet holding its target repository, or another spelling of it (as the
+/// Runs' migration matches) — else none.
+async fn record_legacy_trigger_projects(db: &sqlx::SqlitePool) -> Result<()> {
+    let pending = pdo_trigger::adapters::sqlite::legacy_project_pending(db).await?;
+    for (id, target_repo) in &pending {
+        let mut project = None;
+        if let Some(repo) = target_repo.as_deref().filter(|r| !r.trim().is_empty()) {
+            for spelling in pdo_kernel::repository_path::member_spellings(repo) {
+                project = pdo_workspace::adapters::sqlite::first_project_containing(db, &spelling)
+                    .await?;
+                if project.is_some() {
+                    break;
+                }
+            }
+        }
+        pdo_trigger::adapters::sqlite::record_legacy_project(db, id, project.as_deref()).await?;
+    }
+    if !pending.is_empty() {
+        info!(
+            "project recorded on {} existing triggers (ADR-0087)",
+            pending.len()
+        );
+    }
+    Ok(())
+}
+
 // --- API handlers ---
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn memory_db() -> sqlx::SqlitePool {
+        sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap()
+    }
+
+    /// The database a daemon before ADR-0087 left: one Projet per path, and
+    /// `run_started` events recording no Projet.
+    async fn legacy(db: &sqlx::SqlitePool) {
+        for sql in [
+            "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, harness TEXT, created_at TEXT NOT NULL)",
+            "CREATE TABLE project_members (path TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at TEXT NOT NULL)",
+            "INSERT INTO projects (id, name, created_at) VALUES ('p1', 'Alpha', 's')",
+        ] {
+            sqlx::query(sql).execute(db).await.unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/web', 'p1', 's'), ('/root', 'p1', 's')",
+        )
+        .execute(db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE triggers (id TEXT PRIMARY KEY, name TEXT NOT NULL, pipeline_id TEXT NOT NULL, \
+             pipeline_name TEXT NOT NULL DEFAULT '', target_repo TEXT, target_repos TEXT, \
+             source_branch TEXT, input_template TEXT NOT NULL DEFAULT '', \
+             variables JSON NOT NULL DEFAULT '{}', cron TEXT NOT NULL, guard_command TEXT, \
+             overlap_policy TEXT NOT NULL DEFAULT 'skip', max_concurrent INTEGER, sandbox TEXT, \
+             enabled INTEGER NOT NULL DEFAULT 1, next_fire_at TEXT, last_fired_at TEXT, \
+             last_outcome TEXT, created_at TEXT NOT NULL)",
+        )
+        .execute(db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO triggers (id, name, pipeline_id, target_repo, cron, created_at) VALUES \
+             ('t-web', 'web', 'p', '/repos/web/.', '0 3 * * *', 's'), \
+             ('t-loose', 'loose', 'p', '/repos/loose', '0 3 * * *', 's')",
+        )
+        .execute(db)
+        .await
+        .unwrap();
+        pdo_run::adapters::sqlite_event_store::init(db)
+            .await
+            .unwrap();
+        for (run, payload) in [
+            (
+                "r-web",
+                r#"{"pipeline_name":"p","target_repo":"/repos/web/"}"#,
+            ),
+            (
+                "r-loose",
+                r#"{"pipeline_name":"p","target_repo":"/repos/loose"}"#,
+            ),
+            ("r-root", r#"{"pipeline_name":"p"}"#),
+            (
+                "r-new",
+                r#"{"pipeline_name":"p","target_repo":"/repos/web","project_id":null}"#,
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, payload) VALUES (?, '2026-10-01T00:00:00Z', 'run_started', ?)",
+            )
+            .bind(run)
+            .bind(payload)
+            .execute(db)
+            .await
+            .unwrap();
+        }
+    }
+
+    async fn recorded(db: &sqlx::SqlitePool, run: &str) -> Option<serde_json::Value> {
+        let (payload,): (String,) =
+            sqlx::query_as("SELECT payload FROM events WHERE run_id = ? AND kind = 'run_started'")
+                .bind(run)
+                .fetch_one(db)
+                .await
+                .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        payload.get("project_id").cloned()
+    }
+
+    #[tokio::test]
+    async fn the_existing_runs_get_once_the_projet_the_old_rule_gave_them() {
+        let db = memory_db().await;
+        legacy(&db).await;
+
+        init_db(&db, Path::new("/root")).await.unwrap();
+
+        assert_eq!(recorded(&db, "r-web").await, Some(serde_json::json!("p1")));
+        assert_eq!(
+            recorded(&db, "r-loose").await,
+            Some(serde_json::Value::Null)
+        );
+        // No target: the daemon's repo root, which Alpha holds.
+        assert_eq!(recorded(&db, "r-root").await, Some(serde_json::json!("p1")));
+        // Already recorded (in none): never revisited.
+        assert_eq!(recorded(&db, "r-new").await, Some(serde_json::Value::Null));
+        // The Résumés carry it.
+        let store = pdo_run::adapters::sqlite_event_store::SqliteEventStore::new(db.clone());
+        use pdo_run::application::ports::EventStore;
+        let web = store.summary("r-web").await.unwrap().unwrap();
+        assert_eq!(web.project_id.as_deref(), Some("p1"));
+        let loose = store.summary("r-loose").await.unwrap().unwrap();
+        assert_eq!(loose.project_id, None);
+
+        // Once: a later membership moves no Run.
+        sqlx::query(
+            "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/loose', 'p1', 's')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        init_db(&db, Path::new("/root")).await.unwrap();
+        assert_eq!(
+            recorded(&db, "r-loose").await,
+            Some(serde_json::Value::Null)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_existing_triggers_get_once_the_projet_the_old_rule_gave_them() {
+        let db = memory_db().await;
+        legacy(&db).await;
+        init_db(&db, Path::new("/root")).await.unwrap();
+        let project = |id: &'static str| {
+            let db = db.clone();
+            async move {
+                pdo_trigger::adapters::sqlite::get(&db, id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .project_id
+            }
+        };
+        assert_eq!(
+            project("t-web").await.as_deref(),
+            Some("p1"),
+            "`/repos/web/.` is `/repos/web`"
+        );
+        assert_eq!(project("t-loose").await, None);
+        sqlx::query(
+            "INSERT INTO project_members (path, project_id, created_at) VALUES ('/repos/loose', 'p1', 's')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        init_db(&db, Path::new("/root")).await.unwrap();
+        assert_eq!(project("t-loose").await, None, "once");
+    }
+}

@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { fetchArtifact } from "../api/artifacts";
+import { artifactDownloadUrl, fetchArtifact } from "../api/artifacts";
 import { fetchNodeIO, type FileInfo } from "../api/nodes";
 import { registerTransientOverlay } from "../../lib/overlays";
 import type { IterationInfo } from "../../shared/generated/IterationInfo";
 import type { PortType } from "../../shared/generated/PortType";
 import ImageLightbox from "../../shared/ui/ImageLightbox";
 import { stripFrontmatter } from "../model/frontmatter";
+import { filesPreviewKind } from "../model/nodeDetailFormat";
 import ArtifactBody from "./artifacts/ArtifactBody";
 import ArtifactHeader from "./artifacts/ArtifactHeader";
 import CopyButton from "./artifacts/CopyButton";
+import DownloadButton from "./artifacts/DownloadButton";
 import { useCopyToClipboard } from "../store/useCopyToClipboard";
 import { useMarkdownComponents } from "./artifacts/markdownComponents";
 
@@ -134,22 +136,30 @@ export default function MarkdownArtifactModal({
   // markdown (and unlike image), its content flows through `fetchArtifact`, so
   // the fetch effect below (which only short-circuits on `isImage`) still runs.
   const isHtml = portType === "html";
+  // A `files` port shows each file by its format: an image as an image, a text
+  // file as text, anything else as its download.
+  const isFiles = portType === "files";
+  const filePreview = isFiles ? filesPreviewKind(file?.path) : null;
+  const skipFetch = isImage || filePreview === "image" || filePreview === "none";
   const [fetchedContent, setContent] = useState<string | null>(null);
   // #41: which file `fetchedContent` belongs to. Paging to another file keeps
   // the previous text on screen until the new fetch lands; the copy button must
   // never write that previous file, so it is only armed when the paths agree.
   const [fetchedPath, setFetchedPath] = useState<string | null>(null);
-  const [fetchedLoading, setLoading] = useState(!isImage && !isInline);
+  const [fetchedLoading, setLoading] = useState(!skipFetch && !isInline);
   // #698: an inline source never fetches — its content/loading are read straight from
   // the prop (the caller fetches, the viewer renders), no state to keep in sync.
   const content = isInline ? inlineContent : fetchedContent;
-  const loading = isInline ? inlineLoading : fetchedLoading;
+  // Paging keeps the previous file's text until the next one lands: a `files`
+  // port's text preview waits for its own file instead of showing another's.
+  const staleText = filePreview === "text" && fetchedPath !== file?.path && !!file?.exists;
+  const loading = isInline ? inlineLoading : !skipFetch && (fetchedLoading || staleText);
   // The ordered image list + clicked index currently shown fullscreen in the
   // lightbox, or null when it is closed (#312).
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number } | null>(null);
 
   useEffect(() => {
-    if (isImage || isInline) return;
+    if (skipFetch || isInline) return;
 
     let cancelled = false;
 
@@ -179,7 +189,7 @@ export default function MarkdownArtifactModal({
     return () => {
       cancelled = true;
     };
-  }, [runId, file?.path, file?.exists, isImage, isInline]);
+  }, [runId, file?.path, file?.exists, skipFetch, isInline]);
 
   const goPrevIter = useCallback(() => {
     if (!hasIterNav || iterIndex <= 0) return;
@@ -232,7 +242,7 @@ export default function MarkdownArtifactModal({
   // #41: copy the displayed file's RAW text (frontmatter included — the strip
   // below is for rendering only; html copies its source). No copy for images
   // (out of scope) nor for an inline document (the changelog).
-  const showCopy = !isImage && !isInline;
+  const showCopy = !isImage && !isInline && !skipFetch;
   const copyReady =
     !filesLoading &&
     !loading &&
@@ -279,6 +289,14 @@ export default function MarkdownArtifactModal({
           fileIndex={fileIndex}
           total={total}
           setFileIndex={setFileIndex}
+          downloadButton={
+            !isInline && file?.exists ? (
+              <DownloadButton
+                href={artifactDownloadUrl(runId, file.path)}
+                testId="artifact-download"
+              />
+            ) : undefined
+          }
           copyButton={
             showCopy ? (
               <CopyButton
@@ -302,6 +320,7 @@ export default function MarkdownArtifactModal({
           isImage={isImage}
           isHtml={isHtml}
           isInline={isInline}
+          filePreview={filePreview}
           files={files}
           filesLoading={filesLoading}
           fileIndex={fileIndex}

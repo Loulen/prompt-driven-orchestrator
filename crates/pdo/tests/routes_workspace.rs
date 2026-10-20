@@ -139,7 +139,7 @@ async fn removing_a_member_detaches_it_only_from_its_own_project() {
 }
 
 #[tokio::test]
-async fn naming_a_project_with_members_attaches_them_or_names_the_owner() {
+async fn naming_a_project_with_members_attaches_them_even_when_shared() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let (status, alpha) = flow::post_json(
         &daemon,
@@ -150,18 +150,23 @@ async fn naming_a_project_with_members_attaches_them_or_names_the_owner() {
     assert_eq!(status, 201, "{alpha}");
     assert_eq!(alpha["members"], serde_json::json!(["/srv/a1", "/srv/a2"]));
 
-    // An initial member owned elsewhere refuses the whole creation, by name.
-    let (status, body) = flow::post_json(
+    // ADR-0087: a member of Alpha joins Beta too; Alpha keeps it.
+    let (status, beta) = flow::post_json(
         &daemon,
         "/projects",
         serde_json::json!({ "name": "Beta", "members": ["/srv/a2"] }),
     )
     .await;
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(body["owner_name"], "Alpha");
-    assert_eq!(body["owner_id"], alpha["id"]);
-    let list = daemon.get_json("/projects").await;
-    assert_eq!(list.as_array().unwrap().len(), 1, "nothing written: {list}");
+    assert_eq!(status, 201, "{beta}");
+    assert_eq!(beta["members"], serde_json::json!(["/srv/a2"]));
+    let alpha = daemon
+        .get_json(&format!("/projects/{}", alpha["id"].as_str().unwrap()))
+        .await;
+    assert_eq!(alpha["members"], serde_json::json!(["/srv/a1", "/srv/a2"]));
+    assert_eq!(
+        alpha["primary_repo"], "/srv/a1",
+        "the first member by default"
+    );
 }
 
 #[tokio::test]

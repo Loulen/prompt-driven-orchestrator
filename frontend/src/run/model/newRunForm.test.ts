@@ -601,6 +601,12 @@ describe("buildRunPayload", () => {
    * choose", and only an ABSENT `harness` lets the daemon resolve through the instance
    * default and the floor. A concrete choice is sent verbatim.
    */
+  it("sends the Projet the Run is launched in, and omits it for none (ADR-0087)", () => {
+    expect(buildRunPayload({ ...fields, projectId: "p1" }).project_id).toBe("p1");
+    expect(buildRunPayload({ ...fields, projectId: null }).project_id).toBeUndefined();
+    expect(buildRunPayload(fields).project_id).toBeUndefined();
+  });
+
   it("omits the harness key for the inherit sentinel, and sends an explicit choice", () => {
     expect(buildRunPayload({ ...fields, harness: "" }).harness).toBeUndefined();
     expect(buildRunPayload({ ...fields, harness: "opencode" }).harness).toBe("opencode");
@@ -703,6 +709,8 @@ describe("buildTriggerCreatePayload / buildTriggerUpdatePayload", () => {
       input_template: "audit the codebase",
       guard_command: "gh issue list",
       target_repo: "/home/user/project",
+      // ADR-0087: no Projet named patches its Runs back to no Projet.
+      project_id: null,
       // #465: a fixture with no secondaries patches `target_repos` to `null`, clearing
       // any stored list back to mono-repo (a create simply omits the key).
       target_repos: null,

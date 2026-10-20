@@ -1,9 +1,7 @@
 //! The Projets over a real SQLite database: schema, migrations, membership,
 //! and the settings stored for the contexts downstream.
 
-use pdo_workspace::adapters::sqlite::{
-    auto_fail_for_path, harness_for_path, init, owner_of, SqliteProjects,
-};
+use pdo_workspace::adapters::sqlite::{containing, first_project_containing, init, SqliteProjects};
 use pdo_workspace::application::ports::ProjectRepository;
 use pdo_workspace::domain::project::StoredSetting;
 use sqlx::SqlitePool;
@@ -31,11 +29,7 @@ async fn no_row_exists_before_naming() {
     let db = mem_db().await;
     let store = SqliteProjects::new(db.clone());
     assert!(store.list().await.unwrap().is_empty());
-    assert!(owner_of(&db, "/repos/front").await.unwrap().is_none());
-    assert!(harness_for_path(&db, "/repos/front")
-        .await
-        .unwrap()
-        .is_none());
+    assert!(containing(&db, "/repos/front").await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -64,9 +58,9 @@ async fn membership_comparison_is_verbatim_and_ordered_by_attach() {
     let a = store.create("Alpha").await.unwrap();
     store.add_member(&a.id, "/repos/front").await.unwrap();
     store.add_member(&a.id, "/repos/back").await.unwrap();
-    assert!(owner_of(&db, "/repos/front").await.unwrap().is_some());
-    assert!(owner_of(&db, "/repos/front/").await.unwrap().is_none());
-    assert!(owner_of(&db, "/repos/FRONT").await.unwrap().is_none());
+    assert_eq!(containing(&db, "/repos/front").await.unwrap().len(), 1);
+    assert!(containing(&db, "/repos/front/").await.unwrap().is_empty());
+    assert!(containing(&db, "/repos/FRONT").await.unwrap().is_empty());
     assert_eq!(
         store.get(&a.id).await.unwrap().unwrap().members,
         vec!["/repos/front".to_string(), "/repos/back".to_string()]
@@ -74,39 +68,104 @@ async fn membership_comparison_is_verbatim_and_ordered_by_attach() {
 }
 
 #[tokio::test]
-async fn the_path_tiers_read_the_owning_projets_settings() {
+async fn a_path_may_be_a_member_of_several_projets() {
     let db = mem_db().await;
     let store = SqliteProjects::new(db.clone());
     let a = store.create("Alpha").await.unwrap();
-    store.add_member(&a.id, "/repos/front").await.unwrap();
-
-    store.set_harness(&a.id, Some("opencode")).await.unwrap();
-    store.set_auto_fail(&a.id, Some(false)).await.unwrap();
+    let b = store.create("Bravo").await.unwrap();
+    store.add_member(&a.id, "/repos/shared").await.unwrap();
+    store.add_member(&b.id, "/repos/shared").await.unwrap();
+    let ids: Vec<_> = containing(&db, "/repos/shared")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
     assert_eq!(
-        harness_for_path(&db, "/repos/front")
+        ids,
+        vec![a.id.clone(), b.id.clone()],
+        "in the order it joined"
+    );
+    assert_eq!(
+        first_project_containing(&db, "/repos/shared")
             .await
-            .unwrap()
-            .as_deref(),
-        Some("opencode")
+            .unwrap(),
+        Some(a.id.clone())
     );
-    assert_eq!(
-        auto_fail_for_path(&db, "/repos/front").await.unwrap(),
-        Some(false),
-        "a stored false is not \"no preference\""
-    );
-    assert!(harness_for_path(&db, "/repos/other")
+    // Detaching from one Projet leaves the other's membership alone.
+    store.remove_member(&a.id, "/repos/shared").await.unwrap();
+    let ids: Vec<_> = containing(&db, "/repos/shared")
         .await
         .unwrap()
-        .is_none());
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(ids, vec![b.id]);
+}
 
-    store.set_auto_fail(&a.id, None).await.unwrap();
-    assert_eq!(auto_fail_for_path(&db, "/repos/front").await.unwrap(), None);
-    // A blank stored harness reads as none (the `Some("")` trap of #347).
-    store.set_harness(&a.id, Some("")).await.unwrap();
-    assert!(harness_for_path(&db, "/repos/front")
+#[tokio::test]
+async fn the_default_primary_is_stored_and_cleared() {
+    let db = mem_db().await;
+    let store = SqliteProjects::new(db);
+    let a = store.create("Alpha").await.unwrap();
+    store.add_member(&a.id, "/repos/web").await.unwrap();
+    store.add_member(&a.id, "/repos/api").await.unwrap();
+    store
+        .set_primary_repo(&a.id, Some("/repos/api"))
         .await
-        .unwrap()
-        .is_none());
+        .unwrap();
+    let p = store.get(&a.id).await.unwrap().unwrap();
+    assert_eq!(p.primary_repo.as_deref(), Some("/repos/api"));
+    assert_eq!(p.default_primary(), Some("/repos/api"));
+    store.set_primary_repo(&a.id, None).await.unwrap();
+    let p = store.get(&a.id).await.unwrap().unwrap();
+    assert_eq!(p.default_primary(), Some("/repos/web"));
+}
+
+#[tokio::test]
+async fn init_migrates_one_projet_per_path_to_several() {
+    // The schema before ADR-0087: `path` alone was the key.
+    let db = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::query(
+        "CREATE TABLE projects (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, harness TEXT, created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE project_members (
+            path TEXT PRIMARY KEY, project_id TEXT NOT NULL, created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO projects (id, name, created_at) VALUES ('p1', 'Alpha', 's'), ('p2', 'Bravo', 's')",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO project_members (path, project_id, created_at)          VALUES ('/repos/web', 'p1', 's'), ('/repos/api', 'p1', 's')",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    init(&db).await.unwrap();
+    init(&db).await.unwrap();
+
+    let store = SqliteProjects::new(db.clone());
+    assert_eq!(
+        store.get("p1").await.unwrap().unwrap().members,
+        vec!["/repos/web".to_string(), "/repos/api".to_string()],
+        "the rows and their order survive"
+    );
+    store.add_member("p2", "/repos/web").await.unwrap();
+    assert_eq!(containing(&db, "/repos/web").await.unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -194,13 +253,7 @@ async fn rename_and_delete_free_the_members() {
         "a second delete finds none"
     );
     assert!(store.get(&a.id).await.unwrap().is_none());
-    assert!(owner_of(&db, "/repos/front").await.unwrap().is_none());
-    let b = store.create("Bravo").await.unwrap();
-    store.add_member(&b.id, "/repos/front").await.unwrap();
-    assert_eq!(
-        owner_of(&db, "/repos/front").await.unwrap().unwrap().id,
-        b.id
-    );
+    assert!(containing(&db, "/repos/front").await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -209,7 +262,7 @@ async fn remove_member_frees_the_path() {
     let store = SqliteProjects::new(db.clone());
     let a = store.create("Alpha").await.unwrap();
     store.add_member(&a.id, "/repos/front").await.unwrap();
-    store.remove_member("/repos/front").await.unwrap();
-    assert!(owner_of(&db, "/repos/front").await.unwrap().is_none());
-    store.remove_member("/repos/front").await.unwrap();
+    store.remove_member(&a.id, "/repos/front").await.unwrap();
+    assert!(containing(&db, "/repos/front").await.unwrap().is_empty());
+    store.remove_member(&a.id, "/repos/front").await.unwrap();
 }

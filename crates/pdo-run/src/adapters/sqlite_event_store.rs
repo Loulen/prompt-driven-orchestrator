@@ -114,6 +114,67 @@ pub(crate) async fn load_in(conn: &mut SqliteConnection, run_id: &str) -> Result
     Ok(rows.into_iter().map(|r| r.into_event()).collect())
 }
 
+/// ADR-0087's one migration of the existing Runs: each `run_started` written
+/// before the Projet was recorded (no `project_id` key) receives the Projet
+/// the rule before ADR-0087 gave it — `legacy_project` of its primary
+/// repository (the daemon's repo root when it names none), or of another
+/// spelling of it — else `null` (no Projet). Idempotent: a `run_started`
+/// carrying the key, `null` included, is never touched again, so a later
+/// change of the members moves no Run. How many Runs it recorded.
+///
+/// Runs at boot, before the Résumés are checked: the caller rebuilds them when
+/// it recorded any.
+pub async fn record_legacy_projects<F, Fut>(
+    db: &sqlx::SqlitePool,
+    repo_root: &std::path::Path,
+    legacy_project: F,
+) -> Result<usize>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<String>>>,
+{
+    let starts: Vec<(i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, json_extract(payload, '$.target_repo') FROM events \
+         WHERE kind = 'run_started' AND payload IS NOT NULL \
+           AND json_type(payload, '$.project_id') IS NULL",
+    )
+    .fetch_all(db)
+    .await
+    .context("failed to read the runs without a recorded project")?;
+    if starts.is_empty() {
+        return Ok(0);
+    }
+    let mut recorded = Vec::with_capacity(starts.len());
+    for (id, target_repo) in &starts {
+        let repo = target_repo
+            .clone()
+            .unwrap_or_else(|| repo_root.to_string_lossy().into_owned());
+        let mut project = None;
+        for spelling in pdo_kernel::repository_path::member_spellings(&repo) {
+            if let Some(found) = legacy_project(spelling).await? {
+                project = Some(found);
+                break;
+            }
+        }
+        recorded.push((*id, project));
+    }
+    let mut tx = db.begin().await?;
+    for (id, project) in &recorded {
+        sqlx::query(
+            "UPDATE events SET payload = json_set(payload, '$.project_id', ?) WHERE id = ?",
+        )
+        .bind(project)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to record the project of a run")?;
+    }
+    tx.commit()
+        .await
+        .context("failed to commit the projects of the runs")?;
+    Ok(recorded.len())
+}
+
 /// The id of every Run of the log, newest first.
 pub async fn run_ids(db: &sqlx::SqlitePool) -> Result<Vec<String>> {
     let rows: Vec<(String,)> =

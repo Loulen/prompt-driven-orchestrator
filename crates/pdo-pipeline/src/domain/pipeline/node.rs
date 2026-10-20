@@ -92,6 +92,9 @@ pub enum PortType {
     /// A rendered, static HTML artifact (`output.html`): a leaf review surface
     /// shown in a sandboxed iframe (no JS), never consumed downstream (ADR-0028).
     Html,
+    /// One file or more, of any format, dropped in the port folder. The folder
+    /// travels on the edges: the consumer reads the folder, not one file.
+    Files,
 }
 
 pub const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif"];
@@ -181,12 +184,14 @@ pub struct LiveArtifact {
 impl LiveArtifact {
     /// Where a declared live artifact sits under the iteration's `live/` folder:
     /// `<name>.md` (markdown), `<name>.html` (html), or the folder `<name>/` of
-    /// its images.
+    /// its images or files.
     pub fn relative_path(&self) -> String {
         match self.port_type {
             PortType::Markdown => format!("{}.md", self.name),
             PortType::Html => format!("{}.html", self.name),
-            PortType::Image | PortType::ImageList => format!("{}/", self.name),
+            PortType::Image | PortType::ImageList | PortType::Files => {
+                format!("{}/", self.name)
+            }
         }
     }
 }

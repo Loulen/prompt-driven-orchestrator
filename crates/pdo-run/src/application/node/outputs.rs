@@ -6,14 +6,17 @@ use std::path::Path;
 use pdo_pipeline::domain::pipeline::{self, FrontmatterFieldDecl, PipelineDef, Port, PortType};
 
 fn count_image_files(dir: &Path) -> usize {
+    count_files(dir, pipeline::is_image_file)
+}
+
+/// The regular files of `dir` that `keep` accepts; a missing folder has none.
+fn count_files(dir: &Path, keep: impl Fn(&Path) -> bool) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
     entries
         .filter_map(Result::ok)
-        .filter(|e| {
-            e.file_type().ok().is_some_and(|ft| ft.is_file()) && pipeline::is_image_file(&e.path())
-        })
+        .filter(|e| e.file_type().ok().is_some_and(|ft| ft.is_file()) && keep(&e.path()))
         .count()
 }
 
@@ -72,6 +75,14 @@ pub fn validate(
                     crate::domain::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
                 let count = count_image_files(&port_dir);
                 if count == 0 {
+                    missing.push(port.name.clone());
+                }
+            }
+            // One file or more, of any format; no frontmatter to check.
+            PortType::Files => {
+                let port_dir =
+                    crate::domain::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name);
+                if count_files(&port_dir, |_| true) == 0 {
                     missing.push(port.name.clone());
                 }
             }
@@ -840,6 +851,47 @@ edges: []
         let pipeline = make_pipeline(vec![make_node("node", vec![image_list_port("gallery")])]);
         let result = validate(&pipeline, "node", 1, artifacts);
         assert!(matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["gallery"]));
+    }
+
+    fn files_port(name: &str) -> Port {
+        Port {
+            port_type: PortType::Files,
+            ..image_list_port(name)
+        }
+    }
+
+    #[test]
+    fn files_port_with_files_of_any_format_passes() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        let d = artifacts.join("node/iter-1/exports");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("report.pdf"), b"%PDF").unwrap();
+        std::fs::write(d.join("rows.csv"), "a,b\n").unwrap();
+        let pipeline = make_pipeline(vec![make_node("node", vec![files_port("exports")])]);
+        assert!(validate(&pipeline, "node", 1, artifacts).is_ok());
+    }
+
+    #[test]
+    fn files_port_with_one_file_passes() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        let d = artifacts.join("node/iter-1/exports");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("README"), "x").unwrap();
+        let pipeline = make_pipeline(vec![make_node("node", vec![files_port("exports")])]);
+        assert!(validate(&pipeline, "node", 1, artifacts).is_ok());
+    }
+
+    #[test]
+    fn files_port_with_an_empty_folder_is_missing() {
+        let tmp = TempDir::new().unwrap();
+        let artifacts = tmp.path();
+        // A sub-folder is no file of the port.
+        std::fs::create_dir_all(artifacts.join("node/iter-1/exports/nested")).unwrap();
+        let pipeline = make_pipeline(vec![make_node("node", vec![files_port("exports")])]);
+        let result = validate(&pipeline, "node", 1, artifacts);
+        assert!(matches!(result, Err(ValidationError::MissingOutputs(ref m)) if m == &["exports"]));
     }
 
     fn html_port(name: &str) -> Port {

@@ -14,8 +14,8 @@ export function fetchProjects(): Promise<Project[]> {
 
 /**
  * Name a new Projet (`POST /projects`). The initial `members` travel with the
- * name, so naming a group is a single creation. Throws an {@link ApiError} with
- * `status: 409` naming the owner when a member already belongs to another Projet.
+ * name, so naming a group is a single creation. A member of another Projet joins
+ * this one too (ADR-0087).
  */
 export function createProject(name: string, members: string[] = []): Promise<Project> {
   return request<Project>("POST", "/projects", {
@@ -35,6 +35,8 @@ export interface UpdateProjectRequest {
   agent_choice?: AgentChoice | null;
   /** #669: replace the Projet's skills wholesale; `[]` clears. */
   skills?: SkillRef[];
+  /** ADR-0087: the default primary repository, a member; `null` goes back to the first one. */
+  primary_repo?: string | null;
 }
 
 export function updateProject(
@@ -48,9 +50,8 @@ export function updateProject(
 }
 
 /**
- * Attach a member path to a Projet (`POST /projects/{id}/members`). Throws an
- * {@link ApiError} with `status: 409` whose message names the owning Projet when
- * the path already belongs to a different one (AC: refus nommant le propriétaire).
+ * Attach a member path to a Projet (`POST /projects/{id}/members`). A path may be
+ * a member of several Projets (ADR-0087); attaching it twice is a no-op.
  */
 export function addProjectMember(projectId: string, path: string): Promise<Project> {
   return request<Project>(

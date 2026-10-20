@@ -200,6 +200,7 @@ mod tests {
             pipeline_id: "p".to_string(),
             pipeline_name: "P".to_string(),
             target_repo: None,
+            project_id: None,
             target_repos: None,
             source_branch: None,
             input_template: "do it".to_string(),

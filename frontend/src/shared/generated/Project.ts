@@ -31,9 +31,15 @@ agent_choice?: A,
 skills?: Array<S>, 
 /**
  * Member repository paths, compared **verbatim** (ADR-0033). Ordered by
- * attach time.
+ * attach time. A path may be a member of several Projets (ADR-0087).
  */
 members: Array<string>, 
+/**
+ * The member a launch in this Projet preselects as its primary
+ * repository (ADR-0087): the one chosen, else the first member. Absent
+ * for a Projet without members.
+ */
+primary_repo?: string, 
 /**
  * The entity attributes the extensions stamped on it (CONTEXT.md §
  * *Extensions*); absent when none.

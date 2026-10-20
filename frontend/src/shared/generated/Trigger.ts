@@ -17,6 +17,11 @@ pipeline_id: string,
  */
 pipeline_name: string, target_repo?: string, 
 /**
+ * The Projet the Runs it fires are launched in (ADR-0087), and the one the
+ * Trigger is in; `None` for none.
+ */
+project_id?: string, 
+/**
  * Read-only secondary repos to associate with fired Runs (ADR-0042), stored
  * as raw JSON TEXT (`[{repo, base_branch?}]`) so the Trigger stays
  * decoupled from the Run's request types. `None`/blank → mono-repo fire. The

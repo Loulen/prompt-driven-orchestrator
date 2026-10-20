@@ -15,19 +15,20 @@ use crate::domain::absorption::effort_key;
 use crate::domain::absorption::identity::{NodeIdentity, RunIdentity};
 use crate::domain::absorption::resolver::AbsorptionResolver;
 
+/// The "by project" bucket of a Run: the Projet recorded at its launch
+/// (ADR-0087) while it still exists, else its primary repository, named after
+/// its folder.
 pub fn project_identity(
     payload: &serde_json::Value,
     daemon_root: &Path,
     projects: &[Project],
 ) -> (String, String) {
-    let root = cost_project_root(payload, daemon_root);
-    let root_text = root.to_string_lossy().into_owned();
-    if let Some(project) = projects
-        .iter()
-        .find(|project| project.members.iter().any(|member| member == &root_text))
-    {
+    let recorded = payload.get("project_id").and_then(|v| v.as_str());
+    if let Some(project) = recorded.and_then(|id| projects.iter().find(|p| p.id == id)) {
         return (project.id.clone(), project.name.clone());
     }
+    let root = cost_project_root(payload, daemon_root);
+    let root_text = root.to_string_lossy().into_owned();
     let name = root
         .file_name()
         .and_then(|name| name.to_str())
@@ -418,6 +419,26 @@ mod tests {
         assert_eq!(
             cost_project_root(&payload, Path::new("/daemon/root")),
             PathBuf::from("/proj/A")
+        );
+    }
+
+    #[test]
+    fn a_run_is_costed_in_the_projet_recorded_at_its_launch_never_its_repositorys() {
+        let mut product = Project::named("prj-product", "Product");
+        product.members = vec!["/repos/shared".into()];
+        let mut docs = Project::named("prj-docs", "Docs");
+        docs.members = vec!["/repos/shared".into()];
+        let projects = [product, docs];
+        let in_docs =
+            serde_json::json!({ "target_repo": "/repos/shared", "project_id": "prj-docs" });
+        assert_eq!(
+            project_identity(&in_docs, Path::new("/daemon/root"), &projects),
+            ("prj-docs".to_string(), "Docs".to_string())
+        );
+        let in_none = serde_json::json!({ "target_repo": "/repos/shared", "project_id": null });
+        assert_eq!(
+            project_identity(&in_none, Path::new("/daemon/root"), &projects),
+            ("/repos/shared".to_string(), "shared".to_string())
         );
     }
 

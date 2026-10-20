@@ -160,7 +160,7 @@ pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
 pub fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
     for output in resolve_output_paths(ctx) {
         let dir = match output.port_type {
-            PortType::Image | PortType::ImageList => output.path.clone(),
+            PortType::Image | PortType::ImageList | PortType::Files => output.path.clone(),
             // html resolves to a file path like markdown, so pre-create its
             // PARENT directory.
             PortType::Markdown | PortType::Html => output

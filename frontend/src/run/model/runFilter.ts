@@ -1,4 +1,5 @@
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
+import type { ProjectRef } from "../../lib/groupByRepo";
 
 /* #336 — the client-side filter model for the Runs list. Option sets are
    derived from the runs themselves (never from the live library/trigger
@@ -17,6 +18,7 @@ export const MANUAL_TRIGGER = "__manual__";
 export const NONE = "__none__";
 
 export interface RunFilterValue {
+  /** A {@link projectKey}: the Projet recorded on the Run, else its repo. */
   repo: string | null;
   pipeline: string | null;
   /** A trigger id, or MANUAL_TRIGGER for manually launched runs. */
@@ -37,6 +39,20 @@ export const EMPTY_RUN_FILTER: RunFilterValue = {
 export function repoKey(r: RunListEntry): string {
   return r.effective_repo && r.effective_repo.length > 0 ? r.effective_repo : NONE;
 }
+/** The Projet recorded on a Run (ADR-0087), as the list groups it. */
+export type ProjectOfRun = (projectId: string | null | undefined) => ProjectRef | null;
+
+const NO_PROJECT_KNOWN: ProjectOfRun = () => null;
+
+/**
+ * The filter key on the Project axis, the same buckets as the list's groups:
+ * `project:<id>` for a Run launched in a Projet that still exists, else the
+ * Run's repo ({@link repoKey}) — a repo in several Projets never mixes them.
+ */
+export function projectKey(r: RunListEntry, projectOf: ProjectOfRun = NO_PROJECT_KNOWN): string {
+  const project = projectOf(r.project_id);
+  return project ? `project:${project.id}` : repoKey(r);
+}
 export function pipelineKey(r: RunListEntry): string {
   const name = r.pipeline_name ?? "";
   return name.trim().length > 0 ? name : NONE;
@@ -50,8 +66,12 @@ export function triggerKey(r: RunListEntry): string {
  * (#783) this is the per-run match: `filterRunTree` keeps a non-matching
  * parent as long as a descendant matches.
  */
-export function runMatchesFilter(r: RunListEntry, f: RunFilterValue): boolean {
-  if (f.repo !== null && repoKey(r) !== f.repo) return false;
+export function runMatchesFilter(
+  r: RunListEntry,
+  f: RunFilterValue,
+  projectOf: ProjectOfRun = NO_PROJECT_KNOWN,
+): boolean {
+  if (f.repo !== null && projectKey(r, projectOf) !== f.repo) return false;
   if (f.pipeline !== null && pipelineKey(r) !== f.pipeline) return false;
   if (f.trigger !== null && triggerKey(r) !== f.trigger) return false;
   return true;

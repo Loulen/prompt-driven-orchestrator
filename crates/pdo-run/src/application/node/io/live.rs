@@ -83,7 +83,8 @@ pub(super) fn resolve_live(
     free.sort_by(|a, b| a.0.cmp(&b.0));
     for (file_name, path, is_dir) in free {
         let (name, port_type) = if is_dir {
-            (file_name, PortType::ImageList)
+            let port_type = free_folder_kind(&path);
+            (file_name, port_type)
         } else {
             free_file_kind(&file_name)
         };
@@ -105,6 +106,26 @@ pub(super) fn resolve_live(
 /// asks for it), or a hidden one: never an artifact of its own.
 fn is_scratch(file_name: &str) -> bool {
     file_name.starts_with('.') || file_name.ends_with(".tmp") || file_name.ends_with('~')
+}
+
+/// What a freely published folder is: a list of images when it holds nothing
+/// else, files otherwise.
+fn free_folder_kind(dir: &Path) -> PortType {
+    let only_images = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .all(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            is_scratch(&name)
+                || e.file_type().is_ok_and(|ft| !ft.is_file())
+                || pipeline::is_image_file(Path::new(&name))
+        });
+    if only_images {
+        PortType::ImageList
+    } else {
+        PortType::Files
+    }
 }
 
 /// What a freely published file is, from its extension: named after its stem.
@@ -137,11 +158,15 @@ fn artifact_io(
     not_before: Option<chrono::DateTime<chrono::Utc>>,
     tracked: &HashSet<PathBuf>,
 ) -> LiveArtifactIO {
-    let is_folder = matches!(port_type, PortType::Image | PortType::ImageList) && !path.is_file();
-    let mut files = if is_folder && declared {
+    let is_folder = matches!(
+        port_type,
+        PortType::Image | PortType::ImageList | PortType::Files
+    ) && !path.is_file();
+    let mut files = if is_folder && declared && port_type != PortType::Files {
         list_image_files(artifacts_dir, path)
     } else if is_folder {
-        // A folder nobody declared: whatever it holds is the artifact.
+        // A folder of files, or one nobody declared: whatever it holds is the
+        // artifact.
         list_folder_files(artifacts_dir, path)
     } else if path.is_file() {
         vec![if port_type == PortType::Markdown {
@@ -403,7 +428,32 @@ mod tests {
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].name, "notes");
         assert!(!live[0].declared);
+        // Not only images: a folder of files.
+        assert_eq!(live[0].port_type, PortType::Files);
         assert_eq!(live[0].files.len(), 2);
+    }
+
+    #[test]
+    fn a_declared_files_artifact_is_its_folder_with_every_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("designer/iter-1/live/exports");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("rows.csv"), "a,b").unwrap();
+        fs::write(dir.join("report.pdf"), "%PDF").unwrap();
+        let live = resolve(
+            &node(vec![declared("exports", PortType::Files)], false),
+            tmp.path(),
+        );
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].path, "designer/iter-1/live/exports/");
+        let files: Vec<&str> = live[0].files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            files,
+            [
+                "designer/iter-1/live/exports/report.pdf",
+                "designer/iter-1/live/exports/rows.csv"
+            ]
+        );
     }
 
     #[test]

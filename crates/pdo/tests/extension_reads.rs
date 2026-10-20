@@ -96,12 +96,12 @@ async fn projet(daemon: &TestDaemon, name: &str, repo: &str) -> String {
     project["id"].as_str().unwrap().to_string()
 }
 
-/// A Run of `solo` working in `repo`: its id.
-async fn run_in(daemon: &TestDaemon, repo: &str) -> String {
+/// A Run of `solo` working in `repo`, launched in the Projet `project`: its id.
+async fn run_in(daemon: &TestDaemon, repo: &str, project: &str) -> String {
     let (status, body) = post(
         daemon,
         "/runs",
-        json!({ "pipeline": "solo", "input": "go", "target_repo": repo }),
+        json!({ "pipeline": "solo", "input": "go", "target_repo": repo, "project_id": project }),
     )
     .await;
     assert_eq!(status, 201, "{body}");
@@ -130,8 +130,8 @@ async fn world() -> World {
     let other_repo = other.path().to_string_lossy().into_owned();
     let p1 = projet(&daemon, "P1", &daemon.target_repo()).await;
     let p2 = projet(&daemon, "P2", &other_repo).await;
-    let r1 = run_in(&daemon, &daemon.target_repo()).await;
-    let r2 = run_in(&daemon, &other_repo).await;
+    let r1 = run_in(&daemon, &daemon.target_repo(), &p1).await;
+    let r2 = run_in(&daemon, &other_repo, &p2).await;
     World {
         daemon,
         control,
@@ -314,7 +314,7 @@ async fn ws_never_names_a_new_run_to_a_connection_that_may_not_read_it() {
     let mut alice = w.daemon.connect_ws_as("alice").await.unwrap();
 
     let other_repo = w._other.path().to_string_lossy().into_owned();
-    let created = run_in(&w.daemon, &other_repo).await;
+    let created = run_in(&w.daemon, &other_repo, &w.p2).await;
 
     let window = Duration::from_millis(1500);
     let (bob_seen, alice_seen) = tokio::join!(
@@ -346,6 +346,7 @@ async fn ws_tells_of_a_fire_without_the_run_a_connection_may_not_read() {
             "cron": "0 3 * * *",
             "input_template": "go",
             "target_repo": other_repo,
+            "project_id": w.p2,
         }),
     )
     .await;

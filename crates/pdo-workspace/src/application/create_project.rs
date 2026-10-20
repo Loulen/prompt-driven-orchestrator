@@ -11,24 +11,13 @@ use super::error::{WorkspaceError, WorkspaceResult};
 use super::ports::StorageError;
 use super::workspace::Workspace;
 
-/// What naming a Projet came to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ProjectCreated {
-    Created(Project),
-    /// An initial member already belongs to another Projet; nothing was written.
-    Refused {
-        owner_id: String,
-        owner_name: String,
-    },
-}
-
 impl Workspace {
     pub async fn create_project(
         &self,
         actor: &Actor,
         name: &str,
         members: &[String],
-    ) -> WorkspaceResult<ProjectCreated> {
+    ) -> WorkspaceResult<Project> {
         let Some(name) = project_name(name) else {
             return Err(WorkspaceError::Invalid("project name is required".into()));
         };
@@ -41,21 +30,8 @@ impl Workspace {
                 paths.push(path);
             }
         }
+        // A member of another Projet joins this one too (ADR-0087).
         self.authorize(actor, Operation::new(ResourceKind::Project, Verb::Create))?;
-        // The Projet does not exist yet: any owner is another Projet.
-        for path in &paths {
-            if let Some(owner) = self
-                .projects
-                .owner_of(path)
-                .await
-                .map_err(|e| StorageError(format!("failed to create project: {e}")))?
-            {
-                return Ok(ProjectCreated::Refused {
-                    owner_id: owner.id,
-                    owner_name: owner.name,
-                });
-            }
-        }
         let mut project = self
             .projects
             .create(name)
@@ -80,13 +56,12 @@ impl Workspace {
         let entity = EntityRef::new(ResourceKind::Project, project.id.clone());
         project.attributes = stamp(self.host(), actor, entity).await;
         self.events.project_changed(&project.id).await;
-        Ok(ProjectCreated::Created(project))
+        Ok(project)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ProjectCreated;
     use crate::application::testing::{denying, fixture};
     use crate::application::WorkspaceError;
     use crate::domain::project::Project;
@@ -100,9 +75,6 @@ mod tests {
             .create_project(&Actor::LocalOperator, "  Front  ", &[])
             .await
             .unwrap();
-        let ProjectCreated::Created(project) = project else {
-            panic!("expected a creation, got {project:?}")
-        };
         assert_eq!(project.name, "Front");
         assert!(project.members.is_empty());
         assert_eq!(f.events.changed(), vec![project.id.clone()]);
@@ -157,9 +129,6 @@ mod tests {
             )
             .await
             .unwrap();
-        let ProjectCreated::Created(project) = project else {
-            panic!("expected a creation, got {project:?}")
-        };
         assert_eq!(
             project.members,
             vec!["/repos/front".to_string(), "/repos/back".to_string()]
@@ -178,26 +147,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_member_owned_elsewhere_is_refused_by_name_before_any_write() {
+    async fn a_member_of_another_projet_joins_this_one_too() {
         let f = fixture();
         f.projects.seed(Project::named("a", "Alpha"));
         f.workspace
             .add_project_member(&Actor::LocalOperator, "a", "/repos/front")
             .await
             .unwrap();
-        let refused = f
+        let bravo = f
             .workspace
             .create_project(&Actor::LocalOperator, "Bravo", &["/repos/front".into()])
             .await
             .unwrap();
-        assert_eq!(
-            refused,
-            ProjectCreated::Refused {
-                owner_id: "a".into(),
-                owner_name: "Alpha".into()
-            }
-        );
-        assert_eq!(f.projects.all().len(), 1);
+        assert_eq!(bravo.members, vec!["/repos/front".to_string()]);
+        let alpha = f.projects.all().into_iter().find(|p| p.id == "a").unwrap();
+        assert_eq!(alpha.members, vec!["/repos/front".to_string()]);
     }
 
     #[tokio::test]

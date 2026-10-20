@@ -10,7 +10,6 @@ import OutputSchemaEditor from "./OutputSchemaEditor";
 import ExpectedContentField from "./ExpectedContentField";
 import { PORT_TYPE_OPTIONS } from "./portTypeOptions";
 
-
 interface OutputPortCardProps {
   port: PortDef;
   /**
@@ -85,7 +84,7 @@ export default function OutputPortCard({
               data-testid="port-type-select"
             >
               {PORT_TYPE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
+                <option key={opt.value} value={opt.value} title={opt.hint}>
                   {opt.label}
                 </option>
               ))}

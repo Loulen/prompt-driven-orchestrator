@@ -12,6 +12,7 @@ use crate::domain::draft::{DraftContent, DraftSummary};
 use crate::domain::library::LibraryEntry;
 use crate::domain::pipeline::{self, VariableDef};
 use crate::domain::validation::PipelineValidation;
+use crate::domain::version::{PipelineVersionRef, SaveAs};
 use crate::domain::yaml_json::yaml_value_to_json;
 
 #[derive(Serialize, TS)]
@@ -59,6 +60,11 @@ pub(super) struct PipelineListEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     draft: Option<DraftSummary>,
+    /// Its last version (ADR-0088): the file, which New Run and the Triggers
+    /// launch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    version: Option<PipelineVersionRef>,
 }
 
 impl
@@ -67,14 +73,16 @@ impl
         Attributes,
         PipelineValidation,
         Option<DraftSummary>,
+        Option<PipelineVersionRef>,
     )> for PipelineListEntry
 {
     fn from(
-        (summary, attributes, validation, draft): (
+        (summary, attributes, validation, draft, version): (
             PipelineSummary,
             Attributes,
             PipelineValidation,
             Option<DraftSummary>,
+            Option<PipelineVersionRef>,
         ),
     ) -> Self {
         Self {
@@ -93,6 +101,7 @@ impl
             attributes,
             validation,
             draft,
+            version,
         }
     }
 }
@@ -114,6 +123,40 @@ pub(super) struct SavePipelineRequest {
     /// when it serialized `yaml` and `prompts`.
     #[serde(default)]
     pub(super) draft: Option<DraftContent>,
+    /// How the draft lands among the versions; absent is a new version under
+    /// the default title.
+    #[serde(default)]
+    pub(super) version: Option<SaveAs>,
+}
+
+/// A version as the history lists it (`GET /pipelines/{id}/versions`).
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub(super) struct PipelineVersionEntry {
+    pub(super) number: u32,
+    pub(super) title: String,
+    /// Who saved it; absent for the file the versions started from, and
+    /// for a file written outside PDO.
+    pub(super) author: Option<pdo_kernel::Actor>,
+    /// RFC 3339.
+    pub(super) saved_at: String,
+    /// The file was written outside PDO.
+    pub(super) external: bool,
+    /// The Runs that launched it.
+    pub(super) runs: usize,
+}
+
+impl From<crate::application::ListedVersion> for PipelineVersionEntry {
+    fn from(listed: crate::application::ListedVersion) -> Self {
+        Self {
+            number: listed.meta.number,
+            title: listed.meta.title,
+            author: listed.meta.author,
+            saved_at: listed.meta.saved_at,
+            external: listed.meta.external,
+            runs: listed.runs,
+        }
+    }
 }
 
 #[derive(Deserialize)]

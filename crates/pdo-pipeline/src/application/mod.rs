@@ -21,6 +21,7 @@ mod registry_names;
 mod rename_pipeline;
 mod save_pipeline;
 mod validation;
+mod versions;
 
 pub use editor_json::editor_json;
 pub use error::PipelineError;
@@ -31,6 +32,7 @@ pub use queries::{sidecar_export, PipelineDetail, PipelineSummary, SidecarExport
 pub use rename_pipeline::RenameOutcome;
 pub use save_pipeline::SaveOutcome;
 pub use validation::VALIDATE;
+pub use versions::{ListedVersion, VersionDetail};
 
 /// Where a new or moved pipeline landed.
 #[derive(Debug, Clone, PartialEq, Eq)]

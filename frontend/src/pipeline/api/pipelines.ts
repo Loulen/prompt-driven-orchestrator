@@ -5,9 +5,21 @@
 
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { PipelineValidation } from "../../shared/generated/PipelineValidation";
+import type { PipelineVersionRef } from "../../shared/generated/PipelineVersionRef";
 import { ApiError, request } from "../../shared/http/client";
 import type { PipelineDetail } from "../model/pipeline";
 import { foldPipelineDetail } from "../model/pipelineDetail";
+import type { SaveAs } from "./versions";
+
+/** Where a save landed: the final id, the version the file now is, and the
+ *  pipeline the version saved until now was kept as. */
+export interface SaveResult {
+  ok: boolean;
+  id?: string;
+  renamed?: boolean;
+  version?: PipelineVersionRef;
+  kept?: { id: string };
+}
 
 export function fetchPipelines(): Promise<PipelineListEntry[]> {
   return request<PipelineListEntry[]>("GET", "/pipelines");
@@ -32,18 +44,16 @@ export function savePipeline(
   prompts: Record<string, string>,
   scope?: string,
   draft?: { pipeline: unknown; prompts: Record<string, string> },
-): Promise<{ ok: boolean; id?: string; renamed?: boolean }> {
+  version?: SaveAs,
+): Promise<SaveResult> {
   void scope;
   // #774 — the daemon answers with the FINAL id: a save whose `name:` field
   // changed moves the registry entry (`<old>.yaml` + sidecar) and returns the
   // new stem, so the caller can rekey the open tab in the same gesture.
-  return request<{ ok: boolean; id?: string; renamed?: boolean }>(
-    "PUT",
-    `/pipelines/${encodeURIComponent(id)}`,
-    // ADR-0088: a tab's shared draft is saved with what it held, which the
-    // daemon then counts the draft's changes from.
-    { body: draft ? { yaml, prompts, draft } : { yaml, prompts }, label: `PUT /pipelines/${id}` },
-  );
+  // ADR-0088: a tab's shared draft is saved with what it held, which the
+  // daemon then counts the draft's changes from, as the version `version` says.
+  const body = draft ? { yaml, prompts, draft, ...(version ? { version } : {}) } : { yaml, prompts };
+  return request<SaveResult>("PUT", `/pipelines/${encodeURIComponent(id)}`, { body, label: `PUT /pipelines/${id}` });
 }
 
 /**

@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from "react";
 import { useEditStore } from "../../../pipeline/store/editStore";
 import * as newRunForm from "../../model/newRunForm";
+import { draftLaunch } from "../../../pipeline/model/versions";
 import type { OpenIntent } from "../../model/openIntent";
 import { useNewRunState } from "./useNewRunState";
 import { useOpenIntentSeeding } from "./useOpenIntentSeeding";
@@ -64,7 +65,21 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
     [setSelectedPipelineId, setPipelineChosen, setOverrides, setVarsOpen],
   );
 
-  const flushPendingSaves = useEditStore((s) => s.flushPendingSaves);
+  // ADR-0088: the open drafts a launch would leave out, and their Save.
+  const openTabs = useEditStore((s) => s.openTabs);
+  const listedPipelines = useEditStore((s) => s.pipelines);
+  const saveTab = useEditStore((s) => s.save);
+  const draftLaunchOf = useCallback(
+    (pipelineId: string) => draftLaunch(pipelineId, openTabs, listedPipelines),
+    [openTabs, listedPipelines],
+  );
+  const saveDraftVersion = useCallback(
+    async (tabId: string) => {
+      const saved = await saveTab(tabId, { new_version: true, keep_old: false });
+      return saved ? (saved.id ?? tabId) : null;
+    },
+    [saveTab],
+  );
 
   const handleOverrideChange = useCallback((key: string, value: string) => {
     setOverrides((prev) => ({ ...prev, [key]: value }));
@@ -79,7 +94,8 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
   const submit = useNewRunSubmit(state, {
     primaryInProject: launch.primaryInProject,
     launchProject: launch.launchProject,
-    flushPendingSaves,
+    draftLaunchOf,
+    saveDraftVersion,
     attachmentsOverLimit: attachmentState.attachmentsOverLimit,
     onCreated,
     onClose,
@@ -96,7 +112,6 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
     variableEntries,
     overrideCount,
     handlePipelineChange,
-    flushPendingSaves,
     handleOverrideChange,
     ...attachmentState,
     ...submit,

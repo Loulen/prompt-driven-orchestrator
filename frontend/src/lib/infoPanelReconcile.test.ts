@@ -13,6 +13,12 @@ describe("shouldCloseInfoOnTabChange (#385)", () => {
     expect(shouldCloseInfoOnTabChange({ prevTabId: "a", nextTabId: "b", infoOpen: true })).toBe(true);
   });
 
+  it("stays open between a pipeline and a version of it shown read only (ADR-0088)", () => {
+    expect(shouldCloseInfoOnTabChange({ prevTabId: "flow", nextTabId: "__version__flow@2", infoOpen: true })).toBe(false);
+    expect(shouldCloseInfoOnTabChange({ prevTabId: "__version__flow@2", nextTabId: "__version__flow@1", infoOpen: true })).toBe(false);
+    expect(shouldCloseInfoOnTabChange({ prevTabId: "__version__flow@2", nextTabId: "other", infoOpen: true })).toBe(true);
+  });
+
   it("stays open when the tab did not change (reselect same run/tab)", () => {
     expect(shouldCloseInfoOnTabChange({ prevTabId: "a", nextTabId: "a", infoOpen: true })).toBe(false);
   });

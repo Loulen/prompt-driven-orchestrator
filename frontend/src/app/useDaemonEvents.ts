@@ -89,6 +89,12 @@ export function useDaemonEvents({
         loadPipelines();
         return;
       }
+      // ADR-0088: a Save numbered a new version: the list (and the Save, launch
+      // and history windows that read it) learn it, no editor reloads.
+      if (msg.type === "pipeline_version_changed") {
+        loadPipelines();
+        return;
+      }
       // ADR-0088: the list shows who has a shared draft open, live.
       if (msg.type === "pipeline_draft_changed" && msg.pipeline_id && msg.draft) {
         showListedDraft(msg.pipeline_id, msg.draft);

@@ -105,6 +105,11 @@ and unit tests beside the code.
   `adapters/sqlite_drafts.rs`, the socket `adapters/http/draft.rs`, and the follower of the
   written files `adapters/draft_follow.rs`. The frontend's side is `pipeline/store/draftSession.ts`
   over `yjs`.
+  The versions a Save freezes (ADR-0088): their rules (numbering, titles, the name of a kept
+  version) are `domain/version.rs`, the use cases `application/versions.rs` and
+  `application/save_pipeline.rs`, the store `adapters/sqlite_versions.rs`; the frontend's are
+  `pipeline/model/versions.ts`, the « Save… » window, the « Versions » tab and the launch window
+  (`pipeline/components/SaveVersionModal.tsx`, `VersionsTab.tsx`, `LaunchDraftModal.tsx`).
 - `run` (`crates/pdo-run`, `frontend/src/run/`): a Run's events (`domain/event/`), its state
   (`domain/state/`) and the pure projection that folds one into the other (`domain/projection/`),
   with the rules a Run follows — the graph it walks, what it allows, its verdicts — and the

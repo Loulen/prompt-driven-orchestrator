@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openPipelineForEdit } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 
 // Layer 3b — UI witness for Bug E (#17). Without the daemon-side fix, edits
 // would be wiped by the broadcast/reload cycle: the daemon's PUT triggers a
@@ -90,6 +90,7 @@ test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) 
   // First edit + explicit save (auto-save removed in #35).
   await promptArea.fill("MARKER_A");
   await page.getByTestId("save-button").click();
+  await confirmSaveVersion(page);
 
   // Wait for the watcher broadcast cycle to settle.
   await page.waitForTimeout(1900);
@@ -100,6 +101,7 @@ test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) 
 
   // Explicit save again, then cover the broadcast/reload window.
   await page.getByTestId("save-button").click();
+  await confirmSaveVersion(page);
   await page.waitForTimeout(3000);
 
   await expect(promptArea).toHaveValue("MARKER_A_then_MARKER_B");

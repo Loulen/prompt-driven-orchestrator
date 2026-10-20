@@ -50,6 +50,17 @@ export async function openPipelineForEdit(page: Page, name: string): Promise<voi
 }
 
 /**
+ * ADR-0088: the Save of a shared draft opens the « Save… » window; confirm it
+ * as the next version under its default title.
+ */
+export async function confirmSaveVersion(page: Page): Promise<void> {
+  const modal = page.getByTestId("save-version-modal");
+  await expect(modal).toBeVisible();
+  await page.getByTestId("save-version-confirm").click();
+  await expect(modal).toHaveCount(0);
+}
+
+/**
  * Choose a pipeline in the New Run form by its id — the YAML file stem (#822).
  *
  * The field is the app's own dropdown menu now, not a `<select>`, so there is no

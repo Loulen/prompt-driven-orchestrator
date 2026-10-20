@@ -307,4 +307,9 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
     expect(screen.queryByTestId("library-row-draft")).not.toBeInTheDocument();
     expect(screen.queryByTestId("draft-participant")).not.toBeInTheDocument();
   });
+
+  it("shows the number of its last version (ADR-0088)", () => {
+    render(<LibraryRow name="flow" nodeCount={5} showDuplicate={false} onDelete={() => {}} deleteTitle="Delete" version={8} />);
+    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("5 nodes · v8");
+  });
 });

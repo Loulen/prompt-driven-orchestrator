@@ -38,6 +38,8 @@ const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   "pipeline_validation_changed",
   // ADR-0088: who has a Pipeline's shared draft open, and its changes.
   "pipeline_draft_changed",
+  // ADR-0088: a Save numbered a new version of a Pipeline.
+  "pipeline_version_changed",
   // API 0.12: who has which Run open.
   "presence_arrived",
   "presence_left",

@@ -10,6 +10,29 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.48.0 — Versions de pipeline (CORE-91)
+
+- Save fige le brouillon partagé en version (ADR-0088), numérotée et titrée (`vN` par défaut) :
+  fenêtre « Save… » avec « Save as a new version » (décochée, la dernière version est remplacée
+  sous son numéro) et « Keep old as new pipeline » (la version enregistrée jusque-là devient le
+  pipeline « <nom> (vN) »). Le fichier du registre reste la dernière version : New Run, les
+  Triggers et l'export la lisent. Les versions vivent dans la table SQLite `pipeline_version`.
+- **Migration** : un pipeline sans version devient v1 à sa première lecture, titrée par le champ
+  libre `version:` de son YAML (sinon `v1`). Ce champ disparaît de l'Identity de Pipeline info ;
+  le YAML le garde.
+- **Plus d'enregistrement silencieux au lancement** : New Run n'écrit plus les onglets modifiés.
+  Un brouillon qui diffère de la dernière version demande « Save as vN and run » (défaut) ou
+  « Run last version » ; créer ou modifier un Trigger n'enregistre plus rien.
+- Historique : onglet « Versions » de Pipeline info (brouillon, versions, auteur, date, nombre de
+  Runs) ; « View » ouvre une version en lecture seule, « Restore » la remet dans le brouillon pour
+  tous, d'un seul Undo, sans créer de version.
+- Un Run retient sa version (`pipeline_version` du `RunStarted` et de l'état du Run) ; son Info
+  affiche « vN · titre » et « vM is out » quand une version plus récente existe.
+- API : `GET /pipelines/{id}/versions`, `GET /pipelines/{id}/versions/{n}` ; `PUT /pipelines/{id}`
+  prend `version` (`new_version`, `title`, `keep_old`) et répond `version` et `kept` ;
+  `GET /pipelines` gagne `version` ; le flux `/ws` annonce `pipeline_version_changed`. Les
+  Résumés de Run (version 4) se reconstruisent au boot.
+
 ## 2.47.0 — Lancer dans un Projet ; un dépôt dans plusieurs Projets (CORE-95)
 
 - **Cassant (ADR-0087).** Le Projet d'un Run est choisi au lancement et enregistré sur le Run,
@@ -36,6 +59,7 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - New Run › Where commence par le Projet (le dernier choisi est présélectionné, « No project »
   seulement si les Droits le permettent), présélectionne son dépôt primaire par défaut et propose
   ses autres dépôts comme secondaires cochables, en lecture seule par défaut.
+
 ## 2.46.0 — Output de type files, téléchargement des artefacts (CORE-94)
 
 - Nouveau type d'output `files` (`PortType::Files`) : un fichier ou plus, de tout format, dans

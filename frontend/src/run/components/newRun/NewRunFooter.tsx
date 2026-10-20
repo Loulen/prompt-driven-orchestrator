@@ -51,7 +51,7 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
               data-testid="launch-button-wrapper"
             >
               <button
-                onClick={handleLaunch}
+                onClick={() => void handleLaunch()}
                 disabled={submitting || !canLaunch}
                 aria-describedby={launchBlockReason ? launchReasonId : undefined}
                 className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"

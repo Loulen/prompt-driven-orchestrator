@@ -14,4 +14,5 @@ pub mod self_writes;
 pub mod skill_bank;
 pub mod sqlite_drafts;
 pub mod sqlite_validations;
+pub mod sqlite_versions;
 pub mod watcher;

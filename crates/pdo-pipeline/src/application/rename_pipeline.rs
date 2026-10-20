@@ -49,6 +49,10 @@ impl Pipelines {
             return Err(PipelineError::NameRequired);
         }
         let parsed = parse_pipeline(&yaml)?;
+        // The file as it was is a version before the rename touches it.
+        if let Err(e) = self.ensure_versions(id).await {
+            tracing::warn!("versions of pipeline {id}: unreadable: {e:?}");
+        }
         let old_name = parsed.pipeline.name.trim().to_string();
         if old_name == new_name {
             return Ok(RenameOutcome::Unchanged {
@@ -66,6 +70,7 @@ impl Pipelines {
             self.registry
                 .write(id, &new_yaml)
                 .map_err(PipelineError::Storage)?;
+            self.file_is_last_version(Some(actor), id, false).await;
             let path = self.registry.path_of(id);
             self.events.changed(id, &path.to_string_lossy());
             info!("Pipeline {id} display name updated to {new_name}");
@@ -90,6 +95,8 @@ impl Pipelines {
             })
             .await;
         self.carry_validation(id, &new_id).await;
+        self.carry_versions(id, &new_id).await;
+        self.file_is_last_version(Some(actor), &new_id, false).await;
         self.draft_moved(id, &new_id, true).await;
         // Announce the move ourselves: self-writes are suppressed by the
         // watcher, and clients must refresh the list under the NEW id at once.

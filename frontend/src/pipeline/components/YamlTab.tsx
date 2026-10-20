@@ -29,15 +29,18 @@ export function YamlTab({
     () => (pipeline ? serializePipeline(pipeline) : ""),
     [pipeline],
   );
-  // The last saved portable document — what Copy / Download export.
-  const [yaml, setYaml] = useState(fallbackYaml);
   // #948: an edit shows here before it is saved. While the active tab holds
   // unsaved edits the view is the edit buffer serialized (what Save will write);
-  // Copy / Download keep exporting the saved document, refetched once Save lands.
+  // Copy / Download export the last saved version, fetched even while the draft
+  // differs from it, and refetched once Save lands.
   const dirty = useEditStore(
     (s) => s.openTabs.find((t) => t.id === s.activeTabId)?.dirty ?? false,
   );
-  const shownYaml = dirty ? fallbackYaml : yaml;
+  // The last saved portable document — null until known while the draft differs.
+  const [yaml, setYaml] = useState<string | null>(
+    dirty && (pipelineId || runId) ? null : fallbackYaml,
+  );
+  const shownYaml = dirty ? fallbackYaml : (yaml ?? fallbackYaml);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const [showExcluded, setShowExcluded] = useState(false);
@@ -52,25 +55,27 @@ export function YamlTab({
     return ids.size;
   }, [pipeline]);
 
+  // While the draft differs, its edits do not change the saved document: fetch it once.
+  // A pipeline with no saved document exports its buffer.
+  const savedKey = dirty && (pipelineId || runId) ? null : fallbackYaml;
   useEffect(() => {
-    if (dirty) return;
     let cancelled = false;
     const request = runId
       ? fetchRunPipelineDocument(runId)
       : pipelineId
         ? fetchPipelineDocument(pipelineId)
-        : Promise.resolve(fallbackYaml);
+        : Promise.resolve(savedKey);
     request
       .then((document) => {
         if (!cancelled) setYaml(document);
       })
       .catch(() => {
-        if (!cancelled) setYaml(fallbackYaml);
+        if (!cancelled) setYaml(savedKey);
       });
     return () => {
       cancelled = true;
     };
-  }, [dirty, fallbackYaml, pipelineId, runId]);
+  }, [savedKey, pipelineId, runId]);
 
   useEffect(() => {
     if (scrollToLine == null || !preRef.current) return;
@@ -88,6 +93,7 @@ export function YamlTab({
   }
 
   async function copyDocument() {
+    if (yaml == null) return;
     setCopyError(false);
     if (await copyToClipboard(yaml)) {
       setCopied(true);
@@ -100,6 +106,7 @@ export function YamlTab({
   const pipelineName = pipeline.name || "pipeline";
 
   function downloadDocument() {
+    if (yaml == null) return;
     saveBlob(new Blob([yaml], { type: "application/yaml" }), `${pipelineName}.pdo.yaml`);
   }
 
@@ -132,6 +139,7 @@ export function YamlTab({
           <button
             className="ml-auto flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
             onClick={copyDocument}
+            disabled={yaml == null}
           >
             <Copy size={11} />
             {copied ? "✓ Copied" : "Copy"}
@@ -139,6 +147,7 @@ export function YamlTab({
           <button
             className="flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
             onClick={downloadDocument}
+            disabled={yaml == null}
           >
             <Download size={11} />
             Download

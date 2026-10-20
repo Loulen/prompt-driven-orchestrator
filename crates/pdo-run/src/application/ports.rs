@@ -290,7 +290,13 @@ pub trait SourcePipelines: Send + Sync {
         id: &'a str,
         yaml: &'a str,
         prompts: &'a HashMap<String, String>,
-    ) -> Result<(), OverwriteRefusal>;
+    ) -> BoxFuture<'a, Result<(), OverwriteRefusal>>;
+    /// The last version of `id` (ADR-0088): the file a new Run reads, and
+    /// the version it retains. `None` when the registry does not hold `id`.
+    fn last_version<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, Option<pdo_pipeline::domain::version::PipelineVersionRef>>;
 }
 
 /// Why the shared pipeline was not overwritten.

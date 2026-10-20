@@ -18,7 +18,7 @@ use pdo_kernel::attributes::AttributeFilter;
 use pdo_kernel::Actor;
 
 use crate::adapters::env::resolve_max_attachments_mb;
-use crate::application::artifact::ArtifactQuery;
+use crate::application::artifact::{ArtifactQuery, ArtifactZipQuery};
 use crate::application::create_run::{
     reject_unknown_create_run_fields, CreateRunRequest, PatchRunReposRequest,
 };
@@ -168,6 +168,14 @@ pub(super) async fn artifact(
     Query(query): Query<ArtifactQuery>,
 ) -> Response {
     runs.artifact(&run_id, query).await
+}
+
+pub(super) async fn artifact_zip(
+    State(runs): State<Arc<Runs>>,
+    Path(run_id): Path<String>,
+    Query(query): Query<ArtifactZipQuery>,
+) -> Response {
+    runs.artifact_zip(&run_id, query).await
 }
 
 pub(super) async fn pipeline(

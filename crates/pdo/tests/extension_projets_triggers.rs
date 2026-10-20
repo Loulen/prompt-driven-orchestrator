@@ -96,8 +96,8 @@ async fn projet(daemon: &TestDaemon, name: &str, repo: &str) -> String {
     project["id"].as_str().unwrap().to_string()
 }
 
-/// A Trigger of `solo` working in `repo`: its id.
-async fn trigger_in(daemon: &TestDaemon, name: &str, repo: &str) -> String {
+/// A Trigger of `solo` working in `repo`, launching in `project`: its id.
+async fn trigger_in(daemon: &TestDaemon, name: &str, repo: &str, project: Option<&str>) -> String {
     let (status, trigger) = post(
         daemon,
         "/triggers",
@@ -107,6 +107,7 @@ async fn trigger_in(daemon: &TestDaemon, name: &str, repo: &str) -> String {
             "cron": "0 3 * * *",
             "input_template": "go",
             "target_repo": repo,
+            "project_id": project,
         }),
     )
     .await;
@@ -219,7 +220,7 @@ async fn the_signal_of_the_triggers_reaches_ws_as_a_trigger_updated_without_id()
     let daemon = TestDaemon::spawn_with_extensions(seed, ext.boxed())
         .await
         .unwrap();
-    let trigger = trigger_in(&daemon, "nightly", &daemon.target_repo()).await;
+    let trigger = trigger_in(&daemon, "nightly", &daemon.target_repo(), None).await;
     let mut ws = daemon.connect_ws().await.unwrap();
 
     let (status, body) = post(&daemon, "/ext/test/triggers-changed", json!({})).await;
@@ -270,10 +271,10 @@ async fn world() -> World {
     let other = tempfile::tempdir().unwrap();
     git_init(other.path()).unwrap();
     let other_repo = other.path().to_string_lossy().into_owned();
-    projet(&daemon, "P1", &daemon.target_repo()).await;
+    let p1 = projet(&daemon, "P1", &daemon.target_repo()).await;
     let p2 = projet(&daemon, "P2", &other_repo).await;
-    let t1 = trigger_in(&daemon, "in P1", &daemon.target_repo()).await;
-    let t2 = trigger_in(&daemon, "in P2", &other_repo).await;
+    let t1 = trigger_in(&daemon, "in P1", &daemon.target_repo(), Some(&p1)).await;
+    let t2 = trigger_in(&daemon, "in P2", &other_repo, Some(&p2)).await;
     World {
         daemon,
         control,
@@ -382,7 +383,7 @@ async fn ws_says_nothing_of_a_trigger_to_a_connection_that_may_not_read_it() {
 #[tokio::test]
 async fn without_extension_every_trigger_and_message_passes_unguarded() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let trigger = trigger_in(&daemon, "nightly", &daemon.target_repo()).await;
+    let trigger = trigger_in(&daemon, "nightly", &daemon.target_repo(), None).await;
     let mut ws = daemon.connect_ws().await.unwrap();
     let (status, _) = send(
         &daemon,

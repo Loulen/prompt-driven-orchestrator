@@ -75,6 +75,11 @@ pub struct RunListEntry {
     /// create boundary (ADR-0033) can be unset — this is a READ, so keep the
     /// fallback forever.
     pub effective_repo: String,
+    /// The Projet the Run was launched in (ADR-0087): the group the list
+    /// ranks it under. Absent for a Run launched in no Projet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project_id: Option<String>,
     /// The entity attributes the extensions stamped on it (CONTEXT.md §
     /// *Extensions*); absent when none.
     #[serde(skip_serializing_if = "Attributes::is_empty")]
@@ -122,6 +127,7 @@ impl Runs {
                     parent_run_id: summary.parent_run_id,
                     parent_node_id: summary.parent_node_id,
                     effective_repo,
+                    project_id: summary.project_id,
                     attributes,
                 }
             })

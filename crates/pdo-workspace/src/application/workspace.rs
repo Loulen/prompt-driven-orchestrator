@@ -70,17 +70,19 @@ impl Workspace {
         authorize(self.host.as_ref(), actor, &operation)
     }
 
-    /// The Projets the repository `path` is in: the one that owns it, or none
-    /// (also when the Projets cannot be read). Its other spellings are tried
-    /// when it is no member, as the Run context places a Run
-    /// ([`member_spellings`]).
+    /// The Projets the repository `path` is in: every Projet it is a member
+    /// of (ADR-0087), or none (also when the Projets cannot be read). Its
+    /// other spellings are tried when it is no member ([`member_spellings`]):
+    /// `/repo/` and `/repo/.` are in the Projets of `/repo`.
     pub(crate) async fn projects_of_repository(&self, path: &str) -> Vec<String> {
         for spelling in member_spellings(path) {
-            match self.projects.owner_of(&spelling).await {
-                Ok(Some(owner)) => return vec![owner.id],
-                Ok(None) => {}
+            match self.projects.containing(&spelling).await {
+                Ok(projects) if !projects.is_empty() => {
+                    return projects.into_iter().map(|p| p.id).collect()
+                }
+                Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!("the Projet owning {path} cannot be read: {e}");
+                    tracing::warn!("the Projets of {path} cannot be read: {e}");
                     return Vec::new();
                 }
             }

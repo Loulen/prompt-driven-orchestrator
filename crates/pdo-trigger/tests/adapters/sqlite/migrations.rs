@@ -305,3 +305,91 @@ async fn init_is_idempotent_and_adds_max_concurrent_to_legacy_table() {
 }
 
 // --- #244: guard-output capture on guard-exit-nonzero fire rows ---
+
+/// ADR-0087 migration: the `project_id` column is added once, the Triggers
+/// that existed then marked « to record »; the boot records their Projet once.
+#[tokio::test]
+async fn init_records_the_projet_the_old_rule_gave_a_trigger_once() {
+    let db = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE triggers (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            pipeline_id TEXT NOT NULL,
+            pipeline_name TEXT NOT NULL DEFAULT '',
+            target_repo TEXT,
+            target_repos TEXT,
+            source_branch TEXT,
+            input_template TEXT NOT NULL DEFAULT '',
+            variables JSON NOT NULL DEFAULT '{}',
+            cron TEXT NOT NULL,
+            guard_command TEXT,
+            overlap_policy TEXT NOT NULL DEFAULT 'skip',
+            max_concurrent INTEGER,
+            sandbox TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            next_fire_at TEXT,
+            last_fired_at TEXT,
+            last_outcome TEXT,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO triggers (id, name, pipeline_id, target_repo, cron, created_at) VALUES
+            ('trg-in', 'in', 'pipe', '/repos/web/', '0 9 * * *', 's'),
+            ('trg-out', 'out', 'pipe', '/repos/loose', '0 9 * * *', 's')",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    init(&db).await.unwrap();
+    // Marked « to record », read as no Projet until the boot records it.
+    assert_eq!(get(&db, "trg-in").await.unwrap().unwrap().project_id, None);
+    let mut pending = legacy_project_pending(&db).await.unwrap();
+    pending.sort();
+    assert_eq!(
+        pending,
+        vec![
+            ("trg-in".to_string(), Some("/repos/web/".to_string())),
+            ("trg-out".to_string(), Some("/repos/loose".to_string())),
+        ]
+    );
+    record_legacy_project(&db, "trg-in", Some("p1"))
+        .await
+        .unwrap();
+    record_legacy_project(&db, "trg-out", None).await.unwrap();
+    assert_eq!(
+        get(&db, "trg-in")
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id
+            .as_deref(),
+        Some("p1")
+    );
+    assert!(legacy_project_pending(&db).await.unwrap().is_empty());
+
+    // Once: a later init marks nothing again, and a recorded Projet stays.
+    init(&db).await.unwrap();
+    assert!(legacy_project_pending(&db).await.unwrap().is_empty());
+    record_legacy_project(&db, "trg-in", Some("p2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        get(&db, "trg-in")
+            .await
+            .unwrap()
+            .unwrap()
+            .project_id
+            .as_deref(),
+        Some("p1")
+    );
+}

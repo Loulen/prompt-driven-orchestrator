@@ -29,6 +29,7 @@ pub(crate) fn sample(name: &str, cron: &str) -> NewTrigger {
         pipeline_id: "lib-pipe-1".to_string(),
         pipeline_name: "Auditor".to_string(),
         target_repo: Some("/repos/foo".to_string()),
+        project_id: None,
         target_repos: None,
         source_branch: Some("main".to_string()),
         input_template: "audit the codebase".to_string(),

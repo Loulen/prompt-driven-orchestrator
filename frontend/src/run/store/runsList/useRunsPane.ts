@@ -92,11 +92,16 @@ export function useRunsPane({
     return [...set];
   }, [projects, recentRepos, runs]);
 
-  // Group the active Runs list by Projet (#552), falling back to the #258
-  // per-path grouping when nothing is named; `null` ⇒ the flat list. #783: the
-  // grouping key is the ROOT's repo — a child follows its parent whatever its
-  // own repo.
-  const runGroups = groupByProject(activeTree, (n) => n.run.effective_repo, projectOf);
+  // Group the active Runs list by the Projet each Run was launched in (#552,
+  // ADR-0087), falling back to the #258 per-path grouping for a Run in no
+  // Projet; `null` ⇒ the flat list. #783: the grouping key is the ROOT's — a
+  // child follows its parent whatever its own repo.
+  const { projectOfRun } = view;
+  const runGroups = groupByProject(
+    activeTree,
+    (n) => n.run.effective_repo,
+    (n) => projectOfRun(n.run.project_id),
+  );
   const orderedActive: RunTreeNode[] =
     runGroups === null ? activeTree : runGroups.flatMap((g) => g.items);
 

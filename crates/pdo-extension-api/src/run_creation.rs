@@ -72,6 +72,9 @@ pub struct NewRun {
     pub repos: Vec<RunRepo>,
     /// Its display name; the core names it otherwise.
     pub name: Option<String>,
+    /// The Projet it is launched in (ADR-0087), which must hold its primary
+    /// repository; `None`: in no Projet.
+    pub project_id: Option<String>,
     /// The data it carries for the extensions, as `POST /runs` `extensions`.
     pub extensions: ExtensionData,
 }
@@ -92,6 +95,12 @@ impl NewRun {
         self
     }
 
+    /// The same Run, launched in the Projet `project_id` (API 0.16).
+    pub fn in_project(mut self, project_id: impl Into<String>) -> Self {
+        self.project_id = Some(project_id.into());
+        self
+    }
+
     /// The same Run, named `name`.
     pub fn named(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
@@ -107,7 +116,8 @@ impl NewRun {
     /// The body of the `POST /runs` this Run is: `pipeline`, `input`,
     /// `target_repo` (the primary), `source_branch` (the primary's branch),
     /// `target_repos` (every repository, only with a secondary), `name`,
-    /// `extensions` (only when it carries some).
+    /// `project_id` (only in a Projet), `extensions` (only when it carries
+    /// some).
     pub fn to_request_body(&self) -> Value {
         let mut body = serde_json::json!({
             "pipeline": self.pipeline,
@@ -124,6 +134,9 @@ impl NewRun {
         }
         if let Some(name) = &self.name {
             body["name"] = Value::from(name.clone());
+        }
+        if let Some(project_id) = &self.project_id {
+            body["project_id"] = Value::from(project_id.clone());
         }
         if !self.extensions.is_empty() {
             body["extensions"] = serde_json::to_value(&self.extensions).unwrap_or_default();
@@ -204,6 +217,14 @@ mod tests {
                 "extensions": { "test": { "cle": "valeur" } },
             })
         );
+    }
+
+    #[test]
+    fn a_run_launched_in_a_projet_names_it() {
+        let run = NewRun::new("relay", "go")
+            .in_repo(RunRepo::new("/repo"))
+            .in_project("prj-1");
+        assert_eq!(run.to_request_body()["project_id"], "prj-1");
     }
 
     #[test]

@@ -31,7 +31,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     setEditingTriggerId, setTriggerName, setCronPresetId, setDailyHour, setDailyMinute,
     setRawCron, setGuardCommand, setGuardTest, setGuardTestError, setAllowOverlap,
     setMaxConcurrent, setError, setProvisioning, setProvisioningValid, setProvisioningBlockReason,
-    setSecondaryRepos,
+    setSecondaryRepos, setProjectId, setProjectChosen,
     settings, setSettings, setSettingsFailed, setSandbox, setHarness, setAgentChoice,
     setSkills, setPromptAddedSkills, recentRepos,
   } = s;
@@ -100,6 +100,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
         setEditingTriggerId(null);
         blankTriggerFields();
         clearSharedIfFromTrigger();
+        setProjectChosen(false);
         break;
 
       case "new-trigger":
@@ -107,6 +108,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
         setEditingTriggerId(null);
         blankTriggerFields();
         clearSharedIfFromTrigger();
+        setProjectChosen(false);
         break;
 
       case "edit-trigger": {
@@ -123,6 +125,9 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
         // repo, which is exactly the case the daemon now 400s.
         resetRepo(trigger.target_repo ?? "");
         setSourceBranch(trigger.source_branch ?? "");
+        // ADR-0087: the Projet the Trigger launches its Runs in, as chosen.
+        setProjectId(trigger.project_id ?? null);
+        setProjectChosen(true);
         // #465: round-trip the stored secondaries (raw JSON
         // `[{repo, base_branch?, read_only?}]` with `[0]` = primary). Drop `[0]` —
         // it prefills `targetRepo` above. An absent `read_only` reads `false`

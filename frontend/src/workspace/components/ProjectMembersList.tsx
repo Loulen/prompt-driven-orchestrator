@@ -1,17 +1,25 @@
 /**
  * The Projet's member repositories, a list with its own maximum height — nested, since
- * #940, in the modal's scrolling body. A repo owned by another Projet is shown disabled.
+ * #940, in the modal's scrolling body. A repository may be a member of several Projets
+ * (ADR-0087): the other Projets holding it are named, never in the way. The default
+ * primary repository (the one New Run preselects) is chosen among the checked ones.
  */
 export default function ProjectMembersList({
   candidates,
   checked,
-  ownerElsewhere,
+  alsoIn,
+  primary,
   onToggle,
+  onPrimary,
 }: {
   candidates: string[];
   checked: Set<string>;
-  ownerElsewhere: Map<string, string>;
+  /** path → the names of the other Projets holding it. */
+  alsoIn: Map<string, string[]>;
+  /** The default primary repository, among the checked ones. */
+  primary: string | null;
   onToggle: (path: string) => void;
+  onPrimary: (path: string) => void;
 }) {
   return (
     <div
@@ -24,37 +32,53 @@ export default function ProjectMembersList({
         </div>
       )}
       {candidates.map((path) => {
-        const owner = ownerElsewhere.get(path);
-        const disabled = owner != null;
+        const others = alsoIn.get(path) ?? [];
+        const member = checked.has(path);
+        const isPrimary = member && primary === path;
         return (
-          <label
+          <div
             key={path}
-            className={`flex items-center gap-2 border-b border-line-soft px-2 py-1.5 last:border-b-0 ${
-              disabled ? "opacity-50" : "cursor-pointer hover:bg-bg-4"
-            }`}
+            className="flex items-center gap-2 border-b border-line-soft px-2 py-1.5 last:border-b-0 hover:bg-bg-4"
             style={{ fontSize: "11px" }}
-            title={owner ? `Already in project "${owner}"` : path}
+            title={others.length > 0 ? `Also in ${others.join(", ")}` : path}
             data-testid="project-member-row"
             data-path={path}
-            data-disabled={disabled ? "true" : "false"}
           >
-            <input
-              type="checkbox"
-              checked={checked.has(path)}
-              disabled={disabled}
-              onChange={() => onToggle(path)}
-              data-testid="project-member-checkbox"
-            />
-            <span className="truncate text-fg">{path}</span>
-            {owner && (
-              <span
-                className="ml-auto shrink-0 text-fg-4"
-                data-testid="project-member-owner"
-              >
-                in {owner}
+            <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={member}
+                onChange={() => onToggle(path)}
+                data-testid="project-member-checkbox"
+              />
+              <span className="truncate text-fg">{path}</span>
+            </label>
+            {others.length > 0 && (
+              <span className="shrink-0 text-fg-4" data-testid="project-member-also-in">
+                also in {others.join(", ")}
               </span>
             )}
-          </label>
+            {member &&
+              (isPrimary ? (
+                <span
+                  className="shrink-0 rounded bg-acc/15 px-1.5 py-0.5 font-mono text-acc"
+                  style={{ fontSize: "9.5px" }}
+                  data-testid="project-member-primary"
+                >
+                  default
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="shrink-0 rounded px-1.5 py-0.5 text-fg-4 transition-colors hover:bg-bg-5 hover:text-fg-2"
+                  style={{ fontSize: "10px" }}
+                  onClick={() => onPrimary(path)}
+                  data-testid="project-member-make-primary"
+                >
+                  Make default
+                </button>
+              ))}
+          </div>
         );
       })}
     </div>

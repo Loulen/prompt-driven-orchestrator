@@ -1093,7 +1093,7 @@ async fn skills_of_the_four_tiers_are_unioned_at_spawn_with_their_origin() {
         vec![a["id"].as_str().unwrap()]
     );
 
-    // Projet tier — the Projet owning the Run's primary repo.
+    // Projet tier — the Projet the Run is launched in.
     let project: serde_json::Value = post_json(
         &daemon,
         "/projects",
@@ -1146,6 +1146,7 @@ async fn skills_of_the_four_tiers_are_unioned_at_spawn_with_their_origin() {
             "pipeline": TIER_PIPELINE,
             "input": "go",
             "target_repo": primary,
+            "project_id": project_id,
             "skills": [d],
         }),
     )

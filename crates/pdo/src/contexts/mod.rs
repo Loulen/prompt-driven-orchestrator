@@ -266,7 +266,9 @@ pub(crate) mod testing {
                 .connect("sqlite::memory:")
                 .await
                 .unwrap();
-            crate::daemon::storage::init_db(&db).await.unwrap();
+            crate::daemon::storage::init_db(&db, &repo_root)
+                .await
+                .unwrap();
             let (bus_tx, _) = tokio::sync::broadcast::channel(80);
             let resources = ContextResources {
                 db: db.clone(),

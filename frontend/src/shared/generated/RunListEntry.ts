@@ -48,6 +48,11 @@ parent_run_id?: string, parent_node_id?: string,
  */
 effective_repo: string, 
 /**
+ * The Projet the Run was launched in (ADR-0087): the group the list
+ * ranks it under. Absent for a Run launched in no Projet.
+ */
+project_id?: string, 
+/**
  * The entity attributes the extensions stamped on it (CONTEXT.md §
  * *Extensions*); absent when none.
  */

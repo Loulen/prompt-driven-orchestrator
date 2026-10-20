@@ -64,6 +64,10 @@ pub enum RunAction {
         /// Overrides the parent Run's project — ADR-0033 keeps the boundary.
         #[arg(long)]
         target_repo: Option<String>,
+        /// The Projet the Run is launched in (ADR-0087); it must hold the
+        /// primary repo. From a node session, the Run stays in its parent's.
+        #[arg(long)]
+        project: Option<String>,
         /// Secondary repos as a JSON list of `{repo, base_branch?, read_only?}`
         /// (ADR-0042).
         #[arg(long)]

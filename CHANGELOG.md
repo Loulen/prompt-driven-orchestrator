@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.46.0 — Versions de pipeline (CORE-91)
+## 2.48.0 — Versions de pipeline (CORE-91)
 
 - Save fige le brouillon partagé en version (ADR-0088), numérotée et titrée (`vN` par défaut) :
   fenêtre « Save… » avec « Save as a new version » (décochée, la dernière version est remplacée
@@ -31,7 +31,52 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - API : `GET /pipelines/{id}/versions`, `GET /pipelines/{id}/versions/{n}` ; `PUT /pipelines/{id}`
   prend `version` (`new_version`, `title`, `keep_old`) et répond `version` et `kept` ;
   `GET /pipelines` gagne `version` ; le flux `/ws` annonce `pipeline_version_changed`. Les
-  Résumés de Run (version 3) se reconstruisent au boot.
+  Résumés de Run (version 4) se reconstruisent au boot.
+
+## 2.47.0 — Lancer dans un Projet ; un dépôt dans plusieurs Projets (CORE-95)
+
+- **Cassant (ADR-0087).** Le Projet d'un Run est choisi au lancement et enregistré sur le Run,
+  jamais déduit de son dépôt. `POST /runs` et `POST|PATCH /triggers` acceptent `project_id` ; un
+  Projet nommé doit exister et contenir le dépôt primaire (`400` sinon). Sans `project_id`, un
+  Run est **hors Projet**, même sur un dépôt membre d'un Projet ; un Run créé depuis une session
+  de nœud hérite du Projet de son Run parent, un Trigger lance ses Runs dans son Projet. Les
+  `Operation.projects` d'un Run, de ses nœuds, sessions et commentaires de Review sont ce Projet
+  enregistré : une extension qui lisait le Projet du dépôt doit relire ce champ.
+- Un dépôt peut appartenir à plusieurs Projets : plus de `409` « déjà dans un autre Projet ».
+  `DELETE /projects/{id}/members` ne retire le dépôt que de ce Projet. Chaque Projet désigne un
+  dépôt primaire par défaut (`primary_repo`, `PATCH /projects/{id}`), par défaut son premier
+  membre.
+- **Migration unique au démarrage.** Chaque Run existant reçoit dans son `run_started` le Projet
+  que l'ancienne règle lui attribuait (`project_id`, `null` s'il n'en avait pas), puis les Résumés
+  de Run sont reconstruits ; chaque Trigger reçoit de même le Projet de son dépôt cible. Un Run
+  déjà enregistré n'est jamais revu : changer les membres d'un Projet ne déplace aucun Run.
+- `GET /runs` et `GET /runs/{id}` portent `project_id` ; les listes de Runs et de Triggers se
+  groupent par Projet enregistré. Les Stats rangent le coût d'un Run sous ce Projet.
+- **`pdo-extension-api` 0.16.0**, sans rupture : `NewRun::in_project(id)` lance le Run d'un
+  `Host::create_run` dans un Projet. Sans lui, le Run est hors Projet.
+- `pdo run create --project <id>` lance dans un Projet ; depuis une session de nœud, le Run
+  enfant reste dans le Projet de son parent.
+- New Run › Where commence par le Projet (le dernier choisi est présélectionné, « No project »
+  seulement si les Droits le permettent), présélectionne son dépôt primaire par défaut et propose
+  ses autres dépôts comme secondaires cochables, en lecture seule par défaut.
+
+## 2.46.0 — Output de type files, téléchargement des artefacts (CORE-94)
+
+- Nouveau type d'output `files` (`PortType::Files`) : un fichier ou plus, de tout format, dans
+  `<node>/iter-<N>/<port>/`. La complétion refuse un dossier sans fichier (`missing_outputs`, un
+  sous-dossier ne compte pas). L'aval reçoit le dossier du port, dans le préambule, dans
+  `PDO_INPUT_*` d'un script et dans le panneau d'I/O ; une accumulation donne un dossier par
+  itération complétée.
+- `GET /runs/{id}/artifact?path=…&download=true` renvoie les octets bruts en pièce jointe, avec un
+  nom lisible (`<node>-<port>.md`, suffixé `-iter-<N>` après la première itération).
+  `GET /runs/{id}/artifact/zip?path=…` renvoie le zip d'un dossier de port (`<node>-<port>.zip`).
+  Les deux routes partagent le garde de traversal et posent `nosniff` ; jamais de `text/html`
+  (ADR-0028).
+- Vue du Run : badge « files », une puce par fichier qui le télécharge, « Download all » (zip),
+  icône ↓ au survol de toute ligne d'artefact et dans l'en-tête de la modale markdown. La modale
+  d'un port files pagine ses fichiers et les affiche selon leur format (image, texte, ou
+  téléchargement).
+- Inspecteur : option « Files » dans le sélecteur de type d'output.
 
 ## 2.45.0 — Durée Total ou Active d'un nœud (CORE-99)
 

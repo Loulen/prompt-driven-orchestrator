@@ -4,8 +4,8 @@ import type { Trigger } from "../../shared/generated/Trigger";
 import type { TriggerListEntry } from "../../shared/generated/TriggerListEntry";
 import type { Project } from "../../workspace/model/project";
 import { deleteTrigger, updateTrigger } from "../api/triggers";
-import { groupByProject, type ProjectRef } from "../../lib/groupByRepo";
-import { projectLookup } from "../../workspace/model/projectLookup";
+import { groupByProject } from "../../lib/groupByRepo";
+import { recordedProject } from "../../workspace/model/projectLookup";
 import { useSelectionStore } from "../../stores/selectionStore";
 import { handleSelectionKeydown } from "../../lib/selectionKeys";
 import ProjectEditModal from "../../workspace/components/ProjectEditModal";
@@ -80,13 +80,12 @@ export default function TriggersListPanel({
     isAttributeFilterActive(attributeFilter) || isAttributeFilterActive(projectFilter);
   const triggers = useMemo(() => {
     if (!filterActive) return allTriggers;
-    const lookup = projectLookup(projects);
     const byId = new Map(projects.map((p) => [p.id, p]));
     return allTriggers.filter((t) => {
       if (!matchesAttributes(t.attributes, attributeFilter)) return false;
       if (!isAttributeFilterActive(projectFilter)) return true;
-      const ref = t.effective_repo ? lookup(t.effective_repo) : null;
-      return ref !== null && matchesAttributes(byId.get(ref.id)?.attributes, projectFilter);
+      const project = t.project_id ? byId.get(t.project_id) : undefined;
+      return project !== undefined && matchesAttributes(project.attributes, projectFilter);
     });
   }, [allTriggers, projects, attributeFilter, projectFilter, filterActive]);
 
@@ -115,21 +114,22 @@ export default function TriggersListPanel({
     .map((t) => t.target_repo)
     .filter((r): r is string => !!r);
 
-  // #552 — verbatim `path → Projet` lookup and the candidate repos the pencil can
-  // attach (the distinct effective repos across the Triggers list).
-  const projectOf = useMemo<(path: string) => ProjectRef | null>(
-    () => projectLookup(projects),
-    [projects],
-  );
+  // #552 — the candidate repos the pencil can attach (the distinct effective
+  // repos across the Triggers list).
   const availableRepos = useMemo(() => {
     const set = new Set<string>();
     for (const t of allTriggers) if (t.effective_repo) set.add(t.effective_repo);
     return [...set];
   }, [allTriggers]);
 
-  // Group the Triggers list by Projet (#552), falling back to the #258 per-path
-  // grouping when nothing is named; `null` ⇒ the flat list.
-  const triggerGroups = groupByProject(triggers, (t) => t.effective_repo, projectOf);
+  // Group the Triggers list by the Projet each launches in (#552, ADR-0087),
+  // falling back to the #258 per-path grouping; `null` ⇒ the flat list.
+  const projectOfTrigger = useMemo(() => recordedProject(projects), [projects]);
+  const triggerGroups = groupByProject(
+    triggers,
+    (t) => t.effective_repo,
+    (t) => projectOfTrigger(t.project_id),
+  );
 
   // Visible order (post-grouping) — the basis for shift-range and select-all.
   const orderedIds =

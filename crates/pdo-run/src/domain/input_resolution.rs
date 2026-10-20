@@ -133,6 +133,10 @@ pub struct ResolvedInput {
     pub from_start: bool,
     /// True when the edge accumulates across iterations (#149 / #353).
     pub repeated: bool,
+    /// True when the source port is a `files` output: each path is then the
+    /// port folder, with every file the source dropped in it, not an
+    /// `output.md`.
+    pub folder: bool,
     /// The concrete resolved path(s): exactly one for a single wire or a
     /// Start-sourced prompt; one per COMPLETED source iteration for a
     /// `repeated`/pooled input (empty when the source has completed none —
@@ -181,25 +185,31 @@ pub fn resolve_consumer_inputs(
             edge.emergent_inputs()
                 .into_iter()
                 .map(|(source_port, input_name)| {
+                    let folder = !from_start && is_files_port(pipeline, source_node, &source_port);
+                    let consumed = |n: i64| {
+                        if folder {
+                            crate::domain::blackboard::port_dir(
+                                artifacts_dir,
+                                source_node,
+                                n,
+                                &source_port,
+                            )
+                        } else {
+                            crate::domain::blackboard::artifact_path(
+                                artifacts_dir,
+                                source_node,
+                                n,
+                                &source_port,
+                            )
+                        }
+                    };
                     let paths = if from_start {
                         vec![crate::domain::blackboard::input_path(artifacts_dir)]
                     } else if repeated {
                         // #353: one concrete path per COMPLETED source iteration.
                         repeated_iters
                             .get(source_node.as_str())
-                            .map(|iters| {
-                                iters
-                                    .iter()
-                                    .map(|&n| {
-                                        crate::domain::blackboard::artifact_path(
-                                            artifacts_dir,
-                                            source_node,
-                                            n,
-                                            &source_port,
-                                        )
-                                    })
-                                    .collect()
-                            })
+                            .map(|iters| iters.iter().map(|&n| consumed(n)).collect())
                             .unwrap_or_default()
                     } else {
                         // #194 / #370: the source's latest COMPLETED iteration, never
@@ -209,12 +219,7 @@ pub fn resolve_consumer_inputs(
                             .get(source_node.as_str())
                             .copied()
                             .unwrap_or(consumer_iter);
-                        vec![crate::domain::blackboard::artifact_path(
-                            artifacts_dir,
-                            source_node,
-                            it,
-                            &source_port,
-                        )]
+                        vec![consumed(it)]
                     };
 
                     ResolvedInput {
@@ -222,12 +227,24 @@ pub fn resolve_consumer_inputs(
                         source_node: source_node.clone(),
                         from_start,
                         repeated,
+                        folder,
                         paths,
                     }
                 })
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+/// Whether `node_id` declares `port` as a `files` output: its consumers then
+/// read the port folder.
+fn is_files_port(pipeline: &PipelineDef, node_id: &str, port: &str) -> bool {
+    pipeline
+        .nodes
+        .iter()
+        .find(|n| n.id == node_id)
+        .and_then(|n| n.outputs.iter().find(|p| p.name == port))
+        .is_some_and(|p| p.port_type == pdo_pipeline::domain::pipeline::PortType::Files)
 }
 
 #[cfg(test)]
@@ -577,6 +594,72 @@ mod tests {
                 "resolves to the source's latest-completed iter, not consumer_iter={consumer_iter}"
             );
         }
+    }
+
+    fn with_files_output(mut pipeline: PipelineDef) -> PipelineDef {
+        pipeline.nodes[0].outputs = vec![pdo_pipeline::domain::pipeline::Port {
+            name: "plan".into(),
+            port_type: pdo_pipeline::domain::pipeline::PortType::Files,
+            frontmatter: None,
+            when: None,
+            description: None,
+            instructions: None,
+            required: false,
+            intermediate: false,
+        }];
+        pipeline
+    }
+
+    #[test]
+    fn a_files_output_resolves_to_its_port_folder() {
+        let pipeline = with_files_output(wire_pipeline(
+            false,
+            pdo_pipeline::domain::pipeline::NodeType::Agent,
+        ));
+        let state = state_with(vec![node_with_iterations(
+            "planner",
+            &[(1, NodeStatus::Completed)],
+        )]);
+        let resolved =
+            resolve_over_seam(&pipeline, &state, Path::new("/artifacts"), "implementer", 1);
+        assert!(resolved[0].folder);
+        assert_eq!(
+            resolved[0].paths,
+            vec![PathBuf::from("/artifacts/planner/iter-1/plan")]
+        );
+    }
+
+    #[test]
+    fn a_repeated_files_output_pools_one_folder_per_completed_iter() {
+        let pipeline = with_files_output(wire_pipeline(
+            true,
+            pdo_pipeline::domain::pipeline::NodeType::Agent,
+        ));
+        let state = state_with(vec![node_with_iterations(
+            "planner",
+            &[(1, NodeStatus::Completed), (2, NodeStatus::Completed)],
+        )]);
+        let resolved =
+            resolve_over_seam(&pipeline, &state, Path::new("/artifacts"), "implementer", 3);
+        assert_eq!(
+            resolved[0].paths,
+            vec![
+                PathBuf::from("/artifacts/planner/iter-1/plan"),
+                PathBuf::from("/artifacts/planner/iter-2/plan"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_markdown_output_is_no_folder() {
+        let pipeline = wire_pipeline(false, pdo_pipeline::domain::pipeline::NodeType::Agent);
+        let state = state_with(vec![node_with_iterations(
+            "planner",
+            &[(1, NodeStatus::Completed)],
+        )]);
+        let resolved =
+            resolve_over_seam(&pipeline, &state, Path::new("/artifacts"), "implementer", 1);
+        assert!(!resolved[0].folder);
     }
 
     #[test]

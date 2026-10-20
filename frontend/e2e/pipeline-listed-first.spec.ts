@@ -66,9 +66,12 @@ test.afterAll(async ({ request, baseURL }) => {
   for (const dir of [listedRepo, otherRepo]) await fs.rm(dir, { recursive: true, force: true });
 });
 
-async function openNewRunOn(page: Page, repo: string) {
+/** New Run launched in the Projet `projectId` (ADR-0087), on its `repo`. */
+async function openNewRunOn(page: Page, projectId: string, repo: string) {
   await page.getByRole("tab", { name: "Runs" }).click();
   await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("project-combobox").click();
+  await page.locator(`[data-testid="project-option"][data-project-id="${projectId}"]`).click();
   await page.getByTestId("target-repo-input").fill(repo);
   await expect(page.getByTestId("pipeline-select")).toBeEnabled({ timeout: 10_000 });
   await page.getByTestId("pipeline-select").click();
@@ -94,7 +97,7 @@ test("a pipeline validated for all heads the menu of the Projets it is listed fi
     expect(res.ok()).toBeTruthy();
     projectIds.push(((await res.json()) as { id: string }).id);
   }
-  const [listedId] = projectIds;
+  const [listedId, otherId] = projectIds;
 
   await page.goto("/");
   await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
@@ -126,7 +129,7 @@ test("a pipeline validated for all heads the menu of the Projets it is listed fi
   });
 
   // 2. New Run on the listed Projet's repository: in « Project pipelines ».
-  await openNewRunOn(page, listedRepo);
+  await openNewRunOn(page, listedId, listedRepo);
   const projectSection = page.getByTestId("pipeline-select-section-project");
   await expect(projectSection).toContainText(`Project pipelines · ${PREFIX}listed-${STAMP}`);
   const row = projectSection.getByTestId(`pipeline-select-option-${PIPELINE_NAME}`);
@@ -149,7 +152,7 @@ test("a pipeline validated for all heads the menu of the Projets it is listed fi
   await closeNewRun(page);
 
   // 4. New Run on another Projet's repository: in « Global pipelines ».
-  await openNewRunOn(page, otherRepo);
+  await openNewRunOn(page, otherId, otherRepo);
   await expect(page.getByTestId("pipeline-select-section-project")).toContainText(
     `${PREFIX}other-${STAMP}`,
   );

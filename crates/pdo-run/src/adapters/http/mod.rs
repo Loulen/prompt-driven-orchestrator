@@ -52,6 +52,7 @@ pub fn router(runs: Arc<Runs>) -> Router {
         .route("/runs/{run_id}/refs", get(runs::refs))
         .route("/runs/{run_id}/source-drift", get(runs::source_drift))
         .route("/runs/{run_id}/artifact", get(runs::artifact))
+        .route("/runs/{run_id}/artifact/zip", get(runs::artifact_zip))
         .route("/runs/{run_id}/pipeline", get(runs::pipeline))
         .route(
             "/runs/{run_id}/pipeline/document",

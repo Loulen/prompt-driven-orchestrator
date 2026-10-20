@@ -56,14 +56,28 @@ impl TriggerRuns for RunsOfTriggers {
     }
 }
 
-/// The Projets of a Trigger's repository, matched as the run context matches
-/// a Run's (its spellings included): a Trigger and the Runs it fires are in
-/// the same Projet.
+/// The Projet of a Trigger, checked as the run context checks a launch: a
+/// Trigger and the Runs it fires are in the same Projet (ADR-0087).
 pub struct ProjectsOfRuns(pub Arc<Runs>);
 
 impl TriggerProjects for ProjectsOfRuns {
-    fn of_repository<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Vec<String>> {
-        Box::pin(self.0.projects_of_repository(path))
+    fn refusal<'a>(
+        &'a self,
+        project: &'a str,
+        repo: Option<&'a str>,
+    ) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            self.0
+                .check_launch_in_project(project, repo)
+                .await
+                .err()
+                .map(|(_, body)| {
+                    body.get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("this project cannot launch runs")
+                        .to_string()
+                })
+        })
     }
 }
 
@@ -80,6 +94,8 @@ fn request(fire: RunFromTrigger) -> CreateRunRequest {
         variables: variables(&trigger),
         pipeline_id: Some(trigger.pipeline_id.clone()),
         target_repo: trigger.target_repo.clone(),
+        // ADR-0087: a Trigger launches its Runs in its Projet.
+        project_id: trigger.project_id.clone(),
         // Stored as raw JSON TEXT so the Trigger stays decoupled from the Run's
         // types; a blank/absent/malformed value defers to a mono-repo fire.
         target_repos: trigger

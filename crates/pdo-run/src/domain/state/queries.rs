@@ -68,6 +68,7 @@ impl RunState {
             trigger_editor: None,
             parent_run_id: None,
             parent_node_id: None,
+            project_id: None,
             pipeline_id: None,
             pipeline_version: None,
             review_comments: Vec::new(),

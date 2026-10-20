@@ -10,11 +10,16 @@ import type { NewRunState } from "./useNewRunState";
 import type { EntityContext } from "../../../shared/extensions/contract";
 import { sectionSaveError } from "../../../shared/extensions/sectionForm";
 import { toast } from "../../../shared/ui/toast";
+import type { Project } from "../../../workspace/model/project";
 
 /** ADR-0088: what « Launch » does with a draft that differs from the last version. */
 export type DraftChoice = "save" | "last";
 
 interface SubmitDeps {
+  /** ADR-0087: the primary repository is one of the chosen Projet's (or no Projet is chosen). */
+  primaryInProject: boolean;
+  /** The Projet the Run is launched in; `null` for none. */
+  launchProject: Project | null;
   /** The draft a launch of the pipeline would leave out, if any (ADR-0088). */
   draftLaunchOf: (pipelineId: string) => DraftLaunch | null;
   /** Freeze the draft of the tab `tabId` as a new version: the pipeline's id
@@ -65,8 +70,11 @@ export async function createdRun(runId: string, runName: string): Promise<Entity
  */
 export function useNewRunSubmit(
   s: NewRunState,
-  { draftLaunchOf, saveDraftVersion, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections, provideSections }: SubmitDeps,
+  { primaryInProject, launchProject, draftLaunchOf, saveDraftVersion, attachmentsOverLimit, onCreated, onClose, onTriggerSaved, saveSections, provideSections }: SubmitDeps,
 ) {
+  // The Projet as chosen, even one the form does not list (an edited Trigger's
+  // hidden one): sending none would take the Run or the Trigger out of it.
+  const { projectId } = s;
   const {
     selectedPipeline, sourceBranch, targetRepo, repoValid, runName, setRunName, autoName,
     setAutoName, input, setInput, overrides, setOverrides, mode, setMode, editingTriggerId,
@@ -169,6 +177,7 @@ export function useNewRunSubmit(
           input,
           variables,
           targetRepo,
+          projectId,
           sourceBranch,
           autoName,
           runName,
@@ -204,7 +213,7 @@ export function useNewRunSubmit(
     } finally {
       setSubmitting(false);
     }
-  }, [saveSections, provideSections, selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, draftLaunchOf, saveDraftVersion, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning, setAttachmentError, setAttachmentHint, setAttachments, setAutoName, setError, setInput, setOverrides, setProvisioning, setRunName, setSkills, setSubmitting]);
+  }, [saveSections, provideSections, selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, draftLaunchOf, saveDraftVersion, repoValid, targetRepo, projectId, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning, setAttachmentError, setAttachmentHint, setAttachments, setAutoName, setError, setInput, setOverrides, setProvisioning, setRunName, setSkills, setSubmitting]);
 
   const canLaunch = provisioningValid && !attachmentsOverLimit && newRunForm.canLaunch({
     repoValid,
@@ -214,9 +223,14 @@ export function useNewRunSubmit(
     sandboxDoomed,
     // #465: every non-empty secondary must have resolved before Launch.
     secondariesReady,
-  });
+  }) && primaryInProject;
+  // ADR-0087: a Run launched in a Projet works in one of its repositories.
+  const outsideProjectReason =
+    launchProject && !primaryInProject
+      ? `${targetRepo.trim()} is not a repository of ${launchProject.name}.`
+      : undefined;
   // Notion #7: the provisioning reason is the one the disabled Launch spells out.
-  const launchBlockReason = provisioningValid ? undefined : provisioningBlockReason;
+  const launchBlockReason = outsideProjectReason ?? (provisioningValid ? undefined : provisioningBlockReason);
 
   // The cron the Trigger will be created with: a compiled preset, or the raw escape hatch.
   // Memoized (like `selectedPipeline`/`overrideCount` above) so the compiler can
@@ -252,8 +266,9 @@ export function useNewRunSubmit(
         resolvedCron,
         triggerInputRejectReason,
         missingProfile,
-      }),
+      }) && primaryInProject,
     [
+      primaryInProject,
       repoValid,
       selectedPipeline,
       triggerName,
@@ -276,6 +291,7 @@ export function useNewRunSubmit(
       input,
       guardCommand,
       targetRepo,
+      projectId,
       sourceBranch,
       allowOverlap,
       maxConcurrent,
@@ -335,6 +351,7 @@ export function useNewRunSubmit(
     allowOverlap,
     maxConcurrent,
     targetRepo,
+    projectId,
     sourceBranch,
     buildTargetRepos,
     sandbox,
@@ -374,7 +391,7 @@ export function useNewRunSubmit(
     promptOptional, hasRequiredPrompt, dockerUnavailable, sandboxReason, sandboxProfiles,
     missingProfile, instanceDefaultSandbox, effectiveSandbox, sandboxDoomed,
     inheritedDefaultReason, harnessCatalog, instanceDefaultHarness, secondariesReady,
-    buildTargetRepos, handleLaunch, canLaunch, launchBlockReason, resolvedCron, triggerInputRejectReason,
+    buildTargetRepos, handleLaunch, canLaunch, launchBlockReason, outsideProjectReason, resolvedCron, triggerInputRejectReason,
     canCreateTrigger, handleCreateTrigger, onTestGuard, pendingDraft, cancelPendingDraft,
   };
 }

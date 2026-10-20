@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { cleanupRuns } from "./helpers";
 
 // Layer 4 (e2e) per ADR 0004 — proves #336 end-to-end in a browser: the Runs
@@ -11,12 +10,12 @@ import { cleanupRuns } from "./helpers";
 // Trigger) with AND semantics, an "All" default, a Manual trigger option, and a
 // clear control. Filtering also drives the #258 grouped/flat flip.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const TAG = `${process.pid}-${Date.now()}`;
 const PIPE_A = `e2e-filter-a-${TAG}`;
 const PIPE_B = `e2e-filter-b-${TAG}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 
 // `prompt_required: false` so a cron-only trigger with no input template is
 // accepted at creation (same seed as runs-triggers-by-repo.spec.ts).
@@ -57,6 +56,7 @@ let repoA = "";
 let repoB = "";
 const runIds: string[] = [];
 let triggerId = "";
+const projectIds: string[] = [];
 
 function gitInit(dir: string) {
   execFileSync("git", ["init", "-b", "main"], { cwd: dir });
@@ -86,6 +86,10 @@ test.afterAll(async () => {
     await fetch(`${base}/triggers/${triggerId}`, { method: "DELETE" }).catch(() => {});
   }
   await cleanupRuns(...runIds);
+  const base = `http://127.0.0.1:${Number(process.env.PDO_E2E_PORT ?? 5273)}`;
+  for (const id of projectIds) {
+    await fetch(`${base}/projects/${id}`, { method: "DELETE" }).catch(() => {});
+  }
   for (const name of [PIPE_A, PIPE_B]) {
     await fs.rm(path.join(PIPELINE_DIR, `${name}.yaml`), { force: true });
     await fs.rm(path.join(PIPELINE_DIR, `${name}.prompts`), {
@@ -104,6 +108,7 @@ async function seedRun(
   repo: string,
   name: string,
   triggeredBy?: string,
+  projectId?: string,
 ): Promise<string> {
   const data: Record<string, unknown> = {
     pipeline,
@@ -112,6 +117,7 @@ async function seedRun(
     name,
   };
   if (triggeredBy) data.triggered_by = triggeredBy;
+  if (projectId) data.project_id = projectId;
   const resp = await page.request.post(`${baseURL}/runs`, { data });
   expect(resp.status(), `POST /runs ${name}`).toBe(201);
   const { run_id } = (await resp.json()) as { run_id: string };
@@ -194,4 +200,48 @@ test("Runs list filters by project, pipeline and trigger with AND semantics and 
   await expect(page.getByText(`alpha-a-${TAG}`)).toBeVisible();
   await expect(page.getByText(`alpha-b-${TAG}`)).toBeVisible();
   await expect(page.getByText(`beta-a-${TAG}`)).toBeVisible();
+});
+
+// ADR-0087 — the Project axis offers the list's groups: a repo in two Projets
+// keeps their Runs apart, and a Run in no Projet is filtered by its repo.
+test("the Project filter offers the Projet recorded on each Run, by name", async ({
+  page,
+  baseURL,
+}) => {
+  const ids: Record<string, string> = {};
+  for (const name of [`checkout-${TAG}`, `mobile-${TAG}`]) {
+    const res = await page.request.post(`${baseURL}/projects`, {
+      data: { name, members: [repoA] },
+    });
+    expect(res.ok()).toBeTruthy();
+    ids[name] = ((await res.json()) as { id: string }).id;
+    projectIds.push(ids[name]);
+  }
+  const checkout = ids[`checkout-${TAG}`];
+  const mobile = ids[`mobile-${TAG}`];
+  await seedRun(page, baseURL!, PIPE_A, repoA, `in-checkout-${TAG}`, undefined, checkout);
+  await seedRun(page, baseURL!, PIPE_A, repoA, `in-mobile-${TAG}`, undefined, mobile);
+  await seedRun(page, baseURL!, PIPE_A, repoA, `in-none-${TAG}`);
+
+  await page.goto("/");
+  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(`in-mobile-${TAG}`)).toBeVisible();
+
+  await page.getByTestId("run-filter-project").click();
+  await expect(page.getByTestId(`run-filter-option-project:${checkout}`)).toHaveText(
+    `checkout-${TAG}`,
+  );
+  await page.getByTestId(`run-filter-option-project:${mobile}`).click();
+  await expect(page.getByTestId("run-filter-project")).toHaveText(`mobile-${TAG}`);
+  let names = await visibleRunNames(page);
+  expect(names).toContain(`in-mobile-${TAG}`);
+  expect(names).not.toContain(`in-checkout-${TAG}`);
+  expect(names).not.toContain(`in-none-${TAG}`);
+
+  await page.getByTestId("run-filter-project").click();
+  await page.getByTestId(`run-filter-option-${repoA}`).click();
+  names = await visibleRunNames(page);
+  expect(names).toContain(`in-none-${TAG}`);
+  expect(names).not.toContain(`in-mobile-${TAG}`);
+  expect(names).not.toContain(`in-checkout-${TAG}`);
 });

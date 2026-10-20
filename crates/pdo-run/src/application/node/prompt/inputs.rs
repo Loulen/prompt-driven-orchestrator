@@ -106,6 +106,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
             source_node: r.source_node,
             repeated: r.repeated,
             from_start: r.from_start,
+            folder: r.folder,
         })
         .collect();
 
@@ -116,6 +117,7 @@ pub fn resolve_input_paths(ctx: &AugmentContext<'_>) -> Vec<InputResolution> {
             paths: vec![crate::domain::blackboard::input_path(ctx.artifacts_dir)],
             repeated: false,
             from_start: true,
+            folder: false,
         });
     }
 
@@ -132,7 +134,7 @@ fn output_port_path(
     port: &pdo_pipeline::domain::pipeline::Port,
 ) -> PathBuf {
     match port.port_type {
-        PortType::Image | PortType::ImageList => {
+        PortType::Image | PortType::ImageList | PortType::Files => {
             crate::domain::blackboard::port_dir(artifacts_dir, node_id, iter, &port.name)
         }
         PortType::Markdown => {

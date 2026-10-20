@@ -11,6 +11,7 @@ use pdo_skill::domain::selection::SkillRef;
 use serde::Deserialize;
 use tracing::error;
 
+use super::read_access::{named_project, projects_of};
 use super::{operation, TriggerError};
 use crate::domain::cron_schedule::CronSchedule;
 use crate::domain::rules::{self, EMPTY_NAME, PROMPT_REQUIRED};
@@ -25,6 +26,10 @@ pub struct CreateTriggerRequest {
     pub pipeline_id: String,
     #[serde(default)]
     pub target_repo: Option<String>,
+    /// The Projet the Runs it fires are launched in (ADR-0087), holding
+    /// `target_repo`. Absent/`null`/blank: no Projet.
+    #[serde(default)]
+    pub project_id: Option<String>,
     /// Secondary repos to associate with fired Runs (ADR-0042). Stored as raw JSON
     /// TEXT and forwarded at fire time. Absent → mono-repo fire.
     #[serde(default)]
@@ -89,8 +94,8 @@ impl Triggers {
         hint: ActorHint,
         req: CreateTriggerRequest,
     ) -> Result<Trigger, TriggerError> {
-        let create = operation(Verb::Create, None)
-            .in_projects(self.projects_of_repo(req.target_repo.as_deref()).await);
+        let project = named_project(req.project_id.as_deref());
+        let create = operation(Verb::Create, None).in_projects(projects_of(project.as_deref()));
         self.authorize(actor, &create)?;
         if !rules::valid_name(&req.name) {
             return Err(TriggerError::Invalid(EMPTY_NAME.to_string()));
@@ -135,6 +140,13 @@ impl Triggers {
             .map_err(TriggerError::Invalid)?
             .to_string_lossy()
             .into_owned();
+        // ADR-0087: its Runs are launched in its Projet, on one of its
+        // repositories.
+        if let Some(project) = &project {
+            if let Some(refusal) = self.projects.refusal(project, Some(&target_repo)).await {
+                return Err(TriggerError::Invalid(refusal));
+            }
+        }
 
         // The first fire, via the single recompute seam. `NewTrigger.next_fire_at` is a
         // flat `Option<String>`, so flatten what `Create` returns; `Some(None)` = an
@@ -146,6 +158,7 @@ impl Triggers {
             pipeline_id: req.pipeline_id,
             pipeline_name: pipeline.name,
             target_repo: Some(target_repo),
+            project_id: project,
             target_repos: if req.target_repos.is_empty() {
                 None
             } else {

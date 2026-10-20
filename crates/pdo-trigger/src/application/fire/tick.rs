@@ -6,6 +6,7 @@
 //! calls it directly. Deciding that a Trigger is due asks no one; firing it is
 //! an Operation whose Acteur is the Trigger.
 
+use crate::application::read_access::projects_of;
 use std::sync::atomic::Ordering;
 
 use pdo_kernel::applied::{self, OperationApplied};
@@ -94,7 +95,7 @@ impl Triggers {
                 trigger_id: trigger.id.clone(),
             };
             let fire = operation(Verb::Action(FIRE.to_string()), Some(&trigger.id))
-                .in_projects(self.projects_of_repo(trigger.target_repo.as_deref()).await);
+                .in_projects(projects_of(trigger.project_id.as_deref()));
             if let Err(denied) = self.authorize(&actor, &fire) {
                 self.refused(&trigger, now, denied.to_string()).await;
                 continue;

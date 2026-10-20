@@ -277,6 +277,12 @@ pub(super) fn apply_run_started(state: &mut RunState, event: &Event) {
         state.pipeline_version = payload
             .get("pipeline_version")
             .and_then(|v| serde_json::from_value(v.clone()).ok());
+        // ADR-0087: the Projet recorded at launch; `null` (or, before the
+        // migration, absent) ⇒ in no Projet.
+        state.project_id = payload
+            .get("project_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
 
         let string_list = |key: &str| -> Vec<String> {
             payload

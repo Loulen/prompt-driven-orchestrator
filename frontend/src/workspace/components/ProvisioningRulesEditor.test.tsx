@@ -237,6 +237,7 @@ describe("ProvisioningRulesEditor", () => {
         { copy: [".env"], hardlink: [], symlink: [] },
         [],
         "HEAD",
+        null,
       ),
     );
   });
@@ -264,6 +265,7 @@ describe("ProvisioningRulesEditor", () => {
         { copy: [".env"], hardlink: [], symlink: [] },
         [],
         "HEAD",
+        null,
       ),
     );
   });

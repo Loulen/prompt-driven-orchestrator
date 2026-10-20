@@ -316,6 +316,59 @@ async fn artifact_endpoint_returns_markdown_content() {
         .output();
 }
 
+#[tokio::test]
+async fn a_port_folder_downloads_as_a_zip_and_each_file_as_an_attachment() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon).await;
+    seed_artifacts(daemon.repo_root(), &run_id);
+    let exports = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(&run_id)
+        .join("worktree/.pdo/artifacts/planner/iter-1/exports");
+    std::fs::create_dir_all(&exports).unwrap();
+    std::fs::write(exports.join("report.pdf"), b"%PDF-1.4\n\xff").unwrap();
+    std::fs::write(exports.join("rows.csv"), "a,b\n").unwrap();
+
+    let resp = reqwest::get(format!(
+        "{}/runs/{}/artifact/zip?path=planner/iter-1/exports",
+        daemon.url(),
+        run_id,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["content-type"], "application/zip");
+    assert!(resp.headers()["content-disposition"]
+        .to_str()
+        .unwrap()
+        .starts_with("attachment; filename=\"planner-exports.zip\""));
+    let bytes = resp.bytes().await.unwrap();
+    let archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+    let mut names: Vec<&str> = archive.file_names().collect();
+    names.sort();
+    assert_eq!(names, vec!["report.pdf", "rows.csv"]);
+
+    let resp = reqwest::get(format!(
+        "{}/runs/{}/artifact?path=planner/iter-1/exports/report.pdf&download=true",
+        daemon.url(),
+        run_id,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"%PDF-1.4\n\xff");
+
+    for session in [
+        format!("pdo-{run_id}-planner-iter-1"),
+        format!("pdo-{run_id}-implementer-iter-1"),
+    ] {
+        let _ = std::process::Command::new("tmux")
+            .args(["kill-session", "-t", &session])
+            .output();
+    }
+}
+
 const INTERMEDIATE_PIPELINE: &str = "io-intermediate";
 
 fn seed_intermediate(repo: &std::path::Path) -> anyhow::Result<()> {

@@ -22,6 +22,12 @@ pub struct CreateRunRequest {
     pub pipeline_id: Option<String>,
     #[serde(default)]
     pub target_repo: Option<String>,
+    /// The Projet the Run is launched in (ADR-0087): recorded in `RunStarted`
+    /// and never recomputed. Omitted/`null`/blank: the parent Run's for a Run
+    /// created from a node session, else none. A named Projet must exist, and
+    /// a gesture's primary repository must be one of its members.
+    #[serde(default)]
+    pub project_id: Option<String>,
     /// Secondary repos to associate with this Run (ADR-0042). An omitted field
     /// means "mono-repo". When present, `target_repos[0]` is the **primary** and
     /// must agree with `target_repo`; `[1..]` are the secondaries. An absent list
@@ -130,6 +136,7 @@ pub const CREATE_RUN_FIELDS: &[&str] = &[
     "variables",
     "pipeline_id",
     "target_repo",
+    "project_id",
     "target_repos",
     "source_branch",
     "name",

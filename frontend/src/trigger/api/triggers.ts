@@ -12,6 +12,8 @@ export interface CreateTriggerRequest {
   cron: string;
   input_template?: string;
   target_repo?: string;
+  /** ADR-0087: the Projet its Runs are launched in; omitted for none. */
+  project_id?: string;
   /** Read-only secondary repos to associate with fired Runs (#465). `[0]` = primary
    *  (kept in sync with `target_repo`), `[1..]` secondaries. Omit for mono-repo. */
   target_repos?: TargetRepoInput[];
@@ -61,6 +63,8 @@ export interface UpdateTriggerRequest {
   input_template?: string;
   overlap_policy?: string;
   target_repo?: string | null;
+  /** ADR-0087: the Projet its Runs are launched in; `null` for none. */
+  project_id?: string | null;
   /** Read-only secondary repos (#465): an array sets the list, `null` clears to
    *  mono-repo, `undefined` leaves it unchanged. */
   target_repos?: TargetRepoInput[] | null;

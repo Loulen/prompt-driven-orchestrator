@@ -26,13 +26,11 @@ pub(super) async fn provisioning(
     state: &Runs,
     req: &CreateRunRequest,
     target: &Target,
+    project: Option<&str>,
 ) -> Result<Provisioning, Refusal> {
     let rules = match state
         .projects
-        .provisioning_rules(
-            &target.run_repo_root.to_string_lossy(),
-            req.provisioning.clone(),
-        )
+        .provisioning_rules(project, req.provisioning.clone())
         .await
     {
         Ok(rules) => rules,

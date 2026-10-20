@@ -151,6 +151,7 @@ impl DaemonHandle {
                 pipeline_id: pipeline_id.to_string(),
                 pipeline_name: pipeline_id.to_string(),
                 target_repo: None,
+                project_id: None,
                 target_repos: None,
                 source_branch: None,
                 input_template: "seeded input".to_string(),

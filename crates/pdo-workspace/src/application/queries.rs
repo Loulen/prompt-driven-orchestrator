@@ -32,8 +32,10 @@ pub struct PreviewRequest {
     /// The rules being edited at `scope`.
     pub rules: ProvisioningRules,
     /// The inherited levels the editor already holds; `None` reads them from
-    /// the stores, for the Projet that owns `repository`.
+    /// the stores, for the Projet `project_id`.
     pub inherited: Option<Vec<ScopedRules>>,
+    /// The Projet the Run is launched in (ADR-0087); `None` for none.
+    pub project_id: Option<String>,
 }
 
 impl Workspace {
@@ -75,11 +77,6 @@ impl Workspace {
         project
     }
 
-    /// The Projet owning `path`, compared verbatim (ADR-0033).
-    pub async fn owner_of(&self, path: &str) -> StoreResult<Option<Project>> {
-        self.projects.owner_of(path).await
-    }
-
     pub async fn provisioning_rules(
         &self,
         scope: ProvisioningScope,
@@ -88,12 +85,12 @@ impl Workspace {
         self.provisioning.load(scope, scope_id).await
     }
 
-    /// Every provisioning level a Run in `repository` inherits, coarsest first:
-    /// the instance, the Projet owning the repository (if any), the Run's own
+    /// Every provisioning level a Run launched in `project` inherits, coarsest
+    /// first: the instance, that Projet (if any, ADR-0087), the Run's own
     /// rules, then the isolated node's when it states some.
     pub async fn scoped_provisioning_rules(
         &self,
-        repository: &str,
+        project: Option<&str>,
         run: ProvisioningRules,
         node: ProvisioningRules,
     ) -> StoreResult<Vec<ScopedRules>> {
@@ -104,12 +101,12 @@ impl Workspace {
                 .load(ProvisioningScope::Instance, INSTANCE_SCOPE_ID)
                 .await?,
         }];
-        if let Some(project) = self.projects.owner_of(repository).await? {
+        if let Some(project) = project {
             rules.push(ScopedRules {
                 scope: ProvisioningScope::Project,
                 rules: self
                     .provisioning
-                    .load(ProvisioningScope::Project, &project.id)
+                    .load(ProvisioningScope::Project, project)
                     .await?,
             });
         }
@@ -142,7 +139,7 @@ impl Workspace {
             Some(rules) => rules,
             None => self
                 .scoped_provisioning_rules(
-                    request.repository.trim(),
+                    request.project_id.as_deref(),
                     ProvisioningRules::default(),
                     ProvisioningRules::default(),
                 )
@@ -189,8 +186,6 @@ impl Workspace {
 mod tests {
     use super::*;
     use crate::application::testing::fixture;
-    use crate::domain::project::Project;
-    use pdo_kernel::Actor;
 
     fn rules(copy: &str) -> ProvisioningRules {
         ProvisioningRules {
@@ -200,19 +195,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inherited_levels_follow_the_projet_owning_the_repository() {
+    async fn inherited_levels_follow_the_projet_the_run_is_launched_in() {
         let f = fixture();
-        f.projects.seed(Project::named("p1", "Front"));
-        let actor = Actor::LocalOperator;
-        f.workspace
-            .add_project_member(&actor, "p1", "/repo")
-            .await
-            .unwrap();
         f.provisioning
             .put(ProvisioningScope::Project, "p1", rules("project"));
         let levels = f
             .workspace
-            .scoped_provisioning_rules("/repo", rules("run"), ProvisioningRules::default())
+            .scoped_provisioning_rules(Some("p1"), rules("run"), ProvisioningRules::default())
             .await
             .unwrap();
         let scopes: Vec<_> = levels.iter().map(|l| l.scope).collect();
@@ -226,7 +215,7 @@ mod tests {
         );
         let elsewhere = f
             .workspace
-            .scoped_provisioning_rules("/other", rules("run"), rules("node"))
+            .scoped_provisioning_rules(None, rules("run"), rules("node"))
             .await
             .unwrap();
         let scopes: Vec<_> = elsewhere.iter().map(|l| l.scope).collect();
@@ -255,6 +244,7 @@ mod tests {
                 scope: ProvisioningScope::Project,
                 rules: rules("edited"),
                 inherited: None,
+                project_id: None,
             })
             .await
             .unwrap();
@@ -287,6 +277,7 @@ mod tests {
                 scope: ProvisioningScope::Run,
                 rules: ProvisioningRules::default(),
                 inherited: Some(vec![]),
+                project_id: None,
             })
             .await
             .unwrap_err();

@@ -34,8 +34,9 @@ pub trait ProjectRepository: Send + Sync {
     /// Every Projet, newest first.
     fn list(&self) -> BoxFuture<'_, StoreResult<Vec<Project>>>;
     fn get<'a>(&'a self, id: &'a str) -> BoxFuture<'a, StoreResult<Option<Project>>>;
-    /// The Projet that owns `path`, compared verbatim (ADR-0033).
-    fn owner_of<'a>(&'a self, path: &'a str) -> BoxFuture<'a, StoreResult<Option<Project>>>;
+    /// The Projets `path` is a member of, compared verbatim (ADR-0033), in
+    /// the order it joined them (ADR-0087: a path may be in several).
+    fn containing<'a>(&'a self, path: &'a str) -> BoxFuture<'a, StoreResult<Vec<Project>>>;
     /// Materialise a Projet from a bare name, with a fresh id.
     fn create<'a>(&'a self, name: &'a str) -> BoxFuture<'a, StoreResult<Project>>;
     fn rename<'a>(&'a self, id: &'a str, name: &'a str) -> BoxFuture<'a, StoreResult<()>>;
@@ -59,10 +60,16 @@ pub trait ProjectRepository: Send + Sync {
         id: &'a str,
         skills: Option<StoredSetting>,
     ) -> BoxFuture<'a, StoreResult<()>>;
-    /// Attach a free path. The caller has already checked it is free.
+    /// The default primary repository of the Projet (`None` clears it).
+    fn set_primary_repo<'a>(
+        &'a self,
+        id: &'a str,
+        repo: Option<&'a str>,
+    ) -> BoxFuture<'a, StoreResult<()>>;
+    /// Attach a path that is not yet a member of this Projet.
     fn add_member<'a>(&'a self, id: &'a str, path: &'a str) -> BoxFuture<'a, StoreResult<()>>;
-    /// Detach `path` from whichever Projet holds it.
-    fn remove_member<'a>(&'a self, path: &'a str) -> BoxFuture<'a, StoreResult<()>>;
+    /// Detach `path` from the Projet `id`, and from no other.
+    fn remove_member<'a>(&'a self, id: &'a str, path: &'a str) -> BoxFuture<'a, StoreResult<()>>;
     /// Delete the Projet and free its members. `false` when there was none.
     fn delete<'a>(&'a self, id: &'a str) -> BoxFuture<'a, StoreResult<bool>>;
 }
@@ -83,19 +90,29 @@ pub trait ProvisioningRulesRepository: Send + Sync {
     ) -> BoxFuture<'a, StoreResult<()>>;
 }
 
-/// A repository a Run worked in, with the last Run that started there.
+/// A repository a Run worked in, with the last Run that started there and
+/// the Projet recorded on that Run (ADR-0087).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecentRepository {
     pub path: String,
     pub run_id: String,
+    pub project_id: Option<String>,
 }
 
 impl RecentRepository {
+    /// A repository whose last Run was launched in no Projet.
     pub fn new(path: impl Into<String>, run_id: impl Into<String>) -> Self {
         Self {
             path: path.into(),
             run_id: run_id.into(),
+            project_id: None,
         }
+    }
+
+    /// The same, its last Run launched in the Projet `project_id`.
+    pub fn in_project(mut self, project_id: impl Into<String>) -> Self {
+        self.project_id = Some(project_id.into());
+        self
     }
 }
 

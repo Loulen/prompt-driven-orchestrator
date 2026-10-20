@@ -13,8 +13,9 @@ import {
   NONE,
   isFilterActive,
   pipelineKey,
-  repoKey,
+  projectKey,
   triggerKey,
+  type ProjectOfRun,
   type RunFilterValue,
 } from "../model/runFilter";
 
@@ -123,17 +124,30 @@ export default function RunFilters({
   value,
   onChange,
   treeToggle = null,
+  projectOf,
 }: {
   runs: RunListEntry[];
   triggers: Trigger[];
   value: RunFilterValue;
   onChange: (v: RunFilterValue) => void;
   treeToggle?: TreeToggle | null;
+  /** ADR-0087 — the Projet recorded on a Run; the Project axis offers the
+   *  list's groups: each Projet by name, then each repo of a Run in none. */
+  projectOf?: ProjectOfRun;
 }) {
-  const repoOptions: Option[] = uniqueSorted(runs.map(repoKey)).map((v) => ({
-    value: v,
-    label: repoLabel(v),
-  }));
+  const projectNames = new Map<string, string>();
+  for (const r of runs) {
+    const project = projectOf?.(r.project_id);
+    if (project) projectNames.set(projectKey(r, projectOf), project.name);
+  }
+  const projectOptions: Option[] = uniqueSorted(runs.map((r) => projectKey(r, projectOf)))
+    .map((v) => ({ value: v, label: projectNames.get(v) ?? repoLabel(v) }))
+    .sort((a, b) => {
+      const pa = projectNames.has(a.value);
+      const pb = projectNames.has(b.value);
+      if (pa !== pb) return pa ? -1 : 1;
+      return a.label.localeCompare(b.label);
+    });
   const pipelineOptions: Option[] = uniqueSorted(runs.map(pipelineKey)).map((v) => ({
     value: v,
     label: v === NONE ? "(unnamed)" : v,
@@ -156,7 +170,7 @@ export default function RunFilters({
       <FilterDropdown
         axis="project"
         placeholder="Project"
-        options={repoOptions}
+        options={projectOptions}
         selected={value.repo}
         onSelect={(repo) => onChange({ ...value, repo })}
       />

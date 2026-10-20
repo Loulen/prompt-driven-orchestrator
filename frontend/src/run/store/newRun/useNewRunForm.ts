@@ -8,6 +8,7 @@ import { useOpenIntentSeeding } from "./useOpenIntentSeeding";
 import { useAttachments } from "./useAttachments";
 import { useNewRunSubmit } from "./useNewRunSubmit";
 import { usePipelineOffer } from "./usePipelineOffer";
+import { useLaunchProject } from "./useLaunchProject";
 import type { SectionFormHost } from "../../../shared/extensions/sectionForm";
 
 interface NewRunFormArgs {
@@ -28,13 +29,19 @@ interface NewRunFormArgs {
 export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerSaved, sections }: NewRunFormArgs) {
   const state = useNewRunState(open);
   useOpenIntentSeeding(open, openIntent, state);
+  // ADR-0087: the Projet the Run is launched in, first field of Where.
+  const launch = useLaunchProject(open, openIntent, state);
   const {
     selectedPipeline, setSelectedPipelineId, setPipelineChosen, overrides, setOverrides,
     setVarsOpen,
   } = state;
 
   // The Pipeline menu's sections, and the selection held to them.
-  const { repoProject, sections: pipelineSections } = usePipelineOffer(open, state);
+  const { repoProject, sections: pipelineSections } = usePipelineOffer(
+    open,
+    state,
+    launch.launchProject,
+  );
 
   const variableEntries = useMemo(() => {
     if (!selectedPipeline) return [];
@@ -85,6 +92,8 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
   }, [sections, onClose]);
   const attachmentState = useAttachments(state, cancel);
   const submit = useNewRunSubmit(state, {
+    primaryInProject: launch.primaryInProject,
+    launchProject: launch.launchProject,
     draftLaunchOf,
     saveDraftVersion,
     attachmentsOverLimit: attachmentState.attachmentsOverLimit,
@@ -97,6 +106,7 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
 
   return {
     ...state,
+    ...launch,
     repoProject,
     pipelineSections,
     variableEntries,

@@ -23,9 +23,9 @@ import { sectionSaveError, useSectionForm } from "../../shared/extensions/sectio
  * carries. Naming a group is what **materialises** the Projet — nothing is seeded
  * until this saves (ADR-0046).
  *
- * A candidate repo already owned by **another** Projet is shown disabled with the
- * owner's name (the "refus nommant le propriétaire" surfaced up front); the daemon
- * refuses it too (409), which we also catch defensively.
+ * A repository may be a member of several Projets (ADR-0087): a candidate held by
+ * another Projet names it, and stays free to check. The default primary repository
+ * — the one New Run preselects for this Projet — is chosen among the members.
  *
  * Membership is compared **verbatim** (ADR-0033): the candidate list is the exact
  * effective-repo paths the surrounding list groups by, never canonicalised.
@@ -48,7 +48,7 @@ export default function ProjectEditModal({
   initialMemberPaths: string[];
   /** Candidate repo paths to attach (the surrounding list's distinct repos). */
   availableRepos: string[];
-  /** All Projets, to mark a candidate owned by another Projet as disabled. */
+  /** All Projets, to name the other Projets holding a candidate. */
   projects: Project[];
   onClose: () => void;
   onSaved: () => void;
@@ -72,6 +72,9 @@ export default function ProjectEditModal({
   const [checked, setChecked] = useState<Set<string>>(
     () => new Set(initialMemberPaths),
   );
+  const [primary, setPrimary] = useState<string | null>(initialProject?.primary_repo ?? null);
+  // The default primary is a member: the chosen one while checked, else the
+  // first checked candidate (the daemon's rule for a Projet that chose none).
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // #586: the harness options, dynamic from `/settings` (floor ∪ descriptors,
@@ -99,13 +102,13 @@ export default function ProjectEditModal({
     onClose();
   }
 
-  // path → name of the Projet that OWNS it, excluding the one being edited. A
-  // candidate owned elsewhere cannot be attached here (AC: at most one Projet).
-  const ownerElsewhere = useMemo(() => {
-    const map = new Map<string, string>();
+  // path → the names of the other Projets holding it (ADR-0087: a repository
+  // may be in several), excluding the one being edited.
+  const alsoIn = useMemo(() => {
+    const map = new Map<string, string[]>();
     for (const p of projects) {
       if (editing && p.id === editing.id) continue;
-      for (const path of p.members) map.set(path, p.name);
+      for (const path of p.members) map.set(path, [...(map.get(path) ?? []), p.name]);
     }
     return map;
   }, [projects, editing]);
@@ -117,6 +120,11 @@ export default function ProjectEditModal({
     for (const m of initialMemberPaths) set.add(m);
     return [...set].sort();
   }, [availableRepos, initialMemberPaths]);
+
+  const effectivePrimary =
+    primary !== null && checked.has(primary)
+      ? primary
+      : (candidates.find((path) => checked.has(path)) ?? null);
 
   const trimmedName = name.trim();
   const canSave = trimmedName.length > 0 && !submitting;
@@ -169,14 +177,17 @@ export default function ProjectEditModal({
       }
 
       const desired = checked;
-      // Attach newly-checked paths; a path owned elsewhere is skipped by the
-      // disabled checkbox, but the daemon refuses it too (409 naming the owner).
+      // Attach newly-checked paths (a path of another Projet joins this one too).
       for (const path of desired) {
         if (!current.has(path)) await addProjectMember(projectId, path);
       }
       // Detach paths that were members but are now unchecked.
       for (const path of current) {
         if (!desired.has(path)) await removeProjectMember(projectId, path);
+      }
+      // The default primary, once its repository is a member (ADR-0087).
+      if (primary !== null && effectivePrimary !== (editing?.primary_repo ?? null)) {
+        await updateProject(projectId, { primary_repo: effectivePrimary });
       }
       if (skillsChanged) announceSkillTiersChanged();
       try {
@@ -231,9 +242,9 @@ export default function ProjectEditModal({
             {editing ? "Edit project" : "Name project"}
           </div>
           <p className="text-fg-4" style={{ fontSize: "11px" }}>
-            Group repositories that work together under one name. A repo belongs to
-            at most one project; the harness set here applies to every Run whose
-            primary repo is a member.
+            Group repositories that work together under one name. A repository may
+            be in several projects; the settings here apply to every Run launched in
+            this project, on its default primary repository unless another is chosen.
           </p>
         </div>
 
@@ -301,8 +312,10 @@ export default function ProjectEditModal({
         <ProjectMembersList
           candidates={candidates}
           checked={checked}
-          ownerElsewhere={ownerElsewhere}
+          alsoIn={alsoIn}
+          primary={effectivePrimary}
           onToggle={toggle}
+          onPrimary={setPrimary}
         />
 
         {/* ADR-0081 (#31): the `project/edit` sections, under the core's fields,

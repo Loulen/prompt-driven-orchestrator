@@ -4,9 +4,8 @@
 //! stays the only source of truth and rebuilds it whole ([`summarize`]).
 //!
 //! It holds the fields of `GET /runs` and of `GET /runs/{id}/children`, the
-//! parent of a Run, and its primary repository: the Projets of a Run are
-//! those of that repository, resolved at read time, since the members of a
-//! Projet change outside the event log.
+//! parent of a Run, its primary repository and the Projet recorded at its
+//! launch (ADR-0087), which the access checks read.
 
 use pdo_kernel::Actor;
 use serde::{Deserialize, Serialize};
@@ -19,7 +18,7 @@ use crate::domain::state::{RunState, RunStatus};
 /// The shape of [`RunSummary`]: the Résumés written under another version
 /// are rebuilt from the event log at boot. Bump it with any change of the
 /// fields or of how they are derived.
-pub const SUMMARY_VERSION: i64 = 3;
+pub const SUMMARY_VERSION: i64 = 4;
 
 /// One Run, as the lists show it and the access checks read it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,6 +51,9 @@ pub struct RunSummary {
     pub pipeline_id: Option<String>,
     #[serde(default)]
     pub pipeline_version: Option<u32>,
+    /// The Projet the Run was launched in (ADR-0087); `None` for none.
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 impl RunSummary {
@@ -76,6 +78,7 @@ impl RunSummary {
             target_repo: run.target_repo.clone(),
             pipeline_id: run.pipeline_id.clone(),
             pipeline_version: run.pipeline_version.as_ref().map(|v| v.number),
+            project_id: run.project_id.clone(),
         }
     }
 }
@@ -173,7 +176,18 @@ mod tests {
         assert_eq!(summary.parent_run_id.as_deref(), Some("parent"));
         assert_eq!(summary.parent_node_id.as_deref(), Some("worker"));
         assert_eq!(summary.target_repo.as_deref(), Some("/repo"));
+        assert_eq!(summary.project_id, None);
         assert!(!summary.stalled);
+    }
+
+    #[test]
+    fn a_summary_carries_the_projet_recorded_at_launch() {
+        let mut event = started("r", None);
+        event.payload.as_mut().unwrap()["project_id"] = serde_json::json!("prj-1");
+        assert_eq!(
+            summarize(&[event]).unwrap().project_id.as_deref(),
+            Some("prj-1")
+        );
     }
 
     #[test]

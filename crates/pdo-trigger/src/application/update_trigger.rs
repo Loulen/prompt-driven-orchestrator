@@ -11,6 +11,7 @@ use pdo_skill::domain::selection::SkillRef;
 use serde::Deserialize;
 use tracing::error;
 
+use super::read_access::{named_project, projects_of};
 use super::{operation, TriggerError};
 use crate::domain::cron_schedule::CronSchedule;
 use crate::domain::rules::{self, EMPTY_NAME, PROMPT_REQUIRED};
@@ -44,6 +45,10 @@ pub struct PatchTriggerRequest {
     /// every Trigger save.
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub target_repo: Option<Option<String>>,
+    /// The Projet its Runs are launched in (ADR-0087), double-wrapped: absent =
+    /// leave, present `null`/blank = no Projet, an id = that Projet.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub project_id: Option<Option<String>>,
     /// The secondary list, double-wrapped like `target_repo`: absent = leave, present
     /// `null`/`[]` = clear to mono-repo, an array = set. Stored as raw JSON TEXT.
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -107,10 +112,10 @@ impl Triggers {
     ) -> Result<Trigger, TriggerError> {
         let update = self.on_trigger(Verb::Update, id).await;
         self.authorize(actor, &update)?;
-        // Moved to a repository of another Projet: an update there too, so
-        // nobody moves a Trigger into a Projet they may not edit.
-        if let Some(repo) = &req.target_repo {
-            let moved_to = self.projects_of_repo(repo.as_deref()).await;
+        // Moved to another Projet: an update there too, so nobody moves a
+        // Trigger into a Projet they may not edit.
+        if let Some(project) = &req.project_id {
+            let moved_to = projects_of(named_project(project.as_deref()).as_deref());
             if moved_to != update.projects {
                 self.authorize(
                     actor,
@@ -149,7 +154,7 @@ impl Triggers {
         };
         // Told in the Projets it is now in, and in those it left: a reader
         // of the old one drops it from their list.
-        let now_in = self.projects_of_repo(updated.target_repo.as_deref()).await;
+        let now_in = projects_of(updated.project_id.as_deref());
         let mut told = vec![now_in];
         if told[0] != update.projects {
             told.push(update.projects.clone());
@@ -251,6 +256,26 @@ impl Triggers {
             )),
             None => None,
         };
+        // ADR-0087: the resulting Projet holds the resulting repository.
+        let project = req
+            .project_id
+            .as_ref()
+            .map(|project| named_project(project.as_deref()));
+        let resulting_project = match &project {
+            Some(project) => project.clone(),
+            None => existing.project_id.clone(),
+        };
+        if let Some(id) = &resulting_project {
+            if project.is_some() || target_repo.is_some() {
+                let repo = match &target_repo {
+                    Some(repo) => repo.clone(),
+                    None => existing.target_repo.clone(),
+                };
+                if let Some(refusal) = self.projects.refusal(id, repo.as_deref()).await {
+                    return Err(TriggerError::Invalid(refusal));
+                }
+            }
+        }
         if let Some(Some(n)) = req.max_concurrent {
             rules::validate_max_concurrent(Some(n))
                 .map_err(|msg| TriggerError::Invalid(msg.to_string()))?;
@@ -291,6 +316,7 @@ impl Triggers {
             pipeline_name: repoint.map(|(_, name, _)| name),
             // The trimmed, validated path — never the raw field.
             target_repo,
+            project_id: project,
             // Absent → leave; present `null`/`[]` → clear to mono-repo; a non-empty array
             // → the serialized JSON.
             target_repos: req.target_repos.map(|inner| {

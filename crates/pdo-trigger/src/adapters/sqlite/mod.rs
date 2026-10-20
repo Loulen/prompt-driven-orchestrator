@@ -14,7 +14,7 @@ use sqlx::SqlitePool;
 use crate::application::ports::{BoxFuture, StorageError, Stored, TriggerRepository};
 use crate::domain::trigger::{FireRecord, NewTrigger, Trigger, TriggerFire, UpdateTrigger};
 use rows::{row_to_fire, row_to_trigger};
-pub use schema::init;
+pub use schema::{init, legacy_project_pending, record_legacy_project};
 pub use update::update;
 
 /// The Triggers of the daemon's database.
@@ -86,6 +86,16 @@ pub fn generate_trigger_id() -> String {
     format!("trg-{ts}-{short}")
 }
 
+/// A deleted Projet: the Triggers that launched their Runs in it launch them
+/// in no Projet from now on (ADR-0087). How many it moved.
+pub async fn forget_project(db: &SqlitePool, project_id: &str) -> Result<u64, sqlx::Error> {
+    let done = sqlx::query("UPDATE triggers SET project_id = NULL WHERE project_id = ?")
+        .bind(project_id)
+        .execute(db)
+        .await?;
+    Ok(done.rows_affected())
+}
+
 /// Insert a new Trigger, returning the stored row.
 pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::Error> {
     let id = generate_trigger_id();
@@ -96,8 +106,8 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
         "INSERT INTO triggers
             (id, name, pipeline_id, pipeline_name, target_repo, target_repos, source_branch,
              input_template, variables, cron, guard_command, overlap_policy,
-             max_concurrent, sandbox, harness, agent_choice, skills, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at, last_editor)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?, ?)",
+             max_concurrent, sandbox, harness, agent_choice, skills, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at, last_editor, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&new.name)
@@ -126,6 +136,7 @@ pub async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, sqlx::E
     .bind(&new.next_fire_at)
     .bind(&now)
     .bind(stored_actor(new.last_editor.as_ref()))
+    .bind(&new.project_id)
     .execute(db)
     .await?;
 

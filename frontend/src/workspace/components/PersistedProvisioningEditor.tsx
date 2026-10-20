@@ -65,6 +65,7 @@ export default function PersistedProvisioningEditor({
       rules={rules}
       onChange={setRules}
       onValidityChange={setValid}
+      projectId={scope === "project" ? (projectId ?? null) : null}
       defaultExpanded={defaultExpanded}
       leading={
         <label className="block text-fg-3" style={{ fontSize: 10 }}>

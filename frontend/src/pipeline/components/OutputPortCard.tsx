@@ -8,11 +8,12 @@ import InspectorPortRow, { PortRenameNotices } from "./InspectorPortRow";
 import { usePortNameDraft } from "./usePortNameDraft";
 import OutputSchemaEditor from "./OutputSchemaEditor";
 
-const PORT_TYPE_OPTIONS: { value: PortType; label: string }[] = [
+const PORT_TYPE_OPTIONS: { value: PortType; label: string; hint?: string }[] = [
   { value: "markdown", label: "Markdown" },
   { value: "image", label: "Image" },
   { value: "image_list", label: "Image List" },
   { value: "html", label: "HTML" },
+  { value: "files", label: "Files", hint: "one file or more, any format" },
 ];
 
 interface OutputPortCardProps {
@@ -126,7 +127,7 @@ export default function OutputPortCard({
               data-testid="port-type-select"
             >
               {PORT_TYPE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
+                <option key={opt.value} value={opt.value} title={opt.hint}>
                   {opt.label}
                 </option>
               ))}

@@ -182,15 +182,15 @@ impl pdo_pipeline::application::ports::SkillBank for NoBank {
     }
 }
 
-/// No Projet owns anything, and no tier provisions a Run but its own.
+/// No Projet exists, and no tier provisions a Run but its own.
 struct NoProjects;
 impl Projects for NoProjects {
-    fn owner_of<'a>(&'a self, _path: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
+    fn project<'a>(&'a self, _id: &'a str) -> BoxFuture<'a, Result<Option<Project>, String>> {
         Box::pin(async { Ok(None) })
     }
     fn provisioning_rules<'a>(
         &'a self,
-        _repository: &'a str,
+        _project: Option<&'a str>,
         run: ProvisioningRules,
     ) -> BoxFuture<'a, Result<Vec<ScopedRules>, String>> {
         Box::pin(async move {

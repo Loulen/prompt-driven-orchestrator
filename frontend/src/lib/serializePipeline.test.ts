@@ -102,19 +102,45 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(serializePipeline(absent)).not.toContain("prompt_required");
   });
 
-  it("emits intermediate: true on an Output intermédiaire only (CORE-45)", () => {
+  it("emits the live artifacts and the free publication, apart from the outputs (ADR-0089)", () => {
     const impl: EditorNodeDef = {
       id: "impl", name: "implementer", type: "agent",
       inputs: [],
-      outputs: [
-        { name: "code" },
-        { name: "preview", port_type: "html", intermediate: true },
+      outputs: [{ name: "code" }],
+      live_artifacts: [
+        {
+          name: "progress",
+          instructions: "What is done.",
+          frontmatter: { status: { type: "enum", allowed: ["drafting", "ready"] } },
+        },
+        { name: "screens", port_type: "image_list", instructions: "  " },
       ],
+      free_live_artifacts: true,
+      interactive: false, view: { x: 200, y: 0 },
+    };
+    const obj = pipelineToYamlObject(makeFullPipeline([impl]));
+    const node = (obj.nodes as Record<string, unknown>[]).find((n) => n.id === "impl")!;
+    expect(node.free_live_artifacts).toBe(true);
+    expect(node.live_artifacts).toEqual([
+      {
+        name: "progress",
+        instructions: "What is done.",
+        frontmatter: { status: { type: "enum", allowed: ["drafting", "ready"] } },
+      },
+      { name: "screens", port_type: "image_list" },
+    ]);
+    expect(node.outputs).toEqual([{ name: "code" }]);
+  });
+
+  it("emits no live key for a node that publishes nothing (ADR-0089)", () => {
+    const impl: EditorNodeDef = {
+      id: "impl", name: "implementer", type: "agent",
+      inputs: [], outputs: [{ name: "code" }], live_artifacts: [], free_live_artifacts: false,
       interactive: false, view: { x: 200, y: 0 },
     };
     const yaml = serializePipeline(makeFullPipeline([impl]));
-    expect(yaml.match(/intermediate: true/g)).toHaveLength(1);
-    expect(yaml).not.toContain("intermediate: false");
+    expect(yaml).not.toContain("live_artifacts");
+    expect(yaml).not.toContain("free_live_artifacts");
   });
 
   it("emits a per-node model override when set (#296)", () => {

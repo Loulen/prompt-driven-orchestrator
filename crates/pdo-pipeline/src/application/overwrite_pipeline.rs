@@ -20,7 +20,8 @@ impl Pipelines {
     /// The write is the daemon's own, which the watcher does not announce:
     /// `pipeline_changed` goes out from here, so an open editor of `id`
     /// reloads.
-    pub fn overwrite(
+    /// The file is a new version, saved by `actor`.
+    pub async fn overwrite(
         &self,
         actor: &Actor,
         id: &str,
@@ -35,11 +36,16 @@ impl Pipelines {
             return Err(PipelineError::NotFound);
         }
         let replacement = parse_pipeline(yaml)?.pipeline;
+        // The file as it was is a version before it is replaced.
+        if let Err(e) = self.ensure_versions(id).await {
+            tracing::warn!("versions of pipeline {id}: unreadable: {e:?}");
+        }
         self.registry
             .write(id, yaml)
             .map_err(PipelineError::Storage)?;
         self.registry.write_prompts(id, prompts);
         self.registry.prune_prompts(id, &replacement);
+        self.file_is_last_version(Some(actor), id, true).await;
         self.events
             .changed(id, &self.registry.path_of(id).to_string_lossy());
         info!("Pipeline {id} overwritten");

@@ -10,7 +10,7 @@ use pdo_kernel::{Actor, Operation};
 use super::drafts::Drafts;
 use super::ports::{
     ActiveRuns, DraftDocuments, DraftStore, KnownProjects, NodeLibrary, PipelineEvents,
-    PipelineRegistry, PipelineValidations, RenameLedger, SkillBank,
+    PipelineRegistry, PipelineValidations, PipelineVersions, RenameLedger, SkillBank,
 };
 
 /// One adapter per port.
@@ -27,6 +27,8 @@ pub struct PipelinesPorts {
     pub drafts: Arc<dyn DraftStore>,
     /// The replicated documents of the drafts.
     pub documents: Arc<dyn DraftDocuments>,
+    /// Where the versions a Save freezes are kept (ADR-0088).
+    pub versions: Arc<dyn PipelineVersions>,
     pub extensions: Arc<dyn ExtensionHost>,
 }
 
@@ -41,6 +43,9 @@ pub struct Pipelines {
     pub(crate) validations: Arc<dyn PipelineValidations>,
     pub(crate) projects: Arc<dyn KnownProjects>,
     pub(crate) drafts: Drafts,
+    pub(crate) versions: Arc<dyn PipelineVersions>,
+    /// The writes that number a version, one at a time.
+    pub(crate) version_writes: tokio::sync::Mutex<()>,
     host: Arc<dyn ExtensionHost>,
 }
 
@@ -56,6 +61,8 @@ impl Pipelines {
             validations: ports.validations,
             projects: ports.projects,
             drafts: Drafts::new(ports.drafts, ports.documents),
+            versions: ports.versions,
+            version_writes: tokio::sync::Mutex::new(()),
             host: ports.extensions,
         }
     }

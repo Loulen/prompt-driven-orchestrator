@@ -28,6 +28,15 @@ pub fn artifact_exists(artifacts_dir: &Path, node_id: &str, iter: i64, port_name
     artifact_path(artifacts_dir, node_id, iter, port_name).exists()
 }
 
+/// `<artifacts>/<node>/iter-<n>/live/`: where the node publishes its live
+/// artifacts while it works (ADR-0089).
+pub fn live_dir(artifacts_dir: &Path, node_id: &str, iter: i64) -> PathBuf {
+    artifacts_dir
+        .join(node_id)
+        .join(format!("iter-{iter}"))
+        .join(pdo_pipeline::domain::pipeline::LIVE_DIR)
+}
+
 pub fn input_path(artifacts_dir: &Path) -> PathBuf {
     artifacts_dir.join("_input").join("output.md")
 }

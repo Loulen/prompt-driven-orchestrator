@@ -46,7 +46,7 @@ describe("DraftPresence", () => {
     expect(avatars).toHaveLength(1);
     expect(avatars[0]).toHaveTextContent("AM");
     expect(avatars[0]).toHaveAttribute("title", "Alice Martin");
-    expect(screen.getByTestId("draft-changes")).toHaveTextContent("draft · 3 changes");
+    expect(screen.getByTestId("draft-changes")).toHaveTextContent("draft · 3 changes since v1");
   });
 
   it("says when the tab only reads, and hides the changes when there are none", () => {

@@ -198,6 +198,8 @@ mod tests {
 
     fn node(id: &str, name: &str, node_type: NodeType) -> NodeDef {
         NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
@@ -227,7 +229,6 @@ mod tests {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         };
         let mut start = node("start", "Start", NodeType::Start);
         start.outputs.push(port("user_prompt"));
@@ -298,29 +299,29 @@ mod tests {
     }
 
     #[test]
-    fn export_and_import_keep_an_intermediate_output() {
+    fn export_and_import_keep_the_live_artifacts() {
         let mut pipeline = pipeline();
         let worker = pipeline
             .nodes
             .iter_mut()
             .find(|n| n.id == "worker")
             .unwrap();
-        worker.outputs.push(Port {
-            name: "preview".into(),
-            port_type: crate::domain::pipeline::PortType::Html,
-            frontmatter: None,
-            when: None,
-            description: None,
-            instructions: None,
-            required: false,
-            intermediate: true,
-        });
+        worker
+            .live_artifacts
+            .push(crate::domain::pipeline::LiveArtifact {
+                name: "preview".into(),
+                port_type: crate::domain::pipeline::PortType::Html,
+                instructions: None,
+                frontmatter: None,
+            });
+        worker.free_live_artifacts = true;
 
         let document = super::export(&pipeline, &HashMap::new()).unwrap();
-        assert!(document.contains("intermediate: true"), "{document}");
+        assert!(document.contains("live_artifacts:"), "{document}");
         let imported = super::interpret(&document).unwrap().pipeline;
         let worker = imported.nodes.iter().find(|n| n.id == "worker").unwrap();
-        assert!(worker.outputs[0].intermediate);
+        assert_eq!(worker.live_artifacts[0].name, "preview");
+        assert!(worker.free_live_artifacts);
     }
 
     #[test]

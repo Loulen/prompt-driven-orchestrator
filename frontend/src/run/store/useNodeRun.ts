@@ -1,3 +1,4 @@
+import type { LiveArtifactIO } from "../../shared/generated/LiveArtifactIO";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { killNode, restartNode } from "../api/commands";
 import { markNodeDone, releaseNodeCompletion } from "../api/completion";
@@ -15,7 +16,11 @@ import type { NodeState } from "../../shared/generated/NodeState";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import type { WsMessage } from "../model/liveStream";
 import { useLiveRefresh } from "./useLiveRefresh";
+import { useDaemonStreamStatus } from "./useDaemonSocket";
 import { toastRefusal } from "../../shared/authorization/refusal";
+
+/** How often the I/O of a working node is re-read for its live artifacts. */
+const LIVE_ARTIFACTS_POLL_MS = 2000;
 
 function pollInterval(status: NodeStatus): number | null {
   switch (status) {
@@ -113,6 +118,8 @@ export function useNodeRun(
   const [promptText, setPromptText] = useState<string | null>(null);
   const [inputs, setInputs] = useState<PortIO[]>([]);
   const [outputs, setOutputs] = useState<PortIO[]>([]);
+  // ADR-0089: the iteration's live artifacts, polled with the I/O.
+  const [live, setLive] = useState<LiveArtifactIO[]>([]);
   // #490: a VERDICT object, not `string[] | null`. The old shape was
   // *structurally incapable* of expressing "refused for a reason that has no port
   // list" — which is the bug: the transition guard's refusal ("resume the run
@@ -172,6 +179,7 @@ export function useNodeRun(
           if (!cancelled) {
             setInputs(io.inputs);
             setOutputs(io.outputs);
+            setLive(io.live ?? []);
           }
         })
         .catch(() => {});
@@ -190,6 +198,7 @@ export function useNodeRun(
         if (!cancelled) {
           setInputs(io.inputs);
           setOutputs(io.outputs);
+          setLive(io.live ?? []);
         }
       } catch {
         // ignore
@@ -213,6 +222,16 @@ export function useNodeRun(
     [runId],
   );
   useLiveRefresh(reloadIO, concernsRun, interval, interval !== null && !isStaleIter);
+  // ADR-0089: writing a live artifact emits no Run event, so while the node
+  // works and the stream is open (which stops the poll above), its I/O is
+  // still re-read every few seconds.
+  const streamOpen = useDaemonStreamStatus() === "connected";
+  const works = node.status === "running" || node.status === "awaiting_user";
+  useEffect(() => {
+    if (!works || isStaleIter || !streamOpen) return;
+    const timer = setInterval(() => reloadIORef.current(), LIVE_ARTIFACTS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [works, isStaleIter, streamOpen]);
 
   const stop = useCallback(async () => {
     try {
@@ -346,6 +365,7 @@ export function useNodeRun(
     promptText,
     inputs,
     outputs,
+    live,
     markVerdict,
     releaseVerdict,
     actionVerdict,

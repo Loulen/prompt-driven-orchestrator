@@ -99,6 +99,8 @@ export function useCanvasPlacement({
           isolated_worktree: false,
           inputs: [],
           outputs: [{ name: "out" }],
+          // ADR-0089: a new node may publish live artifacts of its own.
+          free_live_artifacts: true,
         };
         break;
       default:
@@ -109,6 +111,8 @@ export function useCanvasPlacement({
           isolated_worktree: true,
           inputs: [{ name: "in" }],
           outputs: [{ name: "out" }],
+          // ADR-0089: a new node may publish live artifacts of its own.
+          free_live_artifacts: true,
         };
     }
     addNodeToStore(newNode);

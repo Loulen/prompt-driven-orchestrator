@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useEditStore } from "../store/editStore";
 import type { NodeState } from "../../shared/generated/NodeState";
-import type { PortDef } from "../../shared/generated/PortDef";
 import { SectionHead, Field } from "./InspectorPrimitives";
-import OutputPortCard from "./OutputPortCard";
+import OutputsSection from "./nodeInspector/OutputsSection";
 import { NodeTypeIcon } from "./NodeTypeIcon";
 import PooledInputRow from "./PooledInputRow";
 import { useHarnessCatalog } from "../../harness/store/useHarnessCatalog";
@@ -21,10 +20,11 @@ import NameInput from "./nodeInspector/NameInput";
 import PromptSection from "./nodeInspector/PromptSection";
 import StarButton from "./nodeInspector/StarButton";
 import WorkspaceSection from "./nodeInspector/WorkspaceSection";
+import LiveArtifactsSection from "./nodeInspector/LiveArtifactsSection";
 import { NodeConfigSections } from "./ExtensionInspectorSections";
 import { derivePooledInputs } from "../../lib/derivePooledInputs";
 import type { PooledInputSource } from "../../lib/derivePooledInputs";
-import { carriedPorts, edgeCarryingOutput, outputRenameImpact, withCarriedPorts } from "../../lib/edgePorts";
+import { carriedPorts, withCarriedPorts } from "../../lib/edgePorts";
 import { requalifyWhen } from "../../lib/whenClause";
 import { regionsDestroyedByEdgeRemoval } from "../../lib/loopRegions";
 import type { LibraryEntry } from "../model/library";
@@ -191,27 +191,6 @@ export default function NodeInspector({
   // completion still inserts, it adds nothing.
   const addPromptSkill = readOnly || runNode?.skills != null ? undefined : promptAdds.add;
 
-  function handleAddOutput() {
-    const ports = [...node!.outputs];
-    let name = "out";
-    let counter = 1;
-    while (ports.some((p) => p.name === name)) {
-      name = `out-${++counter}`;
-    }
-    ports.push({ name });
-    updateNode(node!.id, { outputs: ports });
-  }
-
-  function handleUpdateOutput(index: number, updates: Partial<PortDef>) {
-    const ports = node!.outputs.map((p, i) => (i === index ? { ...p, ...updates } : p));
-    updateNode(node!.id, { outputs: ports });
-  }
-
-  function handleRemoveOutput(index: number) {
-    const ports = node!.outputs.filter((_, i) => i !== index);
-    updateNode(node!.id, { outputs: ports });
-  }
-
   return (
     <aside ref={asideRef} className="flex h-full flex-col bg-bg-2 overflow-y-auto">
       <div
@@ -351,30 +330,24 @@ export default function NodeInspector({
         )}
 
         {/* Outputs — declared: the node's production contract (CONTEXT.md § Node). */}
-        <SectionHead
-          title="Outputs"
-          count={node.outputs.length}
-          onAdd={handleAddOutput}
-          addTestId="add-output-port"
+        <OutputsSection
+          node={node}
+          pipeline={tab.pipeline}
+          highlightedPort={highlightedPort}
+          onChange={(outputs) => updateNode(node.id, { outputs })}
         />
-        <div className="flex flex-col">
-          {node.outputs.map((port, i) => (
-            <OutputPortCard
-              key={i}
-              index={i}
-              port={port}
-              highlighted={highlightedPort === port.name}
-              onUpdate={(updates) => handleUpdateOutput(i, updates)}
-              onRemove={() => handleRemoveOutput(i)}
-              schema={port.frontmatter}
-              onSchemaChange={(fm) => handleUpdateOutput(i, { frontmatter: fm ?? null })}
-              allowInstructions={node.type === "agent"}
-              wiredBy={edgeCarryingOutput(tab.pipeline, node.id, port.name)}
-              takenNames={node.outputs.filter((_, j) => j !== i).map((p) => p.name)}
-              wiring={outputRenameImpact(tab.pipeline, node.id, port.name)}
-            />
-          ))}
-        </div>
+
+        {/* ADR-0089: the live artifacts, apart from the outputs — never checked,
+            never wired. Only a node that runs something publishes any. */}
+        {carriesIsolation(node.type) && (
+          <LiveArtifactsSection
+            live={node.live_artifacts ?? []}
+            free={node.free_live_artifacts === true}
+            allowInstructions={node.type === "agent"}
+            readOnly={readOnly}
+            onChange={(updates) => updateNode(node.id, updates)}
+          />
+        )}
 
         {/* ADR-0081 (#31): the `node/config` sections of the extensions. */}
         <NodeConfigSections

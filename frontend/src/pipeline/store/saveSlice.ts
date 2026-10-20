@@ -13,6 +13,7 @@ import type { EditState } from "./editState";
 import { isRunTabLocked } from "./editState";
 import { clearedHistory, droppedHistory, rekeyTab } from "./tabHistory";
 import { draftSessionOf } from "./draftSessions";
+import type { SaveAs } from "../api/versions";
 
 type Set = StoreApi<EditState>["setState"];
 type Get = StoreApi<EditState>["getState"];
@@ -149,9 +150,10 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
     );
   },
 
-  save: async (id: string) => {
+  save: async (id: string, version?: SaveAs) => {
     const tab = get().openTabs.find((t) => t.id === id);
-    if (!tab) return;
+    // ADR-0088: a version shown read only has nothing to save.
+    if (!tab || tab.version) return undefined;
     try {
       const yaml = serializePipeline(tab.pipeline);
       if (tab.runId) {
@@ -163,12 +165,14 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
           lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
         }));
         await refreshStaleLint(id);
+        return { ok: true, id };
       } else {
         // Save back into the same store the tab was opened from, so a
         // `library`-scoped edit never overwrites a same-named repo file (#216).
-        // ADR-0088: a tab with a shared draft saves the draft as it holds it;
-        // the daemon then counts no change left.
-        const result = await savePipeline(id, yaml, tab.prompts, tab.scope, draftSessionOf(id)?.content());
+        // ADR-0088: a tab with a shared draft saves the draft as it holds it,
+        // as the version `version` says; the daemon then counts no change left.
+        const draft = draftSessionOf(id)?.content();
+        const result = await savePipeline(id, yaml, tab.prompts, tab.scope, draft, draft ? version : undefined);
         // #774 — the save may have RENAMED the pipeline (a `name:` edit moved
         // the file): rekey the tab to the daemon's final id in the same
         // gesture, so the store never keeps a tab pointing at a dead stem.
@@ -193,6 +197,9 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
           }));
         }
         await refreshStaleLint(newId ?? id);
+        // The list shows the new version, and the pipeline it kept.
+        if (result?.version || result?.kept) void get().loadPipelines();
+        return result;
       }
     } catch (err: unknown) {
       // One typed error contract (`ApiError`) — no more sniffing an `unknown`
@@ -220,7 +227,7 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
           // pipeline was archived away), so its stack must go with it.
           return { openTabs: tabs, activeTabId, selection, lastSavedAt, history: droppedHistory(s.history, id) };
         });
-        return;
+        return undefined;
       }
       const message =
         apiErr?.message ?? (err instanceof Error ? err.message : "Save failed");
@@ -230,12 +237,8 @@ export function saveSlice(set: Set, get: Get): Partial<EditState> {
           t.id === id ? { ...t, saveError: { message, line } } : t,
         ),
       }));
+      return undefined;
     }
-  },
-
-  flushPendingSaves: async () => {
-    const dirtyTabs = get().openTabs.filter((t) => t.dirty);
-    await Promise.all(dirtyTabs.map((t) => get().save(t.id)));
   },
 
   clearSaveError: (id: string) => {

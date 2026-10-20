@@ -26,6 +26,7 @@ pub fn build_preamble(ctx: &AugmentContext<'_>) -> String {
 
     push_inputs(&mut preamble, ctx, &inputs);
     push_outputs(&mut preamble, ctx, &outputs);
+    push_live_artifacts(&mut preamble, ctx);
     push_partial_outputs(&mut preamble, ctx);
     push_secondary_repos(&mut preamble, ctx);
     push_source_edits(&mut preamble, ctx);
@@ -155,37 +156,17 @@ pub(super) fn push_inputs(
     }
 }
 
-/// What the node writes: each ordinary output port, with its schema and conduct,
-/// then its *Outputs intermédiaires* apart, with the conduct they call for.
+/// What the node writes: each output port, with its schema and conduct.
 pub(super) fn push_outputs(
     preamble: &mut String,
     ctx: &AugmentContext<'_>,
     outputs: &[OutputDeclaration],
 ) {
-    let (intermediate, ordinary): (Vec<_>, Vec<_>) =
-        outputs.iter().partition(|output| output.intermediate);
-
     preamble.push_str("## Outputs\n\n");
-    if ordinary.is_empty() {
+    if outputs.is_empty() {
         preamble.push_str("No outputs declared.\n\n");
     } else {
-        for output in ordinary {
-            push_output_entry(preamble, ctx, output);
-        }
-        preamble.push('\n');
-    }
-
-    if !intermediate.is_empty() {
-        preamble.push_str("## Intermediate outputs\n\n");
-        preamble.push_str(
-            "These outputs let the humans follow your work while you do it. Fill each \
-             one **early**, then **update it as you work**. They are **never checked**: \
-             `pdo complete` ignores them (presence, content, frontmatter), and no other \
-             node reads them. Write every update in one go: write a temporary file next \
-             to the target, then rename it onto the target path, so nobody reads a \
-             half-written file.\n",
-        );
-        for output in intermediate {
+        for output in outputs {
             push_output_entry(preamble, ctx, output);
         }
         preamble.push('\n');
@@ -193,10 +174,8 @@ pub(super) fn push_outputs(
 }
 
 /// One output port's line: where to write it, its expected content, and the
-/// format constraints of its type. An intermediate output never describes a
-/// frontmatter schema: nothing would validate it.
+/// format constraints of its type.
 fn push_output_entry(preamble: &mut String, ctx: &AugmentContext<'_>, output: &OutputDeclaration) {
-    let ext_list = IMAGE_EXTENSIONS.join(", .");
     let port = ctx
         .node
         .outputs
@@ -205,51 +184,116 @@ fn push_output_entry(preamble: &mut String, ctx: &AugmentContext<'_>, output: &O
     let instructions = (ctx.node.node_type == NodeType::Agent)
         .then(|| port.and_then(|port| port.instructions.as_deref()))
         .flatten();
-    match output.port_type {
+    push_file_entry(
+        preamble,
+        &output.port_name,
+        output.port_type,
+        &output.path.display().to_string(),
+        instructions,
+        port.and_then(|p| p.frontmatter.as_ref())
+            .map(|schema| ("Required YAML frontmatter", schema)),
+    );
+    if output.port_type == PortType::Files {
+        preamble.push_str(
+            "  Every file of the folder is the output, and the nodes downstream \
+             read the whole folder.\n",
+        );
+    }
+}
+
+/// The node's live artifacts (ADR-0089): the `live/` folder of its iteration,
+/// the ones it declares, and whether it may publish others. Absent when the node
+/// declares none and may publish none.
+pub(super) fn push_live_artifacts(preamble: &mut String, ctx: &AugmentContext<'_>) {
+    let node = ctx.node;
+    if node.live_artifacts.is_empty() && !node.free_live_artifacts {
+        return;
+    }
+    let live_dir = crate::domain::blackboard::live_dir(ctx.artifacts_dir, &node.id, ctx.iter);
+    preamble.push_str("## Live artifacts\n\n");
+    preamble.push_str(&format!(
+        "Live artifacts let the humans follow your work while you do it. Publish them in \
+         `{}/`. Write each one **early**, then **update it as you work**. They are \
+         **never checked**: `pdo complete` ignores them (presence, content, frontmatter), \
+         and no other node reads them; anything the next node needs goes in an output. \
+         Write every update in one go: write a temporary file next to the target, then \
+         rename it onto the target path, so nobody reads a half-written file.\n",
+        live_dir.display()
+    ));
+    for live in &node.live_artifacts {
+        let path = live_dir.join(live.relative_path());
+        let mut path = path.display().to_string();
+        if matches!(
+            live.port_type,
+            PortType::Image | PortType::ImageList | PortType::Files
+        ) {
+            path = path.trim_end_matches('/').to_string();
+        }
+        let instructions = (node.node_type == NodeType::Agent)
+            .then_some(live.instructions.as_deref())
+            .flatten();
+        push_file_entry(
+            preamble,
+            &live.name,
+            live.port_type,
+            &path,
+            instructions,
+            live.frontmatter
+                .as_ref()
+                .map(|schema| ("Expected YAML frontmatter (not enforced)", schema)),
+        );
+    }
+    if node.free_live_artifacts {
+        preamble.push_str(
+            "You may also publish live artifacts nobody declared, in the same folder: \
+             one file per artifact (`<name>.md`, `<name>.html`, an image), or a folder of \
+             images or files. Name them after what they show.\n",
+        );
+    }
+    preamble.push('\n');
+}
+
+/// One file the node writes: where, its expected content, and the format
+/// constraints of its type — an output or a live artifact alike.
+fn push_file_entry(
+    preamble: &mut String,
+    name: &str,
+    port_type: PortType,
+    path: &str,
+    instructions: Option<&str>,
+    schema: Option<(
+        &str,
+        &std::collections::HashMap<String, pdo_pipeline::domain::pipeline::FrontmatterFieldDecl>,
+    )>,
+) {
+    let ext_list = IMAGE_EXTENSIONS.join(", .");
+    match port_type {
         PortType::Image => {
             preamble.push_str(&format!(
-                "- `{}` (image): drop exactly one image file in `{}`\n",
-                output.port_name,
-                output.path.display(),
+                "- `{name}` (image): drop exactly one image file in `{path}`\n"
             ));
             append_output_instructions(preamble, instructions);
             preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
         }
         PortType::ImageList => {
             preamble.push_str(&format!(
-                "- `{}` (image_list): drop one or more image files in `{}`\n",
-                output.port_name,
-                output.path.display(),
+                "- `{name}` (image_list): drop one or more image files in `{path}`\n"
             ));
             append_output_instructions(preamble, instructions);
             preamble.push_str(&format!("  Accepted extensions: .{}\n", ext_list));
         }
         PortType::Files => {
             preamble.push_str(&format!(
-                "- `{}` (files): drop one or more files, of any format, in `{}`\n",
-                output.port_name,
-                output.path.display(),
+                "- `{name}` (files): drop one or more files, of any format, in `{path}`\n"
             ));
             append_output_instructions(preamble, instructions);
-            preamble.push_str(
-                "  Every file of the folder is the output, and the nodes downstream \
-                 read the whole folder.\n",
-            );
         }
         PortType::Markdown => {
-            preamble.push_str(&format!(
-                "- `{}`: write to `{}`\n",
-                output.port_name,
-                output.path.display()
-            ));
+            preamble.push_str(&format!("- `{name}`: write to `{path}`\n"));
             append_output_instructions(preamble, instructions);
 
-            let schema = port
-                .filter(|_| !output.intermediate)
-                .and_then(|p| p.frontmatter.as_ref());
-
-            if let Some(schema) = schema {
-                preamble.push_str("  Required YAML frontmatter:\n");
+            if let Some((label, schema)) = schema {
+                preamble.push_str(&format!("  {label}:\n"));
                 for (field_name, field_decl) in schema {
                     if let Some(ref allowed) = field_decl.allowed {
                         preamble.push_str(&format!(
@@ -271,9 +315,7 @@ fn push_output_entry(preamble: &mut String, ctx: &AugmentContext<'_>, output: &O
         // offline in a scriptless sandboxed iframe (ADR-0028).
         PortType::Html => {
             preamble.push_str(&format!(
-                "- `{}` (html): write a single self-contained HTML file to `{}`\n",
-                output.port_name,
-                output.path.display(),
+                "- `{name}` (html): write a single self-contained HTML file to `{path}`\n"
             ));
             append_output_instructions(preamble, instructions);
             preamble.push_str(

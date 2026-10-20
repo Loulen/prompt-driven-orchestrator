@@ -59,6 +59,14 @@ pub struct LibraryEntry {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(optional = nullable)]
     pub on_demand: bool,
+    /// The node's declared live artifacts (ADR-0089), starred with it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub live_artifacts: Vec<pipeline::LiveArtifact>,
+    /// « Free live artifacts » (ADR-0089), starred with the node.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional = nullable)]
+    pub free_live_artifacts: bool,
 }
 
 impl LibraryEntry {
@@ -90,7 +98,18 @@ impl LibraryEntry {
 /// type's default — not as a silence that would read `diverged` against a node
 /// sitting on that very default.
 pub fn parse_entry(contents: &str) -> Option<LibraryEntry> {
-    let mut entry = serde_yaml::from_str::<LibraryEntry>(contents).ok()?;
+    let mut doc = serde_yaml::from_str::<serde_yaml::Value>(contents).ok()?;
+    // ADR-0089: an entry starred with an `intermediate` output reads it as a
+    // live artifact, like a pipeline does.
+    if let Some(map) = doc.as_mapping_mut() {
+        let name = map
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<unknown>")
+            .to_string();
+        pipeline::migrate_intermediate_outputs(map, &name);
+    }
+    let mut entry = serde_yaml::from_value::<LibraryEntry>(doc).ok()?;
     entry.stamp_isolation();
     Some(entry)
 }
@@ -171,6 +190,8 @@ pub fn entry_from_node(node: &pipeline::NodeDef, prompt: &str) -> LibraryEntry {
         // very node that produced the entry would read `diverged` against it.
         isolated_worktree: node.isolated_worktree,
         on_demand: node.on_demand,
+        live_artifacts: node.live_artifacts.clone(),
+        free_live_artifacts: node.free_live_artifacts,
     };
     entry.stamp_isolation();
     entry

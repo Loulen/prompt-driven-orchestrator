@@ -257,6 +257,8 @@ mod tests {
 
     fn make_node(name: &str) -> crate::domain::pipeline::NodeDef {
         crate::domain::pipeline::NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: "test-id".to_string(),
@@ -270,7 +272,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             outputs: vec![crate::domain::pipeline::Port {
                 name: "out".to_string(),
@@ -280,7 +281,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             interactive: false,
             view: None,
@@ -340,6 +340,8 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
 
             let entry1 = LibraryEntry {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 on_demand: false,
                 name: "Alpha".to_string(),
                 node_type: crate::domain::pipeline::NodeType::Agent,
@@ -388,6 +390,8 @@ mod tests {
             std::fs::create_dir_all(&dir).unwrap();
 
             let entry = LibraryEntry {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 on_demand: false,
                 name: "Typed Reviewer".to_string(),
                 node_type: crate::domain::pipeline::NodeType::Agent,
@@ -445,26 +449,50 @@ mod tests {
     }
 
     #[test]
-    fn sync_state_diverged_when_only_the_intermediate_flag_differs() {
-        // The option is semantic: a node whose output became intermediate is not
-        // the starred node any more, and the entry file carries the flag.
+    fn sync_state_diverged_when_only_the_live_artifacts_differ() {
+        // ADR-0089: semantic — a node that gained a live artifact or the free
+        // publication is not the starred node any more, and the entry carries them.
         with_temp_home(|| {
             let node = make_node("Reviewer");
             save(&entry_from_node(&node, "p")).unwrap();
 
-            let mut flagged = node.clone();
-            flagged.outputs[0].intermediate = true;
-            assert_eq!(sync_state(&flagged, "p"), SyncState::Diverged);
+            let mut live = node.clone();
+            live.live_artifacts
+                .push(crate::domain::pipeline::LiveArtifact {
+                    name: "progress".into(),
+                    port_type: crate::domain::pipeline::PortType::Markdown,
+                    instructions: None,
+                    frontmatter: None,
+                });
+            assert_eq!(sync_state(&live, "p"), SyncState::Diverged);
+            let mut free = node.clone();
+            free.free_live_artifacts = true;
+            assert_eq!(sync_state(&free, "p"), SyncState::Diverged);
 
-            save(&entry_from_node(&flagged, "p")).unwrap();
-            assert_eq!(sync_state(&flagged, "p"), SyncState::Synced);
-            assert!(get("Reviewer").unwrap().outputs[0].intermediate);
+            live.free_live_artifacts = true;
+            save(&entry_from_node(&live, "p")).unwrap();
+            assert_eq!(sync_state(&live, "p"), SyncState::Synced);
+            let entry = get("Reviewer").unwrap();
+            assert_eq!(entry.live_artifacts[0].name, "progress");
+            assert!(entry.free_live_artifacts);
         });
+    }
+
+    #[test]
+    fn an_entry_starred_with_an_intermediate_output_reads_it_as_a_live_artifact() {
+        let entry = crate::domain::library::parse_entry(
+            "name: Writer\ntype: agent\noutputs:\n  - name: adr\n  - name: draft\n    intermediate: true\n",
+        )
+        .unwrap();
+        assert_eq!(entry.outputs.len(), 1);
+        assert_eq!(entry.live_artifacts[0].name, "draft");
     }
 
     #[test]
     fn yaml_round_trip_lossless() {
         let entry = LibraryEntry {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             on_demand: false,
             name: "Complex Node".to_string(),
             node_type: crate::domain::pipeline::NodeType::Agent,
@@ -481,7 +509,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
                 crate::domain::pipeline::Port {
                     name: "reviews".to_string(),
@@ -491,7 +518,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
             ],
             outputs: vec![crate::domain::pipeline::Port {
@@ -512,7 +538,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             interactive: true,
             max_iter: Some(5),
@@ -531,6 +556,8 @@ mod tests {
         // A node on the account default must not emit a `model:` key: an entry
         // that does reads `diverged` against a library file that never had one.
         let entry = LibraryEntry {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             on_demand: false,
             name: "Plain".to_string(),
             node_type: crate::domain::pipeline::NodeType::Agent,
@@ -564,6 +591,8 @@ mod tests {
         // Same invariant as `model`: an unset node must stay byte-identical to a
         // library entry written before the key existed.
         let entry = LibraryEntry {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             on_demand: false,
             name: "Plain".to_string(),
             node_type: crate::domain::pipeline::NodeType::Agent,
@@ -748,6 +777,8 @@ mod tests {
     fn list_is_sorted_alphabetically() {
         with_temp_home(|| {
             let base = LibraryEntry {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 on_demand: false,
                 name: String::new(),
                 node_type: crate::domain::pipeline::NodeType::Agent,
@@ -791,6 +822,8 @@ mod tests {
     #[test]
     fn json_round_trip_preserves_all_port_fields() {
         let entry = LibraryEntry {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             on_demand: false,
             name: "Typed Node".to_string(),
             node_type: crate::domain::pipeline::NodeType::Agent,
@@ -806,7 +839,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
                 crate::domain::pipeline::Port {
                     name: "reviews".to_string(),
@@ -816,7 +848,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
             ],
             outputs: vec![crate::domain::pipeline::Port {
@@ -858,7 +889,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             interactive: true,
             max_iter: Some(5),
@@ -887,6 +917,8 @@ mod tests {
     fn json_round_trip_via_disk_preserves_port_fields() {
         with_temp_home(|| {
             let entry = LibraryEntry {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 on_demand: false,
                 name: "Schema Node".to_string(),
                 node_type: crate::domain::pipeline::NodeType::Agent,
@@ -901,7 +933,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 outputs: vec![crate::domain::pipeline::Port {
                     name: "result".to_string(),
@@ -921,7 +952,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 max_iter: None,

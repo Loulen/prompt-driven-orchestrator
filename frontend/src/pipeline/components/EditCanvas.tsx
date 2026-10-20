@@ -24,6 +24,7 @@ import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
 import LintBanner from "./LintBanner";
+import VersionBanner from "./VersionBanner";
 import RunSearchHost from "../../run/components/runSearch/RunSearchHost";
 import WaitingForStartedNodesBanner, { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
 import DragConnectionLine from "./DragConnectionLine";
@@ -223,40 +224,45 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
 
   return (
     <div className="relative flex-1" ref={reactFlowRef}>
-      <EditToolbar
-        onAddNode={handleAddNode}
-        onAddNote={handleAddNote}
-        onAddNodeFromYaml={() => setAddFromYamlOpen(true)}
-        libraryEntries={libraryEntries}
-        onLibraryDelete={onLibraryDelete}
-        getDropPosition={computeDropPosition}
-        infoOpen={infoOpen}
-        onToggleInfo={onToggleInfo}
-        // #302 / ADR-0048: the Assistant is a template-only affordance — a
-        // library template tab has no `runId`. On a run canvas the Bot is absent;
-        // the Manager tab is reached via `(i)` there.
-        assistantAvailable={tab != null && tab.runId == null}
-        assistantActive={assistantActive}
-        onOpenAssistant={onOpenAssistant}
-        reviewHref={reviewHref}
-        reviewPending={reviewPending}
-        reviewTone={reviewTone}
-        reviewTitle={reviewTitle}
-        readOnly={readOnly}
-        finishedRun={finishedRun}
-        onReopen={mayReopen ? handleReopen : undefined}
-        onRetryAll={mayRetryAll ? () => setConfirmRetryAll(true) : undefined}
-        onOpenShell={handleOpenShell}
-        run={activeRunState}
-        runEdit={runEdit}
-      />
+      {/* ADR-0088: a version shown read only has its banner where the toolbar sits. */}
+      {tab.version ? (
+        <VersionBanner version={tab.version} infoOpen={infoOpen} onToggleInfo={onToggleInfo} />
+      ) : (
+        <EditToolbar
+          onAddNode={handleAddNode}
+          onAddNote={handleAddNote}
+          onAddNodeFromYaml={() => setAddFromYamlOpen(true)}
+          libraryEntries={libraryEntries}
+          onLibraryDelete={onLibraryDelete}
+          getDropPosition={computeDropPosition}
+          infoOpen={infoOpen}
+          onToggleInfo={onToggleInfo}
+          // #302 / ADR-0048: the Assistant is a template-only affordance — a
+          // library template tab has no `runId`. On a run canvas the Bot is absent;
+          // the Manager tab is reached via `(i)` there.
+          assistantAvailable={tab != null && tab.runId == null && tab.version == null}
+          assistantActive={assistantActive}
+          onOpenAssistant={onOpenAssistant}
+          reviewHref={reviewHref}
+          reviewPending={reviewPending}
+          reviewTone={reviewTone}
+          reviewTitle={reviewTitle}
+          readOnly={readOnly}
+          finishedRun={finishedRun}
+          onReopen={mayReopen ? handleReopen : undefined}
+          onRetryAll={mayRetryAll ? () => setConfirmRetryAll(true) : undefined}
+          onOpenShell={handleOpenShell}
+          run={activeRunState}
+          runEdit={runEdit}
+        />
+      )}
       {/* #225: lint diagnostics are an edit-mode affordance — suppress on run tabs.
           NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
           deliberate trade-off ratified at PR time. `tab` is non-null here (early
           return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
       <WaitingForStartedNodesBanner run={activeRunState} />
       <RunSearchHost run={activeRunState} onCloseInfo={onCloseInfo} />
-      {visibleItems.length > 0 && tab.runId == null && (
+      {visibleItems.length > 0 && tab.runId == null && tab.version == null && (
         <div className="absolute left-0 right-0 top-10 z-10">
           <LintBanner items={visibleItems} onDismiss={dismiss} />
         </div>

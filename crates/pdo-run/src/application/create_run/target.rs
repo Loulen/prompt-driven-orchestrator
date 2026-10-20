@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use axum::http::StatusCode;
 use pdo_pipeline::domain::pipeline::{self, PipelineDef};
+use pdo_pipeline::domain::version::PipelineVersionRef;
 use pdo_workspace::adapters::git::repository::validate_source_branch;
 use tracing::warn;
 
@@ -112,6 +113,22 @@ pub(super) struct Launchable {
     pub pipeline: PipelineDef,
     /// The template file it was read from, copied into the Run's directory.
     pub pipeline_path: PathBuf,
+    /// The version that file is (ADR-0088); `None` outside the registry.
+    pub version: Option<PipelineVersionRef>,
+}
+
+/// The version of the registry pipeline the request names: the last one,
+/// the file a Run reads.
+pub(super) async fn version_of(state: &Runs, req: &CreateRunRequest) -> Option<PipelineVersionRef> {
+    let id = req
+        .pipeline_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or(&req.pipeline);
+    if id.trim().is_empty() {
+        return None;
+    }
+    state.source_pipelines.last_version(id).await
 }
 
 /// Load the pipeline and refuse one a Run cannot run: unreadable or
@@ -174,5 +191,6 @@ pub(super) fn load_pipeline(state: &Runs, req: &CreateRunRequest) -> Result<Laun
     Ok(Launchable {
         pipeline,
         pipeline_path,
+        version: None,
     })
 }

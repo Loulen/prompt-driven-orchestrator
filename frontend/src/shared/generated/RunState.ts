@@ -10,6 +10,7 @@ import type { LocStat } from "./LocStat";
 import type { LoopStateInfo } from "./LoopStateInfo";
 import type { NodeDefInfo } from "./NodeDefInfo";
 import type { NodeState } from "./NodeState";
+import type { PipelineVersionRef } from "./PipelineVersionRef";
 import type { RepoPin } from "./RepoPin";
 import type { ReviewComment } from "./ReviewComment";
 import type { RunStatus } from "./RunStatus";
@@ -290,6 +291,12 @@ project_id?: string,
  * (#230). Additive and backward-compatible.
  */
 pipeline_id?: string, 
+/**
+ * The version of the pipeline this Run launched (ADR-0088), frozen into
+ * `RunStarted`. `None` on a Run older than the versions, and on one not
+ * launched from the registry.
+ */
+pipeline_version?: PipelineVersionRef, 
 /**
  * Cumulative count of `NodeStarted` events for this Run — i.e. how many
  * Claude Code NodeRun sessions it spawned (issue #100). A **raw** count,

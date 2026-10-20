@@ -104,6 +104,21 @@ describe("useDaemonEvents", () => {
     }
   });
 
+  it("reads the Pipelines again on a pipeline_version_changed, and reloads no editor (ADR-0088)", () => {
+    const original = useEditStore.getState();
+    const loadPipelines = vi.fn(async () => {});
+    const reloadPipeline = vi.fn(async () => {});
+    useEditStore.setState({ loadPipelines, reloadPipeline });
+    try {
+      const { emit } = mount();
+      emit({ type: "pipeline_version_changed", pipeline_id: "shared" });
+      expect(loadPipelines).toHaveBeenCalledTimes(1);
+      expect(reloadPipeline).not.toHaveBeenCalled();
+    } finally {
+      useEditStore.setState({ loadPipelines: original.loadPipelines, reloadPipeline: original.reloadPipeline });
+    }
+  });
+
   it("drops a pending refresh once unmounted", () => {
     const { targets, hook, emit } = mount();
     emit({ type: "event" });

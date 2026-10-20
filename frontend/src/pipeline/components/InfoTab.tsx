@@ -16,6 +16,7 @@ import { SourceBlock } from "./SourceBlock";
 import PipelineMetaSections from "./PipelineMetaSections";
 import { PipelineConfigSections } from "./ExtensionInspectorSections";
 import { useEditStore } from "../store/editStore";
+import { InfoVersionLine, NewerVersionPill } from "./InfoVersion";
 import { useMemo } from "react";
 import ExtensionSections, { type RenderedSection } from "../../shared/extensions/ExtensionSections";
 import type { RunInfoContext } from "../../shared/extensions/contract";
@@ -99,6 +100,10 @@ export function InfoTab({
   const durationLabel = formatDuration(durationMs);
   const durationTicking = run != null && run.completed_at == null && isLiveRun(run.status);
   const pipelines = useEditStore((s) => s.pipelines);
+  // ADR-0088: a version shown in its own tab is read only, like a Run.
+  const viewingVersion = useEditStore(
+    (s) => s.openTabs.find((t) => t.id === s.activeTabId)?.version != null,
+  );
 
   return (
     <>
@@ -113,13 +118,9 @@ export function InfoTab({
             <div className="font-medium text-fg" data-testid="info-panel-name">
               {pipelineName}
             </div>
-            <div
-              className="mt-0.5 font-mono text-fg-4"
-              style={{ fontSize: "10px" }}
-            >
-              {run ? `run ${run.run_id.slice(-8)} · ${pipeline?.version ?? "v1"}` : `template · ${pipeline?.version ?? "v1"}`}
-            </div>
+            <InfoVersionLine run={run} pipelineId={pipelineId} />
           </div>
+          <NewerVersionPill run={run} />
           {/* Sandbox badge (#410): shown for any sandboxed Run (full/minimal). An
               `off`/host Run renders nothing — the field is absent on those. */}
           {run?.sandbox && run.sandbox !== "off" && (
@@ -247,8 +248,8 @@ export function InfoTab({
 
       {/* Notion #6 / #948: Pipeline info is the only surface of the pipeline's
           metadata — editable on a template, read-only on a Run (active or
-          archived). Order: header → Identity → Variables → Canvas → Stats → note. */}
-      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null} />}
+          archived) and on a version. Order: header → Identity → Variables → Canvas → Stats → note. */}
+      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null || viewingVersion} />}
 
       {(run || pipeline) && (
         <div

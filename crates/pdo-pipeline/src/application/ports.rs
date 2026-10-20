@@ -16,6 +16,7 @@ use crate::domain::draft::{DraftContent, DraftSummary};
 use crate::domain::library::LibraryEntry;
 use crate::domain::pipeline::PipelineDef;
 use crate::domain::validation::PipelineValidation;
+use crate::domain::version::{PipelineVersion, PipelineVersionRef, VersionMeta};
 
 /// The future an async port method returns (the ports are `dyn`, D23).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -104,6 +105,9 @@ pub trait PipelineEvents: Send + Sync {
     /// `pipeline_draft_changed`: the list shows who has the draft of `id`
     /// open, and its changes.
     fn draft_changed(&self, id: &str, draft: &DraftSummary);
+    /// `pipeline_version_changed`: the lists read the last version of `id`
+    /// again. No editor reloads: the file is what its draft was saved as.
+    fn version_changed(&self, id: &str);
 }
 
 /// The validations the pipelines state (CONTEXT.md « Pipeline validé »), keyed
@@ -135,6 +139,39 @@ pub trait KnownProjects: Send + Sync {
 pub trait ActiveRuns: Send + Sync {
     /// How many Runs not yet completed nor archived run the pipeline `id`.
     fn using<'a>(&'a self, pipeline_id: &'a str) -> BoxFuture<'a, usize>;
+    /// How many Runs launched each version of the pipeline `id`, by number.
+    fn per_version<'a>(&'a self, pipeline_id: &'a str) -> BoxFuture<'a, HashMap<u32, usize>>;
+}
+
+/// Where the versions of the pipelines are kept (ADR-0088), keyed by
+/// pipeline id and number.
+pub trait PipelineVersions: Send + Sync {
+    /// The versions of `id`, oldest first, without their content.
+    fn list<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<Vec<VersionMeta>, String>>;
+    /// The version `number` of `id`, with its content.
+    fn get<'a>(
+        &'a self,
+        id: &'a str,
+        number: u32,
+    ) -> BoxFuture<'a, Result<Option<PipelineVersion>, String>>;
+    /// Keep `version` under its number, replacing the one there.
+    fn put<'a>(
+        &'a self,
+        id: &'a str,
+        version: &'a PipelineVersion,
+    ) -> BoxFuture<'a, Result<(), String>>;
+    /// Keep `version` only when `id` has no version yet.
+    fn put_first<'a>(
+        &'a self,
+        id: &'a str,
+        version: &'a PipelineVersion,
+    ) -> BoxFuture<'a, Result<(), String>>;
+    /// The pipeline `id` was deleted: its versions go.
+    fn remove<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Result<(), String>>;
+    /// A rename moved `from` to `to`: its versions follow.
+    fn carry<'a>(&'a self, from: &'a str, to: &'a str) -> BoxFuture<'a, Result<(), String>>;
+    /// The last version of every pipeline, by id.
+    fn lasts(&self) -> BoxFuture<'_, Result<HashMap<String, PipelineVersionRef>, String>>;
 }
 
 /// A pipeline's identity before and after a rename.

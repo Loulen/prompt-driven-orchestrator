@@ -18,7 +18,7 @@ use crate::domain::state::{RunState, RunStatus};
 /// The shape of [`RunSummary`]: the Résumés written under another version
 /// are rebuilt from the event log at boot. Bump it with any change of the
 /// fields or of how they are derived.
-pub const SUMMARY_VERSION: i64 = 3;
+pub const SUMMARY_VERSION: i64 = 4;
 
 /// One Run, as the lists show it and the access checks read it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,6 +45,12 @@ pub struct RunSummary {
     /// The primary repository the Run names; `None` for a Run older than the
     /// create boundary (ADR-0033), which works in the daemon's repo root.
     pub target_repo: Option<String>,
+    /// The registry pipeline it was created from, and the number of the
+    /// version it launched (ADR-0088): the history counts its Runs.
+    #[serde(default)]
+    pub pipeline_id: Option<String>,
+    #[serde(default)]
+    pub pipeline_version: Option<u32>,
     /// The Projet the Run was launched in (ADR-0087); `None` for none.
     #[serde(default)]
     pub project_id: Option<String>,
@@ -70,6 +76,8 @@ impl RunSummary {
             parent_run_id: run.parent_run_id.clone(),
             parent_node_id: run.parent_node_id.clone(),
             target_repo: run.target_repo.clone(),
+            pipeline_id: run.pipeline_id.clone(),
+            pipeline_version: run.pipeline_version.as_ref().map(|v| v.number),
             project_id: run.project_id.clone(),
         }
     }

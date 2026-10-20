@@ -35,7 +35,6 @@ const INPUT: Complete<PortDef> = {
   description: "d",
   instructions: "i",
   required: true,
-  intermediate: true,
 };
 const OUTPUT: Complete<PortDef> = {
   name: "out",
@@ -45,7 +44,6 @@ const OUTPUT: Complete<PortDef> = {
   description: "d",
   instructions: "i",
   required: true,
-  intermediate: true,
 };
 const NODE: Complete<EditorNodeDef> = {
   id: "n1",
@@ -83,6 +81,9 @@ const NODE: Complete<EditorNodeDef> = {
   orchestrator: true,
   // ADR-0086: same caveat — the emission proof is in `serializePipeline.test.ts`.
   on_demand: true,
+  // ADR-0089: same caveat — the emission proof is in `serializePipeline.test.ts`.
+  free_live_artifacts: true,
+  live_artifacts: [{ name: "progress", port_type: "markdown", instructions: "i", frontmatter: FRONTMATTER }],
   // #915: the generated type revealed it; the serializer now emits it.
   auto_fail: true,
 };
@@ -166,7 +167,7 @@ describe("serializer field-partition exhaustiveness guard (#355)", () => {
   // maximal, so the set-equality above can't pass on an accidentally-thin fixture.
   it("fixture is maximal at edge/output-port scope", () => {
     expect(sortedKeys(edge)).toHaveLength(14);
-    expect(sortedKeys(output)).toHaveLength(7);
+    expect(sortedKeys(output)).toHaveLength(6);
   });
 });
 

@@ -980,89 +980,6 @@ describe("editStore.save refreshes a stale lint (CORE-88)", () => {
   });
 });
 
-describe("editStore.flushPendingSaves", () => {
-  it("resolves only after all dirty tabs are clean", async () => {
-    useEditStore.setState({
-      openTabs: [
-        {
-          id: "a",
-          scope: "repo",
-          pipeline: { name: "a", version: "1.0", variables: {}, nodes: [], edges: [] },
-          prompts: {},
-          diagnostics: [],
-          dirty: true,
-          externalDirty: false,
-        },
-        {
-          id: "b",
-          scope: "repo",
-          pipeline: { name: "b", version: "1.0", variables: {}, nodes: [], edges: [] },
-          prompts: {},
-          diagnostics: [],
-          dirty: true,
-          externalDirty: false,
-        },
-        {
-          id: "c",
-          scope: "repo",
-          pipeline: { name: "c", version: "1.0", variables: {}, nodes: [], edges: [] },
-          prompts: {},
-          diagnostics: [],
-          dirty: false,
-          externalDirty: false,
-        },
-      ],
-      activeTabId: "a",
-      selection: { kind: "none", id: null },
-    });
-
-    await useEditStore.getState().flushPendingSaves();
-
-    const tabs = useEditStore.getState().openTabs;
-    expect(tabs.every((t) => t.dirty === false)).toBe(true);
-  });
-
-  it("resolves immediately when no tabs are dirty", async () => {
-    seedTab("p1", false);
-
-    await useEditStore.getState().flushPendingSaves();
-
-    expect(useEditStore.getState().openTabs[0].dirty).toBe(false);
-  });
-
-  it("saves only dirty tabs, not clean ones", async () => {
-    useEditStore.setState({
-      openTabs: [
-        {
-          id: "dirty-one",
-          scope: "repo",
-          pipeline: { name: "d", version: "1.0", variables: {}, nodes: [], edges: [] },
-          prompts: {},
-          diagnostics: [],
-          dirty: true,
-          externalDirty: false,
-        },
-        {
-          id: "clean-one",
-          scope: "repo",
-          pipeline: { name: "c", version: "1.0", variables: {}, nodes: [], edges: [] },
-          prompts: {},
-          diagnostics: [],
-          dirty: false,
-          externalDirty: false,
-        },
-      ],
-      activeTabId: "dirty-one",
-      selection: { kind: "none", id: null },
-    });
-
-    await useEditStore.getState().flushPendingSaves();
-
-    expect(mockSavePipeline).toHaveBeenCalledTimes(1);
-    expect(mockSavePipeline.mock.calls[0][0]).toBe("dirty-one");
-  });
-});
-
 describe("serializePipeline (via save) emits structural node fields", () => {
   // A regular node carries no node-level `max_iter` — the region model keeps the
   // bound on the `loops:` block (ADR-0011). So an ordinary node must serialize
@@ -1318,40 +1235,6 @@ describe("#315 archived run tab (read-only, ADR-0020)", () => {
     expect(tab?.runId).toBe("arch-1");
     expect(tab?.dirty).toBe(false);
     expect(state.activeTabId).toBe("__run__arch-1");
-  });
-
-  // F2: the read-only guards (App hotkeys + EditCanvas) mean an archived run tab
-  // never becomes dirty. `flushPendingSaves` only touches dirty tabs, so it
-  // never PUTs — hence the tab never hits the 404 self-close path and stays
-  // open (the desired "the run I'm watching doesn't vanish" UX). This is the
-  // store-level half of the invariant; the App/EditCanvas gates are the other.
-  it("a clean archived run tab is never flushed, so it never self-closes", async () => {
-    const tabId = "__run__arch-2";
-    useEditStore.setState({
-      openTabs: [
-        {
-          id: tabId,
-          scope: "run",
-          pipeline: { name: "test", version: "1.0", variables: {}, nodes: [], edges: [] },
-          prompts: {},
-          diagnostics: [],
-          dirty: false,
-          externalDirty: false,
-          runId: "arch-2",
-          libraryId: null,
-          libraryScope: null,
-        },
-      ],
-      activeTabId: tabId,
-      selection: { kind: "none", id: null },
-    });
-
-    await useEditStore.getState().flushPendingSaves();
-
-    expect(mockSaveRunPipeline).not.toHaveBeenCalled();
-    expect(
-      useEditStore.getState().openTabs.find((t) => t.id === tabId),
-    ).toBeDefined();
   });
 });
 
@@ -1836,6 +1719,7 @@ describe("scope-qualified pipeline ops", () => {
       expect.any(String),
       {},
       "library",
+      undefined,
       undefined,
     );
   });

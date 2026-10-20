@@ -242,6 +242,9 @@ mod harness_resume_frozen_gone;
 #[path = "pipeline_draft.rs"]
 mod pipeline_draft;
 
+#[path = "pipeline_versions.rs"]
+mod pipeline_versions;
+
 #[path = "hot_reload_conflict.rs"]
 mod hot_reload_conflict;
 

@@ -2,6 +2,7 @@
 //! pipeline, which a rename or a delete refuses to orphan. (The Stats
 //! absorption a rename records is the stats context's `StatsRenames`, #928.)
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use pdo_pipeline::application::ports::{ActiveRuns, BoxFuture};
@@ -32,6 +33,27 @@ impl ActiveRuns for PipelineRuns {
                         && run.status != RunStatus::Archived
                 })
                 .count()
+        })
+    }
+
+    fn per_version<'a>(&'a self, pipeline_id: &'a str) -> BoxFuture<'a, HashMap<u32, usize>> {
+        Box::pin(async move {
+            let Ok(summaries) = self.0.summaries().await else {
+                return HashMap::new();
+            };
+            let mut counts = HashMap::new();
+            for run in summaries.iter() {
+                // A Run created by the pipeline's stem carries no id: its
+                // name stands for it, as for `using`.
+                let launched = run.pipeline_id.as_deref().unwrap_or(&run.pipeline_name);
+                if launched != pipeline_id {
+                    continue;
+                }
+                if let Some(number) = run.pipeline_version {
+                    *counts.entry(number).or_insert(0) += 1;
+                }
+            }
+            counts
         })
     }
 }

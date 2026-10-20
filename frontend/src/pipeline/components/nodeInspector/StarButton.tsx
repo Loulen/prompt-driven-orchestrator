@@ -58,7 +58,6 @@ export default function StarButton({
         ...(p.frontmatter ? { frontmatter: p.frontmatter } : {}),
         ...(p.when ? { when: p.when } : {}),
         ...(p.instructions?.trim() ? { instructions: p.instructions } : {}),
-        ...(p.intermediate ? { intermediate: true } : {}),
       })),
       interactive: node.interactive,
       // #296/#345: persist the per-node model so the library is model-aware and
@@ -74,6 +73,9 @@ export default function StarButton({
       isolated_worktree: nodeIsolation(node),
       // ADR-0086: the « on demand » option is starred with the node.
       on_demand: node.on_demand ?? false,
+      // ADR-0089: the live artifacts are starred with the node.
+      live_artifacts: node.live_artifacts ?? [],
+      free_live_artifacts: node.free_live_artifacts ?? false,
       prompt,
     };
   }
@@ -118,6 +120,8 @@ export default function StarButton({
         // the node back where the entry says it works, not where its type would.
         isolated_worktree: result.spec.isolated_worktree ?? null,
         on_demand: result.spec.on_demand ?? false,
+        live_artifacts: result.spec.live_artifacts ?? [],
+        free_live_artifacts: result.spec.free_live_artifacts ?? false,
       });
       updatePromptFn(result.prompt);
       setPopoverOpen(false);

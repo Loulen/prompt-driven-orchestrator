@@ -372,6 +372,8 @@ mod tests {
 
     fn doc_node(id: &str) -> NodeDef {
         NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
@@ -385,7 +387,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             outputs: vec![Port {
                 name: "out".into(),
@@ -395,7 +396,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             interactive: false,
             view: None,

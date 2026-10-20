@@ -87,35 +87,12 @@ export function emergentInputs(edge: EdgeDef): { port: string; input: string }[]
 }
 
 /**
- * The output ports the source node of `edge` declares that an edge may carry,
- * in declaration order. An Output intermédiaire is never one of them: it is for
- * humans only, and the daemon refuses a pipeline whose edge carries one.
+ * The output ports the source node of `edge` declares, in declaration order:
+ * what an edge may carry. A live artifact is never one of them (ADR-0089).
  */
 export function declaredOutputs(pipeline: EditorPipelineDef, edge: EdgeDef): string[] {
   const source: EditorNodeDef | undefined = pipeline.nodes.find((n) => n.id === edge.source.node);
-  return wireableOutputs(source).map((p) => p.name);
-}
-
-/** The outputs of `node` an edge may carry: every one but its Outputs intermédiaires. */
-export function wireableOutputs(node: EditorNodeDef | undefined): EditorNodeDef["outputs"] {
-  return node?.outputs.filter((p) => !p.intermediate) ?? [];
-}
-
-/**
- * The edge that carries output `port` of node `nodeId`, spelled like the
- * daemon's edge labels but with node names where the daemon uses ids
- * (`designer.preview -> builder.spec`) — or null when no edge carries it. What
- * refuses to mark a wired output intermediate, naming the edge to change first.
- */
-export function edgeCarryingOutput(
-  pipeline: EditorPipelineDef,
-  nodeId: string,
-  port: string,
-): string | null {
-  const edge = pipeline.edges.find((e) => e.source.node === nodeId && carries(e.source, port));
-  if (!edge) return null;
-  const name = (id: string) => pipeline.nodes.find((n) => n.id === id)?.name || id;
-  return `${name(edge.source.node)}.${carriedPorts(edge.source).join("+")} -> ${name(edge.target.node)}.${edge.target.port}`;
+  return source?.outputs.map((p) => p.name) ?? [];
 }
 
 /**

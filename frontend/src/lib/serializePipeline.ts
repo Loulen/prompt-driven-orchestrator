@@ -22,6 +22,7 @@
  * The two per-port emitters differ on `when` — see the comment on
  * `portToYamlObject` (`exportNodeYaml.ts`).
  */
+import type { LiveArtifact } from "../shared/generated/LiveArtifact";
 import type { EdgeAnchor } from "../shared/generated/EdgeAnchor";
 import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
 // #550: the per-harness fold (pure, `../types`-only) — keeps this module pure.
@@ -61,6 +62,16 @@ export function frontmatterToYamlObject(
     out[field] = cleaned;
   }
   return out;
+}
+
+/** A declared live artifact (ADR-0089) as the YAML carries it: `name`, then
+ *  only what is set. */
+export function liveArtifactToYamlObject(live: LiveArtifact): Record<string, unknown> {
+  const l: Record<string, unknown> = { name: live.name };
+  if (live.port_type && live.port_type !== "markdown") l.port_type = live.port_type;
+  if (live.instructions?.trim()) l.instructions = live.instructions;
+  if (live.frontmatter) l.frontmatter = frontmatterToYamlObject(live.frontmatter);
+  return l;
 }
 
 // Canonical plain-object form of a pipeline — the exact structure that gets
@@ -115,6 +126,12 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
     // ADR-0086: the « on demand » option, emitted only when on, like
     // `orchestrator`. Mirrored in `exportNodeAsYaml`, SEMANTIC in `layoutFields.ts`.
     if (n.on_demand) node.on_demand = true;
+    // ADR-0089: the live artifacts and « Free live artifacts », emitted only when
+    // set, like `on_demand`. Mirrored in `exportNodeAsYaml`, SEMANTIC in
+    // `layoutFields.ts`.
+    if (n.free_live_artifacts) node.free_live_artifacts = true;
+    if (n.live_artifacts && n.live_artifacts.length > 0)
+      node.live_artifacts = n.live_artifacts.map(liveArtifactToYamlObject);
     // The node's own auto-fail override (true or false), emitted only when set:
     // absent means "inherit". Dropping it here lost it on every editor save.
     if (n.auto_fail !== undefined && n.auto_fail !== null) node.auto_fail = n.auto_fail;
@@ -172,8 +189,6 @@ export function pipelineToYamlObject(p: EditorPipelineDef): Record<string, unkno
           p.port_type = port.port_type;
         if (port.frontmatter) p.frontmatter = frontmatterToYamlObject(port.frontmatter);
         if (port.when) p.when = port.when;
-        // An Output intermédiaire. Emitted only when set, like `required`.
-        if (port.intermediate) p.intermediate = true;
         if (port.instructions?.trim()) p.instructions = port.instructions;
         return p;
       });

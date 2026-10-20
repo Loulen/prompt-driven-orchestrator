@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use super::definition::PipelineDef;
 use super::diagnostic::ParseError;
 use super::edge::EdgeDef;
-use super::node::{FrontmatterFieldDecl, NodeDef, NodeType, Port};
+use super::node::{FrontmatterFieldDecl, NodeDef, NodeType, Port, LIVE_DIR};
 
 /// Dangling references: an edge endpoint naming a missing node, a port not
 /// declared on its node, or a loop-region member naming a missing node. Emergent
@@ -95,30 +95,68 @@ fn edge_label(edge: &EdgeDef) -> String {
     )
 }
 
-/// The first edge that carries an *Output intermédiaire*, refused with the port
-/// and the edge it names. An intermediate output is for humans only: the
-/// completion never checks it, so wiring it would hand the downstream node a
-/// content nothing guarantees. A runtime-coherence invariant, not a prescriptive
-/// rule — which is why it refuses at parse instead of warning like a dangling
-/// reference.
-pub(crate) fn intermediate_outputs_on_edges(pipeline: &PipelineDef) -> Result<(), ParseError> {
+/// The first edge that carries a live artifact (ADR-0089), refused with the
+/// artifact and the edge it names. A live artifact is for humans only: nothing
+/// guarantees its content, so wiring it would hand the downstream node a file
+/// that may never come. A runtime-coherence invariant, not a prescriptive rule —
+/// which is why it refuses at parse instead of warning like a dangling
+/// reference. An edge naming an *output* of the same name is an ordinary edge.
+pub(crate) fn live_artifacts_on_edges(pipeline: &PipelineDef) -> Result<(), ParseError> {
     for edge in &pipeline.edges {
         let Some(source) = pipeline.nodes.iter().find(|n| n.id == edge.source.node) else {
             continue;
         };
-        let wired = source
-            .outputs
-            .iter()
-            .find(|port| port.intermediate && edge.source.carries(&port.name));
-        if let Some(port) = wired {
+        let wired = source.live_artifacts.iter().find(|live| {
+            edge.source.carries(&live.name)
+                && !source.outputs.iter().any(|port| port.name == live.name)
+        });
+        if let Some(live) = wired {
             return Err(ParseError::InvalidField(format!(
-                "{}: carries intermediate output '{}' of node '{}'; an intermediate \
-                 output cannot be wired (remove it from the edge, or uncheck \
-                 'intermediate' on the port)",
+                "{}: carries live artifact '{}' of node '{}'; a live artifact cannot be \
+                 wired (wire an output instead)",
                 edge_label(edge),
-                port.name,
+                live.name,
                 source.id
             )));
+        }
+    }
+    Ok(())
+}
+
+/// A live artifact's name becomes a path under the iteration's `live/` folder
+/// (ADR-0089): it must be one plain path segment, and unique on its node. That
+/// folder sits beside the output folders, so a node that publishes live
+/// artifacts cannot also have an output named `live`.
+pub(crate) fn live_artifact_names(pipeline: &PipelineDef) -> Result<(), ParseError> {
+    for node in &pipeline.nodes {
+        let publishes = node.free_live_artifacts || !node.live_artifacts.is_empty();
+        if publishes && node.outputs.iter().any(|port| port.name == LIVE_DIR) {
+            return Err(ParseError::InvalidField(format!(
+                "node '{}': an output named '{LIVE_DIR}' would share the folder of the \
+                 node's live artifacts; rename the output",
+                node.id
+            )));
+        }
+        let mut seen = HashSet::new();
+        for live in &node.live_artifacts {
+            let name = live.name.as_str();
+            let plain = !name.trim().is_empty()
+                && name != "."
+                && name != ".."
+                && !name.contains(['/', '\\']);
+            if !plain {
+                return Err(ParseError::InvalidField(format!(
+                    "node '{}': live artifact name '{name}' must be a plain file name \
+                     (no '/', not '.' or '..')",
+                    node.id
+                )));
+            }
+            if !seen.insert(name) {
+                return Err(ParseError::InvalidField(format!(
+                    "node '{}': live artifact '{name}' is declared twice",
+                    node.id
+                )));
+            }
         }
     }
     Ok(())

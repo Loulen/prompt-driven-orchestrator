@@ -155,17 +155,50 @@ pub struct Port {
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(optional = nullable)]
     pub required: bool,
-    /// Marks an **output** port as an *Output intermédiaire* (CONTEXT.md): the
-    /// agent fills it and keeps it current while it works, so humans can follow
-    /// what the node produces during the Run. It is for humans only — the
-    /// completion never checks it (neither presence nor frontmatter), a skip
-    /// writes nothing for it, and no edge may carry it (refused at parse). Its
-    /// `frontmatter` and `when` have no effect. Omitted from the YAML
-    /// when false. Semantic, not layout.
-    #[serde(default, skip_serializing_if = "is_false")]
-    #[ts(optional = nullable)]
-    pub intermediate: bool,
 }
+
+/// An *Artefact live* a node declares (ADR-0089): a file it publishes in the
+/// `live/` folder of its iteration while it works, so the humans can follow.
+/// Announced by the preamble, **never required**: `pdo complete` checks neither
+/// its presence nor its frontmatter, no edge carries it, no routing reads it. A
+/// frontmatter that misses its `frontmatter` schema is only a warning in the
+/// Run view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export, optional_fields = nullable)]
+pub struct LiveArtifact {
+    pub name: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub port_type: PortType,
+    /// What the file is expected to hold, as the preamble tells the agent.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_blank",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frontmatter: Option<HashMap<String, FrontmatterFieldDecl>>,
+}
+
+impl LiveArtifact {
+    /// Where a declared live artifact sits under the iteration's `live/` folder:
+    /// `<name>.md` (markdown), `<name>.html` (html), or the folder `<name>/` of
+    /// its images or files.
+    pub fn relative_path(&self) -> String {
+        match self.port_type {
+            PortType::Markdown => format!("{}.md", self.name),
+            PortType::Html => format!("{}.html", self.name),
+            PortType::Image | PortType::ImageList | PortType::Files => {
+                format!("{}/", self.name)
+            }
+        }
+    }
+}
+
+/// The folder, inside a node's iteration folder, where it publishes its live
+/// artifacts (ADR-0089).
+pub const LIVE_DIR: &str = "live";
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
@@ -261,6 +294,20 @@ pub struct NodeDef {
     #[serde(default, skip_serializing_if = "is_false")]
     #[ts(optional = nullable)]
     pub on_demand: bool,
+    /// The live artifacts this node declares (ADR-0089), apart from its
+    /// outputs: never checked, never wired. An `agent` or `script` option,
+    /// refused on a structural node at parse. A legacy output marked
+    /// `intermediate` is read as one of them
+    /// ([`super::normalize::normalize_node_value`]). Semantic, not layout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
+    pub live_artifacts: Vec<LiveArtifact>,
+    /// « Free live artifacts » (ADR-0089): the node may also publish live
+    /// artifacts nobody declared. The editor turns it on for a new node; a
+    /// document that says nothing leaves it off. Semantic, not layout.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(optional = nullable)]
+    pub free_live_artifacts: bool,
 }
 
 impl NodeDef {

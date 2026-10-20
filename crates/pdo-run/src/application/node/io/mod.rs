@@ -1,6 +1,6 @@
 //! A node's inputs and outputs as the node panel reads them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use serde::Serialize;
@@ -10,8 +10,10 @@ use crate::domain::state::RunState;
 use pdo_pipeline::domain::pipeline::{PipelineDef, PortType};
 
 mod files;
+mod live;
 
 pub use files::*;
+pub use live::*;
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
@@ -19,8 +21,9 @@ pub struct FileInfo {
     pub path: String,
     pub exists: bool,
     pub size: Option<u64>,
+    /// Sorted by field, so the panel's labels keep their place across reads.
     #[ts(type = "Record<string, unknown> | null")]
-    pub frontmatter: Option<HashMap<String, serde_json::Value>>,
+    pub frontmatter: Option<BTreeMap<String, serde_json::Value>>,
     /// #796: the file predates the execution whose output it is displayed as.
     /// An output file that was on disk BEFORE this node's iteration started
     /// (`IterationInfo::started_at`) was not written by the session shown as
@@ -40,10 +43,6 @@ pub struct PortIO {
     /// edges of the same name. Always `false` on an output.
     pub repeated: bool,
     pub port_type: PortType,
-    /// An *Output intermédiaire*: the agent writes it while it works, nothing
-    /// checks it, and its absence is « not written yet », never an error.
-    /// Always `false` on an input.
-    pub intermediate: bool,
     pub files: Vec<FileInfo>,
 }
 
@@ -52,6 +51,9 @@ pub struct PortIO {
 pub struct NodeIO {
     pub inputs: Vec<PortIO>,
     pub outputs: Vec<PortIO>,
+    /// The live artifacts of the iteration (ADR-0089): the declared ones, then
+    /// the ones the node published freely.
+    pub live: Vec<LiveArtifactIO>,
 }
 
 /// Resolve the input/output file view of `node_id` at `iter` for the inspector
@@ -77,6 +79,7 @@ pub fn resolve(
             return NodeIO {
                 inputs: vec![],
                 outputs: vec![],
+                live: vec![],
             }
         }
     };
@@ -142,7 +145,6 @@ pub fn resolve(
                     } else {
                         PortType::Markdown
                     },
-                    intermediate: false,
                     files,
                 });
             }
@@ -159,7 +161,6 @@ pub fn resolve(
             port: "task".into(),
             repeated: false,
             port_type: PortType::Markdown,
-            intermediate: false,
             files,
         });
     }
@@ -194,7 +195,6 @@ pub fn resolve(
                     // An output never accumulates: that belongs to the edge.
                     repeated: false,
                     port_type: output_port.port_type,
-                    intermediate: output_port.intermediate,
                     files,
                 });
             }
@@ -212,7 +212,6 @@ pub fn resolve(
                     // An output never accumulates: that belongs to the edge.
                     repeated: false,
                     port_type: output_port.port_type,
-                    intermediate: output_port.intermediate,
                     files,
                 });
             }
@@ -231,14 +230,19 @@ pub fn resolve(
                     // An output never accumulates: that belongs to the edge.
                     repeated: false,
                     port_type: output_port.port_type,
-                    intermediate: output_port.intermediate,
                     files,
                 });
             }
         }
     }
 
-    NodeIO { inputs, outputs }
+    let live = resolve_live(node, artifacts_dir, iter, not_before, &tracked);
+
+    NodeIO {
+        inputs,
+        outputs,
+        live,
+    }
 }
 
 /// When the execution of `node_id` at `iter` started (#796): the iteration's
@@ -339,6 +343,8 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "planner".into(),
@@ -352,7 +358,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     outputs: vec![Port {
                         name: "plan".into(),
@@ -362,7 +367,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -376,6 +380,8 @@ mod tests {
                     on_demand: false,
                 },
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "implementer".into(),
@@ -389,7 +395,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     outputs: vec![Port {
                         name: "summary".into(),
@@ -399,7 +404,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -585,6 +589,8 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "reviewer".into(),
@@ -599,7 +605,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -613,6 +618,8 @@ mod tests {
                     on_demand: false,
                 },
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "implementer".into(),
@@ -626,7 +633,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     outputs: vec![Port {
                         name: "code".into(),
@@ -636,7 +642,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -814,6 +819,8 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "a".into(),
@@ -828,7 +835,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -842,6 +848,8 @@ mod tests {
                     on_demand: false,
                 },
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "b".into(),
@@ -856,7 +864,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -870,6 +877,8 @@ mod tests {
                     on_demand: false,
                 },
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "merger".into(),
@@ -883,7 +892,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     outputs: vec![],
                     interactive: false,
@@ -962,6 +970,8 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "planner".into(),
@@ -976,7 +986,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -990,6 +999,8 @@ mod tests {
                     on_demand: false,
                 },
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "implementer".into(),
@@ -1052,6 +1063,8 @@ mod tests {
         }
 
         let mk_node = |id: &str, has_out: bool| NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
@@ -1067,7 +1080,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }]
             } else {
                 vec![]
@@ -1138,6 +1150,8 @@ mod tests {
         }
 
         let mk_node = |id: &str, out: Option<&str>| NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
@@ -1154,7 +1168,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }]
                 })
                 .unwrap_or_default(),
@@ -1229,6 +1242,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 skills: Vec::new(),
                 isolated_worktree: None,
                 id: "designer".into(),
@@ -1243,7 +1258,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,

@@ -77,7 +77,6 @@ impl Importer {
             description: None,
             instructions: None,
             required: false,
-            intermediate: false,
         };
         out_port.frontmatter = frontmatter;
 
@@ -97,6 +96,8 @@ impl Importer {
         // guess about what a foreign prompt will touch is exactly the thing the
         // explicit isolation line replaces.
         let node = NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             id: id.clone(),
             name: display_name,
             node_type: NodeType::Agent,

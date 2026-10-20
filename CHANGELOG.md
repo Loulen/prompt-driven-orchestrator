@@ -10,6 +10,27 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.49.0 — Artefacts live (CORE-93)
+
+- **Format de pipeline** : l'output intermédiaire devient l'artefact live (ADR-0089), hors des
+  outputs. Un nœud `agent` ou `script` gagne `live_artifacts` (`name`, `port_type`,
+  `instructions`, `frontmatter`) et `free_live_artifacts` (le nœud peut publier des artefacts
+  non déclarés ; l'éditeur l'allume sur un nouveau nœud, un document muet le laisse éteint).
+  Les deux clés sont refusées sur un nœud structurel.
+- **Migration au chargement** : un output `intermediate: true` d'un nœud `agent`/`script` se
+  lit comme un artefact live déclaré (nom, type, contenu attendu, schéma) ; le fichier est
+  réécrit à la sauvegarde. Ailleurs, la clé est ignorée avec un avertissement. Une entrée de
+  la bibliothèque de nœuds se lit de même.
+- **Refus au parse** : une edge qui porte un artefact live, un nom d'artefact live qui n'est
+  pas un simple nom de fichier ou qui est déclaré deux fois, un output nommé `live` sur un
+  nœud qui publie des artefacts live.
+- L'artefact live se publie dans `<artifacts>/<nœud>/iter-<n>/live/` : `<nom>.md`,
+  `<nom>.html`, ou le dossier `<nom>/` de ses images ou de ses fichiers (type `files`). Un
+  `script` reçoit `PDO_LIVE_DIR`.
+- `GET /runs/{id}/nodes/{node}/io` perd `intermediate` sur les ports et gagne `live` : les
+  artefacts déclarés puis libres, avec leurs fichiers, `schema_warnings` et `updated_at`. Le
+  `PortBrief` des `node_defs` d'un Run perd `intermediate`.
+
 ## 2.48.0 — Versions de pipeline (CORE-91)
 
 - Save fige le brouillon partagé en version (ADR-0088), numérotée et titrée (`vN` par défaut) :

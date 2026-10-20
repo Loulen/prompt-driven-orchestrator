@@ -29,6 +29,7 @@ export type SettingsSectionId =
   | "staging-profiles"
   | "worktree-provisioning"
   | "projects"
+  | "clones-folder"
   | "otlp-export"
   | "prometheus-metrics"
   | "identity"
@@ -187,6 +188,13 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
           "A Project groups repositories. A repository can belong to several Projects; a Run stays in the Project it was launched in.",
         ownPersistence: true,
       },
+      {
+        // CORE-97: saved with the instance form, unlike the Projets above it.
+        id: "clones-folder",
+        label: "Clones folder",
+        description:
+          "Where PDO clones a repository given by its URL. A URL already cloned reuses its clone.",
+      },
     ],
   },
   {
@@ -268,7 +276,8 @@ export type SettingsFieldId =
   | "telemetry-headers"
   | "telemetry-prometheus"
   | "telemetry-include-actor"
-  | "public-url";
+  | "public-url"
+  | "clones-folder";
 
 export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "session-cap": "runtime-limits",
@@ -293,6 +302,7 @@ export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "telemetry-prometheus": "prometheus-metrics",
   "telemetry-include-actor": "identity",
   "public-url": "public-url",
+  "clones-folder": "clones-folder",
 };
 
 export function categoryOf(section: SettingsSectionId): SettingsCategory {

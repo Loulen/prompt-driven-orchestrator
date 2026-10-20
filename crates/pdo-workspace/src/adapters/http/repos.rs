@@ -1,7 +1,8 @@
 //! `/repos*`: validate a repository, list and refresh its branches,
-//! fast-forward one, read its remote, create a repository, and the recent ones.
+//! fast-forward one, read its remote, create a repository, clone one by its
+//! URL, and the recent ones.
 
-use axum::extract::{Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -9,7 +10,7 @@ use pdo_kernel::Actor;
 use serde::Deserialize;
 use tracing::error;
 
-use crate::application::{FastForwarded, WorkspaceError};
+use crate::application::{CloneRequest, FastForwarded, WorkspaceError};
 use crate::domain::scaffold::ScaffoldFile;
 
 use super::dto::RepoRemote;
@@ -33,6 +34,23 @@ pub(super) struct CreateRepoRequest {
     name: String,
     #[serde(default)]
     files: Vec<ScaffoldFile>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct CloneTargetQuery {
+    url: String,
+}
+
+/// Body of `POST /repos/clones`.
+#[derive(Deserialize)]
+pub(super) struct CloneBody {
+    url: String,
+    /// The folder to clone into; absent → `<clones folder>/<name>`.
+    #[serde(default)]
+    path: Option<String>,
+    /// The Projet the repository joins once cloned.
+    #[serde(default)]
+    project_id: Option<String>,
 }
 
 /// A failure of the repository routes: a path that is not a repository is a
@@ -142,6 +160,77 @@ pub(super) async fn create<S: ProjectSettings>(
             "created": outcome.created,
         }))
         .into_response(),
+        Err(e) => failure(e),
+    }
+}
+
+/// `GET /repos/clone-target?url=`: where the clone of `url` goes, and whether
+/// it is already there (CORE-97).
+pub(super) async fn clone_target<S: ProjectSettings>(
+    State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
+    Query(q): Query<CloneTargetQuery>,
+) -> Response {
+    match http.workspace.clone_target(&actor, &q.url).await {
+        Ok(target) => Json(target).into_response(),
+        Err(e) => failure(e),
+    }
+}
+
+/// `POST /repos/clones`: clone a repository by its URL, in the background
+/// (CORE-97). **202** with the clone as it starts; **200** when the URL was
+/// already cloned there (reused) or a clone of that folder runs already.
+pub(super) async fn start_clone<S: ProjectSettings>(
+    State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
+    Json(body): Json<CloneBody>,
+) -> Response {
+    let request = CloneRequest {
+        url: body.url,
+        path: body.path,
+        project_id: body.project_id,
+    };
+    match http.workspace.clone_repository(&actor, request).await {
+        Ok(job) if job.state == crate::application::CloneState::Running => {
+            (StatusCode::ACCEPTED, Json(job)).into_response()
+        }
+        Ok(job) => Json(job).into_response(),
+        Err(e) => failure(e),
+    }
+}
+
+/// `GET /repos/clones`: the clones running, and the last ones finished.
+pub(super) async fn clones<S: ProjectSettings>(
+    State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
+) -> Response {
+    match http.workspace.clone_jobs(&actor) {
+        Ok(jobs) => Json(jobs).into_response(),
+        Err(e) => failure(e),
+    }
+}
+
+/// `GET /repos/clones/{id}`: one clone, where it is.
+pub(super) async fn clone_job<S: ProjectSettings>(
+    State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match http.workspace.clone_job(&actor, &id) {
+        Ok(job) => Json(job).into_response(),
+        Err(e) => failure(e),
+    }
+}
+
+/// `DELETE /repos/clones/{id}`: cancel a running clone, nothing it wrote stays;
+/// a finished one is dismissed from the list.
+pub(super) async fn cancel_clone<S: ProjectSettings>(
+    State(http): State<Http<S>>,
+    Extension(actor): Extension<Actor>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match http.workspace.cancel_clone(&actor, &id) {
+        Ok(job) => Json(job).into_response(),
         Err(e) => failure(e),
     }
 }

@@ -137,4 +137,10 @@ telemetry_include_actor?: boolean | null,
  * `""`-sentinel as `default_model`); anything else must be an
  * `http(s)://` address, stored normalized. `None` leaves it untouched.
  */
-public_url?: string | null, };
+public_url?: string | null, 
+/**
+ * Set the clones folder (CORE-97): `Some("")` clears it back to the
+ * default; anything else must be an absolute path or start with `~/`.
+ * `None` leaves it untouched.
+ */
+clones_folder?: string | null, };

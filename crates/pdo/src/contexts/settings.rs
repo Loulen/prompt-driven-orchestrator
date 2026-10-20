@@ -17,7 +17,7 @@ use pdo_settings::adapters::contexts::{
 };
 use pdo_settings::adapters::sections::{
     HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,
-    SandboxSection, SessionDefaults, TelemetryDefaults, TriggerDefaults,
+    SandboxSection, SessionDefaults, TelemetryDefaults, TriggerDefaults, WorkspaceDefaults,
 };
 use pdo_settings::application::ports::CatalogueEvents;
 use pdo_settings::{Settings, SettingsPorts};
@@ -55,6 +55,7 @@ pub(super) fn settings(
             Arc::new(ReviewDefaults),
             Arc::new(PlatformDefaults),
             Arc::new(TelemetryDefaults),
+            Arc::new(WorkspaceDefaults),
             Arc::new(sandbox),
             harnesses.clone(),
             Arc::new(PriceTableSection { home }),

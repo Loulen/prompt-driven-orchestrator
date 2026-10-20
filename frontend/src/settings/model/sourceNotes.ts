@@ -196,3 +196,9 @@ export function publicUrlSourceNote(field: StringSettingField): string {
   if (field.source === "env") return `Source: env ${envDisplay ?? "PDO_PUBLIC_URL"}.`;
   return "Source: none set (PDO_PUBLIC_URL unset).";
 }
+
+/** Which tier the clones folder comes from (CORE-97): stored, else the built-in default. */
+export function clonesFolderSourceNote(field: StringSettingField | undefined): string {
+  if (field?.source === "stored") return "Source: stored setting.";
+  return `Source: built-in default (${field?.default ?? "~/pdo/repos"}).`;
+}

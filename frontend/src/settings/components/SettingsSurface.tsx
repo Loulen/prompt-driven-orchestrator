@@ -350,7 +350,8 @@ export default function SettingsSurface({
 
             {item.id === "projects" && (
               <ProjectsSections sections={item.sections} source={projects} home={settings?.home ?? null}
-                position={initialPosition} active={open && shownCategory === item.id} />
+                position={initialPosition} active={open && shownCategory === item.id}
+                form={formProps} loading={loading} />
             )}
 
             {item.id === "telemetry" &&

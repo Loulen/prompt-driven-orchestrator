@@ -1,5 +1,5 @@
 //! The sections that are only instance defaults: the run, session, trigger,
-//! review and platform contexts' knobs over the stored tier.
+//! review, platform and workspace contexts' knobs over the stored tier.
 
 use pdo_platform::adapters::instance_defaults as platform;
 use pdo_review::adapters::instance_defaults as review;
@@ -7,6 +7,7 @@ use pdo_run::adapters::instance_defaults as run;
 use pdo_session::adapters::instance_defaults as session;
 use pdo_telemetry::adapters::instance_defaults as telemetry;
 use pdo_trigger::adapters::instance_defaults as trigger;
+use pdo_workspace::adapters::instance_defaults as workspace;
 use serde_json::{Map, Value};
 
 use super::{json, section};
@@ -128,6 +129,20 @@ impl SettingsSection for PlatformDefaults {
                     json(platform::public_url(c.public_url.as_deref())),
                 ),
             ]))
+        })
+    }
+}
+
+/// Where a repository given by its URL is cloned (CORE-97).
+pub struct WorkspaceDefaults;
+
+impl SettingsSection for WorkspaceDefaults {
+    fn disclose<'a>(&'a self, c: &'a InstanceConfig) -> Keys<'a> {
+        Box::pin(async move {
+            Ok(section([(
+                "clones_folder",
+                json(workspace::clones_folder(c.clones_folder.as_deref())),
+            )]))
         })
     }
 }

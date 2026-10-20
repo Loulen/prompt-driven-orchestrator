@@ -8,8 +8,9 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::repository_path::member_spellings;
 use pdo_kernel::{Actor, Operation, ResourceKind};
 
+use super::clone_jobs::CloneJobs;
 use super::ports::{
-    FileBrowser, Git, ProjectDeletions, ProjectEvents, ProjectRepository,
+    ClonesFolder, FileBrowser, Git, ProjectDeletions, ProjectEvents, ProjectRepository,
     ProvisioningRulesRepository, RecentRepositories, SourceTree,
 };
 
@@ -23,6 +24,7 @@ pub struct WorkspacePorts {
     pub git: Arc<dyn Git>,
     pub source_tree: Arc<dyn SourceTree>,
     pub files: Arc<dyn FileBrowser>,
+    pub clones_folder: Arc<dyn ClonesFolder>,
 }
 
 /// The workspace context: every use case is a method.
@@ -35,6 +37,9 @@ pub struct Workspace {
     pub(crate) git: Arc<dyn Git>,
     pub(crate) source_tree: Arc<dyn SourceTree>,
     pub(crate) files: Arc<dyn FileBrowser>,
+    pub(crate) clones_folder: Arc<dyn ClonesFolder>,
+    /// The clones running in the background, and the last ones finished.
+    pub(crate) clones: Arc<CloneJobs>,
     host: Arc<dyn ExtensionHost>,
 }
 
@@ -49,6 +54,8 @@ impl Workspace {
             git: ports.git,
             source_tree: ports.source_tree,
             files: ports.files,
+            clones_folder: ports.clones_folder,
+            clones: Arc::new(CloneJobs::default()),
             host,
         }
     }

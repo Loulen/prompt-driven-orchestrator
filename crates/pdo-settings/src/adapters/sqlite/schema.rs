@@ -52,6 +52,8 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("telemetry_include_actor", "INTEGER"),
     // The address humans open PDO at; NULL keeps the env tier, then none.
     ("public_url", "TEXT"),
+    // CORE-97: where a repository given by its URL is cloned; NULL → ~/pdo/repos.
+    ("clones_folder", "TEXT"),
 ];
 
 /// Create both tables if absent, seed the all-NULL singleton row and the

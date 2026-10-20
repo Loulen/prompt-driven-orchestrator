@@ -33,6 +33,8 @@ export interface DraftValues extends TelemetryDraft {
   reviewAgentCanResolve: boolean;
   /** The stored Public URL, as typed; `""` is unset. */
   publicUrl: string;
+  /** CORE-97: the clones folder, as typed; `""` goes back to the default. */
+  clonesFolder: string;
 }
 
 export function seedFrom(settings: InstanceSettings): DraftValues {
@@ -55,7 +57,28 @@ export function seedFrom(settings: InstanceSettings): DraftValues {
     reviewAgentCanResolve: settings.review_agent_can_resolve.effective,
     ...seedTelemetry(settings),
     publicUrl: settings.public_url.stored ?? "",
+    clonesFolder: settings.clones_folder?.effective ?? DEFAULT_CLONES_FOLDER,
   };
+}
+
+/** The clones folder when none is stored (the daemon's built-in default). */
+export const DEFAULT_CLONES_FOLDER = "~/pdo/repos";
+
+/** The clones folder as the daemon stores it: trimmed, no trailing `/`. */
+function storedClonesFolder(raw: string): string {
+  const folder = raw.trim();
+  return folder === "" ? "" : folder.replace(/\/+$/, "") || "/";
+}
+
+/** The clones folder now in force: the stored one, else the default. */
+function clonesFolderInForce(settings: InstanceSettings): string {
+  return settings.clones_folder?.effective ?? DEFAULT_CLONES_FOLDER;
+}
+
+/** A clones folder the daemon will accept: absolute, or under `~`. Blank is the default. */
+export function isClonesFolder(raw: string): boolean {
+  const folder = storedClonesFolder(raw);
+  return folder === "" || folder === "~" || folder.startsWith("~/") || folder.startsWith("/");
 }
 
 /** A Public URL the daemon will accept: an origin `http(s)://host[:port]`, no path. */
@@ -132,6 +155,7 @@ export function computeDirty(values: DraftValues, settings: InstanceSettings): S
   }
   for (const field of telemetryDirty(values, settings)) dirty.add(field);
   if (values.publicUrl.trim() !== (settings.public_url.stored ?? "")) dirty.add("public-url");
+  if (clonesFolderEdit(values, settings) !== null) dirty.add("clones-folder");
   return dirty;
 }
 
@@ -256,8 +280,26 @@ export function buildPatch(
     }
     patch.public_url = publicUrl;
   }
+  // CORE-97: `""` goes back to the default folder.
+  const clonesFolder = clonesFolderEdit(values, settings);
+  if (clonesFolder !== null) {
+    if (!isClonesFolder(clonesFolder)) {
+      return { error: "Clones folder must be an absolute path or start with ~/." };
+    }
+    patch.clones_folder = clonesFolder;
+  }
   // ADR-0090: the OTLP export.
   const telemetry = telemetryPatch(values, settings);
   if ("error" in telemetry) return telemetry;
   return { patch: { ...patch, ...telemetry.patch } };
+}
+
+/** The clones folder to store, or `null` when the typed one is the one in force. Blank, or
+ *  the default itself while none is stored, changes nothing but the stored tier's clear. */
+function clonesFolderEdit(values: DraftValues, settings: InstanceSettings): string | null {
+  const typed = storedClonesFolder(values.clonesFolder);
+  const stored = settings.clones_folder?.stored ?? null;
+  if (typed === "") return stored === null ? null : "";
+  if (typed === clonesFolderInForce(settings)) return null;
+  return typed;
 }

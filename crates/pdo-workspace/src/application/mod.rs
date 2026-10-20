@@ -4,6 +4,8 @@
 //! the other reads go straight to the ports.
 
 mod add_project_member;
+mod clone_jobs;
+mod clone_repository;
 mod create_project;
 mod create_repository;
 mod delete_project;
@@ -21,6 +23,8 @@ mod workspace;
 #[cfg(test)]
 pub(crate) mod testing;
 
+pub use clone_jobs::{CloneJob, CloneJobs, CloneState};
+pub use clone_repository::{CloneRequest, CloneTarget};
 pub use error::{WorkspaceError, WorkspaceResult};
 pub use fast_forward_branch::FastForwarded;
 pub use queries::{PreviewRequest, RECENT_REPOSITORIES};

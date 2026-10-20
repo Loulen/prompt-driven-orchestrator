@@ -179,6 +179,18 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             Some(json!({ "parent": fixtures.scratch, "name": "fresh" })),
         ),
         call(
+            "POST",
+            "/repos/clones",
+            "/repos/clones".into(),
+            Some(json!({ "url": "https://example.invalid/acme/app.git" })),
+        ),
+        call(
+            "DELETE",
+            "/repos/clones/{id}",
+            "/repos/clones/none".into(),
+            None,
+        ),
+        call(
             "PUT",
             "/settings/provisioning",
             "/settings/provisioning".into(),

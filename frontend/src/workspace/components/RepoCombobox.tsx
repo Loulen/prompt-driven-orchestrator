@@ -44,6 +44,10 @@ interface Props {
   home?: string | null;
   /** A mark at the end of the field (New Run's « project default »). */
   badge?: ReactNode;
+  /** An icon at the start of the field (New Run's globe for a URL, CORE-97). */
+  leading?: ReactNode;
+  /** Replaces the verdict lines under the field (a URL has none: it is cloned first). */
+  hint?: ReactNode;
 }
 
 function splitPath(fullPath: string): { folder: string; parent: string } {
@@ -71,6 +75,8 @@ export default function RepoCombobox({
   help,
   home,
   badge,
+  leading,
+  hint,
 }: Props) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -147,7 +153,7 @@ export default function RepoCombobox({
         <input
           ref={inputRef}
           id="target-repo"
-          className={`w-full rounded-md border bg-bg-3 px-2.5 py-1.5 ${badge ? "pr-32" : "pr-9"} font-mono text-fg placeholder:text-fg-4 transition-colors focus:outline-none ${borderClass}`}
+          className={`w-full rounded-md border bg-bg-3 ${leading ? "pl-8" : "px-2.5"} py-1.5 ${badge ? "pr-32" : "pr-9"} font-mono text-fg placeholder:text-fg-4 transition-colors focus:outline-none ${borderClass}`}
           style={{ fontSize: "12px" }}
           placeholder="/path/to/your/repo"
           value={value}
@@ -156,6 +162,9 @@ export default function RepoCombobox({
           data-testid="target-repo-input"
           autoComplete="off"
         />
+        {leading && (
+          <span className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center">{leading}</span>
+        )}
         {badge && (
           <span className="pointer-events-none absolute inset-y-0 right-8 flex items-center">{badge}</span>
         )}
@@ -188,17 +197,18 @@ export default function RepoCombobox({
           )
         )}
       </div>
-      {repoValidating && (
+      {hint}
+      {!hint && repoValidating && (
         <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
           Validating...
         </span>
       )}
-      {repoError && (
+      {!hint && repoError && (
         <span className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid="repo-error">
           {repoError}
         </span>
       )}
-      {repoValid && !repoError && (
+      {!hint && repoValid && !repoError && (
         <span className="text-acc" style={{ fontSize: "10.5px" }} data-testid="repo-valid">
           Valid git repository
         </span>

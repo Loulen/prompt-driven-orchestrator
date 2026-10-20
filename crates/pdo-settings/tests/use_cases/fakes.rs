@@ -56,6 +56,7 @@ impl Default for InMemoryConfig {
                 telemetry_prometheus: None,
                 telemetry_include_actor: None,
                 public_url: None,
+                clones_folder: None,
                 updated_at: "2026-01-01T00:00:00.000Z".into(),
             }),
             retired: Mutex::new(Vec::new()),
@@ -96,7 +97,7 @@ impl InstanceConfigStore for InMemoryConfig {
                 ($conv:ident: $($f:ident),*) => { $(if let Some(v) = e.$f { r.$f = $conv(v); })* };
             }
             set_with!(text: default_model, default_sandbox, default_harness, manager_profile,
-                telemetry_otlp_endpoint, public_url);
+                telemetry_otlp_endpoint, public_url, clones_folder);
             set_with!(flag: autocomplete_turn_end, default_auto_name, auto_fail, update_check,
                 review_agent_can_resolve, manager_enabled, telemetry_otlp, telemetry_prometheus,
                 telemetry_include_actor);

@@ -1,11 +1,13 @@
 /**
  * Repositories over HTTP: validate one, list and refresh its branches,
- * fast-forward one (#802, #803), read its remote, create one (#824), and the
- * recent ones.
+ * fast-forward one (#802, #803), read its remote, create one (#824), clone one
+ * by its URL (CORE-97), and the recent ones.
  */
 
 import { apiErrorMessage, request } from "../../shared/http/client";
 import type { BranchList } from "../../shared/generated/BranchList";
+import type { CloneJob } from "../../shared/generated/CloneJob";
+import type { CloneTarget } from "../../shared/generated/CloneTarget";
 import type { CreateRepoFile } from "../../shared/generated/CreateRepoFile";
 import type { FastForwardRefusal } from "../../shared/generated/FastForwardRefusal";
 import type { FastForwardResult } from "../../shared/generated/FastForwardResult";
@@ -149,4 +151,47 @@ function listOf(b: BranchList): BranchList {
 
 export function fetchRecentRepos(): Promise<string[]> {
   return request<string[]>("GET", "/repos/recent");
+}
+
+/**
+ * Where the clone of `url` goes (CORE-97): `<clones folder>/<name>`, and whether
+ * that folder already is a clone of it (reused, not cloned again).
+ */
+export function fetchCloneTarget(url: string): Promise<CloneTarget> {
+  return request<CloneTarget>("GET", "/repos/clone-target", {
+    query: { url },
+    label: "GET /repos/clone-target",
+  });
+}
+
+/**
+ * Clone `url` in full, in the background (CORE-97). The answer is the clone as it
+ * starts, or done at once when the URL is already cloned there (`reused`). With a
+ * Projet, the repository joins it once cloned — even if the page is closed by then.
+ */
+export function startClone(body: {
+  url: string;
+  /** The folder to clone into; absent → `<clones folder>/<name>`. */
+  path?: string;
+  project_id?: string;
+}): Promise<CloneJob> {
+  return request<CloneJob>("POST", "/repos/clones", { body, label: "POST /repos/clones" });
+}
+
+/** The clones running, and the last ones finished, newest first. */
+export function fetchClones(): Promise<CloneJob[]> {
+  return request<CloneJob[]>("GET", "/repos/clones", { label: "GET /repos/clones" });
+}
+
+export function fetchClone(id: string): Promise<CloneJob> {
+  return request<CloneJob>("GET", `/repos/clones/${encodeURIComponent(id)}`, {
+    label: "GET /repos/clones",
+  });
+}
+
+/** Stop a running clone: nothing it wrote stays. */
+export function cancelClone(id: string): Promise<CloneJob> {
+  return request<CloneJob>("DELETE", `/repos/clones/${encodeURIComponent(id)}`, {
+    label: "DELETE /repos/clones",
+  });
 }

@@ -177,6 +177,36 @@ describe("SettingsSurface — Projects (CORE-96)", () => {
     expect(updateSettingsMock).not.toHaveBeenCalled();
   });
 
+  it("sets the clones folder with the form's Save (CORE-97)", async () => {
+    updateSettingsMock.mockImplementation(async () =>
+      settings({
+        clones_folder: { effective: "/srv/clones", source: "stored", stored: "/srv/clones", env: null, default: "~/pdo/repos" },
+      }),
+    );
+    render(
+      <SettingsSurface
+        open
+        onClose={() => {}}
+        initialPosition={{ category: "projects", section: "clones-folder" }}
+        projects={{ projects: PROJECTS, runs: [], onChanged: () => {} }}
+      />,
+    );
+    const input = await screen.findByTestId("setting-clones-folder");
+    expect(input).toHaveValue("~/pdo/repos");
+    expect(screen.getByTestId("setting-source-clones-folder")).toHaveTextContent(
+      "Source: built-in default (~/pdo/repos).",
+    );
+    expect(screen.getByTestId("settings-section-body-clones-folder")).toHaveTextContent(
+      "Each clone goes in <folder>/<repository name>.",
+    );
+    fireEvent.change(input, { target: { value: "/srv/clones" } });
+    expect(screen.getByTestId("settings-section-clones-folder-dirty")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() =>
+      expect(updateSettingsMock).toHaveBeenCalledWith(expect.objectContaining({ clones_folder: "/srv/clones" })),
+    );
+  });
+
   it("is reached from the rail, between Sandbox & worktrees and Telemetry", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     const rail = await screen.findByRole("tablist", { name: "Settings categories" });

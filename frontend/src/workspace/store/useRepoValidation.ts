@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { validateRepo } from "../api/repos";
+import { isRemoteUrl } from "../model/clone";
 
 /**
  * The target-repo field and its verdict (#359), lifted out of `NewRunModal.tsx`.
@@ -30,7 +31,8 @@ export function useRepoValidation({
 
   const handleRepoChange = useCallback((value: string) => {
     setTargetRepo(value);
-    if (!value.trim()) {
+    // A URL is no repository yet (CORE-97): it has no verdict until cloned.
+    if (!value.trim() || isRemoteUrl(value)) {
       setRepoValid(null);
       setRepoError(null);
       clearBranches();
@@ -49,7 +51,7 @@ export function useRepoValidation({
   }, []);
 
   useEffect(() => {
-    if (!open || !targetRepo.trim()) return;
+    if (!open || !targetRepo.trim() || isRemoteUrl(targetRepo)) return;
 
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
@@ -81,7 +83,7 @@ export function useRepoValidation({
   }, [targetRepo, open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   let repoBorderClass = "border-line-strong focus:border-acc";
-  if (repoValid === true) repoBorderClass = "border-acc focus:border-acc";
+  if (repoValid === true || isRemoteUrl(targetRepo)) repoBorderClass = "border-acc focus:border-acc";
   else if (repoValid === false) repoBorderClass = "border-st-failed focus:border-st-failed";
 
   return {

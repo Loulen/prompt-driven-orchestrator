@@ -50,6 +50,7 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         telemetry_prometheus: row.try_get("telemetry_prometheus").unwrap_or(None),
         telemetry_include_actor: row.try_get("telemetry_include_actor").unwrap_or(None),
         public_url: row.try_get("public_url").unwrap_or(None),
+        clones_folder: row.try_get("clones_folder").unwrap_or(None),
         updated_at: row.get("updated_at"),
     }
 }
@@ -161,6 +162,9 @@ fn assignments(edit: UpdateInstanceConfig) -> Vec<(&'static str, Bound)> {
     }
     if let Some(v) = edit.public_url {
         sets.push(("public_url", text(v)));
+    }
+    if let Some(v) = edit.clones_folder {
+        sets.push(("clones_folder", text(v)));
     }
     sets
 }

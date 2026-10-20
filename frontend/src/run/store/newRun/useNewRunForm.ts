@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useEditStore } from "../../../pipeline/store/editStore";
 import * as newRunForm from "../../model/newRunForm";
 import { draftLaunch } from "../../../pipeline/model/versions";
@@ -9,6 +9,7 @@ import { useAttachments } from "./useAttachments";
 import { useNewRunSubmit } from "./useNewRunSubmit";
 import { usePipelineOffer } from "./usePipelineOffer";
 import { useLaunchProject } from "./useLaunchProject";
+import { useRepoClone } from "./useRepoClone";
 import type { SectionFormHost } from "../../../shared/extensions/sectionForm";
 
 interface NewRunFormArgs {
@@ -104,9 +105,24 @@ export function useNewRunForm({ open, openIntent, onClose, onCreated, onTriggerS
     provideSections: sections?.provided,
   });
 
+  // CORE-97: a URL as the target repository is cloned, then launched on.
+  const clone = useRepoClone(open, state, launch.launchProject);
+  const { repoValid, repoValidating, branchesLoading, projects, targetRepo } = state;
+  const { canLaunch, handleLaunch } = submit;
+  useEffect(() => {
+    // Waits for the clone to be validated, its branches, the Projets and the
+    // default Pipeline in; then launches if the form may (else the user
+    // finishes it).
+    if (clone.remoteUrl || projects === null) return;
+    if (repoValid === null || repoValidating || branchesLoading) return;
+    if (!clone.takeLaunchAfterClone(targetRepo.trim())) return;
+    if (canLaunch && repoValid) void handleLaunch();
+  }, [clone, projects, targetRepo, repoValid, repoValidating, branchesLoading, canLaunch, handleLaunch]);
+
   return {
     ...state,
     ...launch,
+    ...clone,
     repoProject,
     pipelineSections,
     variableEntries,

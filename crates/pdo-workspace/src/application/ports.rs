@@ -7,6 +7,7 @@ use std::pin::Pin;
 
 use crate::domain::branches::{BranchList, FetchError};
 use crate::domain::browse::{BrowseEntry, BrowseRootError};
+use crate::domain::clone::CloneFailure;
 use crate::domain::fast_forward::{FastForwardDone, FastForwardRefused};
 use crate::domain::project::{DeletedProject, Project, StoredSetting};
 use crate::domain::provisioning::{
@@ -164,6 +165,25 @@ pub trait Git: Send + Sync {
         name: &str,
         files: &[ScaffoldFile],
     ) -> Result<ScaffoldOutcome, String>;
+    /// Clone `url` in full into `dest` with the daemon's credentials, telling
+    /// `on_progress` each line git prints; nothing is left of `dest` when it
+    /// fails or `cancel` fires.
+    fn clone_repository<'a>(
+        &'a self,
+        url: &'a str,
+        dest: &'a Path,
+        on_progress: Box<dyn Fn(&str) + Send + Sync + 'a>,
+        cancel: tokio::sync::oneshot::Receiver<()>,
+    ) -> BoxFuture<'a, Result<(), CloneFailure>>;
+}
+
+/// Where a repository given by its URL is cloned (an instance setting).
+pub trait ClonesFolder: Send + Sync {
+    /// The clones folder on disk, read fresh so a change applies at once; why
+    /// not when it cannot be named (`~` with no home).
+    fn folder(&self) -> BoxFuture<'_, Result<PathBuf, String>>;
+    /// The home `~` stands for in a folder typed by a user.
+    fn home(&self) -> Option<PathBuf>;
 }
 
 /// The source tree provisioning reads: its files and what git provides.

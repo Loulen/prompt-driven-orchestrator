@@ -76,6 +76,17 @@ pub fn normalize_public_url(edit: &mut UpdateInstanceConfig) -> Result<(), Strin
     Ok(())
 }
 
+/// The clones folder in its stored form: trimmed, without a trailing `/`, or
+/// `""` (the clear) for a blank one; refused, naming why, when it is neither
+/// absolute nor under `~` (CORE-97).
+pub fn normalize_clones_folder(edit: &mut UpdateInstanceConfig) -> Result<(), String> {
+    if let Some(raw) = edit.clones_folder.take() {
+        edit.clones_folder =
+            Some(pdo_workspace::domain::clone::normalize_clones_folder(&raw)?.unwrap_or_default());
+    }
+    Ok(())
+}
+
 /// The refusal of a manager pin naming no agentic profile. A pin to nothing
 /// would silently fall back at spawn time, so it is refused at registration.
 pub fn unknown_manager_profile(name: &str, known: &[String]) -> String {
@@ -117,6 +128,20 @@ mod tests {
         let mut untouched = parse_edit(json!({})).unwrap();
         normalize_public_url(&mut untouched).unwrap();
         assert_eq!(untouched.public_url, None);
+    }
+
+    #[test]
+    fn the_clones_folder_is_stored_trimmed_cleared_or_refused() {
+        let mut edit = parse_edit(json!({ "clones_folder": " ~/clones/ " })).unwrap();
+        normalize_clones_folder(&mut edit).unwrap();
+        assert_eq!(edit.clones_folder.as_deref(), Some("~/clones"));
+        let mut clear = parse_edit(json!({ "clones_folder": "" })).unwrap();
+        normalize_clones_folder(&mut clear).unwrap();
+        assert_eq!(clear.clones_folder.as_deref(), Some(""));
+        let mut bad = parse_edit(json!({ "clones_folder": "clones" })).unwrap();
+        assert!(normalize_clones_folder(&mut bad)
+            .unwrap_err()
+            .contains("absolute"));
     }
 
     #[test]

@@ -7,7 +7,7 @@ import {
   removeProjectMember,
   updateProject,
 } from "../../api/projects";
-import { createRepo, validateRepo } from "../../api/repos";
+import { createRepo, startClone, validateRepo } from "../../api/repos";
 import { runCountByProject, sortedProjects, type ProjectsEntry } from "../../model/projectsSettings";
 import { useProjectRights } from "../../store/useProjectRights";
 import { useRepoRemotes } from "../../store/useRepoRemotes";
@@ -95,6 +95,9 @@ export default function ProjectsPanel({
       const repo = await createRepo(parent, name);
       await changed(addProjectMember(selected.id, repo.path));
     },
+    cloneRepository: (url, path) =>
+      startClone({ url, project_id: selected.id, ...(path ? { path } : {}) }),
+    refresh: onChanged,
     removeRepository: (path) => changed(removeProjectMember(selected.id, path)),
     makePrimary: (path) => changed(updateProject(selected.id, { primary_repo: path })),
     askDelete: () => setConfirmDelete(selected),

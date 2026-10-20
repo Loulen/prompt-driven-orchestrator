@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::application::ports::{BoxFuture, Git};
 use crate::domain::branches::{BranchList, FetchError};
+use crate::domain::clone::CloneFailure;
 use crate::domain::fast_forward::{FastForwardDone, FastForwardRefused};
 use crate::domain::scaffold::{ScaffoldFile, ScaffoldOutcome};
 
@@ -63,5 +64,15 @@ impl Git for GitCli {
         files: &[ScaffoldFile],
     ) -> Result<ScaffoldOutcome, String> {
         scaffold::create_repo(parent, name, files)
+    }
+
+    fn clone_repository<'a>(
+        &'a self,
+        url: &'a str,
+        dest: &'a Path,
+        on_progress: Box<dyn Fn(&str) + Send + Sync + 'a>,
+        cancel: tokio::sync::oneshot::Receiver<()>,
+    ) -> BoxFuture<'a, Result<(), CloneFailure>> {
+        Box::pin(async move { clone::clone_full(url, dest, on_progress.as_ref(), cancel).await })
     }
 }

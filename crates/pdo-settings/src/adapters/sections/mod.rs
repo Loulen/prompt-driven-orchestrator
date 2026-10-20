@@ -15,7 +15,7 @@ use serde_json::{Map, Value};
 
 pub use defaults::{
     PlatformDefaults, ReviewDefaults, RunDefaults, SessionDefaults, TelemetryDefaults,
-    TriggerDefaults,
+    TriggerDefaults, WorkspaceDefaults,
 };
 pub use harness::HarnessCatalogue;
 pub use prices::PriceTableSection;

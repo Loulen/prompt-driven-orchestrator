@@ -72,7 +72,7 @@ export default function RunDateFilterMenu({
       <Popover.Trigger
         data-testid="run-filter-date"
         title={label ? dateModeHint(value.mode) : "Date"}
-        className={`flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-1 rounded border px-1.5 py-0.5 text-left outline-none transition-colors hover:bg-bg-4 data-[popup-open]:border-acc ${
+        className={`flex min-w-0 max-w-full flex-[1_0_auto] cursor-pointer items-center justify-between gap-1 rounded border px-1.5 py-0.5 text-left outline-none transition-colors hover:bg-bg-4 data-[popup-open]:border-acc ${
           label !== null ? "border-acc bg-bg-3 text-acc" : "border-line-strong bg-bg-3 text-fg-4"
         }`}
         style={{ fontSize: "10px" }}
@@ -84,7 +84,7 @@ export default function RunDateFilterMenu({
         <ChevronDown size={9} className="shrink-0" />
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Positioner className="isolate z-50 outline-none" side="bottom" align="start" sideOffset={4}>
+        <Popover.Positioner className="isolate z-50 outline-none" side="bottom" align="end" sideOffset={4}>
           <Popover.Popup
             data-testid="run-filter-date-menu"
             className="w-[240px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg outline-none"

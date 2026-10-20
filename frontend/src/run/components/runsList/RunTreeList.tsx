@@ -158,7 +158,7 @@ export default function RunTreeList({
                 <span className="truncate" data-testid="run-repo-label">
                   {group.label}
                 </span>
-                <span className="shrink-0 font-normal text-fg-4" data-testid="run-group-count">
+                <span className="shrink-0 font-mono font-normal text-fg-4" data-testid="run-group-count">
                   {groupRuns.length}
                   {collapsed && awaiting > 0 && ` · ${awaiting} awaiting`}
                 </span>

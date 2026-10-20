@@ -193,12 +193,13 @@ pub(super) fn plain_port(name: &str) -> Port {
         description: None,
         instructions: None,
         required: false,
-        intermediate: false,
     }
 }
 
 pub(super) fn start_node() -> NodeDef {
     NodeDef {
+        free_live_artifacts: false,
+        live_artifacts: Vec::new(),
         id: "start".into(),
         name: "Start".into(),
         node_type: NodeType::Start,
@@ -221,6 +222,8 @@ pub(super) fn start_node() -> NodeDef {
 
 pub(super) fn end_node(agent_count: usize) -> NodeDef {
     NodeDef {
+        free_live_artifacts: false,
+        live_artifacts: Vec::new(),
         id: "end".into(),
         name: "End".into(),
         node_type: NodeType::End,

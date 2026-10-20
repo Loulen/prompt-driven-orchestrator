@@ -3,6 +3,7 @@
  * every gesture the store answers.
  */
 
+import type { Actor } from "../../shared/generated/Actor";
 import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
 import type { DraftSummary } from "../../shared/generated/DraftSummary";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
@@ -10,6 +11,8 @@ import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { LoopRegion } from "../../shared/generated/LoopRegion";
 import type { NoteDef } from "../../shared/generated/NoteDef";
 import type { EditorNodeDef, EditorPipelineDef, PipelineScope } from "../model/pipeline";
+import type { SaveResult } from "../api/pipelines";
+import type { SaveAs } from "../api/versions";
 
 
 // `"run"` is not a canvas element: it means the right pane shows the Run-info /
@@ -69,6 +72,23 @@ export interface DraftTabState {
   undoLabel: string | null;
 }
 
+/**
+ * ADR-0088: the version of a pipeline a tab shows, read only (« View » in the
+ * history). Such a tab has no draft and takes no edit.
+ */
+export interface VersionTabState {
+  pipelineId: string;
+  number: number;
+  title: string;
+  author: Actor | null;
+  savedAt: string;
+}
+
+/** The id of the tab that shows the version `number` of `pipelineId`. */
+export function versionTabId(pipelineId: string, number: number): string {
+  return `__version__${pipelineId}@${number}`;
+}
+
 export interface OpenPipeline {
   id: string;
   scope: string;
@@ -88,6 +108,8 @@ export interface OpenPipeline {
   saveError?: SaveErrorData;
   /** ADR-0088: the shared draft a pipeline tab edits. */
   draft?: DraftTabState;
+  /** ADR-0088: the version a read-only tab shows; absent on every other tab. */
+  version?: VersionTabState;
   /** @deprecated Pipeline library bindings were removed with scoped pipelines. */
   libraryId?: string | null;
   /** @deprecated Pipeline library bindings were removed with scoped pipelines. */
@@ -120,6 +142,7 @@ export function isRunTabLocked(t: OpenPipeline | undefined | null): boolean {
  */
 export function isTabLocked(t: OpenPipeline | undefined | null): boolean {
   if (isRunTabLocked(t)) return true;
+  if (t?.version != null) return true;
   return t?.draft != null && (!t.draft.synced || !t.draft.canWrite);
 }
 
@@ -269,7 +292,25 @@ export interface EditState {
    */
   renamePipeline: (id: string, name: string) => Promise<void>;
 
-  save: (id: string) => Promise<void>;
+  /**
+   * Save the tab `id`. A tab with a shared draft freezes it as the version
+   * `version` says (ADR-0088), a new one by default; the daemon's answer, or
+   * `undefined` when the save failed (the tab carries the error).
+   */
+  save: (id: string, version?: SaveAs) => Promise<SaveResult | undefined>;
+  /** ADR-0088: the tab whose « Save… » window is open, `null` when none. */
+  saveVersionFor: string | null;
+  /** Save the tab `id`: a shared draft opens the « Save… » window first. */
+  requestSave: (id: string) => void;
+  closeSaveVersion: () => void;
+  /** ADR-0088: open the version `number` of `pipelineId` in a read-only tab. */
+  openPipelineVersion: (pipelineId: string, number: number) => Promise<void>;
+  /**
+   * ADR-0088: the version `number` of `pipelineId` becomes the content of its
+   * draft, for every participant, as one change of mine Undo takes back. No
+   * version is created.
+   */
+  restoreVersion: (pipelineId: string, number: number) => Promise<void>;
   /** ADR-0085: « Edit for this run », a run tab unlocked for hot editing. */
   startRunEditing: (id: string) => void;
   /**
@@ -283,7 +324,6 @@ export interface EditState {
    * snapshot. Rejects with the daemon's message when either fails.
    */
   overwriteDefaultPipeline: (id: string) => Promise<void>;
-  flushPendingSaves: () => Promise<void>;
   clearSaveError: (id: string) => void;
 
   reloadPipeline: (id: string) => Promise<void>;

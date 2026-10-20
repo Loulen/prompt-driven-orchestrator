@@ -6,9 +6,10 @@ import type { StoreApi } from "zustand";
 import type { PipelineScope } from "../model/pipeline";
 import { fetchRunPipeline } from "../../run/api/runPipeline";
 import { fetchPipeline, fetchPipelines } from "../api/pipelines";
+import { fetchPipelineVersion } from "../api/versions";
 import { loadTabsDisabled, saveTabsDisabled } from "../../lib/uiPrefs";
 import type { EditState } from "./editState";
-import { hasUnsavedWork } from "./editState";
+import { hasUnsavedWork, versionTabId } from "./editState";
 import type { OpenPipeline, Selection } from "./editState";
 import { droppedHistory, replaceWithTab, placeOpenedTab } from "./tabHistory";
 
@@ -94,6 +95,38 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
       };
       // Single-tab mode replaces the current tab (or parks for confirmation);
       // multi-tab appends (#342).
+      set((s) => placeOpenedTab(s, tab));
+    } catch {
+      // ignore
+    }
+  },
+
+  openPipelineVersion: async (pipelineId: string, number: number) => {
+    const tabId = versionTabId(pipelineId, number);
+    if (get().openTabs.some((t) => t.id === tabId)) {
+      set({ activeTabId: tabId, selection: { kind: "none", id: null } });
+      return;
+    }
+    try {
+      const version = await fetchPipelineVersion(pipelineId, number);
+      const tab: OpenPipeline = {
+        id: tabId,
+        scope: "instance",
+        pipeline: version.pipeline,
+        prompts: version.prompts,
+        diagnostics: [],
+        dirty: false,
+        externalDirty: false,
+        version: {
+          pipelineId,
+          number: version.number,
+          title: version.title,
+          author: version.author,
+          savedAt: version.saved_at,
+        },
+        libraryId: null,
+        libraryScope: null,
+      };
       set((s) => placeOpenedTab(s, tab));
     } catch {
       // ignore

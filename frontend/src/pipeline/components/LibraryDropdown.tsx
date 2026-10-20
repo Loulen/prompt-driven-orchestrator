@@ -69,6 +69,9 @@ export default function LibraryDropdown({
         isolated_worktree: result.spec.isolated_worktree ?? null,
         // ADR-0086: and on demand when the entry is.
         on_demand: result.spec.on_demand ?? false,
+        // ADR-0089: and its live artifacts.
+        live_artifacts: result.spec.live_artifacts ?? [],
+        free_live_artifacts: result.spec.free_live_artifacts ?? false,
         view,
       };
       addNode(node);

@@ -9,6 +9,7 @@ import { graphSlice } from "./graphSlice";
 import { runEditSlice } from "./runEditSlice";
 import { saveSlice } from "./saveSlice";
 import { tabsSlice } from "./tabsSlice";
+import { versionsSlice } from "./versionsSlice";
 
 export const useEditStore = create<EditState>(
   (set, get) =>
@@ -17,5 +18,6 @@ export const useEditStore = create<EditState>(
       ...graphSlice(set, get),
       ...saveSlice(set, get),
       ...runEditSlice(set, get),
+      ...versionsSlice(set, get),
     }) as EditState,
 );

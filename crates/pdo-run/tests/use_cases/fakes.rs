@@ -510,13 +510,25 @@ impl SourcePipelines for Shared {
         id: &'a str,
         yaml: &'a str,
         prompts: &'a HashMap<String, String>,
-    ) -> Result<(), OverwriteRefusal> {
+    ) -> BoxFuture<'a, Result<(), OverwriteRefusal>> {
         let mut shared = self.0.lock().unwrap();
         let Some(entry) = shared.get_mut(id) else {
-            return Err(OverwriteRefusal::NotFound);
+            return Box::pin(async { Err(OverwriteRefusal::NotFound) });
         };
         *entry = (yaml.to_string(), prompts.clone());
-        Ok(())
+        Box::pin(async { Ok(()) })
+    }
+    fn last_version<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, Option<pdo_pipeline::domain::version::PipelineVersionRef>> {
+        let known = self.0.lock().unwrap().contains_key(id);
+        Box::pin(async move {
+            known.then(|| pdo_pipeline::domain::version::PipelineVersionRef {
+                number: 1,
+                title: "v1".into(),
+            })
+        })
     }
 }
 

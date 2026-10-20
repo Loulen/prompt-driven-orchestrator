@@ -714,6 +714,9 @@ describe("NodeInspector StarButton — library save is independent of pipeline s
       isolated_worktree: true,
       // ADR-0086: and on-demand-aware.
       on_demand: false,
+      // ADR-0089: and live-artifact-aware.
+      live_artifacts: [],
+      free_live_artifacts: false,
       prompt: "Review this code.",
     });
   });

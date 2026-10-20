@@ -13,7 +13,6 @@ import { anchorFromPoint, anchorPoint, anchorsByDropOnBody, landsByDrop, dropAnc
 import { drawnEdgeLayout } from "../../lib/drawnEdge";
 import { pendingSource, resetWiringSession, wiringGesture, wiringTrace } from "../../lib/wiringSession";
 import { droppedPath } from "../../lib/wiringGesture";
-import { wireableOutputs } from "../../lib/edgePorts";
 import { snapStepAtZoom } from "../../lib/wiringGrid";
 // #723 — orchestrator pastilles on the run-view node card.
 
@@ -49,11 +48,10 @@ export function useCanvasWiring({
       // #844: the drag starts on a RIM strip, which is a layout handle, not a
       // port. A new edge carries the FIRST DECLARED output (ADR-0073) and the
       // choice is revised in the panel's Outputs section. A structural source
-      // handle (a declared port id) still names its own port. An Output
-      // intermédiaire is never wired: the first ORDINARY output is the default.
+      // handle (a declared port id) still names its own port.
       const sourcePort =
         (sideFromRimHandle(connection.sourceHandle) ? null : connection.sourceHandle) ??
-        wireableOutputs(sourceNode)[0]?.name ??
+        sourceNode?.outputs[0]?.name ??
         "out";
       // Inputs are emergent (#149): dropping on a node's body creates an input
       // named after the SOURCE document. A declared target handle is honoured

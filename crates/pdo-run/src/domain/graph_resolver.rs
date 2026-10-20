@@ -295,6 +295,8 @@ mod tests {
 
     fn make_node(id: &str, node_type: NodeType, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
@@ -310,7 +312,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 })
                 .collect(),
             outputs: outputs
@@ -323,7 +324,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 })
                 .collect(),
             interactive: false,
@@ -341,6 +341,8 @@ mod tests {
 
     fn make_loop_node(id: &str, max_iter: i64) -> NodeDef {
         NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
@@ -355,7 +357,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
                 Port {
                     name: "break".into(),
@@ -365,7 +366,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
             ],
             outputs: vec![
@@ -377,7 +377,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
                 Port {
                     name: "done".into(),
@@ -387,7 +386,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 },
             ],
             interactive: false,

@@ -1,13 +1,14 @@
 //! The shared pipelines a Run's snapshot overwrites: the run context's
 //! `SourcePipelines` port, over the pipeline context's registry (wired after
-//! the Runs, ADR-0085).
+//! the Runs, ADR-0085), and the version a new Run launches (ADR-0088).
 
 use std::collections::HashMap;
 
 use pdo_kernel::Actor;
 use pdo_pipeline::application::PipelineError;
+use pdo_pipeline::domain::version::PipelineVersionRef;
 use pdo_pipeline::Pipelines;
-use pdo_run::application::ports::{OverwriteRefusal, SourcePipelines};
+use pdo_run::application::ports::{BoxFuture, OverwriteRefusal, SourcePipelines};
 
 use super::Late;
 
@@ -32,18 +33,25 @@ impl SourcePipelines for RegistryPipelines {
         id: &'a str,
         yaml: &'a str,
         prompts: &'a HashMap<String, String>,
-    ) -> Result<(), OverwriteRefusal> {
-        let pipelines = self.0.get().map_err(OverwriteRefusal::Failed)?;
-        pipelines
-            .overwrite(actor, id, yaml, prompts)
-            .map_err(|error| match error {
-                PipelineError::Denied(denied) => OverwriteRefusal::Denied(denied),
-                PipelineError::NotFound => OverwriteRefusal::NotFound,
-                PipelineError::Invalid(e) => {
-                    OverwriteRefusal::Failed(format!("invalid run pipeline: {e}"))
-                }
-                PipelineError::Storage(e) => OverwriteRefusal::Failed(e),
-                other => OverwriteRefusal::Failed(format!("{other:?}")),
-            })
+    ) -> BoxFuture<'a, Result<(), OverwriteRefusal>> {
+        Box::pin(async move {
+            let pipelines = self.0.get().map_err(OverwriteRefusal::Failed)?;
+            pipelines
+                .overwrite(actor, id, yaml, prompts)
+                .await
+                .map_err(|error| match error {
+                    PipelineError::Denied(denied) => OverwriteRefusal::Denied(denied),
+                    PipelineError::NotFound => OverwriteRefusal::NotFound,
+                    PipelineError::Invalid(e) => {
+                        OverwriteRefusal::Failed(format!("invalid run pipeline: {e}"))
+                    }
+                    PipelineError::Storage(e) => OverwriteRefusal::Failed(e),
+                    other => OverwriteRefusal::Failed(format!("{other:?}")),
+                })
+        })
+    }
+
+    fn last_version<'a>(&'a self, id: &'a str) -> BoxFuture<'a, Option<PipelineVersionRef>> {
+        Box::pin(async move { self.0.get().ok()?.last_version(id).await })
     }
 }

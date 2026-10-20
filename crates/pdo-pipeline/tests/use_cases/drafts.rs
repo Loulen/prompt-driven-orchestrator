@@ -8,6 +8,7 @@ use pdo_pipeline::adapters::draft_doc::YDraftDocuments;
 use pdo_pipeline::application::drafts::{DraftJoin, DraftMessage};
 use pdo_pipeline::application::ports::{DraftDocument, DraftDocuments};
 use pdo_pipeline::domain::draft::DraftContent;
+use pdo_pipeline::domain::version::SaveAs;
 use serde_json::json;
 
 use crate::fakes::*;
@@ -236,6 +237,7 @@ async fn saving_the_draft_leaves_no_change() {
             &yaml,
             &HashMap::new(),
             &client.doc.content(),
+            &SaveAs::new_version(),
         )
         .await
         .unwrap();
@@ -293,6 +295,7 @@ async fn a_file_with_coordinates_opens_and_saves_with_no_change() {
             &yaml,
             &HashMap::new(),
             &client.doc.content(),
+            &SaveAs::new_version(),
         )
         .await
         .unwrap();
@@ -343,6 +346,7 @@ async fn a_change_made_while_saving_is_still_a_change_and_survives_a_restart() {
             &pipeline_with_worker("flow"),
             &HashMap::new(),
             &saved,
+            &SaveAs::new_version(),
         )
         .await
         .unwrap();

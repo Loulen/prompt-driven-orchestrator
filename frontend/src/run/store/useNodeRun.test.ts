@@ -23,6 +23,12 @@ vi.mock("../api/commands", () => ({
   killNode: vi.fn(),
   restartNode: vi.fn(),
 }));
+// The tab's event stream, closed unless a test opens it.
+const stream = vi.hoisted(() => ({ status: "closed" }));
+vi.mock("./useDaemonSocket", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./useDaemonSocket")>()),
+  useDaemonStreamStatus: () => stream.status,
+}));
 
 /** The three API modules the hook calls, as one namespace. */
 const api = { ...nodesApi, ...completionApi, ...commandsApi };
@@ -153,6 +159,21 @@ describe("useNodeRun — IO reads", () => {
     expect(api.fetchNodeIO).toHaveBeenCalledTimes(2);
     await advance(2000);
     expect(api.fetchNodeIO).toHaveBeenCalledTimes(4);
+  });
+
+  it("re-reads a working node's IO every 2 s while the stream is open, for its live artifacts (ADR-0089)", async () => {
+    stream.status = "connected";
+    try {
+      renderHook(() => useNodeRun("run-1", makeNode({ status: "running" }), 1, {}));
+      await flush();
+      expect(api.fetchNodeIO).toHaveBeenCalledTimes(1);
+      await advance(1999);
+      expect(api.fetchNodeIO).toHaveBeenCalledTimes(1);
+      await advance(1);
+      expect(api.fetchNodeIO).toHaveBeenCalledTimes(2);
+    } finally {
+      stream.status = "closed";
+    }
   });
 
   it("polls IO every 1000ms for awaiting_user and stale too", async () => {

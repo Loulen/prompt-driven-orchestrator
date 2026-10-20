@@ -1,4 +1,5 @@
-//! Delete a pipeline, its prompts, its validation and its draft.
+//! Delete a pipeline, its prompts, its validation, its draft and its
+//! versions.
 
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::info;
@@ -24,6 +25,7 @@ impl Pipelines {
         self.registry.remove(id).map_err(PipelineError::Storage)?;
         self.forget_validation(id).await;
         self.draft_removed(id).await;
+        self.forget_versions(id).await;
         info!("Deleted pipeline {id}");
         Ok(())
     }

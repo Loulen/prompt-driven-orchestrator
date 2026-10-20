@@ -2,7 +2,7 @@
 //! disk, the daemon's live stream, the skill bank, the Stats absorption a
 //! rename leaves behind, the Runs that still use a pipeline, and the
 //! validations of the pipelines over SQLite with the Projets they name, and
-//! their shared drafts (SQLite, `yrs`).
+//! their shared drafts (SQLite, `yrs`) and versions (SQLite).
 
 use std::sync::Arc;
 
@@ -14,6 +14,7 @@ use pdo_pipeline::adapters::registry::FsPipelineRegistry;
 use pdo_pipeline::adapters::skill_bank::BankOfSkills;
 use pdo_pipeline::adapters::sqlite_drafts::SqliteDrafts;
 use pdo_pipeline::adapters::sqlite_validations::SqlitePipelineValidations;
+use pdo_pipeline::adapters::sqlite_versions::SqlitePipelineVersions;
 use pdo_pipeline::{Pipelines, PipelinesPorts};
 use pdo_run::adapters::pipeline_runs::PipelineRuns;
 use pdo_run::Runs;
@@ -48,6 +49,7 @@ pub(super) fn pipelines(
         )))),
         drafts: Arc::new(SqliteDrafts::new(r.db.clone())),
         documents: Arc::new(YDraftDocuments),
+        versions: Arc::new(SqlitePipelineVersions::new(r.db.clone())),
         extensions: host,
     }));
     // ADR-0088: a written file lands in its draft. Outside a runtime (the

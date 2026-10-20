@@ -7,10 +7,4 @@ export type PortIO = { port: string,
  * An input that pools several files: fed by a `repeated` edge, or by two
  * edges of the same name. Always `false` on an output.
  */
-repeated: boolean, port_type: PortType, 
-/**
- * An *Output intermédiaire*: the agent writes it while it works, nothing
- * checks it, and its absence is « not written yet », never an error.
- * Always `false` on an input.
- */
-intermediate: boolean, files: Array<FileInfo>, };
+repeated: boolean, port_type: PortType, files: Array<FileInfo>, };

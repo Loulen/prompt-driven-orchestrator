@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openPipelineForEdit } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 
 // Layer 3b — Save error modal (#74, refs #1).
 // Verifies:
@@ -100,6 +100,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
   // Click Save
   const saveBtn = page.getByTestId("save-button");
   await saveBtn.click();
+  await confirmSaveVersion(page);
 
   // Assert save error modal appears
   const modal = page.getByTestId("save-error-modal");
@@ -160,6 +161,7 @@ test("save error modal dismiss closes modal without opening info panel", async (
   });
 
   await page.getByTestId("save-button").click();
+  await confirmSaveVersion(page);
 
   const modal = page.getByTestId("save-error-modal");
   await expect(modal).toBeVisible({ timeout: 3_000 });

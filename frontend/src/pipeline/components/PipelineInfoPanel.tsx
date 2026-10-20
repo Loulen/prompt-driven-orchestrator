@@ -1,9 +1,9 @@
 /**
- * The info panel beside the canvas: the pipeline's or the Run's Info, Diff, Repositories, Manager, YAML and Assistant tabs.
+ * The info panel beside the canvas: the pipeline's or the Run's Info, Versions, Diff, Repositories, Manager, YAML and Assistant tabs.
  */
 
 import { useState, useCallback, useMemo } from "react";
-import { Info, Terminal, X, FileText, Code, Bot, FileDiff, FolderGit2 } from "lucide-react";
+import { Info, Terminal, X, FileText, Code, Bot, FileDiff, FolderGit2, History } from "lucide-react";
 import AssistantPanel from "../../session/components/AssistantPanel";
 import DiffTab from "../../review/components/DiffTab";
 import RepositoriesSection from "../../run/components/RepositoriesSection";
@@ -19,6 +19,8 @@ import { useDetailTabs } from "../../shared/extensions/catalogue";
 import { InfoTab } from "./InfoTab";
 import { ManagerTab } from "./ManagerTab";
 import { YamlTab } from "./YamlTab";
+import VersionsTab from "./VersionsTab";
+import { useEditStore } from "../store/editStore";
 import { resolveInfoTab, type TabId } from "../../lib/infoPanelReconcile";
 
 export type { TabId };
@@ -82,8 +84,16 @@ export default function PipelineInfoPanel({
   // library *template* (no live Run) with a resolvable pipeline id. Manager and
   // Assistant are therefore never both shown.
   const hasAssistant = !run && !!assistantId;
+  // ADR-0088: the history of the registry pipeline the active tab shows (its
+  // draft, or one of its versions read only).
+  const versionsId = useEditStore((s) => {
+    const active = s.openTabs.find((t) => t.id === s.activeTabId);
+    if (!active || active.runId != null) return null;
+    return active.version?.pipelineId ?? active.id;
+  });
+  const hasVersions = !run && versionsId != null;
   const [ownTab, setOwnTab] = useState<TabId>(initialTab ?? "info");
-  const resolvedTab = resolveInfoTab(tab ?? ownTab, { hasRun: run != null, hasAssistant });
+  const resolvedTab = resolveInfoTab(tab ?? ownTab, { hasRun: run != null, hasAssistant, hasVersions });
 
   // #748: the Diff tab's expand/collapse state, keyed by file path, lives here so
   // it survives `Info ↔ Diff` and a "Diff changed · Reload". Reset per Run.
@@ -127,6 +137,7 @@ export default function PipelineInfoPanel({
 
   const tabs: { id: TabId; label: string; icon: typeof Info; show: boolean }[] = [
     { id: "info", label: "Info", icon: FileText, show: true },
+    { id: "versions", label: "Versions", icon: History, show: hasVersions },
     { id: "diff", label: "Diff", icon: FileDiff, show: run != null },
     // #752 (closing the second half of #566): the Repositories view is a tab of
     // the Run panel — `Info | Diff | Repositories | Manager | YAML` — reachable
@@ -255,6 +266,10 @@ export default function PipelineInfoPanel({
           hasAssistant={hasAssistant}
           onOpenDiff={() => selectTab("diff")}
         />
+      )}
+
+      {shownTab === "versions" && hasVersions && versionsId && (
+        <VersionsTab key={versionsId} pipelineId={versionsId} />
       )}
 
       {shownTab === "diff" && run && (

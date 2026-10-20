@@ -297,6 +297,11 @@ pub(super) async fn run_started(state: &Runs, frozen: Frozen<'_>) -> Started {
             run_payload["pipeline_id"] = serde_json::json!(pid);
         }
     }
+    // ADR-0088: the version it launched, written only when known, so a Run
+    // launched outside the registry keeps its shape.
+    if let Some(version) = &launchable.version {
+        run_payload["pipeline_version"] = serde_json::json!(version);
+    }
     // Upload order is kept: what the user sees on the Start node is what they
     // attached, in that order.
     let image_names: Vec<&str> = attachments

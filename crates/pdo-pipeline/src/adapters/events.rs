@@ -31,4 +31,11 @@ impl PipelineEvents for BroadcastPipelineEvents {
             "draft": draft,
         }));
     }
+
+    fn version_changed(&self, id: &str) {
+        let _ = self.0.send(serde_json::json!({
+            "type": "pipeline_version_changed",
+            "pipeline_id": id,
+        }));
+    }
 }

@@ -2,13 +2,14 @@ import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openPipelineForEdit } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 
-// Layer 4 — Save button + dirty indicator + flush-on-launch (#35).
+// Layer 4 — Save button + dirty indicator (#35).
 // Verifies:
 // 1. Editing a pipeline triggers • prefix on the tab title.
-// 2. Clicking Save clears • and shows "Saved Xs ago".
-// 3. Launching a new run from a dirty edit session flushes pending saves first.
+// 2. Clicking Save (through the « Save… » window, ADR-0088) clears • and
+//    shows "Saved Xs ago".
+// A launch never saves silently (ADR-0088): see pipeline-versions.spec.ts.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -93,6 +94,7 @@ test("edit triggers dirty dot, Save clears it and shows relative time", async ({
 
   // Click Save
   await saveBtn.click();
+  await confirmSaveVersion(page);
 
   // • prefix should disappear
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`);
@@ -124,6 +126,7 @@ test("Cmd+S saves the active tab", async ({ page }) => {
 
   // Ctrl+S (cross-platform for Playwright)
   await page.keyboard.press("Control+s");
+  await confirmSaveVersion(page);
 
   // Should clear dirty prefix
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`);

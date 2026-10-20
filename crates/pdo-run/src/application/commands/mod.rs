@@ -760,6 +760,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 skills: Vec::new(),
                 isolated_worktree: None,
                 id: "sw1".into(),
@@ -773,7 +775,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 outputs: vec![Port {
                     name: "pass".into(),
@@ -783,7 +784,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -828,6 +828,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 skills: Vec::new(),
                 isolated_worktree: None,
                 id: "b".into(),
@@ -841,7 +843,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 outputs: vec![],
                 interactive: false,

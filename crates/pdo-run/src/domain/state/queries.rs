@@ -70,6 +70,7 @@ impl RunState {
             parent_node_id: None,
             project_id: None,
             pipeline_id: None,
+            pipeline_version: None,
             review_comments: Vec::new(),
             sessions_spawned: 0,
             loc: None,

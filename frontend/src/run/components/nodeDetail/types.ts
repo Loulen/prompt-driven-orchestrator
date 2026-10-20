@@ -15,7 +15,7 @@ export type TerminalView = "minimized" | "split" | "expanded";
 export interface ModalState {
   portName: string;
   files: FileInfo[];
-  portKind: "input" | "output";
+  portKind: "input" | "output" | "live";
   portType: PortType;
 }
 

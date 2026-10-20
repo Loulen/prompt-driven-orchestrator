@@ -7,6 +7,8 @@ import type { ChildCounts, RunChildEntry } from "../../model/orchestration";
 // #723 — Orchestration tab + pastilles.
 import { ChildCountPills, OrchestrationTab } from "../OrchestrationTab";
 import IOSection from "./IOSection";
+import LiveSection from "./LiveSection";
+import type { LiveArtifactIO } from "../../../shared/generated/LiveArtifactIO";
 import PromptSection from "./PromptSection";
 import TranscriptTab from "./transcript/TranscriptTab";
 import { nodeIterationTimings } from "../../model/iterationDuration";
@@ -16,7 +18,7 @@ import { useDetailTabs } from "../../../shared/extensions/catalogue";
 /**
  * The lower pane of the panel: the actions, then the tabs — I/O, Transcript,
  * Orchestration for an orchestrator node, the extensions' — then the selected
- * tab: Inputs / Outputs / Initial Prompt under I/O.
+ * tab: Inputs / Outputs / Live artifacts / Initial Prompt under I/O.
  */
 export default function DetailsPane({
   actions,
@@ -32,6 +34,7 @@ export default function DetailsPane({
   onOpenChildRun,
   inputs,
   outputs,
+  live = [],
   promptText,
   onOpenFile,
   selectedIter,
@@ -53,9 +56,11 @@ export default function DetailsPane({
   onOpenChildRun?: (childRunId: string) => void;
   inputs: PortIO[];
   outputs: PortIO[];
+  /** ADR-0089: the iteration's live artifacts. */
+  live?: LiveArtifactIO[];
   promptText: string | null;
   onOpenFile: (
-    portKind: "input" | "output",
+    portKind: "input" | "output" | "live",
     portName: string,
     files: FileInfo[],
     portType: PortType,
@@ -186,6 +191,17 @@ export default function DetailsPane({
           showFrontmatter
           onOpenFile={(portName, files, portType) =>
             onOpenFile("output", portName, files, portType)
+          }
+        />
+      )}
+
+      {/* ADR-0089: Live artifacts, under the Outputs, apart from them. */}
+      {live.length > 0 && (
+        <LiveSection
+          live={live}
+          runId={runId}
+          onOpen={(artifact) =>
+            onOpenFile("live", artifact.name, artifact.files, artifact.port_type)
           }
         />
       )}

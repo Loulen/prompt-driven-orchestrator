@@ -127,6 +127,7 @@ export default function NodeDetailPanel({
     promptText,
     inputs,
     outputs,
+    live,
     markVerdict,
     releaseVerdict,
     actionVerdict,
@@ -339,6 +340,7 @@ export default function NodeDetailPanel({
             onOpenChildRun={onOpenChildRun}
             inputs={inputs}
             outputs={outputs}
+            live={live}
             promptText={promptText}
             onOpenFile={(portKind, portName, files, portType) =>
               setModal({ portName, files, portKind, portType })

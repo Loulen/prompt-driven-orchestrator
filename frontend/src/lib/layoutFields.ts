@@ -60,14 +60,14 @@ export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
   // generated types revealed the serializer used to drop both.
   // ADR-0086: `on_demand` is SEMANTIC — it decides whether the runtime
   // launches the node at all.
-  node: ["id", "name", "type", "interactive", "agent_choice", "skills", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "orchestrator", "on_demand", "auto_fail", "inputs", "outputs"] satisfies (keyof EditorNodeDef)[],
+  // ADR-0089: `live_artifacts` and `free_live_artifacts` are SEMANTIC — they
+  // change what the node is told to publish.
+  node: ["id", "name", "type", "interactive", "agent_choice", "skills", "pin_harness", "harnesses", "provisioning", "max_iter", "isolated_worktree", "orchestrator", "on_demand", "free_live_artifacts", "live_artifacts", "auto_fail", "inputs", "outputs"] satisfies (keyof EditorNodeDef)[],
   // A port has no side (where a wire leaves and lands is the edge's layout:
   // `source_anchor`, `target_anchor`, `target_side`) nor accumulation flag
   // (`repeated` belongs to the edge).
   inputPort: ["name", "required", "port_type", "frontmatter"] satisfies (keyof PortDef)[],
-  // CORE-45: `intermediate` is SEMANTIC — an Output intermédiaire leaves the
-  // completion contract and the wiring, so the star and the diff must see it.
-  outputPort: ["name", "required", "port_type", "frontmatter", "when", "instructions", "intermediate"] satisfies (keyof PortDef)[],
+  outputPort: ["name", "required", "port_type", "frontmatter", "when", "instructions"] satisfies (keyof PortDef)[],
   // `repeated` (#149): the accumulation across iterations, which only the edge
   // carries.
   edge: ["source", "target", "when", "else", "repeated"] satisfies (keyof EdgeDef)[],

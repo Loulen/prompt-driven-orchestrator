@@ -108,15 +108,20 @@ describe("computeSyncState", () => {
     expect(computeSyncState(node, "You review code.", entries)).toBe("synced");
   });
 
-  it("returns diverged when only an output's intermediate flag differs (CORE-45)", () => {
-    const node = makeNode({
-      outputs: [{ name: "review", intermediate: true }],
-    });
+  it("returns diverged when only the live artifacts differ (ADR-0089)", () => {
+    const node = makeNode({ live_artifacts: [{ name: "progress" }] });
     expect(computeSyncState(node, "You review code.", [makeEntry()])).toBe("diverged");
-    const flagged = makeEntry({
-      outputs: [{ name: "review", intermediate: true }],
+    // The daemon spells out the defaults: still the same content.
+    const starred = makeEntry({
+      live_artifacts: [{ name: "progress", port_type: "markdown", instructions: null, frontmatter: null }],
     });
-    expect(computeSyncState(node, "You review code.", [flagged])).toBe("synced");
+    expect(computeSyncState(node, "You review code.", [starred])).toBe("synced");
+
+    const free = makeNode({ free_live_artifacts: true });
+    expect(computeSyncState(free, "You review code.", [makeEntry()])).toBe("diverged");
+    expect(
+      computeSyncState(free, "You review code.", [makeEntry({ free_live_artifacts: true })]),
+    ).toBe("synced");
   });
 
   it("returns diverged when the workspace differs (#655)", () => {

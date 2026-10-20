@@ -34,6 +34,9 @@ const KNOWN_NODE_KEYS: &[&str] = &[
     "isolated_worktree",
     // ADR-0086: the « on demand » option.
     "on_demand",
+    // ADR-0089: the declared live artifacts and the « Free live artifacts » option.
+    "live_artifacts",
+    "free_live_artifacts",
     // Accepted-and-dropped, not a semantic loss → no warning.
     "id",
     "view",
@@ -151,6 +154,9 @@ pub fn parse_node_spec(yaml: &str) -> Result<serde_json::Value, String> {
             "isolated_worktree": entry.isolated_worktree,
             // ADR-0086: the node waits for the user's ▶.
             "on_demand": entry.on_demand,
+            // ADR-0089: the live artifacts ride with the node.
+            "live_artifacts": entry.live_artifacts,
+            "free_live_artifacts": entry.free_live_artifacts,
             "max_iter": entry.max_iter,
             "branches": entry.branches,
         },
@@ -228,15 +234,27 @@ mod tests {
     }
 
     #[test]
-    fn parse_node_spec_keeps_an_intermediate_output() {
+    fn parse_node_spec_reads_an_intermediate_output_as_a_live_artifact() {
         let body = parse_node_spec(
             "name: Writer\ntype: agent\noutputs:\n  - name: adr\n  - name: draft\n    intermediate: true\n",
         )
         .unwrap();
         assert!(body["warnings"].as_array().unwrap().is_empty(), "{body}");
-        assert_eq!(body["spec"]["outputs"][1]["intermediate"], true);
-        // Omitted when false, like in the pipeline YAML.
-        assert!(body["spec"]["outputs"][0].get("intermediate").is_none());
+        assert_eq!(body["spec"]["outputs"].as_array().unwrap().len(), 1);
+        assert_eq!(body["spec"]["live_artifacts"][0]["name"], "draft");
+        assert_eq!(body["spec"]["free_live_artifacts"], false);
+    }
+
+    #[test]
+    fn parse_node_spec_carries_the_live_artifacts() {
+        let body = parse_node_spec(
+            "name: Writer\ntype: agent\nfree_live_artifacts: true\nlive_artifacts:\n  - name: progress\n",
+        )
+        .unwrap();
+        assert!(body["warnings"].as_array().unwrap().is_empty(), "{body}");
+        assert_eq!(body["spec"]["live_artifacts"][0]["name"], "progress");
+        assert_eq!(body["spec"]["free_live_artifacts"], true);
+        assert!(parse_node_spec("name: E\ntype: end\nfree_live_artifacts: true\n").is_err());
     }
 
     #[test]

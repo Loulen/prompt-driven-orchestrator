@@ -55,6 +55,8 @@ mod tests {
 
     fn make_node(id: &str, inputs: &[&str], outputs: &[&str]) -> NodeDef {
         NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: id.into(),
@@ -70,7 +72,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 })
                 .collect(),
             outputs: outputs
@@ -83,7 +84,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 })
                 .collect(),
             interactive: false,

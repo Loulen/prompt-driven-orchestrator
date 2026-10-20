@@ -81,6 +81,9 @@ pub(super) async fn instantiate(
             "isolated_worktree": entry.isolated_worktree,
             // ADR-0086: an on-demand entry instantiates an on-demand node.
             "on_demand": entry.on_demand,
+            // ADR-0089: the live artifacts ride with the entry.
+            "live_artifacts": entry.live_artifacts,
+            "free_live_artifacts": entry.free_live_artifacts,
         },
         "prompt": prompt,
     }))

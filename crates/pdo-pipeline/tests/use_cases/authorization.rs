@@ -37,6 +37,8 @@ async fn a_refused_mutation_changes_nothing() {
     denied(world.pipelines.save_to_library(
         &operator(),
         LibraryEntry {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             on_demand: false,
             name: "n".into(),
             node_type: NodeType::Agent,

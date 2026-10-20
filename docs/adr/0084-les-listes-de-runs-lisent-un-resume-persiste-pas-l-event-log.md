@@ -36,6 +36,12 @@ Précisions de l'implémentation (CORE-32) :
 - Une **marque** (version du Résumé, dernier événement couvert) dit si les Résumés sont ceux du
   journal ; sinon (premier démarrage, forme changée, daemon antérieur qui a écrit dans le
   journal) le démarrage les reconstruit tous, avant de servir.
+- L'**activité** d'un Run (CONTEXT.md « Activité d'un Run », lue par le filtre de date des listes)
+  est gardée en plages d'instants UTC : deux événements à moins d'une heure d'écart font une
+  plage. Le Résumé porte ces plages et l'instant de la dernière activité, pas des jours : le
+  jour d'un instant est celui du fuseau du lecteur, que le daemon ne connaît pas. Le renommage,
+  l'archivage, un nœud constaté inactif ou bloqué sur une limite d'usage et le lint du pipeline
+  ne sont pas de l'activité.
 - Des événements écrits dans le journal **pendant que le daemon tourne**, hors de ses appends
   (un outil qui peuple la base d'une instance lancée), laissent la marque en arrière. La lecture
   suivante du Résumé les rattrape : elle réécrit le Résumé des Runs de ces événements, puis avance

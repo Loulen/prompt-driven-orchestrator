@@ -42,8 +42,6 @@ pub struct OutputDeclaration {
     pub port_name: String,
     pub path: PathBuf,
     pub port_type: PortType,
-    /// An *Output intermédiaire*: listed apart in the preamble, never checked.
-    pub intermediate: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +204,8 @@ mod tests {
             version: Some("1.0".into()),
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 skills: Vec::new(),
                 isolated_worktree: None,
                 id: "planner".into(),
@@ -219,7 +219,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 outputs: vec![Port {
                     name: "plan".into(),
@@ -229,7 +228,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -603,6 +601,8 @@ mod tests {
     fn script_with_repeated_laps_pipeline() -> PipelineDef {
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: "collector".into(),
@@ -770,6 +770,8 @@ mod tests {
     fn edge_based_input_resolution() {
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: "implementer".into(),
@@ -783,7 +785,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             outputs: vec![Port {
                 name: "summary".into(),
@@ -793,7 +794,6 @@ mod tests {
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             interactive: false,
             view: None,
@@ -928,6 +928,8 @@ mod tests {
             ..Default::default()
         });
         pipeline.nodes.push(NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: "implementer".into(),
@@ -966,6 +968,8 @@ mod tests {
         // the incoming edge. The preamble must still enumerate it.
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: "implementer".into(),
@@ -1015,6 +1019,8 @@ mod tests {
         // on a declared input port. planner → implementer, port `plans`.
         let mut pipeline = sample_pipeline();
         pipeline.nodes.push(NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             skills: Vec::new(),
             isolated_worktree: None,
             id: "implementer".into(),
@@ -1279,6 +1285,8 @@ mod tests {
             variables: HashMap::new(),
             nodes: vec![
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "planner".into(),
@@ -1293,7 +1301,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -1307,6 +1314,8 @@ mod tests {
                     on_demand: false,
                 },
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "researcher".into(),
@@ -1321,7 +1330,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -1335,6 +1343,8 @@ mod tests {
                     on_demand: false,
                 },
                 NodeDef {
+                    free_live_artifacts: false,
+                    live_artifacts: Vec::new(),
                     skills: Vec::new(),
                     isolated_worktree: None,
                     id: "implementer".into(),
@@ -1349,7 +1359,6 @@ mod tests {
                             description: None,
                             instructions: None,
                             required: false,
-                            intermediate: false,
                         },
                         Port {
                             name: "context".into(),
@@ -1359,7 +1368,6 @@ mod tests {
                             description: None,
                             instructions: None,
                             required: false,
-                            intermediate: false,
                         },
                     ],
                     outputs: vec![Port {
@@ -1370,7 +1378,6 @@ mod tests {
                         description: None,
                         instructions: None,
                         required: false,
-                        intermediate: false,
                     }],
                     interactive: false,
                     view: None,
@@ -1450,6 +1457,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 skills: Vec::new(),
                 isolated_worktree: None,
                 id: "reviewer".into(),
@@ -1463,7 +1472,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 outputs: vec![Port {
                     name: "review".into(),
@@ -1483,7 +1491,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -1527,89 +1534,112 @@ mod tests {
         );
     }
 
-    /// `sample_pipeline` plus an intermediate html `preview` on `planner`, with
-    /// an expected content and a (kept but ignored) frontmatter schema.
-    fn pipeline_with_intermediate_output() -> PipelineDef {
+    /// `sample_pipeline` plus a declared markdown live artifact `progress` on
+    /// `planner` (ADR-0089), with an expected content and a frontmatter schema.
+    fn pipeline_with_live_artifact() -> PipelineDef {
         let mut pipeline = sample_pipeline();
-        let mut preview = pipeline.nodes[0].outputs[0].clone();
-        preview.name = "preview".into();
-        preview.port_type = PortType::Markdown;
-        preview.intermediate = true;
-        preview.instructions = Some("The plan so far.".into());
-        preview.frontmatter = Some(
-            [(
-                "draft_verdict".into(),
-                pdo_pipeline::domain::pipeline::FrontmatterFieldDecl {
-                    field_type: "string".into(),
-                    allowed: None,
-                },
-            )]
-            .into_iter()
-            .collect(),
-        );
-        pipeline.nodes[0].outputs.push(preview);
+        pipeline.nodes[0]
+            .live_artifacts
+            .push(pdo_pipeline::domain::pipeline::LiveArtifact {
+                name: "progress".into(),
+                port_type: PortType::Markdown,
+                instructions: Some("The plan so far.".into()),
+                frontmatter: Some(
+                    [(
+                        "status".into(),
+                        pdo_pipeline::domain::pipeline::FrontmatterFieldDecl {
+                            field_type: "enum".into(),
+                            allowed: Some(vec!["drafting".into(), "ready".into()]),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+            });
         pipeline
     }
 
     #[test]
-    fn intermediate_outputs_are_listed_apart_with_their_conduct() {
-        let pipeline = pipeline_with_intermediate_output();
+    fn live_artifacts_are_listed_apart_with_their_folder_and_conduct() {
+        let pipeline = pipeline_with_live_artifact();
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
         let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
 
         let outputs = preamble.find("## Outputs\n").expect("outputs section");
-        let intermediate = preamble
-            .find("## Intermediate outputs\n")
-            .expect("intermediate outputs section");
+        let live = preamble
+            .find("## Live artifacts\n")
+            .expect("live artifacts section");
         let plan = preamble
             .find("- `plan`: write to")
             .expect("ordinary output");
-        let preview = preamble
-            .find("- `preview`: write to `/repo/.pdo/artifacts/planner/iter-1/preview/output.md`")
-            .expect("intermediate output with its path");
+        let progress = preamble
+            .find("- `progress`: write to `/repo/.pdo/artifacts/planner/iter-1/live/progress.md`")
+            .expect("declared live artifact with its path");
         assert!(
-            outputs < plan && plan < intermediate && intermediate < preview,
+            outputs < plan && plan < live && live < progress,
             "{preamble}"
         );
 
-        let section = &preamble[intermediate..];
+        let section = &preamble[live..];
         for conduct in [
+            "`/repo/.pdo/artifacts/planner/iter-1/live/`",
             "early",
             "update it as you work",
             "never checked",
             "rename it onto",
+            "Expected content: The plan so far.",
+            "Expected YAML frontmatter (not enforced)",
+            "`status`: enum (allowed: drafting, ready)",
         ] {
             assert!(section.contains(conduct), "missing «{conduct}»: {section}");
         }
-        assert!(
-            section.contains("Expected content: The plan so far."),
-            "{section}"
-        );
-        // The schema stays in the YAML but nothing validates it: never described.
-        assert!(!preamble.contains("draft_verdict"), "{preamble}");
+        // Declared only: no word of undeclared artifacts.
+        assert!(!section.contains("nobody declared"), "{section}");
     }
 
     #[test]
-    fn a_node_with_only_intermediate_outputs_declares_no_outputs() {
+    fn free_live_artifacts_are_announced_with_the_folder() {
         let mut pipeline = sample_pipeline();
-        pipeline.nodes[0].outputs[0].intermediate = true;
+        pipeline.nodes[0].free_live_artifacts = true;
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
+        let live = preamble
+            .find("## Live artifacts\n")
+            .expect("live artifacts section");
+        let section = &preamble[live..];
+        assert!(
+            section.contains("`/repo/.pdo/artifacts/planner/iter-1/live/`"),
+            "{section}"
+        );
+        assert!(section.contains("nobody declared"), "{section}");
+    }
+
+    #[test]
+    fn an_image_list_live_artifact_is_a_folder() {
+        let mut pipeline = pipeline_with_live_artifact();
+        let live = &mut pipeline.nodes[0].live_artifacts[0];
+        live.name = "screens".into();
+        live.port_type = PortType::ImageList;
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
         let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
         assert!(
-            preamble.contains("## Outputs\n\nNo outputs declared.\n"),
+            preamble.contains(
+                "- `screens` (image_list): drop one or more image files in \
+                 `/repo/.pdo/artifacts/planner/iter-1/live/screens`"
+            ),
             "{preamble}"
         );
-        assert!(preamble.contains("## Intermediate outputs\n"), "{preamble}");
     }
 
     #[test]
-    fn an_on_demand_node_launched_ahead_lists_its_intermediate_outputs() {
-        // ADR-0086 × CORE-45: an on-demand node started before its upstream is
-        // told its input is not there yet, and still gets its Intermediate
-        // outputs section like any other node.
-        let mut pipeline = pipeline_with_intermediate_output();
+    fn an_on_demand_node_launched_ahead_lists_its_live_artifacts() {
+        // ADR-0086 × ADR-0089: an on-demand node started before its upstream is
+        // told its input is not there yet, and still gets its Live artifacts
+        // section like any other node.
+        let mut pipeline = pipeline_with_live_artifact();
         let mut reader = pipeline.nodes[0].clone();
         reader.id = "reader".into();
         reader.name = "reader".into();
@@ -1633,87 +1663,51 @@ mod tests {
             preamble.contains("- `work`: not available yet — its upstream `planner`"),
             "{preamble}"
         );
-        let intermediate = preamble
-            .find("## Intermediate outputs\n")
-            .expect("intermediate outputs section");
+        let live = preamble
+            .find("## Live artifacts\n")
+            .expect("live artifacts section");
         assert!(
-            preamble[intermediate..].contains(
-                "- `preview`: write to `/repo/.pdo/artifacts/reader/iter-1/preview/output.md`"
+            preamble[live..].contains(
+                "- `progress`: write to `/repo/.pdo/artifacts/reader/iter-1/live/progress.md`"
             ),
             "{preamble}"
         );
         assert!(
-            !preamble[..intermediate].contains("`preview`"),
-            "the intermediate output is not an ordinary output: {preamble}"
+            !preamble[..live].contains("`progress`"),
+            "a live artifact is not an output: {preamble}"
         );
     }
 
     #[test]
-    fn no_intermediate_section_without_intermediate_outputs() {
+    fn no_live_section_without_live_artifacts() {
         let pipeline = sample_pipeline();
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
         let preamble = build_preamble(&sample_ctx(&pipeline, node, &vars));
-        assert!(!preamble.contains("Intermediate outputs"), "{preamble}");
+        assert!(!preamble.contains("Live artifacts"), "{preamble}");
     }
 
     #[test]
-    fn a_script_node_gets_the_path_of_its_intermediate_output() {
-        let mut pipeline = pipeline_with_intermediate_output();
+    fn a_script_node_gets_the_live_folder() {
+        let mut pipeline = pipeline_with_live_artifact();
         pipeline.nodes[0].node_type = NodeType::Script;
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
         let env = build_script_env(&sample_ctx(&pipeline, node, &vars));
         assert!(env.contains(&(
-            "PDO_OUTPUT_PREVIEW".to_string(),
-            "/repo/.pdo/artifacts/planner/iter-1/preview/output.md".to_string()
+            "PDO_LIVE_DIR".to_string(),
+            "/repo/.pdo/artifacts/planner/iter-1/live".to_string()
         )));
     }
 
     #[test]
-    fn an_intermediate_output_is_never_handed_over_as_partial_output() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        let pipeline = pipeline_with_intermediate_output();
-        let node = &pipeline.nodes[0];
-        for port in ["plan", "preview"] {
-            let dir = artifacts.join("planner/iter-1").join(port);
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("output.md"), "work").unwrap();
-        }
-        assert_eq!(
-            surviving_partial_outputs(node, artifacts, 1, None),
-            vec![artifacts.join("planner/iter-1/plan/output.md")]
-        );
-    }
-
-    #[test]
-    fn a_new_iteration_points_at_its_own_intermediate_output() {
-        // Nothing is copied forward: iteration 2 is told to write its own file,
-        // and the one iteration 1 left is not presented as its work.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let artifacts = tmp.path();
-        let pipeline = pipeline_with_intermediate_output();
-        let node = &pipeline.nodes[0];
-        let dir = artifacts.join("planner/iter-1/preview");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("output.md"), "iteration 1").unwrap();
-
+    fn a_node_without_live_artifacts_gets_no_live_folder() {
+        let pipeline = sample_pipeline();
+        let mut node = pipeline.nodes[0].clone();
+        node.node_type = NodeType::Script;
         let vars = HashMap::new();
-        let mut ctx = sample_ctx(&pipeline, node, &vars);
-        ctx.artifacts_dir = artifacts;
-        ctx.iter = 2;
-        let preview = resolve_output_paths(&ctx)
-            .into_iter()
-            .find(|o| o.port_name == "preview")
-            .unwrap();
-        assert!(preview.intermediate);
-        assert_eq!(
-            preview.path,
-            artifacts.join("planner/iter-2/preview/output.md")
-        );
-        assert!(!preview.path.exists());
-        assert!(surviving_partial_outputs(node, artifacts, 2, None).is_empty());
+        let env = build_script_env(&sample_ctx(&pipeline, &node, &vars));
+        assert!(!env.iter().any(|(k, _)| k == "PDO_LIVE_DIR"), "{env:?}");
     }
 
     #[test]
@@ -1993,6 +1987,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 skills: Vec::new(),
                 isolated_worktree: None,
                 id: "designer".into(),
@@ -2007,7 +2003,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -2053,6 +2048,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 skills: Vec::new(),
                 isolated_worktree: None,
                 id: "gallery".into(),
@@ -2067,7 +2064,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,
@@ -2108,6 +2104,8 @@ mod tests {
             version: None,
             variables: HashMap::new(),
             nodes: vec![NodeDef {
+                free_live_artifacts: false,
+                live_artifacts: Vec::new(),
                 skills: Vec::new(),
                 isolated_worktree: None,
                 id: "node".into(),
@@ -2122,7 +2120,6 @@ mod tests {
                     description: None,
                     instructions: None,
                     required: false,
-                    intermediate: false,
                 }],
                 interactive: false,
                 view: None,

@@ -48,8 +48,9 @@ fn var_value_to_env_string(value: &serde_yaml::Value) -> String {
 ///   input, so a script knows to `readarray -t files <<< "$PDO_INPUT_<PORT>"`
 ///   (and to `pdo skip` when the value is empty).
 /// - `PDO_OUTPUT_<PORT>` — absolute path the script writes its `output.md` to.
-///   An *Output intermédiaire* gets its path the same way: the script may
-///   rewrite it while it runs, and nothing checks it at the end.
+/// - `PDO_LIVE_DIR` — the folder the script publishes its live artifacts in
+///   (ADR-0089), set only when the node declares one or may publish freely.
+///   Nothing checks it at the end.
 /// - `PDO_VAR_<NAME>` — each resolved pipeline variable (sorted for determinism).
 ///
 /// The base four (`PDO_RUN_ID`/`NODE_ID`/`NODE_ITER`/`DAEMON_URL`) are exported
@@ -83,6 +84,15 @@ pub fn build_script_env(ctx: &AugmentContext<'_>) -> Vec<(String, String)> {
         env.push((
             format!("PDO_OUTPUT_{}", env_name_suffix(&output.port_name)),
             output.path.to_string_lossy().into_owned(),
+        ));
+    }
+
+    if !ctx.node.live_artifacts.is_empty() || ctx.node.free_live_artifacts {
+        env.push((
+            "PDO_LIVE_DIR".to_string(),
+            crate::domain::blackboard::live_dir(ctx.artifacts_dir, &ctx.node.id, ctx.iter)
+                .to_string_lossy()
+                .into_owned(),
         ));
     }
 
@@ -162,6 +172,17 @@ pub fn precreate_output_dirs(ctx: &AugmentContext<'_>) {
         if let Err(e) = std::fs::create_dir_all(&dir) {
             tracing::warn!(
                 "failed to pre-create output dir {} for script node {}: {e}",
+                dir.display(),
+                ctx.node.id
+            );
+        }
+    }
+    // ADR-0089: `> "$PDO_LIVE_DIR/progress.md"` needs the folder too.
+    if !ctx.node.live_artifacts.is_empty() || ctx.node.free_live_artifacts {
+        let dir = crate::domain::blackboard::live_dir(ctx.artifacts_dir, &ctx.node.id, ctx.iter);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(
+                "failed to pre-create live dir {} for script node {}: {e}",
                 dir.display(),
                 ctx.node.id
             );

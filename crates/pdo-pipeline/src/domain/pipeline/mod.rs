@@ -23,11 +23,12 @@ pub use legacy_ports::{
     convert_legacy_ports, node_has_legacy_port_key, strip_legacy_port_keys, LegacyPortsReport,
 };
 pub use node::{
-    is_image_file, FrontmatterFieldDecl, NodeDef, NodeType, Port, PortSide, PortType, ViewPosition,
-    IMAGE_EXTENSIONS,
+    is_image_file, FrontmatterFieldDecl, LiveArtifact, NodeDef, NodeType, Port, PortSide, PortType,
+    ViewPosition, IMAGE_EXTENSIONS, LIVE_DIR,
 };
 pub use normalize::{
-    fold_flat_model_effort_into_harnesses, normalize_node_value, ISOLATED_WORKTREE_KEY, SKILLS_KEY,
+    fold_flat_model_effort_into_harnesses, migrate_intermediate_outputs, normalize_node_value,
+    FREE_LIVE_ARTIFACTS_KEY, ISOLATED_WORKTREE_KEY, LIVE_ARTIFACTS_KEY, SKILLS_KEY,
     VALID_NODE_TYPES,
 };
 pub use parse::parse_pipeline;
@@ -2003,6 +2004,8 @@ skills:
     #[test]
     fn script_node_roundtrips_via_serde() {
         let node = NodeDef {
+            free_live_artifacts: false,
+            live_artifacts: Vec::new(),
             isolated_worktree: None,
             id: "s1".into(),
             name: "notify".into(),
@@ -2016,7 +2019,6 @@ skills:
                 description: None,
                 instructions: None,
                 required: false,
-                intermediate: false,
             }],
             interactive: false,
             view: None,
@@ -4178,6 +4180,8 @@ nodes:
       - name: spec
       - name: preview
         port_type: html
+        instructions: The page so far.
+        when: { verdict: PASS }
         intermediate: true
   - id: ab000002
     name: builder
@@ -4191,47 +4195,156 @@ edges:
 "#;
 
     #[test]
-    fn intermediate_output_round_trips_and_is_omitted_when_false() {
+    fn an_intermediate_output_is_read_as_a_declared_live_artifact() {
+        // ADR-0089: migrated at load, rewritten when the file is saved.
         let result = parse_pipeline(&with_start_end(INTERMEDIATE_OUTPUT)).unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
         let designer = &result.pipeline.nodes[2];
-        assert!(!designer.outputs[0].intermediate);
-        assert!(designer.outputs[1].intermediate);
+        assert_eq!(
+            designer
+                .outputs
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["spec"]
+        );
+        assert_eq!(
+            designer.live_artifacts,
+            vec![LiveArtifact {
+                name: "preview".into(),
+                port_type: PortType::Html,
+                instructions: Some("The page so far.".into()),
+                frontmatter: None,
+            }]
+        );
+        assert!(!designer.free_live_artifacts);
 
         let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
-        // One `intermediate:` line in the whole document: the ordinary ports
-        // stay byte-identical to a pre-option pipeline.
+        assert!(!serialized.contains("intermediate:"), "{serialized}");
+        assert!(!serialized.contains("free_live_artifacts"), "{serialized}");
         assert_eq!(
-            serialized.matches("intermediate:").count(),
+            serialized.matches("live_artifacts:").count(),
             1,
             "{serialized}"
         );
         let reparsed = parse_pipeline(&serialized).unwrap().pipeline;
-        assert!(reparsed.nodes[2].outputs[1].intermediate);
-        assert!(!reparsed.nodes[2].outputs[0].intermediate);
+        assert_eq!(reparsed.nodes[2].live_artifacts, designer.live_artifacts);
+        assert_eq!(reparsed.nodes[2].outputs.len(), 1);
+    }
+
+    const LIVE_ARTIFACTS: &str = r#"
+name: live-artifacts
+nodes:
+  - id: ab000001
+    name: designer
+    type: agent
+    isolated_worktree: false
+    free_live_artifacts: true
+    outputs:
+      - name: spec
+    live_artifacts:
+      - name: progress
+        instructions: What you did, what is next.
+        frontmatter:
+          status: { type: enum, allowed: [drafting, ready] }
+      - name: screens
+        port_type: image_list
+  - id: ab000002
+    name: builder
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+edges:
+  - source: { node: ab000001, port: spec }
+    target: { node: ab000002, port: spec }
+"#;
+
+    #[test]
+    fn live_artifacts_and_free_publication_round_trip_apart_from_the_outputs() {
+        let result = parse_pipeline(&with_start_end(LIVE_ARTIFACTS)).unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let designer = &result.pipeline.nodes[2];
+        assert!(designer.free_live_artifacts);
+        assert_eq!(designer.outputs.len(), 1);
+        assert_eq!(designer.live_artifacts.len(), 2);
+        assert_eq!(designer.live_artifacts[0].port_type, PortType::Markdown);
+        assert_eq!(designer.live_artifacts[0].relative_path(), "progress.md");
+        assert_eq!(designer.live_artifacts[1].relative_path(), "screens/");
+
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        let reparsed = parse_pipeline(&serialized).unwrap().pipeline;
+        assert_eq!(reparsed.nodes[2].live_artifacts, designer.live_artifacts);
+        assert!(reparsed.nodes[2].free_live_artifacts);
+        // The builder publishes nothing: no key on it.
+        assert!(!reparsed.nodes[3].free_live_artifacts);
+        assert_eq!(serialized.matches("free_live_artifacts").count(), 1);
     }
 
     #[test]
-    fn an_edge_carrying_an_intermediate_output_is_refused_naming_the_port_and_the_edge() {
-        let yaml = with_start_end(INTERMEDIATE_OUTPUT).replace(
+    fn an_edge_carrying_a_live_artifact_is_refused_naming_it_and_the_edge() {
+        let yaml = with_start_end(LIVE_ARTIFACTS).replace(
             "source: { node: ab000001, port: spec }",
-            "source: { node: ab000001, ports: [spec, preview] }",
+            "source: { node: ab000001, ports: [spec, progress] }",
         );
         let err = parse_pipeline(&yaml).unwrap_err().to_string();
-        assert!(err.contains("intermediate output 'preview'"), "{err}");
+        assert!(err.contains("live artifact 'progress'"), "{err}");
         assert!(
-            err.contains("edge 'ab000001.spec+preview -> ab000002.spec'"),
+            err.contains("edge 'ab000001.spec+progress -> ab000002.spec'"),
             "{err}"
         );
     }
 
     #[test]
-    fn an_unwired_intermediate_output_beside_a_wired_ordinary_one_parses() {
-        let result = parse_pipeline(&with_start_end(INTERMEDIATE_OUTPUT)).unwrap();
-        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    fn a_migrated_intermediate_output_on_an_edge_is_refused() {
+        let yaml = with_start_end(INTERMEDIATE_OUTPUT).replace(
+            "source: { node: ab000001, port: spec }",
+            "source: { node: ab000001, port: preview }",
+        );
+        let err = parse_pipeline(&yaml).unwrap_err().to_string();
+        assert!(err.contains("live artifact 'preview'"), "{err}");
     }
 
     #[test]
-    fn intermediate_outside_an_agent_or_script_output_is_warned() {
+    fn a_live_artifact_name_must_be_a_plain_unique_file_name() {
+        for bad in ["../escape", "a/b", ".."] {
+            let yaml = with_start_end(LIVE_ARTIFACTS).replace(
+                "      - name: progress\n",
+                &format!("      - name: '{bad}'\n"),
+            );
+            let err = parse_pipeline(&yaml).unwrap_err().to_string();
+            assert!(err.contains("plain file name"), "{bad}: {err}");
+        }
+        let twice = with_start_end(LIVE_ARTIFACTS).replace("name: screens", "name: progress");
+        let err = parse_pipeline(&twice).unwrap_err().to_string();
+        assert!(err.contains("declared twice"), "{err}");
+    }
+
+    #[test]
+    fn an_output_named_live_is_refused_beside_live_artifacts() {
+        let yaml =
+            with_start_end(LIVE_ARTIFACTS).replace("      - name: spec\n", "      - name: live\n");
+        let err = parse_pipeline(&yaml).unwrap_err().to_string();
+        assert!(err.contains("output named 'live'"), "{err}");
+        // A node that publishes nothing keeps its `live` output.
+        let plain = with_start_end(INTERMEDIATE_OUTPUT)
+            .replace("        intermediate: true\n", "")
+            .replace("      - name: out\n", "      - name: live\n");
+        parse_pipeline(&plain).unwrap();
+    }
+
+    #[test]
+    fn live_artifacts_are_refused_on_a_structural_node() {
+        let yaml = with_start_end(LIVE_ARTIFACTS).replace(
+            "      - name: user_prompt\n",
+            "      - name: user_prompt\n    free_live_artifacts: true\n",
+        );
+        let err = parse_pipeline(&yaml).unwrap_err().to_string();
+        assert!(err.contains("cannot publish live artifacts"), "{err}");
+    }
+
+    #[test]
+    fn intermediate_outside_an_agent_or_script_output_is_warned_and_dropped() {
         let yaml = with_start_end(INTERMEDIATE_OUTPUT).replace(
             "      - name: user_prompt\n",
             "      - name: user_prompt\n        intermediate: true\n",
@@ -4244,5 +4357,7 @@ edges:
             "{:?}",
             result.diagnostics
         );
+        assert!(result.pipeline.nodes[0].live_artifacts.is_empty());
+        assert_eq!(result.pipeline.nodes[0].outputs[0].name, "user_prompt");
     }
 }

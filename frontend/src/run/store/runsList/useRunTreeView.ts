@@ -23,7 +23,7 @@ export function useRunTreeView(
   selectedRunId: string | null,
   projects: Project[] = [],
 ) {
-  // #336 — client-side run filters (project / pipeline / trigger), AND
+  // #336 — client-side run filters (project / pipeline / trigger / date), AND
   // semantics, session-only state. #783: applied to the TREE (a non-matching
   // parent is kept as a path to a matching descendant) and BEFORE the
   // active/archived split, so grouping, the Archived section and its count all
@@ -61,8 +61,11 @@ export function useRunTreeView(
   // filter's Project axis read it alike.
   const projectOfRun = useMemo(() => recordedProject(projects), [projects]);
   const { activeTree, archivedTree } = useMemo(() => {
+    // The Date axis places its presets from now: re-read at each change of
+    // the Runs, which a live list sees often.
+    const now = new Date();
     const match = (r: RunListEntry) =>
-      runMatchesFilter(r, runFilter, projectOfRun) &&
+      runMatchesFilter(r, runFilter, projectOfRun, now) &&
       matchesAttributes(r.attributes, attributeFilter);
     return {
       activeTree: filterRunTree(tree.filter((n) => !isInArchivedSection(n.run)), match),

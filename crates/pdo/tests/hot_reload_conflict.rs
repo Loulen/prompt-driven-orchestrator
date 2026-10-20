@@ -120,6 +120,10 @@ async fn external_edit_emits_pipeline_changed_for_conflict_detection() {
 
     assert_eq!(evt["type"], "pipeline_changed");
     assert_eq!(evt["pipeline_id"], PIPELINE_NAME);
+    assert_eq!(
+        evt["outside"], true,
+        "an edit outside PDO says so (ADR-0088)"
+    );
     assert!(
         evt["path"].as_str().unwrap().contains(PIPELINE_NAME),
         "path should reference the pipeline file"

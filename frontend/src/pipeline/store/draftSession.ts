@@ -12,6 +12,7 @@
  */
 
 import * as Y from "yjs";
+import type { DraftNotice } from "../../shared/generated/DraftNotice";
 import type { DraftServerMessage } from "../../shared/generated/DraftServerMessage";
 import type { PresenceState } from "../../shared/generated/PresenceState";
 import { openDraftSocket, SYNC_REPLY, SYNC_REQUEST, UPDATE, type DraftSocket } from "../api/draftSocket";
@@ -33,6 +34,8 @@ export interface DraftHost {
   moved: (tabId: string, to: string) => void;
   /** The draft cannot open: the tab edits without it. */
   detach: (tabId: string) => void;
+  /** Someone outside the canvas changed the draft. */
+  notify: (tabId: string, notice: DraftNotice) => void;
 }
 
 /** The origin of my own changes: the only ones Undo replays. */
@@ -58,6 +61,7 @@ export const INITIAL_DRAFT_STATE: DraftTabState = {
   canUndo: false,
   canRedo: false,
   undoLabel: null,
+  notices: [],
 };
 
 export class DraftSession {
@@ -167,6 +171,9 @@ export class DraftSession {
       case "unavailable":
         this.stop();
         this.host.detach(this.tabId);
+        return;
+      case "notice":
+        this.host.notify(this.tabId, message.notice);
         return;
       default:
         return;

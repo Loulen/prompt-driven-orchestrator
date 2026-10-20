@@ -6,7 +6,7 @@ import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
 import { applyObject, applyPrompts, type Json } from "../model/draftDelta";
 import { toDraftPipeline } from "../model/draftForm";
 import type { EditorPipelineDef } from "../model/pipeline";
-import { draftSessionOf, startDraftSessions } from "./draftSessions";
+import { dismissDraftNotice, draftSessionOf, startDraftSessions } from "./draftSessions";
 import { useEditStore } from "./editStore";
 import { savePipeline } from "../api/pipelines";
 import type { OpenPipeline } from "./editState";
@@ -66,6 +66,7 @@ function participant(connection: string, color: number): DraftParticipant {
     display: null,
     color,
     can_write: true,
+    assistant: false,
     selection: null,
     typing: null,
   };
@@ -241,5 +242,23 @@ describe("a pipeline tab's shared draft", () => {
     socket.handlers.onMessage({ type: "moved", to: "shipping" });
     expect(current().id).toBe("shipping");
     expect(sockets.has("shipping")).toBe(true);
+  });
+});
+
+describe("the notices of a shared draft", () => {
+  it("are kept on the tab until dismissed, the newest three", () => {
+    const socket = join(serverDoc());
+    const notice = (n: number) => ({
+      kind: "external_edit" as const,
+      file: "flow.yaml",
+      version: { number: n, title: "external edit" },
+      fields: ["name of a"],
+    });
+    for (const n of [2, 3, 4, 5]) socket.handlers.onMessage({ type: "notice", notice: notice(n) });
+    const kept = current().draft!.notices;
+    expect(kept.map((entry) => (entry.notice.kind === "external_edit" ? entry.notice.version.number : 0))).toEqual([3, 4, 5]);
+
+    dismissDraftNotice("flow", kept[0].id);
+    expect(current().draft!.notices).toHaveLength(2);
   });
 });

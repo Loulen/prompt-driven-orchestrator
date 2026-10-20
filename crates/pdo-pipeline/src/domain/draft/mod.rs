@@ -9,6 +9,7 @@
 
 pub mod changes;
 pub mod delta;
+pub mod notice;
 pub mod presence;
 
 use std::collections::BTreeMap;

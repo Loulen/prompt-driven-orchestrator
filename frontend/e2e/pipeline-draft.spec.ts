@@ -6,8 +6,10 @@ import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 // Layer 3b — ADR-0088: a pipeline of the registry is edited in a shared draft.
 // Two browsers on the same pipeline see each other's changes, selection and
 // typing without reloading; Undo takes back my own change only; a file written
-// outside PDO lands in the draft beside the unsaved changes, with no conflict
-// window; the draft survives a reload.
+// outside PDO is kept as a version « external edit » and lands in the draft
+// beside the unsaved changes, with a notice and no conflict window; the library
+// assistant saves into the draft, live in both browsers, as a participant; the
+// draft survives a reload.
 
 const PIPELINE_NAME = `e2e-draft-${process.pid}-${Date.now()}`;
 // The instance registry the daemon reads, wherever its home is: created
@@ -207,4 +209,54 @@ test("a file written outside PDO lands in the draft beside its changes, with no 
   await expect(page.getByText("External edit conflict")).toHaveCount(0);
   await expect(prompt).toHaveValue("MY_LOCAL_EDIT");
   await expect(title).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+
+  // The notice says it was kept as a version and what merged; « See vN »
+  // opens that version, the file as written.
+  const notice = page.getByTestId("draft-notice").last();
+  await expect(notice).toContainText(`${PIPELINE_NAME}.yaml was changed outside PDO. Kept as v`);
+  await expect(notice).toContainText("external edit and merged into the draft: new node beta");
+  await notice.getByTestId("draft-notice-see-version").click();
+  await expect(page.getByTestId("version-banner")).toContainText("external edit");
+  await expect(node(page, "beta")).toBeVisible();
+});
+
+test("the library assistant saves into the draft, live in two browsers, signed", async ({ page, browser }) => {
+  test.setTimeout(60_000);
+  await open(page);
+  const other = await second(browser);
+  await open(other);
+  await expect(page.getByTestId("draft-presence").getByTestId("draft-participant")).toHaveCount(1);
+
+  const focus = await page.request.put("/sessions/libassist/focus", { data: { pipeline_id: PIPELINE_NAME } });
+  expect(focus.ok()).toBe(true);
+  const saved = await page.request.post("/sessions/libassist/save", {
+    data: {
+      yaml: yaml(PIPELINE_NAME).replace("name: gamma", "name: reviewer"),
+      prompts: { gamma: "Review the code." },
+    },
+  });
+  expect(saved.ok()).toBe(true);
+
+  for (const browserPage of [page, other]) {
+    await expect(node(browserPage, "reviewer")).toBeVisible();
+    await expect(
+      browserPage.getByTestId("draft-presence").locator('[data-testid="draft-participant"][data-assistant="true"]'),
+    ).toHaveCount(1);
+    await expect(node(browserPage, "reviewer").getByTestId("selected-by")).toHaveText("Library");
+    await expect(browserPage.getByTestId("draft-notice").last()).toContainText(
+      "library assistant changed the draft: name of gamma and prompt of gamma.",
+    );
+    await expect(browserPage.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  }
+  expect(await promptOf(other, "reviewer")).toBeTruthy();
+  await expect(await promptOf(other, "reviewer")).toHaveValue("Review the code.");
+  // No file is written: the file is still the last version.
+  expect(await fs.readFile(PIPELINE_PATH, "utf8")).toBe(yaml(PIPELINE_NAME));
+
+  // The assistant leaves with the focus.
+  await page.request.put("/sessions/libassist/focus", { data: { pipeline_id: null } });
+  await expect(
+    page.getByTestId("draft-presence").locator('[data-testid="draft-participant"][data-assistant="true"]'),
+  ).toHaveCount(0);
+  await other.context().close();
 });

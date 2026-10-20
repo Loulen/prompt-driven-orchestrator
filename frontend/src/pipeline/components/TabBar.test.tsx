@@ -211,6 +211,7 @@ describe("TabBar Save on a run tab (ADR-0085)", () => {
       canUndo: false,
       canRedo: false,
       undoLabel: null,
+      notices: [],
     };
     seed([tab("tpl", { dirty: true, draft })], "tpl");
     useEditStore.setState({ save, saveVersionFor: null });

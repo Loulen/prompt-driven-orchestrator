@@ -6,8 +6,11 @@
 //! pipeline, as a question (nothing recorded): refused, it joins to
 //! read, and its updates are refused. A file written (a save from elsewhere,
 //! an overwrite, a rename, an edit outside PDO) lands in the draft field by
-//! field.
+//! field; one written outside PDO is kept as a version first, and the
+//! participants are told. The library assistant saves into the draft as a
+//! participant of its Actor.
 
+mod assistant;
 mod room;
 
 use std::collections::HashMap;
@@ -15,9 +18,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
+
+use crate::domain::draft::notice::DraftNotice;
 use tokio::sync::broadcast;
 use tracing::warn;
 
+pub use assistant::{AssistantDraft, AssistantSaved};
 use room::RoomState;
 pub use room::{DraftMessage, Room};
 
@@ -38,6 +44,12 @@ pub struct Drafts {
     /// newcomer never sits in a draft that is closing.
     seating: tokio::sync::Mutex<()>,
     next_connection: AtomicU64,
+    /// Per Actor and pipeline, what the draft held when its library
+    /// assistant last read it (or saved into it): what its next save there
+    /// changes from.
+    assistant_bases: Mutex<HashMap<(Actor, String), DraftContent>>,
+    /// Per Actor, the draft its library assistant sits in, and its connection.
+    assistant_seats: Mutex<HashMap<Actor, assistant::AssistantSeat>>,
 }
 
 impl Drafts {
@@ -48,6 +60,8 @@ impl Drafts {
             rooms: Mutex::new(HashMap::new()),
             seating: tokio::sync::Mutex::new(()),
             next_connection: AtomicU64::new(room::DAEMON + 1),
+            assistant_bases: Mutex::new(HashMap::new()),
+            assistant_seats: Mutex::new(HashMap::new()),
         }
     }
 
@@ -100,6 +114,7 @@ impl Pipelines {
             display: self.host().display_name(actor),
             color: 0,
             can_write,
+            assistant: false,
             presence: PresenceState::default(),
         };
         let color = room.seat(connection, participant);
@@ -146,32 +161,49 @@ impl Pipelines {
     }
 
     /// The file of `id` was written: a draft of it follows. Nothing for a
-    /// pipeline nobody ever opened.
-    pub async fn draft_file_changed(&self, id: &str) {
+    /// pipeline nobody ever opened. The open draft that followed, with the
+    /// fields that changed in the file.
+    pub async fn draft_file_changed(&self, id: &str) -> Option<(Arc<Room>, Vec<String>)> {
         let room = match self.drafts.loaded(id) {
             Some(room) => room,
             None => match self.drafts.store.load(id).await {
                 Ok(Some(_)) => {
                     let _seating = self.drafts.seating.lock().await;
-                    match self.open_draft(id).await {
+                    if let Ok(room) = self.open_draft(id).await {
                         // Opening followed the file already.
-                        Ok(room) => {
-                            self.announce(&room);
-                            return self.close_if_empty(&room);
-                        }
-                        Err(_) => return,
+                        self.announce(&room);
+                        self.close_if_empty(&room);
                     }
+                    return None;
                 }
-                _ => return,
+                _ => return None,
             },
         };
-        let Ok(file) = self.draft_file(id) else {
+        let file = self.draft_file(id).ok()?;
+        let fields = room.follow(&file)?;
+        self.drafts.persist(&room).await;
+        self.announce(&room);
+        Some((room, fields))
+    }
+
+    /// The file of `id` was written outside PDO (`path`, the file or one of
+    /// its prompts): it is kept as a version « external edit », then lands in
+    /// the draft field by field, and the participants are told what changed.
+    pub async fn file_written_outside(&self, id: &str, path: &str) {
+        let version = self.record_external_version(id).await;
+        let (Some(version), Some((room, fields))) = (version, self.draft_file_changed(id).await)
+        else {
             return;
         };
-        if room.follow(&file) {
-            self.drafts.persist(&room).await;
-            self.announce(&room);
-        }
+        let file = std::path::Path::new(path).file_name().map_or_else(
+            || path.to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        room.notify(DraftNotice::ExternalEdit {
+            file,
+            version,
+            fields,
+        });
     }
 
     /// The draft of `id` was saved as the pipeline `saved_as`, holding
@@ -296,9 +328,22 @@ impl Pipelines {
     }
 
     fn close_if_empty(&self, room: &Arc<Room>) {
-        let mut rooms = self.drafts.rooms();
-        if !room.has_participants() && rooms.get(&room.id()).is_some_and(|r| Arc::ptr_eq(r, room)) {
-            rooms.remove(&room.id());
+        let closed = {
+            let mut rooms = self.drafts.rooms();
+            let closing = !room.has_participants()
+                && rooms.get(&room.id()).is_some_and(|r| Arc::ptr_eq(r, room));
+            if closing {
+                rooms.remove(&room.id());
+            }
+            closing
+        };
+        if closed {
+            // Nobody has it open any more, an assistant seated there included.
+            let summary = DraftSummary {
+                participants: Vec::new(),
+                ..room.summary()
+            };
+            self.events.draft_changed(&room.id(), &summary);
         }
     }
 

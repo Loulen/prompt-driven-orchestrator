@@ -9,6 +9,7 @@ mod documents;
 mod drafts;
 mod fakes;
 mod library;
+mod outside_writes;
 mod overwrite;
 mod queries;
 mod rename;

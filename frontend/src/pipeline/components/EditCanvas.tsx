@@ -24,6 +24,7 @@ import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
 import LintBanner from "./LintBanner";
+import { DraftNotices } from "./DraftNoticeBanner";
 import VersionBanner from "./VersionBanner";
 import RunSearchHost from "../../run/components/runSearch/RunSearchHost";
 import WaitingForStartedNodesBanner, { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
@@ -262,9 +263,12 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
       <WaitingForStartedNodesBanner run={activeRunState} />
       <RunSearchHost run={activeRunState} onCloseInfo={onCloseInfo} />
-      {visibleItems.length > 0 && tab.runId == null && tab.version == null && (
+      {/* ADR-0088: what changed the shared draft from outside the canvas (a
+          file written outside PDO, the library assistant), above the lint. */}
+      {tab.runId == null && tab.version == null && (visibleItems.length > 0 || (tab.draft?.notices.length ?? 0) > 0) && (
         <div className="absolute left-0 right-0 top-10 z-10">
-          <LintBanner items={visibleItems} onDismiss={dismiss} />
+          <DraftNotices tab={tab} />
+          {visibleItems.length > 0 && <LintBanner items={visibleItems} onDismiss={dismiss} />}
         </div>
       )}
 

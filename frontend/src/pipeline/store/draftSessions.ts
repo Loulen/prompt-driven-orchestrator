@@ -13,6 +13,11 @@ import type { DraftTabState, EditState, OpenPipeline, Selection } from "./editSt
 import { rekeyTab } from "./tabHistory";
 
 const sessions = new Map<string, DraftSession>();
+/** The notices a tab shows at once: an older one gives way. */
+const NOTICES_SHOWN = 3;
+let nextNotice = 1;
+/** The store the drafts are started on, for {@link dismissDraftNotice}. */
+let started: StoreApi<EditState> | null = null;
 /** The tabs whose draft could not open: they edit without one. */
 const detached = new Set<string>();
 /** The store is being written from a draft: not a local edit to send. */
@@ -71,6 +76,12 @@ function hostOf(store: StoreApi<EditState>): DraftHost {
       sessions.delete(tabId);
       patchTab(store, tabId, () => ({ draft: undefined }));
     },
+    notify: (tabId, notice) =>
+      patchTab(store, tabId, (t) => {
+        if (!t.draft) return {};
+        const notices = [...t.draft.notices, { id: nextNotice++, notice }].slice(-NOTICES_SHOWN);
+        return { draft: { ...t.draft, notices } };
+      }),
     moved: (tabId, to) => {
       // The draft opens again under the new id.
       store.setState((s) => rekeyTab(s, tabId, to, { draft: INITIAL_DRAFT_STATE }));
@@ -99,8 +110,17 @@ function presenceSelection(selection: Selection): PresenceState["selection"] {
   return id != null ? { kind, id } : null;
 }
 
+/** The tab `tabId` no longer shows the notice `id` (its ×). */
+export function dismissDraftNotice(tabId: string, id: number): void {
+  if (!started) return;
+  patchTab(started, tabId, (t) =>
+    t.draft ? { draft: { ...t.draft, notices: t.draft.notices.filter((n) => n.id !== id) } } : {},
+  );
+}
+
 /** Open, feed and close the drafts of `store`'s pipeline tabs from now on. */
 export function startDraftSessions(store: StoreApi<EditState>): () => void {
+  started = store;
   const host = hostOf(store);
   const sync = (state: EditState, previous: EditState | null) => {
     // A version shown read only has no draft (ADR-0088).
@@ -139,5 +159,6 @@ export function startDraftSessions(store: StoreApi<EditState>): () => void {
     for (const session of sessions.values()) session.close();
     sessions.clear();
     detached.clear();
+    if (started === store) started = null;
   };
 }

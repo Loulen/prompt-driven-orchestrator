@@ -11,7 +11,7 @@ use tracing::{info, warn};
 
 use super::FocusCell;
 use crate::application::launch::spawn_libassist;
-use crate::application::ports::{AssistantHarness, Tmux};
+use crate::application::ports::{AssistantHarness, Templates, Tmux};
 use crate::application::session_ledger::SessionLedger;
 use crate::domain::launch::host_daemon_url;
 use crate::domain::libassist::{
@@ -197,12 +197,23 @@ impl OpenAssistant {
 pub struct CloseAssistant {
     tmux: Arc<dyn Tmux>,
     focus: Arc<FocusCell>,
+    templates: Arc<dyn Templates>,
     host: Arc<dyn ExtensionHost>,
 }
 
 impl CloseAssistant {
-    pub fn new(tmux: Arc<dyn Tmux>, focus: Arc<FocusCell>, host: Arc<dyn ExtensionHost>) -> Self {
-        Self { tmux, focus, host }
+    pub fn new(
+        tmux: Arc<dyn Tmux>,
+        focus: Arc<FocusCell>,
+        templates: Arc<dyn Templates>,
+        host: Arc<dyn ExtensionHost>,
+    ) -> Self {
+        Self {
+            tmux,
+            focus,
+            templates,
+            host,
+        }
     }
 
     /// Whether a session existed to reap.
@@ -211,6 +222,9 @@ impl CloseAssistant {
         let operation = Operation::new(ResourceKind::Session, Verb::Delete).on(session.clone());
         authorize(self.host.as_ref(), actor, &operation)?;
         let session = session.as_str();
+        if let Some(focus) = self.focus.get(session) {
+            self.templates.left(actor, &focus.pipeline_id);
+        }
         self.focus.set(session, None);
         let existed = self.tmux.session_exists(session);
         self.tmux.kill(session);

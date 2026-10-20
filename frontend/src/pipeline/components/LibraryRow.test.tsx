@@ -287,6 +287,7 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
               display: null,
               color: 1,
               can_write: true,
+              assistant: false,
               selection: null,
               typing: null,
             },

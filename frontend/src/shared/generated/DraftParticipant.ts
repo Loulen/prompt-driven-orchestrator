@@ -25,6 +25,10 @@ color: number,
  */
 can_write: boolean, 
 /**
+ * The library assistant of `actor`, seated by its saves.
+ */
+assistant: boolean, 
+/**
  * What it selected on the canvas.
  */
 selection: PresenceSelection | null, 

@@ -92,13 +92,20 @@ pub fn focus_text(focus: Option<&LibassistFocus>) -> String {
         Some(f) => {
             let path = match &f.path {
                 Some(p) => p.to_string_lossy().to_string(),
-                None => "(pas encore de fichier sur le disque — template non sauvée)".to_string(),
+                None => {
+                    "(pas encore de fichier sur le disque — template non sauvée : ni brouillon à \
+                         lire ni save possible avant un premier Save de l'utilisateur)"
+                        .to_string()
+                }
             };
             format!(
                 "PDO — pipeline actuellement ouverte dans l'UI : `{}`, fichier : {}\n\
-                 Travaille sur celle-là, sans la deviner ni la redemander. Pour écrire, un seul \
-                 endpoint : POST /sessions/libassist/save avec `{{\"yaml\": …, \"prompts\": …}}` — \
-                 il écrit dans CE fichier, sans id ni scope à fournir.\n",
+                 Travaille sur celle-là, sans la deviner ni la redemander. Lis son brouillon \
+                 partagé par GET /sessions/libassist/draft : le fichier ne porte que la dernière \
+                 version. Pour écrire, un seul endpoint : POST /sessions/libassist/save avec \
+                 `{{\"yaml\": …, \"prompts\": …}}` — il écrit dans le brouillon de CETTE \
+                 pipeline, en direct chez tous, sans id ni scope à fournir ; le fichier ne change \
+                 qu'au Save d'un humain.\n",
                 f.pipeline_id, path
             )
         }
@@ -140,9 +147,19 @@ and your conversation history does not.
 ## Which pipeline is open
 
 A line beginning `PDO — pipeline actuellement ouverte` is injected into your
-context at **every** user message. It names the pipeline id, its scope, and the
-**absolute path** of its YAML file. Work on that file, at that path — never on a
-sibling you guessed from the working directory.
+context at **every** user message. It names the pipeline id and the **absolute
+path** of its YAML file. Work on that pipeline — never on a sibling you guessed
+from the working directory.
+
+## You work in its shared draft
+
+Everyone who has the pipeline open edits one **shared draft**, live; the file
+holds only the last version a person saved. **Read the draft**, not the file:
+`curl -s {auth} {daemon_url}/sessions/libassist/draft` answers
+`{{"pipeline_id", "yaml", "prompts": {{"<node-id>": "<prompt markdown>"}}}}`. Your
+save lands in that draft as you, live for everyone; only a person turns the
+draft into a version. Read it again before each change: someone may have
+changed it since.
 
 If that line is missing (some harnesses cannot inject it), fetch the same fact
 yourself **before acting**: `curl -s {auth} {daemon_url}/sessions/libassist/focus`. If it
@@ -160,12 +177,13 @@ gives you, and it may live in another folder entirely.
 
 - Daemon base URL: `{daemon_url}`
 - Which pipeline is open: `curl -s {auth} {daemon_url}/sessions/libassist/focus`
+- Read its draft: `curl -s {auth} {daemon_url}/sessions/libassist/draft`
 - List every template: `curl {auth} {daemon_url}/library/pipelines`
 - Validate a single node's YAML before you save: `curl {auth} -X POST {daemon_url}/nodes/parse -H 'Content-Type: application/json' -d '{{"yaml":"<node yaml>"}}'`
 - Persist the open template: `curl {auth} -X POST {daemon_url}/sessions/libassist/save -H 'Content-Type: application/json' -d '{{"yaml":"<full pipeline yaml>","prompts":{{"<node-id>":"<prompt markdown>"}}}}'`
 
-**Saving takes no id and no scope.** The daemon writes into the file the focus
-names, because it is the only party that knows where that is. Do **not** save
+**Saving takes no id and no scope.** The daemon writes into the draft of the
+pipeline the focus names, because it is the only party that knows which one. Do **not** save
 through `POST /library/pipelines`: it writes into the *library store*, a different
 tree from the `.pdo/pipelines/` an edit tab opens — you would leave a duplicate
 there, leave the edited file untouched, and report a save that did not happen.
@@ -175,9 +193,10 @@ there, leave the edited file untouched, and report a save that did not happen.
 Do **not** touch files as you reason. When the user asks for a change: describe
 what you will change, **show a diff**, and write **only after the user says OK**.
 Validate node YAML via `POST /nodes/parse` first; then persist the full template
-via `POST /sessions/libassist/save`. The canvas re-reads the template the moment
-you save — so send the whole file at once, never a half-edited one, and never
-write it with `Write`/`Edit`/`sed` (the canvas would not hear about it).
+via `POST /sessions/libassist/save`. Everyone's canvas shows your change the
+moment you save — so send the whole template at once, never a half-edited one,
+and never write the file with `Write`/`Edit`/`sed` (that is an edit outside PDO,
+kept as a version of its own instead of landing in the draft).
 
 You drive no Run and issue no run commands: your only durable effect is the YAML
 the user reviews. Read first, propose second, write last.
@@ -227,6 +246,12 @@ mod tests {
             "the trap is named outright, so a model that knows the old endpoint is \
              warned off it:\n{p}"
         );
+        assert!(
+            p.contains(&format!(
+                "curl -s {AUTH_HEADER} http://localhost:1234/sessions/libassist/draft"
+            )),
+            "it reads the shared draft, with its token (ADR-0088):\n{p}"
+        );
     }
     #[test]
     fn an_absent_focus_names_nothing_and_says_so() {
@@ -253,6 +278,10 @@ mod tests {
         let text = focus_text(Some(&focus));
         assert!(text.contains("`review`") && text.contains("/repo/.pdo/pipelines/review.yaml"));
         assert!(text.contains("POST /sessions/libassist/save"));
+        assert!(
+            text.contains("GET /sessions/libassist/draft"),
+            "it reads the shared draft, not the file (ADR-0088): {text}"
+        );
         let unsaved = LibassistFocus {
             path: None,
             ..focus

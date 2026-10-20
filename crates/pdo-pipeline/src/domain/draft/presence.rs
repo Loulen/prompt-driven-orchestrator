@@ -26,6 +26,8 @@ pub struct DraftParticipant {
     pub color: u8,
     /// Whether it may change the draft; otherwise it only reads.
     pub can_write: bool,
+    /// The library assistant of `actor`, seated by its saves.
+    pub assistant: bool,
     #[serde(flatten)]
     pub presence: PresenceState,
 }

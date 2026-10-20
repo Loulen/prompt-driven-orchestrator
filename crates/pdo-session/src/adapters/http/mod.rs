@@ -64,11 +64,13 @@ pub fn router(session: Arc<Session>) -> Router {
             "/sessions/libassist/focus",
             put(assistant::put_focus).get(assistant::get_focus),
         )
-        // The assistant's one write path. Deliberately takes no id and no scope:
-        // the focus already names the file, and "scope" means `.pdo/pipelines/` on
-        // an edit tab but `.pdo/library/pipelines/` in the library store, so any
-        // second naming is a way of naming the wrong file.
+        // The assistant's one write path, and what it reads before (ADR-0088:
+        // the template's shared draft, never the file). Deliberately takes no id
+        // and no scope: the focus already names the template, and "scope" means
+        // `.pdo/pipelines/` on an edit tab but `.pdo/library/pipelines/` in the
+        // library store, so any second naming is a way of naming the wrong file.
         .route("/sessions/libassist/save", post(assistant::save))
+        .route("/sessions/libassist/draft", get(assistant::draft))
         .with_state(session)
 }
 

@@ -38,6 +38,7 @@ pub mod recovery;
 pub mod restart_verdict;
 pub mod retry_verdict;
 pub mod review_comment;
+pub mod run_activity;
 pub mod run_cost;
 pub mod run_refs;
 pub mod run_stall;

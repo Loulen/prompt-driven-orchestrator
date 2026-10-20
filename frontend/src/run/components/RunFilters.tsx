@@ -18,6 +18,7 @@ import {
   type ProjectOfRun,
   type RunFilterValue,
 } from "../model/runFilter";
+import RunDateFilterMenu from "./RunDateFilterMenu";
 
 /* #336 — client-side filters for the Runs list. The filter model
    (`RunFilterValue`, `runMatchesFilter`, sentinels, per-axis keys) lives in
@@ -188,6 +189,7 @@ export default function RunFilters({
         selected={value.trigger}
         onSelect={(trigger) => onChange({ ...value, trigger })}
       />
+      <RunDateFilterMenu value={value.date} onChange={(date) => onChange({ ...value, date })} />
       {/* #783 — expand / collapse all, in the slot the #725 GitFork chip held.
           NOT a filter: neutral colours (never accent), never part of
           `isFilterActive`, so it never summons the clear ✕. `ChevronsDownUp`

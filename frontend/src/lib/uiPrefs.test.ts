@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   loadChildRunsExpanded,
+  loadCollapsedRunGroups,
   loadNodeDurationMode,
   loadTabsDisabled,
   saveChildRunsExpanded,
+  saveCollapsedRunGroups,
   saveNodeDurationMode,
   saveTabsDisabled,
 } from "./uiPrefs";
@@ -78,6 +80,25 @@ describe("uiPrefs — childRunsExpanded (#783)", () => {
     expect(loadChildRunsExpanded()).toBe(true);
     localStorage.setItem("pdo.ui.childRunsExpanded", JSON.stringify("false"));
     expect(loadChildRunsExpanded()).toBe(true);
+  });
+});
+
+describe("uiPrefs — collapsedRunGroups", () => {
+  it("defaults to no folded group", () => {
+    expect(loadCollapsedRunGroups()).toEqual([]);
+  });
+
+  it("round-trips under the pdo.ui.collapsedRunGroups key", () => {
+    saveCollapsedRunGroups(["project:p1", "/code/api"]);
+    expect(localStorage.getItem("pdo.ui.collapsedRunGroups")).toBe('["project:p1","/code/api"]');
+    expect(loadCollapsedRunGroups()).toEqual(["project:p1", "/code/api"]);
+  });
+
+  it("drops garbage and what is not a key", () => {
+    localStorage.setItem("pdo.ui.collapsedRunGroups", "nope{");
+    expect(loadCollapsedRunGroups()).toEqual([]);
+    localStorage.setItem("pdo.ui.collapsedRunGroups", JSON.stringify(["project:p1", 3]));
+    expect(loadCollapsedRunGroups()).toEqual(["project:p1"]);
   });
 });
 

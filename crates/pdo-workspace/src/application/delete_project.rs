@@ -29,6 +29,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
+    use crate::application::ports::ProjectRepository;
     use crate::application::testing::{denying, fixture};
     use crate::application::WorkspaceError;
     use crate::domain::project::Project;
@@ -43,6 +44,8 @@ mod tests {
             .await
             .unwrap();
         assert!(f.projects.all().is_empty());
+        // CORE-96: its Runs keep it, so its name stays.
+        assert_eq!(f.projects.deleted().await.unwrap()[0].name, "Front");
         assert_eq!(f.deletions.deleted(), vec!["p1".to_string()]);
         assert_eq!(f.events.changed(), vec!["p1".to_string()]);
     }

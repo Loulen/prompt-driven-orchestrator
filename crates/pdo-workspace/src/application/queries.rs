@@ -14,6 +14,7 @@ use crate::domain::project::Project;
 use crate::domain::provisioning::{
     preview_levels, ProvisioningPlan, ProvisioningRules, ProvisioningScope, ScopedRules,
 };
+use crate::domain::remote::shown_remote;
 
 use super::error::{WorkspaceError, WorkspaceResult};
 use super::ports::{Listing, StorageError, StoreResult};
@@ -166,6 +167,16 @@ impl Workspace {
         self.git.branches(&repo).map_err(WorkspaceError::Git)
     }
 
+    /// The remote of the repository at `path`, credentials dropped; `None`
+    /// for a repository without a remote.
+    pub fn repository_remote(&self, path: &str) -> WorkspaceResult<Option<String>> {
+        let repo = self
+            .git
+            .validate_repository(path)
+            .map_err(WorkspaceError::Invalid)?;
+        Ok(self.git.remote_url(&repo).as_deref().map(shown_remote))
+    }
+
     /// The branches of an already validated repository.
     pub fn branches_of(&self, repo: &Path) -> Result<BranchList, String> {
         self.git.branches(repo)
@@ -285,5 +296,19 @@ mod tests {
             err,
             WorkspaceError::Invalid("repository must be an absolute path".into())
         );
+    }
+
+    #[test]
+    fn the_remote_of_a_repository_is_shown_without_its_credentials() {
+        let f = fixture();
+        assert_eq!(
+            f.workspace.repository_remote("/repo").unwrap().as_deref(),
+            Some("https://example.com/acme/repo.git")
+        );
+        assert_eq!(f.workspace.repository_remote("/elsewhere").unwrap(), None);
+        assert!(matches!(
+            f.workspace.repository_remote("relative"),
+            Err(WorkspaceError::Invalid(_))
+        ));
     }
 }

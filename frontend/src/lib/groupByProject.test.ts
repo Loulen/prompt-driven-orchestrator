@@ -84,6 +84,18 @@ describe("groupByProject", () => {
     expect(groups![0].title).toBe([back, front].sort().join(", "));
   });
 
+  it("marks the group of a Projet deleted since (CORE-96)", () => {
+    const projectOf = projectOfFrom({ "/repos/a": { id: "gone", name: "Deleted project", deleted: true } });
+    const groups = groupByProject([{ id: "a", repo: "/repos/a" }], repoOf, projectOf);
+    expect(groups![0]).toMatchObject({ kind: "project", label: "Deleted project", deleted: true });
+    const live = groupByProject(
+      [{ id: "a", repo: "/repos/a" }],
+      repoOf,
+      projectOfFrom({ "/repos/a": { id: "p1", name: "Checkout" } }),
+    );
+    expect(live![0].deleted).toBeUndefined();
+  });
+
   it("counts a Projet as one unit — the threshold moved onto projects, not paths", () => {
     // A Projet grouping two repos + one loose repo = 2 groups → grouped, with the
     // Projet collapsing its two member paths into a single header.

@@ -64,7 +64,7 @@ export default function App() {
   // #697: the daemon's cached version-check state, for the status-bar badge.
   const { status: updateStatus, refresh: refreshUpdateStatus } = useUpdateStatus();
   const { triggers, refresh: refreshTriggers } = useTriggers();
-  const { projects, refresh: refreshProjects } = useProjects();
+  const { projects, deleted: deletedProjects, refresh: refreshProjects } = useProjects();
   // #348: global Trigger pause, held here so the WS dispatcher can flip it live.
   const {
     paused: triggersPaused,
@@ -267,7 +267,10 @@ export default function App() {
               triggersPaused={triggersPaused}
               onTogglePause={handleTogglePause}
               projects={projects}
-              onProjectsChanged={refreshProjects}
+              deletedProjects={deletedProjects}
+              onOpenProjectSettings={(project) =>
+                openSettings({ category: "projects", section: "projects", project })
+              }
             />
           </ResizablePanel>
 
@@ -372,6 +375,7 @@ export default function App() {
         onRequestUpdate={() => setUpdateConfirmOpen(true)}
         onStartTour={startTourById}
         onStartFullTour={startFullTour}
+        projects={{ projects, runs, onChanged: refreshProjects }}
       />
       {/* After the full-window surfaces, which it must paint over. */}
       <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />

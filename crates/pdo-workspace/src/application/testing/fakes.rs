@@ -42,7 +42,7 @@ impl Git for FakeGit {
         if path.starts_with('/') {
             Ok(PathBuf::from(path))
         } else {
-            Err("target_repo must be an absolute path".into())
+            Err(format!("repository must be an absolute path: {path}"))
         }
     }
     fn branches(&self, _repo: &Path) -> Result<BranchList, String> {
@@ -92,6 +92,9 @@ impl Git for FakeGit {
             subject: None,
             moved_checkout: None,
         })
+    }
+    fn remote_url(&self, repo: &Path) -> Option<String> {
+        (repo == Path::new("/repo")).then(|| "https://me:token@example.com/acme/repo.git".into())
     }
     fn create_repository(
         &self,

@@ -1,10 +1,11 @@
 //! Persistence for Projets (ADR-0046): the `projects` and `project_members`
-//! tables. A row exists only once a human names a group.
+//! tables, and `deleted_projects` for what stays of a deleted one (CORE-96).
+//! A row exists only once a human names a group.
 
 use sqlx::{Row, SqlitePool};
 
 use crate::application::ports::{BoxFuture, ProjectRepository, StorageError, StoreResult};
-use crate::domain::project::{project_id, Project, StoredSetting};
+use crate::domain::project::{project_id, DeletedProject, Project, StoredSetting};
 
 /// A new Projet id, stamped with the current UTC time.
 pub fn generate_project_id() -> String {
@@ -152,15 +153,39 @@ async fn add_member(db: &SqlitePool, project_id: &str, path: &str) -> Result<(),
 }
 
 async fn delete(db: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    let mut tx = db.begin().await?;
+    sqlx::query(
+        "INSERT OR REPLACE INTO deleted_projects (id, name, deleted_at)
+         SELECT id, name, ? FROM projects WHERE id = ?",
+    )
+    .bind(pdo_kernel::clock::now_iso())
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("DELETE FROM project_members WHERE project_id = ?")
         .bind(id)
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
     let res = sqlx::query("DELETE FROM projects WHERE id = ?")
         .bind(id)
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(res.rows_affected() > 0)
+}
+
+async fn deleted(db: &SqlitePool) -> Result<Vec<DeletedProject>, sqlx::Error> {
+    let rows =
+        sqlx::query("SELECT id, name FROM deleted_projects ORDER BY deleted_at DESC, rowid DESC")
+            .fetch_all(db)
+            .await?;
+    Ok(rows
+        .iter()
+        .map(|row| DeletedProject {
+            id: row.get("id"),
+            name: row.get("name"),
+        })
+        .collect())
 }
 
 fn store<T>(result: Result<T, sqlx::Error>) -> StoreResult<T> {
@@ -251,5 +276,9 @@ impl ProjectRepository for SqliteProjects {
     }
     fn delete<'a>(&'a self, id: &'a str) -> BoxFuture<'a, StoreResult<bool>> {
         Box::pin(async move { store(delete(&self.db, id).await) })
+    }
+
+    fn deleted(&self) -> BoxFuture<'_, StoreResult<Vec<DeletedProject>>> {
+        Box::pin(async move { store(deleted(&self.db).await) })
     }
 }

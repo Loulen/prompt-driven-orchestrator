@@ -110,6 +110,8 @@ export function groupByRepo<T>(
 export interface ProjectRef {
   id: string;
   name: string;
+  /** The Projet was deleted since (CORE-96): the Run keeps it, under this mark. */
+  deleted?: boolean;
 }
 
 /**
@@ -127,6 +129,8 @@ export interface ProjectGroup<T> {
   label: string;
   /** Hover title: the path (path group) or the joined member paths (Projet). */
   title: string;
+  /** A Projet deleted since its Runs were launched in it (CORE-96). */
+  deleted?: boolean;
   items: T[];
 }
 
@@ -200,6 +204,7 @@ export function groupByProject<T>(
         repoPath: "",
         label: b.ref ? b.ref.name : "",
         title: [...b.paths].sort().join(", "),
+        ...(b.ref?.deleted ? { deleted: true } : {}),
         items: b.items,
       };
     }

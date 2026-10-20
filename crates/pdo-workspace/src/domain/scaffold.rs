@@ -7,14 +7,15 @@
 //!
 //! Three outcomes, and they are the whole contract:
 //!
-//! 1. Nothing at the target path → create it, `git init` on `main`, write the
-//!    files, one commit. [`ScaffoldOutcome::created`] is `true`.
+//! 1. Nothing at the target path, or an empty folder → create it, `git init` on
+//!    `main`, write the files, one commit (even without files).
+//!    [`ScaffoldOutcome::created`] is `true`.
 //! 2. A **git repository** already there → hand back its path, touch nothing, do
 //!    NOT commit again. `created` is `false`. This is what makes a second run of
 //!    the tour free, and what lets the user keep whatever they did in there.
-//! 3. A directory that is **not** a repository → a named refusal. Never "fix" it
-//!    by initialising a repo over someone's folder: the path was not ours, and the
-//!    caller is entitled to say so to the user verbatim.
+//! 3. A non-empty directory that is **not** a repository → a named refusal.
+//!    Never "fix" it by initialising a repo over someone's folder: the path was
+//!    not ours, and the caller is entitled to say so to the user verbatim.
 //!
 //! The commit is made under an identity written into the repository's own config
 //! rather than taken from the machine's. A daemon that borrowed `~/.gitconfig`

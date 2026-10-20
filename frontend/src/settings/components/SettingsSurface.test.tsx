@@ -2235,7 +2235,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     });
   });
 
-  it("is a full-window overlay with exactly four categories, in order, General selected", async () => {
+  it("is a full-window overlay with its categories, in order, General selected", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     const surface = await screen.findByTestId("settings-surface");
     expect(surface).toHaveClass("h-screen", "w-screen");
@@ -2245,6 +2245,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       "General",
       "Agents",
       "Sandbox & worktrees",
+      "Projects",
       "Telemetry",
       "Diagnostics",
     ]);
@@ -3567,6 +3568,7 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
       "General",
       "Agents",
       "Sandbox & worktrees",
+      "Projects",
       "Telemetry",
       "Diagnostics",
     ]);
@@ -3581,6 +3583,7 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
         "General",
         "Agents",
         "Sandbox & worktrees",
+        "Projects",
         "Telemetry",
         "Diagnostics",
         "Extensions",

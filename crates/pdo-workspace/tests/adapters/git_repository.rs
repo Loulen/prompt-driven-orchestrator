@@ -16,16 +16,22 @@ fn validate_target_repo_rejects_relative_path() {
 #[test]
 fn validate_target_repo_rejects_nonexistent_path() {
     let result = validate_target_repo("/nonexistent/path/that/does/not/exist");
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("does not exist"));
+    assert_eq!(
+        result.unwrap_err(),
+        "/nonexistent/path/that/does/not/exist does not exist or is not a directory"
+    );
 }
 
 #[test]
 fn validate_target_repo_rejects_non_git_dir() {
     let tmp = tempfile::tempdir().unwrap();
-    let result = validate_target_repo(tmp.path().to_str().unwrap());
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not a git repository"));
+    let path = tmp.path().to_str().unwrap();
+    let result = validate_target_repo(path);
+    // The phrase reaches the UI as is: it names the folder, not an API field.
+    assert_eq!(
+        result.unwrap_err(),
+        format!("{path} is not a git repository")
+    );
 }
 
 #[test]
@@ -92,4 +98,30 @@ fn validate_source_branch_does_not_glob() {
     // `show-ref --verify` probe must NOT — `mai*` is not a real branch.
     let err = validate_source_branch(tmp.path(), "mai*").unwrap_err();
     assert!(err.contains("does not exist"), "message was: {err}");
+}
+
+#[test]
+fn remote_url_reads_origin_else_the_first_remote() {
+    use pdo_workspace::adapters::git::repository::remote_url;
+    let tmp = tempfile::tempdir().unwrap();
+    init_test_repo(tmp.path());
+    assert_eq!(remote_url(tmp.path()), None);
+
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+    };
+    git(&["remote", "add", "upstream", "https://example.com/up.git"]);
+    assert_eq!(
+        remote_url(tmp.path()).as_deref(),
+        Some("https://example.com/up.git")
+    );
+    git(&["remote", "add", "origin", "git@example.com:acme/app.git"]);
+    assert_eq!(
+        remote_url(tmp.path()).as_deref(),
+        Some("git@example.com:acme/app.git")
+    );
 }

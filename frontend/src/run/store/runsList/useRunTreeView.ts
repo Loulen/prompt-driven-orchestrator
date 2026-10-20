@@ -12,6 +12,7 @@ import {
 } from "../../../shared/extensions/attributes";
 import type { Project } from "../../../workspace/model/project";
 import { recordedProject } from "../../../workspace/model/projectLookup";
+import type { DeletedProject } from "../../../shared/generated/DeletedProject";
 
 /**
  * The Runs list's tree view: the client-side filters, the run tree split into
@@ -22,6 +23,8 @@ export function useRunTreeView(
   runs: RunListEntry[],
   selectedRunId: string | null,
   projects: Project[] = [],
+  /** The deleted Projets the Runs still name (CORE-96). */
+  deletedProjects: DeletedProject[] = [],
 ) {
   // #336 — client-side run filters (project / pipeline / trigger / date), AND
   // semantics, session-only state. #783: applied to the TREE (a non-matching
@@ -59,7 +62,10 @@ export function useRunTreeView(
   }, [fullTree, projects, projectFilter]);
   // ADR-0087 — the Projet recorded on a Run: the list's groups and the
   // filter's Project axis read it alike.
-  const projectOfRun = useMemo(() => recordedProject(projects), [projects]);
+  const projectOfRun = useMemo(
+    () => recordedProject(projects, deletedProjects),
+    [projects, deletedProjects],
+  );
   const { activeTree, archivedTree } = useMemo(() => {
     // The Date axis places its presets from now: re-read at each change of
     // the Runs, which a live list sees often.

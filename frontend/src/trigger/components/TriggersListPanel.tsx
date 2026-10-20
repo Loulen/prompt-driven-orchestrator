@@ -8,7 +8,7 @@ import { groupByProject } from "../../lib/groupByRepo";
 import { recordedProject } from "../../workspace/model/projectLookup";
 import { useSelectionStore } from "../../stores/selectionStore";
 import { handleSelectionKeydown } from "../../lib/selectionKeys";
-import ProjectEditModal from "../../workspace/components/ProjectEditModal";
+import { projectsEntryOf, type ProjectsEntry } from "../../workspace/model/projectsSettings";
 import SelectControl from "../../shared/ui/SelectControl";
 import TriggerRow from "./triggersList/TriggerRow";
 import TriggersBulk, { type TriggerBulkKind } from "./triggersList/TriggersBulk";
@@ -34,10 +34,11 @@ interface Props {
   paused?: boolean;
   /** #348: flip the global pause flag. */
   onTogglePause?: () => void;
-  /** Projets (#552) — the group-by-Projet layer and the pencil. Optional so
-   *  existing callers/tests keep working. */
+  /** Projets (#552) — the group-by-Projet layer. Optional so existing
+   *  callers/tests keep working. */
   projects?: Project[];
-  onProjectsChanged?: () => void;
+  /** CORE-96: the pencil of a group header opens Settings › Projects there. */
+  onOpenProjectSettings?: (entry: ProjectsEntry) => void;
 }
 
 export default function TriggersListPanel({
@@ -51,14 +52,8 @@ export default function TriggersListPanel({
   paused = false,
   onTogglePause,
   projects = [],
-  onProjectsChanged,
+  onOpenProjectSettings,
 }: Props) {
-  // #552 — the group-header pencil editor (see UnifiedLeftPanel for the shape).
-  const [projectEditor, setProjectEditor] = useState<{
-    project: Project | null;
-    name: string;
-    memberPaths: string[];
-  } | null>(null);
 
   // #577 — multi-select state lives in the shared per-tab store; a pending bulk
   // action is local (drives the confirm/progress modal).
@@ -114,14 +109,6 @@ export default function TriggersListPanel({
     .map((t) => t.target_repo)
     .filter((r): r is string => !!r);
 
-  // #552 — the candidate repos the pencil can attach (the distinct effective
-  // repos across the Triggers list).
-  const availableRepos = useMemo(() => {
-    const set = new Set<string>();
-    for (const t of allTriggers) if (t.effective_repo) set.add(t.effective_repo);
-    return [...set];
-  }, [allTriggers]);
-
   // Group the Triggers list by the Projet each launches in (#552, ADR-0087),
   // falling back to the #258 per-path grouping; `null` ⇒ the flat list.
   const projectOfTrigger = useMemo(() => recordedProject(projects), [projects]);
@@ -155,29 +142,6 @@ export default function TriggersListPanel({
       onToggle={() => void handleToggle(t)}
     />
   );
-
-  const openProjectEditor = (group: {
-    kind: "project" | "path";
-    key: string;
-    repoPath: string;
-    label: string;
-  }) => {
-    if (group.kind === "project") {
-      const id = group.key.slice("project:".length);
-      const project = projects.find((p) => p.id === id) ?? null;
-      setProjectEditor({
-        project,
-        name: project?.name ?? group.label,
-        memberPaths: project?.members ?? [],
-      });
-    } else {
-      setProjectEditor({
-        project: null,
-        name: group.label,
-        memberPaths: group.repoPath ? [group.repoPath] : [],
-      });
-    }
-  };
 
   // The group-header "select all in this repo" control (#577).
   function renderGroupSelectAll(group: { items: TriggerListEntry[]; label: string }) {
@@ -279,12 +243,16 @@ export default function TriggersListPanel({
                     title={group.title}
                   >
                     {renderGroupSelectAll(group)}
-                    <span className="truncate" data-testid="trigger-repo-label">
+                    <span
+                      className={`truncate ${group.deleted ? "italic text-fg-4" : ""}`}
+                      data-testid="trigger-repo-label"
+                    >
                       {group.label}
                     </span>
-                    {/* #552 — the pencil that names / renames the Projet. */}
+                    {/* #552 — the pencil: Settings › Projects on this group (CORE-96). */}
+                    {!group.deleted && onOpenProjectSettings && (
                     <button
-                      onClick={() => openProjectEditor(group)}
+                      onClick={() => onOpenProjectSettings(projectsEntryOf(group))}
                       className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/hdr:inline-flex"
                       title={group.kind === "project" ? "Edit project" : "Name project"}
                       aria-label={group.kind === "project" ? "Edit project" : "Name project"}
@@ -292,6 +260,7 @@ export default function TriggersListPanel({
                     >
                       <Pencil size={10} />
                     </button>
+                    )}
                   </div>
                   {group.items.map(renderTriggerRow)}
                 </div>
@@ -307,17 +276,6 @@ export default function TriggersListPanel({
         onTriggersChanged={onTriggersChanged}
       />
 
-      {projectEditor && (
-        <ProjectEditModal
-          initialProject={projectEditor.project}
-          initialName={projectEditor.name}
-          initialMemberPaths={projectEditor.memberPaths}
-          availableRepos={availableRepos}
-          projects={projects}
-          onClose={() => setProjectEditor(null)}
-          onSaved={() => onProjectsChanged?.()}
-        />
-      )}
     </div>
   );
 }

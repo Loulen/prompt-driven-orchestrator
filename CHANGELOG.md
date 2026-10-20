@@ -10,6 +10,20 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.51.0 — Settings › Projects (CORE-96)
+
+- Nouvelle catégorie « Projects » dans Settings : créer, renommer et supprimer un Projet, ajouter
+  un dépôt (récent, dossier local, nouveau dépôt vide), le retirer, choisir le dépôt primaire
+  par défaut que New Run présélectionne. Les changements se voient en direct dans les autres
+  navigateurs.
+- `GET /repos/remote?path=` rend le remote d'un dépôt, sans ses identifiants (`null` sans
+  remote). `GET /projects/deleted` rend les Projets supprimés (id et dernier nom), gardés dans
+  la table `deleted_projects` pour que leurs Runs les nomment encore (« <nom> (deleted) »).
+- `POST /repos/create` accepte un dossier vide et fait le premier commit même sans fichier.
+- Les refus de `/repos/validate` et de la création de Run nomment le dossier plutôt que le champ
+  `target_repo` : `<chemin> is not a git repository`, `<chemin> does not exist or is not a
+  directory`, `repository must be an absolute path: <chemin>`.
+
 ## 2.50.0 — Liste des Runs : filtre de date, repli d'un Projet (CORE-98)
 
 - **Résumé de Run v4** : il gagne l'instant de la dernière activité et les plages d'activité

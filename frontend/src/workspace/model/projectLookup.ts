@@ -1,5 +1,6 @@
 import type { Project } from "./project";
 import type { ProjectRef } from "../../lib/groupByRepo";
+import type { DeletedProject } from "../../shared/generated/DeletedProject";
 
 /**
  * Build a **verbatim** `path → ProjectRef | null` lookup from the Projets list
@@ -22,11 +23,20 @@ export function projectLookup(
 
 /**
  * The Projet recorded on a Run or a Trigger (ADR-0087), by id, as the lists
- * group it; `null` for none, or for a Projet since deleted.
+ * group it; `null` for none, or for a Projet the caller may not read. A Projet
+ * since deleted stays the Run's (CORE-96): it is named after `deleted`, the
+ * deleted Projets the daemon still names, and marked so.
  */
 export function recordedProject(
   projects: Project[],
+  deleted: DeletedProject[] = [],
 ): (projectId: string | null | undefined) => ProjectRef | null {
-  const byId = new Map(projects.map((p) => [p.id, { id: p.id, name: p.name }]));
+  const byId = new Map<string, ProjectRef>(deleted.map((p) => [p.id, deletedRef(p)]));
+  for (const p of projects) byId.set(p.id, { id: p.id, name: p.name });
   return (projectId) => (projectId ? byId.get(projectId) ?? null : null);
+}
+
+/** A deleted Projet as the lists name it. */
+function deletedRef(project: DeletedProject): ProjectRef {
+  return { id: project.id, name: `${project.name} (deleted)`, deleted: true };
 }

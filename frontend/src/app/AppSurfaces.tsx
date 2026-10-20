@@ -1,6 +1,7 @@
 import SettingsSurface from "../settings/components/SettingsSurface";
 import StatsModal from "../stats/components/StatsModal";
 import type { useSurfaces } from "./useSurfaces";
+import type { ProjectsSource } from "../settings/components/settingsSurface/ProjectsSections";
 
 interface Props {
   surfaces: ReturnType<typeof useSurfaces>;
@@ -10,6 +11,8 @@ interface Props {
   onRequestUpdate: () => void;
   onStartTour: (id: string) => void;
   onStartFullTour: () => void;
+  /** CORE-96: Settings › Projects reads the live Projets and counts the Runs. */
+  projects: ProjectsSource;
 }
 
 /** The two full-window surfaces of the shell (#690): Settings and Stats, one open at a time. */
@@ -21,6 +24,7 @@ export default function AppSurfaces({
   onRequestUpdate,
   onStartTour,
   onStartFullTour,
+  projects,
 }: Props) {
   return (
     <>
@@ -48,6 +52,7 @@ export default function AppSurfaces({
         }}
         onStartTour={onStartTour}
         onStartFullTour={onStartFullTour}
+        projects={projects}
       />
       <StatsModal
         // #717: see the SettingsSurface key above — sibling keys must never collide.

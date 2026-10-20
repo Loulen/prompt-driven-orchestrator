@@ -1,10 +1,9 @@
 import { useCallback, useRef, useState } from "react";
-import FullWindowShell, { type RailItem, type ShellDrawer } from "../../shared/ui/FullWindowShell";
+import FullWindowShell, { type RailItem } from "../../shared/ui/FullWindowShell";
 import TutorialsSection from "../../app/tour/TutorialsSection";
 import { harnessCatalog } from "../../harness/model/catalog";
 import VersionUpdateSection from "../../platform/components/VersionUpdateSection";
-import SkillBankPanel from "../../skill/components/SkillBankPanel";
-import { announceSkillsChanged, useSkillBank } from "../../skill/store/useSkillBank";
+import { useSkillBank } from "../../skill/store/useSkillBank";
 import ExtensionSettingsPanels from "../../shared/extensions/ExtensionSettingsPanels";
 import { useSettingsPanels } from "../../shared/extensions/catalogue";
 import { leaveSettingsPage } from "../../shared/extensions/deepLink";
@@ -30,10 +29,15 @@ import SandboxSections from "./settingsSurface/SandboxSections";
 import Section from "./settingsSurface/Section";
 import SettingsFooter from "./settingsSurface/SettingsFooter";
 import TelemetrySections from "./settingsSurface/TelemetrySections";
+import ProjectsSections, { type ProjectsSource } from "./settingsSurface/ProjectsSections";
+import { skillBankDrawer } from "./settingsSurface/skillBankDrawer";
+import type { ProjectsEntry } from "../../workspace/model/projectsSettings";
 
 export interface SettingsPosition {
   category: SettingsCategoryId;
   section?: SettingsSectionId;
+  /** Settings › Projects (CORE-96): the Projet to show, or a new one to name. */
+  project?: ProjectsEntry;
 }
 
 export interface StatsOpenIntent {
@@ -71,6 +75,8 @@ interface Props {
   onStartTour?: (tourId: string) => void;
   /** #823: Tutorials › Full tour. Fired AFTER this surface has closed. */
   onStartFullTour?: () => void;
+  /** CORE-96: the live Projets and the Runs Settings › Projects counts. */
+  projects?: ProjectsSource;
 }
 
 const RAIL_WIDTH = 176;
@@ -110,6 +116,7 @@ export default function SettingsSurface({
   onRequestUpdate,
   onStartTour,
   onStartFullTour,
+  projects,
 }: Props) {
   const { settings, settled, save, refresh } = useSettings(open);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
@@ -210,30 +217,14 @@ export default function SettingsSurface({
       current[cat] === section ? current : { ...current, [cat]: section },
     );
 
-  // The skill bank in the shell's secondary panel (#690 decision 5, framed by the shell
-  // since #944): the rail stays visible, Escape returns to Settings › Skills first, and the
-  // Save footer hides under it so its own writes and Save are never both in view.
-  const shellDrawer: ShellDrawer | null = drawerOpen
-    ? {
-        title: "Skill bank",
-        escHint: "saves as you go · Esc returns to Settings",
-        widthClassName: "w-[min(880px,90vw)]",
-        testId: "settings-drawer",
-        dataAttributes: { "data-drawer": "skills" },
-        onClose: () => setDrawerOpen(false),
-        content: (
-          <SkillBankPanel
-            bank={skillBank}
-            loaded={skillsLoaded}
-            home={settings?.home ?? null}
-            onChanged={async () => {
-              await refreshSkills();
-              announceSkillsChanged();
-            }}
-          />
-        ),
-      }
-    : null;
+  const shellDrawer = skillBankDrawer({
+    open: drawerOpen,
+    onClose: () => setDrawerOpen(false),
+    bank: skillBank,
+    loaded: skillsLoaded,
+    home: settings?.home ?? null,
+    refresh: refreshSkills,
+  });
 
   const loading = (
     <div className="px-1 py-4 text-fg-4" style={{ fontSize: "12px" }} data-testid="settings-loading">
@@ -277,6 +268,7 @@ export default function SettingsSurface({
             highlight={initialPosition?.category === item.id && !!initialPosition.section}
             dirtySections={rollup.sections}
             onSectionChange={(section) => rememberSection(item.id, section)}
+            wide={item.id === "projects"}
           >
             {item.id === "general" && (
               <>
@@ -355,6 +347,11 @@ export default function SettingsSurface({
               ) : (
                 loading
               ))}
+
+            {item.id === "projects" && (
+              <ProjectsSections sections={item.sections} source={projects} home={settings?.home ?? null}
+                position={initialPosition} active={open && shownCategory === item.id} />
+            )}
 
             {item.id === "telemetry" &&
               (formProps ? <TelemetrySections sections={item.sections} active={shownCategory === item.id} {...formProps} /> : loading)}

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import type { Project } from "../../model/project";
 import { useRecentReposStore } from "../../../stores/recentReposStore";
 import ProjectsPanel from "./ProjectsPanel";
+import type { CloneJob } from "../../../shared/generated/CloneJob";
 
 const api = vi.hoisted(() => ({
   createProject: vi.fn(),
@@ -14,6 +15,10 @@ const api = vi.hoisted(() => ({
   validateRepo: vi.fn(),
   fetchRepoRemote: vi.fn(),
   fetchRecentRepos: vi.fn(),
+  fetchCloneTarget: vi.fn(),
+  startClone: vi.fn(),
+  fetchClones: vi.fn(),
+  cancelClone: vi.fn(),
   askAuthorization: vi.fn(),
 }));
 
@@ -29,6 +34,10 @@ vi.mock("../../api/repos", () => ({
   validateRepo: api.validateRepo,
   fetchRepoRemote: api.fetchRepoRemote,
   fetchRecentRepos: api.fetchRecentRepos,
+  fetchCloneTarget: api.fetchCloneTarget,
+  startClone: api.startClone,
+  fetchClones: api.fetchClones,
+  cancelClone: api.cancelClone,
 }));
 vi.mock("../../../shared/authorization/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shared/authorization/api")>()),
@@ -99,6 +108,24 @@ beforeEach(() => {
   api.addProjectMember.mockResolvedValue({});
   api.removeProjectMember.mockResolvedValue({});
   api.deleteProject.mockResolvedValue(undefined);
+  api.fetchClones.mockResolvedValue([]);
+  api.fetchCloneTarget.mockImplementation(async (url: string) => ({
+    name: "analytics",
+    path: "/home/me/pdo/repos/analytics",
+    cloned: url.includes("shop-web"),
+  }));
+});
+
+const cloneJob = (over: Partial<CloneJob> = {}): CloneJob => ({
+  id: "c1",
+  url: "https://github.com/acme/analytics.git",
+  path: "/home/me/pdo/repos/analytics",
+  project_ids: ["p1"],
+  state: "running",
+  reused: false,
+  progress: { phase: "Receiving objects", percent: 64, size: "38.20 MiB" },
+  error: null,
+  ...over,
 });
 
 describe("ProjectsPanel", () => {
@@ -198,6 +225,103 @@ describe("ProjectsPanel", () => {
     await waitFor(() => expect(api.createRepo).toHaveBeenCalledWith("/home/me/code", "widgets"));
     await waitFor(() => expect(api.addProjectMember).toHaveBeenCalledWith("p1", "/home/me/code/widgets"));
     await waitFor(() => expect(screen.queryByTestId("project-new-repo")).not.toBeInTheDocument());
+  });
+
+  it("clones a URL into the clones folder for the Projet, shows its progress, then reads the Projets again", async () => {
+    api.startClone.mockResolvedValue(cloneJob());
+    const { onChanged } = renderPanel({ entry: { projectId: "p1" } });
+
+    fireEvent.click(screen.getByTestId("project-add-repo"));
+    fireEvent.click(screen.getByTestId("project-add-repo-clone"));
+    fireEvent.change(screen.getByTestId("project-clone-url"), {
+      target: { value: "https://github.com/acme/analytics.git" },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("project-clone-into")).toHaveTextContent("~/pdo/repos/analytics"),
+    );
+    expect(screen.getByTestId("project-clone")).toHaveTextContent(
+      "full clone · with the daemon's git credentials",
+    );
+    fireEvent.click(screen.getByTestId("project-clone-start"));
+
+    await waitFor(() =>
+      expect(api.startClone).toHaveBeenCalledWith({
+        url: "https://github.com/acme/analytics.git",
+        project_id: "p1",
+      }),
+    );
+    const job = await screen.findByTestId("project-clone-job");
+    expect(within(job).getByTestId("project-clone-progress")).toHaveTextContent(
+      "Receiving objects · 64 % · 38.20 MiB",
+    );
+    expect(job).toHaveTextContent("You can close Settings: the clone goes on, and the repository joins Checkout");
+
+    api.fetchClones.mockResolvedValue([cloneJob({ state: "done", progress: null })]);
+    await waitFor(() => expect(onChanged).toHaveBeenCalled(), { timeout: 2000 });
+    await waitFor(() => expect(screen.queryByTestId("project-clone-job")).not.toBeInTheDocument());
+  });
+
+  it("clones into the folder typed after « change », and says a URL already cloned is reused", async () => {
+    api.startClone.mockResolvedValue(cloneJob({ state: "done", reused: true }));
+    const { onChanged } = renderPanel({ entry: { projectId: "p1" } });
+    fireEvent.click(screen.getByTestId("project-add-repo"));
+    fireEvent.click(screen.getByTestId("project-add-repo-clone"));
+    fireEvent.change(screen.getByTestId("project-clone-url"), {
+      target: { value: "git@github.com:acme/shop-web.git" },
+    });
+    expect(await screen.findByTestId("project-clone-reused")).toBeInTheDocument();
+    expect(screen.getByTestId("project-clone-start")).toHaveTextContent("Add");
+    fireEvent.click(screen.getByTestId("project-clone-change"));
+    fireEvent.change(screen.getByTestId("project-clone-path"), { target: { value: "~/src/shop-web" } });
+    fireEvent.click(screen.getByTestId("project-clone-start"));
+    await waitFor(() =>
+      expect(api.startClone).toHaveBeenCalledWith({
+        url: "git@github.com:acme/shop-web.git",
+        path: "~/src/shop-web",
+        project_id: "p1",
+      }),
+    );
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(screen.queryByTestId("project-clone")).not.toBeInTheDocument();
+  });
+
+  it("shows a clone started before the page opened, cancels it, and names a failure", async () => {
+    api.fetchClones.mockResolvedValue([cloneJob()]);
+    // The daemon answers the cancel before the clone has stopped.
+    api.cancelClone.mockResolvedValue(cloneJob());
+    renderPanel({ entry: { projectId: "p1" } });
+    const job = await screen.findByTestId("project-clone-job");
+    expect(within(job).getByTestId("project-clone-job-url")).toHaveTextContent(
+      "https://github.com/acme/analytics.git",
+    );
+    fireEvent.click(within(job).getByTestId("project-clone-cancel"));
+    await waitFor(() => expect(api.cancelClone).toHaveBeenCalledWith("c1"));
+
+    api.fetchClones.mockResolvedValue([
+      cloneJob({ state: "failed", error: "The daemon's git credentials were refused for https://github.com/acme/analytics.git" }),
+    ]);
+    await waitFor(
+      () =>
+        expect(screen.getByTestId("project-clone-error")).toHaveTextContent(
+          "The daemon's git credentials were refused",
+        ),
+      { timeout: 2000 },
+    );
+    fireEvent.click(screen.getByTestId("project-clone-retry"));
+    expect(screen.getByTestId("project-clone-url")).toHaveValue("https://github.com/acme/analytics.git");
+  });
+
+  it("refuses a start the daemon refuses, naming why", async () => {
+    api.startClone.mockRejectedValue(new Error("/home/me/pdo/repos/analytics already exists and is not a clone of https://github.com/acme/analytics.git"));
+    renderPanel({ entry: { projectId: "p1" } });
+    fireEvent.click(screen.getByTestId("project-add-repo"));
+    fireEvent.click(screen.getByTestId("project-add-repo-clone"));
+    expect(screen.getByTestId("project-clone-start")).toBeDisabled();
+    fireEvent.change(screen.getByTestId("project-clone-url"), {
+      target: { value: "https://github.com/acme/analytics.git" },
+    });
+    fireEvent.click(screen.getByTestId("project-clone-start"));
+    expect(await screen.findByTestId("project-clone-error")).toHaveTextContent("already exists and is not a clone of");
   });
 
   it("shows the daemon's refusal of a folder that holds something", async () => {

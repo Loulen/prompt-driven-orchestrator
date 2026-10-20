@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPatch, computeDirty, isPublicUrl, missingDefaultProfile, seedFrom } from "./draft";
+import { buildPatch, computeDirty, isClonesFolder, isPublicUrl, missingDefaultProfile, seedFrom } from "./draft";
 import type { InstanceSettings } from "./settings";
 
 const field = <T,>(effective: T, fallback: T) => ({
@@ -113,3 +113,34 @@ describe("the Public URL in the draft (CORE-83)", () => {
   });
 });
 
+describe("the clones folder in the draft (CORE-97)", () => {
+  it("starts on the folder in force, sends a change trimmed, and goes back to the default when blank", () => {
+    const loaded = settings();
+    expect(seedFrom(loaded).clonesFolder).toBe("~/pdo/repos");
+    expect(computeDirty(seedFrom(loaded), loaded).has("clones-folder")).toBe(false);
+    // The default typed again, with a trailing slash, changes nothing.
+    const same = { ...seedFrom(loaded), clonesFolder: " ~/pdo/repos/ " };
+    expect(computeDirty(same, loaded).has("clones-folder")).toBe(false);
+
+    const values = { ...seedFrom(loaded), clonesFolder: " /srv/clones/ " };
+    const dirty = computeDirty(values, loaded);
+    expect(dirty.has("clones-folder")).toBe(true);
+    expect(buildPatch(values, loaded, dirty)).toEqual({ patch: { clones_folder: "/srv/clones" } });
+
+    const stored = {
+      ...loaded,
+      clones_folder: { effective: "/srv/clones", source: "stored" as const, stored: "/srv/clones", env: null, default: "~/pdo/repos" },
+    };
+    expect(seedFrom(stored).clonesFolder).toBe("/srv/clones");
+    const cleared = { ...seedFrom(stored), clonesFolder: "" };
+    expect(buildPatch(cleared, stored, computeDirty(cleared, stored))).toEqual({ patch: { clones_folder: "" } });
+  });
+
+  it("refuses a relative folder", () => {
+    expect(isClonesFolder("clones")).toBe(false);
+    expect(isClonesFolder("~/x")).toBe(true);
+    const loaded = settings();
+    const values = { ...seedFrom(loaded), clonesFolder: "clones" };
+    expect(buildPatch(values, loaded, computeDirty(values, loaded))).toHaveProperty("error");
+  });
+});

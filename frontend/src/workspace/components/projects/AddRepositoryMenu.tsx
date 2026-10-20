@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderPlus, HardDrive, History, Plus } from "lucide-react";
+import { FolderPlus, Globe, HardDrive, History, Plus } from "lucide-react";
 import { tildify } from "../../../lib/homePath";
 
-/** What « Add repository » offers: a recent one, a local folder, a new empty one. */
+/** What « Add repository » offers: a recent one, a local folder, a URL to clone, a new empty one. */
 export type AddRepositoryChoice =
   | { kind: "recent"; path: string }
   | { kind: "local" }
+  | { kind: "clone" }
   | { kind: "new" };
 
 /**
  * « Add repository » of a Projet in Settings › Projects (CORE-96) and its
  * menu: the recent repositories it does not hold yet, then a local folder
- * (the explorer) and a new empty repository (`git init`).
+ * (the explorer), a URL to clone (CORE-97) and a new empty repository
+ * (`git init`).
  */
 export default function AddRepositoryMenu({
   recent,
@@ -110,6 +112,18 @@ export default function AddRepositoryMenu({
               <HardDrive size={12} className="shrink-0 text-fg-4" />
               <span className="flex-1">Local folder…</span>
               <span className="text-fg-4" style={{ fontSize: "9.5px" }}>explorer</span>
+            </button>
+          )}
+          {canCreateRepository && (
+            <button
+              type="button"
+              role="menuitem"
+              className={item}
+              onClick={() => choose({ kind: "clone" })}
+              data-testid="project-add-repo-clone"
+            >
+              <Globe size={12} className="shrink-0 text-st-running" />
+              <span className="flex-1">Clone from a URL…</span>
             </button>
           )}
           {canCreateRepository && (

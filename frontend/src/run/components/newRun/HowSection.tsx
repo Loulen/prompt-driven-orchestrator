@@ -11,7 +11,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
     pipelines, selectedPipeline, selectedPipelineId, repoValid, mode, harness, setHarness,
     agentChoice, setAgentChoice, skills, setSkills, agentProfiles, skillBank,
     inheritedSkillTiers, handlePipelineChange, harnessCatalog, instanceDefaultHarness,
-    pipelineSections, repoProject, promptAddedSkills,
+    pipelineSections, repoProject, promptAddedSkills, remoteUrl,
   } = form;
   return (
     <div className="flex flex-col gap-3 py-4 border-b border-line">
@@ -39,7 +39,9 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
             onChange={handlePipelineChange}
             disabled={!repoValid || pipelines.length === 0}
             placeholder={
-              !repoValid
+              remoteUrl
+                ? "Available once the clone is done"
+                : !repoValid
                 ? "Select a repository first"
                 : pipelines.length === 0
                   ? "No pipelines found"

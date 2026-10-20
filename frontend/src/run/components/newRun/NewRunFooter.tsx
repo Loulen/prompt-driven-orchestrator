@@ -8,7 +8,7 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
   const {
     mode, editingTriggerId, submitting, attachments, closeWarning, attachmentsOverLimit,
     requestClose, handleLaunch, canLaunch, launchBlockReason, canCreateTrigger,
-    handleCreateTrigger,
+    handleCreateTrigger, remoteUrl, clone, cloning,
   } = form;
   const launchReasonId = useId();
   return (
@@ -32,6 +32,13 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
           Fix attachments to create the run
         </span>
       )}
+      {remoteUrl && !closeWarning && (
+        <span className="mr-auto text-fg-4" style={{ fontSize: "10.5px" }} data-testid="clone-launch-note">
+          {mode === "run"
+            ? "Launch clones first, then starts the Run."
+            : "Clone first: a Trigger fires on a repository."}
+        </span>
+      )}
       <button
         onClick={requestClose}
         data-testid="new-run-cancel"
@@ -40,7 +47,17 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
       >
         Cancel
       </button>
-      {mode === "run" ? (
+      {remoteUrl ? (
+        <button
+          onClick={() => void clone(mode === "run")}
+          disabled={submitting || cloning}
+          className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+          style={{ fontSize: "11.5px" }}
+          data-testid="clone-launch-button"
+        >
+          {cloning ? "Cloning…" : mode === "run" ? "Clone and launch" : "Clone"}
+        </button>
+      ) : mode === "run" ? (
         // A disabled button takes no focus nor hover: the reason hangs on a
         // wrapper, focusable only while provisioning blocks the launch.
         <TooltipProvider>

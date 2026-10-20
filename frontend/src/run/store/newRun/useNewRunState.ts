@@ -30,6 +30,7 @@ export function useNewRunState(open: boolean) {
     setSelectedPipelineId,
     pipelineChosen,
     setPipelineChosen,
+    loadPipelines,
     branches,
     branchesLoading,
     sourceBranch,
@@ -201,7 +202,7 @@ export function useNewRunState(open: boolean) {
   return {
     projectId, setProjectId, projectChosen, setProjectChosen, toggleProjectSecondary,
     pipelines, projects, selectedPipeline, selectedPipelineId, setSelectedPipelineId,
-    pipelineChosen, setPipelineChosen, branches,
+    pipelineChosen, setPipelineChosen, loadPipelines, branches,
     branchesLoading, sourceBranch, setSourceBranch, loadBranches, clearBranches, lastFetchAt,
     branchFetchError, branchesFetching, refetchRemotes, rereadBranches, fastForward,
     targetRepo, repoValid, repoError, repoValidating, repoBorderClass, handleRepoChange,

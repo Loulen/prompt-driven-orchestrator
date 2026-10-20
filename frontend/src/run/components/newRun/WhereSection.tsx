@@ -1,4 +1,4 @@
-import { Briefcase, FolderGit2, GitBranch } from "lucide-react";
+import { Briefcase, FolderGit2, GitBranch, Globe } from "lucide-react";
 import RepoCombobox from "../../../workspace/components/RepoCombobox";
 import SecondaryRepoRow, { SecondaryRepoLabel } from "../SecondaryRepoRow";
 import SourceBranchField from "../../../workspace/components/SourceBranchField";
@@ -7,12 +7,14 @@ import { useRunCreationRightsStore } from "../../store/runCreationRightsStore";
 import { hiddenProjectsNote, isRestricted, repoGroups } from "../../model/runCreationRights";
 import { tildify } from "../../../lib/homePath";
 import ProjectCombobox from "./ProjectCombobox";
+import RemoteRepoHint from "./RemoteRepoHint";
 
 const LABEL = "font-medium text-fg-2 flex items-center gap-1.5";
 
 /**
  * ── WHERE ── the Projet the Run is launched in (ADR-0087), its target
- * repository (the Projet's default primary, preselected), the source branch,
+ * repository (the Projet's default primary, preselected; or a URL, cloned
+ * first, CORE-97), the source branch,
  * then the Projet's other repositories as secondaries, read-only by default,
  * and the secondaries outside the Projet (#465).
  */
@@ -23,7 +25,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
     repoError, repoValidating, repoBorderClass, handleRepoChange, mode, secondaryRepos,
     recentRepos, updateSecondary, removeSecondary, addSecondary, settings,
     offeredProjects, allowNoProject, launchProject, projectNote, chooseProject, projectRepos,
-    toggleProjectSecondary, outsideProjectReason, projectId,
+    toggleProjectSecondary, outsideProjectReason, projectId, remoteUrl,
   } = form;
   // CORE-5: where the caller may create a Run. Restricted, the field offers the
   // repositories of the allowed Projets only, and the loupe goes when the disk
@@ -100,6 +102,9 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
           groupsNote={!launchProject && restricted ? hiddenProjectsNote(rights) : null}
           help={rights.canBrowse ? null : "A new repository goes through an administrator."}
           home={home}
+          // CORE-97: a URL is cloned first, then launched on.
+          leading={remoteUrl ? <Globe size={13} className="text-st-running" /> : undefined}
+          hint={remoteUrl ? <RemoteRepoHint clone={form} home={home} /> : undefined}
           badge={
             isProjectDefault ? (
               <span
@@ -112,7 +117,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
             ) : undefined
           }
         />
-        {outsideProjectReason && (
+        {outsideProjectReason && !remoteUrl && (
           <span className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid="primary-outside-project">
             {outsideProjectReason}
           </span>

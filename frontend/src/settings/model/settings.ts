@@ -87,6 +87,9 @@ export interface InstanceSettings {
   /** The address humans open PDO at (`stored → env PDO_PUBLIC_URL → none`). Agents receive
    *  it and `pdo page mount` prints its links under it; `null` keeps them on localhost. */
   public_url: StringSettingField;
+  /** CORE-97: where a repository given by its URL is cloned (`stored → ~/pdo/repos`),
+   *  as typed: `~` stands for the daemon's home. Absent from an older daemon. */
+  clones_folder?: StringSettingField;
   default_model: StringSettingField;
   /** #550/ADR-0046: instance-wide default harness (`stored → env → floor claude`).
    *  `effective: null` ⇒ the `claude` floor applies at resolve. */

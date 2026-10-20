@@ -95,20 +95,23 @@ export function useLaunchTargets(open: boolean) {
     [load, sourceBranch],
   );
 
-  const loadPipelines = useCallback(() => {
+  // Resolves once both lists are in (a clone just joined a Projet, CORE-97).
+  const loadPipelines = useCallback(async () => {
     if (!open) return;
-    fetchPipelines()
-      .then((list) => setPipelines(list))
-      .catch(() => {});
-    // Fresh on every open: a Projet created meanwhile (the First run tour makes
-    // one) must head the menu the next time the form opens.
-    fetchProjects()
-      .then((list) => setProjects(list))
-      .catch(() => setProjects([]));
+    await Promise.all([
+      fetchPipelines()
+        .then((list) => setPipelines(list))
+        .catch(() => {}),
+      // Fresh on every open: a Projet created meanwhile (the First run tour makes
+      // one) must head the menu the next time the form opens.
+      fetchProjects()
+        .then((list) => setProjects(list))
+        .catch(() => setProjects([])),
+    ]);
   }, [open]);
 
   useEffect(() => {
-    loadPipelines();
+    void loadPipelines();
   }, [loadPipelines]);
 
   useEffect(() => {

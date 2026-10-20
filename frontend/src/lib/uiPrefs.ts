@@ -158,3 +158,30 @@ export function saveNodeDurationMode(v: NodeDurationMode): void {
  * every other Stats setting — see `stats/model/statsFilters.ts`. Stale keys from an
  * older build are left alone: never read, never written, never cleaned up.
  */
+
+/**
+ * The Projet groups of the Runs list the user folded: their group keys
+ * (`project:<id>`, or the repo path of a group in no Projet). Per browser,
+ * saved at the toggle, so a fold survives a reload and a new tab. Absent /
+ * unparseable → none folded.
+ */
+const COLLAPSED_RUN_GROUPS_KEY = "pdo.ui.collapsedRunGroups";
+
+export function loadCollapsedRunGroups(): string[] {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_RUN_GROUPS_KEY);
+    if (raw == null) return [];
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCollapsedRunGroups(keys: string[]): void {
+  try {
+    localStorage.setItem(COLLAPSED_RUN_GROUPS_KEY, JSON.stringify(keys));
+  } catch {
+    // quota / disabled / private mode → in-memory only for this session
+  }
+}

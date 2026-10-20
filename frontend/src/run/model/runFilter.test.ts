@@ -34,17 +34,38 @@ describe("runFilter — three axes, filiation-blind (#783)", () => {
 
   it("composes the axes with AND semantics", () => {
     const alpha = run({ run_id: "a", effective_repo: "/repos/alpha", pipeline_name: "impl" });
-    const f: RunFilterValue = { repo: "/repos/alpha", pipeline: "impl", trigger: null };
+    const f: RunFilterValue = {
+      ...EMPTY_RUN_FILTER,
+      repo: "/repos/alpha",
+      pipeline: "impl",
+    };
     expect(runMatchesFilter(alpha, f)).toBe(true);
     expect(runMatchesFilter(alpha, { ...f, pipeline: "other" })).toBe(false);
     expect(runMatchesFilter(alpha, { ...f, repo: "/repos/beta" })).toBe(false);
   });
 
-  it("isFilterActive reports exactly the three axes", () => {
+  it("composes the Date axis with the others", () => {
+    const now = new Date(2026, 9, 14, 15);
+    const startedYesterday = run({
+      run_id: "y",
+      pipeline_name: "impl",
+      started_at: new Date(2026, 9, 13, 10).toISOString(),
+      activity: [],
+    });
+    const yesterday = { ...EMPTY_RUN_FILTER, date: { mode: "started" as const, range: { preset: "yesterday" as const } } };
+    expect(runMatchesFilter(startedYesterday, yesterday, undefined, now)).toBe(true);
+    expect(runMatchesFilter(startedYesterday, { ...yesterday, pipeline: "other" }, undefined, now)).toBe(false);
+    const today = { ...yesterday, date: { mode: "started" as const, range: { preset: "today" as const } } };
+    expect(runMatchesFilter(startedYesterday, today, undefined, now)).toBe(false);
+  });
+
+  it("isFilterActive reports exactly the four axes", () => {
     expect(isFilterActive(EMPTY_RUN_FILTER)).toBe(false);
     expect(isFilterActive({ ...EMPTY_RUN_FILTER, repo: "/repos/x" })).toBe(true);
     expect(isFilterActive({ ...EMPTY_RUN_FILTER, pipeline: "p" })).toBe(true);
     expect(isFilterActive({ ...EMPTY_RUN_FILTER, trigger: "t" })).toBe(true);
+    expect(isFilterActive({ ...EMPTY_RUN_FILTER, date: { mode: "started", range: null } })).toBe(false);
+    expect(isFilterActive({ ...EMPTY_RUN_FILTER, date: { mode: "active", range: { preset: "today" } } })).toBe(true);
   });
 });
 

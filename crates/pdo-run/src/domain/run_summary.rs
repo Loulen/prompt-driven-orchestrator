@@ -5,7 +5,8 @@
 //!
 //! It holds the fields of `GET /runs` and of `GET /runs/{id}/children`, the
 //! parent of a Run, its primary repository and the Projet recorded at its
-//! launch (ADR-0087), which the access checks read.
+//! launch (ADR-0087), which the access checks read, and its activity, which
+//! the date filter of the lists reads.
 
 use pdo_kernel::Actor;
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::child_awaiting::{child_awaiting_reason, AwaitingTree, ChildWait};
 use crate::domain::event::Event;
 use crate::domain::projection::{is_stalled, project};
+use crate::domain::run_activity::{activity_of, ActivitySpan};
 use crate::domain::state::{RunState, RunStatus};
 
 /// The shape of [`RunSummary`]: the Résumés written under another version
@@ -54,11 +56,18 @@ pub struct RunSummary {
     /// The Projet the Run was launched in (ADR-0087); `None` for none.
     #[serde(default)]
     pub project_id: Option<String>,
+    /// The instant of its last activity; `None` for a Run with none.
+    #[serde(default)]
+    pub last_activity_at: Option<String>,
+    /// Its spans of activity, oldest first (CONTEXT.md « Activité d'un Run »).
+    #[serde(default)]
+    pub activity: Vec<ActivitySpan>,
 }
 
 impl RunSummary {
-    /// The Résumé of a projected Run.
-    pub fn of(run: &RunState) -> Self {
+    /// The Résumé of a projected Run whose log is `events`.
+    pub fn of(run: &RunState, events: &[Event]) -> Self {
+        let activity = activity_of(events);
         Self {
             run_id: run.run_id.clone(),
             pipeline_name: run.pipeline_name.clone(),
@@ -79,6 +88,8 @@ impl RunSummary {
             pipeline_id: run.pipeline_id.clone(),
             pipeline_version: run.pipeline_version.as_ref().map(|v| v.number),
             project_id: run.project_id.clone(),
+            last_activity_at: activity.last().map(|span| span.to.clone()),
+            activity,
         }
     }
 }
@@ -86,7 +97,7 @@ impl RunSummary {
 /// The Résumé of the Run whose whole log is `events`; `None` for a log that
 /// projects no Run (no `RunStarted`).
 pub fn summarize(events: &[Event]) -> Option<RunSummary> {
-    project(events).map(|run| RunSummary::of(&run))
+    project(events).map(|run| RunSummary::of(&run, events))
 }
 
 impl AwaitingTree for RunSummary {
@@ -187,6 +198,35 @@ mod tests {
         assert_eq!(
             summarize(&[event]).unwrap().project_id.as_deref(),
             Some("prj-1")
+        );
+    }
+
+    #[test]
+    fn a_summary_carries_the_activity_of_the_run() {
+        let mut resumed = ev(
+            "r",
+            EventKind::NodeStarted,
+            Some("n"),
+            serde_json::json!({}),
+        );
+        resumed.ts = "2026-10-09T08:00:00Z".into();
+        let summary = summarize(&[started("r", None), resumed]).unwrap();
+        assert_eq!(
+            summary.last_activity_at.as_deref(),
+            Some("2026-10-09T08:00:00.000Z")
+        );
+        assert_eq!(
+            summary.activity,
+            vec![
+                ActivitySpan {
+                    from: "2026-10-07T10:00:00.000Z".into(),
+                    to: "2026-10-07T10:00:00.000Z".into(),
+                },
+                ActivitySpan {
+                    from: "2026-10-09T08:00:00.000Z".into(),
+                    to: "2026-10-09T08:00:00.000Z".into(),
+                },
+            ]
         );
     }
 

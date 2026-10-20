@@ -58,4 +58,23 @@ describe("useRunTreeView", () => {
     act(() => result.current.setProjectFilter({}));
     expect(result.current.filteredRuns).toHaveLength(3);
   });
+
+  it("applies the Date filter to the active and the archived Runs alike", () => {
+    const long = { ...run("long"), started_at: "2020-01-01T12:00:00Z" };
+    const oldArchived = { ...run("old"), status: "archived" as const, started_at: "2020-01-01T12:00:00Z" };
+    const fresh = { ...run("fresh"), started_at: new Date().toISOString() };
+    const freshArchived = { ...fresh, run_id: "fresh-archived", status: "archived" as const };
+    const { result } = renderHook(() => useRunTreeView([long, oldArchived, fresh, freshArchived], null));
+    expect(result.current.archivedCount).toBe(2);
+
+    act(() =>
+      result.current.setRunFilter({
+        ...result.current.runFilter,
+        date: { mode: "started", range: { preset: "today" } },
+      }),
+    );
+    expect(result.current.filteredRuns.map((r) => r.run_id)).toEqual(["fresh", "fresh-archived"]);
+    expect(result.current.archivedCount).toBe(1);
+    expect(result.current.filterActive).toBe(true);
+  });
 });

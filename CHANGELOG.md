@@ -10,6 +10,18 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.50.0 — Liste des Runs : filtre de date, repli d'un Projet (CORE-98)
+
+- **Résumé de Run v4** : il gagne l'instant de la dernière activité et les plages d'activité
+  (instants UTC ; deux événements à moins d'une heure d'écart tiennent dans la même plage). Les
+  Résumés sont reconstruits au démarrage du daemon. `GET /runs` porte `last_activity_at` et
+  `activity` sur chaque entrée.
+- Filtres des Runs : axe Date, Active (par défaut, toute activité dans la plage) ou Started,
+  avec préréglages et plage libre ; il s'applique aussi aux Runs archivés. Le filtre ne survit
+  pas à un rechargement.
+- Un groupe de Projet se replie ; le repli est gardé par navigateur
+  (`pdo.ui.collapsedRunGroups` dans le local storage).
+
 ## 2.49.0 — Artefacts live (CORE-93)
 
 - **Format de pipeline** : l'output intermédiaire devient l'artefact live (ADR-0089), hors des

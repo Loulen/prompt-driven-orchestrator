@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
 import { handleSelectionKeydown } from "../../../lib/selectionKeys";
-import { flattenVisible, type RunTreeNode } from "../../model/runTree";
+import { flattenAll, flattenVisible, type RunTreeNode } from "../../model/runTree";
 import { EMPTY_RUN_FILTER } from "../../model/runFilter";
 import SelectControl from "../../../shared/ui/SelectControl";
 import RunRow from "./RunRow";
@@ -40,7 +40,7 @@ export default function RunTreeList({
     runsScrollRef, visibleRunIds, runSelIds, selectVisible, clearSel, cleanupItems, setRunBulkKind,
     filterActive, filteredRuns, setRunFilter, runGroups, activeTree, isExpanded, runSel, selectGroup,
     openProjectEditor, archivedCount, archivedOpen, setArchivedOpen, archivedTree, setAttributeFilter,
-    setProjectFilter,
+    setProjectFilter, isGroupCollapsed, toggleGroup,
   } = pane;
   const renderRunRow = (node: RunTreeNode) => (
     <RunRow
@@ -112,17 +112,34 @@ export default function RunTreeList({
       )}
       {runGroups === null
         ? flattenVisible(activeTree, isExpanded).map(renderRunRow)
-        : runGroups.map((group) => (
+        : runGroups.map((group) => {
+            const collapsed = isGroupCollapsed(group.key);
+            const groupRuns = flattenAll(group.items);
+            const awaiting = groupRuns.filter((r) => r.status === "awaiting_user").length;
+            return (
             <div
               key={group.key}
               data-testid="run-repo-group"
               data-project={group.kind === "project" ? "true" : "false"}
+              data-collapsed={collapsed ? "true" : "false"}
             >
               <div
                 className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
                 style={{ fontSize: "10px" }}
                 title={group.title}
               >
+                {/* The fold of the group, kept per browser (local storage). */}
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.key)}
+                  aria-expanded={!collapsed}
+                  aria-label={collapsed ? `Expand ${group.label}` : `Collapse ${group.label}`}
+                  title={collapsed ? "Expand project" : "Collapse project"}
+                  className="grid h-4 w-3 shrink-0 cursor-pointer place-items-center rounded text-fg-4 transition-colors hover:text-fg-2"
+                  data-testid="run-group-chevron"
+                >
+                  {collapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
+                </button>
                 {/* #577 — "select all in this repo" (reveals on header hover). */}
                 <SelectControl
                   selected={
@@ -141,6 +158,10 @@ export default function RunTreeList({
                 <span className="truncate" data-testid="run-repo-label">
                   {group.label}
                 </span>
+                <span className="shrink-0 font-mono font-normal text-fg-4" data-testid="run-group-count">
+                  {groupRuns.length}
+                  {collapsed && awaiting > 0 && ` · ${awaiting} awaiting`}
+                </span>
                 {/* #552 — the pencil that names / renames the Projet. */}
                 <button
                   onClick={() => openProjectEditor(group)}
@@ -151,10 +172,18 @@ export default function RunTreeList({
                 >
                   <Pencil size={10} />
                 </button>
+                {collapsed && awaiting > 0 && (
+                  <span
+                    className="ml-auto block h-1.5 w-1.5 shrink-0 rounded-full bg-st-await group-hover/hdr:ml-1"
+                    title={`${awaiting} awaiting you`}
+                    data-testid="run-group-awaiting"
+                  />
+                )}
               </div>
-              {flattenVisible(group.items, isExpanded).map(renderRunRow)}
+              {!collapsed && flattenVisible(group.items, isExpanded).map(renderRunRow)}
             </div>
-          ))}
+            );
+          })}
       {/* #136 — archived runs in their own collapsible section below the
           active list, rendered as a tree like the active one. Reuses
           renderRunRow verbatim (same archived styling / Forget action).

@@ -5,8 +5,7 @@
 use pdo_run::application::ports::EventStore;
 use pdo_run::application::run_summary::{ensure_summaries, rebuild_summaries};
 use pdo_run::domain::event::{Event, EventKind};
-use pdo_run::domain::projection::project;
-use pdo_run::domain::run_summary::RunSummary;
+use pdo_run::domain::run_summary::{summarize, RunSummary};
 use pdo_run::domain::state::RunStatus;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -120,7 +119,7 @@ fn of_kind(run_id: &str, kind: EventKind) -> Event {
 async fn stored_and_replayed(w: &World, run_id: &str) -> (Option<RunSummary>, Option<RunSummary>) {
     let stored = w.store.summary(run_id).await.unwrap();
     let log = w.store.events(run_id).await.unwrap();
-    (stored, project(&log).map(|run| RunSummary::of(&run)))
+    (stored, summarize(&log))
 }
 
 #[tokio::test]
@@ -215,4 +214,32 @@ async fn a_failed_append_changes_neither_the_log_nor_the_summary() {
     w.store.forget("r1").await.unwrap();
     assert!(append.execute(&started("r1")).await.is_err());
     assert_eq!(w.store.summary("r1").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn each_append_keeps_the_activity_of_its_run_and_the_rebuild_gives_it_back() {
+    let w = world();
+    let append = w.runs.append_event();
+    append.execute(&started("r1")).await.unwrap();
+    let mut resumed = event("r1", EventKind::NodeStarted, Some("worker"));
+    resumed.ts = "2026-09-29T08:00:00Z".into();
+    append.execute(&resumed).await.unwrap();
+
+    let kept = w.store.summary("r1").await.unwrap().unwrap();
+    assert_eq!(
+        kept.last_activity_at.as_deref(),
+        Some("2026-09-29T08:00:00.000Z")
+    );
+    assert_eq!(
+        kept.activity
+            .iter()
+            .map(|span| span.from.as_str())
+            .collect::<Vec<_>>(),
+        ["2026-09-27T12:00:00.000Z", "2026-09-29T08:00:00.000Z"],
+        "active on the 27th and on the 29th, not on the 28th"
+    );
+
+    w.store.summaries.lock().unwrap().clear();
+    assert!(ensure_summaries(w.store.as_ref()).await.unwrap(), "rebuilt");
+    assert_eq!(w.store.summary("r1").await.unwrap(), Some(kept));
 }

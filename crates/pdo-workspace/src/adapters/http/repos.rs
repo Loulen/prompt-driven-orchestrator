@@ -222,7 +222,8 @@ pub(super) async fn clone_job<S: ProjectSettings>(
     }
 }
 
-/// `DELETE /repos/clones/{id}`: cancel a running clone; nothing it wrote stays.
+/// `DELETE /repos/clones/{id}`: cancel a running clone, nothing it wrote stays;
+/// a finished one is dismissed from the list.
 pub(super) async fn cancel_clone<S: ProjectSettings>(
     State(http): State<Http<S>>,
     Extension(actor): Extension<Actor>,

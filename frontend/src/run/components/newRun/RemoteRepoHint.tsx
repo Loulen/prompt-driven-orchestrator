@@ -61,10 +61,11 @@ export default function RemoteRepoHint({ clone, home }: { clone: RepoClone; home
             />
           </>
         ) : cloneTarget?.cloned && clonePath === null ? (
-          <>
-            Remote URL · already cloned in <span className="font-mono">{tildify(cloneTarget.path, home)}</span>,
-            reused
-          </>
+          // One flex item: the row's gap would part the path from its comma.
+          <span>
+            Remote URL · already cloned in{" "}
+            <span className="font-mono">{tildify(cloneTarget.path, home)}</span>, reused
+          </span>
         ) : (
           <>
             Remote URL · will be cloned in full

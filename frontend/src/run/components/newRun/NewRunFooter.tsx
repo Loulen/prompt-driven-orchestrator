@@ -8,7 +8,7 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
   const {
     mode, editingTriggerId, submitting, attachments, closeWarning, attachmentsOverLimit,
     requestClose, handleLaunch, canLaunch, launchBlockReason, canCreateTrigger,
-    handleCreateTrigger, remoteUrl, clone, cloning,
+    handleCreateTrigger, remoteUrl, clone, cloning, cloneReused,
   } = form;
   const launchReasonId = useId();
   return (
@@ -34,9 +34,13 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
       )}
       {remoteUrl && !closeWarning && (
         <span className="mr-auto text-fg-4" style={{ fontSize: "10.5px" }} data-testid="clone-launch-note">
-          {mode === "run"
-            ? "Launch clones first, then starts the Run."
-            : "Clone first: a Trigger fires on a repository."}
+          {cloneReused
+            ? mode === "run"
+              ? "Launch starts the Run on the existing clone."
+              : "Use the clone first: a Trigger fires on a repository."
+            : mode === "run"
+              ? "Launch clones first, then starts the Run."
+              : "Clone first: a Trigger fires on a repository."}
         </span>
       )}
       <button
@@ -55,7 +59,15 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
           style={{ fontSize: "11.5px" }}
           data-testid="clone-launch-button"
         >
-          {cloning ? "Cloning…" : mode === "run" ? "Clone and launch" : "Clone"}
+          {cloning
+            ? "Cloning…"
+            : mode === "run"
+              ? cloneReused
+                ? "Launch"
+                : "Clone and launch"
+              : cloneReused
+                ? "Use the clone"
+                : "Clone"}
         </button>
       ) : mode === "run" ? (
         // A disabled button takes no focus nor hover: the reason hangs on a

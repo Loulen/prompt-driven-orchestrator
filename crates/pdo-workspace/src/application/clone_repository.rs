@@ -91,8 +91,8 @@ impl Workspace {
         (!job.project_ids.is_empty()).then_some(job)
     }
 
-    /// Stop a running clone; what it wrote is removed. A finished one stays
-    /// as it ended.
+    /// Stop a running clone; what it wrote is removed. A finished one leaves
+    /// the list: its failure, once read, is dismissed.
     pub fn cancel_clone(&self, actor: &Actor, id: &str) -> WorkspaceResult<CloneJob> {
         self.authorize(
             actor,

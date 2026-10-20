@@ -133,13 +133,17 @@ impl CloneJobs {
         entry.job.project_ids.clone()
     }
 
+    /// Cancels a running clone; a finished one leaves the list (dismissed).
     pub(super) fn cancel(&self, id: &str) -> Option<CloneJob> {
         let mut entries = self.lock();
-        let entry = entries.iter_mut().find(|e| e.job.id == id)?;
-        if let Some(cancel) = entry.cancel.take() {
+        let at = entries.iter().position(|e| e.job.id == id)?;
+        if entries[at].job.state != CloneState::Running {
+            return Some(entries.remove(at).job);
+        }
+        if let Some(cancel) = entries[at].cancel.take() {
             let _ = cancel.send(());
         }
-        Some(entry.job.clone())
+        Some(entries[at].job.clone())
     }
 }
 
@@ -193,6 +197,25 @@ mod tests {
             vec!["p1".to_string(), "p2".to_string()]
         );
         assert_eq!(jobs.list().len(), 1);
+    }
+
+    #[test]
+    fn cancelling_a_finished_clone_dismisses_it() {
+        let jobs = CloneJobs::default();
+        let mut failed = job("a", "p");
+        failed.state = CloneState::Failed;
+        jobs.push(failed, None);
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let mut running = job("b", "p");
+        running.path = "/clones/other".into();
+        assert_eq!(jobs.start(running, tx), None);
+
+        assert_eq!(jobs.cancel("a").unwrap().state, CloneState::Failed);
+        assert_eq!(jobs.get("a"), None);
+
+        assert_eq!(jobs.cancel("b").unwrap().state, CloneState::Running);
+        assert!(rx.try_recv().is_ok());
+        assert!(jobs.get("b").is_some());
     }
 
     #[test]

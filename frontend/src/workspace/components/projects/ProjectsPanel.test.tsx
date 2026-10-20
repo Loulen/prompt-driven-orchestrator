@@ -311,6 +311,16 @@ describe("ProjectsPanel", () => {
     expect(screen.getByTestId("project-clone-url")).toHaveValue("https://github.com/acme/analytics.git");
   });
 
+  it("dismisses a failed clone for good: the daemon forgets it", async () => {
+    api.fetchClones.mockResolvedValue([cloneJob({ state: "failed", error: "No repository answers at x" })]);
+    api.cancelClone.mockResolvedValue(cloneJob({ state: "failed" }));
+    renderPanel({ entry: { projectId: "p1" } });
+    expect(await screen.findByTestId("project-clone-error")).toHaveTextContent("No repository answers");
+    fireEvent.click(screen.getByTestId("project-clone-dismiss"));
+    await waitFor(() => expect(api.cancelClone).toHaveBeenCalledWith("c1"));
+    expect(screen.queryByTestId("project-clone-error")).not.toBeInTheDocument();
+  });
+
   it("refuses a start the daemon refuses, naming why", async () => {
     api.startClone.mockRejectedValue(new Error("/home/me/pdo/repos/analytics already exists and is not a clone of https://github.com/acme/analytics.git"));
     renderPanel({ entry: { projectId: "p1" } });

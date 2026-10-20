@@ -150,6 +150,20 @@ async fn a_failed_or_refused_clone_leaves_nothing_and_says_why() {
     );
     assert!(!clones.path().join("repo").exists());
 
+    // A failure, once read, is dismissed: it leaves the list for good.
+    let id = failed["id"].as_str().unwrap();
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/repos/clones/{id}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let listed = daemon.get_json("/repos/clones").await;
+    assert!(
+        listed.as_array().unwrap().iter().all(|j| j["id"] != id),
+        "{listed}"
+    );
+
     // A folder holding something else is refused by name.
     let source = tempfile::tempdir().unwrap();
     let url = origin(&source.path().join("busy"));
@@ -198,9 +212,14 @@ async fn a_cancelled_clone_leaves_nothing() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    let ended = settled(&daemon, id).await;
-    // A clone this small may finish before the cancel lands; either way
-    // nothing half-done stays.
+    let answered: serde_json::Value = resp.json().await.unwrap();
+    // A clone this small may finish before the cancel lands (the cancel then
+    // dismisses it); either way nothing half-done stays.
+    let ended = if answered["state"] == "running" {
+        settled(&daemon, id).await
+    } else {
+        answered
+    };
     match ended["state"].as_str() {
         Some("cancelled") => assert!(!clones.path().join("app").exists()),
         Some("done") => assert!(clones.path().join("app/.git").is_dir()),

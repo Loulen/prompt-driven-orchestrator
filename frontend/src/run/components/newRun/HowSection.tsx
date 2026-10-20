@@ -49,7 +49,8 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
             }
           />
         </div>
-        {selectedPipeline?.scope === "instance" && (
+        {/* Under the Pipeline chosen, not under a menu that offers none. */}
+        {repoValid && selectedPipeline?.scope === "instance" && (
           <span className="inline-flex items-center gap-1 text-fg-4" style={{ fontSize: "10.5px" }}>
             {selectedPipeline.path}
           </span>

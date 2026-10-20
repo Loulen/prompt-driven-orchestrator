@@ -150,6 +150,8 @@ export function useRepoClone(open: boolean, s: NewRunState, launchProject: Proje
     /** The folder typed after « change », else `null`. */
     clonePath: current.path,
     setClonePath: (path: string | null) => update(typed, { path }),
+    /** The URL is already cloned where it would go: the clone is reused. */
+    cloneReused: isUrl && !!current.target?.cloned && current.path === null,
     cloneJob: isUrl ? current.job : null,
     cloneError: isUrl ? current.error : null,
     cloning: isUrl && current.job?.state === "running",

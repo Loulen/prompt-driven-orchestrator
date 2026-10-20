@@ -78,6 +78,12 @@ export default function ProjectDetail({
       job.project_ids.includes(project.id) &&
       (job.state === "running" || (job.state === "failed" && !dismissed.has(job.id))),
   );
+  // A failed clone, once read, is dismissed for good: the daemon drops it from
+  // its list, so it does not come back when Settings opens again.
+  function dismiss(id: string) {
+    setDismissed((prev) => new Set(prev).add(id));
+    void cancelClone(id).catch(() => {});
+  }
   const [error, setError] = useState<string | null>(null);
 
   async function attempt(gesture: () => Promise<void>): Promise<boolean> {
@@ -235,10 +241,10 @@ export default function ProjectDetail({
           home={home}
           projectName={project.name}
           job={job}
-          onCancel={() => setDismissed((prev) => new Set(prev).add(job.id))}
+          onCancel={() => dismiss(job.id)}
           onCancelClone={() => void cancelClone(job.id).then(track).catch(() => {})}
           onRetry={() => {
-            setDismissed((prev) => new Set(prev).add(job.id));
+            dismiss(job.id);
             setCloneUrl(typedUrls.get(job.id) ?? job.url);
             setAdding("clone");
           }}

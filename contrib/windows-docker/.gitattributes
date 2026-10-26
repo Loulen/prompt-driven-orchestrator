@@ -1,4 +1,0 @@
-# Scripts run in the Linux container: LF even on a Windows checkout (core.autocrlf=true).
-scripts/** text eol=lf
-Dockerfile text eol=lf
-*.yaml text eol=lf

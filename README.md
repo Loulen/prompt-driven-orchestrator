@@ -209,7 +209,7 @@ PDO needs `tmux`, `git` and at least one authenticated agent harness.
 
 ### Install — Windows
 
-PDO doesn't run natively on Windows. As an example, [docs/recipes/windows-docker.md](docs/recipes/windows-docker.md) runs PDO with GitHub Copilot CLI in a Docker container under Docker Desktop. Use it as a starting point: it adapts to another harness such as Claude Code by installing it in the image. If you try it or adapt it, share your feedback or your variant in an issue or a pull request ([CONTRIBUTING.md](CONTRIBUTING.md)).
+PDO doesn't run natively on Windows. [docs/recipes/windows-docker.md](docs/recipes/windows-docker.md) describes how to run it with an agent harness in a Docker container under Docker Desktop. PDO ships no Docker files: hand the recipe to a coding agent on your Windows machine, or follow it yourself. If you try it or adapt it, share your feedback or your variant in an issue or a pull request ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ### Start
 

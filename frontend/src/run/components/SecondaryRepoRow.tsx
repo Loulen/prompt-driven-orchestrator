@@ -218,10 +218,10 @@ export default function SecondaryRepoRow({
     );
   }
 
-  let borderClass = "border-line-strong focus:border-acc";
-  if (repo.valid === true) borderClass = "border-acc focus:border-acc";
+  let borderClass = "border-line-strong focus-within:border-acc";
+  if (repo.valid === true) borderClass = "border-acc focus-within:border-acc";
   else if (repo.valid === false)
-    borderClass = "border-st-failed focus:border-st-failed";
+    borderClass = "border-st-failed focus-within:border-st-failed";
 
   return (
     <div className="flex flex-col gap-1.5" data-testid={`secondary-repo-row-${index}`}>

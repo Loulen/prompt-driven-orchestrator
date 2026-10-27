@@ -626,7 +626,7 @@ describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
     await settleRepo("/code/shop-web");
     expect(screen.getByTestId("project-combobox")).toHaveTextContent("Checkout");
     expect(screen.getByTestId("project-combobox")).toHaveTextContent("3 repos");
-    expect(screen.getByTestId("project-default-badge")).toHaveTextContent("project default");
+    expect(screen.getByTestId("project-default-badge")).toHaveTextContent("default");
 
     fireEvent.click(screen.getByTestId("project-combobox"));
     const options = screen.getAllByTestId("project-option");

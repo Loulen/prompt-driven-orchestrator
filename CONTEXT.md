@@ -1,4 +1,4 @@
-# Prompt Driven Orchestrator (PDO) — Glossaire métier
+# Acogni Driver (PDO) — Glossaire métier
 
 Glossaire vivant : définitions, volonté produit, vocabulaire à éviter. Le contrat détaillé d'une
 décision vit dans `docs/adr/` (renvois « ADR-NNNN »), l'implémentation dans le code, l'historique
@@ -914,7 +914,15 @@ Check de disponibilité Docker côté hôte, TTL-caché, **advisory** : grise le
 
 ## UX — un seul mode d'édition unifié
 
-PDO est un **atelier de production de code** ; la conception de pipelines est un *moyen*, pas le centre de gravité. Un seul mode, le canvas est toujours interactif (ADR-0007). Source visuelle de référence : [`docs/design/`](./docs/design/).
+PDO est un **atelier de production de code** ; la conception de pipelines est un *moyen*, pas le centre de gravité. Un seul mode, le canvas est toujours interactif (ADR-0007). Source visuelle de référence : les choix retenus du prototype Acogni (ADR-0091).
+
+### Identité et densité
+
+**Acogni Driver** *(nom du produit)* : le nom de PDO dans l'interface, porté surtout par le logo Acogni : le mark dans la barre du haut, le lockup « Acogni | Driver » là où il y a la place (pages hors de l'interface, modale de bienvenue). Acogni est la structure qui le publie. La CLI, les variables d'environnement et les identifiants gardent `pdo`. _Éviter_ : « PDO » ou « Prompt Driven Orchestrator » dans un texte affiché.
+
+**Densité** *(règle)* : l'interface montre le plus d'information possible par écran, comme un IDE : icônes plutôt que libellés, nombres en chasse fixe, un nom sur une ligne puis ellipsis. **Aucune phrase d'explication** : un tooltip porte un nom et un raccourci, un état vide une icône, deux à quatre mots et une action, une bannière une icône, un fait court et une action. Si un élément demande une explication, c'est lui qu'il faut revoir. La lecture longue (corps markdown d'un artefact, guide de page) garde sa taille de lecture. Les tours et la modale de bienvenue restent. _Éviter_ : « texte d'aide » sous un champ.
+
+**Champ de commande** *(terme)* : le champ central de la barre du haut, ouvert aussi par Ctrl+K, qui déroule la **palette** : navigation (Settings, Stats…), Runs, Pipelines, commandes du core, Actions des Extensions et résultats de leurs Sources de recherche. Les Actions viennent de l'Emplacement d'Action global `palette` et, pour l'élément sélectionné, des Emplacements d'Action contextuels qui le concernent. La palette ne montre que ce que l'Acteur a le droit de faire ou de voir. _Éviter_ : « barre de recherche », « omnibox », « commande » seul (réservé aux commandes de Run).
 
 ### Layout 3 panneaux
 
@@ -1062,7 +1070,9 @@ PDO s'étend sans modifier son core, par une **API d'extension** versionnée à 
 
 **Emplacement hébergé** *(terme)* : un Emplacement d'UI qu'une Extension déclare dans sa propre interface, d'identifiant `<id de l'extension>/<nom>` (`a/panneau`), avec le type de Contribution d'UI qu'il accepte et la forme du contexte qu'il transmet (ADR-0081, amendement #32). Les autres Extensions y contribuent comme au catalogue du core ; l'hôte rend leurs éléments par le **module partagé** `@pdo/extension-ui`, que le front déclare dans son import map à côté de React. Une contribution à l'emplacement d'une Extension absente est ignorée. _Éviter_ : « slot » d'une extension, « point d'extension » seul.
 
-**Contribution d'UI** *(terme)* : un élément qu'une Extension ajoute à un Emplacement d'UI : une **Page** (plein écran, joignable par lien profond), une **Action** (une entrée qui appelle une Commande d'extension), un **Onglet**, une **Section**, une **Décoration** (une petite marque sur un élément : ligne de liste, carte, barre d'état), un **Filtre de liste**, une **Source d'autocomplétion** (un caractère déclencheur qui ouvre, dans un champ de texte du core, la liste des suggestions qu'une fonction de l'Extension répond ; la suggestion choisie insère son texte, que le core n'interprète pas, et l'Extension peut dessiner ce texte une fois rendu ; API 0.14, `review/composer`). Elle peut porter une **clause `when`**. Une **Section** placée dans un formulaire (`project/edit`, `run/new`) garde ses changements en brouillon et les applique au Save de son hôte, une fois l'entité enregistrée (ADR-0081, amendement #31). _Éviter_ : « plugin UI », « widget ».
+**Contribution d'UI** *(terme)* : un élément qu'une Extension ajoute à un Emplacement d'UI : une **Page** (plein écran, joignable par lien profond), une **Action** (une entrée qui appelle une Commande d'extension), un **Onglet**, une **Section**, une **Décoration** (une petite marque sur un élément : ligne de liste, carte, barre d'état), un **Filtre de liste**, une **Source d'autocomplétion** (un caractère déclencheur qui ouvre, dans un champ de texte du core, la liste des suggestions qu'une fonction de l'Extension répond ; la suggestion choisie insère son texte, que le core n'interprète pas, et l'Extension peut dessiner ce texte une fois rendu ; API 0.14, `review/composer`), une **Source de recherche** (une fonction de l'Extension qui répond, pour la requête tapée dans le Champ de commande, des résultats déjà filtrés selon les droits de l'Acteur : libellé, méta, icône, lien profond ; le core les groupe sous le nom de l'Extension, n'attend pas une source lente et isole une source en erreur). Elle peut porter une **clause `when`**. Une **Section** placée dans un formulaire (`project/edit`, `run/new`) garde ses changements en brouillon et les applique au Save de son hôte, une fois l'entité enregistrée (ADR-0081, amendement #31). _Éviter_ : « plugin UI », « widget ».
+
+**Design system partagé** *(terme, ADR-0091)* : les tokens de l'interface (couleurs des deux thèmes, échelle typographique, hauteurs, rayons, polices) et ses primitives (bouton, bouton icône, liste déroulante, menu, tooltip, popover, modale, champ, pastille, touche, icône de statut, toast, onglets, section) que le core sert aux UI d'Extension par le module partagé, plus une feuille de tokens à adresse stable pour une page servie hors de l'interface. Une Extension ne recopie ni token ni primitive : elle suit le thème et les évolutions du core sans être recompilée. _Éviter_ : « thème d'extension », « kit UI ».
 
 **Commande d'extension** *(terme)* : une fonction qu'exporte le bundle d'une Extension, déclarée avec un id, un titre et une icône ; une Action la référence, et le core l'appelle avec le contexte de l'emplacement de l'Action. _Éviter_ : « commande » seul (réservé aux commandes de Run, `/commands`), « callback ».
 

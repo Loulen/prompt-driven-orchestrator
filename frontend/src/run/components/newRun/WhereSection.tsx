@@ -108,11 +108,12 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
           badge={
             isProjectDefault ? (
               <span
-                className="rounded bg-acc/15 px-1.5 py-0.5 font-mono text-acc"
+                className="rounded border border-line bg-bg-4 px-1.5 py-px font-mono text-fg-2"
                 style={{ fontSize: "9.5px" }}
+                title={`Default repository of ${launchProject.name}`}
                 data-testid="project-default-badge"
               >
-                project default
+                default
               </span>
             ) : undefined
           }

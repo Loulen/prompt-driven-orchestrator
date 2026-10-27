@@ -16,6 +16,7 @@ interface Props {
   repoValid: boolean | null;
   repoValidating: boolean;
   repoError: string | null;
+  /** The field's border: its colour, and `focus-within:` for the focused one. */
   borderClass: string;
   /**
    * Open the explorer HERE instead of at the field's current value (#824). For a
@@ -42,7 +43,7 @@ interface Props {
   help?: string | null;
   /** The daemon's home, to read a grouped repository as `~/code/…`. */
   home?: string | null;
-  /** A mark at the end of the field (New Run's « project default »). */
+  /** A mark after the path, before the loupe (New Run's « default »): never over the path. */
   badge?: ReactNode;
   /** An icon at the start of the field (New Run's globe for a URL, CORE-97). */
   leading?: ReactNode;
@@ -58,6 +59,36 @@ function splitPath(fullPath: string): { folder: string; parent: string } {
     folder: trimmed.slice(lastSlash + 1),
     parent: trimmed.slice(0, lastSlash),
   };
+}
+
+/**
+ * A path on one line, cut in its middle: the folders shrink with an ellipsis,
+ * the last segment stays whole while it fits (`~/work/clients/very-lo…/shop-web`).
+ * Laid over the input, which keeps the value, the caret and the full path in its
+ * title; it takes no pointer, so a click lands in the input.
+ */
+function MidPath({ path, className }: { path: string; className: string }) {
+  const trimmed = path.replace(/\/+$/, "");
+  const cut = trimmed.lastIndexOf("/");
+  const head = cut > 0 ? trimmed.slice(0, cut) : "";
+  const tail = cut > 0 ? trimmed.slice(cut) : trimmed || path;
+  return (
+    <span
+      aria-hidden
+      className={`pointer-events-none absolute inset-0 flex items-center overflow-hidden whitespace-nowrap font-mono ${className}`}
+      style={{ fontSize: "12px" }}
+      data-testid="target-repo-path"
+    >
+      {head && (
+        <span className="min-w-[1ch] shrink truncate text-fg-2" data-testid="target-repo-path-head">
+          {head}
+        </span>
+      )}
+      <span className="max-w-full shrink-0 truncate text-fg" data-testid="target-repo-path-tail">
+        {tail}
+      </span>
+    </span>
+  );
 }
 
 export default function RepoCombobox({
@@ -79,6 +110,9 @@ export default function RepoCombobox({
   hint,
 }: Props) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  // CORE-108: out of focus, the path is shown cut in its middle over the input;
+  // focused, the input shows the raw value to edit.
+  const [focused, setFocused] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -107,8 +141,12 @@ export default function RepoCombobox({
   const showGroups = grouped && dropdownOpen && (shownGroups.length > 0 || !!groupsNote);
 
   const handleFocus = useCallback(() => {
+    setFocused(true);
     setDropdownOpen(true);
   }, []);
+
+  const showPath = !focused && value.trim() !== "";
+  const pad = `${leading ? "pl-2" : "pl-2.5"} ${badge ? "pr-2" : canBrowse || grouped ? "pr-0.5" : "pr-2.5"}`;
 
   const handleSelect = useCallback(
     (repo: string) => {
@@ -149,30 +187,36 @@ export default function RepoCombobox({
 
   return (
     <div ref={containerRef} className="relative">
-      <div className="relative">
-        <input
-          ref={inputRef}
-          id="target-repo"
-          className={`w-full rounded-md border bg-bg-3 ${leading ? "pl-8" : "px-2.5"} py-1.5 ${badge ? "pr-32" : "pr-9"} font-mono text-fg placeholder:text-fg-4 transition-colors focus:outline-none ${borderClass}`}
-          style={{ fontSize: "12px" }}
-          placeholder="/path/to/your/repo"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onFocus={handleFocus}
-          data-testid="target-repo-input"
-          autoComplete="off"
-        />
-        {leading && (
-          <span className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center">{leading}</span>
-        )}
-        {badge && (
-          <span className="pointer-events-none absolute inset-y-0 right-8 flex items-center">{badge}</span>
-        )}
+      {/* CORE-108: one row — the leading icon, the text box, the mark, the loupe.
+          The mark and the loupe are siblings of the text box, so a long path
+          shrinks before them and never runs under them. */}
+      <div className={`flex items-center rounded-md border bg-bg-3 transition-colors ${borderClass}`}>
+        {leading && <span className="pointer-events-none flex shrink-0 items-center pl-2.5">{leading}</span>}
+        <div className="relative min-w-0 flex-1">
+          <input
+            ref={inputRef}
+            id="target-repo"
+            className={`w-full bg-transparent ${pad} py-1.5 font-mono placeholder:text-fg-4 focus:outline-none ${
+              showPath ? "text-transparent" : "text-fg"
+            }`}
+            style={{ fontSize: "12px" }}
+            placeholder="/path/to/your/repo"
+            title={value || undefined}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onFocus={handleFocus}
+            onBlur={() => setFocused(false)}
+            data-testid="target-repo-input"
+            autoComplete="off"
+          />
+          {showPath && <MidPath path={tildify(value, home)} className={pad} />}
+        </div>
+        {badge && <span className="flex shrink-0 items-center">{badge}</span>}
         {canBrowse ? (
           <button
             type="button"
             onClick={openExplorer}
-            className="absolute inset-y-0 right-0 flex items-center px-2.5 text-fg-4 transition-colors hover:text-fg-2"
+            className="flex shrink-0 items-center self-stretch px-2.5 text-fg-4 transition-colors hover:text-fg-2"
             title="Browse for a repository"
             aria-label="Browse for a repository"
             data-testid="repo-browse-trigger"
@@ -188,7 +232,7 @@ export default function RepoCombobox({
                 setDropdownOpen((o) => !o);
                 inputRef.current?.focus();
               }}
-              className="absolute inset-y-0 right-0 flex items-center px-2.5 text-fg-4 transition-colors hover:text-fg-2"
+              className="flex shrink-0 items-center self-stretch px-2.5 text-fg-4 transition-colors hover:text-fg-2"
               aria-label="Show the repositories"
               data-testid="repo-groups-trigger"
             >

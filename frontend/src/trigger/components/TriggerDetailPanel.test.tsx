@@ -423,6 +423,18 @@ describe("TriggerDetailPanel — sections and the fires table (CORE-116)", () =>
     expect(onEdit).toHaveBeenCalledTimes(1);
   });
 
+  it("offers no Run now on a suspended Trigger", () => {
+    fetchTriggerFires.mockResolvedValue([]);
+    render(
+      <TriggerDetailPanel
+        trigger={trigger({ suspension: { extension: "test", reason: "on hold" } })}
+        onSelectRun={noop}
+        onRunNow={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("trigger-detail-run-now")).toBeNull();
+  });
+
   it("names the Trigger's Projet in its configuration", () => {
     fetchTriggerFires.mockResolvedValue([]);
     render(

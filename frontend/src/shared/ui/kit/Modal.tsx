@@ -61,7 +61,9 @@ export function Modal({
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      swallowed.current = true;
+      // Only an Escape aimed inside the dialog can be taken by a layer in it;
+      // one from outside (the focus on the body) still closes it.
+      swallowed.current = !!ref.current && e.target instanceof Node && ref.current.contains(e.target);
       // `cancel` follows its keydown in the same task.
       window.setTimeout(() => (swallowed.current = false));
     };

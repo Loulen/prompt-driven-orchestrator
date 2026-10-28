@@ -58,7 +58,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, handleProvisioningValidity,
     handlePaste, requestClose, triggerInputRejectReason, selectedPipelineId, editingTriggerId,
     input, runName, triggerName, launchProject, pendingDraft, cancelPendingDraft, handleLaunch,
-    handleCreateTrigger, remoteUrl, clone,
+    handleCreateTrigger, remoteUrl, clone, cloning, submitting, canLaunch, canCreateTrigger,
   } = form;
   // CORE-5: where a Run may be created, asked again at each open (a right may
   // have changed since the Projets were last read).
@@ -87,11 +87,15 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
   if (!open) return null;
 
-  // Ctrl+Enter: the footer's primary action.
+  // Ctrl+Enter: the footer's primary action, on the very conditions that
+  // enable its button.
   const submit = () => {
-    if (remoteUrl) void clone(mode === "run");
-    else if (mode === "run") void handleLaunch();
-    else handleCreateTrigger();
+    if (submitting) return;
+    if (remoteUrl) {
+      if (!cloning) void clone(mode === "run");
+    } else if (mode === "run") {
+      if (canLaunch) void handleLaunch();
+    } else if (canCreateTrigger) handleCreateTrigger();
   };
 
   return (

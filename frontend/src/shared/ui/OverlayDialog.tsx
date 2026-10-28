@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type ClipboardEvent, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { IconButton } from "./kit";
+import { FOCUSABLE } from "./kit/layer";
 
 /**
  * The kit's dialog frame (a 32 px title bar, the body, a 40 px footer) in a
@@ -8,7 +9,7 @@ import { IconButton } from "./kit";
  * surfaces open over while it stays mounted (Settings from New Run, #691; a
  * guided tour aiming into it), which the top layer of a modal dialog would
  * cover. Mount it to open it. The focus goes to the control marked
- * `data-autofocus`, and comes back to the opener; Escape (unless a layer
+ * `data-autofocus`, Tab keeps it inside, and it comes back to the opener; Escape (unless a layer
  * inside took it) and a click on the backdrop close it; Ctrl+Enter submits.
  */
 export default function OverlayDialog({
@@ -67,6 +68,22 @@ export default function OverlayDialog({
         className={["d-dlg", `d-dlg--${size}`, "ln-dlg", className].filter(Boolean).join(" ")}
         data-testid={testId}
         onKeyDown={(e) => {
+          // Tab stays in the dialog: past the last control, back to the first.
+          if (e.key === "Tab" && ref.current) {
+            const all = [...ref.current.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null || el === document.activeElement);
+            const first = all[0];
+            const last = all[all.length - 1];
+            if (first && last) {
+              if (e.shiftKey && (document.activeElement === first || document.activeElement === ref.current)) {
+                e.preventDefault();
+                last.focus();
+              } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+              }
+            }
+            return;
+          }
           if (e.key === "Escape" && !e.defaultPrevented) {
             e.preventDefault();
             e.stopPropagation();

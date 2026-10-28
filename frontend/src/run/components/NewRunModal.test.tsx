@@ -3924,6 +3924,26 @@ describe("NewRunModal — the dialog", () => {
     await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
   });
 
+  it("does not launch on Ctrl+Enter while the Run button is disabled", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", prompt_required: true })]);
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    // A prompt-required pipeline and no prompt: the button is disabled.
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "New Run" }), { key: "Enter", ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps Tab inside the dialog", () => {
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    const dialog = screen.getByRole("dialog", { name: "New Run" });
+    screen.getByTestId("new-run-cancel").focus();
+    // The last enabled control is Cancel when Run is disabled: Tab wraps to the first.
+    fireEvent.keyDown(screen.getByTestId("new-run-cancel"), { key: "Tab" });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+  });
+
   it("offers to create a Projet when there is none yet", async () => {
     vi.mocked(fetchProjects).mockResolvedValue([]);
     renderModal();

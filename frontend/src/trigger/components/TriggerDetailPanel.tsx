@@ -140,7 +140,8 @@ export default function TriggerDetailPanel({
         )}
         {trigger.suspension && <SuspendedPill suspension={trigger.suspension} />}
         <span className="d-grow" />
-        {onRunNow && (
+        {/* A suspended Trigger fires neither on its schedule nor by Run now. */}
+        {onRunNow && !trigger.suspension && (
           <Button size="sm" icon={Play} onClick={onRunNow} title="Run now" data-testid="trigger-detail-run-now">
             Run
           </Button>
@@ -153,7 +154,6 @@ export default function TriggerDetailPanel({
         <div className="tg-suspended" title={suspensionTooltip(trigger.suspension)} data-testid="trigger-detail-suspension">
           <Pause size={12} strokeWidth={1.5} aria-hidden />
           <span className="tg-suspended__word">Suspended · does not fire</span>
-          <span className="tg-suspended__why">{suspensionTooltip(trigger.suspension)}</span>
         </div>
       )}
 

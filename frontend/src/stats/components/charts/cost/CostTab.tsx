@@ -3,7 +3,6 @@ import type { StatsCost } from "../../../../shared/generated/StatsCost";
 import type { StatsCostEntity } from "../../../../shared/generated/StatsCostEntity";
 import type { StatsEffortCostEntity } from "../../../../shared/generated/StatsEffortCostEntity";
 import type { StatsProjectCostEntity } from "../../../../shared/generated/StatsProjectCostEntity";
-import { formatCostAmount } from "../../../../run/model/costLabel";
 import { useStatsAbsorption } from "../../../store/useStatsAbsorption";
 import {
   coupleRows,
@@ -14,11 +13,8 @@ import {
 import { isCostNodeRow, type CostAxis } from "../../../model/cost";
 import { RUNS_COUNT } from "../../../model/rowCounts";
 import { Breadcrumb } from "../common/Breadcrumb";
-import { Info } from "lucide-react";
-import { Tooltip } from "../../../../shared/ui/tooltip";
 import type { TabFrame } from "../../StatsCharts";
 import { EmptyNote, Panel } from "../common/ChartPrimitives";
-import { MasterList } from "../common/MasterList";
 import { ProvenanceName } from "../common/Provenance";
 import {
   PipelineName,
@@ -26,6 +22,7 @@ import {
 } from "../common/TableCombinedIcon";
 import type { CoupleSelection } from "../common/tableSelection";
 import { effortNameCell } from "./effortNameCell";
+import { CostRanking } from "./CostRanking";
 import { CostSummary } from "./CostSummary";
 import { CostTable } from "./CostTable";
 
@@ -304,15 +301,6 @@ export function CostTab({
     index === crumbs.length - 1 ? { label: crumb.label } : crumb,
   );
 
-  const axisNote = [
-    "Model ids verbatim, one row per id — the same id run through two harnesses is one row, one column per harness. Hover a model or an effort for where the value was read and its provider.",
-    noCostSource.length > 0
-      ? `${noCostSource.join(", ")} has no cost source and is not on this axis.`
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
   return (
     <div className="sx-tab" data-testid="stats-chart-cost">
       {frame.band(<Breadcrumb crumbs={clickableCrumbs} />)}
@@ -325,57 +313,28 @@ export function CostTab({
           unit={detailUnit}
         />
         <div className="sx-split">
-          <Panel
-            title="Ranked by cost"
-            flush
-            className="sx-aside"
-            testid="stats-drilldown-navigation"
-            aside={
-              <>
-                {axis === "model" && (
-                  <Tooltip content={axisNote} side="top">
-                    <span role="img" aria-label={axisNote} className="inline-flex text-text-3">
-                      <Info size={12} strokeWidth={1.5} />
-                    </span>
-                  </Tooltip>
-                )}
-                <select
-                  aria-label="Cost grouping"
-                  value={axis}
-                  onChange={(event) => {
-                    setAxis(event.target.value as CostAxis);
-                    toTotal();
-                    absorption.clear();
-                  }}
-                  className="sx-select"
-                >
-                  <option value="pipeline">By pipeline</option>
-                  <option value="project">By project</option>
-                  <option value="model">By model</option>
-                </select>
-              </>
-            }
-          >
-            <MasterList
-              rows={rows}
-              selected={axis === "model" ? selectedModelId : selectedId}
-              monoName={axis === "model"}
-              valueLabel={(row) =>
-                formatCostAmount(row.usd, row.partial, row.estimated)
+          <CostRanking
+            axis={axis}
+            onAxisChange={(next) => {
+              setAxis(next);
+              toTotal();
+              absorption.clear();
+            }}
+            noCostSource={noCostSource}
+            rows={rows}
+            selected={axis === "model" ? selectedModelId : selectedId}
+            selection={masterSelection}
+            onSelect={(id) => {
+              if (axis === "model") {
+                setSelectedModelId(id);
+                setSelectedEffortId(null);
+                setSelectedPipelineId(null);
+              } else {
+                setSelectedId(id);
+                setDrilledPipelineId(null);
               }
-              selection={masterSelection}
-              onSelect={(id) => {
-                if (axis === "model") {
-                  setSelectedModelId(id);
-                  setSelectedEffortId(null);
-                  setSelectedPipelineId(null);
-                } else {
-                  setSelectedId(id);
-                  setDrilledPipelineId(null);
-                }
-              }}
-            />
-          </Panel>
+            }}
+          />
 
           <div className="sx-detail" data-testid="stats-drilldown-detail">
             <Panel

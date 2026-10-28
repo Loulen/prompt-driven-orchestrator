@@ -1,13 +1,17 @@
-import { useState } from "react";
-import { ChevronDown, ChevronRight, History } from "lucide-react";
+import { Fragment, useState } from "react";
+import { ChevronDown, ChevronRight, Clock, Hand } from "lucide-react";
 import type { TriggerFire } from "../../../shared/generated/TriggerFire";
-import { formatFireTs, outcomeDot } from "../../model/outcome";
+import { Section } from "../../../shared/ui/kit";
+import { ToneIcon } from "../../../shared/ui/kit/tone";
+import { formatFireTs, outcomeTone, outcomeWord } from "../../model/outcome";
 import { useTriggerFires } from "../../store/useTriggerFires";
 import GuardOutput from "../GuardOutput";
 
 /**
- * A Trigger's reverse-chrono fire history: the answer to "why didn't it fire
- * last night?". Each "fired" entry links to the Run it created.
+ * A Trigger's reverse-chrono fire history, a table: the answer to "why didn't
+ * it fire last night?". Each row: the outcome's icon, when, how (the schedule
+ * or Run now), the outcome and its reason, the Run it created, the guard's
+ * exit code; a guard that skipped unfolds its output.
  */
 export default function FireHistory({
   triggerId,
@@ -21,43 +25,37 @@ export default function FireHistory({
   const { fires, loading } = useTriggerFires(triggerId, refreshKey);
 
   return (
-    <div className="flex flex-col gap-2 border-t border-line p-3" style={{ fontSize: "11.5px" }}>
-      <div className="flex items-center gap-1.5">
-        <History size={12} className="text-text-3" />
-        <span
-          className="font-medium uppercase tracking-wider text-text-3"
-          style={{ fontSize: "10px" }}
-        >
-          Fire history
-        </span>
-      </div>
-
+    <Section title="Fires" count={loading ? undefined : fires.length} flush>
       {loading ? (
-        <div className="text-text-3" style={{ fontSize: "10.5px" }}>
-          Loading…
-        </div>
+        <div className="d-empty--row tg-empty">Loading…</div>
       ) : fires.length === 0 ? (
-        <div className="text-text-3" style={{ fontSize: "10.5px" }} data-testid="fire-history-empty">
-          No fires yet — entries appear here each time the trigger evaluates.
+        <div className="d-empty--row tg-empty" data-testid="fire-history-empty">
+          No fire
         </div>
       ) : (
-        <div className="flex flex-col gap-1.5" data-testid="fire-history">
-          {fires.map((f) => (
-            <FireEntry key={f.id} fire={f} onSelectRun={onSelectRun} />
-          ))}
-        </div>
+        <table className="tg-fires" data-testid="fire-history">
+          <thead>
+            <tr>
+              <th aria-label="Outcome icon" />
+              <th>Time</th>
+              <th aria-label="Source" />
+              <th>Outcome</th>
+              <th>Run</th>
+              <th className="tg-r">Exit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fires.map((f) => (
+              <FireEntry key={f.id} fire={f} onSelectRun={onSelectRun} />
+            ))}
+          </tbody>
+        </table>
       )}
-    </div>
+    </Section>
   );
 }
 
-function FireEntry({
-  fire,
-  onSelectRun,
-}: {
-  fire: TriggerFire;
-  onSelectRun: (runId: string) => void;
-}) {
+function FireEntry({ fire, onSelectRun }: { fire: TriggerFire; onSelectRun: (runId: string) => void }) {
   const [showOutput, setShowOutput] = useState(false);
 
   // The disclosure is scoped strictly to `guard-exit-nonzero` rows (#244/D2):
@@ -65,70 +63,77 @@ function FireEntry({
   // rows carry no captured streams. `!= null` on the code so a legit `0` counts.
   const hasGuardOutput =
     fire.outcome === "guard-exit-nonzero" &&
-    (fire.guard_exit_code != null ||
-      !!fire.guard_stdout?.trim() ||
-      !!fire.guard_stderr?.trim());
+    (fire.guard_exit_code != null || !!fire.guard_stdout?.trim() || !!fire.guard_stderr?.trim());
+  const word = outcomeWord(fire.outcome);
+  const manual = fire.source === "manual";
+  const SourceIcon = manual ? Hand : Clock;
 
   return (
-    <div
-      className="flex flex-col gap-0.5 rounded border border-line bg-surface-2 px-2 py-1.5"
-      data-testid="fire-entry"
-    >
-      <div className="flex items-center gap-1.5">
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${outcomeDot(fire.outcome)}`} />
-        <span className="font-medium text-text-2">{fire.outcome}</span>
-        {fire.source === "manual" && (
-          <span
-            className="rounded border border-line-strong px-1 py-px text-text-3"
-            style={{ fontSize: "9px" }}
-            data-testid="fire-source-manual"
-          >
-            manual
-          </span>
-        )}
-        <span className="ml-auto font-mono text-text-3" style={{ fontSize: "10px" }}>
+    <Fragment>
+      <tr className="tg-fire" data-testid="fire-entry" data-outcome={fire.outcome}>
+        <td className="tg-fire__ic">
+          <ToneIcon tone={outcomeTone(fire.outcome)} />
+        </td>
+        <td className="tg-mono tg-fire__ts" title={fire.ts}>
           {formatFireTs(fire.ts)}
-        </span>
-      </div>
-      {fire.reason && (
-        <div className="text-text-3" style={{ fontSize: "10.5px" }}>
-          {fire.reason}
-        </div>
-      )}
-      {fire.run_id && (
-        <button
-          onClick={() => onSelectRun(fire.run_id!)}
-          className="self-start font-mono text-primary hover:underline"
-          style={{ fontSize: "10.5px" }}
-          data-testid="fire-run-link"
-          title="Open the run this fire created"
-        >
-          {fire.run_id}
-        </button>
-      )}
-
-      {hasGuardOutput && (
-        <>
-          <button
-            type="button"
-            onClick={() => setShowOutput((v) => !v)}
-            className="flex cursor-pointer items-center gap-1 self-start text-text-3 transition-colors hover:text-text-2"
-            style={{ fontSize: "10.5px" }}
-            data-testid="fire-guard-output-toggle"
+        </td>
+        <td className="tg-fire__ic">
+          <span
+            role="img"
+            aria-label={manual ? "Run now" : "Schedule"}
+            title={manual ? "Run now" : "Schedule"}
+            data-testid={manual ? "fire-source-manual" : "fire-source-cron"}
           >
-            {showOutput ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            Guard output
-          </button>
-          {showOutput && (
+            <SourceIcon size={12} strokeWidth={1.5} aria-hidden />
+          </span>
+        </td>
+        <td className="tg-fire__out" title={fire.reason ? `${word} · ${fire.reason}` : `${word} (${fire.outcome})`}>
+          {hasGuardOutput && (
+            <button
+              type="button"
+              onClick={() => setShowOutput((v) => !v)}
+              className="tg-fire__toggle"
+              aria-expanded={showOutput}
+              aria-label="Guard output"
+              title="Guard output"
+              data-testid="fire-guard-output-toggle"
+            >
+              {showOutput ? <ChevronDown size={12} strokeWidth={1.5} /> : <ChevronRight size={12} strokeWidth={1.5} />}
+            </button>
+          )}
+          <span className="tg-fire__word">{word}</span>
+          {fire.reason && <span className="tg-faint tg-fire__reason">{fire.reason}</span>}
+        </td>
+        <td className="tg-fire__run">
+          {fire.run_id ? (
+            <button
+              type="button"
+              onClick={() => onSelectRun(fire.run_id!)}
+              className="tg-link tg-mono"
+              data-testid="fire-run-link"
+              title={`Open ${fire.run_id}`}
+            >
+              {fire.run_id}
+            </button>
+          ) : (
+            <span className="tg-faint">–</span>
+          )}
+        </td>
+        <td className="tg-mono tg-r">{fire.guard_exit_code ?? ""}</td>
+      </tr>
+      {hasGuardOutput && showOutput && (
+        <tr className="tg-fire__more">
+          <td />
+          <td colSpan={5}>
             <GuardOutput
               stdout={fire.guard_stdout}
               stderr={fire.guard_stderr}
               exitCode={fire.guard_exit_code}
               data-testid="fire-guard-output"
             />
-          )}
-        </>
+          </td>
+        </tr>
       )}
-    </div>
+    </Fragment>
   );
 }

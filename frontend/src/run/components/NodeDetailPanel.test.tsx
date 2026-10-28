@@ -277,7 +277,7 @@ describe("NodeDetailPanel", () => {
         expect(toggle).toHaveAttribute("aria-expanded", "false");
         expect(screen.queryByLabelText("Copy patterns")).not.toBeInTheDocument();
         await waitFor(() =>
-          expect(toggle).toHaveTextContent("Provisioning · 0 inherited · 1 at this level"),
+          expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("0 inherited · 1 at this level"),
         );
         fireEvent.click(toggle);
         expect(screen.getByLabelText("Copy patterns")).toHaveAttribute("readonly");

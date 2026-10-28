@@ -371,3 +371,29 @@ describe("FsExplorerModal — accessibility (#437)", () => {
     expect(props.onClose).toHaveBeenCalled();
   });
 });
+
+describe("FsExplorerModal — the folder in its title bar (CORE-116)", () => {
+  const DEEP = "/home/user/work/clients/very-long-organisation-name/monorepo/frontend-application";
+
+  it("cuts the folder in its middle: its own name stays whole, the full path in the tooltip", async () => {
+    mockedBrowse.mockResolvedValue({ ...MIXED, path: DEEP });
+    renderModal();
+    const path = await screen.findByTestId("fs-browse-path");
+    await waitFor(() => expect(path).toHaveTextContent(DEEP));
+    expect(path).toHaveAttribute("title", DEEP);
+    expect(path.querySelector(".ln-path__tail")).toHaveTextContent("/frontend-application");
+  });
+
+  it("closes itself alone on Escape, stopped before the dialog under it", async () => {
+    const outer = vi.fn();
+    document.addEventListener("keydown", outer);
+    const { onClose } = renderModal();
+    await screen.findByTestId("fs-browse-modal");
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    screen.getByTestId("fs-browse-modal").dispatchEvent(event);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+    expect(outer).not.toHaveBeenCalled();
+    document.removeEventListener("keydown", outer);
+  });
+});

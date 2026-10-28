@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import TriggerDetailPanel from "./TriggerDetailPanel";
 import type { Trigger } from "../../shared/generated/Trigger";
 import type { TriggerFire } from "../../shared/generated/TriggerFire";
@@ -115,7 +115,8 @@ describe("TriggerDetailPanel", () => {
     ]);
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
 
-    expect(await screen.findByText(/skipped-overlap/i)).toBeInTheDocument();
+    expect(await screen.findByText("Skipped, overlap")).toBeInTheDocument();
+    expect(screen.getByTestId("fire-entry")).toHaveAttribute("data-outcome", "skipped-overlap");
     expect(screen.getByText("previous run still active")).toBeInTheDocument();
     expect(screen.queryByTestId("fire-run-link")).not.toBeInTheDocument();
   });
@@ -127,16 +128,16 @@ describe("TriggerDetailPanel", () => {
     ]);
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
 
-    expect(await screen.findByText(/guard-error/i)).toBeInTheDocument();
+    expect(await screen.findByText("Guard error")).toBeInTheDocument();
     expect(screen.getByText("guard timed out")).toBeInTheDocument();
-    expect(screen.getByText(/guard-exit-nonzero/i)).toBeInTheDocument();
+    expect(screen.getByText("Guard skip")).toBeInTheDocument();
     expect(screen.getByText("no work to do")).toBeInTheDocument();
   });
 
   it("shows an empty fire-history state when the trigger never fired", async () => {
     fetchTriggerFires.mockResolvedValue([]);
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
-    expect(await screen.findByText(/no fires yet/i)).toBeInTheDocument();
+    expect(await screen.findByTestId("fire-history-empty")).toHaveTextContent(/^No fire$/);
   });
 
   it("shows the concurrency cap for a bounded-allow trigger (#239)", () => {
@@ -182,7 +183,7 @@ describe("TriggerDetailPanel", () => {
       fire({ id: 5, outcome: "guard-error", reason: "guard timed out", run_id: undefined }),
     ]);
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
-    expect(await screen.findByText(/guard-error/i)).toBeInTheDocument();
+    expect(await screen.findByText("Guard error")).toBeInTheDocument();
     expect(screen.queryByTestId("fire-guard-output-toggle")).not.toBeInTheDocument();
   });
 
@@ -299,9 +300,8 @@ describe("TriggerDetailPanel", () => {
     fireEvent.click(screen.getByTestId("guard-test-button"));
 
     expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would skip");
-    const output = screen.getByTestId("guard-test-output");
-    expect(output).toHaveTextContent("3");
-    expect(output).toHaveTextContent("no work to do");
+    expect(screen.getByTestId("guard-test-result")).toHaveTextContent("exit 3");
+    expect(screen.getByTestId("guard-test-output")).toHaveTextContent("no work to do");
   });
 
   it("shows 'Guard error' for an error verdict", async () => {
@@ -371,5 +371,63 @@ describe("TriggerDetailPanel", () => {
 
     await screen.findByTestId("guard-test-result");
     expect(screen.queryByTestId("guard-test-caveat")).not.toBeInTheDocument();
+  });
+});
+
+describe("TriggerDetailPanel — sections and the fires table (CORE-116)", () => {
+  beforeEach(() => {
+    fetchTriggerFires.mockReset();
+    fetchSettings.mockReset();
+    fetchSettings.mockResolvedValue({ home: "/home/me" });
+  });
+
+  it("lists the fires in a table: outcome icon, time, source, outcome, run, exit", async () => {
+    fetchTriggerFires.mockResolvedValue([
+      fire({ id: 2, outcome: "guard-exit-nonzero", reason: "no work", run_id: undefined, guard_exit_code: 3, source: "cron" }),
+      fire({ id: 1, source: "manual" }),
+    ]);
+    render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
+    const table = await screen.findByTestId("fire-history");
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
+      "",
+      "Time",
+      "",
+      "Outcome",
+      "Run",
+      "Exit",
+    ]);
+    const [skip, fired] = within(table).getAllByTestId("fire-entry");
+    expect(skip).toHaveTextContent("Guard skip");
+    expect(skip.lastElementChild).toHaveTextContent("3");
+    expect(within(skip).getByTestId("fire-source-cron")).toHaveAccessibleName("Schedule");
+    expect(within(fired).getByTestId("fire-source-manual")).toHaveAccessibleName("Run now");
+    expect(within(fired).getByTestId("fire-run-link")).toBeInTheDocument();
+    // The section's head counts them.
+    expect(screen.getByRole("button", { name: /Fires/ })).toHaveTextContent("2");
+  });
+
+  it("says « No fire » and nothing more when the trigger never fired", async () => {
+    fetchTriggerFires.mockResolvedValue([]);
+    render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
+    expect(await screen.findByTestId("fire-history-empty")).toHaveTextContent(/^No fire$/);
+  });
+
+  it("puts Run now and Edit in its header", () => {
+    fetchTriggerFires.mockResolvedValue([]);
+    const onRunNow = vi.fn();
+    const onEdit = vi.fn();
+    render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} onRunNow={onRunNow} onEdit={onEdit} />);
+    fireEvent.click(screen.getByTestId("trigger-detail-run-now"));
+    fireEvent.click(screen.getByTestId("trigger-detail-edit"));
+    expect(onRunNow).toHaveBeenCalledTimes(1);
+    expect(onEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the Trigger's Projet in its configuration", () => {
+    fetchTriggerFires.mockResolvedValue([]);
+    render(
+      <TriggerDetailPanel trigger={trigger({ project_id: "prj-1" })} projectName="Platform" onSelectRun={noop} />,
+    );
+    expect(screen.getByText("Project").nextElementSibling).toHaveTextContent("Platform");
   });
 });

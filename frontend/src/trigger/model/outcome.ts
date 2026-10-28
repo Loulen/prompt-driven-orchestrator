@@ -1,4 +1,5 @@
 import type { Trigger } from "../../shared/generated/Trigger";
+import type { Tone } from "../../shared/ui/kit";
 
 /**
  * Map a fire outcome (a Trigger's `last_outcome`, or one history row's) to a
@@ -69,4 +70,41 @@ export function overlapLabel(t: Pick<Trigger, "overlap_policy" | "max_concurrent
       ? `allow (max ${t.max_concurrent} concurrent)`
       : "allow (unlimited concurrent fires)"
     : "skip (default)";
+}
+
+/** A fire outcome's status tone, for its icon (the colours of {@link outcomeDot}). */
+export function outcomeTone(outcome: string | null | undefined): Tone {
+  switch (outcome) {
+    case "fired":
+      return "done";
+    case "error":
+      return "failed";
+    case "skipped-overlap":
+    case "skipped-suspended":
+    case "guard-exit-nonzero":
+    case "guard-error":
+      return "blocked";
+    default:
+      return "skipped";
+  }
+}
+
+/** A fire outcome, as a word: `guard-exit-nonzero` → « Guard skip ». */
+export function outcomeWord(outcome: string): string {
+  switch (outcome) {
+    case "fired":
+      return "Fired";
+    case "skipped-overlap":
+      return "Skipped, overlap";
+    case "skipped-suspended":
+      return "Skipped, suspended";
+    case "guard-exit-nonzero":
+      return "Guard skip";
+    case "guard-error":
+      return "Guard error";
+    case "error":
+      return "Error";
+    default:
+      return outcome;
+  }
 }

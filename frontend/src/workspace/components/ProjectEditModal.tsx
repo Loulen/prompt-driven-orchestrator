@@ -14,6 +14,9 @@ import { useSkillBank } from "../../skill/store/useSkillBank";
 import { announceSkillTiersChanged, useSkillTiers } from "../../skill/store/useSkillTiers";
 import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import ProjectMembersList from "./ProjectMembersList";
+import { FolderGit2 } from "lucide-react";
+import { Button, Kbd, Modal, TextInput } from "../../shared/ui/kit";
+import FormRow, { FormSection } from "../../shared/ui/FormRow";
 import type { ProjectEditContext } from "../../shared/extensions/contract";
 import { sectionSaveError, useSectionForm } from "../../shared/extensions/sectionForm";
 
@@ -39,6 +42,7 @@ export default function ProjectEditModal({
   projects,
   onClose,
   onSaved,
+  home,
 }: {
   /** The Projet being edited, or `null` when the pencil creates a fresh one. */
   initialProject: Project | null;
@@ -51,7 +55,10 @@ export default function ProjectEditModal({
   /** All Projets, to name the other Projets holding a candidate. */
   projects: Project[];
   onClose: () => void;
-  onSaved: () => void;
+  /** The Projet saved (created or edited); called again when a retry saves it. */
+  onSaved: (project?: Project) => void;
+  /** The daemon's home, to read a path as `~/code/…`. */
+  home?: string | null;
 }) {
   const [name, setName] = useState(initialName);
   // The Projet this modal created, when a later step of the save failed: a retry
@@ -150,6 +157,7 @@ export default function ProjectEditModal({
       let projectId: string;
       let current: Set<string>;
       let attributes = editing?.attributes ?? {};
+      let savedProject: Project | undefined = editing ?? undefined;
       if (editing) {
         projectId = editing.id;
         current = new Set(editing.members);
@@ -163,6 +171,7 @@ export default function ProjectEditModal({
         });
       } else {
         const project = await createProject(trimmedName, [...checked]);
+        savedProject = project;
         projectId = project.id;
         current = new Set(project.members);
         attributes = project.attributes ?? {};
@@ -199,12 +208,12 @@ export default function ProjectEditModal({
         });
       } catch (cause) {
         // The Projet is saved: the list shows it; the section may retry.
-        onSaved();
+        onSaved(savedProject);
         setError(sectionSaveError(cause));
         setSubmitting(false);
         return;
       }
-      onSaved();
+      onSaved(savedProject);
       onClose();
     } catch (e) {
       // The Projet exists even though a later step failed: let the list show it.
@@ -220,145 +229,129 @@ export default function ProjectEditModal({
     }
   }
 
+  const memberCount = checked.size;
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
-      data-testid="project-edit-backdrop"
-      onClick={cancel}
+    <Modal
+      size="l"
+      icon={<FolderGit2 size={14} strokeWidth={1.5} className="ln-faint" aria-hidden />}
+      title={
+        editing ? (
+          <>
+            Edit project <span className="ln-pmodal__name">{editing.name}</span>
+          </>
+        ) : (
+          "New project"
+        )
+      }
+      titleText={editing ? `Edit project ${editing.name}` : "New project"}
+      onClose={cancel}
+      onSubmit={() => void handleSave()}
+      footerNote={
+        <span className="ln-mono" data-testid="project-edit-summary">
+          {memberCount} repo{memberCount === 1 ? "" : "s"}
+        </span>
+      }
+      actions={
+        <>
+          <Button onClick={cancel} data-testid="project-edit-cancel">
+            Cancel
+          </Button>
+          <Button tone="primary" onClick={() => void handleSave()} disabled={!canSave} data-testid="project-edit-save">
+            {submitting ? "Saving…" : "Save"}
+            {!submitting && <Kbd>Ctrl ↵</Kbd>}
+          </Button>
+        </>
+      }
+      data-testid="project-edit-modal"
     >
-      <div
-        className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-2"
-        style={{ fontSize: "12px" }}
-        role="dialog"
-        aria-label="Edit project"
-        data-testid="project-edit-modal"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* #940: bounded to the window like New Run — the header and the actions
-            never shrink, only the body scrolls when the content overflows; the
-            borders mark where the scrolling body is cut off. */}
-        <div className="shrink-0 border-b border-line px-4 pb-3 pt-4">
-          <div className="mb-1 font-medium text-text">
-            {editing ? "Edit project" : "Name project"}
-          </div>
-          <p className="text-text-3" style={{ fontSize: "11px" }}>
-            Group repositories that work together under one name. A repository may
-            be in several projects; the settings here apply to every Run launched in
-            this project, on its default primary repository unless another is chosen.
-          </p>
-        </div>
-
-        <div className="min-h-0 overflow-y-auto px-4 pt-3" data-testid="project-edit-body">
-        <label className="mb-1 block text-text-3" style={{ fontSize: "11px" }}>
-          Name
-        </label>
-        <input
-          value={name}
-          onChange={(e) => {
-            setName(e.target.value);
-            setError(null);
-          }}
-          data-testid="project-name-input"
-          className="mb-3 w-full rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text outline-none focus:border-primary"
-          style={{ fontSize: "11px" }}
-        />
-
-        <div className="mb-3">
-        <AgentControl
-          choice={agentChoice}
-          onChange={setAgentChoice}
-          profiles={agentProfiles}
-          catalog={harnessCatalog}
-          inherited={{ harness: "claude", model: null, effort: null }}
-          label="Agent — Project"
-          testId="project-agent-control"
-        />
-        <div className="mt-2">
-          {/* #669/ADR-0062: the Projet tier; the instance selection is inherited. */}
-          <SkillSelector
-            tier="project"
-            own={skills}
-            onChange={setSkills}
-            inherited={[{ tier: "instance", skills: instanceSkills }]}
-            bank={skillBank}
-            label="Skills — Project"
-            testId="project-skill-selector"
-          />
-        </div>
-        <div className="sr-only" aria-hidden>
-          <HarnessSelect
-            value={harness}
-            onChange={setHarness}
-            catalog={harnessCatalog}
-            inheritLabel="No harness (inherit)"
-            data-testid="project-harness-select"
-          />
-        </div>
-
-        {initialProject && (
-          <div className="mb-3">
+      {/* #940: bounded to the window like New Run — only the body scrolls. */}
+      <div className="ln-form" data-testid="project-edit-body">
+        <div className="ln-sec">
+          <FormRow label="Name" htmlFor="project-name">
+            <TextInput
+              id="project-name"
+              className="ln-grow"
+              value={name}
+              placeholder="Project name"
+              onChange={(e) => {
+                setName(e.target.value);
+                setError(null);
+              }}
+              data-autofocus=""
+              data-testid="project-name-input"
+            />
+          </FormRow>
+          <FormRow label="Agent" title="Every Run launched in this project">
+            <AgentControl
+              choice={agentChoice}
+              onChange={setAgentChoice}
+              profiles={agentProfiles}
+              catalog={harnessCatalog}
+              inherited={{ harness: "claude", model: null, effort: null }}
+              label="Agent — Project"
+              showLabel={false}
+              testId="project-agent-control"
+            />
+            <div className="d-sr" aria-hidden>
+              <HarnessSelect
+                value={harness}
+                onChange={setHarness}
+                catalog={harnessCatalog}
+                inheritLabel="No harness (inherit)"
+                data-testid="project-harness-select"
+              />
+            </div>
+          </FormRow>
+          <FormRow label="Skills" title="The project tier, on top of the instance's">
+            {/* #669/ADR-0062: the Projet tier; the instance selection is inherited. */}
+            <SkillSelector
+              tier="project"
+              own={skills}
+              onChange={setSkills}
+              inherited={[{ tier: "instance", skills: instanceSkills }]}
+              bank={skillBank}
+              label="Skills — Project"
+              showLabel={false}
+              testId="project-skill-selector"
+            />
+          </FormRow>
+          {initialProject && (
             <PersistedProvisioningEditor
               scope="project"
               projectId={initialProject.id}
               initialRepository={initialProject.members[0] ?? ""}
             />
-          </div>
-        )}
+          )}
         </div>
 
-        <label className="mb-1 block text-text-3" style={{ fontSize: "11px" }}>
-          Member repositories
-        </label>
-        <ProjectMembersList
-          candidates={candidates}
-          checked={checked}
-          alsoIn={alsoIn}
-          primary={effectivePrimary}
-          onToggle={toggle}
-          onPrimary={setPrimary}
-        />
+        <FormSection label="Repositories">
+          <ProjectMembersList
+            candidates={candidates}
+            checked={checked}
+            alsoIn={alsoIn}
+            primary={effectivePrimary}
+            onToggle={toggle}
+            onPrimary={setPrimary}
+            home={home}
+          />
+        </FormSection>
 
         {/* ADR-0081 (#31): the `project/edit` sections, under the core's fields,
             one per contribution in registration order. */}
-        <ExtensionSections<ProjectEditContext>
-          location="project/edit"
-          extra={sectionContext}
-          form={sections.form}
-        />
+        <div className="ln-ext empty:hidden">
+          <ExtensionSections<ProjectEditContext>
+            location="project/edit"
+            extra={sectionContext}
+            form={sections.form}
+          />
         </div>
 
-        <div className="shrink-0 border-t border-line px-4 py-3">
         {error && (
-          <div
-            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
-            style={{ fontSize: "11px" }}
-            data-testid="project-edit-error"
-          >
+          <div className="ln-alert" role="alert" data-testid="project-edit-error">
             {error}
           </div>
         )}
-
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={cancel}
-            className="cursor-pointer rounded border border-line-strong px-3 py-1 text-text-3 transition-colors hover:bg-hover"
-            style={{ fontSize: "11px" }}
-            data-testid="project-edit-cancel"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={!canSave}
-            className="cursor-pointer rounded bg-primary px-3 py-1 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ fontSize: "11px" }}
-            data-testid="project-edit-save"
-          >
-            {submitting ? "Saving…" : "Save"}
-          </button>
-        </div>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 }

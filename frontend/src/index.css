@@ -12,6 +12,8 @@
 @import "./app/shell.css";
 /* The command field's palette. */
 @import "./app/palette/palette.css";
+/* The launch forms: New Run, the Triggers, the Project modal. */
+@import "./run/components/newRun/launch.css";
 
 @custom-variant dark (&:is(.dark *));
 

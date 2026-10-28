@@ -88,7 +88,7 @@ export default function TriggerRow({
           className="mt-0.5 flex items-center gap-1.5 truncate text-text-3"
           style={{ fontSize: "10px" }}
         >
-          <span className="min-w-0 truncate font-mono">{t.pipeline_name}</span>
+          <span className="min-w-0 truncate font-mono" title={t.pipeline_name}>{t.pipeline_name}</span>
           {t.target_repo && (
             <span
               className="shrink-0 rounded border border-line-strong px-1 py-px"

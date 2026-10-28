@@ -10,3 +10,8 @@ export function tildify(path: string, home: string | null | undefined): string {
   if (root && path.startsWith(`${root}/`)) return `~${path.slice(root.length)}`;
   return path;
 }
+
+/** The last segment of a path or a URL: `shop-api` for `/work/shop-api/`. */
+export function baseName(path: string): string {
+  return path.replace(/\/+$/, "").split("/").pop() || path;
+}

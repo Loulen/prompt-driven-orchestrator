@@ -239,9 +239,7 @@ describe("ProjectsPanel", () => {
     await waitFor(() =>
       expect(screen.getByTestId("project-clone-into")).toHaveTextContent("~/pdo/repos/analytics"),
     );
-    expect(screen.getByTestId("project-clone")).toHaveTextContent(
-      "full clone · with the daemon's git credentials",
-    );
+    expect(screen.getByTestId("project-clone")).toHaveTextContent("full clone");
     fireEvent.click(screen.getByTestId("project-clone-start"));
 
     await waitFor(() =>
@@ -254,7 +252,8 @@ describe("ProjectsPanel", () => {
     expect(within(job).getByTestId("project-clone-progress")).toHaveTextContent(
       "Receiving objects · 64 % · 38.20 MiB",
     );
-    expect(job).toHaveTextContent("You can close Settings: the clone goes on, and the repository joins Checkout");
+    // Settings may close: the repository joins the Projet once cloned (in the tooltip).
+    expect(within(job).getByTitle("Joins Checkout when the clone is done")).toBeInTheDocument();
 
     api.fetchClones.mockResolvedValue([cloneJob({ state: "done", progress: null })]);
     await waitFor(() => expect(onChanged).toHaveBeenCalled(), { timeout: 2000 });

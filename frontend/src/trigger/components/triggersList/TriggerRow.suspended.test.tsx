@@ -78,9 +78,10 @@ describe("TriggerRow — suspended by an extension (API 0.8)", () => {
     const pill = screen.getByTestId("trigger-suspended");
     // Once the hover actions take their room, the column gets narrower than
     // the pill: the pill truncates its label inside the column, never past it.
-    expect(pill).toHaveClass("min-w-0", "max-w-full", "overflow-hidden");
-    expect(pill).not.toHaveClass("shrink-0");
-    expect(screen.getByText("suspended")).toHaveClass("truncate");
+    // `tg-suspended-pill`: shrinks (`flex: 0 1 auto`, `min-width: 0`, `overflow: hidden`),
+    // its label ellipsed (`tg-suspended-pill__t`).
+    expect(pill).toHaveClass("tg-suspended-pill");
+    expect(screen.getByText("suspended")).toHaveClass("tg-suspended-pill__t");
   });
 
   it("is a plain enabled row without a suspension", () => {

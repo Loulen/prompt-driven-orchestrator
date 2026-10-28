@@ -229,40 +229,43 @@ export default function ProvisioningRulesEditor({
   }
 
   return (
-    <section
-      className="@container rounded-md border border-line bg-surface-2"
-      data-testid={`provisioning-${level}`}
-    >
-      <div className={`px-3 py-2 ${open ? "border-b border-line" : ""}`}>
-        <div className="flex items-center justify-between gap-2">
+    <section className="@container ln-prov" data-open={open || undefined} data-testid={`provisioning-${level}`}>
+      {/* A label-left row, like the form around it: the toggle as the label,
+          the summary and the repository it resolves against beside it. */}
+      <div className="ln-row ln-prov__head">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => {
+            if (!blocked) setExpanded(!open);
+          }}
+          title={blocked ? "Fix the provisioning issue to collapse" : SUBTITLE}
+          className="ln-row__label ln-prov__toggle"
+          data-testid="provisioning-toggle"
+        >
+          Provisioning
+        </button>
+        <div className="ln-row__ctl">
           <button
             type="button"
-            aria-expanded={open}
-            aria-controls={bodyId}
+            tabIndex={-1}
+            aria-hidden
+            className="ln-prov__chev"
             onClick={() => {
               if (!blocked) setExpanded(!open);
             }}
-            title={blocked ? "Fix the provisioning issue to collapse" : undefined}
-            className="flex max-w-full shrink-0 cursor-pointer items-center gap-1 text-left font-medium text-text"
-            data-testid="provisioning-toggle"
           >
-            {open ? (
-              <ChevronDown size={12} aria-hidden="true" className="shrink-0 text-text-3" />
-            ) : (
-              <ChevronRight size={12} aria-hidden="true" className="shrink-0 text-text-3" />
-            )}
-            <span className="truncate">
-              Provisioning <span className="font-normal text-text-3">· {summary}</span>
-            </span>
+            {open ? <ChevronDown size={12} strokeWidth={1.5} /> : <ChevronRight size={12} strokeWidth={1.5} />}
           </button>
+          <span className="ln-faint ln-ellipsis ln-prov__sum" data-testid="provisioning-summary">
+            {summary}
+          </span>
           {marker && (
-            <div className="min-w-0 truncate text-right text-text-3" style={{ fontSize: 10 }} title={marker}>
+            <span className="ln-faint ln-ellipsis ln-rowend ln-prov__marker" title={marker}>
               {marker}
-            </div>
+            </span>
           )}
-        </div>
-        <div className="mt-0.5 text-text-3" style={{ fontSize: 10 }}>
-          {SUBTITLE}
         </div>
       </div>
       {open && (

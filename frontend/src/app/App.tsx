@@ -40,6 +40,7 @@ import { useAssistantTarget } from "./useAssistantTarget";
 import CenterPane from "./CenterPane";
 import { useShellLayout } from "./useShellLayout";
 import RightPane from "./RightPane";
+import { ConfirmDialog } from "../shared/ui/kit";
 import AppSurfaces from "./AppSurfaces";
 import StatusBar from "./StatusBar";
 import UpdateModals from "./UpdateModals";
@@ -314,6 +315,9 @@ export default function App() {
               selectedTrigger={selectedTrigger}
               triggerPromptRequired={triggerPromptRequired}
               firesRefreshKey={firesRefreshKey}
+              onRunNowTrigger={(t) => void launch.handleRunNowTrigger(t)}
+              onEditTrigger={(t) => openNewRunModal({ kind: "edit-trigger", trigger: t })}
+              projects={projects}
               runNode={runNode}
               editTab={editTab}
               selectedRun={selectedRun}
@@ -375,6 +379,16 @@ export default function App() {
       />
       {/* After the full-window surfaces, which it must paint over. */}
       <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
+      {/* #348: a manual fire while the Triggers are paused is deliberate. */}
+      {launch.pausedFire && (
+        <ConfirmDialog
+          title={`Fire ${launch.pausedFire.name}?`}
+          consequence="Triggers are paused"
+          actionLabel="Run now"
+          onConfirm={launch.confirmPausedFire}
+          onClose={launch.cancelPausedFire}
+        />
+      )}
       <EditorModals
         saveErrorTab={saveErrorTab}
         onViewYaml={info.handleViewYaml}

@@ -3,14 +3,14 @@ import { Menu as MenuPrimitive } from "@base-ui/react/menu"
 
 import { cn } from "@/shared/lib/utils"
 import { ChevronRightIcon, CheckIcon } from "lucide-react"
-import { appRoot } from "./zoom"
+import { layerHostRef } from "./zoom"
 
 function DropdownMenu({ ...props }: MenuPrimitive.Root.Props) {
   return <MenuPrimitive.Root data-slot="dropdown-menu" {...props} />
 }
 
 function DropdownMenuPortal({ ...props }: MenuPrimitive.Portal.Props) {
-  return <MenuPrimitive.Portal data-slot="dropdown-menu-portal" container={appRoot()} {...props} />
+  return <MenuPrimitive.Portal data-slot="dropdown-menu-portal" container={layerHostRef} {...props} />
 }
 
 function DropdownMenuTrigger({ ...props }: MenuPrimitive.Trigger.Props) {
@@ -31,8 +31,9 @@ function DropdownMenuContent({
     "align" | "alignOffset" | "side" | "sideOffset" | "anchor"
   >) {
   return (
-    // In the app's root, so the menu is drawn at the UI scale (`zoom.ts`).
-    <MenuPrimitive.Portal container={appRoot()}>
+    // In the app's root, so the menu is drawn at the UI scale (`zoom.ts`), or
+    // in the open modal dialog, outside of which the page is inert.
+    <MenuPrimitive.Portal container={layerHostRef}>
       <MenuPrimitive.Positioner
         className="isolate z-50 outline-none"
         align={align}

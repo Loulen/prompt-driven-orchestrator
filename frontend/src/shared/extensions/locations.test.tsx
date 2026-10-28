@@ -256,7 +256,8 @@ describe("a section location", () => {
     const [demo, rights] = screen.getAllByTestId(/^extension-section-/);
     expect(demo).toHaveAttribute("data-testid", "extension-section-demo:attach");
     expect(rights).toHaveAttribute("data-testid", "extension-section-rights:rights");
-    expect(within(demo).getByText("· Extension demo")).toBeInTheDocument();
+    // The extension that adds it: its icon, named, and in the tag's tooltip.
+    expect(within(demo).getByRole("img", { name: "Extension demo" })).toBeInTheDocument();
 
     fireEvent.change(within(demo).getByLabelText("draft"), { target: { value: "draft-1" } });
     expect(saves).toEqual([]);

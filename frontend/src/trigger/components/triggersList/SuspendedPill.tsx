@@ -18,12 +18,11 @@ export default function SuspendedPill({ suspension }: { suspension: TriggerSuspe
           role="note"
           tabIndex={0}
           aria-label={`Suspended: ${suspension.reason}`}
-          className="inline-flex min-w-0 max-w-full items-center gap-0.5 overflow-hidden rounded-full border border-st-await/50 bg-st-await/14 px-1.5 py-px text-st-await"
-          style={{ fontSize: "9px" }}
+          className="d-chip tg-suspended-pill"
           data-testid="trigger-suspended"
         >
-          <Pause size={8} className="shrink-0" aria-hidden="true" />
-          <span className="truncate">suspended</span>
+          <Pause size={10} strokeWidth={2} aria-hidden="true" />
+          <span className="tg-suspended-pill__t">suspended</span>
         </span>
       </Tooltip>
     </>

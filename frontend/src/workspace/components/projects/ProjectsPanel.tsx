@@ -182,7 +182,8 @@ export default function ProjectsPanel({
           availableRepos={candidates(editing, recent, runs)}
           projects={projects}
           onClose={() => setEditing(null)}
-          onSaved={onChanged}
+          onSaved={() => onChanged()}
+          home={home}
         />
       )}
     </div>

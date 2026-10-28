@@ -125,8 +125,8 @@ describe("ChangelogModal (#698)", () => {
     expect(screen.getByTestId("changelog-manual-command")).toHaveTextContent(
       "brew update && brew upgrade Loulen/tap/pdo",
     );
-    expect(screen.getByTestId("changelog-copy-command")).toHaveTextContent("Copy command");
-    expect(screen.getByText(/To update, run in a terminal/)).toBeInTheDocument();
+    expect(screen.getByTestId("changelog-copy-command")).toHaveAccessibleName("Copy command");
+    expect(screen.getByTitle(/To update, run in a terminal/)).toBeInTheDocument();
   });
 
   it("says « up to date » with the embedded changelog when nothing is missed", async () => {
@@ -143,7 +143,7 @@ describe("ChangelogModal (#698)", () => {
     expect(screen.getByTestId("markdown-body")).toHaveTextContent("# Changelog");
     expect(screen.queryByTestId("changelog-behind")).not.toBeInTheDocument();
     expect(screen.queryByTestId("changelog-fallback")).not.toBeInTheDocument();
-    expect(screen.getByText(/Nothing to update/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Nothing to update/)).toBeInTheDocument();
   });
 
   it("signals the fallback to the embedded changelog with its reason", async () => {
@@ -250,9 +250,9 @@ describe("ChangelogModal (#698)", () => {
     await screen.findByTestId("markdown-body");
     fireEvent.click(screen.getByTestId("changelog-copy-command"));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("brew update && brew upgrade Loulen/tap/pdo"));
-    await waitFor(() => expect(screen.getByTestId("changelog-copy-command")).toHaveTextContent("Copied"));
+    await waitFor(() => expect(screen.getByTestId("changelog-copy-command")).toHaveAccessibleName("Copied"));
     vi.advanceTimersByTime(1600);
-    await waitFor(() => expect(screen.getByTestId("changelog-copy-command")).toHaveTextContent("Copy command"));
+    await waitFor(() => expect(screen.getByTestId("changelog-copy-command")).toHaveAccessibleName("Copy command"));
     vi.useRealTimers();
   });
 

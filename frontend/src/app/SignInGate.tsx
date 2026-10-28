@@ -41,8 +41,7 @@ export default function SignInGate({ children }: { children: ReactNode }) {
   if (state === "admitted") return <>{children}</>;
   return (
     <div
-      className="grid h-[calc(100dvh/var(--app-zoom,1))] w-[calc(100vw/var(--app-zoom,1))] place-items-center bg-surface-0 text-text-3"
-      style={{ fontSize: "12.5px" }}
+      className="grid h-[calc(100dvh/var(--app-zoom,1))] w-[calc(100vw/var(--app-zoom,1))] place-items-center bg-surface-0 text-text-3 text-sm"
       data-testid="sign-in-gate"
     >
       {state === "redirecting" ? "Redirecting to sign in…" : null}

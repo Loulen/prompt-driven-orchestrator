@@ -3,7 +3,8 @@
  *
  * xterm paints on a canvas and takes resolved colours, so it cannot read CSS
  * tokens. And ANSI colours are not app chrome: `red` must stay red. They
- * therefore live here, as one explicit palette, rather than in the tokens.
+ * therefore live here, as one explicit palette of `rgb()` values, rather than
+ * in the tokens.
  */
 
 export interface TerminalTheme {
@@ -60,29 +61,29 @@ export const TERMINAL_INK = [
  * secondary ink, its cursor the ink.
  */
 const DARK: TerminalTheme = {
-  background: "#0b0b0d",
-  foreground: "#aeb1b5",
-  cursor: "#d2d4d7",
+  background: "rgb(11, 11, 13)",
+  foreground: "rgb(174, 177, 181)",
+  cursor: "rgb(210, 212, 215)",
   // #772: a selection the user can see — blue at ~35% alpha keeps the glyphs
   // readable and the highlight obvious.
-  selectionBackground: "#3b82f659",
-  selectionInactiveBackground: "#3b82f633",
-  black: "#0b0b0d",
-  red: "#ef4444",
-  green: "#10b981",
-  yellow: "#f59e0b",
-  blue: "#3b82f6",
-  magenta: "#8b5cf6",
-  cyan: "#06b6d4",
-  white: "#d2d4d7",
-  brightBlack: "#5a6270",
-  brightRed: "#f87171",
-  brightGreen: "#34d399",
-  brightYellow: "#fbbf24",
-  brightBlue: "#60a5fa",
-  brightMagenta: "#a78bfa",
-  brightCyan: "#22d3ee",
-  brightWhite: "#f8fafc",
+  selectionBackground: "rgba(59, 130, 246, 0.35)",
+  selectionInactiveBackground: "rgba(59, 130, 246, 0.2)",
+  black: "rgb(11, 11, 13)",
+  red: "rgb(239, 68, 68)",
+  green: "rgb(16, 185, 129)",
+  yellow: "rgb(245, 158, 11)",
+  blue: "rgb(59, 130, 246)",
+  magenta: "rgb(139, 92, 246)",
+  cyan: "rgb(6, 182, 212)",
+  white: "rgb(210, 212, 215)",
+  brightBlack: "rgb(90, 98, 112)",
+  brightRed: "rgb(248, 113, 113)",
+  brightGreen: "rgb(52, 211, 153)",
+  brightYellow: "rgb(251, 191, 36)",
+  brightBlue: "rgb(96, 165, 250)",
+  brightMagenta: "rgb(167, 139, 250)",
+  brightCyan: "rgb(34, 211, 238)",
+  brightWhite: "rgb(248, 250, 252)",
 };
 
 /** The terminal's palette: always the dark screen. */

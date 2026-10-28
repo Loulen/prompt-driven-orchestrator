@@ -16,13 +16,13 @@ const STEP = 0.5;
 
 /**
  * The largest font size, between the floor and `base`, at which the `pilot` grid
- * fits the area. `measure(fontSize)` answers how many cells fit at that size
+ * fits the area. `measure(size)` answers how many cells fit at that size
  * (xterm's FitAddon `proposeDimensions` after setting the font); `undefined`
  * means the area is not measurable yet, and the normal size is kept.
  */
 export function spectatorFontSize(
   pilot: Dimensions,
-  measure: (fontSize: number) => Dimensions | undefined,
+  measure: (size: number) => Dimensions | undefined,
   base: number = BASE_FONT_SIZE,
   floor: number = MIN_SPECTATOR_FONT_SIZE,
 ): number {

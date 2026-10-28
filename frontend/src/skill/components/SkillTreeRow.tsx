@@ -121,8 +121,7 @@ export default function TreeRowView({
           />
         ) : (
           <span
-            className={`min-w-0 flex-1 truncate ${isFolder ? "font-medium text-text" : "text-text-2"}`}
-            style={{ fontSize: "12px" }}
+            className={`min-w-0 flex-1 truncate ${isFolder ? "font-medium text-text" : "text-text-2"} text-sm`}
           >
             {name}
           </span>
@@ -137,7 +136,7 @@ export default function TreeRowView({
                 data-testid={`tree-source-${row.ref.id}`}
               />
             )}
-            <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+            <span className="font-mono text-text-3 text-2xs">
               {row.count}
             </span>
           </span>
@@ -153,7 +152,7 @@ export default function TreeRowView({
         )}
       </div>
       {renaming && (
-        <div className="pb-1 text-text-3" style={{ paddingLeft: indent + 22, fontSize: "10px" }}>
+        <div className="pb-1 text-text-3 text-2xs" style={{ paddingLeft: indent + 22 }}>
           {renameError ? (
             <span className="text-st-failed" data-testid="rename-error">
               {renameError}
@@ -209,8 +208,7 @@ function RenameInput({
         if (trimmed === "" || trimmed === initial) onCancel();
         else void onCommit(trimmed);
       }}
-      className="min-w-0 flex-1 rounded border border-primary bg-surface-0 px-1.5 py-0.5 text-text outline-none"
-      style={{ fontSize: "12px" }}
+      className="min-w-0 flex-1 rounded border border-primary bg-surface-0 px-1.5 py-0.5 text-text outline-none text-sm"
     />
   );
 }

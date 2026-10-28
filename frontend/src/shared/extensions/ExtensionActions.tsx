@@ -118,7 +118,7 @@ export function ExtensionMenuGroups<L extends ActionLocation>({
           <Fragment key={extension.id}>
             {(index > 0 || leading) && <DropdownMenuSeparator />}
             <DropdownMenuGroup data-testid={`extension-menu-${location}-${extension.id}`}>
-              <DropdownMenuLabel className="text-text-3" style={{ fontSize: "10.5px" }}>
+              <DropdownMenuLabel className="text-text-3 text-xs">
                 {extension.name}
               </DropdownMenuLabel>
               {group.map((element) => (

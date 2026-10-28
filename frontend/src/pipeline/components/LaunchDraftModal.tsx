@@ -64,12 +64,11 @@ export default function LaunchDraftModal({
         aria-modal="true"
         aria-labelledby="launch-draft-title"
         data-testid="launch-draft-modal"
-        className="w-[460px] max-w-[calc(90vw/var(--app-zoom,1))] rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className="w-[460px] max-w-[calc(90vw/var(--app-zoom,1))] rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-2">
-          <h3 id="launch-draft-title" className="font-medium text-text" style={{ fontSize: "13px" }}>
+          <h3 id="launch-draft-title" className="font-medium text-text text-md">
             Run <span className="font-mono">{draft.pipelineName}</span>
           </h3>
           <button
@@ -103,7 +102,7 @@ export default function LaunchDraftModal({
               />
               <span className="min-w-0">
                 <span className="block text-text">{option.label}</span>
-                <span className="block text-text-3" style={{ fontSize: "11px" }}>
+                <span className="block text-text-3 text-xs">
                   {option.hint}
                 </span>
               </span>
@@ -115,16 +114,14 @@ export default function LaunchDraftModal({
           <button
             onClick={onCancel}
             data-testid="launch-draft-cancel"
-            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
           >
             Cancel
           </button>
           <button
             onClick={() => onChoose(choice)}
             data-testid="launch-draft-confirm"
-            className="flex cursor-pointer items-center gap-1 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
-            style={{ fontSize: "11.5px" }}
+            className="flex cursor-pointer items-center gap-1 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi text-xs"
           >
             <Play size={11} />
             {choice === "save" ? `Save as ${next} and run` : "Run last version"}

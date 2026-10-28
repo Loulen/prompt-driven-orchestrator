@@ -288,7 +288,7 @@ describe("upload failures between the browser and the daemon (#839)", () => {
     const err = (await createRun(attachedRun()).catch((e) => e)) as ApiError;
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(413);
-    expect(err.message).toContain("server in front of PDO");
+    expect(err.message).toContain("server in front of the daemon");
     expect(err.message).toContain("1.4 MB");
     expect(err.message).toContain("client_max_body_size");
     expect(err.message).toContain("max_attachments_mb");
@@ -301,7 +301,7 @@ describe("upload failures between the browser and the daemon (#839)", () => {
     });
     const err = (await createRun(attachedRun()).catch((e) => e)) as ApiError;
     expect(err.message).toMatch(/^attachments exceed the per-run limit/);
-    expect(err.message).not.toContain("server in front of PDO");
+    expect(err.message).not.toContain("server in front of the daemon");
   });
 
   it("a non-JSON error on any status says the reply did not come from the daemon", async () => {

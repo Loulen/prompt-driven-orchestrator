@@ -57,10 +57,10 @@ export default function RunShellModal({ session, onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-text" style={{ fontSize: "13px" }}>
+            <span className="font-medium text-text text-md">
               Run shell
             </span>
-            <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+            <span className="font-mono text-text-3 text-2xs">
               {session}
             </span>
           </div>

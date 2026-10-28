@@ -27,13 +27,12 @@ export function MenuItem({
       onClick={onClick}
       className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-active ${
         danger ? "text-st-failed" : "text-text-2"
-      }`}
-      style={{ fontSize: "11.5px" }}
+      } text-xs`}
     >
       <span className="shrink-0">{icon}</span>
       <span className="flex-1 whitespace-nowrap">{label}</span>
       {hint && (
-        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+        <span className="font-mono text-text-3 text-2xs">
           {hint}
         </span>
       )}
@@ -67,8 +66,7 @@ export function ActionButton({
         danger
           ? "border-st-failed/40 text-st-failed hover:bg-st-failed/14"
           : "border-line-strong bg-surface-2 text-text-2 hover:border-primary"
-      }`}
-      style={{ fontSize: "11.5px" }}
+      } text-xs`}
     >
       {icon}
       {label}
@@ -98,7 +96,7 @@ export function FolderPicker({
       className="absolute left-0 top-9 z-10 w-64 rounded-md border border-line bg-surface-2 p-1 shadow-xl"
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="px-2 py-1 text-text-3 uppercase tracking-wide" style={{ fontSize: "9.5px" }}>
+      <div className="px-2 py-1 text-text-3 uppercase tracking-wide text-2xs">
         Move to
       </div>
       <button
@@ -106,8 +104,7 @@ export function FolderPicker({
         role="menuitem"
         onClick={() => onPick(null)}
         disabled={current === null}
-        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-text-2 hover:bg-active disabled:opacity-40"
-        style={{ fontSize: "11.5px" }}
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-text-2 hover:bg-active disabled:opacity-40 text-xs"
       >
         <Folder size={12} /> Root of the bank
       </button>
@@ -118,8 +115,7 @@ export function FolderPicker({
           role="menuitem"
           onClick={() => onPick(folder.id)}
           disabled={current === folder.id}
-          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-text-2 hover:bg-active disabled:opacity-40"
-          style={{ fontSize: "11.5px" }}
+          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-text-2 hover:bg-active disabled:opacity-40 text-xs"
         >
           <Folder size={12} className="shrink-0" />
           <span className="truncate">{folderPathLabel(folder.id, folders)}</span>
@@ -129,8 +125,7 @@ export function FolderPicker({
       <button
         type="button"
         onClick={onClose}
-        className="w-full rounded px-2 py-1 text-left text-text-3 hover:bg-active"
-        style={{ fontSize: "11px" }}
+        className="w-full rounded px-2 py-1 text-left text-text-3 hover:bg-active text-xs"
       >
         Cancel
       </button>
@@ -145,8 +140,7 @@ export function TabButton({ active, onClick, label }: { active: boolean; onClick
       role="tab"
       aria-selected={active}
       onClick={onClick}
-      className={`-mb-px border-b-2 px-1 pb-2 ${active ? "border-primary text-text" : "border-transparent text-text-3 hover:text-text"}`}
-      style={{ fontSize: "12px" }}
+      className={`-mb-px border-b-2 px-1 pb-2 ${active ? "border-primary text-text" : "border-transparent text-text-3 hover:text-text"} text-sm`}
     >
       {label}
     </button>

@@ -187,7 +187,7 @@ export const OVERVIEW_TOUR: TourDef = {
   minutes: 4,
   steps: [...CANVAS_STEPS, ...APP_STEPS],
   intro: {
-    title: "Tour of PDO",
+    title: "Tour of Acogni Driver",
     body: "A walk around the screen on a real Run: the canvas, the panels, a node and its output, an edge, the Runs, Triggers and Pipelines tabs. The tour prepares everything first; nothing needs an agent.",
     footnote:
       "Nothing here touches your own repositories. The example Trigger is removed when the tour ends; the pipeline and the Run stay yours.",
@@ -229,7 +229,7 @@ export const OVERVIEW_TOUR: TourDef = {
       run: removeExampleTrigger,
     },
   ],
-  recapIntro: `You toured PDO on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
+  recapIntro: `You toured Acogni Driver on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
   recap: (app) => [
     { label: "Canvas", text: "a pipeline is nodes linked by edges; the panels around it list and detail" },
     { label: "Nodes", text: "an input in, outputs out, a terminal of their own; usually agents, scripts here" },

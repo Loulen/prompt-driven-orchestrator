@@ -137,19 +137,15 @@ test("clicking anywhere on port card opens modal with markdown + frontmatter", a
   await expect(modal).toContainText("Review");
   await expect(modal).toContainText("No issues");
 
-  // Frontmatter card with the typed verdict. It is a sibling of the markdown
-  // body inside the modal overlay (not inside `.artifact-markdown`); scope to
-  // the overlay so the output port card's own `verdict` chip doesn't collide.
-  const overlay = page
-    .locator(".fixed.inset-0.z-50")
-    .filter({ has: page.locator(".artifact-markdown") });
+  // Frontmatter strip with the typed verdict. It is a sibling of the markdown
+  // body inside the modal (not inside `.artifact-markdown`); scope to the
+  // modal so the output port card's own `verdict` chip doesn't collide.
+  const overlay = page.getByTestId("artifact-modal");
   await expect(overlay.getByText("verdict")).toBeVisible();
   await expect(overlay.getByText("PASS")).toBeVisible();
 
-  // Close via the X button (scope to the modal overlay so we don't grab an
-  // inspector icon-button instead).
-  const closeBtn = overlay.locator("button").filter({ has: page.locator("svg") }).last();
-  await closeBtn.click();
+  // Close via the X button of the modal's header.
+  await overlay.getByTestId("artifact-close").click();
   await expect(modal).not.toBeVisible({ timeout: 2_000 });
 });
 

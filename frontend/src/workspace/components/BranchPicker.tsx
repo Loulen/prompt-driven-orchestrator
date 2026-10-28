@@ -58,12 +58,11 @@ export function BranchPicker({
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={onSearchKeyDown}
           placeholder="Filter branches…"
-          className="min-w-0 flex-1 bg-transparent text-text placeholder:text-text-3 focus:outline-none"
-          style={{ fontSize: "12px" }}
+          className="min-w-0 flex-1 bg-transparent text-text placeholder:text-text-3 focus:outline-none text-sm"
           data-testid={`${testIdPrefix}-search`}
           aria-label="Filter branches"
         />
-        <span className="shrink-0 text-text-3" style={{ fontSize: "10px" }}>
+        <span className="shrink-0 text-text-3 text-2xs">
           ↑↓ · ⏎ · esc
         </span>
       </div>
@@ -71,8 +70,7 @@ export function BranchPicker({
       <div className="max-h-64 overflow-y-auto" role="listbox">
         {empty && (
           <div
-            className="px-2.5 py-3 text-text-3"
-            style={{ fontSize: "11px" }}
+            className="px-2.5 py-3 text-text-3 text-xs"
             data-testid={`${testIdPrefix}-empty`}
           >
             No branch matches “{query}”.
@@ -105,8 +103,7 @@ export function BranchPicker({
       </div>
 
       <div
-        className="border-t border-line px-2.5 py-1.5 text-text-3"
-        style={{ fontSize: "10px" }}
+        className="border-t border-line px-2.5 py-1.5 text-text-3 text-2xs"
         data-testid={`${testIdPrefix}-footer`}
       >
         {localCount} local · {remoteCount} remote · {fetchedLabel(lastFetchAt, fetchError, fetching)}
@@ -168,8 +165,7 @@ function BranchGroup({
   return (
     <>
       <div
-        className="flex items-center gap-1.5 px-2.5 pt-2 pb-1 uppercase tracking-wider text-text-3"
-        style={{ fontSize: "9.5px" }}
+        className="flex items-center gap-1.5 px-2.5 pt-2 pb-1 uppercase tracking-wider text-text-3 text-2xs"
       >
         <KindIcon kind={kind} size={10} />
         {label}
@@ -200,8 +196,7 @@ function BranchGroup({
             <KindIcon kind={branch.kind} />
             <span className="flex min-w-0 flex-1 flex-col leading-tight">
               <span
-                className={`truncate font-mono ${isSelected ? "text-primary" : "text-text"}`}
-                style={{ fontSize: "11.5px" }}
+                className={`truncate font-mono ${isSelected ? "text-primary" : "text-text"} text-xs`}
               >
                 {highlightSegments(branch.name, query).map((seg, s) => (
                   <span key={s} className={seg.match ? "text-primary" : undefined}>
@@ -210,14 +205,14 @@ function BranchGroup({
                 ))}
               </span>
               {branch.last_commit_subject && (
-                <span className="truncate text-text-3" style={{ fontSize: "10px" }}>
+                <span className="truncate text-text-3 text-2xs">
                   {branch.last_commit_subject}
                 </span>
               )}
             </span>
             <GapChip gap={branchGap(branch)} />
             {shortAge(branch.last_commit_at) && (
-              <span className="shrink-0 text-text-3" style={{ fontSize: "10px" }}>
+              <span className="shrink-0 text-text-3 text-2xs">
                 {shortAge(branch.last_commit_at)}
               </span>
             )}

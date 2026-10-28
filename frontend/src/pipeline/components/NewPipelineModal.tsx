@@ -48,12 +48,11 @@ export default function NewPipelineModal({ onClose }: { onClose: () => void }) {
         // presence ends the « create a new pipeline » step); the naming step
         // lights only the field, so Create stays under the dim until asked (#837).
         data-testid="new-pipeline-dialog"
-        className="w-[360px] rounded-lg border border-line bg-surface-2 p-4"
-        style={{ fontSize: "12px" }}
+        className="w-[360px] rounded-lg border border-line bg-surface-2 p-4 text-sm"
       >
         <div className="mb-3 font-medium text-text">New Pipeline</div>
 
-        <label className="mb-1 block text-text-3" style={{ fontSize: "11px" }}>
+        <label className="mb-1 block text-text-3 text-xs">
           Name
         </label>
         <input
@@ -75,8 +74,7 @@ export default function NewPipelineModal({ onClose }: { onClose: () => void }) {
           <div
             data-testid="new-pipeline-error"
             role="alert"
-            className="rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
-            style={{ fontSize: "11px" }}
+            className="rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed text-xs"
           >
             {error}
           </div>

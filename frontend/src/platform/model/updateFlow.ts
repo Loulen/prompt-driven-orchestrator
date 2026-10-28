@@ -146,9 +146,7 @@ export function updateFlowMessage(state: UpdateFlowState): string {
 
 /** Wording of the confirm dialog's Runs line, count-aware; never a block. */
 export function activeRunsWarning(count: number): string {
-  if (count <= 0) {
-    return "No Run is active. The daemon restarts; the page reconnects on its own.";
-  }
-  const runs = count === 1 ? "1 Run is active" : `${count} Runs are active`;
-  return `${runs}. The daemon restarts — the agents' tmux sessions survive and the Runs resume with it; only the connection to this page drops for a moment.`;
+  if (count <= 0) return "No active Run · the page reconnects on its own";
+  const runs = count === 1 ? "1 active Run" : `${count} active Runs`;
+  return `${runs} · tmux sessions survive, Runs resume with the daemon`;
 }

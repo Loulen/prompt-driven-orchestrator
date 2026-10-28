@@ -366,7 +366,7 @@ test("a bundle built for another React major is not loaded, and a banner says so
   const played = await playTestExtension(page, REACT_MAJOR - 1);
   await page.goto("/");
   await expect(page.getByTestId("extension-banner-test")).toContainText(
-    `built for React ${REACT_MAJOR - 1}, and PDO runs React ${REACT_MAJOR}`,
+    `built for React ${REACT_MAJOR - 1}, and the app runs React ${REACT_MAJOR}`,
   );
   expect(played.bundleRequests()).toBe(0);
   await expect(page.getByTestId("extension-nav")).toHaveCount(0);

@@ -88,8 +88,8 @@ const STEPS: TourStep[] = [
     // nobody can make — the button is gone.
     body: (o) =>
       pipelineCreated(o)
-        ? "Enter already created it: PDO wrote the file and opened it in the editor, with a Start and an End marker already in place."
-        : "Click Create. PDO writes the file and opens it in the editor, with a Start and an End marker already in place.",
+        ? "Enter already created it: the file is written and opened it in the editor, with a Start and an End marker already in place."
+        : "Click Create. The file is written and opened in the editor, with a Start and an End marker already in place.",
     target: () => ['[data-testid="new-pipeline-create"]'],
     waitingFor: "the Create button",
     // A reader who kept the pipeline at the end of a previous run of this tour
@@ -129,7 +129,7 @@ const STEPS: TourStep[] = [
   {
     id: "name-implementer",
     title: "Name it implementer",
-    body: "PDO already called it implementer, which is the name this tour uses. This field is where you would change it.",
+    body: "It is already called implementer, which is the name this tour uses. This field is where you would change it.",
     target: () => [NAME_INPUT],
     waitingFor: "the Name field of the selected node",
     failureHint: "This usually means the node was deselected or the pane was closed.",

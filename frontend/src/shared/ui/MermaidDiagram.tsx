@@ -9,7 +9,7 @@ import { useTheme } from "../../hooks/useTheme";
 // re-rendered after a switch comes back in the new palette.
 function themeVars() {
   const c = (token: `--${string}`) => cssColor(token);
-  return {
+  const vars: Record<string, string> = {
     background: c("--surface-1"), // modal body
     primaryColor: c("--surface-2"), // node fill
     primaryBorderColor: c("--line-strong"),
@@ -33,8 +33,16 @@ function themeVars() {
     clusterBorder: c("--line"),
     activeTaskBkgColor: c("--primary"),
     titleColor: c("--text"),
-    fontSize: "12px",
   };
+  // The labels' size: the type scale's secondary text, read live like the colours.
+  vars.fontSize = cssLength("--fs-sm", "12px");
+  return vars;
+}
+
+/** A length token of the design system, resolved; `fallback` without a stylesheet. */
+function cssLength(token: `--${string}`, fallback: string): string {
+  if (typeof getComputedStyle !== "function" || typeof document === "undefined") return fallback;
+  return getComputedStyle(document.documentElement).getPropertyValue(token).trim() || fallback;
 }
 
 // Initialize ONCE at module scope. initialize() is synchronous (returns void).

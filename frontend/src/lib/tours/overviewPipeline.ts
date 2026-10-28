@@ -14,7 +14,7 @@ export const OVERVIEW_RUN_NAME = "tour-overview";
 
 /** The Run's prompt — fixed, and what the Start step shows the reader. */
 export const OVERVIEW_PROMPT =
-  "Show me around PDO: implement a tiny change, then review it and hand back a verdict.";
+  "Show me around Acogni Driver: implement a tiny change, then review it and hand back a verdict.";
 
 /** The Trigger the tour installs to be shown, and removes on the way out. */
 export const EXAMPLE_TRIGGER_NAME = "tutorial-example-trigger";

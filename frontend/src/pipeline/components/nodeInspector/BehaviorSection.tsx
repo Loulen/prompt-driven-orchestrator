@@ -84,7 +84,7 @@ export default function BehaviorSection({
       </FormRow>
       {/* #588/ADR-0069: the « Interactive » toggle guards the node's completion
           (released from the run-mode UI) and seeds the `pdo-interactive` skill —
-          the conduct travels in the skill, and PDO files the `/pdo-interactive`
+          the conduct travels in the skill, and the daemon files the `/pdo-interactive`
           line under the prompt at spawn. */}
       <FormRow label="Interactive" help="A human talks to this node · adds the pdo-interactive skill">
         <Toggle
@@ -111,7 +111,7 @@ export default function BehaviorSection({
 
       {/* #723/ADR-0064: the « Orchestrator » toggle — agent nodes only (a
           script runs no agent). Turning it on seeds the `pdo-orchestrate`
-          skill; PDO files the fixed /pdo-orchestrate line at spawn. The toggle
+          skill; the daemon files the fixed /pdo-orchestrate line at spawn. The toggle
           is the single source of intent: removing the skill by hand keeps it on
           and warns, with a one-click re-add. */}
       {!isScript && (

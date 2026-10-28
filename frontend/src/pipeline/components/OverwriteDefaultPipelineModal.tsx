@@ -68,11 +68,10 @@ export default function OverwriteDefaultPipelineModal({
         role="dialog"
         aria-label="Overwrite default pipeline"
         data-testid="overwrite-default-modal"
-        className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="shrink-0 font-medium text-text" style={{ fontSize: "13px" }}>
+        <h3 className="shrink-0 font-medium text-text text-md">
           Overwrite the default pipeline?
         </h3>
         <div className="mt-2 flex min-h-0 flex-col gap-2 overflow-y-auto text-text-2" data-testid="overwrite-default-body">
@@ -112,8 +111,7 @@ export default function OverwriteDefaultPipelineModal({
             onClick={onClose}
             disabled={busy}
             data-testid="overwrite-default-cancel"
-            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover disabled:opacity-40 text-xs"
           >
             Cancel
           </button>
@@ -121,8 +119,7 @@ export default function OverwriteDefaultPipelineModal({
             onClick={() => void confirm()}
             disabled={!canConfirm}
             data-testid="overwrite-default-confirm"
-            className="cursor-pointer rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 text-xs"
           >
             {busy ? "Overwriting…" : "Overwrite default pipeline"}
           </button>
@@ -177,7 +174,7 @@ function OverwriteImpact({
       )}
       {preview.modified_since_launch == null && (
         <p className="text-text-3" data-testid="overwrite-default-modified-unknown">
-          PDO cannot tell whether the default pipeline changed since this run was launched.
+          There is no telling whether the default pipeline changed since this run was launched.
         </p>
       )}
     </>

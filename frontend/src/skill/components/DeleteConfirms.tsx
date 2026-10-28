@@ -27,10 +27,10 @@ export function DeleteSkillConfirm({
     referents.runs.length;
   return (
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="skill-delete">
-      <h3 className="font-semibold text-text" style={{ fontSize: "17px" }}>
+      <h3 className="font-semibold text-text text-xl">
         Delete {skill.name}?
       </h3>
-      <p className="mt-2 text-text-3" style={{ fontSize: "12px" }}>
+      <p className="mt-2 text-text-3 text-sm">
         {count === 0 ? (
           "No live reference. Nothing else will change."
         ) : (
@@ -41,8 +41,7 @@ export function DeleteSkillConfirm({
         )}
       </p>
       <div
-        className="mt-3 rounded-md border border-line bg-surface-2 px-3 py-2.5 font-mono text-text-3"
-        style={{ fontSize: "10.5px" }}
+        className="mt-3 rounded-md border border-line bg-surface-2 px-3 py-2.5 font-mono text-text-3 text-xs"
         data-testid="skill-referents"
       >
         {count === 0 && <div>No live references.</div>}
@@ -56,7 +55,7 @@ export function DeleteSkillConfirm({
           <ReferentLine key={`r-${item.run_id}`} tier="RUN" label={`${item.name ?? item.run_id} (not started)`} />
         ))}
       </div>
-      <p className="mt-3 rounded-md border border-st-blocked/40 bg-st-blocked/14 px-3 py-2 text-text-2" style={{ fontSize: "11px" }}>
+      <p className="mt-3 rounded-md border border-st-blocked/40 bg-st-blocked/14 px-3 py-2 text-text-2 text-xs">
         Runs already started are untouched: their skill content was frozen at spawn. The folder{" "}
         <span className="font-mono">{path}/</span> is removed.
       </p>
@@ -64,8 +63,7 @@ export function DeleteSkillConfirm({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover"
-          style={{ fontSize: "11.5px" }}
+          className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover text-xs"
         >
           Cancel
         </button>
@@ -73,8 +71,7 @@ export function DeleteSkillConfirm({
           type="button"
           onClick={onConfirm}
           data-testid="skill-delete-confirm"
-          className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink hover:opacity-90"
-          style={{ fontSize: "11.5px" }}
+          className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink hover:opacity-90 text-xs"
         >
           {count === 0 ? "Delete" : "Delete anyway"}
         </button>
@@ -107,10 +104,10 @@ export function DeleteFolderConfirm({
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="folder-delete">
-      <h3 className="font-semibold text-text" style={{ fontSize: "17px" }}>
+      <h3 className="font-semibold text-text text-xl">
         Delete folder {folder.name}?
       </h3>
-      <p className="mt-2 text-text-3" style={{ fontSize: "12px" }}>
+      <p className="mt-2 text-text-3 text-sm">
         {count === 0
           ? "The folder is empty."
           : `Its ${count} skill${count === 1 ? "" : "s"} and sub-folders move to ${parentName ? `“${parentName}”` : "the root of the bank"}. No skill is deleted.`}
@@ -126,8 +123,7 @@ export function DeleteFolderConfirm({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover"
-          style={{ fontSize: "11.5px" }}
+          className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover text-xs"
         >
           Cancel
         </button>
@@ -135,8 +131,7 @@ export function DeleteFolderConfirm({
           type="button"
           onClick={onConfirm}
           data-testid="folder-delete-confirm"
-          className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink hover:opacity-90"
-          style={{ fontSize: "11.5px" }}
+          className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink hover:opacity-90 text-xs"
         >
           Delete folder
         </button>

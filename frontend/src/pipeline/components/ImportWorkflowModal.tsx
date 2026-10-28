@@ -95,14 +95,13 @@ export default function ImportWorkflowModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim">
       <div
-        className="w-[400px] rounded-lg border border-line bg-surface-2 p-4"
-        style={{ fontSize: "12px" }}
+        className="w-[400px] rounded-lg border border-line bg-surface-2 p-4 text-sm"
         data-testid="import-workflow-modal"
       >
         <div className="mb-1 font-medium text-text">Import a pipeline</div>
         <div className="mb-3 grid grid-cols-2 rounded border border-line-strong bg-surface-2 p-0.5">
           {([
-            ["pdo", "Pipeline PDO"],
+            ["pdo", "Acogni Driver pipeline"],
             ["claude", "Workflow Claude Code"],
           ] as const).map(([value, label]) => (
             <button
@@ -125,8 +124,8 @@ export default function ImportWorkflowModal({
 
         {mode === "pdo" ? (
           <>
-            <p className="mb-2 text-text-3" style={{ fontSize: "11px" }}>
-              Paste a portable PDO pipeline document or load a YAML file. If the pipeline
+            <p className="mb-2 text-text-3 text-xs">
+              Paste a portable pipeline document or load a YAML file. If the pipeline
               selects skills, add its <code>.skills.zip</code> sidecar so the bank recreates them.
             </p>
             <textarea
@@ -169,7 +168,7 @@ export default function ImportWorkflowModal({
           </>
         ) : (
           <>
-            <p className="mb-2 text-text-3" style={{ fontSize: "11px" }}>
+            <p className="mb-2 text-text-3 text-xs">
               Decompile a Claude Code workflow into a draft. Unmapped idioms are
               annotated instead of executed.
             </p>
@@ -185,7 +184,7 @@ export default function ImportWorkflowModal({
 
         {mismatch && (
           <div className="mb-3 rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-text-2">
-            This content looks like a {mode === "pdo" ? "Claude Code workflow" : "PDO pipeline"}.
+            This content looks like a {mode === "pdo" ? "Claude Code workflow" : "Acogni Driver pipeline"}.
             <button
               className="ml-1 text-primary hover:underline"
               onClick={() => setMode(mode === "pdo" ? "claude" : "pdo")}
@@ -197,8 +196,7 @@ export default function ImportWorkflowModal({
 
         {error && (
           <div
-            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
-            style={{ fontSize: "11px" }}
+            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed text-xs"
             data-testid="import-workflow-error"
           >
             {error}
@@ -207,8 +205,7 @@ export default function ImportWorkflowModal({
 
         {warnings && (
           <div
-            className="mb-3 max-h-40 overflow-y-auto rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-text-2"
-            style={{ fontSize: "11px" }}
+            className="mb-3 max-h-40 overflow-y-auto rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-text-2 text-xs"
             data-testid="import-workflow-warnings"
           >
             <div className="mb-1 font-medium text-st-await">

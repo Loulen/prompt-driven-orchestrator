@@ -5,10 +5,10 @@ import { contrastRatio, AA_TEXT } from "../../lib/contrast";
 describe("terminalTheme (#759, an always-dark screen)", () => {
   it("is one dark palette, whatever the theme of the interface", () => {
     const theme = terminalTheme();
-    expect(theme.background).toBe("#0b0b0d");
+    expect(theme.background).toBe("rgb(11, 11, 13)");
     expect(theme.black).toBe(theme.background);
     // #772: a selection the user can see.
-    expect(theme.selectionBackground).toMatch(/^#3b82f6/);
+    expect(theme.selectionBackground).toMatch(/^rgba\(59, 130, 246,/);
   });
 
   it("reads its text, in the secondary ink, at AA on the dark ground", () => {

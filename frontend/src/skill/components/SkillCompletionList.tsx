@@ -128,13 +128,13 @@ export default function SkillCompletionList({
         <span className="min-w-0 truncate">
           <span className="text-text">/{option.skill.name}</span>
           {option.folder && (
-            <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+            <span className="font-mono text-text-3 text-2xs">
               {" "}
               {option.folder}
             </span>
           )}
         </span>
-        <span className="text-text-3" style={{ fontSize: "10px" }}>
+        <span className="text-text-3 text-2xs">
           {option.received ? `on this ${scope}` : `adds it to the ${scope}`}
         </span>
       </div>
@@ -146,11 +146,10 @@ export default function SkillCompletionList({
       aria-label="Skills"
       data-testid="skill-completion-list"
       data-placement={place && "bottom" in place ? "above" : "below"}
-      className="fixed z-[60] flex flex-col rounded-md border border-line-strong bg-surface-1 font-sans shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
+      className="fixed z-[60] flex flex-col rounded-md border border-line-strong bg-surface-1 font-sans text-xs shadow-[0_12px_32px_var(--shadow)]"
       style={{
         ...(place ?? { top: 0, left: 0, maxHeight: MAX_HEIGHT }),
         width: WIDTH,
-        fontSize: "11px",
       }}
     >
       <div ref={rows} data-testid="skill-completion-rows" className="min-h-0 overflow-y-auto py-1">
@@ -159,7 +158,7 @@ export default function SkillCompletionList({
         {rest.length > 0 && <GroupHead label="Skill bank" />}
         {rest.map((option, i) => row(option, received.length + i))}
       </div>
-      <div ref={foot} className="border-t border-line px-2.5 py-1 text-text-3" style={{ fontSize: "9.5px" }}>
+      <div ref={foot} className="border-t border-line px-2.5 py-1 text-text-3 text-2xs">
         ↑↓ choose · ↵ insert · esc close
       </div>
     </div>,
@@ -169,7 +168,7 @@ export default function SkillCompletionList({
 
 function GroupHead({ label }: { label: string }) {
   return (
-    <div className="px-2.5 pb-0.5 pt-1 uppercase tracking-wider text-text-3" style={{ fontSize: "9px" }}>
+    <div className="px-2.5 pb-0.5 pt-1 uppercase tracking-wider text-text-3 text-2xs">
       {label}
     </div>
   );

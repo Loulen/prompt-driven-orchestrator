@@ -111,7 +111,7 @@ export default function PasteSkillModal({
           <DropOverlay count={dragging} hint="A SKILL.md replaces the skill text · folders are refused" />
         )}
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h3 className="flex items-center gap-2 font-semibold text-text" style={{ fontSize: "13.5px" }}>
+          <h3 className="flex items-center gap-2 font-semibold text-text text-lg">
             <ClipboardPaste size={14} className="text-text-3" />
             New skill from SKILL.md
           </h3>
@@ -154,13 +154,11 @@ export default function PasteSkillModal({
                       : text.trim() && validation.valid
                         ? "border-primary/60"
                         : "border-line-strong focus:border-primary"
-                }`}
-                style={{ fontSize: "11.5px", lineHeight: 1.55 }}
+                } text-xs`} style={{ lineHeight: 1.55 }}
               />
               {replacedFrom !== null && editing && (
                 <div
-                  className="absolute right-3 top-3 flex items-center gap-2 rounded-md border border-primary/40 bg-surface-2 px-2.5 py-1 text-text-2 shadow"
-                  style={{ fontSize: "10.5px" }}
+                  className="absolute right-3 top-3 flex items-center gap-2 rounded-md border border-primary/40 bg-surface-2 px-2.5 py-1 text-text-2 shadow text-xs"
                   role="status"
                   data-testid="paste-skill-replaced"
                 >
@@ -216,13 +214,12 @@ export default function PasteSkillModal({
                 {refused.map((item) => (
                   <li
                     key={`refused-${item.name}`}
-                    className="flex items-center gap-2 rounded-md border border-st-failed/60 bg-st-failed/14 px-3 py-1.5"
-                    style={{ fontSize: "11px" }}
+                    className="flex items-center gap-2 rounded-md border border-st-failed/60 bg-st-failed/14 px-3 py-1.5 text-xs"
                     data-testid="paste-skill-refused"
                   >
                     <Folder size={11} className="shrink-0 text-st-failed" />
                     <span className="font-mono text-text">{item.name}</span>
-                    <span className="rounded border border-st-failed/60 px-1.5 text-st-failed" style={{ fontSize: "9.5px" }}>
+                    <span className="rounded border border-st-failed/60 px-1.5 text-st-failed text-2xs">
                       refused
                     </span>
                     <span className="text-text-2">{item.reason}</span>
@@ -240,13 +237,13 @@ export default function PasteSkillModal({
               </ul>
             )}
             {staged.length > 0 && editing && (
-              <p className="text-text-3" style={{ fontSize: "10.5px" }}>
+              <p className="text-text-3 text-xs">
                 {staged.length} file{staged.length === 1 ? "" : "s"} · {formatBytes(totalStagedBytes(staged))} · uploaded after
                 Create, in this order
               </p>
             )}
             {staged.length === 0 && editing && (
-              <p className="text-text-3" style={{ fontSize: "10.5px" }}>
+              <p className="text-text-3 text-xs">
                 Files are stored next to SKILL.md and travel with the skill. You can edit them as plain text once the
                 skill exists.
               </p>
@@ -254,8 +251,7 @@ export default function PasteSkillModal({
             {phase === "settle" && failedCount > 0 && (
               <div
                 role="alert"
-                className="rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2"
-                style={{ fontSize: "11px" }}
+                className="rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2 text-xs"
                 data-testid="paste-skill-upload-failed"
               >
                 <strong className="text-text">Skill created.</strong> {failedCount} of {staged.length} file
@@ -270,7 +266,7 @@ export default function PasteSkillModal({
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-3">
-          <span className="text-text-3" style={{ fontSize: "10.5px" }} data-testid="paste-skill-footer">
+          <span className="text-text-3 text-xs" data-testid="paste-skill-footer">
             {editing
               ? "Validated as you type · nothing touches disk until Create"
               : busy
@@ -284,22 +280,20 @@ export default function PasteSkillModal({
                 onClick={() => void finish()}
                 disabled={busy}
                 data-testid="paste-skill-done"
-                className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40"
-                style={{ fontSize: "11.5px" }}
+                className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40 text-xs"
               >
                 Done
               </button>
             ) : confirmDiscard ? (
               <>
-                <span className="text-text-2" style={{ fontSize: "11px" }} data-testid="paste-skill-discard-prompt">
+                <span className="text-text-2 text-xs" data-testid="paste-skill-discard-prompt">
                   {text.trim() !== "" ? "Discard the pasted text" : "Discard the attached files"}
                   {text.trim() !== "" && staged.length > 0 ? " and files" : ""}?
                 </span>
                 <button
                   type="button"
                   onClick={() => setConfirmDiscard(false)}
-                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover text-xs"
                 >
                   Keep editing
                 </button>
@@ -307,8 +301,7 @@ export default function PasteSkillModal({
                   type="button"
                   onClick={onClose}
                   data-testid="paste-skill-discard"
-                  className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink hover:opacity-90"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink hover:opacity-90 text-xs"
                 >
                   Discard
                 </button>
@@ -318,8 +311,7 @@ export default function PasteSkillModal({
                 <button
                   type="button"
                   onClick={requestClose}
-                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover text-xs"
                 >
                   Cancel
                 </button>
@@ -328,8 +320,7 @@ export default function PasteSkillModal({
                   onClick={() => void submit()}
                   disabled={!canCreate}
                   data-testid="paste-skill-create"
-                  className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40 text-xs"
                 >
                   {submitting
                     ? "Creating…"

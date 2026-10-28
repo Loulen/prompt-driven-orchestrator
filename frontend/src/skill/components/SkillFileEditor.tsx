@@ -37,7 +37,7 @@ export default function FileEditor({
       data-dirty={dirty || undefined}
       onKeyDown={onKeyDown}
     >
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2" style={{ fontSize: "11px" }}>
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2 text-xs">
         <span
           className={`h-2 w-2 shrink-0 rounded-full ${dirty ? "bg-st-await" : "bg-primary/60"}`}
           aria-label={dirty ? "unsaved" : "saved"}
@@ -59,8 +59,7 @@ export default function FileEditor({
                   }
                 });
               }}
-              className="rounded-md bg-primary px-2 py-0.5 font-medium text-surface-0 hover:opacity-90"
-              style={{ fontSize: "10.5px" }}
+              className="rounded-md bg-primary px-2 py-0.5 font-medium text-surface-0 hover:opacity-90 text-xs"
               data-testid="skill-file-leave-save"
             >
               Save
@@ -72,8 +71,7 @@ export default function FileEditor({
                 leave();
                 onLeaveSettled();
               }}
-              className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-st-failed"
-              style={{ fontSize: "10.5px" }}
+              className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-st-failed text-xs"
               data-testid="skill-file-leave-discard"
             >
               Discard
@@ -81,15 +79,14 @@ export default function FileEditor({
             <button
               type="button"
               onClick={onLeaveSettled}
-              className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary"
-              style={{ fontSize: "10.5px" }}
+              className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary text-xs"
               data-testid="skill-file-leave-stay"
             >
               Stay
             </button>
           </span>
         ) : (
-          <span className="text-text-3" style={{ fontSize: "10.5px" }}>
+          <span className="text-text-3 text-xs">
             plain text · ⌘S saves
           </span>
         )}
@@ -109,11 +106,11 @@ export default function FileEditor({
       </div>
 
       {editor.loading ? (
-        <div className="p-3 text-text-3" style={{ fontSize: "11px" }}>
+        <div className="p-3 text-text-3 text-xs">
           Loading…
         </div>
       ) : binary ? (
-        <div className="flex flex-1 items-center justify-center p-6 text-text-3" style={{ fontSize: "11.5px" }} data-testid="skill-file-binary">
+        <div className="flex flex-1 items-center justify-center p-6 text-text-3 text-xs" data-testid="skill-file-binary">
           binary file · {formatBytes(editor.content?.size ?? 0)}
         </div>
       ) : (
@@ -125,16 +122,14 @@ export default function FileEditor({
           aria-label={`${editor.path} text`}
           aria-invalid={editor.error ? true : undefined}
           data-testid="skill-file-text"
-          className="min-h-[220px] flex-1 resize-none bg-surface-0 p-3 font-mono text-text outline-none"
-          style={{ fontSize: "11.5px", lineHeight: 1.55 }}
+          className="min-h-[220px] flex-1 resize-none bg-surface-0 p-3 font-mono text-text outline-none text-xs" style={{ lineHeight: 1.55 }}
         />
       )}
 
       {editor.error && (
         <div
           role="alert"
-          className="border-t border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2"
-          style={{ fontSize: "11px" }}
+          className="border-t border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2 text-xs"
           data-testid="skill-file-error"
         >
           <strong className="text-text">{isSkillMd ? "Cannot save SKILL.md." : "Cannot save."}</strong> {editor.error}
@@ -142,10 +137,10 @@ export default function FileEditor({
       )}
 
       {!binary && !editor.loading && (
-        <div className="flex items-center gap-2 border-t border-line px-3 py-2" style={{ fontSize: "10.5px" }}>
+        <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-xs">
           <span className="text-text-3">
             {locked
-              ? "Read-only — managed by PDO"
+              ? "Read-only: built in"
               : editor.savedAt
                 ? "Saved just now"
                 : "On disk"} · {formatBytes(new TextEncoder().encode(editor.saved).length)}

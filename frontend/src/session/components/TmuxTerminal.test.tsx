@@ -444,8 +444,8 @@ describe("TmuxTerminal", () => {
     expect(config.cursorBlink).toBe(true);
     const theme = config.theme as Record<string, string>;
     // An always-dark screen, whatever the theme of the interface.
-    expect(theme.background).toBe("#0b0b0d");
-    expect(theme.foreground).toBe("#aeb1b5");
+    expect(theme.background).toBe("rgb(11, 11, 13)");
+    expect(theme.foreground).toBe("rgb(174, 177, 181)");
   });
 
   it("wheel event scrolls xterm buffer instead of propagating", () => {
@@ -1056,7 +1056,7 @@ describe("TmuxTerminal", () => {
       render(<TmuxTerminal session="test-session" />);
       const config = mockTerminalCalls[0][0] as { theme: { selectionBackground: string } };
       expect(config.theme.selectionBackground).not.toBe("#2a2d35");
-      expect(config.theme.selectionBackground).toMatch(/^#3b82f6/);
+      expect(config.theme.selectionBackground).toMatch(/^rgba\(59, 130, 246,/);
     });
 
     it("Copy button is disabled without a selection and copies the selection when clicked", async () => {

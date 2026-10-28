@@ -142,8 +142,7 @@ export default function ImageLightbox({ images, index, alt = "", onClose }: Prop
             <ChevronRight size={28} />
           </button>
           <span
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 font-mono text-text-3"
-            style={{ fontSize: "11px" }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 font-mono text-text-3 text-xs"
             data-testid="lightbox-counter"
           >
             {current + 1} of {images.length}

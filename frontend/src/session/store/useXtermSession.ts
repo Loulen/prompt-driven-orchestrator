@@ -141,7 +141,6 @@ export function useXtermSession(
       cursorBlink: !isFrozen,
       // Nothing to type into: the socket is not opened at all below.
       disableStdin: isFrozen,
-      fontSize: baseFontSize(),
       fontFamily: "'Geist Mono', monospace",
       // An always-dark screen, whatever the theme of the interface.
       theme: terminalTheme(),
@@ -152,6 +151,8 @@ export function useXtermSession(
       // `forcedSelectionEvent` relies on it.
       macOptionClickForcesSelection: true,
     });
+    // The grid's size: the terminal's own scale, times the UI scale.
+    term.options.fontSize = baseFontSize();
 
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
@@ -211,8 +212,8 @@ export function useXtermSession(
         const pilot = current.pilot;
         const size = spectatorFontSize(
           pilot,
-          (fontSize) => {
-            term.options.fontSize = fontSize;
+          (candidate) => {
+            term.options.fontSize = candidate;
             return fitAddon.proposeDimensions();
           },
           baseFontSize(),

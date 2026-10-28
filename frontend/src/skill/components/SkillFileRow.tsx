@@ -31,8 +31,7 @@ export default function FileRow({
     <div
       className={`flex items-center gap-2 rounded-md border px-3 py-1.5 ${
         confirming ? "border-st-failed/60 bg-st-failed/14" : active ? "border-primary/60 bg-surface-2" : badge ? "border-primary/40 bg-surface-2" : "border-line bg-surface-2"
-      }`}
-      style={{ fontSize: "11.5px" }}
+      } text-xs`}
       data-testid="skill-file-row"
       data-path={path}
     >
@@ -47,11 +46,11 @@ export default function FileRow({
         <span className="truncate font-mono text-text">{path}</span>
         {badge && (
           <>
-            <span className="shrink-0 rounded border border-primary/50 px-1.5 text-primary" style={{ fontSize: "9.5px" }}>
+            <span className="shrink-0 rounded border border-primary/50 px-1.5 text-primary text-2xs">
               {badge.text}
             </span>
             {badge.detail && !compact && (
-              <span className="truncate text-text-3" style={{ fontSize: "10.5px" }}>
+              <span className="truncate text-text-3 text-xs">
                 {badge.detail}
               </span>
             )}
@@ -60,14 +59,13 @@ export default function FileRow({
       </button>
       {confirming ? (
         <span className="flex items-center gap-1.5" data-testid="skill-file-delete-confirm">
-          <span className="text-text-2" style={{ fontSize: "11px" }}>
+          <span className="text-text-2 text-xs">
             Delete this file?
           </span>
           <button
             type="button"
             onClick={onKeep}
-            className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary"
-            style={{ fontSize: "10.5px" }}
+            className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary text-xs"
           >
             Keep
           </button>
@@ -75,8 +73,7 @@ export default function FileRow({
             type="button"
             onClick={onDelete}
             data-testid="skill-file-delete-yes"
-            className="rounded-md bg-st-failed px-2 py-0.5 font-medium text-primary-ink hover:opacity-90"
-            style={{ fontSize: "10.5px" }}
+            className="rounded-md bg-st-failed px-2 py-0.5 font-medium text-primary-ink hover:opacity-90 text-xs"
           >
             Delete
           </button>
@@ -84,7 +81,7 @@ export default function FileRow({
       ) : (
         <>
           {size !== null && (
-            <span className="shrink-0 font-mono text-text-3" style={{ fontSize: "10.5px" }}>
+            <span className="shrink-0 font-mono text-text-3 text-xs">
               {formatBytes(size)}
             </span>
           )}

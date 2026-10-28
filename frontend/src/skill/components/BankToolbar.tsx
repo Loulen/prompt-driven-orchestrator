@@ -17,8 +17,7 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
           placeholder="Filter skills…"
           aria-label="Filter skills"
           data-testid="skill-filter"
-          className="min-w-0 flex-1 bg-transparent text-text outline-none placeholder:text-text-3"
-          style={{ fontSize: "11.5px" }}
+          className="min-w-0 flex-1 bg-transparent text-text outline-none placeholder:text-text-3 text-xs"
         />
       </label>
       <button
@@ -30,7 +29,7 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
         className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-1.5 text-text-2 hover:border-primary"
       >
         <Folder size={12} />
-        <span style={{ fontSize: "12px", lineHeight: 1 }}>+</span>
+        <span className="text-sm" style={{ lineHeight: 1 }}>+</span>
       </button>
       <span className="relative">
         <button
@@ -43,8 +42,7 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
           aria-haspopup="menu"
           aria-expanded={addMenuOpen}
           data-testid="skill-add"
-          className="flex shrink-0 items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 font-medium text-surface-0 hover:opacity-90"
-          style={{ fontSize: "11.5px" }}
+          className="flex shrink-0 items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 font-medium text-surface-0 hover:opacity-90 text-xs"
         >
           <Plus size={12} />
           Add

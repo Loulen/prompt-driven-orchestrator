@@ -14,7 +14,7 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
   return (
     <div className={`flex w-[330px] shrink-0 flex-col gap-4 overflow-y-auto ${editing ? "" : "opacity-60"}`}>
       <section>
-        <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+        <h4 className="mb-2 text-text-3 uppercase tracking-wide text-2xs">
           Checks
         </h4>
         {editing ? (
@@ -22,8 +22,7 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
             {checks.map((check) => (
               <li
                 key={check.id}
-                className="flex items-center gap-2 text-text-2"
-                style={{ fontSize: "11.5px" }}
+                className="flex items-center gap-2 text-text-2 text-xs"
                 data-testid={`check-${check.id}`}
                 data-state={check.state}
               >
@@ -35,28 +34,28 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
             ))}
           </ul>
         ) : (
-          <div className="flex items-center gap-2 text-text-3" style={{ fontSize: "11.5px" }}>
+          <div className="flex items-center gap-2 text-text-3 text-xs">
             <CheckDot state="pass" /> All five pass
           </div>
         )}
       </section>
 
       <section>
-        <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+        <h4 className="mb-2 text-text-3 uppercase tracking-wide text-2xs">
           Will appear as
         </h4>
         <div
           className={`rounded-md border border-line bg-surface-2 px-3 py-2.5 ${validation.valid ? "" : "opacity-70"}`}
           data-testid="paste-skill-preview"
         >
-          <div className={`font-semibold ${preview.name ? "text-text" : "text-text-3"}`} style={{ fontSize: "12.5px" }}>
+          <div className={`font-semibold ${preview.name ? "text-text" : "text-text-3"} text-sm`}>
             {previewName}
           </div>
-          <div className={`mt-0.5 ${preview.description ? "text-text-3" : "text-text-3"}`} style={{ fontSize: "11px" }}>
+          <div className={`mt-0.5 ${preview.description ? "text-text-3" : "text-text-3"} text-xs`}>
             {previewDescription}
           </div>
           {staged.length > 0 && (
-            <div className="mt-1.5 text-text-3" style={{ fontSize: "10.5px" }}>
+            <div className="mt-1.5 text-text-3 text-xs">
               + {staged.length} file{staged.length === 1 ? "" : "s"}
             </div>
           )}
@@ -64,8 +63,7 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
         {reason && editing && (
           <div
             role="alert"
-            className="mt-2 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2"
-            style={{ fontSize: "11px" }}
+            className="mt-2 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2 text-xs"
             data-testid="paste-skill-reason"
           >
             <strong className="text-text">
@@ -79,7 +77,7 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
       </section>
 
       <section>
-        <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+        <h4 className="mb-2 text-text-3 uppercase tracking-wide text-2xs">
           Folder
         </h4>
         <label className="flex items-center gap-2 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5">
@@ -90,8 +88,7 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
             onChange={(event) => setFolderId(event.target.value || null)}
             aria-label="Folder"
             data-testid="paste-skill-folder"
-            className="w-full bg-transparent text-text outline-none"
-            style={{ fontSize: "11.5px" }}
+            className="w-full bg-transparent text-text outline-none text-xs"
           >
             <option value="">Root of the bank</option>
             {folders.map((folder) => (
@@ -102,7 +99,7 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
           </select>
         </label>
         {selectedFolder === null && folderId !== null && (
-          <p className="mt-1 text-st-blocked" style={{ fontSize: "10px" }}>
+          <p className="mt-1 text-st-blocked text-2xs">
             That folder no longer exists; the skill will land at the root.
           </p>
         )}
@@ -131,7 +128,7 @@ function CheckDot({ state }: { state: CheckState }) {
     );
   }
   if (state === "warn") {
-    return <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-st-await/20 text-st-await font-bold" style={{ fontSize: 9 }}>!</span>;
+    return <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-st-await/20 text-2xs text-st-await font-bold">!</span>;
   }
   return <span className="h-3.5 w-3.5 rounded-full border border-line-strong" />;
 }

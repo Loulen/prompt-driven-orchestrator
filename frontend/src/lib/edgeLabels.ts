@@ -181,10 +181,10 @@ export function midpointAxis(points: Point[], mid: Point): LabelAxis {
  * cap. The pill is a 16 px line; a card counts when it overlaps that line.
  */
 export function conditionPillMaxWidth(center: Point, cards: Rect[]): number {
-  const CAP = 220;
+  const CAP = 220; // `.cv-pill` max-width in canvas.css
   const FLOOR = 40;
   const MARGIN = 4;
-  const HALF_HEIGHT = 8;
+  const HALF_HEIGHT = 8; // half the `.cv-pill` height
   let half = CAP / 2;
   for (const c of cards) {
     if (c.y > center.y + HALF_HEIGHT || c.y + c.height < center.y - HALF_HEIGHT) continue;

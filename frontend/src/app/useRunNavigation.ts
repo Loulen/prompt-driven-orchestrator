@@ -95,6 +95,8 @@ export function useRunNavigation({
   );
   // The child run opens on the node that needs a look (its banner at once),
   // as soon as its state is the selected one; a selection made meanwhile wins.
+  // `orchestratorReturn` re-runs it when the child's state arrived before the
+  // landing was recorded (opening a tab always clears the selection first).
   useEffect(() => {
     if (!landOnChild.current || selectedRun?.run_id !== landOnChild.current) return;
     landOnChild.current = null;

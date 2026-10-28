@@ -1,4 +1,4 @@
-import { ArrowLeft, GitFork, Play, Workflow } from "lucide-react";
+import { ArrowLeft, Play, Workflow } from "lucide-react";
 import EditCanvas from "../pipeline/components/EditCanvas";
 import TabBar from "../pipeline/components/TabBar";
 import MountedPageView from "../platform/components/MountedPageView";
@@ -6,7 +6,7 @@ import { useActivePage, useMountedPages } from "../platform/store/mountedPages";
 import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
-import { Button, EmptyState } from "../shared/ui/kit";
+import { Button, EmptyState, IconButton } from "../shared/ui/kit";
 import { canCreateSomeRun } from "../run/model/runCreationRights";
 import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import type { Project } from "../workspace/model/project";
@@ -86,22 +86,21 @@ export default function CenterPane({
       {hasEditTab && (
         <div hidden={activePage != null} className="flex min-h-0 flex-1 flex-col">
           {orchestratorReturn && selectedRun?.run_id === orchestratorReturn.childRunId && (
-            <button
-              type="button"
-              data-testid="orchestrator-back-bar"
-              onClick={handleBackToOrchestrator}
-              className="flex h-6 shrink-0 cursor-pointer items-center gap-1.5 border-b border-line bg-surface-1 px-3 text-xs text-text-3 transition-colors hover:text-text"
-              title="Back to the orchestrator node, on its Orchestration tab"
-            >
-              <ArrowLeft size={12} />
-              <span>
-                Back to <span className="font-medium text-text-2">{orchestratorReturn.nodeName}</span>
-                <span className="text-text-3"> · {orchestratorReturn.parentRunName}</span>
+            <div className="cv-child" data-testid="orchestrator-back-bar">
+              <IconButton
+                icon={ArrowLeft}
+                size="sm"
+                label="Back to parent run"
+                data-testid="orchestrator-back"
+                onClick={handleBackToOrchestrator}
+              />
+              <span className="cv-child__parent" title={orchestratorReturn.parentRunName}>
+                {orchestratorReturn.parentRunName}
               </span>
-              <span className="ml-auto flex items-center gap-1 text-2xs text-text-3">
-                <GitFork size={10} /> child run
+              <span className="cv-child__node" title={orchestratorReturn.nodeName}>
+                {orchestratorReturn.nodeName}
               </span>
-            </button>
+            </div>
           )}
           <EditCanvas
             libraryEntries={libraryEntries}

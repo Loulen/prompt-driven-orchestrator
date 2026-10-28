@@ -307,7 +307,6 @@ export default function App() {
             collapsible={rightPane.collapsible}
             panelRef={rightPane.panelRef}
             id="right"
-            className="panel-r"
             data-collapsed={rightPaneCollapsed || undefined}
           >
             <RightPane

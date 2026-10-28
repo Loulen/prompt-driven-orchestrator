@@ -39,7 +39,7 @@ export interface Rect {
 }
 
 /** Approximate default node-card footprint; nodes auto-size around this. */
-export const CARD_WIDTH = 180;
+export const CARD_WIDTH = 208;
 export const CARD_HEIGHT = 80;
 
 /** Breathing room between two cards, so « not overlapping » also reads as such. */

@@ -28,29 +28,17 @@ export default function FileChip({
       {...(download ? { download: true } : { target: "_blank", rel: "noreferrer" })}
       // Above the row's open target: a chip never opens the artifact modal.
       onClick={(e) => e.stopPropagation()}
-      className={`relative flex h-9 max-w-[220px] items-center gap-1.5 rounded border border-line bg-surface-0 px-1.5 transition-colors hover:border-text-3${
+      className={`relative flex h-6 max-w-[220px] items-center gap-1.5 rounded border border-line bg-surface-0 px-1 transition-colors hover:border-text-3${
         file.inherited ? " opacity-60" : ""
       }`}
       title={title}
       data-testid={testId}
     >
-      <span
-        className="grid h-6 w-6 flex-shrink-0 place-items-center rounded border border-line bg-surface-2 font-mono font-medium text-text-3"
-        style={{ fontSize: "7.5px" }}
-        aria-hidden="true"
-      >
+      <span className="flex-shrink-0 font-mono text-2xs font-medium text-text-3" aria-hidden="true">
         {fileBadge(name)}
       </span>
-      <span className="flex min-w-0 flex-col leading-tight">
-        <span className="truncate text-text-2" style={{ fontSize: "10.5px" }}>
-          {name}
-        </span>
-        {file.size != null && (
-          <span className="font-mono text-text-3" style={{ fontSize: "9px" }}>
-            {formatSize(file.size)}
-          </span>
-        )}
-      </span>
+      <span className="truncate text-xs text-text-2">{name}</span>
+      {file.size != null && <span className="shrink-0 font-mono text-2xs text-text-3">{formatSize(file.size)}</span>}
       {download && (
         <Download size={11} className="flex-shrink-0 text-text-3" aria-hidden="true" />
       )}

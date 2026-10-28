@@ -10,7 +10,8 @@ import { E2E_TARGET_REPO, pickPipeline } from "./helpers";
 // `files`, and the created Run carries both in `start_node`.
 
 const PIPELINE_NAME = `e2e-attachments-${process.pid}-${Date.now()}`;
-// The daemon reads the instance pipelines from `$HOME/.pdo/pipelines`.
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
 const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 

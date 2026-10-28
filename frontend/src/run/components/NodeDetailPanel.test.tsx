@@ -174,8 +174,10 @@ function makeNode(overrides?: Partial<NodeState>): NodeState {
   describe("frozen harness (#616)", () => {
     it("shows the node's frozen harness next to the id when present", () => {
       render(<NodeDetailPanel node={makeNode({ harness: "copilot" })} runId="run-1" />);
+      // The harness's initial, its name in the tooltip.
       const chip = screen.getByTestId("node-frozen-harness");
-      expect(chip).toHaveTextContent("copilot");
+      expect(chip).toHaveTextContent("G");
+      expect(chip).toHaveAccessibleName("copilot · frozen at spawn");
     });
 
     it("shows no harness chip when the node never froze one (a pure skip / pre-#616)", () => {
@@ -359,8 +361,8 @@ describe("NodeDetailPanel", () => {
       );
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
       expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
-      expect(screen.getByText("Mark complete")).toBeInTheDocument();
-      expect(screen.getByTestId("prompt-toggle")).toBeInTheDocument();
+      expect(screen.getByTestId("mark-complete-btn")).toHaveAccessibleName("Mark complete");
+      expect(screen.getByTestId("prompt-section")).toBeInTheDocument();
     });
 
     // #44: « Expand terminal » no longer swaps the panel for a full-height
@@ -578,7 +580,7 @@ describe("NodeDetailPanel", () => {
 
       const frame = screen.getByTestId("terminal-fullsize");
       expect(frame).toContainElement(screen.getByTestId("tmux-terminal"));
-      expect(frame.className).toMatch(/\bborder-st-done\b/);
+      expect(frame.style.borderColor).toContain("--color-st-done");
       expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Completed");
     });
 
@@ -654,7 +656,7 @@ describe("NodeDetailPanel", () => {
       fetchNodeIOMock.mockClear();
       fetchPromptMock.mockClear();
 
-      const trigger = screen.getByText(/iter 2/);
+      const trigger = screen.getByRole("button", { name: /^Iteration 2 of/ });
       fireEvent.click(trigger);
 
       const option = await screen.findByTestId("iter-option-1");
@@ -733,7 +735,7 @@ describe("NodeDetailPanel", () => {
       expect(banner).not.toHaveTextContent("after retry");
       // `includes`, not `startsWith`: the script reason does not start with the
       // after-retry one, so the generic banner must NOT also fire.
-      expect(screen.queryByText(/^Failed — script output validation failed$/)).toBeTruthy();
+      expect(screen.queryByTestId("failed-banner")).toBeNull();
     });
 
     it("lists the missing output ports of a script fail-fast", () => {
@@ -820,9 +822,8 @@ describe("NodeDetailPanel", () => {
       render(
         <><NodeDetailPanel node={makeNode()} runId="run-1" /></>,
       );
-      const toggle = screen.getByTestId("prompt-toggle");
-      expect(toggle).toBeInTheDocument();
-      expect(toggle.textContent).toContain("Initial Prompt");
+      const toggle = within(screen.getByTestId("prompt-section")).getByRole("button", { name: /Prompt/ });
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
       expect(screen.queryByText("system prompt here")).not.toBeInTheDocument();
     });
 
@@ -830,13 +831,13 @@ describe("NodeDetailPanel", () => {
       render(
         <><NodeDetailPanel node={makeNode()} runId="run-1" /></>,
       );
-      const toggle = screen.getByTestId("prompt-toggle");
+      const toggle = within(screen.getByTestId("prompt-section")).getByRole("button", { name: /Prompt/ });
 
       fireEvent.click(toggle);
-      expect(screen.getByText("Loading prompt...")).toBeInTheDocument();
+      expect(screen.getByText("Loading…")).toBeInTheDocument();
 
       fireEvent.click(toggle);
-      expect(screen.queryByText("Loading prompt...")).not.toBeInTheDocument();
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     });
 
     // #315: the per-iter rendered prompt lives in the node's working dir, which
@@ -866,11 +867,9 @@ describe("NodeDetailPanel", () => {
           />
         </>,
       );
-      fireEvent.click(screen.getByTestId("prompt-toggle"));
-      expect(
-        screen.getByText("Prompt not preserved for archived runs."),
-      ).toBeInTheDocument();
-      expect(screen.queryByText("Loading prompt...")).not.toBeInTheDocument();
+      fireEvent.click(within(screen.getByTestId("prompt-section")).getByRole("button", { name: /Prompt/ }));
+      expect(screen.getByText("Not preserved")).toBeInTheDocument();
+      expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     });
   });
 
@@ -943,7 +942,7 @@ describe("NodeDetailPanel", () => {
         screen.getByTestId("tmux-terminal").getAttribute("data-status"),
       ).toBe("running");
 
-      fireEvent.click(screen.getByText(/iter 2/));
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
       fireEvent.click(await screen.findByTestId("iter-option-1"));
       await act(async () => {});
 
@@ -1211,8 +1210,8 @@ describe("NodeDetailPanel", () => {
           />
         </>,
       );
-      expect(screen.getByText("Stopped")).toBeInTheDocument();
-      expect(screen.getByText(/user killed it/)).toBeInTheDocument();
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("Stopped");
+      expect(screen.getByTestId("stopped-banner")).toHaveTextContent("Stopped — user killed it");
     });
 
     it("renders Skipped label and greyed banner with the prune reason (#620)", () => {
@@ -1228,7 +1227,7 @@ describe("NodeDetailPanel", () => {
         </>,
       );
       // The header label distinguishes it from a green "Completed" node…
-      expect(screen.getByText("Skipped")).toBeInTheDocument();
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("Skipped");
       // …and the banner carries *why* it was pruned, at node level.
       expect(
         screen.getByText(/required input never arrived — branch not taken/),
@@ -1241,7 +1240,7 @@ describe("NodeDetailPanel", () => {
           <NodeDetailPanel node={makeNode({ status: "skipped" })} runId="run-1" />
         </>,
       );
-      expect(screen.getByText(/Skipped — branch not taken/)).toBeInTheDocument();
+      expect(screen.getByTestId("skipped-banner")).toHaveTextContent("Skipped — branch not taken");
     });
 
     it("renders Stale label in header and stale banner", () => {
@@ -1250,8 +1249,8 @@ describe("NodeDetailPanel", () => {
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
         </>,
       );
-      expect(screen.getByText("Stale")).toBeInTheDocument();
-      expect(screen.getByText(/agent idle/i)).toBeInTheDocument();
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("Stale");
+      expect(screen.getByTestId("stale-banner")).toHaveTextContent("Idle 2m+ — outputs incomplete");
     });
 
     it("stale node shows Mark complete button", () => {
@@ -1260,7 +1259,7 @@ describe("NodeDetailPanel", () => {
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
         </>,
       );
-      expect(screen.getByText("Mark complete")).toBeInTheDocument();
+      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
     });
 
     it("stopped node does not show Mark complete button", () => {
@@ -1269,7 +1268,7 @@ describe("NodeDetailPanel", () => {
           <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
         </>,
       );
-      expect(screen.queryByText("Mark complete")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
     });
 
     it("minimizes the terminal for a stopped node", () => {
@@ -1308,9 +1307,9 @@ describe("NodeDetailPanel", () => {
           <NodeDetailPanel node={interrupted()} runId="run-1" />
         </>,
       );
-      expect(screen.getByText("Interrupted")).toBeInTheDocument();
+      expect(screen.getByTestId("node-status-badge")).toHaveTextContent("Interrupted");
       expect(screen.getByTestId("interrupted-banner")).toBeInTheDocument();
-      expect(screen.getByText(/session died/i)).toBeInTheDocument();
+      expect(screen.getByTestId("interrupted-banner-title")).toHaveTextContent("Session died");
     });
 
     it("names a merge-back conflict instead of a dead session (ADR-0082)", () => {
@@ -1337,7 +1336,7 @@ describe("NodeDetailPanel", () => {
           <NodeDetailPanel node={interrupted()} runId="run-1" />
         </>,
       );
-      expect(screen.getByTestId("play-retry-btn")).toHaveTextContent("Play");
+      expect(screen.getByTestId("play-retry-btn")).toHaveAccessibleName("Retry");
     });
 
     it("Play re-drives the node via retryNode (daemon embeds the reopen)", async () => {
@@ -1587,7 +1586,7 @@ describe("NodeDetailPanel", () => {
       );
       const banner = screen.getByTestId("stale-banner");
       expect(banner).toBeInTheDocument();
-      expect(banner).toHaveTextContent("Agent idle for >2 min");
+      expect(banner).toHaveTextContent("Idle 2m+");
       expect(banner).toHaveTextContent("outputs incomplete");
     });
 
@@ -1650,14 +1649,12 @@ describe("NodeDetailPanel", () => {
       );
 
       const staleBanner = staleContainer.querySelector('[data-testid="stale-banner"]');
-      const failedBanner = failedContainer.querySelector('[data-testid="output-validation-banner"]')
-        ?? failedContainer.querySelector('.border-st-failed\\/30');
+      const failedBanner = failedContainer.querySelector('[data-testid="failed-banner"]') as HTMLElement | null;
 
+      // Each banner is tinted in its own tone: skipped grey, failed red.
       expect(staleBanner).toBeInTheDocument();
-      expect(staleBanner?.className).toContain("st-skipped");
-      if (failedBanner) {
-        expect(failedBanner.className).toContain("st-failed");
-      }
+      expect((staleBanner as HTMLElement).style.getPropertyValue("--st")).toContain("--color-st-skipped");
+      expect(failedBanner?.style.getPropertyValue("--st")).toContain("--color-st-failed");
     });
   });
 
@@ -1671,7 +1668,7 @@ describe("NodeDetailPanel", () => {
       const stopBtn = screen.getByTestId("stop-btn");
       expect(stopBtn).toBeInTheDocument();
       expect(stopBtn).not.toBeDisabled();
-      expect(stopBtn).toHaveTextContent("Stop");
+      expect(stopBtn).toHaveAccessibleName("Stop");
     });
 
     it("shows disabled Stop button when node is completed", () => {
@@ -1753,7 +1750,7 @@ describe("NodeDetailPanel", () => {
         </>,
       );
       const playBtn = screen.getByTestId("play-retry-btn");
-      expect(playBtn).toHaveTextContent("Play");
+      expect(playBtn).toHaveAccessibleName("Retry");
       fireEvent.click(playBtn);
       await waitFor(() => expect(retryNodeMock).toHaveBeenCalledWith("run-1", expect.any(String)));
     });
@@ -1774,7 +1771,7 @@ describe("NodeDetailPanel", () => {
         </>,
       );
       const retryBtn = screen.getByTestId("retry-btn");
-      expect(retryBtn).toHaveTextContent("Retry");
+      expect(retryBtn).toHaveAccessibleName("Retry");
     });
 
     it("shows Play label for failed node", () => {
@@ -1784,7 +1781,7 @@ describe("NodeDetailPanel", () => {
         </>,
       );
       const playBtn = screen.getByTestId("play-retry-btn");
-      expect(playBtn).toHaveTextContent("Play");
+      expect(playBtn).toHaveAccessibleName("Retry");
     });
 
     it("shows Play label for stopped node", () => {
@@ -1794,7 +1791,7 @@ describe("NodeDetailPanel", () => {
         </>,
       );
       const playBtn = screen.getByTestId("play-retry-btn");
-      expect(playBtn).toHaveTextContent("Play");
+      expect(playBtn).toHaveAccessibleName("Retry");
     });
 
     it("shows Retry label for completed node", () => {
@@ -1804,7 +1801,7 @@ describe("NodeDetailPanel", () => {
         </>,
       );
       const playBtn = screen.getByTestId("play-retry-btn");
-      expect(playBtn).toHaveTextContent("Retry");
+      expect(playBtn).toHaveAccessibleName("Retry");
     });
 
     it("Stop button calls stopNode API", async () => {
@@ -1855,7 +1852,7 @@ describe("NodeDetailPanel", () => {
       );
       const startBtn = screen.getByTestId("start-btn");
       expect(startBtn).toBeInTheDocument();
-      expect(startBtn).toHaveTextContent("Start");
+      expect(startBtn).toHaveAccessibleName("Start");
     });
 
     it("clicking Start force-spawns the node via startNode API", async () => {
@@ -2071,9 +2068,7 @@ describe("NodeDetailPanel", () => {
       );
       const banner = screen.getByTestId("awaiting-banner");
       expect(banner).toHaveAttribute("data-cause", "declared");
-      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
-        "The agent is waiting for your answer",
-      );
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Question");
       expect(screen.getByTestId("awaiting-banner-message")).toHaveTextContent(
         "Which layout: strip or card?",
       );
@@ -2098,19 +2093,19 @@ describe("NodeDetailPanel", () => {
         </>,
       );
       const hint = () => screen.getByTestId("awaiting-banner-hint");
-      expect(hint()).toHaveTextContent(/Reply in the terminal below/);
+      expect(hint()).toHaveTextContent(/Reply in the terminal/);
       expect(hint()).not.toHaveTextContent(/take control to reply/);
 
       fireEvent.click(screen.getByTestId("mock-become-spectator"));
       expect(hint()).toHaveTextContent(/take control to reply/);
-      expect(hint()).not.toHaveTextContent(/Reply in the terminal below/);
+      expect(hint()).not.toHaveTextContent(/Reply in the terminal/);
       expect(screen.getByTestId("awaiting-banner")).toHaveAttribute(
         "data-terminal-spectating",
         "true",
       );
 
       fireEvent.click(screen.getByTestId("mock-become-pilot"));
-      expect(hint()).toHaveTextContent(/Reply in the terminal below/);
+      expect(hint()).toHaveTextContent(/Reply in the terminal/);
     });
 
     it("tells a spectator to take control on a completion that is not released", () => {
@@ -2152,9 +2147,7 @@ describe("NodeDetailPanel", () => {
           />
         </>,
       );
-      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
-        "The agent is waiting for you",
-      );
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Awaiting you");
       expect(screen.queryByTestId("awaiting-banner-message")).toBeNull();
       // Non-interactive: no release button, « Mark complete » only.
       expect(screen.queryByTestId("release-completion-btn")).toBeNull();
@@ -2178,9 +2171,7 @@ describe("NodeDetailPanel", () => {
         "data-cause",
         "completion_not_released",
       );
-      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
-        "The agent is done and waits for your go",
-      );
+      expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent("Done, awaiting approval");
       expect(screen.getByTestId("release-completion-btn")).toHaveAttribute("data-primary", "true");
       fireEvent.click(screen.getByTestId("awaiting-banner-release"));
       expect(releaseNodeCompletionMock).toHaveBeenCalledWith("run-1", "test-node", 1);
@@ -2472,7 +2463,7 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("mark-complete-verdict")).toBeInTheDocument();
 
       // Switching iteration must not carry a verdict that belongs to another one.
-      fireEvent.click(screen.getByText(/iter 2/));
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
       const option = await screen.findByTestId("iter-option-1");
       await act(async () => {
         fireEvent.click(option);
@@ -2574,9 +2565,7 @@ describe("NodeDetailPanel", () => {
           "data-verdict",
           "released",
         );
-        expect(screen.getByTestId("release-verdict")).toHaveTextContent(
-          "tell the agent in the terminal",
-        );
+        expect(screen.getByTestId("release-verdict")).toHaveTextContent("Completion released");
       });
 
       it("renders projected release state after reload and scopes it to the displayed iteration", () => {
@@ -2610,9 +2599,7 @@ describe("NodeDetailPanel", () => {
           </>,
         );
 
-        expect(screen.getByTestId("release-completion-btn")).toHaveTextContent(
-          "Mark ready for completion",
-        );
+        expect(screen.getByTestId("release-completion-btn")).toHaveAccessibleName("Mark ready for completion");
       });
     });
   });
@@ -2673,7 +2660,7 @@ describe("NodeDetailPanel", () => {
       expect(identity).toHaveTextContent("iter 3");
       expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Running");
       const frame = screen.getByTestId("terminal-fullsize");
-      expect(frame.className).toMatch(/\bborder-st-running\b/);
+      expect(frame.style.borderColor).toContain("--color-st-running");
       expect(frame.style.boxShadow).not.toContain("color-mix");
     });
 
@@ -2689,7 +2676,7 @@ describe("NodeDetailPanel", () => {
 
     it("recolours the frame and the badge live when the status changes", () => {
       const { rerender } = renderEnlarged(makeNode({ status: "running" }));
-      expect(screen.getByTestId("terminal-fullsize").className).toMatch(/\bborder-st-running\b/);
+      expect(screen.getByTestId("terminal-fullsize").style.borderColor).toContain("--color-st-running");
 
       rerender(
         <>
@@ -2698,11 +2685,11 @@ describe("NodeDetailPanel", () => {
       );
 
       const frame = screen.getByTestId("terminal-fullsize");
-      expect(frame.className).toMatch(/\bborder-st-await\b/);
-      expect(frame.className).not.toMatch(/\bborder-st-running\b/);
+      expect(frame.style.borderColor).toContain("--color-st-await");
+      expect(frame.style.borderColor).not.toContain("--color-st-running");
       // The awaiting halo joins the shadow.
       expect(frame.style.boxShadow).toContain("color-mix");
-      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Awaiting User");
+      expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Awaiting you");
       expect(screen.getByTestId("term-identity-status")).toHaveAttribute("data-status", "awaiting_user");
     });
 
@@ -2710,7 +2697,7 @@ describe("NodeDetailPanel", () => {
       const { rerender } = renderEnlarged(awaitingNode());
       expect(toolbar().getByRole("button", { name: "Mark ready for completion" })).toBeInTheDocument();
       expect(
-        toolbar().getByRole("button", { name: "Mark complete · take the artifacts as they are" }),
+        toolbar().getByRole("button", { name: "Approve" }),
       ).toBeInTheDocument();
 
       rerender(
@@ -2800,7 +2787,7 @@ describe("NodeDetailPanel", () => {
       );
       // The release does not close the enlarged view; the frame follows.
       const frame = screen.getByTestId("terminal-fullsize");
-      expect(frame.className).toMatch(/\bborder-st-running\b/);
+      expect(frame.style.borderColor).toContain("--color-st-running");
       expect(
         within(screen.getByTestId("term-gesture-popover")).getByTestId("release-verdict"),
       ).toHaveAttribute("data-verdict", "released");
@@ -3015,7 +3002,7 @@ describe("NodeDetailPanel", () => {
         ],
       });
       await act(async () => {});
-      fireEvent.click(screen.getByText(/iter 2/));
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
       fireEvent.click(await screen.findByTestId("iter-option-1"));
       await act(async () => {});
 

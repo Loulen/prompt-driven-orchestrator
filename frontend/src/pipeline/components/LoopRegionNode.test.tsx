@@ -248,9 +248,11 @@ describe("LoopRegionNode — box / chrome layer split (#455)", () => {
         <LoopRegionNode {...props({ layer: "box", exhausted: true, runId: "run-1" })} />
       </Wrapper>,
     );
+    // A tinted area (canvas.css `.cv-region`), sized to the members.
     const box = screen.getByTestId("loop-region");
-    expect(box.style.border).toContain("dashed");
-    expect(box.style.background).not.toBe("");
+    expect(box.className).toContain("cv-region");
+    expect(box).toHaveAttribute("data-exhausted", "true");
+    expect(box.style.width).not.toBe("");
     expect(screen.queryByTestId("loop-region-header")).toBeNull();
     expect(screen.queryByTestId("loop-region-block")).toBeNull();
     expect(screen.queryByTestId("loop-region-route-from-manager")).toBeNull();
@@ -282,7 +284,9 @@ describe("LoopRegionNode — box / chrome layer split (#455)", () => {
     );
     // The container spans the whole box and now sits ABOVE the member cards, so
     // it must not swallow their clicks (#167, the other way round).
-    expect(screen.getByTestId("loop-region-chrome").className).toContain("pointer-events-none");
-    expect(screen.getByTestId("loop-region-header").className).toContain("pointer-events-auto");
+    // canvas.css: `.cv-region-chrome` is `pointer-events: none`, its corner
+    // counter `pointer-events: all`.
+    expect(screen.getByTestId("loop-region-chrome").className).toContain("cv-region-chrome");
+    expect(screen.getByTestId("loop-region-header").className).toContain("cv-region__corner");
   });
 });

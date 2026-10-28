@@ -8,16 +8,15 @@ import { ExtensionActionButtons } from "../../shared/extensions/ExtensionActions
  * after a separator. Their context's Run is the Run on screen, whatever the
  * list's selection.
  */
-export default function RunToolbarActions({ run, readOnly }: { run: RunState; readOnly: boolean }) {
+export default function RunToolbarActions({ run }: { run: RunState }) {
   const extra = useMemo(() => ({ run: runContext(run) }), [run]);
   return (
     <ExtensionActionButtons
       location="run/toolbar"
       extra={extra}
-      // An archived canvas has no editing group: nothing to separate from.
-      before={readOnly ? null : <span className="mx-0.5 h-4 w-px bg-line" />}
-      className="flex items-center gap-0.5"
-      buttonClassName="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
+      before={<span className="cv-tb__sep" aria-hidden />}
+      className="flex items-center gap-px"
+      buttonClassName="d-icon"
       iconSize={14}
     />
   );

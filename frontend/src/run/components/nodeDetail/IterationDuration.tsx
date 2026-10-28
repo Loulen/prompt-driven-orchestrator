@@ -37,7 +37,7 @@ function IterationDurationTooltip({
       : "—";
   const waitOpen = !!timing.open_wait_since && timing.status === "awaiting_user";
   return (
-    <div className="whitespace-normal font-mono" style={{ fontSize: "10px" }}>
+    <div className="whitespace-normal font-mono text-2xs">
       <div className="grid grid-cols-[auto_auto] gap-x-6" data-testid="iteration-times">
         <span className="text-text-3">Started</span>
         <span className="text-right">
@@ -98,45 +98,29 @@ export function IterationDurationLabel({
   const durations = useIterationDurations(timing);
   if (durations == null) return null;
   const duration = formatDuration(durations[mode]);
-  const dot =
-    timing.status === "running"
-      ? "bg-st-running animate-pulse"
-      : timing.status === "awaiting_user"
-        ? "bg-st-await"
-        : null;
+  const tone =
+    timing.status === "running" ? "running" : timing.status === "awaiting_user" ? "awaiting" : null;
   return (
-    // A local provider: the panel also renders outside the App's (tests).
-    <>
-      <span> · </span>
-      <Tooltip
-        content={<IterationDurationTooltip timing={timing} durations={durations} mode={mode} />}
+    <Tooltip
+      content={<IterationDurationTooltip timing={timing} durations={durations} mode={mode} />}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label={`${duration} ${mode}. Click to show ${otherDurationMode(mode)} time`}
+        data-testid="iteration-duration"
+        data-mode={mode}
+        className="ri-dur"
       >
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-label={`${duration} ${mode}. Click to show ${otherDurationMode(mode)} time`}
-          data-testid="iteration-duration"
-          data-mode={mode}
-          className="group flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 font-mono text-text-3 transition-colors hover:bg-hover hover:text-text-2"
-          style={{ fontSize: "10px" }}
-        >
-          {dot && (
-            <span
-              aria-hidden
-              data-testid="iteration-duration-dot"
-              className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`}
-            />
-          )}
-          <span>{duration}</span>{" "}
-          <span
-            className="text-text-3 underline decoration-text-3 decoration-dotted underline-offset-2 group-hover:decoration-text-3"
-            data-testid="iteration-duration-unit"
-          >
-            {mode}
-          </span>
-        </button>
-      </Tooltip>
-    </>
+        {tone && (
+          <span aria-hidden data-testid="iteration-duration-dot" data-st={tone} className="ri-dur__dot" />
+        )}
+        <span>{duration}</span>{" "}
+        <span className="ri-dur__unit" data-testid="iteration-duration-unit">
+          {mode}
+        </span>
+      </button>
+    </Tooltip>
   );
 }
 

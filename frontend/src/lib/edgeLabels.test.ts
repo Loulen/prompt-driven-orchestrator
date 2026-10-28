@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   conditionLabelOffset,
+  conditionPillMaxWidth,
   departureHeading,
   firstSegmentHeading,
   midpointAxis,
@@ -100,6 +101,36 @@ describe("conditionLabelOffset (#845)", () => {
     const onVertical = conditionLabelOffset("vertical");
     expect(onVertical.y).toBe(0);
     expect(onVertical.x).not.toBe(0);
+  });
+});
+
+describe("conditionPillMaxWidth", () => {
+  const card = (x: number, y: number) => ({ x, y, width: 208, height: 60 });
+
+  it("keeps the full width when no card sits beside the pill", () => {
+    expect(conditionPillMaxWidth({ x: 0, y: 0 }, [card(0, 200)])).toBe(220);
+  });
+
+  it("shrinks to the gap between two cards side by side, a margin each side", () => {
+    // Cards 300 px apart leave a 92 px gap; the pill sits mid-gap above the wire.
+    const left = card(0, 0);
+    const right = card(300, 0);
+    const w = conditionPillMaxWidth({ x: 254, y: 15 }, [left, right]);
+    expect(w).toBeLessThanOrEqual(92 - 2 * 4);
+    expect(w).toBeGreaterThan(60);
+  });
+
+  it("is limited by the nearer card when the pill is off-centre", () => {
+    const w = conditionPillMaxWidth({ x: 250, y: 15 }, [card(0, 0), card(300, 0)]);
+    expect(w).toBe(2 * (250 - 208 - 4));
+  });
+
+  it("ignores cards above or below the pill's line", () => {
+    expect(conditionPillMaxWidth({ x: 254, y: 120 }, [card(0, 0), card(300, 0)])).toBe(220);
+  });
+
+  it("never goes under a floor that still shows a few characters", () => {
+    expect(conditionPillMaxWidth({ x: 210, y: 15 }, [card(0, 0), card(212, 0)])).toBe(40);
   });
 });
 

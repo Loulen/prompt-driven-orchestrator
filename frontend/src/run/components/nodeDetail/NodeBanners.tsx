@@ -1,4 +1,6 @@
-import { AlertCircle, CheckCircle, RotateCcw, Square } from "lucide-react";
+import { RotateCcw, Square } from "lucide-react";
+import { Button } from "../../../shared/ui/kit";
+import NodeBanner from "./NodeBanner";
 import type { NodeState } from "../../../shared/generated/NodeState";
 import type { NodeStatus } from "../../../shared/generated/NodeStatus";
 import AwaitingBanner from "./AwaitingBanner";
@@ -10,22 +12,22 @@ import type { NodeGestureRights } from "./types";
 const MERGE_CONFLICT_PREFIX = "merge_conflict: ";
 
 /**
- * The Interrupted banner's sentence. A merge-back conflict is not a dead session:
+ * The Interrupted banner's fact and detail. A merge-back conflict is not a dead session:
  * since ADR-0082 no resolver takes it over, so the node parks here with its work
  * in its sub-worktree, and « Session died » sent the reader looking for a crash.
  */
-function interruptedBannerText(reason: string | null | undefined): string {
+function interruptedBanner(reason: string | null | undefined): { title: string; text: string } {
   if (reason?.startsWith(MERGE_CONFLICT_PREFIX)) {
     const detail = reason.slice(MERGE_CONFLICT_PREFIX.length);
-    return `Merge-back conflict — ${detail} — the work is kept in the node's worktree`;
+    return { title: "Merge-back conflict", text: `${detail} · work kept in the node's worktree` };
   }
-  return `Session died${reason ? ` — ${reason}` : ""} — the work is presumed intact`;
+  return { title: "Session died", text: `${reason ? `${reason} · ` : ""}work presumed intact` };
 }
 
 /**
- * The status banners stacked between the toolbar and the terminal: completion
- * released, awaiting user, stale, stopped, interrupted, skipped, frontmatter
- * retry and the two failed variants.
+ * The status banners stacked between the header and the terminal, one tinted
+ * line each: completion released, awaiting user, stale, stopped, interrupted,
+ * skipped, frontmatter retry and the two failed variants.
  */
 export default function NodeBanners({
   node,
@@ -65,20 +67,14 @@ export default function NodeBanners({
   /** CORE-42: the gestures on this node the caller may make; the others hide. */
   may: NodeGestureRights;
 }) {
+  // A failed node is retried from its banner too.
+  const failedActions = !isArchived && may.retry && (
+    <Button size="sm" icon={RotateCcw} data-testid="failed-retry-btn" onClick={retry}>
+      Retry
+    </Button>
+  );
   return (
     <>
-      {completionReleased && selectedIterStatus === "running" && (
-        <div className="flex items-center gap-2 border-b border-st-running/30 bg-st-running/14 px-3 py-2">
-          <CheckCircle size={14} className="shrink-0 text-st-running" />
-          <span
-            className="text-st-running"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            Running — completion released. Tell the agent when you are done.
-          </span>
-        </div>
-      )}
-
       {/* #588 / ADR-0069 — the declared wait, on the iteration on screen. Only
           the latest iteration carries `node.awaiting`; an older awaiting
           iteration (a reaped one) renders the bare shape. A *derived* wait (a
@@ -105,157 +101,85 @@ export default function NodeBanners({
           block is therefore dead code for every new Run, and kept because Runs
           recorded before #469 still project `stale` and must still render as they
           always did. Do NOT "clean it up", and do not wire a producer back in to
-          give it something to show.
-          Its Retry button is also the only working action here: `Mark complete` is
-          rendered for a stale node below but the completion guard refuses the
-          transition, so it clicks into the void — a known, deliberately unfixed
-          consequence (ADR-0032 § "Ce qu'on ne fait pas": no catch-up). */}
+          give it something to show. */}
       {node.status === "stale" && (
-        <div
-          className="flex items-center gap-2 border-b border-st-skipped/30 bg-st-skipped/14 px-3 py-2"
-          data-testid="stale-banner"
-        >
-          <AlertCircle size={14} className="shrink-0 text-st-skipped" />
-          <span
-            className="flex-1 text-st-skipped"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            Agent idle for &gt;2 min — outputs incomplete
-          </span>
-          {!isArchived && (
-            <div className="flex items-center gap-1">
-              {may.kill && (
-              <button
-                data-testid="stale-stop-btn"
-                onClick={killStale}
-                className="flex cursor-pointer items-center gap-1 rounded border border-st-skipped/40 bg-st-skipped/10 px-1.5 py-0.5 text-st-skipped transition-colors hover:bg-st-skipped/20"
-                style={{ fontSize: "10.5px", fontWeight: 500 }}
-              >
-                <Square size={10} />
-                Stop
-              </button>
-              )}
-              {may.restart && (
-              <button
-                data-testid="stale-retry-btn"
-                onClick={restartIteration}
-                className="flex cursor-pointer items-center gap-1 rounded border border-st-skipped/40 bg-st-skipped/10 px-1.5 py-0.5 text-st-skipped transition-colors hover:bg-st-skipped/20"
-                style={{ fontSize: "10.5px", fontWeight: 500 }}
-              >
-                <RotateCcw size={10} />
-                Retry
-              </button>
-              )}
-            </div>
-          )}
-        </div>
+        <NodeBanner
+          tone="skipped"
+          title="Idle 2m+"
+          text="outputs incomplete"
+          testId="stale-banner"
+          actions={
+            !isArchived && (
+              <>
+                {may.kill && (
+                  <Button size="sm" icon={Square} data-testid="stale-stop-btn" onClick={killStale}>
+                    Stop
+                  </Button>
+                )}
+                {may.restart && (
+                  <Button size="sm" icon={RotateCcw} data-testid="stale-retry-btn" onClick={restartIteration}>
+                    Retry
+                  </Button>
+                )}
+              </>
+            )
+          }
+        />
       )}
 
-      {/* Stopped banner */}
       {node.status === "stopped" && (
-        <div className="flex items-center gap-2 border-b border-st-skipped/30 bg-st-skipped/14 px-3 py-2">
-          <AlertCircle size={14} className="shrink-0 text-st-skipped" />
-          <span
-            className="text-st-skipped"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            Stopped{node.failure_reason ? ` — ${node.failure_reason}` : ""}
-          </span>
-        </div>
+        <NodeBanner tone="skipped" title="Stopped" text={node.failure_reason ?? undefined} testId="stopped-banner" />
       )}
 
       {/* Interrupted banner — #598 / ADR-0049. An infra incident killed the
           session (tmux gone, daemon restart, spawn-abort); the work on disk is
           presumed intact and the run is parked, not failed. The one action that
           matters here is Reopen: it re-drives the interrupted node (the daemon
-          reopens the run atomically on the node retry). Before this the state
-          was a dead end — the placeholder promised "reopen or retry" but no
-          button delivered it. Mirrors the `stale` banner's shape; the Reopen
-          button shares the toolbar Play's `retry` handler (revives the session,
-          flips the terminal back to split). */}
+          reopens the run atomically on the node retry). */}
       {node.status === "interrupted" && (
-        <div
-          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await/14 px-3 py-2"
-          data-testid="interrupted-banner"
-        >
-          <AlertCircle size={14} className="shrink-0 text-st-await" />
-          <span
-            className="flex-1 text-st-await"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            {interruptedBannerText(node.failure_reason)}
-          </span>
-          {!isArchived && may.retry && (
-            <button
-              data-testid="interrupted-reopen-btn"
-              onClick={retry}
-              className="flex cursor-pointer items-center gap-1 rounded border border-st-await/40 bg-st-await/10 px-1.5 py-0.5 text-st-await transition-colors hover:bg-st-await/20"
-              style={{ fontSize: "10.5px", fontWeight: 500 }}
-            >
-              <RotateCcw size={10} />
-              Reopen
-            </button>
-          )}
-        </div>
+        <NodeBanner
+          tone="awaiting"
+          testId="interrupted-banner"
+          {...interruptedBanner(node.failure_reason)}
+          actions={
+            !isArchived &&
+            may.retry && (
+              <Button size="sm" icon={RotateCcw} data-testid="interrupted-reopen-btn" onClick={retry}>
+                Reopen
+              </Button>
+            )
+          }
+        />
       )}
 
       {/* Skipped banner (#620) — a structurally-unreachable node the resilience
-          sweep pruned. Slate, not green: it never ran, its branch was not taken.
-          The reason reads at node level (skip_reason), lifted from the skip event. */}
+          sweep pruned. It never ran, its branch was not taken. The reason reads
+          at node level (skip_reason), lifted from the skip event. */}
       {node.status === "skipped" && (
-        <div className="flex items-center gap-2 border-b border-st-skipped/30 bg-st-skipped/14 px-3 py-2">
-          <AlertCircle size={14} className="shrink-0 text-st-skipped" />
-          <span
-            className="text-st-skipped"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            Skipped{node.skip_reason ? ` — ${node.skip_reason}` : " — branch not taken"}
-          </span>
-        </div>
+        <NodeBanner tone="skipped" title="Skipped" text={node.skip_reason ?? "branch not taken"} testId="skipped-banner" />
       )}
 
-      {/* Frontmatter retry pending banner (amber) */}
       {node.status === "running" && (node.frontmatter_retries ?? 0) > 0 && (
-        <div
-          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await/14 px-3 py-2"
-          data-testid="frontmatter-retry-banner"
-        >
-          <AlertCircle size={14} className="shrink-0 text-st-await" />
-          <span
-            className="text-st-await"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            Frontmatter mismatch — corrective message sent, awaiting retry
-          </span>
-        </div>
+        <NodeBanner
+          tone="awaiting"
+          title="Frontmatter mismatch"
+          text="corrective message sent, awaiting retry"
+          testId="frontmatter-retry-banner"
+        />
       )}
 
-      {/* Failed banner — output-validation variant (#490) */}
+      {/* Failed banner — output-validation variant (#490): the reason
+          VERBATIM, then the evidence, one line each. */}
       {node.status === "failed" && isOutputValidationFailure(node) && (
-        <div
-          className="flex flex-col gap-1 border-b border-st-failed/30 bg-st-failed/14 px-3 py-2"
-          data-testid="output-validation-banner"
+        <NodeBanner
+          tone="failed"
+          title="Failed"
+          text={node.failure_reason ?? undefined}
+          testId="output-validation-banner"
+          actions={failedActions}
         >
-          <div className="flex items-center gap-2">
-            <AlertCircle size={14} className="shrink-0 text-st-failed" />
-            <span
-              className="text-st-failed"
-              style={{ fontSize: "11.5px", fontWeight: 500 }}
-            >
-              {/* #490: the reason VERBATIM, not a hard-coded "after retry" — which
-                  lied for the `script` fail-fast path, a path that never retries.
-                  It also makes the landing order safe: if the status arrives before
-                  the evidence, we show the right reason with no list, which is
-                  informationally equal to the pre-#490 behaviour. */}
-              Failed — {node.failure_reason}
-            </span>
-          </div>
           {node.frontmatter_violations && node.frontmatter_violations.length > 0 && (
-            <ul
-              className="mt-0.5 flex flex-col gap-0.5 pl-5 font-mono text-st-failed"
-              style={{ fontSize: "10px" }}
-              data-testid="frontmatter-violation-list"
-            >
+            <ul className="ri-banner__list" data-testid="frontmatter-violation-list">
               {node.frontmatter_violations.map((v, i) => (
                 <li key={i}>
                   {v.port}.{v.field}: {v.reason}
@@ -264,34 +188,27 @@ export default function NodeBanners({
             </ul>
           )}
           {/* #490: a `script` node failing on a MISSING output used to paint this
-              banner with an empty list — the daemon computed the evidence and the
-              projector threw it away. */}
+              banner with an empty list. */}
           {node.missing_outputs && node.missing_outputs.length > 0 && (
-            <ul
-              className="mt-0.5 flex flex-col gap-0.5 pl-5 font-mono text-st-failed"
-              style={{ fontSize: "10px" }}
-              data-testid="missing-output-list"
-            >
+            <ul className="ri-banner__list" data-testid="missing-output-list">
               {node.missing_outputs.map((m) => (
                 <li key={m}>Missing outputs: {m}</li>
               ))}
             </ul>
           )}
-        </div>
+        </NodeBanner>
       )}
 
-      {/* Failed banner — generic. Same predicate, inverted: two different tests here
-          would let both banners fire (or neither). */}
+      {/* Failed banner — generic. Same predicate, inverted: two different tests
+          here would let both banners fire (or neither). */}
       {node.status === "failed" && !isOutputValidationFailure(node) && (
-        <div className="flex items-center gap-2 border-b border-st-failed/30 bg-st-failed/14 px-3 py-2">
-          <AlertCircle size={14} className="shrink-0 text-st-failed" />
-          <span
-            className="text-st-failed"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            Failed{node.failure_reason ? ` — ${node.failure_reason}` : ""}
-          </span>
-        </div>
+        <NodeBanner
+          tone="failed"
+          title="Failed"
+          text={node.failure_reason ?? undefined}
+          testId="failed-banner"
+          actions={failedActions}
+        />
       )}
     </>
   );

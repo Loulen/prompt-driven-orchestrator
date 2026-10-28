@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import {
   ancestorIds, buildRunTree, filterRunTree, flattenAll, isInArchivedSection, parentIds, rootOf,
@@ -43,6 +43,12 @@ export function useRunTreeView(
     isFilterActive(runFilter) ||
     isAttributeFilterActive(attributeFilter) ||
     isAttributeFilterActive(projectFilter);
+  /** Every filter off: the axes, the date and the extensions' attributes. */
+  const clearFilters = useCallback(() => {
+    setRunFilter(EMPTY_RUN_FILTER);
+    setAttributeFilter({});
+    setProjectFilter({});
+  }, []);
 
   // #783 — the run tree, built from ALL runs so a child follows its parent into
   // whatever group the ROOT lands in, whatever the child's own repo. A subtree
@@ -186,6 +192,7 @@ export function useRunTreeView(
     setAttributeFilter,
     projectFilter,
     setProjectFilter,
+    clearFilters,
     filterActive,
     activeTree,
     archivedTree,

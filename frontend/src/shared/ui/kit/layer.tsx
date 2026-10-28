@@ -101,8 +101,8 @@ export function Floating({
 /**
  * A panel under its anchor (a dropdown, a menu, a popover). Flips up when
  * there is no room below, stays inside the window. Closes on Escape (focus
- * back on the anchor), on a pointer-down outside, on resize and on an outside
- * scroll.
+ * back on the anchor), on a pointer-down outside, on resize and on a scroll
+ * that moves the anchor.
  */
 export function AnchoredPanel({
   anchor,
@@ -179,8 +179,13 @@ export function AnchoredPanel({
         preventScroll: true,
       });
     };
+    // Only a scroll that moves the anchor: a box beside it (a list that
+    // shrinks under a choice made in the panel) leaves the panel in place.
     const onScroll = (e: Event) => {
-      if (!(e.target instanceof Node && ref.current?.contains(e.target))) close.current();
+      const t = e.target;
+      if (t instanceof Node && ref.current?.contains(t)) return;
+      if (t instanceof Element && anchor.current && !t.contains(anchor.current)) return;
+      close.current();
     };
     const onResize = () => close.current();
     document.addEventListener("pointerdown", onDown, true);

@@ -177,7 +177,11 @@ selected Run, or when its repository belongs to no Projet.
 ### `runs/filter`
 
 - **Accepts**: list filter.
-- **Renders**: a row under the Runs list's own filters, one control per contribution.
+- **Renders**: a row of the Runs list's filter menu (the funnel of its header), after the core's
+  filters: the contribution's control, captioned by its `label`; the row's tooltip names the
+  extension. The funnel counts an attribute set as one filter in force, and « Clear all » empties
+  the filter. The menu stays open over the kit's floating panels (`Select`, `Menu`, `Popover`); a
+  click in a panel drawn otherwise closes it.
 - **Context**: `ListFilterContext` = `LocationContext` + `resource` (`"run"`) + `filter`. The
   component also receives `resource`, `filter` (prefixed key → value) and `setFilter(next)`; the
   list keeps the Runs carrying every attribute of the filter, as `?attr.<id>/<key>=<value>` does.
@@ -427,7 +431,8 @@ locations.
 
 ### List filters
 
-A list-filter location renders a row under the list's own filters, one control per contribution.
+A list-filter location renders a row under the list's own filters, one control per contribution;
+the Runs list puts them in its filter menu instead.
 The component receives `resource`, `label` (the contribution's declared label, its caption),
 `filter` (prefixed key → value) and `setFilter(next)`, and
 `context` = `ListFilterContext` (`LocationContext` + `resource` + `filter`). The list keeps what
@@ -450,12 +455,13 @@ carries every attribute of the filter, as `?attr.<id>/<key>=<value>` does on the
 ### `projects/filter`
 
 - **Accepts**: list filter.
-- **Renders**: above the Runs list and above the Triggers list, which both group by Projet (each
-  list keeps its own filter); `resource` is `"project"`. A list keeps the items whose Projet
+- **Renders**: in the Runs list's filter menu, after the `runs/filter` rows (the label's tooltip
+  says « Project »), and above the Triggers list; both lists group by Projet and each keeps its own
+  filter. `resource` is `"project"`. A list keeps the items whose Projet
   carries every attribute of the filter (`GET /projects?attr.…`), by the grouping's rule: the
   Projet whose members hold the repository (of the Run's root, of the Trigger). An item outside
-  any Projet is left out while the filter is active. The row opens on a « Project » tag, so its
-  controls never read as the list's own.
+  any Projet is left out while the filter is active. Above the Triggers, the row opens on a
+  « Project » tag, so its controls never read as the list's own.
 - **0.1**: the `ListFilter { resource: Project }` slot.
 ### The Action locations
 
@@ -509,8 +515,8 @@ interface ReviewFileContext extends ReviewContext { entity: FileEntity; file: { 
 ### `runs/header`
 
 - **Accepts**: action.
-- **Renders**: an icon button per action in the Runs tab's title bar, before « Project » and
-  « New Run ».
+- **Renders**: an icon button per action in the Runs tab's title bar, before the filters'
+  funnel and « New Run ».
 - **Context**: `LocationContext`.
 
 ### `run/item/menu`

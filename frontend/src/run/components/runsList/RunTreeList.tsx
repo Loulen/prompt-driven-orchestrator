@@ -3,7 +3,6 @@ import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
 import { handleSelectionKeydown } from "../../../lib/selectionKeys";
 import { flattenAll, flattenVisible, type RunTreeNode } from "../../model/runTree";
-import { EMPTY_RUN_FILTER } from "../../model/runFilter";
 import SelectControl from "../../../shared/ui/SelectControl";
 import RunRow from "./RunRow";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
@@ -38,9 +37,9 @@ export default function RunTreeList({
 }: Props) {
   const {
     runsScrollRef, visibleRunIds, runSelIds, selectVisible, clearSel, cleanupItems, setRunBulkKind,
-    filterActive, filteredRuns, setRunFilter, runGroups, activeTree, isExpanded, runSel, selectGroup,
-    openProjectSettings, canOpenProjectSettings, archivedCount, archivedOpen, setArchivedOpen, archivedTree, setAttributeFilter,
-    setProjectFilter, isGroupCollapsed, toggleGroup,
+    filterActive, filteredRuns, clearFilters, runGroups, activeTree, isExpanded, runSel, selectGroup,
+    openProjectSettings, canOpenProjectSettings, archivedCount, archivedOpen, setArchivedOpen, archivedTree,
+    isGroupCollapsed, toggleGroup,
   } = pane;
   const renderRunRow = (node: RunTreeNode) => (
     <RunRow
@@ -100,11 +99,7 @@ export default function RunTreeList({
           <button
             data-testid="run-filter-empty-clear"
             className="mt-1 block w-full cursor-pointer text-primary hover:underline"
-            onClick={() => {
-              setRunFilter(EMPTY_RUN_FILTER);
-              setAttributeFilter({});
-              setProjectFilter({});
-            }}
+            onClick={clearFilters}
           >
             Clear filters
           </button>

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
 import {
   ANY_TIME,
-  dateFilterLabel,
   rangeDays,
   runMatchesDate,
   startDateLabel,
@@ -95,15 +94,6 @@ describe("runMatchesDate", () => {
 });
 
 describe("labels", () => {
-  it("the filter button says the range", () => {
-    expect(dateFilterLabel(ANY_TIME, NOW)).toBeNull();
-    expect(dateFilterLabel({ mode: "active", range: { preset: "7d" } }, NOW)).toBe("7 days");
-    expect(dateFilterLabel(day("started", "2026-10-12"), NOW)).toBe("Oct 12");
-    expect(
-      dateFilterLabel({ mode: "active", range: { from: "2025-12-30", to: "2026-01-02" } }, NOW),
-    ).toBe("Dec 30, 2025 → Jan 2");
-  });
-
   it("a row shows its start date unless it started today", () => {
     expect(startDateLabel(local(2026, 10, 14, 1), NOW)).toBeNull();
     expect(startDateLabel(local(2026, 10, 12), NOW)).toBe("Oct 12");

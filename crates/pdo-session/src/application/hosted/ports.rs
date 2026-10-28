@@ -43,11 +43,13 @@ pub trait HostedHarness: Send + Sync {
     fn resolve<'a>(&'a self, name: Option<&'a str>) -> BoxFuture<'a, Option<HarnessDescriptor>>;
 }
 
-/// The Cap de sessions concurrentes was full.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CapReached {
-    pub live: usize,
-    pub cap: usize,
+/// Why a session was given no slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotAdmitted {
+    /// The Cap de sessions concurrentes is full.
+    CapReached { live: usize, cap: usize },
+    /// The Cap cannot be read (the daemon is starting or stopping).
+    Unavailable(String),
 }
 
 /// A slot of the Cap, taken under the admission lock: the lock is released
@@ -64,8 +66,8 @@ impl AdmissionSlot {
 /// The Cap de sessions concurrentes, shared with the Nodes of the Runs
 /// (implemented by the `run` side): the same lock, the same count.
 pub trait SessionAdmission: Send + Sync {
-    /// Take a slot, or say the Cap is full. Nothing waits for a slot.
-    fn admit(&self) -> BoxFuture<'_, Result<AdmissionSlot, CapReached>>;
+    /// Take a slot, or say why not. Nothing waits for a slot.
+    fn admit(&self) -> BoxFuture<'_, Result<AdmissionSlot, NotAdmitted>>;
 
     /// A session gave its slot back: the Nodes waiting for one may start.
     fn released(&self);

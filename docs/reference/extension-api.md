@@ -417,7 +417,8 @@ let session = host
   repository) and the harness (`400` for one the core does not know), then takes a slot of the
   **Cap de sessions concurrentes**, shared with the Nodes: a full Cap refuses at once, `409`
   `session cap reached (<live>/<cap> live sessions)`, nothing waits. A key the extension already
-  gave is `409`. A refused Operation is `403`, and nothing is opened.
+  gave is `409`, an ended session's included: its record keeps the key. A refused Operation is
+  `403`, and nothing is opened.
 - **Its launch**: the Contribution au lancement of every extension is asked with the Actor of the
   gesture as `started_by` (`session_env` and `session_preamble`, for an agent and a shell
   alike, `session.kind` `hosted`). An agent reads the extensions' text then its `prompt`, and
@@ -435,7 +436,8 @@ let session = host
   calling extension's sessions, ended ones included.
 - **Terminating** asks `session` × `terminate` on the session (its id, in its Projet), ends it
   (`terminated`), then kills its process. Its record stays. An ended session is answered as it
-  is; `404` for a key never given.
+  is, with the reason it ended for; `404` for a key never given. Terminated while it is still
+  being launched, the session never runs: `open_session` answers it ended.
 - **Its life**: a session whose process exits ends (`exited`) within a few seconds. A restarted
   daemon takes back the live ones with who started them, and ends (`exited`) those whose process
   is gone. The orphan sweep never kills a session recorded live, and kills any other name with
@@ -443,7 +445,8 @@ let session = host
 
 Each change of its state is published as `hosted_session_changed`, to every extension's
 `on_event` and, on `/ws`, to the connections whose Actor may run `session` × `read` on it (in its
-Projet); `HostedSessionChanged::from_event` reads it back:
+Projet); `HostedSessionChanged::from_event` reads it back. The whole session travels, its
+`config` (the initial prompt included) and its `cwd` too: every extension receives it.
 
 ```json
 { "type": "hosted_session_changed",

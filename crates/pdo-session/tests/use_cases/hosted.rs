@@ -497,3 +497,61 @@ async fn the_sweep_keeps_a_recorded_session_and_kills_any_other_of_the_prefix() 
     assert!(!w.tmux.has(&ended.id));
     assert!(!w.tmux.has("pdo-hosted-stray"));
 }
+
+#[tokio::test]
+async fn terminated_while_it_is_launched_it_stays_ended_and_its_process_is_killed() {
+    use futures_util::FutureExt;
+    let w = World::new();
+    let hosted = w.hosted.clone();
+    *w.tmux.on_next_spawn.lock().unwrap() = Some(Box::new(move || {
+        let ended = hosted
+            .terminate(EXT, &alice(), "s")
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+        assert_eq!(ended.end_reason, Some(EndReason::Terminated));
+    }));
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::shell("s"))
+        .await
+        .unwrap();
+    assert_eq!(session.state, HostedState::Ended);
+    assert_eq!(session.end_reason, Some(EndReason::Terminated));
+    assert!(!w.tmux.has(&session.id), "its process is killed");
+    assert_eq!(w.ledger.hosted_live(), 0);
+    assert_eq!(
+        *w.cap.released.lock().unwrap(),
+        1,
+        "its slot given back once"
+    );
+    assert_eq!(
+        w.changes(),
+        [
+            (HostedState::Starting, None),
+            (HostedState::Ended, Some(EndReason::Terminated))
+        ],
+        "never `running` after `ended`"
+    );
+}
+
+#[tokio::test]
+async fn a_session_that_exited_keeps_its_reason_when_it_is_terminated() {
+    let w = World::new();
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::shell("s"))
+        .await
+        .unwrap();
+    w.tmux.sessions.lock().unwrap().remove(&session.id);
+    w.hosted.reconcile();
+    let ended = w.hosted.terminate(EXT, &alice(), "s").await.unwrap();
+    assert_eq!(ended.end_reason, Some(EndReason::Exited));
+    assert_eq!(*w.cap.released.lock().unwrap(), 1);
+    let ends = w
+        .changes()
+        .into_iter()
+        .filter(|(state, _)| *state == HostedState::Ended)
+        .count();
+    assert_eq!(ends, 1, "ended once");
+}

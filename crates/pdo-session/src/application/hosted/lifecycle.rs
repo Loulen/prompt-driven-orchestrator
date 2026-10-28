@@ -38,18 +38,18 @@ impl Hosted {
             .in_projects(record.projects());
         authorize(self.host.as_ref(), actor, &operation)
             .map_err(|denied| HostedRefusal::new(403, denied.to_string()))?;
-        if !record.is_live() {
-            return Ok(record.session);
-        }
-        let ended = self
+        // Ended in between (its process exited): it keeps its reason.
+        let (ended, changed) = self
             .registry
             .update(record.id(), |r| {
                 r.end(EndReason::Terminated, &pdo_kernel::clock::now_iso())
             })
-            .unwrap_or(record);
-        self.tmux.kill(ended.id());
-        info!("Terminated hosted session {}", ended.id());
-        self.admission.released();
+            .unwrap_or((record, false));
+        if changed {
+            self.tmux.kill(ended.id());
+            info!("Terminated hosted session {}", ended.id());
+            self.admission.released();
+        }
         Ok(ended.session)
     }
 
@@ -64,9 +64,7 @@ impl Hosted {
             }
             let now = pdo_kernel::clock::now_iso();
             if self.tmux.session_exists(record.id()) {
-                if record.session.state == HostedState::Starting {
-                    self.registry.update(record.id(), |r| r.run(&now));
-                }
+                self.registry.update(record.id(), |r| r.run(&now));
                 self.ledger
                     .adopt(session_ref(&record), record.session.started_by.clone());
             } else {
@@ -94,15 +92,11 @@ impl Hosted {
                 continue;
             }
             let now = pdo_kernel::clock::now_iso();
-            let mut exited = false;
-            self.registry.update(record.id(), |r| {
-                // Terminated in between: its reason stands.
-                if r.is_live() {
-                    r.end(EndReason::Exited, &now);
-                    exited = true;
-                }
-            });
-            if exited {
+            // Terminated in between: its reason stands.
+            let exited = self
+                .registry
+                .update(record.id(), |r| r.end(EndReason::Exited, &now));
+            if let Some((_, true)) = exited {
                 info!("Hosted session {} exited", record.id());
                 released = true;
             }

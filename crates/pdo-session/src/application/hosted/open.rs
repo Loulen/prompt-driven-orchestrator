@@ -1,6 +1,7 @@
 //! Open a Session hébergée for an extension (ADR-0091).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use pdo_extension_api::{
     EndReason, HostedKind, HostedRefusal, HostedSession, OpenSession, SessionKind, SessionLaunch,
@@ -10,7 +11,7 @@ use pdo_kernel::authorization::authorize;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::info;
 
-use super::Hosted;
+use super::{Hosted, NotAdmitted};
 use crate::domain::hosted::{folder_lookup, primer_path, FolderError, FolderLookup, HostedRecord};
 use crate::domain::launch::{build_hosted_script, HostedTail};
 use crate::domain::names::hosted_session_name;
@@ -24,9 +25,10 @@ impl Hosted {
     /// resolved, a slot of the Cap taken (or a refusal at once), then
     /// recorded `starting` **before** its tmux session exists (the sweep
     /// keeps a session only by its record), launched without a byte written
-    /// into its folder, and `running`.
+    /// into its folder, and `running`. Terminated while it was launched, it
+    /// stays ended and its process is killed.
     pub async fn open(
-        &self,
+        self: &Arc<Self>,
         extension: &str,
         actor: &Actor,
         open: OpenSession,
@@ -50,14 +52,12 @@ impl Hosted {
             _ => None,
         };
 
-        let slot = self.admission.admit().await.map_err(|cap| {
-            HostedRefusal::new(
+        let slot = self.admission.admit().await.map_err(|refused| match refused {
+            NotAdmitted::CapReached { live, cap } => HostedRefusal::new(
                 409,
-                format!(
-                    "session cap reached ({}/{} live sessions): no hosted session is opened",
-                    cap.live, cap.cap
-                ),
-            )
+                format!("session cap reached ({live}/{cap} live sessions): no hosted session is opened"),
+            ),
+            NotAdmitted::Unavailable(why) => HostedRefusal::unavailable(why),
         })?;
         let id = hosted_session_name(&uuid::Uuid::new_v4().simple().to_string()[..12]);
         let now = pdo_kernel::clock::now_iso();
@@ -73,24 +73,51 @@ impl Hosted {
         drop(slot);
 
         let session_ref = SessionRef::new(&id, SessionKind::Hosted).hosted_by(extension, &open.key);
-        match self.launch(&record, &session_ref, actor, harness.as_ref()) {
+        // Blocking (the extensions' hooks, the state folder, tmux): off the
+        // async runtime's threads.
+        let launched = {
+            let (hosted, record, session_ref, actor) = (
+                self.clone(),
+                record.clone(),
+                session_ref.clone(),
+                actor.clone(),
+            );
+            tokio::task::spawn_blocking(move || {
+                hosted.launch(&record, &session_ref, &actor, harness.as_ref())
+            })
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("the launch panicked: {e}")))
+        };
+        match launched {
             Ok(()) => {
                 info!(
                     "Opened hosted session {id} of `{extension}` in {}",
                     cwd.display()
                 );
-                let running = self
-                    .registry
-                    .update(&id, |r| r.run(&pdo_kernel::clock::now_iso()));
-                self.ledger.started(session_ref, Some(actor.clone()));
-                Ok(running.map(|r| r.session).unwrap_or(record.session))
+                let now = pdo_kernel::clock::now_iso();
+                match self.registry.update(&id, |r| r.run(&now)) {
+                    Some((running, true)) => {
+                        self.ledger.started(session_ref, Some(actor.clone()));
+                        Ok(running.session)
+                    }
+                    // Terminated while it was launched: its kill came before
+                    // its tmux session existed.
+                    Some((ended, false)) => {
+                        self.tmux.kill(&id);
+                        Ok(ended.session)
+                    }
+                    None => Ok(record.session),
+                }
             }
             Err(e) => {
-                self.registry.update(&id, |r| {
-                    r.end(EndReason::Exited, &pdo_kernel::clock::now_iso())
-                });
+                let now = pdo_kernel::clock::now_iso();
+                let ended = self
+                    .registry
+                    .update(&id, |r| r.end(EndReason::Exited, &now));
                 self.registry.forget(&id);
-                self.admission.released();
+                if let Some((_, true)) = ended {
+                    self.admission.released();
+                }
                 Err(HostedRefusal::new(
                     500,
                     format!("failed to open the hosted session: {e}"),

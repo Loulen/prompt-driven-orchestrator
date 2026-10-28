@@ -10,7 +10,7 @@ use pdo_kernel::extension_host::{ExtensionHost, NodeContribution};
 use pdo_kernel::{Actor, Operation};
 
 use pdo_session::application::hosted::{
-    AdmissionSlot, CapReached, HostedHarness, HostedPlaces, HostedStore, SessionAdmission,
+    AdmissionSlot, HostedHarness, HostedPlaces, HostedStore, NotAdmitted, SessionAdmission,
 };
 use pdo_session::application::ports::*;
 use pdo_session::domain::declared_wait::WaitFacts;
@@ -102,6 +102,9 @@ pub struct FakeTmux {
     pub fail_next_spawn: Mutex<Option<String>>,
     /// `kill` leaves the session alive.
     pub unkillable: Mutex<bool>,
+    /// Runs once, inside the next `new_session`, before the session exists.
+    #[allow(clippy::type_complexity)]
+    pub on_next_spawn: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl FakeTmux {
@@ -139,6 +142,10 @@ impl Tmux for FakeTmux {
     ) -> anyhow::Result<()> {
         if let Some(message) = self.fail_next_spawn.lock().unwrap().take() {
             anyhow::bail!("{message}");
+        }
+        let hook = self.on_next_spawn.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook();
         }
         self.created
             .lock()
@@ -633,11 +640,11 @@ pub struct Cap {
 }
 
 impl SessionAdmission for Cap {
-    fn admit(&self) -> BoxFuture<'_, Result<AdmissionSlot, CapReached>> {
+    fn admit(&self) -> BoxFuture<'_, Result<AdmissionSlot, NotAdmitted>> {
         let full = *self.full.lock().unwrap();
         Box::pin(async move {
             if full {
-                Err(CapReached { live: 2, cap: 2 })
+                Err(NotAdmitted::CapReached { live: 2, cap: 2 })
             } else {
                 Ok(AdmissionSlot::holding(()))
             }

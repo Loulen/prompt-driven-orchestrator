@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use pdo_harness::registry::HarnessDescriptor;
 use pdo_run::Runs;
 use pdo_session::application::hosted::{
-    AdmissionSlot, CapReached, HostedHarness, HostedPlaces, SessionAdmission,
+    AdmissionSlot, HostedHarness, HostedPlaces, NotAdmitted, SessionAdmission,
 };
 use pdo_session::application::ports::BoxFuture;
 
@@ -73,11 +73,9 @@ impl HostedHarness for HostedSide {
 impl SessionAdmission for HostedSide {
     /// The Runs' admission lock, held from the count until the session is
     /// recorded: the Nodes and the Sessions hébergées share the Cap.
-    fn admit(&self) -> BoxFuture<'_, Result<AdmissionSlot, CapReached>> {
+    fn admit(&self) -> BoxFuture<'_, Result<AdmissionSlot, NotAdmitted>> {
         Box::pin(async move {
-            let Ok(runs) = self.runs.get() else {
-                return Err(CapReached { live: 0, cap: 0 });
-            };
+            let runs = self.runs.get().map_err(NotAdmitted::Unavailable)?;
             let guard = runs.admission_lock_owned().lock_owned().await;
             let stored = pdo_run::application::settings::stored_session_cap(&runs).await;
             let cap = pdo_run::adapters::env::configured_cap_with(stored);
@@ -86,7 +84,7 @@ impl SessionAdmission for HostedSide {
             if pdo_run::domain::admission::can_admit(live, cap) {
                 Ok(AdmissionSlot::holding(guard))
             } else {
-                Err(CapReached { live, cap })
+                Err(NotAdmitted::CapReached { live, cap })
             }
         })
     }

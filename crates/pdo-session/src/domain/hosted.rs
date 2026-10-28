@@ -60,14 +60,24 @@ impl HostedRecord {
         self.session.project.iter().cloned().collect()
     }
 
-    /// Its process came up.
-    pub fn run(&mut self, now: &str) {
+    /// Its process came up: `starting` becomes `running`. Whether it changed:
+    /// a session terminated while it was being launched stays ended.
+    pub fn run(&mut self, now: &str) -> bool {
+        if self.session.state != HostedState::Starting {
+            return false;
+        }
         self.set(HostedState::Running, None, now);
+        true
     }
 
-    /// It ended, for `reason`.
-    pub fn end(&mut self, reason: EndReason, now: &str) {
+    /// It ended, for `reason`. Whether it changed: an ended session keeps
+    /// the reason it ended for.
+    pub fn end(&mut self, reason: EndReason, now: &str) -> bool {
+        if !self.is_live() {
+            return false;
+        }
         self.set(HostedState::Ended, Some(reason), now);
+        true
     }
 
     fn set(&mut self, state: HostedState, reason: Option<EndReason>, now: &str) {
@@ -139,13 +149,18 @@ mod tests {
         assert_eq!(record.session.config.model.as_deref(), Some("opus"));
         assert_eq!(record.projects(), ["p1"]);
         assert!(record.is_live());
-        record.run("t1");
+        assert!(record.run("t1"));
         assert_eq!(record.session.state, HostedState::Running);
         assert_eq!(record.session.updated_at, "t1");
-        record.end(EndReason::Exited, "t2");
+        assert!(!record.run("t1b"), "only a starting session comes up");
+        assert!(record.end(EndReason::Exited, "t2"));
         assert!(!record.is_live());
         assert_eq!(record.session.end_reason, Some(EndReason::Exited));
         assert_eq!(record.session.created_at, "t0");
+        assert!(!record.end(EndReason::Terminated, "t3"), "ended once");
+        assert!(!record.run("t4"), "an ended session never runs again");
+        assert_eq!(record.session.end_reason, Some(EndReason::Exited));
+        assert_eq!(record.session.updated_at, "t2");
     }
 
     #[test]

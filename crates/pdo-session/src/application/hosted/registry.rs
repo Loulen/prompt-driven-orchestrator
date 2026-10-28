@@ -112,21 +112,31 @@ impl HostedRegistry {
         Ok(())
     }
 
-    /// Change the record `id` with `change`, store and publish it; `None`
-    /// for an id not recorded. A record the store refuses is still changed
-    /// in memory, and the refusal logged: the session's state is a fact.
-    pub fn update(&self, id: &str, change: impl FnOnce(&mut HostedRecord)) -> Option<HostedRecord> {
-        let record = {
+    /// Apply `change` to the record `id`; when it answers that it changed the
+    /// record, store and publish it. The record as it now stands and whether
+    /// it changed; `None` for an id not recorded. A record the store refuses
+    /// is still changed in memory, and the refusal logged: the session's
+    /// state is a fact.
+    pub fn update(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut HostedRecord) -> bool,
+    ) -> Option<(HostedRecord, bool)> {
+        let (record, changed) = {
             let mut records = self.lock();
             let record = records.iter_mut().find(|r| r.id() == id)?;
-            change(record);
-            if let Err(e) = self.store.save(record) {
-                warn!("the hosted session {id} could not be stored: {e}");
+            let changed = change(record);
+            if changed {
+                if let Err(e) = self.store.save(record) {
+                    warn!("the hosted session {id} could not be stored: {e}");
+                }
             }
-            record.clone()
+            (record.clone(), changed)
         };
-        self.changed(&record);
-        Some(record)
+        if changed {
+            self.changed(&record);
+        }
+        Some((record, changed))
     }
 
     /// Forget the record `id` and its state folder.

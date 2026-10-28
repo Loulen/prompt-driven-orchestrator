@@ -16,7 +16,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 pub use lifecycle::TERMINATE;
 pub use open::OPEN;
 pub use ports::{
-    AdmissionSlot, CapReached, HostedHarness, HostedPlaces, HostedStore, SessionAdmission,
+    AdmissionSlot, HostedHarness, HostedPlaces, HostedStore, NotAdmitted, SessionAdmission,
 };
 pub use registry::HostedRegistry;
 

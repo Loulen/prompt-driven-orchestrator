@@ -27,9 +27,12 @@ const VAR_TYPES = ["int", "float", "string", "bool", "list"] as const;
 export default function PipelineMetaSections({
   pipeline,
   readOnly,
+  version = null,
 }: {
   pipeline: EditorPipelineDef;
   readOnly: boolean;
+  /** Read only: the label of the version shown (`v2 · title`), if any. */
+  version?: string | null;
 }) {
   const updateMeta = useEditStore((s) => s.updatePipelineMeta);
   const globalGridSize = useWiringStore((s) => s.defaultGridSize);
@@ -84,6 +87,9 @@ export default function PipelineMetaSections({
             <KeyValue
               rows={[
                 { k: "Name", v: <span className="ei-trunc" data-testid="pipeline-meta-name">{pipeline.name}</span>, tip: pipeline.name },
+                ...(version
+                  ? [{ k: "Version", v: <span className="ei-trunc" data-testid="pipeline-meta-version">{version}</span>, mono: true, tip: version }]
+                  : []),
                 {
                   k: "Prompt",
                   v: <span data-testid="pipeline-meta-prompt-required">{promptRequired ? "Yes" : "No"}</span>,

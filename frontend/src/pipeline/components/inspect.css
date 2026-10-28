@@ -52,8 +52,13 @@
     flex: 0 1 auto;
     max-width: 60%;
   }
+  /* every inspector head: the sub line (an id, an edge's ports) gives way first; an edge's target keeps its share */
   .ei-bar__title > .ei-trunc ~ .ei-trunc {
+    flex: none;
     max-width: 40%;
+  }
+  .ei-bar__title > .ei-bar__sub {
+    flex: 0 1000 auto;
   }
   .ei-bar__sub {
     min-width: 0;
@@ -980,6 +985,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    container-type: inline-size;
     font-size: var(--fs-sm);
   }
   .pi-draft {
@@ -1071,6 +1077,21 @@
   }
   .pi-vrow:is(:hover, :focus-within) .pi-vrow__acts {
     display: inline-flex;
+  }
+  .pi-vrow__last {
+    display: contents;
+  }
+  /* a narrow pane: the columns tighten, « last » gives way (the first row is the last), the title keeps the room */
+  @container (max-width: 320px) {
+    .pi-vrow__n {
+      width: 20px;
+    }
+    .pi-vrow__runs {
+      width: 28px;
+    }
+    .pi-vrow__last {
+      display: none;
+    }
   }
 
   /* the YAML of the document */
@@ -1261,14 +1282,15 @@
   .pi-dfile > svg {
     flex: none;
   }
+  /* the folder gives way first, then the name down to its tail */
   .pi-dfile__name {
     display: inline-flex;
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     max-width: 60%;
     min-width: 0;
     white-space: nowrap;
   }
-  .pi-dfile__head {
+  .pi-dfile__lead {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1277,7 +1299,7 @@
     flex: none;
   }
   .pi-dfile__dir {
-    flex: 1 1 auto;
+    flex: 1 1000 auto;
     min-width: 0;
     overflow: hidden;
     color: var(--text-3);

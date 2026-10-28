@@ -19,7 +19,7 @@ import { PipelineConfigSections } from "./ExtensionInspectorSections";
 import { inspectorSection } from "./inspectorSection";
 import { useEditStore } from "../store/editStore";
 import { InfoVersionLine } from "./InfoVersion";
-import { shortSavedAgo } from "../model/versions";
+import { shortSavedAgo, versionLabel } from "../model/versions";
 import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { RunInfoContext } from "../../shared/extensions/contract";
 import "./inspect.css";
@@ -152,9 +152,11 @@ export function InfoTab({
 }) {
   const pipelines = useEditStore((s) => s.pipelines);
   // ADR-0088: a version shown in its own tab is read only, like a Run.
-  const viewingVersion = useEditStore(
-    (s) => s.openTabs.find((t) => t.id === s.activeTabId)?.version != null,
-  );
+  const shownVersion = useEditStore((s) => s.openTabs.find((t) => t.id === s.activeTabId)?.version ?? null);
+  const viewingVersion = shownVersion != null;
+  // The read-only Pipeline section names the version: the one a Run launched, the one a tab shows.
+  const versionRef = run ? (run.pipeline_version ?? null) : shownVersion;
+  const version = versionRef ? versionLabel({ number: versionRef.number, title: versionRef.title }) : null;
   const waiting = run?.waiting_for_started_nodes ?? 0;
 
   return (
@@ -299,7 +301,7 @@ export function InfoTab({
       {/* Notion #6 / #948: Pipeline info is the only surface of the pipeline's
           metadata — editable on a template, read-only on a Run (active or
           archived) and on a version. */}
-      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null || viewingVersion} />}
+      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null || viewingVersion} version={version} />}
 
       {/* On a Run and a version the node and edge counts are rows of the
           Pipeline section; a template keeps them in a section of their own. */}

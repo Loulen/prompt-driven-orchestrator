@@ -60,7 +60,7 @@ function FileName({ name }: { name: string }) {
   const cut = name.length > NAME_TAIL * 2 ? name.length - NAME_TAIL : name.length;
   return (
     <span className="pi-dfile__name" title={name}>
-      <span className="pi-dfile__head">{name.slice(0, cut)}</span>
+      <span className="pi-dfile__lead">{name.slice(0, cut)}</span>
       {cut < name.length && <span className="pi-dfile__tail">{name.slice(cut)}</span>}
     </span>
   );

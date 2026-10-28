@@ -128,7 +128,7 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
             {version.title}
           </span>
           {index === 0 && (
-            <span data-testid="version-last">
+            <span className="pi-vrow__last" data-testid="version-last">
               <Chip mono>last</Chip>
             </span>
           )}

@@ -400,6 +400,18 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
     useEditStore.setState({ pipelines: [] });
   });
 
+  it("names the launched version in the Pipeline section, after Name; none when the Run carries none", () => {
+    const run = makeRun({ pipeline_version: { number: 2, title: "NEEDS_WORK loops back" } });
+    const { rerender } = render(<StorePanel run={run} />);
+    const version = screen.getByTestId("pipeline-meta-version");
+    expect(version).toHaveTextContent("v2 · NEEDS_WORK loops back");
+    expect(
+      screen.getByTestId("pipeline-meta-name").compareDocumentPosition(version) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    rerender(<StorePanel run={makeRun()} />);
+    expect(screen.queryByTestId("pipeline-meta-version")).not.toBeInTheDocument();
+  });
+
   it("keeps the Run stats alongside the graph stats", () => {
     render(<StorePanel run={makeRun()} />);
     expect(screen.getByTestId("run-stats")).toBeInTheDocument();
@@ -423,6 +435,12 @@ describe("Pipeline info — Info tab on a version is read-only (ADR-0088)", () =
     expect(meta).toHaveAttribute("data-readonly", "true");
     expect(screen.queryByTestId("prompt-required-checkbox")).not.toBeInTheDocument();
     expect(within(meta).queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.getByTestId("pipeline-meta-version")).toHaveTextContent("v1 · 1.0");
+  });
+
+  it("has no Version row on a template: the version line under the head says it", () => {
+    render(<StorePanel assistantId="p1" />);
+    expect(screen.queryByTestId("pipeline-meta-version")).not.toBeInTheDocument();
   });
 });
 

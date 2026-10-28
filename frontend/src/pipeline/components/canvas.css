@@ -1,0 +1,467 @@
+/*
+ * The canvas of a pipeline and of a Run (ADR-0091): node cards with a meta
+ * grid, Start/End markers, rounded edges and their mono labels, tinted loop
+ * and collection regions, notes, the floating toolbar, the one-line lint
+ * banner, the child-run bar, the empty state and the presence stack.
+ * Tokens only. Status is a light tint, a border and an icon; ruby is the
+ * selection.
+ */
+
+.cv-pane {
+  --cv-edge: color-mix(in oklch, var(--text-3) 80%, var(--surface-0));
+  --cv-wire: var(--color-st-await);
+  --cv-pop-shadow: 0 4px 14px color-mix(in oklch, black 22%, transparent);
+}
+:is(.cv-pane, .ri) [data-st="running"] { --st: var(--color-st-running); }
+:is(.cv-pane, .ri) [data-st="awaiting"] { --st: var(--color-st-await); }
+:is(.cv-pane, .ri) [data-st="done"] { --st: var(--color-st-done); }
+:is(.cv-pane, .ri) [data-st="blocked"] { --st: var(--color-st-blocked); }
+:is(.cv-pane, .ri) [data-st="failed"] { --st: var(--color-st-failed); }
+:is(.cv-pane, .ri) [data-st="skipped"] { --st: var(--color-st-skipped); }
+
+/* ------------------------------------------------------------ node card */
+.cv-n {
+  position: relative;
+  box-sizing: border-box;
+  width: 208px;
+  color: var(--text);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+}
+/* Status: a light tint and a border; the selection is one ruby ring, never doubled. */
+.cv-n[data-st] {
+  background: color-mix(in oklab, var(--st) 7%, var(--surface-1));
+  border-color: color-mix(in oklab, var(--st) 40%, var(--line));
+}
+.cv-n[data-st="skipped"] { background: color-mix(in oklab, var(--st) 5%, var(--surface-1)); }
+.cv-n[data-selected] { outline: 1.5px solid var(--selected-edge); outline-offset: 3px; }
+/* An on-demand node the Run never launched: greyed, dashed, waiting for its ▶. */
+.cv-n[data-idle] { opacity: 0.6; border-style: dashed; border-color: var(--text-2); }
+/* While a wire is drawn (#844): amber arms the gesture, solid amber lands it. */
+.cv-n[data-rim] { box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px color-mix(in oklab, var(--cv-wire) 45%, transparent); }
+.cv-n[data-wire] { box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px var(--cv-wire); }
+.cv-n__head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--line-soft);
+  min-width: 0;
+}
+.cv-n__lead { position: relative; display: inline-grid; place-items: center; flex: none; }
+.cv-n__mode { position: absolute; right: -4px; bottom: -4px; color: var(--text-2); }
+.cv-n__mode[data-broken] { color: var(--color-st-blocked); }
+.cv-n__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-md);
+  font-weight: var(--w-medium);
+}
+.cv-n__type { flex: none; color: var(--text-3); }
+.cv-n__flag { display: inline-grid; place-items: center; flex: none; color: var(--text-3); }
+.cv-n__loop {
+  flex: none;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 3px;
+  border-radius: var(--radius-ui);
+  background: var(--hover);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  line-height: 14px;
+  color: var(--text-2);
+}
+.cv-n__grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 6px; padding: 3px 6px 4px; }
+.cv-n__cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  min-width: 0;
+  font-family: var(--font-code);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.cv-n__cell > svg { flex: none; color: var(--text-3); }
+.cv-n__cell > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-n__row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 0 6px 4px; min-width: 0; }
+.cv-n__images { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 6px 4px; }
+.cv-n__img {
+  position: relative;
+  width: 46px;
+  height: 30px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  background: var(--surface-0);
+}
+.cv-n__img span {
+  position: absolute;
+  inset: auto 0 0;
+  padding: 0 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: color-mix(in oklab, var(--surface-0) 70%, transparent);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+/* The ▶ of an on-demand or skipped node, outside the card so its dimming leaves it. */
+.cv-n__play {
+  position: absolute;
+  z-index: 4;
+  top: -9px;
+  right: -9px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--primary);
+  border-radius: 50%;
+  background: var(--surface-0);
+  color: var(--primary);
+  cursor: pointer;
+}
+.cv-n__play:hover { background: var(--primary); color: var(--primary-ink); }
+
+/* Child-run counts of an orchestrator: a dot and a number per kind. */
+.cv-kids { display: inline-flex; flex-wrap: wrap; gap: 2px; }
+.cv-kid {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: var(--radius-ui);
+  background: color-mix(in oklab, var(--st) 14%, transparent);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  color: var(--text-2);
+}
+.cv-kid i { width: 5px; height: 5px; border-radius: 50%; background: var(--st); }
+
+/* ------------------------------------------------------------ Start / End markers */
+.cv-mk {
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  max-width: 208px;
+  padding: 0 8px;
+  white-space: nowrap;
+  color: var(--text-2);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+.cv-mk > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cv-mk__ic { flex: none; color: var(--text-3); }
+.cv-mk[data-kind="start"] .cv-mk__ic { color: var(--color-st-done); fill: currentColor; }
+.cv-mk__ok { flex: none; color: var(--color-st-done); }
+.cv-mk[data-reached] { border-color: color-mix(in oklab, var(--color-st-done) 40%, var(--line)); }
+.cv-mk[data-selected] { outline: 1.5px solid var(--selected-edge); outline-offset: 3px; }
+.cv-mk[data-rim] { box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px color-mix(in oklab, var(--cv-wire) 45%, transparent); }
+.cv-mk[data-wire] { box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px var(--cv-wire); }
+
+/* ------------------------------------------------------------ edges */
+.cv-edge__line { fill: none; stroke: var(--cv-edge); stroke-width: 1.25; }
+.cv-edge__chev { fill: none; stroke: var(--cv-edge); stroke-width: 1.25; stroke-linejoin: round; stroke-linecap: round; }
+.cv-edge[data-selected] { --cv-edge: var(--selected-edge); }
+.cv-edge[data-selected] .cv-edge__line { stroke-width: 1.75; }
+.cv-edge[data-broken] { --cv-edge: var(--color-st-failed); }
+
+/* The condition: a mono chip on the line. */
+.cv-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  max-width: 220px;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  line-height: 14px;
+  color: var(--text-2);
+  cursor: grab;
+}
+.cv-pill[data-else] { color: var(--text-3); font-style: italic; }
+.cv-pill[data-selected] { border-color: var(--selected-edge); color: var(--text); }
+/* An output's name at the departure: mono, no frame, a paper halo. */
+.cv-port-label {
+  padding: 0 2px;
+  white-space: nowrap;
+  background: var(--surface-0);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  line-height: 12px;
+  color: var(--text-3);
+  cursor: grab;
+}
+.cv-broken {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  max-width: 220px;
+  padding: 0 2px 0 4px;
+  white-space: nowrap;
+  background: color-mix(in oklab, var(--color-st-failed) 12%, var(--surface-1));
+  border: 1px solid color-mix(in oklab, var(--color-st-failed) 45%, var(--line));
+  border-radius: var(--radius-ui);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  color: var(--color-st-failed);
+}
+.cv-broken > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cv-broken button {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-ui);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.cv-broken button:hover { background: color-mix(in oklab, var(--color-st-failed) 20%, transparent); }
+
+/* ------------------------------------------------------------ loop and collection regions */
+.cv-region {
+  --rg: var(--text-3);
+  position: relative;
+  box-sizing: border-box;
+  background: color-mix(in oklch, var(--rg) 7%, transparent);
+  border-radius: 4px;
+  pointer-events: none;
+}
+.cv-region[data-exhausted] { --rg: var(--color-st-blocked); }
+.cv-region[data-selected] { --rg: var(--selected-edge); }
+.cv-region-chrome { position: relative; pointer-events: none; }
+.cv-region__corner {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  max-width: calc(100% - 8px);
+  padding: 0 5px;
+  border: 0;
+  background: transparent;
+  pointer-events: all;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  color: var(--rg);
+}
+.cv-region__corner > span { overflow: hidden; text-overflow: ellipsis; color: var(--text-2); font-weight: var(--w-medium); }
+.cv-region__corner[data-exhausted] { --rg: var(--color-st-blocked); }
+.cv-region__corner[data-exhausted] > span { color: var(--rg); }
+.cv-region__block {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 4px 0 6px;
+  white-space: nowrap;
+  pointer-events: all;
+  background: var(--surface-1);
+  border: 1px solid color-mix(in oklab, var(--color-st-blocked) 45%, var(--line));
+  border-radius: var(--radius-ui);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  color: var(--color-st-blocked);
+}
+
+/* ------------------------------------------------------------ notes */
+.cv-note {
+  box-sizing: border-box;
+  display: flex;
+  gap: 6px;
+  width: 200px;
+  padding: 6px 8px;
+  background: color-mix(in oklch, var(--color-st-await) 6%, var(--surface-1));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.cv-note__ic { flex: none; margin-top: 2px; color: var(--text-3); }
+.cv-note__text { margin: 0; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
+.cv-note__text[data-empty] { color: var(--text-3); font-style: italic; }
+.cv-note[data-selected] { outline: 1.5px solid var(--selected-edge); outline-offset: 3px; }
+
+/* ------------------------------------------------------------ floating toolbar, top left */
+.cv-tb {
+  position: absolute;
+  z-index: 10;
+  left: var(--g-4);
+  top: var(--g-4);
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+}
+.cv-tb__sep { flex: none; width: 1px; height: 14px; margin: 0 3px; background: var(--line); }
+.cv-tb__slot { position: relative; display: inline-flex; }
+.cv-tb__badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 6px;
+  background: var(--color-st-await);
+  color: var(--surface-0);
+  font: var(--w-strong) var(--fs-2xs) / 12px var(--font-code);
+  text-align: center;
+  pointer-events: none;
+}
+/* The Review pill: outlined blue pending, solid blue on an unread reply, amber on a proposed resolution. */
+.cv-tb__badge[data-tone="pending"] {
+  background: color-mix(in oklab, var(--color-st-running) 14%, var(--surface-1));
+  color: var(--color-st-running);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-st-running) 45%, transparent);
+}
+.cv-tb__badge[data-tone="unread"] { background: var(--color-st-running); }
+
+/* ------------------------------------------------------------ bands under the tab bar */
+.cv-bands { position: absolute; z-index: 9; left: 0; right: 0; top: 0; }
+.cv-line {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  min-height: var(--h-row);
+  padding: 0 var(--g-2) 0 var(--pad-x);
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  background: color-mix(in oklch, var(--st, var(--color-st-blocked)) 7%, var(--surface-0));
+  border-bottom: 1px solid var(--line);
+}
+.cv-line > svg { flex: none; color: var(--st, var(--color-st-blocked)); }
+.cv-line__count { flex: none; font-family: var(--font-code); font-size: var(--fs-xs); font-weight: var(--w-strong); color: var(--text); }
+.cv-line__msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-line__actions { flex: none; display: inline-flex; align-items: center; gap: var(--g-1); }
+.cv-line--sub { padding-left: calc(var(--pad-x) + 4px); border-top: 0; }
+.cv-line[data-kind="nudge"] { --st: var(--color-st-await); }
+
+/* The child-run bar: back to the parent run. */
+.cv-child {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  height: var(--h-row);
+  padding: 0 var(--g-2);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-1);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.cv-child__parent { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.cv-child__node { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-code); font-size: var(--fs-xs); color: var(--text-3); }
+
+/* ------------------------------------------------------------ corner chrome */
+.cv-corner {
+  position: absolute;
+  z-index: 8;
+  top: var(--g-4);
+  right: var(--g-4);
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+}
+.cv-pres {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: var(--h-control);
+  padding: 0 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  color: var(--text-3);
+}
+.cv-stack { display: inline-flex; align-items: center; }
+.cv-stack > * + * { margin-left: -4px; }
+.cv-stack .d-av { box-shadow: 0 0 0 1.5px var(--surface-1); }
+.cv-stack__more { margin-left: 3px; font-family: var(--font-code); font-size: var(--fs-2xs); color: var(--text-3); }
+.cv-zoom {
+  position: absolute;
+  z-index: 5;
+  left: var(--g-4);
+  bottom: var(--g-4);
+  height: 18px;
+  padding: 0 5px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  line-height: 16px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------ empty canvas */
+.cv-empty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ------------------------------------------------------------ toolbar menus */
+.cv-menu { min-width: 180px; padding: 2px 0; }
+.cv-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  height: var(--h-row);
+  padding: 0 var(--pad-x);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 0;
+}
+.cv-menu__item > svg { flex: none; color: var(--text-2); }
+.cv-menu__item[data-highlighted] { background: var(--hover); }

@@ -1,4 +1,6 @@
 import { type Node, type NodeProps } from "@xyflow/react";
+import { Repeat, Split } from "lucide-react";
+import { Button } from "../../shared/ui/kit";
 import type { LoopKind } from "../../shared/generated/LoopKind";
 import { useEditStore } from "../store/editStore";
 import { endRegion } from "../../run/api/commands";
@@ -55,109 +57,75 @@ export interface LoopRegionNodeData {
 
 export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
   const setSelection = useEditStore((s) => s.setSelection);
+  const selected = useEditStore(
+    (s) => s.selection.kind === "region" && s.selection.regionId === data.regionId,
+  );
   // CORE-42: « route from manager » only when the caller may end the region.
   const mayEndRegion = useMayOnRun(data.runId as string | null | undefined)("end_region");
-
-  const accent = data.exhausted
-    ? "var(--color-st-blocked)"
-    : "var(--primary)";
-  // `⇉` (fan-out) for a collection region, `↻` (loop) for a bounded one.
-  const glyph = data.kind === "collection" ? "⇉" : "↻";
+  const collection = data.kind === "collection";
+  // A fan-out splits its members, a bounded loop repeats them.
+  const Glyph = collection ? Split : Repeat;
 
   const openInspector = () =>
     setSelection({ kind: "region", id: null, regionId: data.regionId });
 
-  // The grouping layer: border + faint fill, nothing interactive. Sits behind
-  // the member cards and lets every click through (#167).
+  // The grouping layer: a tinted area, nothing interactive. Sits behind the
+  // member cards and lets every click through (#167).
   if (data.layer === "box") {
     return (
       <div
         data-testid="loop-region"
         data-region-id={data.regionId}
-        className="loop-region pointer-events-none relative"
-        style={{
-          width: data.width,
-          height: data.height,
-          borderRadius: 12,
-          border: `1px dashed ${accent}`,
-          // Faint translucent fill so the box reads as a grouping layer behind
-          // the member cards without obscuring them.
-          background: data.exhausted
-            ? "color-mix(in oklab, var(--color-st-blocked) 14%, transparent)"
-            : "var(--selected)",
-        }}
+        data-exhausted={data.exhausted || undefined}
+        data-selected={selected || undefined}
+        className="loop-region cv-region"
+        style={{ width: data.width, height: data.height }}
       />
     );
   }
 
-  // The chrome layer: same rectangle, no border and no fill (it covers the
-  // cards, so anything painted here would hide them), `pointer-events: none`
-  // throughout except on the two chips below.
+  // The chrome layer: same rectangle, transparent (it covers the cards),
+  // `pointer-events: none` throughout except on the counter and the badge.
+  const title = `${collection ? "Collection region" : "Loop region"} ${data.regionId} · ${data.counterText}${
+    data.exhausted ? " · limit reached" : ""
+  }`;
   return (
     <div
       data-testid="loop-region-chrome"
       data-region-id={data.regionId}
-      className="pointer-events-none relative"
+      className="cv-region-chrome"
       style={{ width: data.width, height: data.height }}
     >
-      <div
+      {/* The counter, top right: read-only — `max_iter` is edited in the
+          RegionInspector, where the region id is shown too (#149). */}
+      <button
+        type="button"
         data-testid="loop-region-header"
+        data-exhausted={data.exhausted || undefined}
         onClick={openInspector}
-        className="pointer-events-auto absolute flex cursor-pointer items-center gap-1.5 rounded bg-surface-0 px-2 font-mono"
-        style={{
-          top: -13,
-          left: 14,
-          height: 23,
-          fontSize: 11,
-          fontWeight: 500,
-          border: `1px solid ${accent}`,
-          color: accent,
-        }}
+        className="nodrag nopan cv-region__corner"
+        title={title}
       >
-        <span className="loop-region-glyph" style={{ fontSize: 12, lineHeight: 1 }}>
-          {glyph}
-        </span>
-        {/* Read-only counter. `max_iter` is edited in the RegionInspector, and
-            the region id is shown there too — the canvas header carries neither
-            an inline control nor the id, honouring the slim-card rule (#149). */}
-        <span className="loop-region-count" style={{ opacity: 0.85 }}>
-          {data.counterText}
-        </span>
-      </div>
+        <Glyph size={11} strokeWidth={1.5} className="loop-region-glyph" aria-hidden />
+        <span className="loop-region-count">{data.counterText}</span>
+      </button>
       {data.exhausted && (
-        <div
-          data-testid="loop-region-block"
-          className="pointer-events-auto absolute flex items-center gap-1.5 rounded bg-surface-0 px-2 font-mono whitespace-nowrap"
-          style={{
-            bottom: -14,
-            left: "50%",
-            transform: "translateX(-50%)",
-            height: 23,
-            fontSize: 10,
-            border: "1px solid var(--color-st-blocked)",
-            color: "var(--color-st-blocked)",
-          }}
-        >
-          exhausted — unrouted
+        <div data-testid="loop-region-block" className="cv-region__block">
+          exhausted · unrouted
           {data.runId != null && mayEndRegion && (
             // The run overlay on an exhausted-unrouted region offers a "route
             // from manager" affordance (ADR-0011 / #152): ending the region by
             // id fires its completion and the daemon resumes the run.
-            <button
-              type="button"
+            <Button
+              size="sm"
               data-testid="loop-region-route-from-manager"
-              className="ml-1.5 rounded border px-1 leading-none hover:bg-st-blocked/14"
-              style={{
-                borderColor: "var(--color-st-blocked)",
-                color: "var(--color-st-blocked)",
-              }}
               onClick={(e) => {
                 e.stopPropagation();
                 endRegion(data.runId as string, data.regionId).catch(toastRefusal);
               }}
             >
-              route from manager
-            </button>
+              Route from manager
+            </Button>
           )}
         </div>
       )}

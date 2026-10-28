@@ -52,7 +52,8 @@ export function ChildCountPills({
   clickHint,
 }: {
   counts: ChildCounts;
-  size?: "sm" | "xs";
+  /** `pill`: a tinted pill per kind (canvas card, detail tab); `sm` / `xs`: a dot and a number. */
+  size?: "sm" | "xs" | "pill";
   testId?: string;
   /** When set, the cluster is clickable and stops the click from reaching the row. */
   onClick?: () => void;
@@ -60,29 +61,41 @@ export function ChildCountPills({
   clickHint?: string;
 }) {
   if (totalChildren(counts) === 0) return null;
+  const pill = size === "pill";
   const dot = size === "xs" ? 6 : 7;
-  const fs = size === "xs" ? 9.5 : 10.5;
   const hint = onClick && clickHint ? ` — ${clickHint}` : "";
-  const item = (n: number, bg: string, label: string, id: string) =>
+  const item = (n: number, bg: string, tone: string, label: string, id: string) =>
     n > 0 ? (
-      <span
-        key={id}
-        data-testid={`${testId}-${id}`}
-        title={`${n} ${label} child run${n > 1 ? "s" : ""}${hint}`}
-        className="inline-flex items-center gap-1 font-mono text-text-2"
-        style={{ fontSize: fs, lineHeight: 1 }}
-      >
-        <span className={`inline-block rounded-full ${bg}`} style={{ width: dot, height: dot }} />
-        {n}
-      </span>
+      pill ? (
+        <span
+          key={id}
+          data-testid={`${testId}-${id}`}
+          data-st={tone}
+          title={`${n} ${label} child run${n > 1 ? "s" : ""}${hint}`}
+          className="cv-kid"
+        >
+          <i aria-hidden />
+          {n}
+        </span>
+      ) : (
+        <span
+          key={id}
+          data-testid={`${testId}-${id}`}
+          title={`${n} ${label} child run${n > 1 ? "s" : ""}${hint}`}
+          className={`inline-flex items-center gap-1 font-mono leading-none text-text-2 ${size === "xs" ? "text-2xs" : "text-xs"}`}
+        >
+          <span className={`inline-block rounded-full ${bg}`} style={{ width: dot, height: dot }} />
+          {n}
+        </span>
+      )
     ) : null;
   const label = `${counts.finished} finished, ${counts.failed} failed, ${counts.stale} stale, ${counts.running} running child runs`;
   const body = (
     <>
-      {item(counts.finished, "bg-st-done", "finished", "finished")}
-      {item(counts.failed, "bg-st-failed", "failed", "failed")}
-      {item(counts.stale, "bg-st-skipped", "stale", "stale")}
-      {item(counts.running, "bg-st-running", "running", "running")}
+      {item(counts.finished, "bg-st-done", "done", "finished", "finished")}
+      {item(counts.failed, "bg-st-failed", "failed", "failed", "failed")}
+      {item(counts.stale, "bg-st-skipped", "blocked", "stale", "stale")}
+      {item(counts.running, "bg-st-running", "running", "running", "running")}
     </>
   );
   if (onClick) {
@@ -103,7 +116,7 @@ export function ChildCountPills({
     );
   }
   return (
-    <span className="inline-flex items-center gap-2" data-testid={testId} aria-label={label}>
+    <span className={pill ? "cv-kids" : "inline-flex items-center gap-2"} data-testid={testId} aria-label={label}>
       {body}
     </span>
   );

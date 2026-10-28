@@ -259,7 +259,7 @@ describe("condition label (#845)", () => {
     expect(pill.style.pointerEvents).toBe("all");
   });
 
-  it("looks unlike an output tag — pill border and radius against a flat square tag", () => {
+  it("looks unlike an output tag — a framed chip against a bare label", () => {
     seedEdge();
     const { container } = render(<OrthogonalEdge {...edgeProps(conditional)} />, {
       wrapper: Wrapper,
@@ -267,11 +267,11 @@ describe("condition label (#845)", () => {
 
     const pill = label(container, "edge-condition-label-e-0");
     const tag = label(container, "edge-output-label-e-0-out");
-    expect(pill.style.borderRadius).not.toBe(tag.style.borderRadius);
-    expect(pill.style.background).not.toBe(tag.style.background);
-    // The pill is outlined in the edge's own colour; the tag is a hairline.
-    expect(pill.style.border).toContain("--text-3");
-    expect(tag.style.border).toContain("--line");
+    // The condition is a framed mono chip (`.cv-pill`); the output's name a
+    // bare mono label on a paper halo (`.cv-port-label`).
+    expect(pill.className).toContain("cv-pill");
+    expect(tag.className).toContain("cv-port-label");
+    expect(tag.className).not.toContain("cv-pill");
   });
 
   it("writes its dragged position", () => {

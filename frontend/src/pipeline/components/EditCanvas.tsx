@@ -4,8 +4,9 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ReactFlow, Background, useNodesState, useEdgesState, useReactFlow, type Node, type Edge, ReactFlowProvider, ViewportPortal } from "@xyflow/react";
+import { ReactFlow, Background, BackgroundVariant, useNodesState, useEdgesState, useReactFlow, type Node, type Edge, ReactFlowProvider, ViewportPortal } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "./canvas.css";
 import type { RunState } from "../../shared/generated/RunState";
 import type { LibraryEntry } from "../model/library";
 import type { LibraryPipelineEntry } from "../api/libraryPipelines";
@@ -50,6 +51,9 @@ import { useRunEditing } from "../store/useRunEditing";
 import FinishEditingConfirmModal from "./FinishEditingConfirmModal";
 import { EditNode } from "./EditNode";
 import { CanvasContextMenuHost } from "./CanvasContextMenu";
+import RunPresenceStack from "../../run/components/RunPresenceStack";
+import { EmptyState } from "../../shared/ui/kit";
+import { Workflow } from "lucide-react";
 
 const nodeTypes = { edit: EditNode, loopRegion: LoopRegionNode, note: NoteNode };
 const edgeTypes = { orthogonal: OrthogonalEdge };
@@ -174,7 +178,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const { withPlay, nodePlay } = useCanvasNodePlay(pipeline, activeRunState);
   const derivedNodes = useMemo(() => {
     if (!pipeline) return [];
-    const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds).map(withPlay).map((card) => {
+    const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds, agentProfiles).map(withPlay).map((card) => {
       if (!(card.data as { orchestrator?: boolean }).orchestrator) return card;
       const runId = activeRunState?.run_id ?? null;
       if (!runId) return card;
@@ -195,7 +199,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     // pipeline alone (independent of run state).
     const noteNodes: Node[] = buildNoteNodes(pipeline);
     return [...regionNodes, ...cards, ...noteNodes];
-  }, [pipeline, activeRunState, agentProfileIds, runChildren, withPlay]);
+  }, [pipeline, activeRunState, agentProfileIds, agentProfiles, runChildren, withPlay]);
   const derivedEdges = useMemo(
     () => (pipeline ? deriveEditEdges(pipeline) : []),
     [pipeline],
@@ -210,11 +214,19 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   }, [derivedEdges, setEdges]);
 
   const onNodeDragStop = useCanvasNodeDragStop();
+  const canvasView = useMemo(
+    () => ({
+      fit: () => void reactFlow.fitView(fitViewOptions),
+      zoomIn: () => void reactFlow.zoomIn(),
+      zoomOut: () => void reactFlow.zoomOut(),
+    }),
+    [reactFlow, fitViewOptions],
+  );
 
   if (!tab || !pipeline) {
     return (
-      <div className="flex flex-1 items-center justify-center text-text-3">
-        Select a pipeline to edit
+      <div className="cv-empty">
+        <EmptyState icon={Workflow}>No pipeline open</EmptyState>
       </div>
     );
   }
@@ -225,8 +237,27 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     ? pipeline.nodes.find((n) => n.id === exportNodeId) ?? null
     : null;
 
+  const bands =
+    activeRunState?.waiting_for_started_nodes ||
+    (tab.runId == null && tab.version == null && (visibleItems.length > 0 || (tab.draft?.notices.length ?? 0) > 0));
   return (
-    <div className="relative flex-1" ref={reactFlowRef}>
+    <div className="cv-pane relative flex min-h-0 flex-1 flex-col">
+      {/* The lines under the tab bar: one each, full width, above the canvas. */}
+      {bands ? (
+        <div className="shrink-0">
+          <WaitingForStartedNodesBanner run={activeRunState} />
+          {/* ADR-0088: what changed the shared draft from outside the canvas (a
+              file written outside PDO, the library assistant), above the lint.
+              #225: lint is an edit-mode affordance — suppressed on run tabs. */}
+          {tab.runId == null && tab.version == null && (
+            <>
+              <DraftNotices tab={tab} />
+              {visibleItems.length > 0 && <LintBanner items={visibleItems} onDismiss={dismiss} />}
+            </>
+          )}
+        </div>
+      ) : null}
+    <div className="relative min-h-0 flex-1" ref={reactFlowRef}>
       {/* ADR-0088: a version shown read only has its banner where the toolbar sits. */}
       {tab.version ? (
         <VersionBanner version={tab.version} infoOpen={infoOpen} onToggleInfo={onToggleInfo} />
@@ -257,20 +288,14 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           onOpenShell={handleOpenShell}
           run={activeRunState}
           runEdit={runEdit}
+          view={canvasView}
         />
       )}
-      {/* #225: lint diagnostics are an edit-mode affordance — suppress on run tabs.
-          NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
-          deliberate trade-off ratified at PR time. `tab` is non-null here (early
-          return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
-      <WaitingForStartedNodesBanner run={activeRunState} />
       <RunSearchHost run={activeRunState} onCloseInfo={onCloseInfo} />
-      {/* ADR-0088: what changed the shared draft from outside the canvas (a
-          file written outside PDO, the library assistant), above the lint. */}
-      {tab.runId == null && tab.version == null && (visibleItems.length > 0 || (tab.draft?.notices.length ?? 0) > 0) && (
-        <div className="absolute left-0 right-0 top-10 z-10">
-          <DraftNotices tab={tab} />
-          {visibleItems.length > 0 && <LintBanner items={visibleItems} onDismiss={dismiss} />}
+      {/* Who else has this Run open: an avatar stack in the corner. */}
+      {activeRunState && (
+        <div className="cv-corner">
+          <RunPresenceStack runId={activeRunState.run_id} />
         </div>
       )}
 
@@ -326,6 +351,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           fitViewOptions={fitViewOptions}
           proOptions={{ hideAttribution: true }}
           className="pdo-unzoom bg-surface-0"
+          style={{ ["--xy-background-color" as string]: "var(--surface-0)" }}
           // #315: drag + connect are off on a read-only canvas; click-to-select stays on.
           // #936: edges are born from a DRAG only; a click on a rim selects the node.
           nodesDraggable={!readOnly}
@@ -334,7 +360,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         >
           {/* Decorative background — pure chrome, but drawn at the wiring grid's
               pitch (#877) so a 30px step does not fall out of phase with it. */}
-          <Background color="var(--line-soft)" gap={gridStep} size={1} />
+          <Background variant={BackgroundVariant.Dots} color="var(--line-strong)" gap={gridStep} size={1} />
           <CanvasZoomBadge />
           {/* #844: the wiring grid lives in FLOW space. Drawn inside the viewport
               portal, it shares the path's coordinate system exactly, so a dot is
@@ -386,6 +412,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       {confirmRetryAll && <RetryAllConfirmModal onConfirm={handleRetryAll} onCancel={() => setConfirmRetryAll(false)} />}
       <NodePlayRetryConfirm nodePlay={nodePlay} />
       {finishConfirm && <FinishEditingConfirmModal {...finishConfirm} />}
+    </div>
     </div>
   );
 }

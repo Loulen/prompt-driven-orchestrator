@@ -32,15 +32,14 @@ export interface LoopRegionLayout {
   badgeMemberId: string | null;
 }
 
-// Approximate slim-card footprint (px) used to bound the region box around its
-// members. Cards auto-size; this is the padding-inclusive envelope the box
-// must clear. Mirrors the `minWidth: 160` slim card in EditCanvas.
-const CARD_W = 180;
-const CARD_H = 54;
-// Inset of the translucent box around the member extent. Leaves room for the
-// `↻ X/Y` header pinned to the box's top edge (see refonte.css .rf-region-head).
-const REGION_PAD = 26;
-const REGION_PAD_TOP = 30;
+// The card's footprint (px) used to bound the region box around its members:
+// the 208 px card with its meta grid (canvas.css `.cv-n`).
+const CARD_W = 208;
+const CARD_H = 66;
+// Inset of the tinted box around the member extent. Leaves room above the
+// members for the counter in the box's top-right corner.
+const REGION_PAD = 20;
+const REGION_PAD_TOP = 26;
 
 function regionMaxIterText(maxIter: LoopRegion["max_iter"]): string {
   if (maxIter == null) return "∞";

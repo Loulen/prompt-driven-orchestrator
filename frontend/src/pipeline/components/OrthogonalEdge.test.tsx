@@ -60,7 +60,7 @@ function edgeStroke(container: HTMLElement): string {
 describe("OrthogonalEdge selection color (#177)", () => {
   it("renders grey when no edge is selected", () => {
     const { container } = render(<OrthogonalEdge {...edgeProps(0)} />, { wrapper: Wrapper });
-    expect(edgeStroke(container)).toContain("--text-3");
+    expect(edgeStroke(container)).toContain("--cv-edge");
     expect(edgeStroke(container)).not.toContain("--selected-edge");
   });
 
@@ -81,7 +81,7 @@ describe("OrthogonalEdge selection color (#177)", () => {
     act(() => {
       useEditStore.getState().setSelection({ kind: "none", id: null });
     });
-    expect(edgeStroke(container)).toContain("--text-3");
+    expect(edgeStroke(container)).toContain("--cv-edge");
     expect(edgeStroke(container)).not.toContain("--selected-edge");
   });
 
@@ -91,7 +91,7 @@ describe("OrthogonalEdge selection color (#177)", () => {
     act(() => {
       useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 3 });
     });
-    expect(edgeStroke(container)).toContain("--text-3");
+    expect(edgeStroke(container)).toContain("--cv-edge");
     expect(edgeStroke(container)).not.toContain("--selected-edge");
   });
 

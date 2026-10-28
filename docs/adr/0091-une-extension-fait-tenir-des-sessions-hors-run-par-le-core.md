@@ -25,13 +25,17 @@ son dossier de travail (prompts, hooks, skills) et lit l'instantané de son Run.
 3. **Le core n'écrit jamais dans son dossier de travail** : amorce, hooks et Artefacts live vont
    dans un dossier d'état sous `~/.pdo/`. Elle ne reçoit donc **aucun skill** : la livraison
    d'ADR-0062 écrit dans le dossier, et ce dossier peut être le home (les skills globaux du
-   harnais) ou un dépôt où un humain travaille. Une Extension parle à l'agent par la
-   Contribution au lancement.
+   harnais) ou un dépôt où un humain travaille.
 4. **Elle ne se complète pas** : `pdo wait-user` y déclare l'attente comme pour un Node, Entrée
    la lève ; `pdo complete` y est refusé.
-5. **Le Cap de sessions concurrentes la compte** : moins éphémère que le Manager ou
+5. **Le core n'y ajoute aucun préambule** : l'agent ne lit que le texte de l'Extension
+   (Contribution au lancement) et le prompt initial. Les notions de Run, de Pipeline, d'output
+   ou de complétion n'ont rien à y faire ; l'Extension dit elle-même ce qu'elle veut (Artefacts
+   live, attente déclarée), le core fournit seulement les variables (`PDO_SESSION_ID`,
+   `PDO_LIVE_DIR`, `PDO_DAEMON_URL`).
+6. **Le Cap de sessions concurrentes la compte** : moins éphémère que le Manager ou
    l'Assistant, elle tient un harnais aussi longtemps qu'un Node.
-6. **L'UI se livre en briques** : `@pdo/extension-ui` exporte le terminal de session et les
+7. **L'UI se livre en briques** : `@pdo/extension-ui` exporte le terminal de session et les
    éléments d'un détail de session (en-tête, gestes, configuration, Zoom du terminal, Artefacts
    live, Événements, onglets `session/detail`) ; l'Extension compose sa mise en page.
 

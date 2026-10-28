@@ -10,7 +10,18 @@ import { CANVAS_FIT_PADDING, type CanvasFitViewOptions } from "./usePaneToggleRe
  * zoom bounds and the fit are multiplied by it, and a new scale re-frames the
  * canvas at its size.
  */
-export function useCanvasScale(reactFlow: ReactFlowInstance): { zoom: number; fitViewOptions: CanvasFitViewOptions } {
+/** The toolbar's view group: fit the graph, zoom in, zoom out. */
+export interface CanvasView {
+  fit: () => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+}
+
+export function useCanvasScale(reactFlow: ReactFlowInstance): {
+  zoom: number;
+  fitViewOptions: CanvasFitViewOptions;
+  view: CanvasView;
+} {
   const zoom = useUiScale() / 100;
   const fitViewOptions = useMemo(() => ({ maxZoom: zoom, padding: CANVAS_FIT_PADDING }), [zoom]);
   const framedAt = useRef(zoom);
@@ -19,5 +30,13 @@ export function useCanvasScale(reactFlow: ReactFlowInstance): { zoom: number; fi
     framedAt.current = zoom;
     void reactFlow.fitView({ maxZoom: zoom, padding: CANVAS_FIT_PADDING });
   }, [zoom, reactFlow]);
-  return { zoom, fitViewOptions };
+  const view = useMemo(
+    () => ({
+      fit: () => void reactFlow.fitView(fitViewOptions),
+      zoomIn: () => void reactFlow.zoomIn(),
+      zoomOut: () => void reactFlow.zoomOut(),
+    }),
+    [reactFlow, fitViewOptions],
+  );
+  return { zoom, fitViewOptions, view };
 }

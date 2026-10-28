@@ -24,11 +24,10 @@ import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
-import LintBanner from "./LintBanner";
-import { DraftNotices } from "./DraftNoticeBanner";
+import CanvasBands from "./CanvasBands";
 import VersionBanner from "./VersionBanner";
 import RunSearchHost from "../../run/components/runSearch/RunSearchHost";
-import WaitingForStartedNodesBanner, { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
+import { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
 import DragConnectionLine from "./DragConnectionLine";
 import CanvasZoomBadge from "./CanvasZoomBadge";
 import { DragHighlightProvider } from "./DragHighlightContext";
@@ -96,7 +95,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const [addFromYamlOpen, setAddFromYamlOpen] = useState(false);
   const reactFlowRef = useRef<HTMLDivElement>(null);
   const reactFlow = useReactFlow();
-  const { zoom, fitViewOptions } = useCanvasScale(reactFlow);
+  const { zoom, fitViewOptions, view: canvasView } = useCanvasScale(reactFlow);
 
   // #844: the wiring grid shows only while a wire is being drawn, on the lattice
   // the gesture is currently originated on, in the feedback the reader chose.
@@ -214,14 +213,6 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   }, [derivedEdges, setEdges]);
 
   const onNodeDragStop = useCanvasNodeDragStop();
-  const canvasView = useMemo(
-    () => ({
-      fit: () => void reactFlow.fitView(fitViewOptions),
-      zoomIn: () => void reactFlow.zoomIn(),
-      zoomOut: () => void reactFlow.zoomOut(),
-    }),
-    [reactFlow, fitViewOptions],
-  );
 
   if (!tab || !pipeline) {
     return (
@@ -237,26 +228,9 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     ? pipeline.nodes.find((n) => n.id === exportNodeId) ?? null
     : null;
 
-  const bands =
-    activeRunState?.waiting_for_started_nodes ||
-    (tab.runId == null && tab.version == null && (visibleItems.length > 0 || (tab.draft?.notices.length ?? 0) > 0));
   return (
     <div className="cv-pane relative flex min-h-0 flex-1 flex-col">
-      {/* The lines under the tab bar: one each, full width, above the canvas. */}
-      {bands ? (
-        <div className="shrink-0">
-          <WaitingForStartedNodesBanner run={activeRunState} />
-          {/* ADR-0088: what changed the shared draft from outside the canvas (a
-              file written outside PDO, the library assistant), above the lint.
-              #225: lint is an edit-mode affordance — suppressed on run tabs. */}
-          {tab.runId == null && tab.version == null && (
-            <>
-              <DraftNotices tab={tab} />
-              {visibleItems.length > 0 && <LintBanner items={visibleItems} onDismiss={dismiss} />}
-            </>
-          )}
-        </div>
-      ) : null}
+      <CanvasBands tab={tab} run={activeRunState} lint={visibleItems} onDismissLint={dismiss} />
     <div className="relative min-h-0 flex-1" ref={reactFlowRef}>
       {/* ADR-0088: a version shown read only has its banner where the toolbar sits. */}
       {tab.version ? (

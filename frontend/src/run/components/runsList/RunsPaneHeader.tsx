@@ -1,26 +1,29 @@
-import { Plus } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, Plus } from "lucide-react";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import { ExtensionActionButtons } from "../../../shared/extensions/ExtensionActions";
-import { Button, IconButton, Tooltip } from "../../../shared/ui/kit";
+import type { RunListEntry } from "../../../shared/generated/RunListEntry";
+import { IconButton, Tooltip } from "../../../shared/ui/kit";
 import LeftPaneBar from "../../../shared/ui/LeftPaneBar";
 import {
   useRecheckRunCreationRights,
   useRunCreationRightsStore,
 } from "../../store/runCreationRightsStore";
 import { canCreateSomeRun, NO_RUN_ANYWHERE } from "../../model/runCreationRights";
-
+import RunFilterFunnel from "./RunFilterFunnel";
 
 const NO_EXTRA = {};
 
 interface Props {
   pane: RunsPaneState;
+  runs: RunListEntry[];
+  triggers: { id: string; name: string }[];
   onNewRun: () => void;
 }
 
 /** The Runs tab's header: the extensions' `runs/header` actions (#30), the
- *  « Project » configurator and New run. */
-export default function RunsPaneHeader({ pane, onNewRun }: Props) {
-  const { availableRepos, projectOf, openProjectSettings, canOpenProjectSettings } = pane;
+ *  filters' funnel (CORE-110), expand / collapse all and New run. The Projets
+ *  are set up in Settings › Projects. */
+export default function RunsPaneHeader({ pane, runs, triggers, onNewRun }: Props) {
   // CORE-5: disabled, with its reason, when no Projet allows creating a Run.
   const canCreate = useRunCreationRightsStore((s) => canCreateSomeRun(s.rights));
   useRecheckRunCreationRights(!canCreate);
@@ -34,39 +37,16 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
         buttonClassName="d-icon"
         iconSize={14}
       />
-      {availableRepos.length > 0 && canOpenProjectSettings && (
-        <Button
-          size="sm"
-          tone="ghost"
-          aria-label="Configure project"
-          onClick={() => {
-            // CORE-96: Settings › Projects — on the one repository's Projet, or
-            // naming one for it; with several repositories, the page as it is.
-            if (availableRepos.length > 1) {
-              openProjectSettings();
-              return;
-            }
-            const path = availableRepos[0];
-            const project = projectOf(path);
-            openProjectSettings(
-              project
-                ? {
-                    kind: "project",
-                    key: `project:${project.id}`,
-                    repoPath: "",
-                    label: project.name,
-                  }
-                : {
-                    kind: "path",
-                    key: path,
-                    repoPath: path,
-                    label: path.split("/").filter(Boolean).pop() ?? path,
-                  },
-            );
-          }}
-        >
-          Project
-        </Button>
+      {(runs.length > 0 || pane.filterActive) && <RunFilterFunnel pane={pane} runs={runs} triggers={triggers} />}
+      {/* #783 — expand / collapse every child Run: not a filter. */}
+      {pane.allParentIds.length > 0 && (
+        <IconButton
+          icon={pane.allExpanded ? ChevronsDownUp : ChevronsUpDown}
+          label={pane.allExpanded ? "Collapse all child runs" : "Expand all child runs"}
+          data-testid="run-tree-toggle-all"
+          data-state={pane.allExpanded ? "expanded" : "collapsed"}
+          onClick={() => pane.setAllExpanded(!pane.allExpanded)}
+        />
       )}
       {canCreate ? (
         <IconButton icon={Plus} label="New run" onClick={onNewRun} data-testid="new-run-button" />

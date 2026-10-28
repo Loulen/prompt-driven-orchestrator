@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   EMPTY_RUN_FILTER,
+  activeFilterCount,
   isFilterActive,
+  runFilterOptions,
   projectKey,
   runMatchesFilter,
   type RunFilterValue,
@@ -94,5 +96,48 @@ describe("runFilter — the Project axis follows the recorded Projet (ADR-0087)"
     const byRepo = { ...EMPTY_RUN_FILTER, repo: "/code/shop-api" };
     expect(runMatchesFilter(inNone, byRepo, projectOf)).toBe(true);
     expect(runMatchesFilter(inP2, byRepo, projectOf)).toBe(false);
+  });
+});
+
+describe("runFilter — the menu's options and its count (funnel)", () => {
+  const projectOf = (id: string | null | undefined) => (id === "p1" ? { id: "p1", name: "Checkout" } : null);
+  const runs = [
+    run({ run_id: "a", effective_repo: "/code/zebra", pipeline_name: "deploy", triggered_by: "t1" }),
+    run({ run_id: "b", effective_repo: "/code/shop", pipeline_name: "audit", project_id: "p1" }),
+    run({ run_id: "c", effective_repo: "/code/alpha", pipeline_name: "", triggered_by: "gone" }),
+    run({ run_id: "d", effective_repo: "/code/alpha", pipeline_name: "audit" }),
+  ];
+
+  it("lists the Projets by name first, then the repos by basename; each value once", () => {
+    const { project } = runFilterOptions(runs, [], projectOf);
+    expect(project).toEqual([
+      { value: "project:p1", label: "Checkout" },
+      { value: "/code/alpha", label: "alpha" },
+      { value: "/code/zebra", label: "zebra" },
+    ]);
+  });
+
+  it("names a nameless pipeline, the manual launches and a deleted trigger by its id", () => {
+    const { pipeline, trigger } = runFilterOptions(runs, [{ id: "t1", name: "Nightly" }], projectOf);
+    expect(pipeline.map((o) => o.label)).toEqual(["(unnamed)", "audit", "deploy"]);
+    expect(trigger).toEqual([
+      { value: "__manual__", label: "Manual" },
+      { value: "gone", label: "gone" },
+      { value: "t1", label: "Nightly" },
+    ]);
+  });
+
+  it("counts each axis set, the date range and each extension attribute", () => {
+    expect(activeFilterCount(EMPTY_RUN_FILTER)).toBe(0);
+    const f: RunFilterValue = {
+      ...EMPTY_RUN_FILTER,
+      repo: "project:p1",
+      pipeline: "audit",
+      date: { mode: "started", range: { preset: "7d" } },
+    };
+    expect(activeFilterCount(f)).toBe(3);
+    expect(activeFilterCount(f, { "x/a": "1", "x/b": "2" }, { "x/c": "3" })).toBe(6);
+    // The mode alone narrows nothing.
+    expect(activeFilterCount({ ...EMPTY_RUN_FILTER, date: { mode: "started", range: null } })).toBe(0);
   });
 });

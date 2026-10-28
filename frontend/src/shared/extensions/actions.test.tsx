@@ -158,8 +158,8 @@ function fakePane(over: Partial<RunsPaneState> = {}): RunsPaneState {
     visibleRunIds: [],
     runById: new Map(),
     filteredRuns: [],
-    availableRepos: [],
-    projectOf: () => null,
+    allParentIds: [],
+    filterActive: false,
     openProjectSettings: vi.fn(),
     runningWillStop: 0,
     cleanupItems: [],
@@ -208,7 +208,7 @@ afterEach(() => {
 describe("a bar of the catalogue (runs/header)", () => {
   it("shows one icon button per action, before the core's, and calls its command with the context", async () => {
     serve([extension("demo", "Demo", [action("runs/header", "sync")])]);
-    render(shell(<RunsPaneHeader pane={fakePane()} onNewRun={vi.fn()} />, { run_id: "r1", pipeline_name: "demo", status: "running" } as RunState));
+    render(shell(<RunsPaneHeader pane={fakePane()} runs={[]} triggers={[]} onNewRun={vi.fn()} />, { run_id: "r1", pipeline_name: "demo", status: "running" } as RunState));
     const button = await screen.findByTestId("extension-action-demo:sync");
     expect(button).toHaveAccessibleName("Do sync");
     // Before « New Run » in the header's order.
@@ -227,7 +227,7 @@ describe("a bar of the catalogue (runs/header)", () => {
 
   it("adds nothing without a contribution", async () => {
     serve([]);
-    render(shell(<RunsPaneHeader pane={fakePane()} onNewRun={vi.fn()} />));
+    render(shell(<RunsPaneHeader pane={fakePane()} runs={[]} triggers={[]} onNewRun={vi.fn()} />));
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(screen.queryByTestId("extension-actions-runs/header")).toBeNull();
   });

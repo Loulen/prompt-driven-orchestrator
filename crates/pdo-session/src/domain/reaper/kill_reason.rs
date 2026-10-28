@@ -51,6 +51,11 @@ pub enum KillReason {
         /// distinguishes "they walked away" from "the tab is gone".
         idle_secs: Option<i64>,
     },
+    /// A name with the prefix of the Sessions hébergées that no live record
+    /// holds (ADR-0091): an absence verdict, like an unrecognised name.
+    HostedUnregistered {
+        session_name: String,
+    },
 }
 
 impl std::fmt::Display for KillReason {
@@ -121,6 +126,10 @@ impl std::fmt::Display for KillReason {
                 "Orphan sweep: killing idle library assistant {session_name} \
                  (no edit view ever declared)"
             ),
+            KillReason::HostedUnregistered { session_name } => write!(
+                f,
+                "Orphan sweep: killing hosted session {session_name} (no live record)"
+            ),
         }
     }
 }
@@ -141,6 +150,7 @@ impl KillReason {
                 | KillReason::ManagerRunAbsent { .. }
                 | KillReason::ShellRunAbsent { .. }
                 | KillReason::NodeRunAbsent { .. }
+                | KillReason::HostedUnregistered { .. }
         )
     }
 }

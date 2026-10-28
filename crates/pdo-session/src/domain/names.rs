@@ -82,6 +82,18 @@ pub fn libassist_session_name_of(actor: &Actor) -> String {
     }
 }
 
+/// The prefix of every Session hébergée's name (ADR-0091): the sweep keeps a
+/// name with it only while a live session of that name is recorded, and kills
+/// any other.
+pub const HOSTED_SESSION_PREFIX: &str = "pdo-hosted-";
+
+/// The name of the Session hébergée `suffix` (a random id the session context
+/// draws): the extension's key never enters it, so it holds only what tmux
+/// accepts.
+pub fn hosted_session_name(suffix: &str) -> String {
+    format!("{HOSTED_SESSION_PREFIX}{suffix}")
+}
+
 /// FNV-1a, 64 bits: a digest that stays the same from one build to the next,
 /// unlike the standard library's hasher.
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -106,6 +118,7 @@ pub fn session_ref(name: &str) -> Option<SessionRef> {
         }
         ParsedSession::Shell { run_id } => SessionRef::new(name, SessionKind::Shell).in_run(run_id),
         ParsedSession::LibAssist => SessionRef::new(name, SessionKind::LibraryAssistant),
+        ParsedSession::Hosted => SessionRef::new(name, SessionKind::Hosted),
     })
 }
 
@@ -134,6 +147,9 @@ pub enum ParsedSession {
     /// Owns no Run; reaped by the explicit `DELETE` on leaving every edit view,
     /// with the sweep's idle arm as the backstop.
     LibAssist,
+    /// A Session hébergée (ADR-0091, [`hosted_session_name`]). Owns no Run:
+    /// its record, not its name, says whether it should be alive.
+    Hosted,
 }
 
 impl ParsedSession {
@@ -143,7 +159,7 @@ impl ParsedSession {
             ParsedSession::NodeRun { run_id, .. }
             | ParsedSession::Manager { run_id }
             | ParsedSession::Shell { run_id } => Some(run_id),
-            ParsedSession::LibAssist => None,
+            ParsedSession::LibAssist | ParsedSession::Hosted => None,
         }
     }
 }
@@ -183,6 +199,15 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
     if let Some(suffix) = rest.strip_prefix("libassist-") {
         if !suffix.is_empty() {
             return Some(ParsedSession::LibAssist);
+        }
+        return None;
+    }
+
+    // ADR-0091: a Session hébergée, parsed before the `-iter-` split like the
+    // other names without a Run. Its suffix must be non-empty.
+    if let Some(suffix) = rest.strip_prefix("hosted-") {
+        if !suffix.is_empty() {
+            return Some(ParsedSession::Hosted);
         }
         return None;
     }
@@ -428,6 +453,20 @@ mod tests {
         assert_eq!(assistant.kind, SessionKind::LibraryAssistant);
         assert_eq!(assistant.run_id, None);
         assert_eq!(session_ref("pdo-"), None);
+    }
+
+    #[test]
+    fn a_hosted_session_name_reads_back_as_a_hosted_session_without_a_run() {
+        let name = hosted_session_name("1a2b3c4d5e6f");
+        assert_eq!(name, "pdo-hosted-1a2b3c4d5e6f");
+        assert!(name.starts_with(HOSTED_SESSION_PREFIX));
+        assert_eq!(parse_session_name(&name), Some(ParsedSession::Hosted));
+        assert_eq!(ParsedSession::Hosted.run_id(), None);
+        assert_eq!(parse_session_name("pdo-hosted-"), None);
+        assert_eq!(
+            session_ref(&name),
+            Some(SessionRef::new(&name, SessionKind::Hosted))
+        );
     }
 
     #[test]

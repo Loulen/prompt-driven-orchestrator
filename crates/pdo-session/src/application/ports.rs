@@ -275,6 +275,12 @@ pub trait AssistantHarness: Send + Sync {
 pub trait RunProjects: Send + Sync {
     /// The Projets `run_id` is in; none for an unknown Run.
     fn projects_of_run<'a>(&'a self, run_id: &'a str) -> BoxFuture<'a, Vec<String>>;
+
+    /// The Projets of the Session hébergée `session`, from its record (never
+    /// from its name); none by default and for a session not recorded.
+    fn projects_of_hosted(&self, _session: &str) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// No Run is in any Projet: a use case's Projets until it is given its own.
@@ -287,14 +293,16 @@ impl RunProjects for NoRunProjects {
 }
 
 /// The Projets of the session `session`: those of the Run it belongs to (a
-/// node's, a manager's, a run shell's); none for the library assistant or a
-/// name PDO does not give.
+/// node's, a manager's, a run shell's), the one a Session hébergée is
+/// recorded in; none for the library assistant or a name PDO does not give.
 pub async fn projects_of_session(projects: &dyn RunProjects, session: &str) -> Vec<String> {
-    match crate::domain::names::parse_session_name(session)
-        .as_ref()
-        .and_then(crate::domain::names::ParsedSession::run_id)
-    {
-        Some(run_id) => projects.projects_of_run(run_id).await,
+    use crate::domain::names::{parse_session_name, ParsedSession};
+    match parse_session_name(session) {
+        Some(ParsedSession::Hosted) => projects.projects_of_hosted(session),
+        Some(parsed) => match parsed.run_id() {
+            Some(run_id) => projects.projects_of_run(run_id).await,
+            None => Vec::new(),
+        },
         None => Vec::new(),
     }
 }

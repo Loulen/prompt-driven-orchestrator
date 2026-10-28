@@ -1,4 +1,5 @@
-//! The live NodeRun sessions across every Run: what the session cap counts.
+//! The live NodeRun sessions across every Run, and the live Sessions
+//! hébergées: what the session cap counts.
 
 use tracing::warn;
 
@@ -8,8 +9,9 @@ use crate::domain::admission;
 use crate::domain::projection;
 use crate::Runs;
 
-/// Count the live NodeRun sessions across *all* runs (admission control). Pipeline
-/// Manager sessions are not nodes, so they are excluded by construction.
+/// Count the live NodeRun sessions across *all* runs, plus the live Sessions
+/// hébergées (ADR-0091), for admission control. Pipeline Manager sessions are
+/// not nodes, so they are excluded by construction.
 pub async fn count_global_live_sessions(db: &Runs) -> usize {
     count_global_live_sessions_excluding(db, None).await
 }
@@ -38,4 +40,5 @@ pub async fn count_global_live_sessions_excluding(
         }
     }
     admission::count_live_node_sessions_excluding(states.iter(), exclude)
+        + db.sessions().hosted_live()
 }

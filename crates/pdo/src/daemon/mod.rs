@@ -156,6 +156,13 @@ pub async fn serve_with_config(
         // on orphaned Running nodes and surface git/event-log divergence.
         boot_recovery::run_boot_recovery(&run).await;
     }
+    // ADR-0091: the Sessions hébergées a previous daemon held are taken back
+    // with who started them, or ended if their process is gone. Before the
+    // ledger adopts the live sessions, so it knows who started them.
+    let hosted = session.hosted().clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || hosted.restore()).await {
+        warn!("the hosted sessions could not be restored: {e}");
+    }
     // CORE-61: the sessions a previous daemon started end like the others, and
     // their end is announced to the extensions.
     let ledger = session.ledger().clone();

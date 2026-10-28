@@ -241,8 +241,17 @@ fn core_entry(
         ),
         ResourceKind::Session => (
             "Sessions",
-            "Open, attach and take control of terminals",
-            &[CREATE, UPDATE, DELETE, "attach", "take_control", "resume"],
+            "Open, attach and take control of terminals; open and terminate the hosted sessions",
+            &[
+                CREATE,
+                UPDATE,
+                DELETE,
+                "attach",
+                "take_control",
+                "resume",
+                "open",
+                "terminate",
+            ],
         ),
         ResourceKind::Update => (
             "Updates",

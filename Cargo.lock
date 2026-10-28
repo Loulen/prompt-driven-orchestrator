@@ -2165,7 +2165,7 @@ dependencies = [
 
 [[package]]
 name = "pdo-extension-api"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "axum",
  "serde",
@@ -2372,6 +2372,7 @@ dependencies = [
  "tokio",
  "tracing",
  "ts-rs",
+ "uuid",
 ]
 
 [[package]]

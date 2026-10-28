@@ -114,7 +114,7 @@ pub fn build_tmux_script_with(
                 Some(cmd) => cmd.to_string(),
                 None => build_agent_tail(
                     harness,
-                    prompt_path,
+                    Some(prompt_path),
                     model,
                     effort,
                     settings_path,

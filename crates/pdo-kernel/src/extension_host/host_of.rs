@@ -3,12 +3,15 @@
 
 use std::sync::Weak;
 
+use std::sync::Arc;
+
 use pdo_extension_api::{
     ActorDisplay, Attributes, Authorization, EntityRef, ExtensionData, ExtensionEvent, Host,
-    NewRun, OperationApplied, Presence, Resource, RunCostRead, RunCreation, RunNotCreated,
+    HostedGesture, HostedRefusal, HostedSession, NewRun, OpenSession, OperationApplied, Presence,
+    Resource, RunCostRead, RunCreation, RunNotCreated,
 };
 
-use super::{ExtensionHost, Extensions, Registry};
+use super::{ExtensionHost, Extensions, HostedSessions, Registry};
 use crate::event_bus::guarded;
 use crate::{Actor, Operation};
 
@@ -28,6 +31,20 @@ impl ExtensionHostOf {
             .upgrade()
             .map(|registry| Extensions { registry })
     }
+
+    fn hosted(&self) -> Option<Arc<dyn HostedSessions>> {
+        self.registry
+            .upgrade()
+            .and_then(|registry| registry.hosted.get().cloned())
+    }
+}
+
+/// The answer of a gesture on a Session hébergée before the daemon plugged
+/// what holds them.
+fn not_hosted() -> HostedGesture {
+    Box::pin(std::future::ready(Err(HostedRefusal::unavailable(
+        "the daemon holds no hosted session yet (starting or stopping)",
+    ))))
 }
 
 impl Host for ExtensionHostOf {
@@ -125,6 +142,30 @@ impl Host for ExtensionHostOf {
             None => Box::pin(std::future::ready(Err(RunNotCreated::unavailable(
                 "the daemon creates no Run yet (starting or stopping)",
             )))),
+        }
+    }
+
+    fn open_session(&self, actor: &Actor, open: OpenSession) -> HostedGesture {
+        match self.hosted() {
+            Some(hosted) => hosted.open(&self.id, actor.clone(), open),
+            None => not_hosted(),
+        }
+    }
+
+    fn hosted_session(&self, key: &str) -> Option<HostedSession> {
+        self.hosted()?.read(&self.id, key)
+    }
+
+    fn hosted_sessions(&self) -> Vec<HostedSession> {
+        self.hosted()
+            .map(|hosted| hosted.list(&self.id))
+            .unwrap_or_default()
+    }
+
+    fn terminate_session(&self, actor: &Actor, key: &str) -> HostedGesture {
+        match self.hosted() {
+            Some(hosted) => hosted.terminate(&self.id, actor.clone(), key),
+            None => not_hosted(),
         }
     }
 }

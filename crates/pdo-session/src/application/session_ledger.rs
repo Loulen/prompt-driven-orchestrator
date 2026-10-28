@@ -15,6 +15,7 @@
 //! nothing: it never lists tmux.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -48,6 +49,9 @@ pub struct SessionLedger {
     tmux: Arc<dyn Tmux>,
     host: Arc<dyn ExtensionHost>,
     live: Mutex<Live>,
+    /// The live Sessions hébergées (ADR-0091), as their registry counts
+    /// them: the Cap de sessions concurrentes counts them with the Nodes.
+    hosted_live: AtomicUsize,
 }
 
 impl SessionLedger {
@@ -56,7 +60,35 @@ impl SessionLedger {
             tmux,
             host,
             live: Mutex::new(Live::default()),
+            hosted_live: AtomicUsize::new(0),
         }
+    }
+
+    /// How many Sessions hébergées are live: what they take of the Cap.
+    pub fn hosted_live(&self) -> usize {
+        self.hosted_live.load(Ordering::Relaxed)
+    }
+
+    /// The registry of the Sessions hébergées counted `live` of them.
+    pub fn set_hosted_live(&self, live: usize) {
+        self.hosted_live.store(live, Ordering::Relaxed);
+    }
+
+    /// Know `session`, alive since a previous daemon, as started by
+    /// `started_by`, without announcing its start again: its end will be
+    /// announced with who started it.
+    pub fn adopt(&self, session: SessionRef, started_by: Option<Actor>) {
+        if !self.listened() {
+            return;
+        }
+        let mut live = self.lock();
+        live.next += 1;
+        let entry = Entry {
+            generation: live.next,
+            session: session.clone(),
+            started_by,
+        };
+        live.sessions.insert(session.id, entry);
     }
 
     /// `session` just came up, started by `started_by`: announce it. A session
@@ -93,7 +125,12 @@ impl SessionLedger {
     /// `actor` took control of the terminal of the session `name`: it attached
     /// and drives it alone, or took the hand from the pilot.
     pub fn taken_over(&self, actor: &Actor, name: &str) {
-        if let Some(session) = session_ref(name) {
+        let known = self
+            .lock()
+            .sessions
+            .get(name)
+            .map(|entry| entry.session.clone());
+        if let Some(session) = known.or_else(|| session_ref(name)) {
             self.announce(SessionChange::TakenOver, Some(actor.clone()), session);
         }
     }

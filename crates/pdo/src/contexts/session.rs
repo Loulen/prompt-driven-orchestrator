@@ -8,12 +8,14 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_pipeline::Pipelines;
 use pdo_platform::Platform;
 use pdo_run::Runs;
+use pdo_session::adapters::hosted_store::FsHostedStore;
 use pdo_session::adapters::terminal_window::OsTerminalWindow;
+use pdo_session::application::hosted::HostedPorts;
 use pdo_session::application::ports::Tmux;
 use pdo_session::{Session, SessionOptions, SessionPorts};
 
 use super::ContextResources;
-use crate::ports::session::{RunSide, SessionRunPorts};
+use crate::ports::session::{HostedSide, RunSide, SessionRunPorts};
 use crate::ports::Late;
 
 pub(super) fn session(
@@ -32,6 +34,14 @@ pub(super) fn session(
         pipelines: pipelines.clone(),
         docker_cmd_override: r.docker_cmd_override.clone(),
     });
+    // ADR-0091: the records and state of the Sessions hébergées live under the
+    // daemon's `~/.pdo/`, never in the folder a session works in.
+    let pdo_home = r.home_root.clone().unwrap_or_else(|| r.repo_root.clone());
+    let hosted = Arc::new(HostedSide {
+        runs: runs.clone(),
+        db: r.db.clone(),
+        home: r.home_root.clone(),
+    });
     Session::new(
         SessionPorts {
             tmux,
@@ -45,6 +55,12 @@ pub(super) fn session(
             terminal_window: Arc::new(OsTerminalWindow),
             extensions: host,
             projects: run.projects,
+            hosted: HostedPorts {
+                store: Arc::new(FsHostedStore::new(pdo_home.join(".pdo").join("hosted"))),
+                places: hosted.clone(),
+                harness: hosted.clone(),
+                admission: hosted,
+            },
         },
         SessionOptions {
             daemon_port: r.port,

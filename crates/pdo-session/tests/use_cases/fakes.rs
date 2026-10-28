@@ -9,8 +9,12 @@ use pdo_extension_api::{Authorization, RequestParts, SessionLaunch};
 use pdo_kernel::extension_host::{ExtensionHost, NodeContribution};
 use pdo_kernel::{Actor, Operation};
 
+use pdo_session::application::hosted::{
+    AdmissionSlot, CapReached, HostedHarness, HostedPlaces, HostedStore, SessionAdmission,
+};
 use pdo_session::application::ports::*;
 use pdo_session::domain::declared_wait::WaitFacts;
+use pdo_session::domain::hosted::HostedRecord;
 use pdo_session::domain::launch::ContainerExec;
 use pdo_session::domain::pane::{PaneTarget, ReattachOutcome};
 use pdo_session::domain::reaper::{NodeRunInfo, SweepTtls};
@@ -545,5 +549,102 @@ impl pdo_session::application::ports::RunProjects for InP1 {
                 Vec::new()
             }
         })
+    }
+}
+
+/// The records of the Sessions hébergées in memory, their state folders in a
+/// temporary folder.
+pub struct HostedRecords {
+    pub records: Mutex<Vec<HostedRecord>>,
+    pub root: tempfile::TempDir,
+}
+
+impl Default for HostedRecords {
+    fn default() -> Self {
+        Self {
+            records: Mutex::new(Vec::new()),
+            root: tempfile::tempdir().unwrap(),
+        }
+    }
+}
+
+impl HostedStore for HostedRecords {
+    fn load(&self) -> Vec<HostedRecord> {
+        self.records.lock().unwrap().clone()
+    }
+
+    fn save(&self, record: &HostedRecord) -> Result<(), String> {
+        let mut records = self.records.lock().unwrap();
+        match records.iter_mut().find(|r| r.id() == record.id()) {
+            Some(stored) => *stored = record.clone(),
+            None => records.push(record.clone()),
+        }
+        Ok(())
+    }
+
+    fn remove(&self, id: &str) {
+        self.records.lock().unwrap().retain(|r| r.id() != id);
+    }
+
+    fn state_dir(&self, id: &str) -> PathBuf {
+        self.root.path().join(id)
+    }
+}
+
+/// Where a Session hébergée's folder resolves: one home, one Projet `p1`
+/// whose primary repository is `repo`.
+pub struct Places {
+    pub home: Option<PathBuf>,
+    pub repo: Option<PathBuf>,
+}
+
+impl HostedPlaces for Places {
+    fn home(&self) -> Option<PathBuf> {
+        self.home.clone()
+    }
+
+    fn project_repo<'a>(&'a self, project: &'a str) -> BoxFuture<'a, Option<PathBuf>> {
+        let repo = (project == "p1").then(|| self.repo.clone()).flatten();
+        Box::pin(async move { repo })
+    }
+}
+
+/// The harnesses: `claude` by default or by name, nothing else.
+pub struct Harnesses;
+
+impl HostedHarness for Harnesses {
+    fn resolve<'a>(
+        &'a self,
+        name: Option<&'a str>,
+    ) -> BoxFuture<'a, Option<pdo_harness::registry::HarnessDescriptor>> {
+        let found = match name {
+            None | Some("claude") => Some(pdo_harness::registry::claude()),
+            Some(_) => None,
+        };
+        Box::pin(async move { found })
+    }
+}
+
+/// The Cap: full or not, and how many slots were given back.
+#[derive(Default)]
+pub struct Cap {
+    pub full: Mutex<bool>,
+    pub released: Mutex<usize>,
+}
+
+impl SessionAdmission for Cap {
+    fn admit(&self) -> BoxFuture<'_, Result<AdmissionSlot, CapReached>> {
+        let full = *self.full.lock().unwrap();
+        Box::pin(async move {
+            if full {
+                Err(CapReached { live: 2, cap: 2 })
+            } else {
+                Ok(AdmissionSlot::holding(()))
+            }
+        })
+    }
+
+    fn released(&self) {
+        *self.released.lock().unwrap() += 1;
     }
 }

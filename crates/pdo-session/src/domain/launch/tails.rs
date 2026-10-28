@@ -52,7 +52,7 @@ pub const LIBASSIST_HOOK_SETTINGS_JSON: &str = r#"{"hooks":{"UserPromptSubmit":[
 /// #347: a stray `""` never reaches the tail as `--model ''`).
 pub(super) fn build_agent_tail(
     descriptor: &pdo_harness::registry::HarnessDescriptor,
-    prompt_path: &Path,
+    prompt_path: Option<&Path>,
     model: Option<&str>,
     effort: Option<&str>,
     settings_path: Option<&Path>,
@@ -64,10 +64,11 @@ pub(super) fn build_agent_tail(
             .unwrap_or_default()
     };
     let holes = pdo_harness::argv::Holes {
-        prompt: format!(
-            "\"$(cat {})\"",
-            sh_single_quote(&prompt_path.to_string_lossy())
-        ),
+        // No prompt file (a Session hébergée with nothing to read): the
+        // `{prompt}` token drops, the agent opens on an empty input.
+        prompt: prompt_path
+            .map(|path| format!("\"$(cat {})\"", sh_single_quote(&path.to_string_lossy())))
+            .unwrap_or_default(),
         model: quote_opt(model),
         effort: quote_opt(effort),
         settings: settings_path

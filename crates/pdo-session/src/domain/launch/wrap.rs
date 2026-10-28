@@ -12,8 +12,9 @@ pub fn host_daemon_url(daemon_port: u16) -> String {
 }
 
 /// The variables the core sets in every node session, whatever its tail: the
-/// session `PATH` and identity, the daemon URL, the sandbox's `HOME` and its
-/// session marker. An extension can never overwrite one of them.
+/// session `PATH` and identity (a Session hébergée's `PDO_SESSION_ID`
+/// included), the daemon URL, the sandbox's `HOME` and its session marker. An
+/// extension can never overwrite one of them.
 pub const CORE_ENV_NAMES: &[&str] = &[
     "PATH",
     "HOME",
@@ -22,6 +23,7 @@ pub const CORE_ENV_NAMES: &[&str] = &[
     "PDO_NODE_ITER",
     "PDO_DAEMON_URL",
     "PDO_SBX_SESSION",
+    "PDO_SESSION_ID",
 ];
 
 /// The extensions' variables a session may carry (API 0.8): every pair but

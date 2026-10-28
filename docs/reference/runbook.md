@@ -30,7 +30,7 @@ PDO is one crate per bounded context (ADR-0079), and a target starts with the cr
 | `pdo_run` | A Run: its events, the scheduler, the nodes' lifecycle, the Pipeline Manager's commands, creation, archive |
 | `pdo_pipeline` | The pipeline documents, the registry, the watcher, the migrator, the workflow import |
 | `pdo_review` | The review of a Run's diff and its comments |
-| `pdo_session` | tmux, the terminals, the declared wait, the reaper, the library assistant |
+| `pdo_session` | tmux, the terminals, the declared wait, the reaper, the library assistant, the Sessions hébergées (`pdo_session::application::hosted`) |
 | `pdo_harness` | The harnesses: registry, probes, catalogues |
 | `pdo_sandbox` | Docker, the staging of a sandbox's home, the staging profiles |
 | `pdo_skill` | The Banque de skills, its import, the delivery into a worktree |

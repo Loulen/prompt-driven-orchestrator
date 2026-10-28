@@ -55,6 +55,9 @@ pub struct SweepInput {
     /// is what a browser reload leaves behind: it is an idle verdict, not a fresh
     /// one. Same clock as `now`, resolved by the caller in the same pass.
     pub focus_age: Option<Duration>,
+    /// Whether a live Session hébergée of this name is recorded (ADR-0091) —
+    /// filled for [`ParsedSession::Hosted`] only, `false` elsewhere.
+    pub recorded: bool,
 }
 
 /// The TTLs the sweep arbitrates on. Named fields rather than two positional
@@ -197,6 +200,13 @@ fn decide_one(
                 }),
             }
         }
+        // ADR-0091: a Session hébergée has no TTL and no owner Run; its record
+        // alone keeps it. The record is written before its tmux session is
+        // created, so a live one is never seen here without it.
+        ParsedSession::Hosted if input.recorded => SweepVerdict::Keep,
+        ParsedSession::Hosted => SweepVerdict::Kill(KillReason::HostedUnregistered {
+            session_name: input.session_name.clone(),
+        }),
         ParsedSession::NodeRun {
             run_id,
             node_id,
@@ -258,6 +268,7 @@ mod tests {
             info,
             attached: false,
             focus_age: None,
+            recorded: false,
         }
     }
 
@@ -358,7 +369,36 @@ mod tests {
             info: None,
             attached,
             focus_age,
+            recorded: false,
         }
+    }
+
+    /// ADR-0091: a recorded Session hébergée is kept whatever its age or its
+    /// attachment; one with the prefix and no live record is killed, as an
+    /// absence verdict.
+    #[test]
+    fn a_hosted_session_lives_by_its_record_alone() {
+        let name = crate::domain::names::hosted_session_name("1a2b3c");
+        let input = |recorded| SweepInput {
+            session_name: name.clone(),
+            parsed: parse_session_name(&name),
+            info: None,
+            attached: false,
+            focus_age: None,
+            recorded,
+        };
+        let now = at("2026-07-31T15:32:19Z");
+        let decisions = decide_sweep(&[input(true), input(false)], TTLS, now);
+        assert_eq!(decisions[0].verdict, SweepVerdict::Keep);
+        let killed = KillReason::HostedUnregistered {
+            session_name: name.clone(),
+        };
+        assert_eq!(decisions[1].verdict, SweepVerdict::Kill(killed.clone()));
+        assert!(killed.is_absence());
+        assert_eq!(
+            killed.to_string(),
+            format!("Orphan sweep: killing hosted session {name} (no live record)")
+        );
     }
 
     /// #594 / ADR-0051 §4: presence, not the owning Run, decides the assistant's
@@ -468,6 +508,7 @@ mod tests {
                 info: live(),
                 attached: true,
                 focus_age: Some(Duration::ZERO),
+                recorded: false,
             }],
             TTLS,
             at("2026-07-31T15:32:19Z"),

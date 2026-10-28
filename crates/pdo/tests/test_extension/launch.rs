@@ -12,7 +12,9 @@
 //! - **`session_env`** / **`session_preamble`** (API 0.13), for a session
 //!   that is no Node (the Pipeline Manager, the library assistant): the same
 //!   variables plus `TEST_STARTED_BY`, the id of who starts the session (else
-//!   its kind of Actor, `nobody` when unknown), and the same preamble.
+//!   its kind of Actor, `nobody` when unknown), and the same preamble; a
+//!   Session hébergée also gets the `PDO_TOKEN` of who started it
+//!   (`sessions.rs`).
 //!
 //! Every launch it is asked about is recorded ([`Launch::launches`], `GET
 //! /ext/test/launch`), with whether it asked for the preamble.
@@ -20,7 +22,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use pdo::extension_api::{Actor, NodeEnv, NodeLaunch, SessionLaunch, TriggerRef};
+use pdo::extension_api::{Actor, NodeEnv, NodeLaunch, SessionKind, SessionLaunch, TriggerRef};
 use serde_json::{json, Value};
 
 /// The launch side of the test extension's control.
@@ -101,6 +103,10 @@ impl Launch {
         };
         let mut env = self.env.lock().unwrap().clone();
         env.insert("TEST_STARTED_BY".into(), started_by);
+        if launch.session.kind == SessionKind::Hosted {
+            let token = super::sessions::token_of(launch.started_by.as_ref());
+            env.insert("PDO_TOKEN".into(), token);
+        }
         env
     }
 

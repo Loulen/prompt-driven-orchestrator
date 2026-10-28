@@ -45,6 +45,14 @@
 //!   preamble (`Ligne de fixture`); none by default (`PUT /ext/test/launch
 //!   {"preamble": …}`).
 //!
+//! Its Sessions hébergées (API 0.17): `POST /ext/test/sessions {"key", "kind":
+//! "agent"|"shell", "folder"?: {"kind": "path", "path"}|{"kind": "home"}|
+//! {"kind": "project_repo"}, "project"?, "config"?: {"harness", "model",
+//! "effort", "prompt"}}` opens one on behalf of the caller, `GET
+//! /ext/test/sessions[/<key>]` reads them, `DELETE /ext/test/sessions/<key>`
+//! terminates one. Their records live under `$HOME/.pdo/hosted/`; a hosted
+//! shell's `pdo` acts as who opened it.
+//!
 //! It suspends a Trigger on `PUT /ext/test/suspensions {"trigger_id", "reason"}`
 //! and lifts it on `DELETE /ext/test/suspensions/<id>`.
 //!

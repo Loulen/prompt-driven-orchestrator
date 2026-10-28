@@ -13,7 +13,11 @@ import {
 import NodeDetailHeader, { NodeProvisioning } from "./nodeDetail/NodeDetailHeader";
 import NodeControls, { ActionVerdictBanner } from "./nodeDetail/NodeControls";
 import NodeBanners from "./nodeDetail/NodeBanners";
-import NodeActions from "./nodeDetail/NodeActions";
+import NodeVerdicts from "./nodeDetail/NodeVerdicts";
+import { createPortal } from "react-dom";
+import { useInspectorBarSlot } from "../../pipeline/components/inspectorBarSlot";
+import { reviewUrl } from "../model/runRefs";
+import "./inspector.css";
 import DetailsPane from "./nodeDetail/DetailsPane";
 import TerminalSection from "./nodeDetail/TerminalSection";
 import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
@@ -116,9 +120,9 @@ export default function NodeDetailPanel({
 
   // The retry handlers used to call `setTerminalView("split")` inline. The mode
   // stays presentational state here; it travels into `useNodeRun` as a *stable*
-  // callback (`useCallback` with no deps, exactly as stable as the `setTerminalView`
-  // setter it replaces), so the retry callbacks keep the identity they had.
-  const showTerminalSplit = useCallback(() => setTerminalView("split"), []);
+  // callback (`useCallback` on the setter, which never changes), so the retry
+  // callbacks keep the identity they had.
+  const showTerminalSplit = useCallback(() => setTerminalView("split"), [setTerminalView]);
 
   // Every read and command of this panel is iter-scoped, so the resolved
   // `selectedIter` is an argument: the panel owns the IterSelector's state and the
@@ -223,9 +227,32 @@ export default function NodeDetailPanel({
   // remount, no flicker).
   const closeModal = useCallback(() => setModal(null), []);
 
+  const controls = !isArchived ? (
+    <NodeControls
+      node={node}
+      stop={stop}
+      restartIteration={restartIteration}
+      start={start}
+      retry={retry}
+      may={may}
+      review={reviewTarget ? { href: reviewUrl(runId, reviewTarget.pair), label: reviewTarget.label } : null}
+      completion={{
+        canRelease: canReleaseCompletion,
+        released: completionReleased,
+        isReleasing,
+        releaseIsPrimary,
+        release: releaseCompletion,
+        canMarkComplete: may.markComplete,
+        markComplete,
+      }}
+    />
+  ) : null;
+  // Under the Run / Config tabs, the controls sit at the right of the tab bar
+  // while the Run tab is on screen; elsewhere at the end of the header line.
+  const barSlot = useInspectorBarSlot();
+
   return (
-    <aside className="flex h-full flex-col bg-surface-1">
-      {/* Header */}
+    <aside className="ri" data-testid="node-detail-panel">
       <NodeDetailHeader
         node={node}
         nodeName={nodeName}
@@ -233,7 +260,9 @@ export default function NodeDetailPanel({
         selectedIter={selectedIter}
         onSelectIter={setSelectedIter}
         statusLabel={isOnDemand && node.status === "pending" ? "On demand" : undefined}
+        trailing={barSlot ? null : controls}
       />
+      {barSlot?.element && barSlot.runActive && controls && createPortal(controls, barSlot.element)}
 
       <NodeProvisioning
         node={node}
@@ -242,43 +271,40 @@ export default function NodeDetailPanel({
         provisioningGitRef={provisioningGitRef}
       />
 
-      {!isArchived && (
-        <NodeControls
+      <div className="ri-banners">
+        {/* #487: the refusal of a Retry/Play or Start click, rendered AT the
+            gesture. Before this the daemon's 409 was swallowed, so the click
+            looked like it did nothing. */}
+        {!isArchived && actionVerdict && <ActionVerdictBanner actionVerdict={actionVerdict} />}
+        {!isArchived && (
+          <NodeVerdicts
+            status={node.status}
+            selectedIter={selectedIter}
+            completionReleased={completionReleased}
+            releaseVerdict={releaseVerdict}
+            markVerdict={markVerdict}
+          />
+        )}
+        <NodeBanners
           node={node}
-          stop={stop}
+          isArchived={isArchived}
+          selectedIter={selectedIter}
+          selectedIterStatus={selectedIterStatus}
+          completionReleased={completionReleased}
+          nodeAwaitsOnLatestIter={nodeAwaitsOnLatestIter}
+          terminalLive={terminalLive}
+          terminalSpectating={terminalSpectating}
+          canReleaseCompletion={canReleaseCompletion}
+          isReleasing={isReleasing}
+          releaseCompletion={releaseCompletion}
+          markComplete={markComplete}
+          onOpenChildRun={onOpenChildRun}
+          killStale={killStale}
           restartIteration={restartIteration}
-          start={start}
           retry={retry}
           may={may}
         />
-      )}
-
-      {/* #487: the refusal of a Retry/Play or Start click, rendered AT the gesture.
-          Before this the daemon's 409 ("resume the run first" / "session cap
-          reached") was swallowed, so the click looked like it did nothing. */}
-      {!isArchived && actionVerdict && (
-        <ActionVerdictBanner actionVerdict={actionVerdict} />
-      )}
-
-      <NodeBanners
-        node={node}
-        isArchived={isArchived}
-        selectedIter={selectedIter}
-        selectedIterStatus={selectedIterStatus}
-        completionReleased={completionReleased}
-        nodeAwaitsOnLatestIter={nodeAwaitsOnLatestIter}
-        terminalLive={terminalLive}
-        terminalSpectating={terminalSpectating}
-        canReleaseCompletion={canReleaseCompletion}
-        isReleasing={isReleasing}
-        releaseCompletion={releaseCompletion}
-        markComplete={markComplete}
-        onOpenChildRun={onOpenChildRun}
-        killStale={killStale}
-        restartIteration={restartIteration}
-        retry={retry}
-        may={may}
-      />
+      </div>
 
       <TerminalSection
         node={node}
@@ -310,24 +336,6 @@ export default function NodeDetailPanel({
         }}
         detailsPane={
           <DetailsPane
-            actions={
-              <NodeActions
-                node={node}
-                runId={runId}
-                isArchived={isArchived}
-                reviewTarget={reviewTarget}
-                selectedIter={selectedIter}
-                canReleaseCompletion={canReleaseCompletion}
-                completionReleased={completionReleased}
-                isReleasing={isReleasing}
-                releaseIsPrimary={releaseIsPrimary}
-                releaseVerdict={releaseVerdict}
-                markVerdict={markVerdict}
-                releaseCompletion={releaseCompletion}
-                markComplete={markComplete}
-                canMarkComplete={may.markComplete}
-              />
-            }
             node={node}
             runId={runId}
             isArchived={isArchived}

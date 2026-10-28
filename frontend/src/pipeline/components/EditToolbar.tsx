@@ -1,9 +1,25 @@
-import { Plus, Info, Undo2, Redo2, SquareTerminal, Box, StickyNote, FilePlus, FileDiff, Bot, Play, RotateCcw, Terminal } from "lucide-react";
+import {
+  Bot,
+  FilePlus,
+  Info,
+  Maximize,
+  Play,
+  Plus,
+  Redo2,
+  RotateCcw,
+  SquareTerminal,
+  StickyNote,
+  Terminal,
+  Undo2,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
+import { IconButton, Tooltip } from "../../shared/ui/kit";
+import { ReviewIcon } from "../../shared/ui/brand/AccentIcons";
 import type { PendingTone } from "../../review/model/commentStatus";
 import type { RunState } from "../../shared/generated/RunState";
 import type { NodeType } from "../../shared/generated/NodeType";
 import type { LibraryEntry } from "../model/library";
-import { Tooltip } from "../../shared/ui/tooltip";
 import LibraryDropdown from "./LibraryDropdown";
 import {
   DropdownMenu,
@@ -69,9 +85,11 @@ interface Props {
   // #30: the Run of a Run's canvas: the extensions' `run/toolbar` actions sit
   // after the finished-run group. Absent on a template's canvas.
   run?: RunState | null;
+  /** The view group: fit the canvas, zoom in and out. */
+  view?: { fit: () => void; zoomIn: () => void; zoomOut: () => void };
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, run = null, runEdit }: Props) {
+export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, run = null, runEdit, view }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -88,268 +106,155 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
     const t = s.activeTabId;
     return t != null && (s.history[t]?.future.length ?? 0) > 0;
   }) || (draft?.canRedo ?? false);
-  const undoTip = !draft
-    ? "Undo · Ctrl+Z"
-    : draft.undoLabel
-      ? `Ctrl+Z · Undo your last change: ${draft.undoLabel}`
-      : "Ctrl+Z · Undo your last change";
   // A group sits before the trailing controls: they open with a separator.
   const leadingGroup = !readOnly || runEdit != null || finishedRun;
+  const sep = <span className="cv-tb__sep" aria-hidden />;
 
   return (
-    <div
-      className="absolute left-3 top-3 z-10 flex items-center gap-0.5 rounded-md border border-line bg-surface-1/90 p-1 backdrop-blur-sm shadow-lg"
-      data-testid="edit-toolbar"
-    >
-      {/* #315: every editing affordance is suppressed on a read-only archived
-          canvas. Only the Pipeline-info button (below) survives. */}
+    <div className="cv-tb" role="toolbar" aria-label="Canvas tools" data-testid="edit-toolbar">
+      {/* ADR-0085: the « Edit » control of a Run leads the bar. */}
+      {runEdit && (
+        <>
+          <RunEditControl runEdit={runEdit} />
+          {!readOnly && sep}
+        </>
+      )}
+
+      {/* #315: every editing affordance is suppressed on a read-only canvas. */}
       {!readOnly && (
         <>
-          {/* #307: the `+` is now a dropdown — create a Node (current behaviour)
-              or a canvas Note. The trigger keeps `data-testid="toolbar-add"`;
-              the sibling script button is unchanged. */}
+          {/* #307: the `+` is a menu — create a Node or a canvas Note, or a
+              node from YAML (#345). */}
           <DropdownMenu>
-            <DropdownMenuTrigger
-              data-testid="toolbar-add"
-              className="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0 data-[popup-open]:bg-hover data-[popup-open]:text-text"
-              aria-label="Add"
-            >
-              <Plus size={14} />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              className="min-w-[160px] rounded-md border border-line-strong bg-surface-2 p-1 shadow-lg"
-              side="bottom"
-              align="start"
-            >
-              <DropdownMenuItem
-                data-testid="add-menu-node"
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover"
-                style={{ fontSize: "11.5px" }}
-                onClick={() => onAddNode("agent")}
-              >
-                <Box size={13} className="shrink-0 text-text-3" />
+            <Tooltip label="Add">
+              <DropdownMenuTrigger data-testid="toolbar-add" className="d-icon" aria-label="Add">
+                <Plus size={14} strokeWidth={1.5} aria-hidden />
+              </DropdownMenuTrigger>
+            </Tooltip>
+            <DropdownMenuContent className="cv-menu" side="bottom" align="start">
+              <DropdownMenuItem data-testid="add-menu-node" className="cv-menu__item" onClick={() => onAddNode("agent")}>
+                <Bot size={14} strokeWidth={1.5} aria-hidden />
                 <span>Node</span>
               </DropdownMenuItem>
-              <DropdownMenuItem
-                data-testid="add-menu-note"
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover"
-                style={{ fontSize: "11.5px" }}
-                onClick={() => onAddNote()}
-              >
-                <StickyNote size={13} className="shrink-0 text-text-3" />
+              <DropdownMenuItem data-testid="add-menu-note" className="cv-menu__item" onClick={() => onAddNote()}>
+                <StickyNote size={14} strokeWidth={1.5} aria-hidden />
                 <span>Note</span>
               </DropdownMenuItem>
-              {/* #345: 4th way to create a node — from a pasted/uploaded YAML
-                  definition. `FilePlus`, NOT `FileUp` (which belongs to the
-                  foreign-workflow import). */}
+              {/* `FilePlus`, NOT `FileUp` (which belongs to the foreign-workflow import). */}
               <DropdownMenuItem
                 data-testid="add-menu-node-from-yaml"
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover"
-                style={{ fontSize: "11.5px" }}
+                className="cv-menu__item"
                 onClick={() => onAddNodeFromYaml()}
               >
-                <FilePlus size={13} className="shrink-0 text-text-3" />
-                <span>Add node from YAML…</span>
+                <FilePlus size={14} strokeWidth={1.5} aria-hidden />
+                <span>Node from YAML…</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <span className="mx-0.5 h-4 w-px bg-line" />
-
           <LibraryDropdown entries={libraryEntries} onDelete={onLibraryDelete} getDropPosition={getDropPosition} onAddNodeFromYaml={onAddNodeFromYaml} />
 
           {/* No ForEach add-button: a fan-out is a `collection` loop region
-              (#151), created by selecting the member(s) and fanning out over a
-              list field, not by adding a node. Mirrors the Loop button removal
-              (#171). */}
+              (#151), created by fanning a selection out over a list field. No
+              Merge add-button either (ADR-0082): convergence is drawn by wiring
+              several edges into any node. */}
+          <IconButton icon={SquareTerminal} label="Script node" data-testid="toolbar-script" onClick={() => onAddNode("script")} />
 
-          {/* No Merge add-button either (ADR-0082): convergence is drawn by
-              wiring several edges into any node. */}
+          {sep}
 
-          <Tooltip content="Script node (deterministic bash)">
-            <button
-              data-testid="toolbar-script"
-              onClick={() => onAddNode("script")}
-              className="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
-            >
-              <SquareTerminal size={14} />
-            </button>
-          </Tooltip>
-
-          <span className="mx-0.5 h-4 w-px bg-line" />
-
-          <Tooltip content={undoTip}>
-            <button
-              data-testid="toolbar-undo"
-              onClick={() => undo()}
-              disabled={!canUndo}
-              className="grid h-7 w-7 place-items-center rounded text-text-3 transition-colors enabled:cursor-pointer hover:bg-hover hover:text-text active:bg-primary active:text-surface-0 disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent disabled:hover:text-text-3"
-            >
-              <Undo2 size={14} />
-            </button>
-          </Tooltip>
-
-          <Tooltip content="Redo · Ctrl+Y">
-            <button
-              data-testid="toolbar-redo"
-              onClick={() => redo()}
-              disabled={!canRedo}
-              className="grid h-7 w-7 place-items-center rounded text-text-3 transition-colors enabled:cursor-pointer hover:bg-hover hover:text-text active:bg-primary active:text-surface-0 disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent disabled:hover:text-text-3"
-            >
-              <Redo2 size={14} />
-            </button>
-          </Tooltip>
+          <IconButton
+            icon={Undo2}
+            label={draft?.undoLabel ? `Undo ${draft.undoLabel}` : "Undo"}
+            kbd="Ctrl+Z"
+            data-testid="toolbar-undo"
+            onClick={() => undo()}
+            disabled={!canUndo}
+          />
+          <IconButton icon={Redo2} label="Redo" kbd="Ctrl+Y" data-testid="toolbar-redo" onClick={() => redo()} disabled={!canRedo} />
         </>
       )}
 
-      {runEdit && (
-        <>
-          {!readOnly && <span className="mx-0.5 h-4 w-px bg-line" />}
-          <RunEditControl runEdit={runEdit} />
-        </>
-      )}
-
-      {/* #598 / ADR-0049: the finished-run action group (Variant A). Contextual
-          to a TERMINAL, non-archived run — the three ways to continue it. Placed
-          between the history group and the view group, in its own cluster. */}
+      {/* #598 / ADR-0049: the finished-run group — the three ways to continue
+          a TERMINAL, non-archived run. */}
       {finishedRun && (
         <>
-          {(!readOnly || runEdit) && <span className="mx-0.5 h-4 w-px bg-line" />}
-
+          {(!readOnly || runEdit) && sep}
           {onReopen && (
-            <Tooltip content="Reopen — re-project & drive">
-              <button
-                data-testid="toolbar-reopen"
-                aria-label="Reopen run"
-                onClick={onReopen}
-                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-primary transition-colors hover:bg-hover active:bg-primary active:text-surface-0"
-              >
-                <Play size={14} />
-              </button>
-            </Tooltip>
+            <IconButton icon={Play} label="Reopen run" data-testid="toolbar-reopen" onClick={onReopen} />
           )}
-
           {onRetryAll && (
-            <Tooltip content="Retry all — archive & fresh run">
-              <button
-                data-testid="toolbar-retry-all"
-                aria-label="Retry all"
-                onClick={onRetryAll}
-                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
-              >
-                <RotateCcw size={14} />
-              </button>
-            </Tooltip>
+            <IconButton icon={RotateCcw} label="Retry all" data-testid="toolbar-retry-all" onClick={onRetryAll} />
           )}
-
           {onOpenShell && (
-            <Tooltip content="Open shell in worktree">
-              <button
-                data-testid="toolbar-open-shell"
-                aria-label="Open shell in worktree"
-                onClick={onOpenShell}
-                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
-              >
-                <Terminal size={14} />
-              </button>
-            </Tooltip>
+            <IconButton icon={Terminal} label="Open shell in worktree" data-testid="toolbar-open-shell" onClick={onOpenShell} />
           )}
         </>
       )}
 
-      {run && <RunToolbarActions run={run} readOnly={!leadingGroup} />}
+      {/* The view group: fit, zoom in, zoom out. */}
+      {view && (
+        <>
+          {leadingGroup && sep}
+          <IconButton icon={Maximize} label="Fit view" data-testid="toolbar-fit" onClick={view.fit} />
+          <IconButton icon={ZoomIn} label="Zoom in" data-testid="toolbar-zoom-in" onClick={view.zoomIn} />
+          <IconButton icon={ZoomOut} label="Zoom out" data-testid="toolbar-zoom-out" onClick={view.zoomOut} />
+        </>
+      )}
+
+      {run && <RunToolbarActions run={run} />}
+
+      {(reviewHref || run || onToggleInfo || (assistantAvailable && onOpenAssistant)) && sep}
 
       {/* #752: the Review quick access — navigation, not a toggle (no
           `aria-pressed`). The pill is the pending count; its tone is the nuance. */}
       {reviewHref && (
-        <>
-          {leadingGroup && <span className="mx-0.5 h-4 w-px bg-line" />}
-
-          <Tooltip content={reviewTitle}>
-            <a
-              href={reviewHref}
-              data-testid="toolbar-review"
-              aria-label={reviewTitle}
-              data-pending={reviewPending > 0 ? reviewPending : undefined}
-              data-tone={reviewPending > 0 ? reviewTone : undefined}
-              className="relative grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
-            >
-              <FileDiff size={14} />
-              {reviewPending > 0 && (
-                <span
-                  data-testid="toolbar-review-pill"
-                  aria-hidden
-                  className={`absolute -right-[5px] -top-1 box-border grid h-[15px] min-w-[15px] place-items-center rounded-[8px] border-2 border-surface-1 px-1 font-sans font-semibold leading-none ${
-                    reviewTone === "proposed"
-                      ? "bg-st-await text-primary-ink"
-                      : reviewTone === "unread"
-                        ? "bg-st-running text-primary-ink"
-                        : "bg-st-running/14 text-st-running shadow-[inset_0_0_0_1px_rgba(59,130,246,.35)]"
-                  }`}
-                  style={{ fontSize: "9.5px" }}
-                >
-                  {reviewPending}
-                </span>
-              )}
-            </a>
-          </Tooltip>
-        </>
+        <Tooltip label={reviewTitle}>
+          <a
+            href={reviewHref}
+            data-testid="toolbar-review"
+            aria-label={reviewTitle}
+            data-pending={reviewPending > 0 ? reviewPending : undefined}
+            data-tone={reviewPending > 0 ? reviewTone : undefined}
+            className="d-icon"
+          >
+            <ReviewIcon size={14} />
+            {reviewPending > 0 && (
+              <span
+                data-testid="toolbar-review-pill"
+                aria-hidden
+                className="cv-tb__badge"
+                data-tone={reviewTone}
+              >
+                {reviewPending}
+              </span>
+            )}
+          </a>
+        </Tooltip>
       )}
 
-      {/* The loupe: the search over the Run's transcripts, between Review and
-          the info group. */}
-      {run && (
-        <>
-          {leadingGroup && !reviewHref && <span className="mx-0.5 h-4 w-px bg-line" />}
-          <RunSearchToggle runId={run.run_id} />
-        </>
+      {/* The loupe: the search over the Run's transcripts. */}
+      {run && <RunSearchToggle runId={run.run_id} />}
+
+      {/* #302 / ADR-0048: the "agent" glyph, immediately left of `(i)`, both
+          driving the same Pipeline info panel — the Bot toggles the Assistant
+          tab. #938: the host lights at most one of the two. */}
+      {assistantAvailable && onOpenAssistant && (
+        <IconButton
+          icon={Bot}
+          label="Pipeline assistant"
+          data-testid="toolbar-assistant"
+          pressed={assistantActive}
+          onClick={onOpenAssistant}
+        />
       )}
-
-      {(onToggleInfo || (assistantAvailable && onOpenAssistant)) && (
-        <>
-          {/* #315: no leading separator when the info group is the sole control. */}
-          {leadingGroup && !reviewHref && !run && <span className="mx-0.5 h-4 w-px bg-line" />}
-
-          {/* #302 / ADR-0048: the "agent" glyph, immediately left of `(i)`, both
-              driving the same Pipeline info panel — the Bot toggles the Assistant
-              tab. Grouped with `(i)`, so no separator between them. #938: the host
-              lights at most one of the two, from the tab actually shown. */}
-          {assistantAvailable && onOpenAssistant && (
-            <Tooltip content="Pipeline assistant">
-              <button
-                data-testid="toolbar-assistant"
-                aria-label="Pipeline assistant"
-                aria-pressed={assistantActive}
-                onClick={onOpenAssistant}
-                className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${
-                  assistantActive
-                    ? "bg-primary text-surface-0"
-                    : "text-text-3 hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
-                }`}
-              >
-                <Bot size={14} />
-              </button>
-            </Tooltip>
-          )}
-
-          {onToggleInfo && (
-            <Tooltip content="Pipeline info">
-              <button
-                data-testid="toolbar-info"
-                aria-label="Pipeline info"
-                aria-pressed={infoOpen ?? false}
-                onClick={onToggleInfo}
-                className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${
-                  infoOpen
-                    ? "bg-primary text-surface-0"
-                    : "text-text-3 hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
-                }`}
-              >
-                <Info size={14} />
-              </button>
-            </Tooltip>
-          )}
-        </>
+      {onToggleInfo && (
+        <IconButton
+          icon={Info}
+          label="Pipeline info"
+          data-testid="toolbar-info"
+          pressed={infoOpen ?? false}
+          onClick={onToggleInfo}
+        />
       )}
     </div>
   );

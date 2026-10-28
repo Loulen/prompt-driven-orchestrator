@@ -75,7 +75,8 @@ export const INSPECTOR_EXPLORE = [
   testId("inspector-tab-run"),
   INSPECTOR_TAB_CONFIG,
   '[data-testid^="detail-tab-"]',
-  testId("prompt-toggle"),
+  // The folds of the inspector's sections: Outputs, Inputs, Properties, Prompt.
+  ".ri .d-sec__toggle",
   TERMINAL_RESTORE,
   testId("term-expand"),
   testId("term-copy"),

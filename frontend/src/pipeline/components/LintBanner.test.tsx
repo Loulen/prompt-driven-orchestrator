@@ -31,12 +31,17 @@ describe("LintBanner", () => {
     expect(screen.getByText(/unknown node type 'merge'/)).toBeInTheDocument();
   });
 
-  it("renders multiple diagnostics", () => {
+  it("shows the count and the first diagnostic on one line, the others on Show", () => {
     render(
       <LintBanner items={[lint("first warning", 0), lint("second warning", 1)]} onDismiss={noop} />,
     );
     expect(screen.getByText("first warning")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.queryByText("second warning")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show/ }));
     expect(screen.getByText("second warning")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Hide/ }));
+    expect(screen.queryByText("second warning")).toBeNull();
   });
 
   it("has the lint-banner testid", () => {
@@ -51,6 +56,7 @@ describe("LintBanner", () => {
         onDismiss={noop}
       />,
     );
+    fireEvent.click(screen.getByRole("button", { name: /Show/ }));
     // The nudge row carries the dismiss button…
     expect(screen.getByTestId("lint-banner-dismiss-fanout:worker")).toBeInTheDocument();
     // …and it is the ONLY dismiss affordance (lint rows have none).

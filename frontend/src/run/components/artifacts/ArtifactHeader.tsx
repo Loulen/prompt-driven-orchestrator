@@ -42,23 +42,24 @@ export default function ArtifactHeader({
   onClose: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-line px-4 py-3">
+    <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
       {header ?? (
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-text" style={{ fontSize: "13px" }}>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 font-medium text-text" style={{ fontSize: "13px" }}>
             {portName}
           </span>
           {path && (
             <span
-              className="font-mono text-text-3"
+              className="min-w-0 truncate font-mono text-text-3"
               style={{ fontSize: "10px" }}
+              title={path}
             >
               {path}
             </span>
           )}
         </div>
       )}
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         {hasIterNav && (
           <div className="flex items-center gap-1" data-testid="iter-nav">
             <button

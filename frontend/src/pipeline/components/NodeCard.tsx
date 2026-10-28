@@ -1,41 +1,43 @@
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
-import { STATUS_BORDER, STATUS_BG, SELECTION_RING_STYLE } from "../../nodeStyles";
+import { nodeStatusTone } from "../../shared/ui/kit/statusMeta";
 
 interface NodeCardProps {
-  status: NodeStatus;
+  /** The node's status in a Run; `null` on a template, which has none. */
+  status: NodeStatus | null;
   selected?: boolean;
+  /** An on-demand node the Run never launched: greyed, dashed (ADR-0086). */
+  idle?: boolean;
+  /** The rim is hovered: a wire may start here (#844). */
+  rimHover?: boolean;
+  /** Releasing the wire here would land it (#844). */
+  wireTarget?: boolean;
   className?: string;
   style?: React.CSSProperties;
   children: React.ReactNode;
 }
 
-export function NodeCard({ status, selected, className, style, children }: NodeCardProps) {
-  const borderColor = STATUS_BORDER[status];
-  const bgColor = STATUS_BG[status];
+/** A pending node has no status to show yet: no tint, no coloured border. */
+const UNSTARTED: ReadonlySet<NodeStatus> = new Set(["pending", "waiting"]);
 
+/**
+ * The frame of a node on the canvas: its status as a light tint, a border and
+ * (inside) an icon; the selection as one ruby ring outside the border.
+ */
+export function NodeCard({ status, selected, idle, rimHover, wireTarget, className, style, children }: NodeCardProps) {
+  const tone = status && !UNSTARTED.has(status) ? nodeStatusTone(status) : undefined;
   return (
     <div
       data-testid="node-card"
-      className={`relative rounded-md border-[1.5px] ${borderColor} ${bgColor} px-3 py-2 ${className ?? ""}`}
-      style={{
-        ...(selected ? SELECTION_RING_STYLE : undefined),
-        ...style,
-      }}
+      data-st={tone}
+      data-status={status ?? undefined}
+      data-selected={selected || undefined}
+      data-idle={idle || undefined}
+      data-rim={rimHover || undefined}
+      data-wire={wireTarget || undefined}
+      className={`cv-n${className ? ` ${className}` : ""}`}
+      style={style}
     >
       {children}
-      {status === "failed" && (
-        <span
-          data-testid="failed-badge"
-          className="absolute z-[3] rounded-full bg-st-failed border-2 border-surface-0"
-          style={{
-            top: -7,
-            right: -7,
-            width: 18,
-            height: 18,
-            boxShadow: "0 2px 6px rgba(239,68,68,0.4)",
-          }}
-        />
-      )}
     </div>
   );
 }

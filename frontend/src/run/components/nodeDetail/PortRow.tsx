@@ -265,22 +265,19 @@ const VERDICT_TONE: Record<string, StatusTone> = {
 
 const toneOf = (v: unknown) => VERDICT_TONE[display(v).toLowerCase()];
 
-/** A frontmatter as key and value chips on one line, a verdict-like value
- *  tinted and first, since the row may only have room for one. */
+/** A frontmatter on one line: its verdict-like value (else its first key) as
+ *  a tinted chip, a count of the other keys, every key in the tooltip. */
 export function FrontmatterChips({ values }: { values: Record<string, unknown> }) {
   const entries = Object.entries(values);
-  const chips = [...entries].sort(([, a], [, b]) => Number(!toneOf(a)) - Number(!toneOf(b)));
+  const [k, v] = entries.find(([, value]) => toneOf(value)) ?? entries[0];
+  const others = entries.length - 1;
   return (
-    <span className="ri-fm" data-testid="frontmatter-card" title={entries.map(([k, v]) => `${k}: ${display(v)}`).join("\n")}>
-      {chips.map(([k, v]) => {
-        const tone = toneOf(v);
-        return (
-          <span key={k} className="ri-fm__chip" data-st={tone}>
-            <span className="ri-fm__k">{k}</span>
-            <span>{display(v)}</span>
-          </span>
-        );
-      })}
+    <span className="ri-fm" data-testid="frontmatter-card" title={entries.map(([key, value]) => `${key}: ${display(value)}`).join("\n")}>
+      <span className="ri-fm__chip" data-st={toneOf(v)}>
+        <span className="ri-fm__k">{k}</span>
+        <span>{display(v)}</span>
+      </span>
+      {others > 0 && <span className="ri-fm__chip ri-fm__more">+{others}</span>}
     </span>
   );
 }

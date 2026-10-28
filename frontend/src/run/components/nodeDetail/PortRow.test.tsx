@@ -131,12 +131,21 @@ describe("PortRow — downloads", () => {
 });
 
 describe("FrontmatterChips", () => {
-  it("puts the verdict first, every key in the tooltip", () => {
+  it("shows the verdict alone with a count of the other keys, every key in the tooltip", () => {
     render(<FrontmatterChips values={{ score: 7, status: "draft", verdict: "PASS" }} />);
     const card = screen.getByTestId("frontmatter-card");
     const chips = card.querySelectorAll(".ri-fm__chip");
+    expect(chips).toHaveLength(2);
     expect(chips[0]).toHaveTextContent("verdictPASS");
     expect(chips[0]).toHaveAttribute("data-st", "done");
+    expect(chips[1]).toHaveTextContent("+2");
     expect(card).toHaveAttribute("title", "score: 7\nstatus: draft\nverdict: PASS");
+  });
+
+  it("a single key shows alone, without a count", () => {
+    render(<FrontmatterChips values={{ score: 7 }} />);
+    const chips = screen.getByTestId("frontmatter-card").querySelectorAll(".ri-fm__chip");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveTextContent("score7");
   });
 });

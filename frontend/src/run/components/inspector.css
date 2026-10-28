@@ -295,9 +295,9 @@ button.ri-port__name:hover { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) { .ri-dot[data-live] { animation: none; } }
 
 /* Frontmatter values: key and value chips, a verdict tinted. */
-/* One line, whatever the number of keys: the group shrinks, each chip ellipsizes
-   its value, and the path keeps a share of the row. */
-.ri-fm { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 3px; min-width: 0; max-width: 40%; overflow: hidden; }
+/* One line, whatever the number of keys: one chip and a count, its value
+   ellipsized, and the path keeps a share of the row. */
+.ri-fm { display: inline-flex; flex: none; align-items: center; gap: 3px; min-width: 0; max-width: 40%; overflow: hidden; }
 .ri-fm__chip {
   display: inline-flex;
   flex: 0 1 auto;
@@ -318,6 +318,7 @@ button.ri-port__name:hover { text-decoration: underline; }
 }
 .ri-fm__chip > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ri-fm__chip[data-st] { color: var(--st); background: color-mix(in oklab, var(--st) 12%, transparent); }
+.ri-fm__more { flex: none; color: var(--text-3); font-weight: var(--w-regular); }
 .ri-fm__k { flex: none; color: var(--text-3); font-weight: var(--w-regular); }
 .ri-thumbs { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 var(--pad-x) var(--g-2) 30px; }
 .ri-thumb {

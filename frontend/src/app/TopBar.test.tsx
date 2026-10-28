@@ -136,14 +136,14 @@ describe("the top bar", () => {
 });
 
 describe("the command field", () => {
-  it("opens the palette on a click, empty of results, and Escape closes it", async () => {
+  it("opens the palette on a click, says when nothing matches, and Escape closes it", async () => {
     renderBar();
     expect(screen.queryByTestId("command-palette")).toBeNull();
     fireEvent.click(screen.getByTestId("command-field"));
     const input = screen.getByTestId("command-palette-input");
     await waitFor(() => expect(input).toHaveFocus());
     fireEvent.change(input, { target: { value: "deploy" } });
-    expect(screen.getByTestId("command-palette-empty")).toHaveTextContent("No results");
+    expect(screen.getByTestId("command-palette-empty")).toHaveTextContent("No match");
     fireEvent.keyDown(input, { key: "Escape" });
     expect(screen.queryByTestId("command-palette")).toBeNull();
     // Closed, the query is gone.

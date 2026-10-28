@@ -16,10 +16,13 @@ import type { Actor } from "../generated/Actor";
 import type { TriggerSuspension } from "../generated/TriggerSuspension";
 import type { Attributes } from "./attributes";
 import type { BaseContext, ProjectContext } from "./context";
+import type { PaletteContext } from "./paletteContract";
 
 export type { BaseContext, ProjectContext, RunContext } from "./context";
 // API 0.14: the sources of completion of `review/composer`.
 export type * from "./completionContract";
+// API 0.18: the command field, `palette`, and its Sources de recherche.
+export type * from "./paletteContract";
 
 /** Who the element belongs to. */
 export interface ExtensionRef {
@@ -364,6 +367,7 @@ export interface ActionContexts {
   "review/toolbar": ReviewContext;
   "review/file": ReviewFileContext;
   "skill/menu": ItemContext<SkillEntity>;
+  palette: PaletteContext;
 }
 
 export type ActionLocation = keyof ActionContexts;

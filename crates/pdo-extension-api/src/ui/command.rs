@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::{ResourceKind, Verb};
+
 /// A command an extension's bundle exports (a Commande d'extension, CONTEXT.md
 /// § *Extensions*): what an [`Action`](super::UiElement::Action) calls.
 ///
@@ -25,6 +27,32 @@ pub struct UiCommand {
     pub icon: Option<String>,
     /// The name the bundle exports the function under.
     pub export: String,
+    /// The Operation the command makes (0.18): before rendering an action
+    /// that calls it, the core asks the Autorisation d'opération about it, on
+    /// the entity of the action's location when it hands one over, and leaves
+    /// the action out when it is refused. Without one, the action always
+    /// shows; the extension's route still refuses what it must.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub operation: Option<CommandOperation>,
+}
+
+/// The Operation a [`UiCommand`] makes, without its target: the core aims it
+/// at the entity the action acts on (`entity.id` of its location's context),
+/// and places it in the Projets as the question of authorization does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[non_exhaustive]
+pub struct CommandOperation {
+    /// `run`, `project`…, or `<extension>/<kind>`.
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    pub resource: ResourceKind,
+    /// `read`, `create`, `update`, `delete`, or `{ "action": <name> }`.
+    #[cfg_attr(
+        feature = "ts",
+        ts(type = "\"read\" | \"create\" | \"update\" | \"delete\" | { action: string }")
+    )]
+    pub verb: Verb,
 }
 
 impl UiCommand {
@@ -34,6 +62,7 @@ impl UiCommand {
             title: title.into(),
             icon: None,
             export: export.into(),
+            operation: None,
         }
     }
 
@@ -41,5 +70,43 @@ impl UiCommand {
     pub fn with_icon(mut self, url: impl Into<String>) -> Self {
         self.icon = Some(url.into());
         self
+    }
+
+    /// The same command, making the Operation `verb` on `resource`: an action
+    /// calling it shows only to whom the Autorisation d'opération allows it.
+    pub fn guarded_by(mut self, resource: ResourceKind, verb: Verb) -> Self {
+        self.operation = Some(CommandOperation { resource, verb });
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_command_declares_the_operation_it_makes() {
+        let bare = UiCommand::new("test.greet", "Greet", "greet");
+        assert!(serde_json::to_value(&bare)
+            .unwrap()
+            .get("operation")
+            .is_none());
+        let guarded = bare.guarded_by(
+            ResourceKind::extension("test", "note"),
+            Verb::Action("archive".into()),
+        );
+        assert_eq!(
+            serde_json::to_value(&guarded).unwrap(),
+            json!({
+                "id": "test.greet", "title": "Greet", "export": "greet",
+                "operation": { "resource": "test/note", "verb": { "action": "archive" } },
+            })
+        );
+        let read = UiCommand::new("c", "C", "c").guarded_by(ResourceKind::Run, Verb::Read);
+        assert_eq!(
+            serde_json::to_value(&read).unwrap()["operation"],
+            json!({ "resource": "run", "verb": "read" })
+        );
     }
 }

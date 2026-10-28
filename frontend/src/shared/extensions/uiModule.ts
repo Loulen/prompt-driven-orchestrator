@@ -8,7 +8,9 @@
  * (ADR-0083). Since 0.11 it writes to the clipboard the way the core's Copy
  * buttons do, outside a secure context too: `copyToClipboard`. Since 0.17 it
  * hands out the shared design system's primitives (ADR-0091): an extension's
- * UI draws its controls with the core's own, in the core's tokens.
+ * UI draws its controls with the core's own, in the core's tokens. Since
+ * 0.18 its types describe the Sources de recherche of the command field
+ * (`SearchResult`, `SearchFunction`); nothing more is exported.
  */
 
 import { useActorDisplay, useCurrentActor } from "../actors/store";

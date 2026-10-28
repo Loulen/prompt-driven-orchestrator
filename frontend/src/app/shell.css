@@ -1,7 +1,7 @@
 /*
  * The shell of the app (the Workbench): top bar, status bar, the header of
- * the left panel, the document tabs, the empty centre and the command
- * palette. Tokens only (`public/shared/tokens.css`), like the kit.
+ * the left panel, the document tabs and the empty centre (the command
+ * palette's are in `palette/palette.css`). Tokens only (`public/shared/tokens.css`), like the kit.
  */
 
 @layer components {
@@ -139,64 +139,6 @@
   }
   .sh-cmd .d-kbd {
     flex: none;
-  }
-
-  /* ---------------------------------------------------------------- command palette */
-  .sh-pal-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 55;
-  }
-  .sh-pal {
-    position: absolute;
-    top: calc(var(--h-topbar) + 4px);
-    left: 50%;
-    display: flex;
-    flex-direction: column;
-    width: min(560px, calc(100% - 32px));
-    max-height: min(480px, calc(100% - 80px));
-    border: 1px solid var(--line);
-    border-radius: var(--radius-ui);
-    background: var(--surface-1);
-    box-shadow: 0 8px 24px -8px var(--shadow);
-    transform: translateX(-50%);
-  }
-  .sh-pal__field {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: var(--g-3);
-    height: 36px;
-    padding: 0 var(--pad-x);
-    border-bottom: 1px solid var(--line);
-    color: var(--text-3);
-  }
-  .sh-pal__input {
-    flex: 1 1 auto;
-    min-width: 0;
-    height: 100%;
-    border: 0;
-    background: transparent;
-    color: var(--text);
-    font: inherit;
-    font-size: var(--fs-md);
-    outline: none;
-  }
-  .sh-pal__input::placeholder {
-    color: var(--text-3);
-  }
-  .sh-pal__list {
-    min-height: 0;
-    padding: var(--g-2) 0;
-    overflow: auto;
-  }
-  .sh-pal__empty {
-    display: flex;
-    align-items: center;
-    height: 28px;
-    padding: 0 10px;
-    color: var(--text-3);
-    font-size: var(--fs-sm);
   }
 
   /* ---------------------------------------------------------------- status bar, 22 px */

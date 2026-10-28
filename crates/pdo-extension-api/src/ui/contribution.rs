@@ -77,6 +77,21 @@ pub enum UiElement {
         #[cfg_attr(feature = "ts", ts(optional))]
         render: Option<CompletionRender>,
     },
+    /// A Source de recherche (0.18): for the query typed in the command
+    /// field, the function `search` of the bundle answers results already
+    /// filtered by the Actor's rights (a label, facts, an icon, a status, a
+    /// deep link). The core groups them under the extension's name, keeps
+    /// the first ones of each source, never waits for a slow source and keeps
+    /// a failing one to its own group.
+    Search {
+        /// The function the bundle exports, `(query, context) => results`.
+        search: String,
+        /// An SVG the extension serves, the icon of its group in the palette;
+        /// the extension's first letter, boxed, without one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        icon: Option<String>,
+    },
 }
 
 /// How the text a [`UiElement::Completion`] inserted shows once the text is
@@ -105,6 +120,7 @@ pub enum UiElementKind {
     Decoration,
     ListFilter,
     Completion,
+    Search,
 }
 
 impl UiElement {
@@ -118,6 +134,7 @@ impl UiElement {
             UiElement::Decoration { .. } => UiElementKind::Decoration,
             UiElement::ListFilter { .. } => UiElementKind::ListFilter,
             UiElement::Completion { .. } => UiElementKind::Completion,
+            UiElement::Search { .. } => UiElementKind::Search,
         }
     }
 }
@@ -224,6 +241,22 @@ impl UiContribution {
         Self::new(location, id.as_ref(), label.as_ref(), element)
     }
 
+    /// A Source de recherche at `location` (`palette`): the query typed in
+    /// the command field goes to the bundle's exported function `search`
+    /// (0.18).
+    pub fn search(
+        location: UiLocation,
+        id: impl AsRef<str>,
+        label: impl AsRef<str>,
+        search: impl Into<String>,
+    ) -> Self {
+        let element = UiElement::Search {
+            search: search.into(),
+            icon: None,
+        };
+        Self::new(location, id.as_ref(), label.as_ref(), element)
+    }
+
     /// The same source of completion, each match of `pattern` (a JavaScript
     /// regular expression) in a rendered text drawn by the exported
     /// `component`. Elsewhere, unchanged.
@@ -237,10 +270,11 @@ impl UiContribution {
         self
     }
 
-    /// The same page, with the SVG served at `url` as its icon. Only a page
-    /// has its own icon (an action shows its command's): elsewhere, unchanged.
+    /// The same page or Source de recherche, with the SVG served at `url` as
+    /// its icon. Only those have their own icon (an action shows its
+    /// command's): elsewhere, unchanged.
     pub fn with_icon(mut self, url: impl Into<String>) -> Self {
-        if let UiElement::Page { icon, .. } = &mut self.element {
+        if let UiElement::Page { icon, .. } | UiElement::Search { icon, .. } = &mut self.element {
             *icon = Some(url.into());
         }
         self
@@ -311,6 +345,28 @@ mod tests {
         assert!(serde_json::to_value(&bare).unwrap().get("render").is_none());
         let page = UiContribution::page(UiLocation::TopbarEnd, "p", "P", "P").rendering("x", "X");
         assert!(serde_json::to_value(&page).unwrap().get("render").is_none());
+    }
+
+    #[test]
+    fn a_search_source_declares_its_function_and_its_icon() {
+        let source = UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes")
+            .with_icon("/ext/test/icon.svg");
+        assert_eq!(source.element.kind(), UiElementKind::Search);
+        assert_eq!(
+            serde_json::to_value(&source).unwrap(),
+            json!({
+                "location": "palette", "id": "notes", "label": "Notes",
+                "type": "search", "search": "searchNotes", "icon": "/ext/test/icon.svg",
+            })
+        );
+        let bare = UiContribution::search(UiLocation::Palette, "n", "N", "s").rendering("x", "X");
+        let wire = serde_json::to_value(&bare).unwrap();
+        assert!(wire.get("icon").is_none());
+        assert!(wire.get("render").is_none());
+        assert_eq!(
+            serde_json::to_value(UiElementKind::Search).unwrap(),
+            "search"
+        );
     }
 
     #[test]

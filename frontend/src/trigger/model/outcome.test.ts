@@ -1,17 +1,19 @@
 import { describe, it, expect } from "vitest";
-import { formatFireTs, lastOutcomeTooltip, outcomeDot, outcomeRing, overlapLabel } from "./outcome";
+import { formatFireTs, lastOutcomeTooltip, outcomeDot, outcomeTone, overlapLabel } from "./outcome";
 import type { Trigger } from "../../shared/generated/Trigger";
 
 describe("trigger outcome model", () => {
-  it("maps every outcome to its status dot and ring", () => {
+  it("maps every outcome to its status dot and tone", () => {
     expect(outcomeDot("fired")).toBe("bg-st-done");
     expect(outcomeDot("error")).toBe("bg-st-failed");
     expect(outcomeDot("skipped-overlap")).toBe("bg-st-blocked");
     expect(outcomeDot("guard-exit-nonzero")).toBe("bg-st-blocked");
     expect(outcomeDot("guard-error")).toBe("bg-st-blocked");
     expect(outcomeDot(undefined)).toBe("bg-st-skipped");
-    expect(outcomeRing("fired")).toBe("border-st-done");
-    expect(outcomeRing(null)).toBe("border-st-skipped");
+    expect(outcomeTone("fired")).toBe("done");
+    expect(outcomeTone("error")).toBe("failed");
+    expect(outcomeTone("guard-error")).toBe("blocked");
+    expect(outcomeTone(null)).toBeNull();
   });
 
   it("says when a Trigger never fired", () => {

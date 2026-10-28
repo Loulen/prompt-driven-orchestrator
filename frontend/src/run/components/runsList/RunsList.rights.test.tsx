@@ -122,14 +122,11 @@ describe("the gestures of the Runs list (CORE-42)", () => {
     renderList();
     const theirs = screen.getByTestId("row-theirs");
     await waitFor(() => expect(within(theirs).queryByTestId("pause-run-button")).toBeNull());
-    expect(within(theirs).queryByTestId("cleanup-run-button")).toBeNull();
-    expect(within(theirs).queryByTestId("rename-button")).toBeNull();
     expect(await menuItems("theirs")).toEqual(["run-menu-copy-id"]);
     expect(await menuItems("old")).toEqual(["run-menu-copy-id"]);
 
     const mine = screen.getByTestId("row-mine");
     expect(within(mine).getByTestId("pause-run-button")).toBeInTheDocument();
-    expect(within(mine).getByTestId("cleanup-run-button")).toBeInTheDocument();
     expect(await menuItems("mine")).toEqual([
       "run-menu-rename",
       "run-menu-pause",

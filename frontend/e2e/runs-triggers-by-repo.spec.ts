@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 
 // Layer 4 (e2e) per ADR 0004 — proves #258 end-to-end in a browser: the Runs and
 // Triggers lists group by project (target repo), conditionally (only when ≥ 2
-// distinct repos are present), with no "Unassigned" bucket and the raw
-// `target_repo` left untouched (the row badge mirrors it, the header does not).
+// distinct repos are present), with no "Unassigned" bucket, each row under the
+// group of the repo its Trigger names.
 //
 // #470/ADR-0033: this spec used to reach the daemon's own repo by OMITTING
 // `target_repo`. That shape is refused now, so the daemon repo is named
@@ -186,17 +186,16 @@ test("Triggers list groups by repo across ≥2 repos, including the daemon's own
     .filter({ hasText: path.basename(repoA) });
   await expect(repoALabel.locator("xpath=..")).toHaveAttribute("title", repoA);
 
-  // The row badge mirrors the RAW `target_repo`, never the resolved
-  // `effective_repo`: each row is titled with the repo its Trigger actually names.
-  //
-  // #470: the converse — a null-target row showing NO badge — is no longer
-  // creatable through the API, so it is pinned at layer 3a instead
-  // (`triggers_list_resolves_effective_repo_without_mutating_raw_target`, which
-  // seeds the historical row under the API and asserts the raw field stays null).
-  const aRow = page.getByTestId("trigger-row").filter({ hasText: "g-a" });
-  await expect(aRow.locator(`[title="${repoA}"]`)).toHaveCount(1);
-  const rootRow = page.getByTestId("trigger-row").filter({ hasText: "g-root" });
-  await expect(rootRow.locator(`[title="${WORKSPACE_ROOT}"]`)).toHaveCount(1);
+  // Each row sits under the group of the repo its Trigger names: the header
+  // says the repo, the row carries no badge of its own.
+  const groupOf = (label: string) =>
+    page.getByTestId("trigger-repo-group").filter({
+      has: page.getByTestId("trigger-repo-label").filter({ hasText: label }),
+    });
+  await expect(groupOf(path.basename(repoA)).getByTestId("trigger-row").filter({ hasText: "g-a" })).toHaveCount(1);
+  await expect(
+    groupOf(path.basename(WORKSPACE_ROOT)).getByTestId("trigger-row").filter({ hasText: "g-root" }),
+  ).toHaveCount(1);
 });
 
 test("Runs list groups by repo when runs span ≥2 repos", async ({ page, baseURL }) => {

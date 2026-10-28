@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import LibraryRow from "./LibraryRow";
 
 function renderRow(
@@ -9,6 +9,7 @@ function renderRow(
     nodeCount?: number;
     modified?: string | null;
     selected?: boolean;
+    checked?: boolean;
     showDuplicate?: boolean;
     onOpen?: () => void;
     onDuplicate?: () => void;
@@ -19,14 +20,18 @@ function renderRow(
     onRenameCommit?: () => void;
     onRenameCancel?: () => void;
     onDelete?: () => void;
+    onToggleSelect?: () => void;
     deleteTitle?: string;
+    invalid?: string | null;
     indicator?: ReactNode;
+    version?: number;
   } = {},
 ) {
   const props = {
     name: "fixture",
     nodeCount: 3,
     showDuplicate: false,
+    onOpen: () => {},
     onDelete: () => {},
     deleteTitle: "Delete pipeline",
     ...over,
@@ -34,236 +39,140 @@ function renderRow(
   return render(<LibraryRow {...props} testId="row" />);
 }
 
-describe("LibraryRow openable vs passive", () => {
-  it("renders a <button> when onOpen is given, and clicking it opens", () => {
+describe("LibraryRow, two lines", () => {
+  it("opens on a click and on Enter", () => {
     const onOpen = vi.fn();
     renderRow({ onOpen });
-
     const row = screen.getByTestId("row");
-    expect(row.tagName).toBe("BUTTON");
+    expect(row).toHaveAttribute("role", "button");
     fireEvent.click(row);
-    expect(onOpen).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onOpen).toHaveBeenCalledTimes(2);
   });
 
-  it("renders a passive <div> when onOpen is absent", () => {
-    renderRow();
-
-    const row = screen.getByTestId("row");
-    expect(row.tagName).toBe("DIV");
-    // Not a button by role either — there is nothing behind it to open.
-    expect(row.getAttribute("role")).toBeNull();
+  it("puts the name and its validation on line 1, the nodes, version and edit date on line 2", () => {
+    renderRow({
+      name: "planner",
+      nodeCount: 7,
+      version: 8,
+      modified: "2026-10-25T12:00:00Z",
+      indicator: <span>ind</span>,
+    });
+    expect(screen.getByTestId("library-row-name")).toHaveTextContent("planner");
+    const meta = screen.getByTestId("library-row-meta");
+    expect(meta).toHaveTextContent("7n");
+    expect(within(meta).getByTestId("library-row-version")).toHaveTextContent("v8");
+    expect(within(meta).getByTestId("library-row-edited")).toHaveTextContent("25 Oct");
+    expect(meta).not.toContainElement(screen.getByText("ind"));
   });
 
-  it("shows the name and node count in both shapes", () => {
-    const { unmount } = renderRow({ name: "planner", nodeCount: 7 });
-    expect(screen.getByText("planner")).toBeInTheDocument();
-    expect(screen.getByText("7 nodes")).toBeInTheDocument();
+  it("marks an invalid pipeline with its lint, and a valid one with nothing", () => {
+    const { unmount } = renderRow();
+    expect(screen.queryByTestId("library-row-lint")).toBeNull();
+    expect(screen.getByTestId("row")).not.toHaveAttribute("data-invalid");
     unmount();
 
-    renderRow({ name: "planner", nodeCount: 7, onOpen: () => {} });
-    expect(screen.getByText("planner")).toBeInTheDocument();
-    expect(screen.getByText("7 nodes")).toBeInTheDocument();
+    renderRow({ invalid: "invalid YAML: line 3" });
+    expect(screen.getByTestId("library-row-lint")).toHaveAccessibleName("Invalid: invalid YAML: line 3");
+    expect(screen.getByTestId("row")).toHaveAttribute("data-invalid", "true");
   });
 
-  it("renders no data-testid attribute at all when testId is omitted", () => {
-    // The /pipelines rows pass none; an empty `data-testid=""` would make them
-    // matchable by an accidental query.
-    const { container } = render(
-      <LibraryRow
-        name="fixture"
-        nodeCount={3}
-        showDuplicate={false}
-        onDelete={() => {}}
-        deleteTitle="Delete pipeline"
-      />,
-    );
-    expect(container.firstElementChild!.hasAttribute("data-testid")).toBe(false);
-  });
-});
+  it("tells the open tab and the ticked row apart", () => {
+    const { unmount } = renderRow({ selected: true });
+    expect(screen.getByTestId("row")).toHaveAttribute("data-open", "true");
+    expect(screen.getByTestId("row")).not.toHaveAttribute("data-checked");
+    unmount();
 
-describe("LibraryRow instance metadata", () => {
-  it("labels the useful last-edit metadata", () => {
-    renderRow({ modified: "2026-08-26T12:00:00Z" });
-    expect(screen.getByText(/^edited /)).toBeInTheDocument();
+    renderRow({ checked: true, onToggleSelect: () => {} });
+    expect(screen.getByTestId("row")).toHaveAttribute("data-checked", "true");
+    expect(screen.getByRole("checkbox", { name: "Deselect fixture" })).toHaveAttribute("aria-checked", "true");
   });
 
-  it("keeps the meta line on one line, truncating the text", () => {
-    // The hover actions narrow the row: a wrapping meta line would grow the
-    // row under the cursor and move the validation indicator.
-    renderRow({ modified: "2026-08-26T12:00:00Z", indicator: <span>ind</span> });
-    const meta = screen.getByTestId("library-row-meta");
-    expect(meta.className).toContain("whitespace-nowrap");
-    expect(screen.getByText(/^edited /).parentElement!.className).toContain("truncate");
-  });
-
-  it("puts the indicator bottom-right, under the hover actions, out of the meta line", () => {
-    // The actions line keeps its height at rest, so the indicator does not
-    // move when the icons appear on hover.
-    renderRow({ modified: "2026-08-26T12:00:00Z", indicator: <span>ind</span> });
-    const indicatorSlot = screen.getByText("ind").parentElement!;
-    expect(screen.getByTestId("library-row-meta")).not.toContainElement(indicatorSlot);
-    expect(indicatorSlot.className).toContain("shrink-0");
-    const column = indicatorSlot.parentElement!;
-    expect(column.className).toContain("flex-col");
-    expect(column.lastElementChild).toBe(indicatorSlot);
-    expect(column.firstElementChild!.className).toContain("h-4");
-  });
-});
-
-describe("LibraryRow delete", () => {
-  it("calls onDelete on the trash affordance, addressed by its title", () => {
-    const onDelete = vi.fn();
-    renderRow({ onDelete, deleteTitle: "Remove from library" });
-
-    fireEvent.click(screen.getByRole("button", { name: "Remove from library" }));
-    expect(onDelete).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not also open the row: the trash stops propagation", () => {
+  it("ticks from its lead icon without opening", () => {
     const onOpen = vi.fn();
-    const onDelete = vi.fn();
-    renderRow({ onOpen, onDelete });
-
-    // The affordance is a span nested inside the row <button>; without
-    // stopPropagation the click would open the pipeline it is deleting.
-    fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
-    expect(onDelete).toHaveBeenCalledTimes(1);
+    const onToggleSelect = vi.fn();
+    renderRow({ onOpen, onToggleSelect });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select fixture" }));
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
   });
 });
 
-describe("LibraryRow duplicate", () => {
-  it("hides the duplicate affordance when showDuplicate is false", () => {
-    renderRow({ showDuplicate: false, onDuplicate: () => {} });
-    expect(screen.queryByTestId("library-duplicate-button")).not.toBeInTheDocument();
+describe("LibraryRow hover bar", () => {
+  it("deletes from its trash, named by the delete title, without opening the row", () => {
+    const onOpen = vi.fn();
+    const onDelete = vi.fn();
+    renderRow({ onOpen, onDelete, deleteTitle: "Remove from library" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove from library" }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("calls onDuplicate without opening the row", () => {
+  it("duplicates only when it offers it, without opening the row", () => {
+    const { unmount } = renderRow({ showDuplicate: false, onDuplicate: () => {} });
+    expect(screen.queryByTestId("library-duplicate-button")).not.toBeInTheDocument();
+    unmount();
+
     const onOpen = vi.fn();
     const onDuplicate = vi.fn();
     renderRow({ showDuplicate: true, onDuplicate, onOpen });
-
     fireEvent.click(screen.getByTestId("library-duplicate-button"));
     expect(onDuplicate).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
   });
-
-  it("survives a shown duplicate affordance with no handler wired", () => {
-    renderRow({ showDuplicate: true });
-    expect(() =>
-      fireEvent.click(screen.getByTestId("library-duplicate-button")),
-    ).not.toThrow();
-  });
 });
 
-describe("LibraryRow selection", () => {
-  it("marks the open editor tab with the selected background", () => {
-    renderRow({ onOpen: () => {}, selected: true });
-    const cls = screen.getByTestId("row").className;
-    expect(cls).toContain("bg-surface-2 text-text");
-    // Not the unselected pair (whose `hover:bg-hover/50` also contains "bg-surface-2").
-    expect(cls).not.toContain("hover:bg-hover/50");
-  });
-
-  it("leaves an unselected row on the hover-only background", () => {
-    renderRow({ onOpen: () => {}, selected: false });
-    const cls = screen.getByTestId("row").className;
-    expect(cls).toContain("text-text-2 hover:bg-hover/50");
-  });
-
-  it("defaults to unselected when `selected` is omitted", () => {
-    renderRow({ onOpen: () => {} });
-    expect(screen.getByTestId("row").className).toContain("hover:bg-hover/50");
-  });
-});
-
-// #774 — inline rename: a hover pencil flips the row's name into an input.
+// #774 — inline rename: the pencil (or F2) flips the row's name into an input.
 // Enter/blur commits, Escape cancels; the pencil never opens the row.
 describe("LibraryRow inline rename", () => {
-  it("shows a rename pencil only when onRenameStart is wired", () => {
-    const { unmount } = renderRow({ onOpen: () => {} });
+  it("offers a rename only when onRenameStart is wired", () => {
+    const { unmount } = renderRow();
     expect(screen.queryByTestId("library-rename-button")).not.toBeInTheDocument();
     unmount();
 
-    renderRow({ onOpen: () => {}, onRenameStart: () => {} });
+    renderRow({ onRenameStart: () => {} });
     expect(screen.getByTestId("library-rename-button")).toBeInTheDocument();
   });
 
-  it("clicking the pencil starts the rename without opening the row", () => {
+  it("starts the rename from the pencil or F2, without opening the row", () => {
     const onOpen = vi.fn();
     const onRenameStart = vi.fn();
     renderRow({ onOpen, onRenameStart });
 
     fireEvent.click(screen.getByTestId("library-rename-button"));
-    expect(onRenameStart).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(screen.getByTestId("row"), { key: "F2" });
+    expect(onRenameStart).toHaveBeenCalledTimes(2);
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("renders an inline input while renaming, prefilled with the current name", () => {
-    renderRow({ onOpen: () => {}, renaming: true, renameValue: "fixture" });
-    const input = screen.getByTestId("library-rename-input");
-    expect(input).toHaveValue("fixture");
-    expect(screen.queryByTestId("library-rename-button")).not.toBeInTheDocument();
-    expect(screen.queryByText("fixture")).not.toBeInTheDocument();
+  it("renders an inline input while renaming, prefilled, the hover bar gone", () => {
+    renderRow({ renaming: true, renameValue: "fixture" });
+    expect(screen.getByTestId("library-rename-input")).toHaveValue("fixture");
+    expect(screen.queryByTestId("library-row-actions")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("library-row-name")).not.toBeInTheDocument();
   });
 
-  it("commits on Enter", () => {
+  it("commits on Enter and on blur, cancels on Escape", () => {
     const onRenameCommit = vi.fn();
-    renderRow({
-      onOpen: () => {},
-      renaming: true,
-      renameValue: "renamed",
-      onRenameCommit,
-    });
-    fireEvent.keyDown(screen.getByTestId("library-rename-input"), { key: "Enter" });
-    expect(onRenameCommit).toHaveBeenCalledTimes(1);
-  });
-
-  it("cancels on Escape", () => {
     const onRenameCancel = vi.fn();
-    const onRenameCommit = vi.fn();
-    renderRow({
-      onOpen: () => {},
-      renaming: true,
-      renameValue: "renamed",
-      onRenameCommit,
-      onRenameCancel,
-    });
-    fireEvent.keyDown(screen.getByTestId("library-rename-input"), { key: "Escape" });
+    renderRow({ renaming: true, renameValue: "renamed", onRenameCommit, onRenameCancel });
+    const input = screen.getByTestId("library-rename-input");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
+    expect(onRenameCommit).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(input, { key: "Escape" });
     expect(onRenameCancel).toHaveBeenCalledTimes(1);
-    expect(onRenameCommit).not.toHaveBeenCalled();
   });
 
-  it("commits on blur", () => {
-    const onRenameCommit = vi.fn();
-    renderRow({
-      onOpen: () => {},
-      renaming: true,
-      renameValue: "renamed",
-      onRenameCommit,
-    });
-    fireEvent.blur(screen.getByTestId("library-rename-input"));
-    expect(onRenameCommit).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports typed value changes to the parent", () => {
-    const onRenameValueChange = vi.fn();
-    renderRow({
-      onOpen: () => {},
-      renaming: true,
-      renameValue: "ren",
-      onRenameValueChange,
-    });
-    fireEvent.change(screen.getByTestId("library-rename-input"), {
-      target: { value: "renamed" },
-    });
-    expect(onRenameValueChange).toHaveBeenCalledWith("renamed");
-  });
-
-  it("clicking the input does not open the row", () => {
+  it("reports typed value changes, and a click in the input does not open the row", () => {
     const onOpen = vi.fn();
-    renderRow({ onOpen: () => {}, renaming: true, renameValue: "x" });
-    fireEvent.click(screen.getByTestId("library-rename-input"));
+    const onRenameValueChange = vi.fn();
+    renderRow({ onOpen, renaming: true, renameValue: "ren", onRenameValueChange });
+    const input = screen.getByTestId("library-rename-input");
+    fireEvent.change(input, { target: { value: "renamed" } });
+    fireEvent.click(input);
+    expect(onRenameValueChange).toHaveBeenCalledWith("renamed");
     expect(onOpen).not.toHaveBeenCalled();
   });
 });
@@ -275,6 +184,7 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
         name="flow"
         nodeCount={5}
         showDuplicate={false}
+        onOpen={() => {}}
         onDelete={() => {}}
         deleteTitle="Delete pipeline"
         draft={{
@@ -296,21 +206,24 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
       />,
     );
     expect(screen.getByTestId("library-row-draft")).toHaveTextContent("draft: 3 changes");
-    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("6 nodes");
+    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("6n");
     expect(screen.getAllByTestId("draft-participant")).toHaveLength(1);
   });
 
   it("shows nothing of a draft that is the file", () => {
     render(
-      <LibraryRow name="flow" nodeCount={5} showDuplicate={false} onDelete={() => {}} deleteTitle="Delete" draft={{ changes: 0, nodes: 5, participants: [] }} />,
+      <LibraryRow
+        name="flow"
+        nodeCount={5}
+        showDuplicate={false}
+        onOpen={() => {}}
+        onDelete={() => {}}
+        deleteTitle="Delete"
+        draft={{ changes: 0, nodes: 5, participants: [] }}
+      />,
     );
-    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("5 nodes");
+    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("5n");
     expect(screen.queryByTestId("library-row-draft")).not.toBeInTheDocument();
     expect(screen.queryByTestId("draft-participant")).not.toBeInTheDocument();
-  });
-
-  it("shows the number of its last version (ADR-0088)", () => {
-    render(<LibraryRow name="flow" nodeCount={5} showDuplicate={false} onDelete={() => {}} deleteTitle="Delete" version={8} />);
-    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("5 nodes · v8");
   });
 });

@@ -433,7 +433,7 @@ describe("the list filters of the Triggers list", () => {
 });
 
 describe("the trigger/item decorations", () => {
-  it("sit on a line of their own, never on the pipeline's name line", async () => {
+  it("sit at the end of the name's line, never on the pipeline's name line", async () => {
     const t = {
       id: "t1", name: "Nightly", pipeline_id: "p", pipeline_name: "fp-demo", target_repo: "/repos/a",
       effective_repo: "/repos/a", variables: {}, cron: "0 9 * * *", overlap_policy: "skip", auto_name: true,
@@ -458,8 +458,9 @@ describe("the trigger/item decorations", () => {
     const marks = screen.getByTestId("extension-decorations-trigger/item");
     const nameLine = screen.getByText("fp-demo").parentElement!;
     expect(nameLine.contains(marks)).toBe(false);
-    expect(marks.tagName).toBe("DIV");
-    expect(marks.className).toContain("flex-wrap");
+    // On one line at the end of the row's first line: the row keeps its 46 px.
+    expect(marks.closest(".lp-deco")).not.toBeNull();
+    expect(marks.className).toContain("flex-nowrap");
   });
 });
 

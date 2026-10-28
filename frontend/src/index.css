@@ -10,6 +10,8 @@
 @import "./shared/ui/kit/kit.css";
 /* The shell: top bar, status bar, left panel header, document tabs. */
 @import "./app/shell.css";
+/* The lists of the left panel: rows, group headers, hover and bulk bars. */
+@import "./app/leftList.css";
 /* The command field's palette. */
 @import "./app/palette/palette.css";
 /* The launch forms: New Run, the Triggers, the Project modal. */

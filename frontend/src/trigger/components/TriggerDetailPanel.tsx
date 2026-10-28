@@ -128,7 +128,7 @@ export default function TriggerDetailPanel({
     <aside className="tg-detail" data-testid="trigger-detail-panel">
       <header className="tg-detail__head">
         <span className="tg-detail__status" role="img" aria-label={lastOutcomeTooltip(trigger)} title={lastOutcomeTooltip(trigger)}>
-          <ToneIcon tone={outcomeTone(trigger.last_outcome)} size={14} />
+          <ToneIcon tone={outcomeTone(trigger.last_outcome) ?? "neutral"} size={14} />
         </span>
         <h2 className="tg-detail__name" title={trigger.name}>
           {trigger.name}

@@ -1,20 +1,32 @@
-import { useMemo } from "react";
-import { ChevronDown, ChevronRight, Pause, Pencil, Play, RotateCcw, SquareTerminal, Trash2, Zap } from "lucide-react";
-import { isLiveRun, isTerminalRun } from "../../model/runStatus";
+import { useMemo, type CSSProperties } from "react";
+import { ChevronDown, ChevronRight, Pause, Play, RotateCcw, Trash2 } from "lucide-react";
 import { waitingForStartedNodesLabel } from "../../model/nodePlay";
+import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
 import type { RunTreeNode } from "../../model/runTree";
-import { ChildCountPills } from "../OrchestrationTab";
-import SelectControl from "../../../shared/ui/SelectControl";
-import { STATUS_STYLES } from "./runsListTables";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { DecorationContext } from "../../../shared/extensions/contract";
+import { StatusIcon } from "../../../shared/ui/kit";
+import StatusMark from "../../../shared/ui/leftList/StatusMark";
+import HoverBar, { RowAction } from "../../../shared/ui/leftList/HoverBar";
 import RunRowMenu from "./RunRowMenu";
 import RunParentLink from "./RunParentLink";
 import RunRowPeople from "./RunRowPeople";
+import { ChildPills, NodePips, RunFigures, TriggerMark } from "./RunRowParts";
 import type { RunGesture } from "../../model/runGestures";
-import { startDateLabel } from "../../model/runDateFilter";
+
+const RUN_STATUS_WORD: Record<RunListEntry["status"] | "stalled", string> = {
+  running: "Running",
+  awaiting_user: "Awaiting you",
+  completed: "Completed",
+  failed: "Failed",
+  skipped: "Skipped",
+  halted: "Halted",
+  paused: "Paused",
+  archived: "Archived",
+  stalled: "Stalled",
+};
 
 interface Props {
   node: RunTreeNode;
@@ -23,16 +35,18 @@ interface Props {
   triggers: TriggerListEntry[];
   onSelectRun: (runId: string) => void;
   onSelectTrigger?: (triggerId: string) => void;
-  /** Switch the left panel to its Triggers tab (the trigger badge's target). */
+  /** Switch the left panel to its Triggers tab (the trigger mark's target). */
   onShowTriggers: () => void;
 }
 
-// One run row, rendered identically whether the list is flat or grouped by
-// repo (#258). Extracted so both code paths share the exact same markup.
-// #783 — the row is a TREE node: indented 14px per level, a chevron under the
-// status dot when it has children, the aggregated child counts bottom-right.
-// The tree itself (structure, counts, filter) is computed by `lib/runTree.ts`;
-// this only renders.
+/**
+ * One Run of the Runs list, on two lines (#258, #783): its status
+ * (the select control too), its name, its Trigger, its child counts and its
+ * nodes' progress; then its pipeline, the extensions' marks and people, its
+ * duration and its cost. Indented 12 px per level of the tree, which
+ * `model/runTree.ts` computes; this only renders. The hover bar holds the one
+ * action its status calls for and the « ⋯ » menu.
+ */
 export default function RunRow({
   node,
   pane,
@@ -45,8 +59,7 @@ export default function RunRow({
   const {
     isExpanded, setExpanded, runSel, renamingRunId, renameValue, setRenameValue, renameInputRef,
     commitRename, cancelRename, startRename, handlePause, handleResume, setConfirmRetryAll,
-    setConfirmCleanup, setConfirmForget, runShell, runsScrollRef, selectRange, toggleSel,
-    visibleRunIds, runById, mayOnRow,
+    setConfirmForget, runsScrollRef, selectRange, toggleSel, visibleRunIds, runById, mayOnRow,
   } = pane;
   const run = node.run;
   // A root whose parent sits in the other section (active / archived) links to it.
@@ -65,18 +78,8 @@ export default function RunRow({
   );
   const hasChildren = node.children.length > 0;
   const expanded = hasChildren && isExpanded(run.run_id);
-  const isSelected = run.run_id === selectedRunId;
+  const isOpen = run.run_id === selectedRunId;
   const rowSelected = runSel.has(run.run_id);
-  // A stalled run (no node running/waiting, nothing schedulable; #180) is
-  // surfaced amber and steady, overriding its still-`running` canonical
-  // status — "never a silent stall". `stalled` is derived per read by the
-  // daemon (`event_log::is_stalled`) and shipped on every list entry.
-  const dot = run.stalled
-    ? "bg-st-skipped"
-    : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).dot;
-  const ring = run.stalled
-    ? "border-st-skipped"
-    : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).ring;
   const isArchived = run.status === "archived";
   // CORE-42: each gesture also needs the caller's right to make it.
   const may = (gesture: RunGesture) => mayOnRow(run.run_id, gesture);
@@ -84,9 +87,7 @@ export default function RunRow({
   const canRename = may("rename_run");
   const canForget = isArchived && may("delete");
   const isRenaming = renamingRunId === run.run_id;
-  // Its start date, top-right, unless it started today; the hover actions
-  // take its place.
-  const startDate = startDateLabel(run.started_at, new Date());
+  const label = run.name || run.run_id.slice(0, 20);
   // #110 — gate on EXPLICIT statuses, never isLiveRun/isTerminalRun: the former
   // includes `paused` (would wrongly show Pause on a paused run → 409); the
   // latter includes `archived` (would wrongly show Retry-all on archived → 409).
@@ -99,19 +100,49 @@ export default function RunRow({
       run.status === "halted" ||
       run.status === "skipped") &&
     may("retry_all");
+  // A stalled run (no node running/waiting, nothing schedulable; #180) shows
+  // its own steady mark over its still-`running` canonical status — "never a
+  // silent stall". `stalled` is derived per read by the daemon.
+  // A status this front does not know yet (a newer daemon) reads as running.
+  const shownStatus = run.stalled ? "stalled" : run.status in RUN_STATUS_WORD ? run.status : "running";
+  // #503: the mark carries the failure reason; #588: the awaiting reason.
+  const reason =
+    run.failure_reason ??
+    run.awaiting_reason ??
+    (run.waiting_for_started_nodes
+      ? `Reached End, ${waitingForStartedNodesLabel(run.waiting_for_started_nodes)}`
+      : undefined);
+  const trigger = run.triggered_by
+    ? (triggers.find((t) => t.id === run.triggered_by)?.name ?? run.triggered_by)
+    : null;
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
+      className="lp-row"
       data-run-row={run.run_id}
       data-depth={node.depth}
+      data-open={isOpen || undefined}
+      data-checked={rowSelected || undefined}
+      data-archived={isArchived || undefined}
+      aria-current={isOpen || undefined}
       aria-level={node.depth + 1}
       aria-expanded={hasChildren ? expanded : undefined}
+      style={{ "--depth": node.depth } as CSSProperties}
       onClick={() => onSelectRun(run.run_id)}
       onKeyDown={(e) => {
-        // #783 decision 2 — ← / → drive the tree from the focused row: → opens
-        // a collapsed parent; ← closes an open one, or climbs to the parent
-        // row when there is nothing left to close.
-        if (e.key === "ArrowRight" && hasChildren && !expanded) {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelectRun(run.run_id);
+        } else if (e.key === "F2" && canRename) {
+          e.preventDefault();
+          startRename(run);
+        } else if (e.key === "ArrowRight" && hasChildren && !expanded) {
+          // #783 decision 2 — ← / → drive the tree from the focused row: → opens
+          // a collapsed parent; ← closes an open one, or climbs to the parent
+          // row when there is nothing left to close.
           e.preventDefault();
           setExpanded(run.run_id, true);
         } else if (e.key === "ArrowLeft") {
@@ -126,72 +157,56 @@ export default function RunRow({
           }
         }
       }}
-      style={{ fontSize: "11.5px", paddingLeft: 12 + node.depth * 14 }}
-      className={`group flex w-full cursor-pointer items-stretch gap-2 border-b border-l-2 border-line-soft py-2 pr-3 text-left transition-colors ${
-        rowSelected
-          ? "border-l-primary bg-selected text-text"
-          : isSelected
-            ? "border-l-transparent bg-surface-2 text-text"
-            : "border-l-transparent text-text-2 hover:bg-hover/50"
-      } ${isArchived ? "opacity-60" : ""}`}
     >
-      {/* Left column (16px, shared shape with Library / Triggers rows): the
-          #577 select control, and — only on a row with children — the #783
-          chevron stacked under it. Two distinct targets: the chevron never
-          selects nor opens the run. */}
-      <div className="flex w-4 shrink-0 flex-col items-center gap-1">
-      {/* #577 — the status dot doubles as the select control: it goes hollow on
-          hover and becomes a green check when selected. #503: the resting dot
-          still carries the failure reason so a red Run has something to say;
-          #588: an amber dot carries the awaiting reason (the agent's question,
-          or « child run <name> is awaiting you »). */}
-      <SelectControl
-        selected={rowSelected}
-        dotClass={dot}
-        ringClass={ring}
-        pulse={run.status === "running" && !run.stalled}
-        dotTitle={
-          run.failure_reason ??
-          run.awaiting_reason ??
-          (run.waiting_for_started_nodes
-            ? `Reached End, ${waitingForStartedNodesLabel(run.waiting_for_started_nodes)}`
-            : undefined)
-        }
-        dotTestId="run-status-dot"
-        testId="run-select-control"
-        label={rowSelected ? `Deselect ${run.name || run.run_id}` : `Select ${run.name || run.run_id}`}
-        onSelect={(e) => {
-          if (e.shiftKey) selectRange("runs", run.run_id, visibleRunIds);
-          else toggleSel("runs", run.run_id);
-        }}
-      />
-      {hasChildren && (
-        <span
-          role="button"
-          aria-label={expanded ? "Collapse child runs" : "Expand child runs"}
-          aria-expanded={expanded}
-          title={expanded ? "Collapse child runs" : "Expand child runs"}
-          data-testid="run-tree-chevron"
-          className="grid h-3.5 w-4 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text-2"
-          onClick={(e) => {
-            e.stopPropagation();
-            setExpanded(run.run_id, !expanded);
+      <span className="lp-lead">
+        {hasChildren ? (
+          <button
+            type="button"
+            className="lp-chev"
+            aria-label={expanded ? "Collapse child runs" : "Expand child runs"}
+            title={expanded ? "Collapse child runs" : "Expand child runs"}
+            aria-expanded={expanded}
+            data-testid="run-tree-chevron"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded(run.run_id, !expanded);
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            {expanded ? <ChevronDown size={14} strokeWidth={1.5} /> : <ChevronRight size={14} strokeWidth={1.5} />}
+          </button>
+        ) : (
+          <span className="lp-chev lp-chev--none" />
+        )}
+        {/* #577 — the status mark doubles as the select control. */}
+        <StatusMark
+          glyph={
+            <span data-testid="run-status-dot" data-status={shownStatus}>
+              <StatusIcon kind="run" status={shownStatus} title={reason} />
+            </span>
+          }
+          selected={rowSelected}
+          selecting={runSel.size > 0}
+          label={rowSelected ? `Deselect ${label}` : `Select ${label}`}
+          title={`${RUN_STATUS_WORD[shownStatus]}${reason ? `: ${reason}` : ""}\nClick to select, Shift+click for a range`}
+          testId="run-select-control"
+          onSelect={(e) => {
+            if (e.shiftKey) selectRange("runs", run.run_id, visibleRunIds);
+            else toggleSel("runs", run.run_id);
           }}
-        >
-          {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-        </span>
-      )}
-      </div>
-      <div className="min-w-0 flex-1">
+        />
+      </span>
+      <span className="lp-l1">
         {isRenaming ? (
           <input
             ref={renameInputRef}
-            className="w-full rounded border border-primary bg-surface-2 px-1 py-0.5 font-medium text-text outline-none"
-            style={{ fontSize: "11.5px" }}
+            className="lp-rename"
+            aria-label="Name"
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
             onBlur={() => commitRename()}
             onKeyDown={(e) => {
+              e.stopPropagation();
               if (e.key === "Enter") commitRename();
               if (e.key === "Escape") cancelRename();
             }}
@@ -199,196 +214,76 @@ export default function RunRow({
             data-testid="rename-input"
           />
         ) : (
-          <div className="truncate font-medium" data-testid="run-display-label">
-            {run.name || run.run_id.slice(0, 20)}
-          </div>
-        )}
-        <div
-          className="flex items-center gap-1.5 truncate font-mono text-text-3"
-          style={{ fontSize: "10px" }}
-        >
-          <span className="truncate" data-testid="run-pipeline-name">
-            {run.pipeline_name}
+          <span className="lp-name" title={run.name || run.run_id} data-testid="run-display-label">
+            {label}
           </span>
-          {/* Provenance badge, icon-only (#725, user decision 2026-09-06): the
-              words live in the `title`; `aria-label` carries the word for AT.
-              #783 dropped the « orchestrated » badge — the indentation says
-              the filiation; the trigger badge stays. */}
-          {run.triggered_by && (
-            <span
-              role="button"
-              aria-label="trigger"
-              title={`Created by trigger “${
-                triggers.find((t) => t.id === run.triggered_by)?.name ?? run.triggered_by
-              }” — click to open it in the Triggers tab`}
-              className="flex shrink-0 cursor-pointer items-center rounded border border-primary px-1.5 py-[2px] text-primary transition-colors hover:bg-selected"
-              data-testid="run-trigger-badge"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (run.triggered_by) onSelectTrigger?.(run.triggered_by);
-                onShowTriggers();
-              }}
-            >
-              <Zap size={9} />
-            </span>
-          )}
-          {linkedParent && <RunParentLink parent={linkedParent} pane={pane} onSelectRun={onSelectRun} />}
-          {/* 0.12: the people of the Run, as the extensions draw them
-              (`run/item/people`); nothing without such an extension. */}
-          <RunRowPeople run={run} />
-        </div>
-      </div>
-      {/* Right column (#783): line 1 = the start date at rest, the
-          hover-revealed action icons in its place; line 2 = the aggregated
-          child counts, always visible, bottom-right. The
-          actions row keeps its height at rest so the pills never move when the
-          icons appear. */}
-      <div className="flex shrink-0 flex-col items-end justify-between gap-1">
-      <div className="flex h-4 items-center">
-      {startDate && (
-        <span
-          className="shrink-0 font-mono text-text-3 group-hover:hidden"
-          style={{ fontSize: "10px" }}
-          title={run.started_at ? `Started ${new Date(run.started_at).toLocaleString()}` : undefined}
-          data-testid="run-start-date"
-        >
-          {startDate}
+        )}
+        {trigger !== null && (
+          <TriggerMark
+            name={trigger}
+            onOpen={() => {
+              if (run.triggered_by) onSelectTrigger?.(run.triggered_by);
+              onShowTriggers();
+            }}
+          />
+        )}
+        {hasChildren && (
+          <ChildPills
+            counts={node.counts}
+            // Decision 1 — the pills of a COLLAPSED parent expand it; once open
+            // they are inert and the click reaches the row as usual.
+            onExpand={expanded ? undefined : () => setExpanded(run.run_id, true)}
+          />
+        )}
+        <span className="lp-end">
+          <NodePips nodes={run.nodes ?? []} />
         </span>
-      )}
-      {!isRenaming && canRename && (
-        <span
-          role="button"
-          title="Rename run"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
-          onClick={(e) => {
-            e.stopPropagation();
-            startRename(run);
-          }}
-          data-testid="rename-button"
-        >
-          <Pencil size={12} />
+      </span>
+      <span className="lp-l2">
+        <span className="lp-pipe" title={run.pipeline_name} data-testid="run-pipeline-name">
+          {run.pipeline_name}
         </span>
-      )}
-      {canPause && (
-        <span
-          role="button"
-          title="Pause run"
-          data-testid="pause-run-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
-          onClick={(e) => {
-            e.stopPropagation();
-            handlePause(run.run_id);
-          }}
-        >
-          <Pause size={12} />
+        {linkedParent && <RunParentLink parent={linkedParent} pane={pane} onSelectRun={onSelectRun} />}
+        <span className="lp-end">
+          {/* The extensions' marks (`run/item`, ADR-0081) and people
+              (`run/item/people`, API 0.12), before the figures; nothing at all
+              without a contribution. */}
+          <span className="lp-deco">
+            <ExtensionDecorations<DecorationContext> location="run/item" extra={decorated} nowrap />
+            <RunRowPeople run={run} />
+          </span>
+          <RunFigures run={run} />
         </span>
+      </span>
+      {!isRenaming && (
+        <HoverBar testId="run-row-actions">
+          {canPause ? (
+            <RowAction icon={Pause} label="Pause" testId="pause-run-button" onClick={() => handlePause(run.run_id)} />
+          ) : canResume ? (
+            <RowAction icon={Play} label="Resume" testId="resume-run-button" onClick={() => handleResume(run.run_id)} />
+          ) : canRetryAll ? (
+            <RowAction
+              icon={RotateCcw}
+              label="Retry all"
+              testId="retry-all-button"
+              onClick={() => setConfirmRetryAll(run.run_id)}
+            />
+          ) : canForget ? (
+            <RowAction icon={Trash2} label="Forget" danger testId="forget-run-button" onClick={() => setConfirmForget(run.run_id)} />
+          ) : null}
+          <RunRowMenu
+            run={run}
+            pane={pane}
+            isRenaming={isRenaming}
+            canPause={canPause}
+            canResume={canResume}
+            canRetryAll={canRetryAll}
+            canCleanup={canCleanup}
+            canRename={canRename}
+            canForget={canForget}
+          />
+        </HoverBar>
       )}
-      {canResume && (
-        <span
-          role="button"
-          title="Resume run"
-          data-testid="resume-run-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleResume(run.run_id);
-          }}
-        >
-          <Play size={12} />
-        </span>
-      )}
-      {canRetryAll && (
-        <span
-          role="button"
-          title="Retry all — archive this run and start a fresh one"
-          data-testid="retry-all-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
-          onClick={(e) => {
-            e.stopPropagation();
-            setConfirmRetryAll(run.run_id);
-          }}
-        >
-          <RotateCcw size={12} />
-        </span>
-      )}
-      {isTerminalRun(run.status) && !isArchived && (
-        <span
-          role="button"
-          title="Open a bash shell in this run's worktree"
-          data-testid="open-session-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
-          onClick={(e) => {
-            e.stopPropagation();
-            // Silent on failure, like handleCleanup: nothing actionable in the row.
-            void runShell.open(run.run_id);
-          }}
-        >
-          <SquareTerminal size={12} />
-        </span>
-      )}
-      {canCleanup && (
-        <span
-          role="button"
-          title={
-            isLiveRun(run.status)
-              ? "Stop and archive run"
-              : "Cleanup run"
-          }
-          // #911: the Overview tour's archive step points at it.
-          data-testid="cleanup-run-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
-          onClick={(e) => {
-            e.stopPropagation();
-            setConfirmCleanup({ runId: run.run_id, status: run.status });
-          }}
-        >
-          <Trash2 size={12} />
-        </span>
-      )}
-      {canForget && (
-        <span
-          role="button"
-          title="Forget this run permanently (event log + metadata)"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-st-failed group-hover:inline-flex"
-          onClick={(e) => {
-            e.stopPropagation();
-            setConfirmForget(run.run_id);
-          }}
-        >
-          <Trash2 size={12} />
-        </span>
-      )}
-      <RunRowMenu
-        run={run}
-        pane={pane}
-        isRenaming={isRenaming}
-        canPause={canPause}
-        canResume={canResume}
-        canRetryAll={canRetryAll}
-        canCleanup={canCleanup}
-        canRename={canRename}
-        canForget={canForget}
-      />
-      </div>
-      {/* Line 2: the `run/item` decorations (ADR-0081, #31), then the child
-          counts. Here and not by the name, so a badge never truncates the
-          pipeline's name; nothing at all without either. */}
-      <div className="flex items-center gap-1 empty:hidden">
-      <ExtensionDecorations<DecorationContext> location="run/item" extra={decorated} />
-      {hasChildren && (
-        <ChildCountPills
-          counts={node.counts}
-          size="xs"
-          testId="run-child-pills"
-          // Decision 1 — the pills of a COLLAPSED parent expand it; once open
-          // they are inert and the click reaches the row as usual.
-          onClick={expanded ? undefined : () => setExpanded(run.run_id, true)}
-          clickHint="click to expand"
-        />
-      )}
-      </div>
-      </div>
-    </button>
+    </div>
   );
 }
-

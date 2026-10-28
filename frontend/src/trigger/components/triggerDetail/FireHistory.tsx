@@ -72,7 +72,7 @@ function FireEntry({ fire, onSelectRun }: { fire: TriggerFire; onSelectRun: (run
     <Fragment>
       <tr className="tg-fire" data-testid="fire-entry" data-outcome={fire.outcome}>
         <td className="tg-fire__ic">
-          <ToneIcon tone={outcomeTone(fire.outcome)} />
+          <ToneIcon tone={outcomeTone(fire.outcome) ?? "skipped"} />
         </td>
         <td className="tg-mono tg-fire__ts" title={fire.ts}>
           {formatFireTs(fire.ts)}

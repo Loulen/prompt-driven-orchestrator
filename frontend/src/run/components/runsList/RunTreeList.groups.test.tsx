@@ -50,6 +50,7 @@ function List({ selectedRunId = null }: { selectedRunId?: string | null }) {
       triggers={[]}
       selectedRunId={selectedRunId}
       onSelectRun={vi.fn()}
+      onNewRun={vi.fn()}
       onShowTriggers={vi.fn()}
     />
   );
@@ -99,8 +100,8 @@ describe("the fold of a Projet group", () => {
     fireEvent.click(within(mobile).getByTestId("run-group-chevron"));
     expect(group("Mobile").dataset.collapsed).toBe("true");
     expect(within(group("Mobile")).queryAllByTestId("run-display-label")).toHaveLength(0);
-    expect(within(group("Mobile")).getByTestId("run-group-count").textContent).toBe("3 · 1 awaiting");
-    expect(within(group("Mobile")).getByTestId("run-group-awaiting")).toBeTruthy();
+    expect(within(group("Mobile")).getByTestId("run-group-count").textContent).toBe("3");
+    expect(within(group("Mobile")).getByTestId("run-group-awaiting")).toHaveAccessibleName("1 awaiting you");
     // The other group stays open.
     expect(within(group("Checkout")).queryAllByTestId("run-display-label")).toHaveLength(1);
 

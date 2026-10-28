@@ -330,6 +330,34 @@ describe("primitives", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
+  it("Popover stays open when a box beside its trigger scrolls, closes when one holding it does", async () => {
+    const user = userEvent.setup();
+    render(
+      <div data-testid="page">
+        <div data-testid="list" />
+        <div data-testid="bar">
+          <Popover
+            label="Filters"
+            trigger={({ toggle }) => (
+              <button type="button" onClick={toggle}>
+                Filter
+              </button>
+            )}
+          >
+            <TextInput aria-label="Name" />
+          </Popover>
+        </div>
+      </div>,
+    );
+    await user.click(screen.getByRole("button", { name: "Filter" }));
+    await screen.findByRole("dialog", { name: "Filters" });
+    // A list that shrinks under a choice clamps its scroll: the trigger does not move.
+    fireEvent.scroll(screen.getByTestId("list"));
+    expect(screen.getByRole("dialog", { name: "Filters" })).toBeInTheDocument();
+    fireEvent.scroll(screen.getByTestId("page"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   it("Tabs select with the arrow keys and Home / End", async () => {
     const user = userEvent.setup();
     function Strip() {

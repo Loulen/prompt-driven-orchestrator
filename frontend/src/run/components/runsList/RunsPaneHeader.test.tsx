@@ -15,9 +15,8 @@ vi.mock("../../../shared/extensions/ExtensionActions", () => ({
 }));
 
 const pane = {
-  availableRepos: [],
-  projectOf: () => null,
-  openProjectSettings: vi.fn(),
+  allParentIds: [],
+  filterActive: false,
 } as unknown as RunsPaneState;
 
 const P1 = { id: "p1", name: "PDO", members: ["/r"] } as unknown as Project;
@@ -26,7 +25,7 @@ function renderHeader() {
   const onNewRun = vi.fn();
   render(
     <>
-      <RunsPaneHeader pane={pane} onNewRun={onNewRun} />
+      <RunsPaneHeader pane={pane} runs={[]} triggers={[]} onNewRun={onNewRun} />
     </>,
   );
   return onNewRun;

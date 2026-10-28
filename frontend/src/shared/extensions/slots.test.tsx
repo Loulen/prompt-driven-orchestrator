@@ -123,7 +123,7 @@ describe("the UI slots", () => {
       const [filter, setFilter] = useState<Attributes>({});
       return (
         <>
-          <ExtensionListFilters filter={filter} onChange={setFilter} />
+          <ExtensionListFilters location="runs/filter" filter={filter} onChange={setFilter} />
           <output data-testid="filter">{JSON.stringify(filter)}</output>
         </>
       );

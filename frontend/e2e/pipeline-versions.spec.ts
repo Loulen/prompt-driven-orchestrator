@@ -6,8 +6,8 @@ import { cleanupRuns, E2E_TARGET_REPO, openPipelineForEdit, pickPipeline } from 
 // Layer 3b — ADR-0088: Save freezes the shared draft as a version. The history
 // lists them, shows one read only and restores it into the draft; a launch
 // with a draft that differs from the last version asks first, and the Run
-// keeps the version it launched; « Keep old as new pipeline » lists the
-// version saved until now as a pipeline of its own.
+// keeps the version it launched; « Keep vN apart » lists the version saved
+// until now as a pipeline of its own; Cancel saves nothing.
 
 const PIPELINE_NAME = `e2e-versions-${process.pid}-${Date.now()}`;
 let PIPELINE_PATH = "";
@@ -66,7 +66,7 @@ test("save versions, view and restore one, launch the last, keep the old as a pi
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`);
   await expect(tabTitle.locator("xpath=ancestor::button[1]")).not.toHaveAttribute("data-dirty", "true");
 
-  // 1. Change the draft, Save… offers v2, ticked: save it.
+  // 1. Change the draft, Save… offers v2 first: save it.
   await page.getByTestId("toolbar-info").click();
   // The tab takes no edit until its draft has arrived.
   const promptRequired = page.getByTestId("prompt-required-checkbox");
@@ -78,7 +78,7 @@ test("save versions, view and restore one, launch the last, keep the old as a pi
   await expect(page.getByTestId("draft-changes")).toContainText("since v1");
   await page.getByTestId("save-button").click();
   const save = page.getByTestId("save-version-modal");
-  await expect(save.getByTestId("save-version-new")).toBeChecked();
+  await expect(save.getByRole("radio", { name: "New version v2" })).toHaveAttribute("aria-checked", "true");
   await expect(save.getByTestId("save-version-title-input")).toHaveValue("v2");
   await expect(save.getByTestId("save-version-confirm")).toHaveText(/Save v2/);
   await save.getByTestId("save-version-confirm").click();
@@ -121,12 +121,22 @@ test("save versions, view and restore one, launch the last, keep the old as a pi
   // The draft stayed as it was: nothing was saved.
   await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
 
-  // 4. Save with « Keep old as new pipeline »: « <name> (v2) » is in the library.
+  // 4. Cancel saves nothing: the draft stays changed, v2 the last.
   await page.getByTestId(`tab-title-${PIPELINE_NAME}`).click();
   await page.getByTestId("save-button").click();
-  await save.getByTestId("save-version-keep-old").check();
-  await expect(save.getByTestId("save-version-keep-hint")).toContainText(`${PIPELINE_NAME} (v2)`);
+  await save.getByTestId("save-version-cancel").click();
+  await expect(save).toHaveCount(0);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
+  await expect(page.getByTestId("draft-changes")).toContainText("since v2");
+
+  // 5. Save with « Keep v2 apart »: v3 is saved, « <name> (v2) » is in the library.
+  await page.getByTestId("save-button").click();
+  await save.getByRole("radio", { name: "Keep v2 apart" }).click();
+  await expect(save.getByTestId("save-version-effect")).toContainText(`${PIPELINE_NAME} (v2)`);
+  await expect(save.getByTestId("save-version-confirm")).toHaveText(/Save v3, keep v2/);
   await save.getByTestId("save-version-confirm").click();
+  await expect(save).toHaveCount(0);
+  await expect((await versionsTab(page)).getByTestId("version-row-3")).toContainText("last");
   await page.getByRole("tab", { name: "Pipelines" }).click();
   await expect(page.getByText(`${PIPELINE_NAME} (v2)`, { exact: true })).toBeVisible();
 });

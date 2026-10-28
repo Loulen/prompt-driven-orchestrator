@@ -6,9 +6,10 @@ import { execFileSync } from "node:child_process";
 import { cleanupRuns } from "./helpers";
 
 // Layer 4 (e2e) per ADR 0004 — proves #336 end-to-end in a browser: the Runs
-// list carries three client-side filter dropdowns (Project / Pipeline /
-// Trigger) with AND semantics, an "All" default, a Manual trigger option, and a
-// clear control. Filtering also drives the #258 grouped/flat flip.
+// header's funnel (CORE-110) opens one row per filter (Project / Pipeline /
+// Trigger / Date) with AND semantics, an "All" default, a Manual trigger
+// option; the funnel counts the filters in force and a cross clears them.
+// Filtering also drives the #258 grouped/flat flip.
 
 const TAG = `${process.pid}-${Date.now()}`;
 const PIPE_A = `e2e-filter-a-${TAG}`;
@@ -125,6 +126,20 @@ async function seedRun(
   return run_id;
 }
 
+/** Open the funnel's menu when it is closed, then the select of `axis`. */
+async function openFilter(page: Page, axis: "project" | "pipeline" | "trigger") {
+  if (!(await page.getByTestId("run-filter-menu").isVisible())) {
+    await page.getByTestId("run-filter-funnel").click();
+  }
+  await page.getByTestId(`run-filter-${axis}`).getByRole("button").click();
+}
+
+/** Pick the option named `name` on `axis`. */
+async function pickFilter(page: Page, axis: "project" | "pipeline" | "trigger", name: string) {
+  await openFilter(page, axis);
+  await page.getByRole("option", { name, exact: true }).click();
+}
+
 async function visibleRunNames(page: Page): Promise<string[]> {
   return page.getByTestId("run-display-label").allTextContents();
 }
@@ -154,19 +169,24 @@ test("Runs list filters by project, pipeline and trigger with AND semantics and 
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  // Filter row present with "All" placeholders (Runs is the default tab). Other
-  // specs' residual runs may coexist on the shared e2e daemon, so assertions
-  // use this spec's uniquely-named rows, never absolute counts.
-  await expect(page.getByTestId("run-filter-project")).toBeVisible();
-  await expect(page.getByTestId("run-filter-pipeline")).toBeVisible();
-  await expect(page.getByTestId("run-filter-trigger")).toBeVisible();
+  // No « Project » button: the Projets are set up in Settings. Other specs'
+  // residual runs may coexist on the shared e2e daemon, so assertions use this
+  // spec's uniquely-named rows, never absolute counts.
+  await expect(page.getByRole("button", { name: "Configure project" })).toHaveCount(0);
+  const funnel = page.getByTestId("run-filter-funnel");
+  await expect(funnel).toHaveAccessibleName("Filter");
   await expect(page.getByText(`alpha-a-${TAG}`)).toBeVisible();
   await expect(page.getByText(`alpha-b-${TAG}`)).toBeVisible();
   await expect(page.getByText(`beta-a-${TAG}`)).toBeVisible();
 
+  // The funnel opens the rows, each on "All".
+  await funnel.click();
+  for (const axis of ["project", "pipeline", "trigger"]) {
+    await expect(page.getByTestId(`run-filter-${axis}`).getByRole("button")).toHaveText("All");
+  }
+
   // Pipeline filter: only PIPE_A runs remain.
-  await page.getByTestId("run-filter-pipeline").click();
-  await page.getByTestId(`run-filter-option-${PIPE_A}`).click();
+  await pickFilter(page, "pipeline", PIPE_A);
   let names = await visibleRunNames(page);
   expect(names).toContain(`alpha-a-${TAG}`);
   expect(names).toContain(`beta-a-${TAG}`);
@@ -174,29 +194,29 @@ test("Runs list filters by project, pipeline and trigger with AND semantics and 
 
   // AND with the Project filter: repoB + PIPE_A ⇒ only the triggered run. A
   // single remaining repo also flips the grouped list flat for these rows.
-  await page.getByTestId("run-filter-project").click();
-  await page.getByTestId(`run-filter-option-${repoB}`).click();
+  await pickFilter(page, "project", path.basename(repoB));
   names = await visibleRunNames(page);
   expect(names).toContain(`beta-a-${TAG}`);
   expect(names).not.toContain(`alpha-a-${TAG}`);
   expect(names).not.toContain(`alpha-b-${TAG}`);
+  // The menu stays open between choices; the funnel counts two filters.
+  await expect(page.getByTestId("run-filter-menu")).toBeVisible();
+  await expect(funnel).toHaveAccessibleName("Filters · 2 active");
 
   // Trigger filter resolves the trigger id to its NAME in the menu.
-  await page.getByTestId("run-filter-trigger").click();
-  const trigOption = page.getByTestId(`run-filter-option-${triggerId}`);
-  await expect(trigOption).toHaveText(`nightly-${TAG}`);
-  await trigOption.click();
+  await pickFilter(page, "trigger", `nightly-${TAG}`);
   names = await visibleRunNames(page);
   expect(names).toContain(`beta-a-${TAG}`);
 
   // Contradictory AND: Manual + repoB + PIPE_A ⇒ zero rows ⇒ empty state.
-  await page.getByTestId("run-filter-trigger").click();
-  await page.getByTestId("run-filter-option-__manual__").click();
+  await pickFilter(page, "trigger", "Manual");
   await expect(page.getByTestId("run-filter-empty")).toBeVisible();
 
-  // Clear restores everything.
+  // The cross beside the funnel clears everything.
+  await page.keyboard.press("Escape");
   await page.getByTestId("run-filter-clear").click();
   await expect(page.getByTestId("run-filter-empty")).toHaveCount(0);
+  await expect(funnel).toHaveAccessibleName("Filter");
   await expect(page.getByText(`alpha-a-${TAG}`)).toBeVisible();
   await expect(page.getByText(`alpha-b-${TAG}`)).toBeVisible();
   await expect(page.getByText(`beta-a-${TAG}`)).toBeVisible();
@@ -227,19 +247,16 @@ test("the Project filter offers the Projet recorded on each Run, by name", async
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText(`in-mobile-${TAG}`)).toBeVisible();
 
-  await page.getByTestId("run-filter-project").click();
-  await expect(page.getByTestId(`run-filter-option-project:${checkout}`)).toHaveText(
-    `checkout-${TAG}`,
-  );
-  await page.getByTestId(`run-filter-option-project:${mobile}`).click();
-  await expect(page.getByTestId("run-filter-project")).toHaveText(`mobile-${TAG}`);
+  await openFilter(page, "project");
+  await expect(page.getByRole("option", { name: `checkout-${TAG}`, exact: true })).toBeVisible();
+  await page.getByRole("option", { name: `mobile-${TAG}`, exact: true }).click();
+  await expect(page.getByTestId("run-filter-project").getByRole("button")).toHaveText(`mobile-${TAG}`);
   let names = await visibleRunNames(page);
   expect(names).toContain(`in-mobile-${TAG}`);
   expect(names).not.toContain(`in-checkout-${TAG}`);
   expect(names).not.toContain(`in-none-${TAG}`);
 
-  await page.getByTestId("run-filter-project").click();
-  await page.getByTestId(`run-filter-option-${repoA}`).click();
+  await pickFilter(page, "project", path.basename(repoA));
   names = await visibleRunNames(page);
   expect(names).toContain(`in-none-${TAG}`);
   expect(names).not.toContain(`in-mobile-${TAG}`);

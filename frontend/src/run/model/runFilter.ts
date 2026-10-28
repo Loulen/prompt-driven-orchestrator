@@ -8,7 +8,7 @@ import { ANY_TIME, runMatchesDate, type RunDateFilter } from "./runDateFilter";
    The daemon already ships every axis on `GET /runs` (`effective_repo`,
    `pipeline_name`, `triggered_by`); filtering is a pure view-layer computation.
 
-   This lives in its own module (#345) so `RunFilters.tsx` only exports a
+   This lives in its own module (#345) so the menu only exports a
    component: the non-component exports below (an object constant and a
    function) would otherwise break React Fast Refresh
    (`react-refresh/only-export-components`), mirroring the `highlightYaml`
@@ -30,8 +30,8 @@ export interface RunFilterValue {
 
 /* #783 — the #725 `showOrchestrated` axis is gone: children are no longer a
    filterable population but rows nested under their parent (`lib/runTree.ts`),
-   and the strip's fourth control is the expand/collapse-all button, which is
-   NOT a filter (never accent, never part of `isFilterActive`). */
+   and the expand/collapse-all button of the header is NOT a filter (never
+   part of `isFilterActive`). */
 export const EMPTY_RUN_FILTER: RunFilterValue = {
   repo: null,
   pipeline: null,
@@ -84,9 +84,74 @@ export function runMatchesFilter(
 }
 
 /**
- * True when at least one axis narrows the list — the condition for the strip's
- * clear ✕ (and the empty state's).
+ * True when at least one axis narrows the list — the condition for the empty
+ * state's « Clear filters ».
  */
 export function isFilterActive(f: RunFilterValue): boolean {
   return f.repo !== null || f.pipeline !== null || f.trigger !== null || f.date.range !== null;
+}
+
+/** The number of filters in force, the funnel's badge: each axis set, a date
+ *  range, each extension attribute (of the Run, of its Projet). */
+export function activeFilterCount(f: RunFilterValue, ...attributes: object[]): number {
+  const axes = [f.repo, f.pipeline, f.trigger, f.date.range].filter((v) => v !== null).length;
+  return attributes.reduce((n, a) => n + Object.keys(a).length, axes);
+}
+
+export interface RunFilterOption {
+  value: string;
+  label: string;
+}
+
+/** The choices of each axis, read off the Runs themselves. */
+export interface RunFilterOptions {
+  project: RunFilterOption[];
+  pipeline: RunFilterOption[];
+  trigger: RunFilterOption[];
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** Basename of a repo path, for a compact option label. */
+function repoLabel(path: string): string {
+  if (path === NONE) return "(no project)";
+  const segs = path.split("/").filter((s) => s.length > 0);
+  return segs.length ? segs[segs.length - 1] : path;
+}
+
+/**
+ * The options of the three single-value axes. The Project axis offers the
+ * list's groups: each Projet by name, then each repo of a Run in none. A
+ * trigger resolves to its name, a deleted one keeps its id; « Manual » only
+ * when a Run was launched by hand.
+ */
+export function runFilterOptions(
+  runs: RunListEntry[],
+  triggers: { id: string; name: string }[],
+  projectOf: ProjectOfRun = NO_PROJECT_KNOWN,
+): RunFilterOptions {
+  const projectNames = new Map<string, string>();
+  for (const r of runs) {
+    const project = projectOf(r.project_id);
+    if (project) projectNames.set(projectKey(r, projectOf), project.name);
+  }
+  const project = uniqueSorted(runs.map((r) => projectKey(r, projectOf)))
+    .map((v) => ({ value: v, label: projectNames.get(v) ?? repoLabel(v) }))
+    .sort((a, b) => {
+      const pa = projectNames.has(a.value);
+      const pb = projectNames.has(b.value);
+      if (pa !== pb) return pa ? -1 : 1;
+      return a.label.localeCompare(b.label);
+    });
+  const pipeline = uniqueSorted(runs.map(pipelineKey)).map((v) => ({
+    value: v,
+    label: v === NONE ? "(unnamed)" : v,
+  }));
+  const trigger = uniqueSorted(runs.map(triggerKey)).map((v) => ({
+    value: v,
+    label: v === MANUAL_TRIGGER ? "Manual" : (triggers.find((t) => t.id === v)?.name ?? v),
+  }));
+  return { project, pipeline, trigger };
 }

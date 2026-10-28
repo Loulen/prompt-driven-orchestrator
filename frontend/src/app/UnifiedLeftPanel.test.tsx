@@ -23,7 +23,6 @@ import { importWorkflow } from "../pipeline/api/library";
 import { openRunShell } from "../session/api/sessions";
 import { useEditStore } from "../pipeline/store/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
-import { useRecentReposStore } from "../stores/recentReposStore";
 import { legacyScope } from "../test/legacy";
 import { resetActorsForTests, useActorsStore } from "../shared/actors/store";
 
@@ -575,6 +574,72 @@ describe("UnifiedLeftPanel empty Runs list (runs/empty)", () => {
   });
 });
 
+// CORE-110 — the extensions' list filters of the Runs (`runs/filter`) and of
+// their Projet (`projects/filter`) are rows of the funnel's menu.
+describe("UnifiedLeftPanel extension list filters in the funnel's menu", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetExtensions();
+  });
+
+  it("lists each contribution under its label, counts it on the funnel, and clears with the rest", async () => {
+    resetExtensions();
+    const entry: ExtensionEntry = {
+      id: "demo",
+      name: "Extension demo",
+      version: "1.0.0",
+      ui: {
+        bundle_url: "/ext/demo/ui.js",
+        react_major: hostReactMajor(),
+        ui_module_major: null,
+        contributions: [
+          { location: "runs/filter", id: "by", label: "Started by", type: "list_filter", component: "StartedBy" },
+          { location: "projects/filter", id: "team", label: "Team", type: "list_filter", component: "Team" },
+        ] as UiContribution[],
+        commands: [],
+        locations: [],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/ext"
+          ? new Response(JSON.stringify([entry]), { status: 200, headers: { "Content-Type": "application/json" } })
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+    setBundleLoader(async () => ({
+      StartedBy: ({ filter, setFilter }: { filter: Record<string, string>; setFilter: (f: Record<string, string>) => void }) => (
+        <button type="button" onClick={() => setFilter({ ...filter, "demo/started_by": "alice" })}>
+          only alice
+        </button>
+      ),
+      Team: () => <span>any team</span>,
+    }));
+    const user = userEvent.setup();
+    renderPanel({
+      runs: [
+        { stalled: false, run_id: "a", pipeline_name: "p", status: "running", started_at: null, name: "By alice", effective_repo: "/r", attributes: { "demo/started_by": "alice" } },
+        { stalled: false, run_id: "b", pipeline_name: "p", status: "running", started_at: null, name: "By bob", effective_repo: "/r", attributes: { "demo/started_by": "bob" } },
+      ],
+    });
+    // Nothing under the header.
+    await act(async () => {});
+    expect(screen.queryByTestId("extension-filters-run")).toBeNull();
+
+    await user.click(screen.getByTestId("run-filter-funnel"));
+    const row = await screen.findByTestId("run-filter-ext-demo:by");
+    expect(row).toHaveAttribute("title", "Started by · Extension demo");
+    expect(screen.getByTestId("run-filter-ext-demo:team")).toHaveAttribute("title", "Team · Project · Extension demo");
+    await user.click(within(row).getByRole("button", { name: "only alice" }));
+    expect(screen.getAllByTestId("run-display-label").map((el) => el.textContent)).toEqual(["By alice"]);
+    expect(screen.getByTestId("run-filter-funnel")).toHaveAccessibleName("Filters · 1 active");
+
+    await user.click(screen.getByTestId("run-filter-clear-all"));
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
+  });
+});
+
 describe("UnifiedLeftPanel run status dot", () => {
   const run = (over: Partial<RunListEntry>): RunListEntry[] => [
     { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, stalled: false, effective_repo: "", ...over },
@@ -746,25 +811,13 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
   });
 
-  it("opens Settings › Projects to name a Projet for a flat single-repository list", () => {
+  it("has no « Project » button: the Projets are set up in Settings (CORE-110)", () => {
     const runs: RunListEntry[] = [
       { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
     ];
-    const onOpenProjectSettings = vi.fn();
-    renderPanel({ runs, onOpenProjectSettings });
-
-    fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
-    expect(onOpenProjectSettings).toHaveBeenCalledWith({ draft: { name: "foo", members: ["/repos/foo"] } });
-  });
-
-  it("opens Settings › Projects from a recent repository before the first Run", () => {
-    useRecentReposStore.setState({ recentRepos: ["/repos/fresh"] });
-    const onOpenProjectSettings = vi.fn();
-    renderPanel({ runs: [], onOpenProjectSettings });
-
-    fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
-
-    expect(onOpenProjectSettings).toHaveBeenCalledWith({ draft: { name: "fresh", members: ["/repos/fresh"] } });
+    renderPanel({ runs, onOpenProjectSettings: vi.fn() });
+    expect(screen.queryByRole("button", { name: "Configure project" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Project" })).toBeNull();
   });
 
   it("opens Settings › Projects on the Projet of a group header's pencil (CORE-96)", () => {
@@ -1844,6 +1897,28 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
 // the runs themselves (deleted pipelines/triggers stay filterable); the filter
 // applies BEFORE the active/archived split so grouping and the Archived count
 // both reflect it.
+/** CORE-110 — open the funnel's menu when it is closed, then the select of `axis`. */
+async function openFilter(user: ReturnType<typeof userEvent.setup>, axis: "project" | "pipeline" | "trigger") {
+  if (!screen.queryByTestId("run-filter-menu")) await user.click(screen.getByTestId("run-filter-funnel"));
+  await user.click(within(screen.getByTestId(`run-filter-${axis}`)).getByRole("button"));
+}
+
+/** The choices of `axis`, its select left open. */
+async function filterOptions(user: ReturnType<typeof userEvent.setup>, axis: "project" | "pipeline" | "trigger") {
+  await openFilter(user, axis);
+  return (await screen.findAllByRole("option")).map((o) => o.textContent);
+}
+
+/** Pick `option` on `axis` from the funnel's menu. */
+async function pickFilter(
+  user: ReturnType<typeof userEvent.setup>,
+  axis: "project" | "pipeline" | "trigger",
+  option: string,
+) {
+  await openFilter(user, axis);
+  await user.click(await screen.findByRole("option", { name: option }));
+}
+
 describe("UnifiedLeftPanel run filters (#336)", () => {
   const trig: TriggerListEntry = {
     effective_repo: "",
@@ -1866,28 +1941,72 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     { stalled: false, run_id: "r4", pipeline_name: "deploy", status: "archived", started_at: null, name: "Zebra archived", effective_repo: "/repos/zebra" },
   ];
 
-  it("hides the filter row entirely when there are no runs", () => {
+  it("has no funnel when there are no runs", () => {
     renderPanel({ runs: [] });
-    expect(screen.queryByTestId("run-filter-project")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("run-filter-pipeline")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("run-filter-trigger")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("run-filter-funnel")).not.toBeInTheDocument();
   });
 
-  it("renders the three dropdowns defaulting to All (placeholder labels)", () => {
+  it("opens one row per filter from the funnel, each on All (CORE-110)", async () => {
+    const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
-    expect(screen.getByTestId("run-filter-project")).toHaveTextContent("Project");
-    expect(screen.getByTestId("run-filter-pipeline")).toHaveTextContent("Pipeline");
-    expect(screen.getByTestId("run-filter-trigger")).toHaveTextContent("Trigger");
+    // Nothing under the header: the filters live behind the funnel.
+    expect(screen.queryByTestId("run-filter-menu")).not.toBeInTheDocument();
+    const funnel = screen.getByTestId("run-filter-funnel");
+    expect(funnel).toHaveAccessibleName("Filter");
+    expect(funnel).not.toHaveAttribute("data-on");
+    await user.click(funnel);
+    for (const axis of ["project", "pipeline", "trigger"]) {
+      expect(within(screen.getByTestId(`run-filter-${axis}`)).getByRole("button")).toHaveTextContent("All");
+    }
+    expect(screen.getByTestId("run-filter-date")).toHaveTextContent("Any time");
+    expect(screen.getByTestId("run-filter-count")).toHaveTextContent("No filter");
+    expect(screen.getByTestId("run-filter-clear-all")).toBeDisabled();
     // No clear control while everything is on "All".
     expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
+  });
+
+  it("fills and counts the funnel while filters are in force; the menu stays open between choices", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+    await pickFilter(user, "project", "alpha");
+    await pickFilter(user, "pipeline", "auditor");
+    expect(screen.getByTestId("run-filter-menu")).toBeInTheDocument();
+    const funnel = screen.getByTestId("run-filter-funnel");
+    expect(funnel).toHaveAttribute("data-on");
+    expect(funnel).toHaveAccessibleName("Filters · 2 active");
+    expect(funnel).toHaveTextContent("2");
+    expect(screen.getByTestId("run-filter-count")).toHaveTextContent("2 active");
+    await user.click(screen.getByTestId("run-filter-clear-all"));
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
+    expect(screen.getByTestId("run-filter-funnel")).not.toHaveAttribute("data-on");
+  });
+
+  it("filters by date from the menu: a preset, then a custom range", async () => {
+    const user = userEvent.setup();
+    const dated: RunListEntry[] = [
+      { stalled: false, run_id: "d1", pipeline_name: "p", status: "completed", started_at: "2026-10-12T10:00:00Z", name: "Old", effective_repo: "/repos/a" },
+      { stalled: false, run_id: "d2", pipeline_name: "p", status: "completed", started_at: new Date().toISOString(), name: "Fresh", effective_repo: "/repos/a" },
+    ];
+    renderPanel({ runs: dated });
+    await user.click(screen.getByTestId("run-filter-funnel"));
+    await user.click(within(screen.getByTestId("run-filter-date")).getByRole("radio", { name: "Started" }));
+    await user.click(within(screen.getByTestId("run-filter-date")).getByRole("button", { name: "Date" }));
+    await user.click(await screen.findByRole("option", { name: "Today" }));
+    expect(screen.getAllByTestId("run-display-label").map((el) => el.textContent)).toEqual(["Fresh"]);
+
+    await user.click(within(screen.getByTestId("run-filter-date")).getByRole("button", { name: "Date" }));
+    await user.click(await screen.findByRole("option", { name: "Custom range" }));
+    fireEvent.change(screen.getByTestId("run-filter-date-from"), { target: { value: "2026-10-12" } });
+    fireEvent.change(screen.getByTestId("run-filter-date-to"), { target: { value: "2026-10-12" } });
+    expect(screen.getAllByTestId("run-display-label").map((el) => el.textContent)).toEqual(["Old"]);
+    expect(screen.getByTestId("run-filter-funnel")).toHaveAccessibleName("Filters · 1 active");
   });
 
   it("filters by pipeline name", async () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-deploy"));
+    await pickFilter(user, "pipeline", "deploy");
 
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Alpha deploy"]);
@@ -1902,8 +2021,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     // Two active repos ⇒ grouped before filtering.
     expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
 
-    await user.click(screen.getByTestId("run-filter-project"));
-    await user.click(await screen.findByTestId("run-filter-option-/repos/alpha"));
+    await pickFilter(user, "project", "alpha");
 
     // One repo left ⇒ groupByRepo's ≥2 threshold fails ⇒ flat list.
     expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
@@ -1924,12 +2042,9 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     ];
     renderPanel({ runs: shared, projects });
 
-    await user.click(screen.getByTestId("run-filter-project"));
-    expect(await screen.findByTestId("run-filter-option-project:p1")).toHaveTextContent("Checkout");
-    expect(screen.getByTestId("run-filter-option-project:p2")).toHaveTextContent("Mobile");
-    expect(screen.getByTestId("run-filter-option-/code/shop-api")).toHaveTextContent("shop-api");
+    expect(await filterOptions(user, "project")).toEqual(["All", "Checkout", "Mobile", "shop-api"]);
 
-    await user.click(screen.getByTestId("run-filter-option-project:p2"));
+    await user.click(screen.getByRole("option", { name: "Mobile" }));
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["In Mobile"]);
     expect(screen.getByTestId("run-filter-project")).toHaveTextContent("Mobile");
@@ -1939,12 +2054,10 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-trigger"));
     // Known trigger resolves to its name; deleted trigger falls back to the id.
-    expect(await screen.findByTestId("run-filter-option-trg-1")).toHaveTextContent("Nightly audit");
-    expect(screen.getByTestId("run-filter-option-trg-gone")).toHaveTextContent("trg-gone");
+    expect(await filterOptions(user, "trigger")).toEqual(["All", "Manual", "Nightly audit", "trg-gone"]);
 
-    await user.click(screen.getByTestId("run-filter-option-trg-1"));
+    await user.click(screen.getByRole("option", { name: "Nightly audit" }));
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Alpha auditor"]);
   });
@@ -1953,8 +2066,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-trigger"));
-    await user.click(await screen.findByTestId("run-filter-option-__manual__"));
+    await pickFilter(user, "trigger", "Manual");
 
     // r2 (active manual) visible; r4 (archived manual) counted in Archived.
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
@@ -1966,17 +2078,14 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-project"));
-    await user.click(await screen.findByTestId("run-filter-option-/repos/alpha"));
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-auditor"));
+    await pickFilter(user, "project", "alpha");
+    await pickFilter(user, "pipeline", "auditor");
 
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Alpha auditor"]);
 
     // A trigger choice contradicting the rest empties the list.
-    await user.click(screen.getByTestId("run-filter-trigger"));
-    await user.click(await screen.findByTestId("run-filter-option-trg-gone"));
+    await pickFilter(user, "trigger", "trg-gone");
     expect(screen.queryAllByTestId("run-display-label")).toHaveLength(0);
     expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
   });
@@ -1987,13 +2096,11 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
 
     // The archived run is a zebra deploy; filter to alpha ⇒ section disappears.
-    await user.click(screen.getByTestId("run-filter-project"));
-    await user.click(await screen.findByTestId("run-filter-option-/repos/alpha"));
+    await pickFilter(user, "project", "alpha");
     expect(screen.queryByTestId("run-archived-section")).not.toBeInTheDocument();
 
     // Filter to zebra ⇒ the section is back with the filtered count.
-    await user.click(screen.getByTestId("run-filter-project"));
-    await user.click(await screen.findByTestId("run-filter-option-/repos/zebra"));
+    await pickFilter(user, "project", "zebra");
     expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
   });
 
@@ -2001,14 +2108,14 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-deploy"));
+    await pickFilter(user, "pipeline", "deploy");
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(1);
 
     await user.click(screen.getByTestId("run-filter-clear"));
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
-    expect(screen.getByTestId("run-filter-pipeline")).toHaveTextContent("Pipeline");
     expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("run-filter-funnel"));
+    expect(within(screen.getByTestId("run-filter-pipeline")).getByRole("button")).toHaveTextContent("All");
   });
 
   it("shows the empty state with a working Clear-filters control on zero matches", async () => {
@@ -2016,10 +2123,8 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     // Single-pipeline list plus a second pipeline elsewhere so both options exist.
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-deploy"));
-    await user.click(screen.getByTestId("run-filter-trigger"));
-    await user.click(await screen.findByTestId("run-filter-option-trg-1"));
+    await pickFilter(user, "pipeline", "deploy");
+    await pickFilter(user, "trigger", "Nightly audit");
 
     expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
     await user.click(screen.getByTestId("run-filter-empty-clear"));
@@ -2035,8 +2140,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     ];
     renderPanel({ runs: weird });
 
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-__none__"));
+    await pickFilter(user, "pipeline", "(unnamed)");
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Nameless"]);
   });
@@ -2245,8 +2349,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     const user = userEvent.setup();
     localStorage.setItem("pdo.ui.childRunsExpanded", "false");
     renderPanel({ runs });
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-code-review"));
+    await pickFilter(user, "pipeline", "code-review");
     // epic → kid → grandkid is the only path; kid-trig (implement-loop) and the
     // roots that don't match are gone. The parents open on the match even
     // though the default is collapsed.
@@ -2264,8 +2367,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
   it("a filter matching only a root shows no chevron path for children", async () => {
     const user = userEvent.setup();
     renderPanel({ runs });
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-triage"));
+    await pickFilter(user, "pipeline", "triage");
     expect(labels()).toEqual(["triage nightly"]);
   });
 
@@ -2382,8 +2484,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     };
     render(<Harness />);
     // Keep only the implement-loop runs: the orchestrator is filtered out.
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-implement-loop"));
+    await pickFilter(user, "pipeline", "implement-loop");
     expect(screen.getByTestId("run-filter-clear")).toBeInTheDocument();
     const link = within(row("kid")).getByTestId("run-parent-link");
     link.focus();

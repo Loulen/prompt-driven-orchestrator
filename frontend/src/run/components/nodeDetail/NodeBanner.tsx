@@ -43,14 +43,18 @@ export default function NodeBanner({
       data-testid={testId}
       {...data}
     >
-      <div className="d-banner" title={tooltip}>
+      <div className="d-banner">
         <ToneIcon tone={tone} size={14} />
-        <strong className="d-banner__title" data-testid={testId ? `${testId}-title` : undefined}>
+        <strong className="d-banner__title" title={text != null && text !== "" ? undefined : tooltip} data-testid={testId ? `${testId}-title` : undefined}>
           {title}
         </strong>
         {text != null && text !== "" && <span className="sr-only"> — </span>}
         {text != null && text !== "" && (
-          <span className={`d-banner__text${quote ? " ri-banner__quote" : ""}`} data-testid={testId ? `${testId}-message` : undefined}>
+          <span
+            className={`d-banner__text${quote ? " ri-banner__quote" : ""}`}
+            title={tooltip}
+            data-testid={testId ? `${testId}-message` : undefined}
+          >
             {text}
           </span>
         )}

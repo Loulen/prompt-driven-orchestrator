@@ -75,10 +75,6 @@ export default function NodeBanners({
   );
   return (
     <>
-      {completionReleased && selectedIterStatus === "running" && (
-        <NodeBanner tone="running" title="Completion released" text="tell the agent when you are done" />
-      )}
-
       {/* #588 / ADR-0069 — the declared wait, on the iteration on screen. Only
           the latest iteration carries `node.awaiting`; an older awaiting
           iteration (a reaped one) renders the bare shape. A *derived* wait (a

@@ -6,18 +6,13 @@
  * Tokens only. Status is a light tint, a border and an icon; ruby is the
  * selection.
  */
+@import "../../shared/ui/statusTone.css";
 
 .cv-pane {
   --cv-edge: color-mix(in oklch, var(--text-3) 80%, var(--surface-0));
   --cv-wire: var(--color-st-await);
   --cv-pop-shadow: 0 4px 14px color-mix(in oklch, black 22%, transparent);
 }
-:is(.cv-pane, .ri) [data-st="running"] { --st: var(--color-st-running); }
-:is(.cv-pane, .ri) [data-st="awaiting"] { --st: var(--color-st-await); }
-:is(.cv-pane, .ri) [data-st="done"] { --st: var(--color-st-done); }
-:is(.cv-pane, .ri) [data-st="blocked"] { --st: var(--color-st-blocked); }
-:is(.cv-pane, .ri) [data-st="failed"] { --st: var(--color-st-failed); }
-:is(.cv-pane, .ri) [data-st="skipped"] { --st: var(--color-st-skipped); }
 
 /* ------------------------------------------------------------ node card */
 .cv-n {
@@ -94,6 +89,7 @@
 }
 .cv-n__cell > svg { flex: none; color: var(--text-3); }
 .cv-n__cell > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cv-mk__deco { position: absolute; top: calc(100% + 4px); left: 0; display: flex; flex-wrap: wrap; gap: 3px; }
 .cv-n__row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 0 6px 4px; min-width: 0; }
 .cv-n__images { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 6px 4px; }
 .cv-n__img {
@@ -336,7 +332,6 @@
   border-radius: var(--radius-ui);
 }
 .cv-tb__sep { flex: none; width: 1px; height: 14px; margin: 0 3px; background: var(--line); }
-.cv-tb__slot { position: relative; display: inline-flex; }
 .cv-tb__badge {
   position: absolute;
   top: 0;
@@ -360,7 +355,6 @@
 .cv-tb__badge[data-tone="unread"] { background: var(--color-st-running); }
 
 /* ------------------------------------------------------------ bands under the tab bar */
-.cv-bands { position: absolute; z-index: 9; left: 0; right: 0; top: 0; }
 .cv-line {
   display: flex;
   align-items: center;
@@ -424,22 +418,6 @@
 .cv-stack > * + * { margin-left: -4px; }
 .cv-stack .d-av { box-shadow: 0 0 0 1.5px var(--surface-1); }
 .cv-stack__more { margin-left: 3px; font-family: var(--font-code); font-size: var(--fs-2xs); color: var(--text-3); }
-.cv-zoom {
-  position: absolute;
-  z-index: 5;
-  left: var(--g-4);
-  bottom: var(--g-4);
-  height: 18px;
-  padding: 0 5px;
-  background: var(--surface-1);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-ui);
-  font-family: var(--font-code);
-  font-size: var(--fs-2xs);
-  line-height: 16px;
-  color: var(--text-3);
-  pointer-events: none;
-}
 
 /* ------------------------------------------------------------ empty canvas */
 .cv-empty {

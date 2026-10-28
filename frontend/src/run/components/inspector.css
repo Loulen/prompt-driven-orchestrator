@@ -4,6 +4,7 @@
  * terminal, the detail tabs (I/O, Transcript, Orchestration, the extensions')
  * and their rows. Tokens only; the kit's sections, chips and banners.
  */
+@import "../../shared/ui/statusTone.css";
 
 .ri {
   display: flex;
@@ -144,7 +145,7 @@
 .ri-banners { flex: none; }
 .ri-banner { border-bottom: 1px solid var(--line-soft); }
 .ri-banner .d-banner { padding-right: var(--g-2); }
-.ri-banner__quote { color: var(--text) !important; }
+.ri-banner__quote { color: var(--text); }
 .ri-banner__since { flex: none; font-family: var(--font-code); font-size: var(--fs-2xs); color: var(--text-3); }
 .ri-banner__list {
   margin: 0;
@@ -158,7 +159,6 @@
 .ri-banner__list li { overflow-wrap: anywhere; }
 
 /* ------------------------------------------------------------ terminal: an always-dark screen */
-.ri-termwrap { min-height: 0; height: 100%; display: flex; flex-direction: column; border-bottom: 1px solid var(--line-soft); }
 .ri-term-bar {
   flex: none;
   display: flex;
@@ -288,7 +288,6 @@ button.ri-port__name:hover { text-decoration: underline; }
 .ri-port__tools { flex: none; display: inline-flex; align-items: center; gap: 0; opacity: 0; }
 .ri-port__line:hover .ri-port__tools, .ri-port__tools:focus-within { opacity: 1; }
 .ri-port__sub { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 0 var(--pad-x) var(--g-2) 30px; min-width: 0; }
-.ri-port__files { display: flex; flex-direction: column; padding: 0 0 var(--g-2) 22px; }
 .ri-dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
 .ri-dot[data-live] { background: var(--color-st-running); animation: ri-pulse 1.6s ease-in-out infinite; }
 .ri-dot[data-ok] { background: var(--color-st-done); }
@@ -449,7 +448,6 @@ button.ri-port__name:hover { text-decoration: underline; }
   font-size: var(--fs-sm);
   color: var(--color-st-failed);
 }
-.ri-hit { background: color-mix(in oklab, var(--color-st-await) 35%, transparent); color: inherit; border-radius: 1px; }
 
 /* ------------------------------------------------------------ Orchestration */
 .ri-orch { padding-bottom: var(--g-2); }

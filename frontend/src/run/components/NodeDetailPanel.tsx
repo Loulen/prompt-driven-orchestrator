@@ -13,7 +13,7 @@ import {
 import NodeDetailHeader, { NodeProvisioning } from "./nodeDetail/NodeDetailHeader";
 import NodeControls, { ActionVerdictBanner } from "./nodeDetail/NodeControls";
 import NodeBanners from "./nodeDetail/NodeBanners";
-import NodeVerdicts from "./nodeDetail/NodeActions";
+import NodeVerdicts from "./nodeDetail/NodeVerdicts";
 import { createPortal } from "react-dom";
 import { useInspectorBarSlot } from "../../pipeline/components/inspectorBarSlot";
 import { reviewUrl } from "../model/runRefs";
@@ -120,8 +120,8 @@ export default function NodeDetailPanel({
 
   // The retry handlers used to call `setTerminalView("split")` inline. The mode
   // stays presentational state here; it travels into `useNodeRun` as a *stable*
-  // callback (`useCallback` with no deps, exactly as stable as the `setTerminalView`
-  // setter it replaces), so the retry callbacks keep the identity they had.
+  // callback (`useCallback` on the setter, which never changes), so the retry
+  // callbacks keep the identity they had.
   const showTerminalSplit = useCallback(() => setTerminalView("split"), [setTerminalView]);
 
   // Every read and command of this panel is iter-scoped, so the resolved
@@ -278,6 +278,7 @@ export default function NodeDetailPanel({
         {!isArchived && actionVerdict && <ActionVerdictBanner actionVerdict={actionVerdict} />}
         {!isArchived && (
           <NodeVerdicts
+            status={node.status}
             selectedIter={selectedIter}
             completionReleased={completionReleased}
             releaseVerdict={releaseVerdict}

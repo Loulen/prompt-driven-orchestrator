@@ -114,7 +114,7 @@ export default function PortRow({
       data-pending={anyExists ? undefined : true}
       className="port-row ri-port"
     >
-      <div className="ri-port__line" title={tip}>
+      <div className="ri-port__line">
         <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-label={portType} role="img" />
         {anyExists ? (
           // The name opens the artifact; the tools at the end keep their own clicks.
@@ -156,7 +156,9 @@ export default function PortRow({
         )}
         {frontmatter && Object.keys(frontmatter).length > 0 && <FrontmatterChips values={frontmatter} />}
         <ExtensionDecorations<PortItemContext> location="port/item" extra={decorated} className="relative" />
-        <span className="ri-port__where">{displayPath}</span>
+        <span className="ri-port__where" title={tip}>
+          {displayPath}
+        </span>
         {anyExists && totalSize > 0 && <span className="ri-port__size">{formatSize(totalSize)}</span>}
         <span className="ri-port__tools">
           {copyTarget && (

@@ -174,6 +174,14 @@ export default function DetailsPane({
               onOpenFile={(portName, files, portType) => onOpenFile("output", portName, files, portType)}
             />
           )}
+          {/* ADR-0089: Live artifacts, under the Outputs, apart from them. */}
+          {live.length > 0 && (
+            <LiveSection
+              live={live}
+              runId={runId}
+              onOpen={(artifact) => onOpenFile("live", artifact.name, artifact.files, artifact.port_type)}
+            />
+          )}
           {inputs.length > 0 && (
             <IOSection
               title="Inputs"
@@ -182,14 +190,6 @@ export default function DetailsPane({
               runId={runId}
               nodeId={node.node_id}
               onOpenFile={(portName, files, portType) => onOpenFile("input", portName, files, portType)}
-            />
-          )}
-          {/* ADR-0089: Live artifacts, under the Outputs, apart from them. */}
-          {live.length > 0 && (
-            <LiveSection
-              live={live}
-              runId={runId}
-              onOpen={(artifact) => onOpenFile("live", artifact.name, artifact.files, artifact.port_type)}
             />
           )}
           <NodeProperties node={node} runId={runId} selectedIter={selectedIter} />

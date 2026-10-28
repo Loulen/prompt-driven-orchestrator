@@ -371,7 +371,6 @@ export function useXtermSession(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, mode, frozen]);
 
-
   return {
     connected,
     dropped: droppedSession === session,

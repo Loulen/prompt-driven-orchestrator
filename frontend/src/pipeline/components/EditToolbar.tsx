@@ -201,7 +201,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
         </>
       )}
 
-      {run && <RunToolbarActions run={run} readOnly={false} />}
+      {run && <RunToolbarActions run={run} />}
 
       {(reviewHref || run || onToggleInfo || (assistantAvailable && onOpenAssistant)) && sep}
 

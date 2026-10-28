@@ -236,6 +236,13 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         <span>{data.label}</span>
         {reached && !start && <CircleCheck size={12} strokeWidth={1.5} className="cv-mk__ok" aria-label="Reached" />}
         {inputImages.length > 0 && <InputImages names={inputImages} />}
+        {/* ADR-0081 (#31) — the `canvas/node` decorations, under the marker. */}
+        <ExtensionDecorations<CanvasNodeContext>
+          location="canvas/node"
+          extra={decorated}
+          block
+          className="cv-mk__deco"
+        />
         {rim}
       </div>
     );

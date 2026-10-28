@@ -163,7 +163,7 @@ export function InfoTab({
         </span>
         {run ? (
           <span className="d-mono ei-dim" title={run.run_id}>
-            {run.run_id.slice(-8)}
+            {run.run_id.slice(-7)}
           </span>
         ) : (
           <Chip>template</Chip>

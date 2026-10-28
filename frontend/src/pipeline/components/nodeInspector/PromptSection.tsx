@@ -124,6 +124,7 @@ export default function PromptSection({
             ? { value: promptContent, onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => updatePrompt(nodeId, e.target.value) }
             : fieldProps)}
           className="d-input d-area"
+          title={isScript ? undefined : "/ inserts a skill; one this node does not receive joins its skills"}
           wrap={isScript ? "off" : undefined}
           rows={10}
           placeholder={isScript ? "#!/usr/bin/env bash" : "Role prompt · {{inputs.<port>}}"}
@@ -147,7 +148,12 @@ export default function PromptSection({
           <pre>{[isInteractive && "/pdo-interactive", isOrchestrator && "/pdo-orchestrate"].filter(Boolean).join("\n")}</pre>
         </div>
       )}
-      {!isScript && <SkillPromptHint scope="node" lastAdded={lastAddedSkill ?? null} testId="node-prompt-skill-hint" />}
+      {/* The completion says it once it added a skill; how to call it is in the prompt's tooltip. */}
+      {!isScript && lastAddedSkill && (
+        <div className="ei-pad">
+          <SkillPromptHint scope="node" lastAdded={lastAddedSkill} testId="node-prompt-skill-hint" />
+        </div>
+      )}
     </Section>
   );
 }

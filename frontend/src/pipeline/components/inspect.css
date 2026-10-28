@@ -48,6 +48,13 @@
     flex: none;
     color: var(--text-3);
   }
+  .ei-bar__title > .ei-trunc {
+    flex: 0 1 auto;
+    max-width: 60%;
+  }
+  .ei-bar__title > .ei-trunc ~ .ei-trunc {
+    max-width: 40%;
+  }
   .ei-bar__sub {
     min-width: 0;
     overflow: hidden;
@@ -129,6 +136,10 @@
   }
   .ei-meta.d-mono {
     font-size: var(--fs-xs);
+  }
+  .ei-line > .ei-meta {
+    flex: none;
+    white-space: nowrap;
   }
   /* what others do and what an extension owns stays visible in a section head */
   .d-sec__aside:has(.ei-keep) {
@@ -466,6 +477,9 @@
   }
   .ei-port__row .port-row > .d-input {
     flex: 1 1 auto;
+  }
+  .ei-port__row .port-row > .ei-select {
+    flex: none;
   }
   .ei-port__row .port-row[data-hl] {
     background: var(--selected);
@@ -1185,7 +1199,7 @@
     flex: none;
   }
   .pi-dfile__name {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     max-width: 60%;
     min-width: 0;
     overflow: hidden;

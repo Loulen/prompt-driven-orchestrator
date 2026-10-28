@@ -78,8 +78,9 @@ pub use session::{
 };
 pub use skill::{ExtensionSkill, SkillFile};
 pub use ui::{
-    CompletionRender, ContextKey, HostedLocation, Slot, UiCommand, UiContribution, UiContributions,
-    UiElement, UiElementKind, UiLocation, UiSlot, When, UI_MODULE, UI_MODULE_MAJOR,
+    CommandOperation, CompletionRender, ContextKey, HostedLocation, Slot, UiCommand,
+    UiContribution, UiContributions, UiElement, UiElementKind, UiLocation, UiSlot, When, UI_MODULE,
+    UI_MODULE_MAJOR,
 };
 
 pub use axum;
@@ -103,5 +104,7 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `run/item/people` location; 0.13 only added the launch hooks of every
 /// session, `session_env` and `session_preamble`, and the session events; 0.16
 /// only added `NewRun::project_id`, the Projet a Run is launched in; 0.17 only
-/// added the primitives of the shared module `@pdo/extension-ui`, ADR-0091).
+/// added the primitives of the shared module `@pdo/extension-ui`, ADR-0091;
+/// 0.18 only added the `palette` location, the Sources de recherche and the
+/// Operation a command makes).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

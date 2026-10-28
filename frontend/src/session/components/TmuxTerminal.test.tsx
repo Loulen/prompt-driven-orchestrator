@@ -810,9 +810,7 @@ describe("TmuxTerminal", () => {
           paneSource={paneSource}
         />,
       );
-      await new Promise((r) => setTimeout(r, 10));
-
-      expect(fetchPaneMock).toHaveBeenCalledWith("run-1", "cop", 1);
+      await waitFor(() => expect(fetchPaneMock).toHaveBeenCalledWith("run-1", "cop", 1));
       expect(wsInstances).toHaveLength(0);
     });
 
@@ -845,9 +843,7 @@ describe("TmuxTerminal", () => {
           paneSource={paneSource}
         />,
       );
-      await new Promise((r) => setTimeout(r, 10));
-
-      expect(screen.getByText("snapshot · session reaped")).toBeInTheDocument();
+      expect(await screen.findByText("snapshot · session reaped")).toBeInTheDocument();
       // Attaching an OS terminal to a reaped session can only fail.
       expect(screen.queryByTestId("term-detach")).toBeNull();
     });
@@ -867,9 +863,8 @@ describe("TmuxTerminal", () => {
           paneSource={paneSource}
         />,
       );
-      await new Promise((r) => setTimeout(r, 10));
-
-      expect(screen.getByText("no pane kept")).toBeInTheDocument();
+      // Waits for the read, not a fixed delay: a loaded machine takes longer.
+      expect(await screen.findByText("no pane kept")).toBeInTheDocument();
       expect(wsInstances).toHaveLength(0);
     });
 

@@ -133,7 +133,6 @@ export const UNMIGRATED: readonly string[] = [
   "run/components/newRun/WhatSection.tsx",
   "run/components/newRun/WhereSection.tsx",
   "run/components/nodeDetail/ImportFilesModal.tsx",
-  "run/components/nodeDetail/LiveSection.tsx",
   "run/components/nodeDetail/RetryConfirmDialog.tsx",
   "run/components/runsList/RetryAllConfirmModal.tsx",
   "run/components/runsList/RunRow.tsx",

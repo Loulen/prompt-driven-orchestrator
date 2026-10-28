@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { ShieldAlert, X } from "lucide-react";
+import { Button, IconButton, TextInput } from "../../shared/ui/kit";
 import type { SandboxProfile } from "../model/sandbox";
 
 /**
@@ -41,7 +42,7 @@ export default function ProfileEnvEditor({
     if (!key) return;
     if (profile.reserved_env_keys.includes(key)) {
       onRefuse(
-        `\`${key}\` is set by PDO for every sandboxed Run and cannot be overridden — the container's home, its daemon URL and its Run id all depend on it.`,
+        `\`${key}\` is set by the daemon for every sandboxed Run and cannot be overridden — the container's home, its daemon URL and its Run id all depend on it.`,
       );
       return;
     }
@@ -56,56 +57,42 @@ export default function ProfileEnvEditor({
   };
 
   return (
-    <div className="flex flex-col gap-1.5" data-testid="staging-profile-env">
-      <span className="text-text-3" style={{ fontSize: "10.5px" }}>
+    <div className="set-group" data-testid="staging-profile-env">
+      <span
+        className="d-caps set-group__head"
+        title={`Posed at container creation, for every session of the Run; ${profile.reserved_env_keys.join(", ")} are set by the daemon and refused`}
+      >
         Environment
       </span>
       {Object.entries(profile.env).length === 0 ? (
-        <span
-          className="text-text-3"
-          style={{ fontSize: "10.5px" }}
-          data-testid="staging-profile-no-env"
-        >
-          None — the container gets only the variables PDO sets itself.
+        <span className="set-faint text-sm" data-testid="staging-profile-no-env">
+          None
         </span>
       ) : (
         Object.entries(profile.env).map(([key, value]) => (
-          <div
-            key={key}
-            className="flex items-center gap-2"
-            data-testid={`staging-env-${key}`}
-          >
-            <span className="shrink-0 font-mono text-text" style={{ fontSize: "11.5px" }}>
-              {key}
-            </span>
-            <span className="text-text-3" style={{ fontSize: "11.5px" }}>
-              =
-            </span>
+          <div key={key} className="set-rrow" data-testid={`staging-env-${key}`}>
+            <span className="set-mono">{key}</span>
+            <span className="set-faint">=</span>
             {/* Shown in clear, deliberately: the value is already in clear in the
                 database, in the Run's event file and in `docker inspect`. Masking it
-                would suggest PDO is protecting it. */}
-            <span
-              className="min-w-0 flex-1 truncate font-mono text-text-2"
-              style={{ fontSize: "11.5px" }}
-              title={value}
-            >
-              {value === "" ? <em className="text-text-3">(empty)</em> : value}
+                would suggest it is protected. */}
+            <span className="set-mono set-ellipsis set-rrow__path text-text-2" title={value}>
+              {value === "" ? <em className="set-faint">(empty)</em> : value}
             </span>
-            <button
-              type="button"
+            <IconButton
+              icon={X}
+              label={`Remove ${key}`}
+              size="sm"
               onClick={() => removeEnv(key)}
               disabled={busy}
-              aria-label={`Remove ${key}`}
               data-testid={`staging-env-remove-${key}`}
-              className="shrink-0 rounded p-0.5 text-text-3 transition-colors hover:bg-active hover:text-text-2 disabled:opacity-40"
-            >
-              <X size={12} />
-            </button>
+            />
           </div>
         ))
       )}
-      <div className="flex items-center gap-2 pt-0.5">
-        <input
+      <div className="set-line pt-1">
+        <TextInput
+          mono
           value={envKey}
           onChange={(e) => setEnvKey(e.target.value)}
           onKeyDown={(e) => {
@@ -114,10 +101,9 @@ export default function ProfileEnvEditor({
           placeholder="PUPPETEER_EXECUTABLE_PATH"
           aria-label="Environment variable name"
           data-testid="staging-env-new-key"
-          className="min-w-0 flex-1 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
-          style={{ fontSize: "11px" }}
         />
-        <input
+        <TextInput
+          mono
           value={envValue}
           onChange={(e) => setEnvValue(e.target.value)}
           onKeyDown={(e) => {
@@ -126,37 +112,21 @@ export default function ProfileEnvEditor({
           placeholder="/usr/bin/chromium"
           aria-label="Environment variable value"
           data-testid="staging-env-new-value"
-          className="min-w-0 flex-1 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
-          style={{ fontSize: "11px" }}
         />
-        <button
-          type="button"
-          onClick={addEnv}
-          disabled={busy || envKey.trim().length === 0}
-          data-testid="staging-env-add"
-          className="shrink-0 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 transition-colors hover:border-primary disabled:opacity-40"
-          style={{ fontSize: "11px" }}
-        >
+        <Button size="sm" onClick={addEnv} disabled={busy || envKey.trim().length === 0} data-testid="staging-env-add">
           Set
-        </button>
+        </Button>
       </div>
-      <div className="text-text-3" style={{ fontSize: "10.5px" }}>
-        Posed at container creation, for every session of the Run. Often the only way
-        to configure an MCP server whose <span className="font-mono">.mcp.json</span>{" "}
-        comes from a plugin. <span className="font-mono">{profile.reserved_env_keys.join(", ")}</span>{" "}
-        are set by PDO and refused here.
-      </div>
-      {/* Load-bearing copy, not a disclaimer: without it someone puts an API key
-          here believing it is a secret store. */}
+      {/* Load-bearing, not a disclaimer: without it someone puts an API key here
+          believing it is a secret store. */}
       <div
-        className="text-st-await"
-        style={{ fontSize: "10.5px" }}
+        className="set-warn"
+        title="Stored in clear in the database, copied into the Run's frozen event log, readable with docker inspect; kept out of the daemon log (names only)"
         data-testid="staging-profile-env-not-a-vault"
       >
-        <strong>This is not a secret store.</strong> Values are stored in clear in the
-        PDO database, copied into the Run's frozen event log, and readable with{" "}
-        <span className="font-mono">docker inspect</span>. They are kept out of the
-        daemon log (names only), and nothing else protects them.
+        <ShieldAlert size={13} strokeWidth={1.5} aria-hidden />
+        <span>Not a secret store</span>
+        <span className="set-faint set-ellipsis">clear in the database · docker inspect</span>
       </div>
     </div>
   );

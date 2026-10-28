@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { CloneJob } from "../../../shared/generated/CloneJob";
 import { cancelClone } from "../../api/repos";
 import { useClones } from "../../store/useClones";
-import { Pencil, SlidersHorizontal, Trash2 } from "lucide-react";
+import { FolderGit2, Pencil, SlidersHorizontal, Trash2 } from "lucide-react";
+import { Button, EmptyState, IconButton, TextInput } from "../../../shared/ui/kit";
 import type { Project } from "../../model/project";
 import { alsoIn, recentToAdd, runCount } from "../../model/projectsSettings";
 import FsExplorerModal from "../FsExplorerModal";
@@ -116,18 +117,15 @@ export default function ProjectDetail({
   }
 
   return (
-    <div
-      className="flex min-w-0 flex-1 flex-col gap-3 rounded-md border border-line bg-surface-0 px-3.5 py-3"
-      data-testid="project-detail"
-      data-project-id={project.id}
-    >
-      <div className="flex items-center gap-2">
+    <div className="set-pdet" data-testid="project-detail" data-project-id={project.id}>
+      <div className="set-pdet__head">
         {renaming !== null ? (
-          <input
+          <TextInput
             autoFocus
             value={renaming}
             aria-label="Project name"
             data-testid="project-rename-input"
+            className="set-pdet__rename"
             onChange={(e) => setRenaming(e.target.value)}
             onBlur={() => void commitRename()}
             onKeyDown={(e) => {
@@ -137,82 +135,57 @@ export default function ProjectDetail({
                 setRenaming(null);
               }
             }}
-            className="min-w-0 rounded border border-primary bg-surface-2 px-1.5 py-0.5 font-semibold text-text outline-none"
-            style={{ fontSize: "13px" }}
           />
         ) : (
-          <span className="truncate font-semibold text-text" style={{ fontSize: "13px" }} data-testid="project-detail-name">
+          <span className="set-pdet__name" title={project.name} data-testid="project-detail-name">
             {project.name}
           </span>
         )}
         {editable && renaming === null && (
-          <button
-            type="button"
+          <IconButton
+            icon={Pencil}
+            label="Rename project"
+            size="sm"
             onClick={() => setRenaming(project.name)}
-            aria-label="Rename project"
-            title="Rename"
             data-testid="project-rename"
-            className="shrink-0 rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2"
-          >
-            <Pencil size={11} />
-          </button>
+          />
         )}
-        <span className="shrink-0 font-mono text-text-3" style={{ fontSize: "10.5px" }} data-testid="project-detail-runs">
+        <span className="set-pdet__runs" data-testid="project-detail-runs">
           {runCount(runs)}
         </span>
         {!editable && (
-          <span
-            className="shrink-0 rounded bg-surface-2 px-1.5 py-0.5 text-text-3"
-            style={{ fontSize: "9.5px" }}
-            title="You may read this project, not change it."
-            data-testid="project-read-only"
-          >
+          <span className="d-chip" title="You may read this project, not change it" data-testid="project-read-only">
             read-only
           </span>
         )}
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {editable && (
-            <button
-              type="button"
-              onClick={gestures.openSettings}
-              title="Agent, skills, worktree provisioning and extension settings of this project"
-              data-testid="project-more-settings"
-              className="flex items-center gap-1 rounded border border-line-strong px-2 py-1 text-text-3 transition-colors hover:border-primary hover:text-text"
-              style={{ fontSize: "10.5px" }}
-            >
-              <SlidersHorizontal size={11} />
-              Agent & skills…
-            </button>
-          )}
-          {deletable && (
-            <button
-              type="button"
-              onClick={gestures.askDelete}
-              data-testid="project-delete"
-              className="flex items-center gap-1 rounded border border-st-failed/50 px-2 py-1 text-st-failed transition-colors hover:bg-st-failed/10"
-              style={{ fontSize: "10.5px" }}
-            >
-              <Trash2 size={11} />
-              Delete project
-            </button>
-          )}
-        </div>
+        <span className="d-grow" />
+        {editable && (
+          <Button
+            size="sm"
+            icon={SlidersHorizontal}
+            onClick={gestures.openSettings}
+            title="Agent, skills, worktree provisioning and extension settings of this project"
+            data-testid="project-more-settings"
+          >
+            Edit
+          </Button>
+        )}
+        {deletable && (
+          <IconButton
+            icon={Trash2}
+            label={`Delete ${project.name}`}
+            tone="danger"
+            onClick={gestures.askDelete}
+            data-testid="project-delete"
+          />
+        )}
       </div>
 
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
-          Repositories
-        </span>
-        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
-          the default primary is preselected in New Run
-        </span>
-      </div>
-
-      <div className="flex flex-col gap-1.5" data-testid="project-detail-repos">
+      <div className="set-pdet__repos" data-testid="project-detail-repos">
         {project.members.length === 0 && (
-          <div className="px-1 text-text-3" style={{ fontSize: "11px" }}>
-            No repository yet.
-          </div>
+          <EmptyState icon={FolderGit2} layout="row">
+            No repository
+          </EmptyState>
         )}
         {project.members.map((path) => (
           <ProjectRepositoryRow
@@ -230,8 +203,10 @@ export default function ProjectDetail({
       </div>
 
       {error && (
-        <div className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid="project-detail-error">
-          {error}
+        <div className="set-row__note set-row__note--failed" role="alert" data-testid="project-detail-error">
+          <span className="set-ellipsis" title={error}>
+            {error}
+          </span>
         </div>
       )}
 

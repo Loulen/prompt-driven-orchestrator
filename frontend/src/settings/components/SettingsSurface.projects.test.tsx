@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { InstanceSettings } from "../model/settings";
 import type { Project } from "../../workspace/model/project";
 import type { ProjectsEntry } from "../../workspace/model/projectsSettings";
+import { tipFor, tipOf } from "./settingsSurface/testing";
 
 // CORE-96 — Settings › Projects: the category, where it lands, what it hands the page.
 // Every api function the surface (and the panels it mounts) imports must exist in this factory: Vitest 4 wraps the module namespace in a
@@ -163,7 +164,7 @@ describe("SettingsSurface — Projects (CORE-96)", () => {
     );
     expect(screen.getByTestId("settings-category-projects")).toHaveAttribute("aria-selected", "true");
     const section = screen.getByTestId("settings-section-body-projects");
-    expect(within(section).getByText("saves as you go")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-section-projects-scope")).toHaveAttribute("data-scope", "live");
     await waitFor(() =>
       expect(within(section).getByTestId("projects-panel-stub")).toHaveTextContent(
         'Checkout entry={"projectId":"p1"} home=/home/user',
@@ -193,12 +194,10 @@ describe("SettingsSurface — Projects (CORE-96)", () => {
     );
     const input = await screen.findByTestId("setting-clones-folder");
     expect(input).toHaveValue("~/pdo/repos");
-    expect(screen.getByTestId("setting-source-clones-folder")).toHaveTextContent(
+    expect(await tipFor("clones-folder")).toMatch(
       "Source: built-in default (~/pdo/repos).",
     );
-    expect(screen.getByTestId("settings-section-body-clones-folder")).toHaveTextContent(
-      "Each clone goes in <folder>/<repository name>.",
-    );
+    expect(tipOf("clones-folder")).toMatch("Each clone goes in <folder>/<repository name>");
     fireEvent.change(input, { target: { value: "/srv/clones" } });
     expect(screen.getByTestId("settings-section-clones-folder-dirty")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("settings-save"));

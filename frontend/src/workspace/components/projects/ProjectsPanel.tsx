@@ -12,7 +12,8 @@ import { runCountByProject, sortedProjects, type ProjectsEntry } from "../../mod
 import { useProjectRights } from "../../store/useProjectRights";
 import { useRepoRemotes } from "../../store/useRepoRemotes";
 import { useRecentReposStore } from "../../../stores/recentReposStore";
-import ConfirmDeleteModal from "../../../shared/ui/ConfirmDeleteModal";
+import { Briefcase, Plus } from "lucide-react";
+import { Button, ConfirmDialog, EmptyState } from "../../../shared/ui/kit";
 import ProjectEditModal from "../ProjectEditModal";
 import ProjectDetail, { type ProjectGestures } from "./ProjectDetail";
 import ProjectList, { type ProjectDraft } from "./ProjectList";
@@ -117,62 +118,76 @@ export default function ProjectsPanel({
   }
 
   return (
-    <div className="flex flex-col gap-2" data-testid="projects-panel">
+    <div data-testid="projects-panel">
       {error && (
-        <div className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid="projects-error">
-          {error}
+        <div className="set-row__note set-row__note--failed" role="alert" data-testid="projects-error">
+          <span className="set-ellipsis" title={error}>
+            {error}
+          </span>
         </div>
       )}
-      <div className="flex items-start gap-4">
-        <ProjectList
-          projects={list}
-          selectedId={selected?.id ?? null}
-          onSelect={(id) => {
-            setSelectedId(id);
-            setError(null);
-          }}
-          draft={draft}
-          onDraft={(next) => {
-            setDraft(next);
-            setError(null);
-          }}
-          onCreate={create}
-          canCreate={rights.canCreate}
-          home={home}
-        />
-        {selected && gestures ? (
-          <ProjectDetail
-            // A fresh detail per Projet: no rename or form survives a switch.
-            key={selected.id}
-            project={selected}
-            projects={projects}
-            runs={counts.get(selected.id) ?? 0}
-            remotes={remotes}
-            recent={recent}
+      {list.length === 0 && !draft ? (
+        <EmptyState
+          icon={Briefcase}
+          action={
+            rights.canCreate && (
+              <Button size="sm" icon={Plus} onClick={() => setDraft({ name: "", members: [] })} data-testid="projects-new">
+                New project
+              </Button>
+            )
+          }
+        >
+          <span data-testid="projects-empty">No project yet</span>
+        </EmptyState>
+      ) : (
+        <div className="set-md">
+          <ProjectList
+            projects={list}
+            selectedId={selected?.id ?? null}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setError(null);
+            }}
+            draft={draft}
+            onDraft={(next) => {
+              setDraft(next);
+              setError(null);
+            }}
+            onCreate={create}
+            canCreate={rights.canCreate}
             home={home}
-            editable={!rights.readOnly.has(selected.id)}
-            deletable={!rights.undeletable.has(selected.id)}
-            canBrowse={rights.canBrowse}
-            canCreateRepository={rights.canCreateRepository}
-            gestures={gestures}
           />
-        ) : (
-          <div className="flex-1 px-1 py-2 text-text-3" style={{ fontSize: "11px" }} data-testid="projects-empty">
-            No project yet. A project groups the repositories a team works on; New Run starts from one.
-          </div>
-        )}
-      </div>
+          {selected && gestures && (
+            <ProjectDetail
+              // A fresh detail per Projet: no rename or form survives a switch.
+              key={selected.id}
+              project={selected}
+              projects={projects}
+              runs={counts.get(selected.id) ?? 0}
+              remotes={remotes}
+              recent={recent}
+              home={home}
+              editable={!rights.readOnly.has(selected.id)}
+              deletable={!rights.undeletable.has(selected.id)}
+              canBrowse={rights.canBrowse}
+              canCreateRepository={rights.canCreateRepository}
+              gestures={gestures}
+            />
+          )}
+        </div>
+      )}
 
-      <ConfirmDeleteModal
-        // Fresh on every open (#227).
-        key={confirmDelete?.id ?? "none"}
-        open={confirmDelete !== null}
-        kind="project"
-        name={confirmDelete?.name ?? ""}
-        detail="Repositories and Runs stay"
-        onClose={() => setConfirmDelete(null)}
-        onConfirm={() => confirmDelete && void remove(confirmDelete)}
-      />
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Delete project ${confirmDelete.name}?`}
+          consequence="Runs keep it, marked deleted"
+          target={`${confirmDelete.members.length} repositor${confirmDelete.members.length === 1 ? "y stays" : "ies stay"} on disk`}
+          actionLabel="Delete"
+          danger
+          onConfirm={() => void remove(confirmDelete)}
+          onClose={() => setConfirmDelete(null)}
+        />
+      )}
 
       {editing && (
         <ProjectEditModal

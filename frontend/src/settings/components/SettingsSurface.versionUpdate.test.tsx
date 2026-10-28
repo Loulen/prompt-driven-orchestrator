@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { InstanceSettings } from "../model/settings";
 import type { UpdateStatus } from "../../platform/model/update";
+import { switchFor } from "./settingsSurface/testing";
 
 // #697 — Settings › General › Version & update. Every api function the surface (and the
 // panels it mounts) imports must exist in this factory: Vitest 4 wraps the module
@@ -281,7 +282,7 @@ describe("Settings › General › Version & update (#697)", () => {
 
     const body = await screen.findByTestId("settings-section-body-version-update");
     expect(within(body).getByText("Version & update")).toBeInTheDocument();
-    expect(within(body).getByText("saves as you go")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-section-version-update-scope")).toHaveAttribute("data-scope", "live");
     // Sub-column entry, after Runs.
     const rail = screen.getByTestId("settings-section-version-update");
     expect(rail).toBeInTheDocument();
@@ -352,7 +353,7 @@ describe("Settings › General › Version & update (#697)", () => {
       "Unknown · manual (no service)",
     );
     const cmd = screen.getByTestId("setting-version-manual-command");
-    expect(cmd).toHaveTextContent("PDO will not update itself");
+    expect(within(cmd).getByTitle(/Install method not detected/)).toBeInTheDocument();
     expect(cmd).toHaveTextContent("Build from source, then restart the daemon.");
     expect(within(cmd).queryByTestId("setting-version-copy-command")).not.toBeInTheDocument();
     expect(screen.getByTestId("setting-version-checked-at")).toHaveTextContent("—");
@@ -367,14 +368,14 @@ describe("Settings › General › Version & update (#697)", () => {
     renderVersionSection();
 
     const btn = await screen.findByTestId("setting-version-check-now");
-    expect(btn).toHaveTextContent("Check now");
+    expect(btn).toHaveAccessibleName("Check now");
     fireEvent.click(btn);
     expect(checkForUpdateNowMock).toHaveBeenCalledTimes(1);
-    expect(btn).toHaveTextContent("Checking…");
+    expect(btn).toHaveAccessibleName("Checking…");
     expect(btn).toBeDisabled();
 
     resolve(status());
-    await waitFor(() => expect(btn).toHaveTextContent("Check now"));
+    await waitFor(() => expect(btn).toHaveAccessibleName("Check now"));
     expect(screen.getByTestId("setting-version-latest")).toHaveTextContent("v1.59.0");
     expect(screen.getByTestId("setting-version-checked-at")).toHaveTextContent("GitHub Releases");
     expect(heard).toHaveBeenCalled();
@@ -408,7 +409,7 @@ describe("Settings › General › Version & update (#697)", () => {
     window.addEventListener(UPDATE_STATUS_CHANGED, heard);
     renderVersionSection();
 
-    const sw = await screen.findByTestId("setting-update-check");
+    const sw =(await switchFor("update-check"));
     expect(sw).toHaveAttribute("aria-checked", "true");
     fireEvent.click(sw);
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith({ update_check: false }));
@@ -418,10 +419,9 @@ describe("Settings › General › Version & update (#697)", () => {
     expect(latest).toHaveTextContent("Update check is off.");
     const btn = screen.getByTestId("setting-version-check-now");
     expect(btn).toBeDisabled();
-    expect(btn).toHaveAttribute("title", "Turn the update check on to check now.");
     // The badge follows through the bus, and the form stays clean: nothing to Save.
     expect(heard).toHaveBeenCalled();
-    expect(screen.getByText("No unsaved changes")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-footer")).not.toBeInTheDocument();
     window.removeEventListener(UPDATE_STATUS_CHANGED, heard);
   });
 
@@ -433,7 +433,7 @@ describe("Settings › General › Version & update (#697)", () => {
     updateSettingsMock.mockResolvedValue(settings());
     renderVersionSection();
 
-    const sw = await screen.findByTestId("setting-update-check");
+    const sw =(await switchFor("update-check"));
     expect(sw).toHaveAttribute("aria-checked", "false");
     fireEvent.click(sw);
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith({ update_check: true }));

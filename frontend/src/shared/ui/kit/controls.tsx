@@ -104,14 +104,17 @@ export interface SegmentedProps<T extends string = string> {
   disabled?: boolean;
 }
 
-/** Two to four exclusive choices, inset, no dividers. Arrow keys move and select (one tab stop). */
+/** Two to four exclusive choices, inset, no dividers. Arrow keys move and select, Home and End jump (one tab stop). */
 export function Segmented<T extends string>({ items, value, onChange, label, size = "md", disabled }: SegmentedProps<T>) {
   const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const dir = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
-    if (!dir || disabled) return;
+    const jump = e.key === "Home" || e.key === "End";
+    if ((!dir && !jump) || disabled) return;
     e.preventDefault();
     const on = items.filter((i) => !i.disabled);
-    const next = on[(on.findIndex((i) => i.value === value) + dir + on.length) % on.length];
+    const next = jump
+      ? on[e.key === "Home" ? 0 : on.length - 1]
+      : on[(on.findIndex((i) => i.value === value) + dir + on.length) % on.length];
     if (!next) return;
     onChange(next.value);
     e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[items.indexOf(next)]?.focus();

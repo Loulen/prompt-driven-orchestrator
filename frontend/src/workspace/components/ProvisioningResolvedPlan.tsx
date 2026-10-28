@@ -56,7 +56,7 @@ export default function ProvisioningResolvedPlan({
   );
   return (
     <div className="border-t border-line px-3 py-2">
-      <div className="mb-1 font-medium uppercase tracking-wide text-text-3" style={{ fontSize: 9 }}>
+      <div className="mb-1 font-medium uppercase tracking-wide text-text-3 text-2xs">
         Resolved plan · {frozen ? "frozen" : "live"}
       </div>
       {(plan?.rules ?? []).filter((rule) => rule.unmatched).map((rule) => (

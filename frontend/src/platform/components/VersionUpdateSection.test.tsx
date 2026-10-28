@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "../model/update";
 
@@ -11,6 +11,9 @@ vi.mock("../api/update", () => ({
 }));
 
 import VersionUpdateSection from "./VersionUpdateSection";
+import { SETTINGS_CATEGORIES } from "../../settings/model/settingsCategories";
+
+const SECTION = SETTINGS_CATEGORIES.flatMap((c) => c.sections).find((s) => s.id === "version-update")!;
 
 /** A distribution (#24): its own name, version, source and command, on core 2.0.0. */
 function distribution(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
@@ -39,7 +42,7 @@ function distribution(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
 
 function renderSection() {
   return render(
-    <VersionUpdateSection active onToggleCheck={async () => {}} onRequestUpdate={() => {}} />,
+    <VersionUpdateSection section={SECTION} active onToggleCheck={async () => {}} onRequestUpdate={() => {}} />,
   );
 }
 
@@ -84,9 +87,9 @@ describe("Settings › Version & update — a distribution's release channel (#2
     const btn = await screen.findByTestId("setting-version-update-button");
     expect(btn).toBeDisabled();
     expect(btn).toHaveAttribute("title", expect.stringContaining("declares no update command"));
-    expect(screen.getByTestId("setting-version-manual-command")).toHaveTextContent(
-      "acme-pdo declares no update command",
-    );
+    expect(
+      within(screen.getByTestId("setting-version-manual-command")).getByTitle(/acme-pdo declares no update command/),
+    ).toHaveTextContent("none");
     expect(screen.queryByTestId("setting-version-copy-command")).not.toBeInTheDocument();
     expect(screen.getByTestId("setting-version-apply-blocked")).toHaveTextContent("will not guess");
   });
@@ -118,7 +121,6 @@ describe("Settings › Version & update — a distribution's release channel (#2
     expect(latest).toHaveTextContent("No release source is declared");
     const check = screen.getByTestId("setting-version-check-now");
     expect(check).toBeDisabled();
-    expect(check).toHaveAttribute("title", expect.stringContaining("No release source"));
     expect(screen.getByTestId("setting-version-update-button")).toBeDisabled();
   });
 });

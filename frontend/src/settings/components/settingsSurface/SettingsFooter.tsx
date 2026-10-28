@@ -1,82 +1,65 @@
 import type { RefObject } from "react";
-import { SETTINGS_CATEGORIES } from "../../model/settingsCategories";
+import { CircleX } from "lucide-react";
+import { Button, Kbd } from "../../../shared/ui/kit";
 import type { SettingsForm } from "../../store/useSettingsForm";
 
 /**
- * The Save footer, visible on every core category (not on an extension's page, which owns
- * its writes): where the unsaved changes are, the daemon's refusal next to Save, Cancel.
+ * The Save bar under the core categories (not on an extension's page, which owns its
+ * writes): shown while the instance form has something to say — how many settings are
+ * unsaved, the refusal next to Save, « Saved » once written. Discard drops the draft.
  */
 export default function SettingsFooter({
   form,
   saveButtonRef,
   loaded,
-  onCancel,
+  onDiscard,
 }: {
   form: Omit<SettingsForm, "saveButtonRef">;
   /** Focused when a save fails, so the refusal is read next to the button. */
   saveButtonRef: RefObject<HTMLButtonElement | null>;
   /** `GET /settings` answered: Save has something to compare against. */
   loaded: boolean;
-  onCancel: () => void;
+  /** Drops the draft. */
+  onDiscard: () => void;
 }) {
   const { saveState, isDirty, rollup, missingDefaultProfile } = form;
-  const dirtyCategory = SETTINGS_CATEGORIES.find((item) => rollup.categories.has(item.id));
+  // A dangling stored default keeps Save reachable so the blocker is read next to it.
+  if (!isDirty && !missingDefaultProfile && saveState.status === "idle") return null;
   const dirtyCount = rollup.fields.size;
-  const footerText =
-    saveState.status === "saved"
-      ? "Saved"
-      : isDirty && dirtyCategory
-        ? `Unsaved changes in ${dirtyCategory.label} (${dirtyCount} field${dirtyCount === 1 ? "" : "s"})`
-        : "No unsaved changes";
 
   return (
-    <div
-      className="flex items-center gap-3 border-t border-line px-4 py-3"
-      data-testid="settings-footer"
-    >
+    <footer className="d-bar set-savebar" data-testid="settings-footer">
+      {isDirty && <span className="set-dirty" aria-hidden />}
       <span
-        className={isDirty || saveState.status === "saved" ? "text-st-await" : "text-text-3"}
-        style={{ fontSize: "11px" }}
+        className={saveState.status === "saved" ? "set-ok" : undefined}
         data-testid="settings-footer-status"
         data-dirty={isDirty ? "true" : undefined}
       >
-        {footerText}
+        {saveState.status === "saved" && !isDirty ? "Saved" : isDirty ? `${dirtyCount} unsaved` : ""}
       </span>
-      <div className="ml-auto flex items-center gap-2">
-        {saveState.status === "error" && (
-          <span
-            role="alert"
-            className="text-st-failed"
-            style={{ fontSize: "11px" }}
-            data-testid="settings-error"
-          >
-            Save failed: {saveState.message}
-          </span>
-        )}
-        <button
-          type="button"
-          onClick={onCancel}
-          data-testid="settings-cancel"
-          className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
-          style={{ fontSize: "11.5px" }}
-        >
-          Cancel
-        </button>
-        <button
-          ref={saveButtonRef}
-          type="button"
-          onClick={() => void form.handleSave()}
-          // Disabled while the form is clean (#691): on a clean page the only enabled primary
-          // is a panel's own. A dangling stored default keeps it clickable so the blocker
-          // is read next to the button, not guessed.
-          disabled={saveState.status === "saving" || !loaded || (!isDirty && !missingDefaultProfile)}
-          className="rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
-          style={{ fontSize: "11.5px" }}
-          data-testid="settings-save"
-        >
-          {saveState.status === "saving" ? "Saving…" : "Save"}
-        </button>
-      </div>
-    </div>
+      {saveState.status === "error" && (
+        <span role="alert" className="d-err set-ellipsis" title={saveState.message} data-testid="settings-error">
+          <CircleX size={12} strokeWidth={1.5} aria-hidden />
+          {saveState.message}
+        </span>
+      )}
+      <span className="d-grow" />
+      {isDirty && (
+        <Button onClick={onDiscard} data-testid="settings-discard">
+          Discard
+        </Button>
+      )}
+      <Button
+        ref={saveButtonRef}
+        tone="primary"
+        onClick={() => void form.handleSave()}
+        disabled={saveState.status === "saving" || !loaded || (!isDirty && !missingDefaultProfile)}
+        title="Save (Ctrl+S)"
+        data-testid="settings-save"
+      >
+        {saveState.status === "saving" ? "Saving…" : "Save"}
+        <Kbd>Ctrl S</Kbd>
+      </Button>
+    </footer>
   );
 }

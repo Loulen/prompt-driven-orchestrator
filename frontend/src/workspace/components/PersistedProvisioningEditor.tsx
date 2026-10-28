@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchInstanceProvisioning, fetchProjectProvisioning, saveInstanceProvisioning, saveProjectProvisioning } from "../api/provisioning";
 import { EMPTY_PROVISIONING_RULES } from "../model/provisioning";
 import type { ProvisioningRules } from "../../shared/generated/ProvisioningRules";
+import { Button, Field, TextInput } from "../../shared/ui/kit";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
 
 export default function PersistedProvisioningEditor({
@@ -68,29 +69,29 @@ export default function PersistedProvisioningEditor({
       projectId={scope === "project" ? (projectId ?? null) : null}
       defaultExpanded={defaultExpanded}
       leading={
-        <label className="block text-text-3" style={{ fontSize: 10 }}>
-          Resolve against
-          <input
+        <Field label="Resolve against" help="A repository to preview the rules on">
+          <TextInput
+            mono
             value={repository}
             onChange={(event) => setRepository(event.target.value)}
             placeholder="/absolute/path/to/repository"
-            className="mt-1 w-full rounded border border-line-strong bg-surface-2 px-2 py-1 font-mono text-text outline-none focus:border-primary"
           />
-        </label>
+        </Field>
       }
       trailing={
-        <div className="flex items-center justify-between">
-          <span className={message?.includes("Failed") ? "text-st-failed" : "text-text-3"}>
+        <div className="set-line">
+          <span className={`set-ellipsis text-xs ${message?.includes("Failed") ? "set-bad" : "set-faint"}`}>
             {message}
           </span>
-          <button
-            type="button"
+          <span className="d-grow" />
+          <Button
+            size="sm"
+            tone="primary"
             onClick={save}
             disabled={!valid || saving || (scope === "project" && !projectId)}
-            className="rounded bg-primary px-2.5 py-1 font-medium text-primary-ink disabled:opacity-40"
           >
             {saving ? "Saving…" : "Save provisioning"}
-          </button>
+          </Button>
         </div>
       }
     />

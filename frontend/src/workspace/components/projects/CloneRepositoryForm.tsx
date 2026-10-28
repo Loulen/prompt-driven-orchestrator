@@ -1,16 +1,18 @@
 import { useEffect, useState } from "react";
-import { Globe, Loader2 } from "lucide-react";
+import { CircleX, Globe, Loader2, RotateCcw, X } from "lucide-react";
 import { tildify } from "../../../lib/homePath";
+import { Button, IconButton, TextInput } from "../../../shared/ui/kit";
 import { fetchCloneTarget } from "../../api/repos";
 import { isRemoteUrl, progressLine, progressPercent } from "../../model/clone";
 import type { CloneJob } from "../../../shared/generated/CloneJob";
 import type { CloneTarget } from "../../../shared/generated/CloneTarget";
 
 /**
- * « Clone from a URL » of a Projet in Settings › Projects (CORE-97): the URL, the
- * folder it is cloned into (`<clones folder>/<name>`, which « change » edits), then
- * the clone's progress with its Cancel. The clone runs in the daemon: Settings may
- * close, the repository joins the Projet once it is there.
+ * « Clone from a URL » of a Projet in Settings › Projects (CORE-97), as a block: the
+ * URL, the folder it is cloned into (`<clones folder>/<name>`, which « change » edits),
+ * then the clone's progress line and bar with its Cancel, or why it failed with Dismiss
+ * and Try again. The clone runs in the daemon: Settings may close, the repository joins
+ * the Projet once it is there.
  *
  * Without `job`, the form to fill; with one, that clone as it runs (or why it failed).
  */
@@ -77,28 +79,76 @@ export default function CloneRepositoryForm({
     }
   }
 
-  return (
-    <div
-      className="flex flex-col gap-2 rounded-md border border-st-running/50 bg-surface-1 px-3 py-2.5"
-      data-testid={job ? "project-clone-job" : "project-clone"}
-      data-state={job?.state}
-    >
-      <div className="flex items-center gap-1.5 font-medium text-text" style={{ fontSize: "11.5px" }}>
-        <Globe size={12} className="text-st-running" />
-        Clone from a URL
-      </div>
-      {job ? (
-        <div
-          className="truncate rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text"
-          style={{ fontSize: "12px" }}
-          title={job.url}
-          data-testid="project-clone-job-url"
-        >
-          {job.url}
+  const into = path && (
+    <span className="set-line min-w-0">
+      <span className="set-faint">Into</span>
+      <span className="set-mono set-ellipsis" title={path} data-testid="project-clone-into">
+        {tildify(path, home)}
+      </span>
+    </span>
+  );
+
+  if (job) {
+    return (
+      <div className="set-cform" data-testid="project-clone-job" data-state={job.state}>
+        <div className="set-line">
+          {failed ? (
+            <CircleX size={13} strokeWidth={1.5} className="set-bad" aria-label="failed" />
+          ) : (
+            <Loader2 size={13} strokeWidth={1.5} className="animate-spin text-st-running" aria-label="cloning" />
+          )}
+          <span className="set-mono set-ellipsis" title={job.url} data-testid="project-clone-job-url">
+            {job.url}
+          </span>
+          {running && (
+            <span className="set-faint set-mono flex-none text-xs" data-testid="project-clone-progress">
+              {progressLine(job)}
+            </span>
+          )}
+          <span className="d-grow" />
+          {running && onCancelClone && (
+            <Button size="sm" tone="ghost" onClick={onCancelClone} data-testid="project-clone-cancel">
+              Cancel
+            </Button>
+          )}
+          {!running && (
+            <Button size="sm" onClick={onCancel} data-testid="project-clone-dismiss">
+              Dismiss
+            </Button>
+          )}
+          {failed && onRetry && (
+            <Button size="sm" icon={RotateCcw} onClick={onRetry} data-testid="project-clone-retry">
+              Try again
+            </Button>
+          )}
         </div>
-      ) : (
-        <input
+        {running ? (
+          <div className="set-line set-cform__meta">
+            <span className="set-bar">
+              <span style={{ width: `${progressPercent(job)}%` }} />
+            </span>
+            <span className="set-line min-w-0" title={`The repository joins ${projectName} when the clone is done`}>
+              → {into}
+            </span>
+          </div>
+        ) : (
+          job.error && (
+            <span className="set-cform__err" title={job.error} data-testid="project-clone-error">
+              {job.error}
+            </span>
+          )
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="set-cform" data-testid="project-clone">
+      <div className="set-line">
+        <Globe size={13} strokeWidth={1.5} className="text-st-running" aria-hidden />
+        <TextInput
           autoFocus
+          mono
           value={url}
           onChange={(e) => {
             setUrl(e.target.value);
@@ -113,130 +163,61 @@ export default function CloneRepositoryForm({
           }}
           aria-label="URL of the repository to clone"
           placeholder="https://github.com/acme/app.git"
+          title="A full clone, with the daemon's git credentials"
           spellCheck={false}
           data-testid="project-clone-url"
-          className="min-w-0 rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text outline-none focus:border-st-running"
-          style={{ fontSize: "12px" }}
         />
-      )}
-      <div className="flex items-center justify-between gap-2 text-text-3" style={{ fontSize: "10.5px" }}>
-        <span className="flex min-w-0 items-center gap-1.5 truncate">
-          {editingPath !== null && !job ? (
-            <>
-              Into
-              <input
-                autoFocus
-                value={editingPath}
-                onChange={(e) => setEditingPath(e.target.value)}
-                aria-label="Folder to clone into"
-                spellCheck={false}
-                data-testid="project-clone-path"
-                className="min-w-0 flex-1 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 font-mono text-text outline-none focus:border-st-running"
-                style={{ fontSize: "11px" }}
-              />
-            </>
-          ) : path ? (
-            <>
-              Into{" "}
-              <span className="font-mono text-text-3" data-testid="project-clone-into">
-                {tildify(path, home)}
-              </span>
-              {!job && (
-                <button
-                  type="button"
-                  onClick={() => setEditingPath(tildify(path, home))}
-                  className="underline decoration-dotted hover:text-text-2"
-                  data-testid="project-clone-change"
-                >
-                  change
-                </button>
-              )}
-              {!job && shownTarget?.cloned && editingPath === null && (
-                <span className="text-primary" data-testid="project-clone-reused">
-                  · already cloned, reused
-                </span>
-              )}
-            </>
-          ) : (
-            "An https://, ssh:// or git@host:path URL"
-          )}
-        </span>
-        <span className="shrink-0">full clone · with the daemon&apos;s git credentials</span>
+        <Button
+          size="sm"
+          tone="primary"
+          onClick={() => void clone()}
+          disabled={!valid || busy}
+          data-testid="project-clone-start"
+        >
+          {busy ? "Starting…" : shownTarget?.cloned && editingPath === null ? "Add" : "Clone and add"}
+        </Button>
+        <IconButton icon={X} label="Cancel" kbd="Esc" size="sm" onClick={onCancel} data-testid="project-clone-dismiss" />
       </div>
-
-      {running && job && (
-        <>
-          <div className="flex items-center justify-between gap-2" style={{ fontSize: "10.5px" }}>
-            <span className="flex items-center gap-1.5 text-text-2" data-testid="project-clone-progress">
-              <Loader2 size={11} className="animate-spin text-st-running" />
-              {progressLine(job)}
-            </span>
-            {onCancelClone && (
-              <button
-                type="button"
-                onClick={onCancelClone}
-                className="text-text-3 hover:text-text-2"
-                data-testid="project-clone-cancel"
-              >
-                Cancel
-              </button>
-            )}
-          </div>
-          <div className="h-1 overflow-hidden rounded-full bg-surface-2">
-            <div
-              className="h-full rounded-full bg-st-running transition-[width] duration-300"
-              style={{ width: `${progressPercent(job)}%` }}
+      <div className="set-line set-cform__meta">
+        {editingPath !== null ? (
+          <>
+            <span className="set-faint">Into</span>
+            <TextInput
+              autoFocus
+              small
+              mono
+              value={editingPath}
+              onChange={(e) => setEditingPath(e.target.value)}
+              aria-label="Folder to clone into"
+              spellCheck={false}
+              data-testid="project-clone-path"
             />
-          </div>
-          <div className="text-text-3" style={{ fontSize: "10.5px" }}>
-            You can close Settings: the clone goes on, and the repository joins {projectName} when it
-            is done.
-          </div>
-        </>
-      )}
-
-      {(error || (failed && job?.error)) && (
-        <div className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid="project-clone-error">
-          {error ?? job?.error}
-        </div>
-      )}
-
-      {!running && (
-        <div className="flex justify-end gap-1.5">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded px-2.5 py-1 text-text-3 hover:bg-hover"
-            style={{ fontSize: "11px" }}
-            data-testid="project-clone-dismiss"
-          >
-            {failed ? "Dismiss" : "Cancel"}
-          </button>
-          {failed && job && onRetry ? (
+          </>
+        ) : path ? (
+          <>
+            {into}
             <button
               type="button"
-              onClick={onRetry}
-              data-testid="project-clone-retry"
-              className="rounded bg-primary px-2.5 py-1 font-medium text-primary-ink hover:bg-primary-hi"
-              style={{ fontSize: "11px" }}
+              onClick={() => setEditingPath(tildify(path, home))}
+              className="set-link"
+              data-testid="project-clone-change"
             >
-              Try again
+              change
             </button>
-          ) : (
-            !job && (
-              <button
-                type="button"
-                onClick={() => void clone()}
-                disabled={!valid || busy}
-                data-testid="project-clone-start"
-                className="rounded bg-primary px-2.5 py-1 font-medium text-primary-ink hover:bg-primary-hi disabled:opacity-50"
-                style={{ fontSize: "11px" }}
-              >
-                {busy ? "Starting…" : shownTarget?.cloned && editingPath === null ? "Add" : "Clone and add"}
-              </button>
-            )
-          )}
-        </div>
+            {shownTarget?.cloned && (
+              <span className="d-chip" title="Already cloned there: reused" data-testid="project-clone-reused">
+                reused
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="set-faint">https://, ssh:// or git@host:path</span>
+        )}
+      </div>
+      {error && (
+        <span className="set-cform__err" title={error} data-testid="project-clone-error">
+          {error}
+        </span>
       )}
     </div>
   );

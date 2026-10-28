@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { isOn, rowOf, switchFor, switchOf, tipFor, tipOf } from "./settingsSurface/testing";
 
 const fetchSettingsMock = vi.fn();
 const updateSettingsMock = vi.fn();
@@ -500,9 +501,7 @@ describe("SettingsSurface", () => {
     expect(screen.getByLabelText("Copy patterns")).toBeInTheDocument();
     // The page scrolls, not the surface: the shell is fixed, each category page owns its
     // scroll container.
-    expect(screen.getByTestId("settings-scroll-sandbox")).toHaveClass(
-      "overflow-y-auto",
-    );
+    expect(screen.getByTestId("settings-page-sandbox")).toHaveClass("set-page");
   });
 
   it("loads and seeds the effective values", async () => {
@@ -572,7 +571,7 @@ describe("SettingsSurface", () => {
     render(<SettingsSurface open onClose={() => {}} />);
     expect(await screen.findByTestId("settings-section-public-url")).toHaveTextContent("Public URL");
     const field = await screen.findByTestId("setting-public-url");
-    expect(screen.getByTestId("setting-source-public-url")).toHaveTextContent(
+    expect(await tipFor("public-url")).toMatch(
       "Source: none set (PDO_PUBLIC_URL unset).",
     );
 
@@ -583,12 +582,7 @@ describe("SettingsSurface", () => {
     expect(updateSettingsMock).not.toHaveBeenCalled();
 
     fireEvent.change(field, { target: { value: "https://pdo.example.net/" } });
-    expect(screen.getByTestId("setting-public-url-preview")).toHaveTextContent(
-      "With its guide: https://pdo.example.net/#/pages/my-page",
-    );
-    expect(screen.getByTestId("setting-public-url-preview")).toHaveTextContent(
-      "Page alone: https://pdo.example.net/pages/my-page/",
-    );
+    expect(tipOf("public-url")).toContain("https://pdo.example.net/#/pages/my-page");
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
     expect(updateSettingsMock).toHaveBeenCalledWith({ public_url: "https://pdo.example.net/" });
@@ -610,7 +604,7 @@ describe("SettingsSurface", () => {
     ).toHaveTextContent("/home/user/.pdo/prices/fetched.json");
     expect(
       screen.getByTestId("setting-price-table-fetched-at"),
-    ).toHaveTextContent(/never synced/i);
+    ).toHaveTextContent(/never/i);
     // Absent is SILENT: no advisory when nothing is wrong.
     expect(
       screen.queryByTestId("setting-price-table-reason"),
@@ -650,10 +644,14 @@ describe("SettingsSurface", () => {
     expect(
       screen.getByTestId("setting-price-table-fetched-at"),
     ).toHaveTextContent("2026-07-30T14:12:03Z");
-    // And what the manual tier shadows is visible.
+    // And what the manual tier shadows is named.
     expect(
       screen.getByTestId("setting-price-table-manual-path"),
-    ).toHaveTextContent("claude-opus-4-8");
+    ).toHaveTextContent("1 model");
+    expect(screen.getByTestId("setting-price-table-manual-path").querySelector(".set-kv__v")).toHaveAttribute(
+      "title",
+      "claude-opus-4-8",
+    );
   }, 20_000);
 
   it("lists the resolved harnesses and stays silent when no descriptor is inert (#553)", async () => {
@@ -704,9 +702,9 @@ describe("SettingsSurface", () => {
   it("discloses a shadowed env source for the cap", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    const note = await screen.findByTestId("setting-source-session-cap");
-    expect(note).toHaveTextContent("PDO_SESSION_CAP=9");
-    expect(note).toHaveTextContent(/env/i);
+    const note = await tipFor("session-cap");
+    expect(note).toMatch("PDO_SESSION_CAP=9");
+    expect(note).toMatch(/env/i);
   });
 
   it("saves only the changed field", async () => {
@@ -784,13 +782,11 @@ describe("SettingsSurface", () => {
     render(<SettingsSurface open onClose={onClose} />);
 
     await screen.findByTestId("setting-session-cap");
-    fireEvent.click(screen.getByTestId("settings-save"));
+    // A clean form shows no Save bar at all.
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
     expect(updateSettingsMock).not.toHaveBeenCalled();
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
-      "No unsaved changes",
-    );
 
-    fireEvent.click(screen.getByTestId("settings-cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expect(
       screen.queryByTestId("settings-confirm-close"),
     ).not.toBeInTheDocument();
@@ -938,9 +934,9 @@ describe("SettingsSurface", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const note = await screen.findByTestId("setting-source-default-model");
-    expect(note).toHaveTextContent("PDO_DEFAULT_MODEL=sonnet");
-    expect(note).toHaveTextContent(/overridden/i);
+    const note = await tipFor("default-model");
+    expect(note).toMatch("PDO_DEFAULT_MODEL=sonnet");
+    expect(note).toMatch(/overridden/i);
   });
 
   it("seeds the default-sandbox select from the effective value (#410)", async () => {
@@ -1001,10 +997,7 @@ describe("SettingsSurface", () => {
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
     await screen.findByTestId("setting-default-sandbox");
-    fireEvent.click(screen.getByTestId("settings-save"));
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
-      "No unsaved changes",
-    );
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
     expect(updateSettingsMock).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -1060,9 +1053,9 @@ describe("SettingsSurface", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const note = await screen.findByTestId("setting-source-default-sandbox");
-    expect(note).toHaveTextContent("PDO_DEFAULT_SANDBOX=full");
-    expect(note).toHaveTextContent(/overridden/i);
+    const note = await tipFor("default-sandbox");
+    expect(note).toMatch("PDO_DEFAULT_SANDBOX=full");
+    expect(note).toMatch(/overridden/i);
   });
 });
 
@@ -1078,10 +1071,8 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
   it("is unchecked on a fresh instance (ADR-0012: opt-in)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    const box = (await screen.findByTestId(
-      "setting-autocomplete-turn-end",
-    )) as HTMLInputElement;
-    expect(box.checked).toBe(false);
+    const box = (await switchFor("autocomplete-turn-end"));
+    expect(isOn(box)).toBe(false);
   });
 
   it("is labelled on the end of turn, never on a duration", async () => {
@@ -1091,10 +1082,10 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
     // should have to delete this assertion on purpose.
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    const box = await screen.findByTestId("setting-autocomplete-turn-end");
-    const row = box.closest("div") as HTMLElement;
-    expect(row).toHaveTextContent(/finished its turn/i);
-    expect(row).not.toHaveTextContent(/second|minute|idle|stale/i);
+    await switchFor("autocomplete-turn-end");
+    const label = `${rowOf("autocomplete-turn-end").textContent} ${tipOf("autocomplete-turn-end")}`;
+    expect(label).toMatch(/finished its turn/i);
+    expect(label).not.toMatch(/second|minute|idle|stale/i);
   });
 
   it("seeds from the effective value when the env tier turned it on", async () => {
@@ -1110,13 +1101,9 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const box = (await screen.findByTestId(
-      "setting-autocomplete-turn-end",
-    )) as HTMLInputElement;
-    expect(box.checked).toBe(true);
-    expect(
-      screen.getByTestId("setting-source-autocomplete-turn-end"),
-    ).toHaveTextContent("PDO_AUTOCOMPLETE_TURN_END=on");
+    const box = (await switchFor("autocomplete-turn-end"));
+    expect(isOn(box)).toBe(true);
+    expect(await tipFor("autocomplete-turn-end")).toMatch("PDO_AUTOCOMPLETE_TURN_END=on");
   });
 
   it("saves the ticked box and nothing else", async () => {
@@ -1135,7 +1122,7 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
 
-    fireEvent.click(await screen.findByTestId("setting-autocomplete-turn-end"));
+    fireEvent.click(await switchFor("autocomplete-turn-end"));
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
@@ -1168,7 +1155,7 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
 
-    fireEvent.click(await screen.findByTestId("setting-autocomplete-turn-end"));
+    fireEvent.click(await switchFor("autocomplete-turn-end"));
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
@@ -1187,12 +1174,9 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
-    await screen.findByTestId("setting-autocomplete-turn-end");
-    fireEvent.click(screen.getByTestId("settings-save"));
-    // Nothing changed at all → no round-trip, the footer says so.
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
-      "No unsaved changes",
-    );
+    await switchFor("autocomplete-turn-end");
+    // Nothing changed at all → no Save bar, no round-trip.
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
     expect(updateSettingsMock).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -1212,12 +1196,10 @@ describe("SettingsSurface — turn-end auto-completion (#469)", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const note = await screen.findByTestId(
-      "setting-source-autocomplete-turn-end",
-    );
-    expect(note).toHaveTextContent(/stored value \(off\)/i);
-    expect(note).toHaveTextContent("PDO_AUTOCOMPLETE_TURN_END=on");
-    expect(note).toHaveTextContent(/overridden/i);
+    const note = await tipFor("autocomplete-turn-end");
+    expect(note).toMatch(/stored value \(off\)/i);
+    expect(note).toMatch("PDO_AUTOCOMPLETE_TURN_END=on");
+    expect(note).toMatch(/overridden/i);
   });
 });
 
@@ -1244,18 +1226,12 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const box = (await screen.findByTestId(
-      "setting-review-agent-can-resolve",
-    )) as HTMLInputElement;
-    expect(box.checked).toBe(false);
-    expect(
-      screen.getByTestId("setting-source-review-agent-can-resolve"),
-    ).toHaveTextContent(/built-in default \(off\)/i);
-    expect(
-      screen.getByTestId("setting-source-review-agent-can-resolve"),
-    ).toHaveTextContent("PDO_REVIEW_AGENT_CAN_RESOLVE");
+    const box = (await switchFor("review-agent-can-resolve"));
+    expect(isOn(box)).toBe(false);
+    expect(await tipFor("review-agent-can-resolve")).toMatch(/built-in default \(off\)/i);
+    expect(await tipFor("review-agent-can-resolve")).toMatch("PDO_REVIEW_AGENT_CAN_RESOLVE");
     // Right after auto-name in the DOM.
-    const autoName = screen.getByTestId("setting-default-auto-name");
+    const autoName = switchOf("default-auto-name");
     expect(
       autoName.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -1266,20 +1242,14 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
     expect(updateSettingsMock).toHaveBeenCalledWith({
       review_agent_can_resolve: true,
     });
-    await waitFor(() =>
-      expect(
-        screen.getByTestId("setting-source-review-agent-can-resolve"),
-      ).toHaveTextContent(/stored value \(on\)/i),
-    );
+    await waitFor(() => expect(tipOf("review-agent-can-resolve")).toMatch(/stored value \(on\)/i));
   });
 
   it("is checked on a fresh instance (default is ON — pre-#338 behaviour)", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    const box = (await screen.findByTestId(
-      "setting-default-auto-name",
-    )) as HTMLInputElement;
-    expect(box.checked).toBe(true);
+    const box = (await switchFor("default-auto-name"));
+    expect(isOn(box)).toBe(true);
   });
 
   it("seeds from the effective value when a stored off overrides the default", async () => {
@@ -1295,13 +1265,9 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const box = (await screen.findByTestId(
-      "setting-default-auto-name",
-    )) as HTMLInputElement;
-    expect(box.checked).toBe(false);
-    expect(
-      screen.getByTestId("setting-source-default-auto-name"),
-    ).toHaveTextContent(/stored value \(off\)/i);
+    const box = (await switchFor("default-auto-name"));
+    expect(isOn(box)).toBe(false);
+    expect(await tipFor("default-auto-name")).toMatch(/stored value \(off\)/i);
   });
 
   it("sends `false` when unticked — never a clear sentinel", async () => {
@@ -1320,7 +1286,7 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
 
-    fireEvent.click(await screen.findByTestId("setting-default-auto-name"));
+    fireEvent.click(await switchFor("default-auto-name"));
     fireEvent.click(screen.getByTestId("settings-save"));
 
     await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
@@ -1339,11 +1305,9 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     const onClose = vi.fn();
     render(<SettingsSurface open onClose={onClose} />);
-    await screen.findByTestId("setting-default-auto-name");
-    fireEvent.click(screen.getByTestId("settings-save"));
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
-      "No unsaved changes",
-    );
+    await switchFor("default-auto-name");
+    // Nothing changed at all → no Save bar, no round-trip.
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
     expect(updateSettingsMock).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -1361,10 +1325,10 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
       }),
     );
     render(<SettingsSurface open onClose={() => {}} />);
-    const note = await screen.findByTestId("setting-source-default-auto-name");
-    expect(note).toHaveTextContent(/stored value \(off\)/i);
-    expect(note).toHaveTextContent("PDO_DEFAULT_AUTO_NAME=on");
-    expect(note).toHaveTextContent(/overridden/i);
+    const note = await tipFor("default-auto-name");
+    expect(note).toMatch(/stored value \(off\)/i);
+    expect(note).toMatch("PDO_DEFAULT_AUTO_NAME=on");
+    expect(note).toMatch(/overridden/i);
   });
 });
 
@@ -1400,10 +1364,8 @@ describe("SettingsSurface — Pipeline Manager section (manager on demand)", () 
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
     fireEvent.click(screen.getByTestId("settings-category-agents"));
-    const box = (await screen.findByTestId(
-      "setting-manager-enabled",
-    )) as HTMLInputElement;
-    expect(box.checked).toBe(false);
+    const box = (await switchFor("manager-enabled"));
+    expect(isOn(box)).toBe(false);
     const select = screen.getByTestId(
       "setting-manager-profile",
     ) as HTMLSelectElement;
@@ -1419,7 +1381,7 @@ describe("SettingsSurface — Pipeline Manager section (manager on demand)", () 
     const options = within(select)
       .getAllByRole("option")
       .map((o) => o.textContent);
-    expect(options).toContain("Follow the Run");
+    expect(options).toContain("Follow the run");
   });
 
   it("shows the tombstone and a warning for a stored pin whose profile is gone — never a rewrite", async () => {
@@ -1444,7 +1406,7 @@ describe("SettingsSurface — Pipeline Manager section (manager on demand)", () 
     ).toBeInTheDocument();
     expect(
       screen.getByTestId("setting-manager-profile-missing-note"),
-    ).toHaveTextContent(/falls back to « Follow the Run »/i);
+    ).toHaveTextContent(/follows the run/i);
   });
 
   it("saves the flag as a plain bool and the pin as a profile name; Save stays clean otherwise", async () => {
@@ -1453,13 +1415,13 @@ describe("SettingsSurface — Pipeline Manager section (manager on demand)", () 
     render(<SettingsSurface open onClose={() => {}} />);
     fireEvent.click(screen.getByTestId("settings-category-agents"));
 
-    fireEvent.click(await screen.findByTestId("setting-manager-enabled"));
+    fireEvent.click(await switchFor("manager-enabled"));
     // Wait for the profiles fetch so the option exists before the change.
     await screen.findByTestId("settings-section-body-pipeline-manager");
     await waitFor(() =>
       expect(
         screen.getByTestId("setting-manager-profile").textContent,
-      ).toContain("Follow the Run"),
+      ).toContain("Follow the run"),
     );
     await waitFor(() => {
       const select = screen.getByTestId("setting-manager-profile");
@@ -1523,13 +1485,13 @@ describe("SettingsSurface — Interface / child runs default (#783)", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
 
-    const expanded = await screen.findByTestId("setting-child-runs-expanded");
-    const collapsed = screen.getByTestId("setting-child-runs-collapsed");
+    const row = await screen.findByTestId("setting-row-child-runs");
+    const expanded = within(row).getByRole("radio", { name: "Expanded" });
+    const collapsed = within(row).getByRole("radio", { name: "Collapsed" });
     expect(expanded).toHaveAttribute("aria-checked", "true");
     expect(collapsed).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByTestId("setting-child-runs-badge")).toHaveTextContent(
-      "Device-local · saved immediately",
-    );
+    // Kept on this device, saved at once: the scope icon says so.
+    expect(row.querySelector('[data-scope="device"]')).not.toBeNull();
 
     fireEvent.click(collapsed);
     expect(localStorage.getItem("pdo.ui.childRunsExpanded")).toBe("false");
@@ -1544,9 +1506,8 @@ describe("SettingsSurface — Interface / child runs default (#783)", () => {
     localStorage.setItem("pdo.ui.childRunsExpanded", "false");
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    expect(
-      await screen.findByTestId("setting-child-runs-collapsed"),
-    ).toHaveAttribute("aria-checked", "true");
+    const row = await screen.findByTestId("setting-row-child-runs");
+    expect(within(row).getByRole("radio", { name: "Collapsed" })).toHaveAttribute("aria-checked", "true");
   });
 });
 
@@ -1562,17 +1523,16 @@ describe("SettingsSurface — Interface / wiring grid size (#877)", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
 
-    const m = await screen.findByTestId("setting-wiring-grid-size-M");
-    const s = screen.getByTestId("setting-wiring-grid-size-S");
-    const l = screen.getByTestId("setting-wiring-grid-size-L");
+    const row = await screen.findByTestId("setting-row-wiring-grid-size");
+    const m = within(row).getByRole("radio", { name: "M" });
+    const s = within(row).getByRole("radio", { name: "S" });
+    const l = within(row).getByRole("radio", { name: "L" });
     expect(m).toHaveAttribute("aria-checked", "true");
-    expect(s).toHaveTextContent("20px");
-    expect(m).toHaveTextContent("30px");
-    expect(l).toHaveTextContent("40px");
+    expect(s).toHaveAttribute("title", "S, 20 px");
+    expect(m).toHaveAttribute("title", "M, 30 px");
+    expect(l).toHaveAttribute("title", "L, 40 px");
     // No « Global » option here: this IS the global default.
-    expect(
-      screen.queryByTestId("setting-wiring-grid-size-global"),
-    ).not.toBeInTheDocument();
+    expect(within(row).getAllByRole("radio")).toHaveLength(3);
 
     fireEvent.click(s);
     expect(localStorage.getItem("pdo.ui.wiringGridSize")).toBe('"S"');
@@ -1584,7 +1544,7 @@ describe("SettingsSurface — Interface / wiring grid size (#877)", () => {
   it("no longer tells the reader the step is a product constant", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    await screen.findByTestId("setting-wiring-grid-size");
+    await screen.findByTestId("setting-row-wiring-grid-size");
     expect(screen.queryByText(/product constant/)).not.toBeInTheDocument();
   });
 });
@@ -1607,7 +1567,7 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
 
-    const toggle = await screen.findByTestId("setting-tabs-disabled");
+    const toggle =(await switchFor("tabs-disabled"));
     expect(toggle).toHaveAttribute("aria-checked", "false");
 
     fireEvent.click(toggle);
@@ -1622,7 +1582,7 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
   it("toggles back off and writes false", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    const toggle = await screen.findByTestId("setting-tabs-disabled");
+    const toggle =(await switchFor("tabs-disabled"));
     fireEvent.click(toggle);
     fireEvent.click(toggle);
     expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("false");
@@ -1635,7 +1595,7 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
     render(<SettingsSurface open onClose={() => {}} />);
 
     // …but the toggle is present and functional.
-    const toggle = await screen.findByTestId("setting-tabs-disabled");
+    const toggle =(await switchFor("tabs-disabled"));
     expect(screen.queryByTestId("setting-session-cap")).not.toBeInTheDocument();
     fireEvent.click(toggle);
     expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("true");
@@ -1645,7 +1605,7 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
     useEditStore.setState({ singleTabMode: true });
     fetchSettingsMock.mockResolvedValue(sample());
     render(<SettingsSurface open onClose={() => {}} />);
-    const toggle = await screen.findByTestId("setting-tabs-disabled");
+    const toggle =(await switchFor("tabs-disabled"));
     expect(toggle).toHaveAttribute("aria-checked", "true");
   });
 });
@@ -1756,19 +1716,15 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     ).not.toBeInTheDocument();
     // No inner scroll: the category page is the one scroll container.
     expect(panel).not.toHaveClass("overflow-y-auto");
-    expect(screen.getByTestId("settings-scroll-sandbox")).toHaveClass(
-      "overflow-y-auto",
-    );
+    expect(screen.getByTestId("settings-page-sandbox")).toHaveClass("set-page");
     expect(
-      within(
-        screen.getByTestId("settings-section-body-staging-profiles"),
-      ).getByText("saves as you go"),
-    ).toBeInTheDocument();
+      screen.getByTestId("settings-section-staging-profiles-scope"),
+    ).toHaveAttribute("data-scope", "live");
 
     // The form's draft and the panel's edits never compete: a panel write leaves the form
-    // clean and Save disabled; a form edit enables Save without touching the panel.
+    // clean and no Save bar; a form edit brings Save without touching the panel.
     const cap = screen.getByTestId("setting-session-cap") as HTMLInputElement;
-    expect(screen.getByTestId("settings-save")).toBeDisabled();
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
     fireEvent.change(cap, { target: { value: "7" } });
     expect(screen.getByTestId("settings-save")).toBeEnabled();
     expect(screen.getByTestId("settings-footer-status")).toHaveAttribute(
@@ -1889,22 +1845,19 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     await openPanel();
     fireEvent.click(await screen.findByTestId("staging-profile-delete-full"));
 
-    const dialog = await screen.findByTestId("staging-profile-delete-dialog");
-    expect(dialog).toHaveTextContent(/will\s+not\s+repoint/i);
+    await screen.findByTestId("staging-profile-delete-dialog");
+    const dialog = screen.getByRole("dialog", { name: "Delete profile full?" });
+    // The referents are not repointed: their next Run fails.
     expect(dialog).toHaveTextContent(/fails/i);
-    expect(screen.getByTestId("staging-profile-referents")).toHaveTextContent(
-      "Nightly audit",
-    );
-    expect(screen.getByTestId("staging-profile-referents")).toHaveTextContent(
-      /Instance default sandbox/i,
-    );
+    expect(dialog).toHaveTextContent("trigger Nightly audit");
+    expect(dialog).toHaveTextContent(/instance default/i);
     expect(
       screen.getByTestId("staging-profile-referent-runs"),
     ).toHaveTextContent(/unaffected/i);
     // Nothing deleted until the user confirms.
     expect(deleteSandboxProfileMock).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTestId("staging-profile-delete-confirm"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() =>
       expect(deleteSandboxProfileMock).toHaveBeenCalledWith("full"),
     );
@@ -2052,7 +2005,7 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("staging-profiles-error")).toHaveTextContent(
-        /set by PDO for every sandboxed Run/i,
+        /set by the daemon for every sandboxed Run/i,
       ),
     );
     expect(saveSandboxProfileMock).not.toHaveBeenCalled();
@@ -2069,9 +2022,11 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
       "staging-profile-env-not-a-vault",
     );
     expect(warning).toHaveTextContent(/not a secret store/i);
-    expect(warning).toHaveTextContent(/database/i);
-    expect(warning).toHaveTextContent(/event log/i);
-    expect(warning).toHaveTextContent(/docker inspect/i);
+    // The three places the value lands: on the line, the rest in its tooltip.
+    const said = `${warning.textContent} ${warning.getAttribute("title")}`;
+    expect(said).toMatch(/database/i);
+    expect(said).toMatch(/event log/i);
+    expect(said).toMatch(/docker inspect/i);
   });
 
   it("sets an explicit registry ref on the profile", async () => {
@@ -2152,9 +2107,9 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     // left is the ONE sentence that makes the default comprehensible — the tag is the hash of
     // the seeded Dockerfile's bytes — said where the choice is made.
     const none = screen.getByTestId("staging-image-none");
-    expect(none).toHaveTextContent(/SHA-256/i);
+    expect(none.getAttribute("title")).toMatch(/SHA-256/i);
     expect(none).toHaveTextContent("~/.pdo/sandbox/Dockerfile");
-    expect(none).not.toHaveTextContent(/instance/i);
+    expect(`${none.textContent} ${none.getAttribute("title")}`).not.toMatch(/instance/i);
   });
 
   /** The one thing an explicit ref LOSES, said where it is chosen. Without it the first
@@ -2167,8 +2122,8 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
     const warning = screen.getByTestId("staging-image-ref-no-fallback");
     expect(warning).toHaveTextContent(/no local build to fall back on/i);
     expect(warning).toHaveTextContent(/fails the Run/i);
-    // …and that PDO cannot vouch for the image's contents.
-    expect(warning).toHaveTextContent(/claude/i);
+    // …and that nothing vouches for the image's contents.
+    expect(warning.getAttribute("title")).toMatch(/contains the harness/i);
   });
 
   /**
@@ -2218,6 +2173,84 @@ describe("SettingsSurface — staging profiles panel (#432)", () => {
   });
 });
 
+describe("SettingsSurface — search line, Save bar (CORE-117)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset().mockResolvedValue(sample());
+    updateSettingsMock.mockReset();
+    resetProfileMocks();
+    fetchInstanceProvisioningMock.mockReset().mockResolvedValue({ copy: [], hardlink: [], symlink: [] });
+  });
+
+  it("finds a setting in another category, names its category, and Escape clears it first", async () => {
+    const onClose = vi.fn();
+    render(<SettingsSurface open onClose={onClose} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "default sandbox" } });
+
+    expect(screen.getByTestId("setting-row-default-sandbox")).toBeInTheDocument();
+    expect(screen.queryByTestId("setting-row-session-cap")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-section-body-sandbox")).toHaveTextContent("Sandbox & worktrees ›");
+    await waitFor(() => expect(screen.getByTestId("settings-search-count")).toHaveTextContent("1"));
+    // The section column has nothing to list under a search.
+    expect(screen.queryByTestId("settings-subcolumn")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.getByTestId("settings-search")).toHaveValue("");
+    expect(screen.getByTestId("setting-row-session-cap")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("finds a row by its help, and keeps a panel mounted while it hides it", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    const panel = await screen.findByTestId("staging-profiles-panel");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "sweep runs every" } });
+    expect(screen.getByTestId("setting-row-reaper-ttl")).toBeInTheDocument();
+    expect(panel).toBeInTheDocument();
+    expect(panel).not.toBeVisible();
+  });
+
+  it("shows only the changed settings, and says so when there is none", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-modified-only"));
+    await waitFor(() => expect(screen.getByText("No settings")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+    fireEvent.change(screen.getByTestId("setting-reaper-ttl"), { target: { value: "1200" } });
+    fireEvent.click(screen.getByTestId("settings-modified-only"));
+    expect(screen.getByTestId("setting-row-reaper-ttl")).toBeInTheDocument();
+    expect(screen.queryByTestId("setting-row-session-cap")).not.toBeInTheDocument();
+    expect(screen.queryByText("No settings")).not.toBeInTheDocument();
+  });
+
+  it("Discard puts the value back, hides the bar and hands the focus to the search line", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    const ttl = await screen.findByTestId("setting-reaper-ttl");
+    fireEvent.change(ttl, { target: { value: "1200" } });
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("1 unsaved");
+    fireEvent.click(screen.getByTestId("settings-discard"));
+    expect(ttl).toHaveValue(3600);
+    expect(screen.queryByTestId("settings-footer")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-search")).toHaveFocus();
+  });
+
+  it("saves with Ctrl+S", async () => {
+    updateSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    fireEvent.change(await screen.findByTestId("setting-reaper-ttl"), { target: { value: "1200" } });
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledWith({ reaper_ttl_secs: 1200 }));
+  });
+
+  it("names a value out of its range at the row end", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    fireEvent.change(await screen.findByTestId("setting-guard-timeout"), { target: { value: "900" } });
+    expect(within(screen.getByTestId("setting-row-guard-timeout")).getByRole("alert")).toHaveTextContent("1–600");
+  });
+});
+
 describe("SettingsSurface — full-window shell, categories, sections (#690)", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();
@@ -2259,11 +2292,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
     const entries = () =>
-      within(
-        screen
-          .getByTestId("settings-page-general")
-          .querySelector("nav") as HTMLElement,
-      )
+      within(screen.getByTestId("settings-subcolumn"))
         .getAllByRole("button")
         .map((button) => button.textContent);
     // #823 added Tutorials as General's fifth section, #891 Stats absorptions.
@@ -2287,11 +2316,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     );
     const diagnostics = screen.getByTestId("settings-page-diagnostics");
     expect(diagnostics).not.toHaveAttribute("hidden");
-    expect(
-      within(diagnostics.querySelector("nav") as HTMLElement)
-        .getAllByRole("button")
-        .map((button) => button.textContent),
-    ).toEqual(["Price table", "Harness descriptors"]);
+    expect(entries()).toEqual(["Price table", "Harness descriptors"]);
     // Read-only: values are there, nothing to edit, and the sync lives in Stats.
     expect(
       screen.getByTestId("setting-price-table-fetched-path"),
@@ -2355,17 +2380,15 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     ).not.toBeInTheDocument();
 
     fireEvent.change(cap, { target: { value: "12" } });
-    // Three altitudes: field, section, category — plus the footer names the place.
-    expect(cap).toHaveClass("border-st-await");
+    // Three altitudes: row, section, category — plus the Save bar counts them.
+    expect(screen.getByTestId("setting-row-session-cap")).toHaveAttribute("data-dirty", "true");
     expect(
       screen.getByTestId("settings-section-runtime-limits-dirty"),
     ).toBeInTheDocument();
     expect(
       screen.getByTestId("settings-category-general-dirty"),
     ).toBeInTheDocument();
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
-      "Unsaved changes in General (1 field)",
-    );
+    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent("1 unsaved");
 
     fireEvent.click(screen.getByTestId("settings-category-diagnostics"));
     // Still dirty from Diagnostics, and the footer is still there.
@@ -2467,7 +2490,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     const confirm = await screen.findByTestId("settings-confirm-close");
     expect(confirm).toHaveTextContent("General › Runtime limits");
-    expect(confirm).toHaveTextContent("1 field");
+    expect(confirm).toHaveTextContent("1 unsaved change");
     expect(screen.getByTestId("settings-confirm-keep")).toHaveFocus();
 
     fireEvent.click(screen.getByTestId("settings-confirm-keep"));
@@ -2494,7 +2517,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     fireEvent.change(await screen.findByTestId("setting-session-cap"), {
       target: { value: "12" },
     });
-    fireEvent.click(screen.getByTestId("settings-cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     fireEvent.click(await screen.findByTestId("settings-confirm-discard"));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(updateSettingsMock).not.toHaveBeenCalled();
@@ -2527,9 +2550,6 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     expect(screen.getByTestId("settings-drawer")).toHaveAttribute(
       "data-drawer",
       "skills",
-    );
-    expect(screen.getByTestId("settings-drawer")).toHaveTextContent(
-      "Esc returns to Settings",
     );
     // The rail stays visible under the drawer.
     expect(
@@ -2575,7 +2595,6 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     expect(
       within(drawer).getByRole("heading", { name: "Skill bank" }),
     ).toBeInTheDocument();
-    expect(drawer).toHaveTextContent("saves as you go · Esc returns to Settings");
     expect(screen.getByTestId("settings-drawer-close")).toHaveAccessibleName(
       "Close panel",
     );
@@ -2617,20 +2636,16 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
   it("the single-tab toggle persists immediately and never dirties the draft", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
-    fireEvent.click(screen.getByTestId("setting-tabs-disabled"));
+    fireEvent.click(switchOf("tabs-disabled"));
     expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("true");
-    expect(screen.getByTestId("setting-tabs-disabled-badge")).toHaveTextContent(
-      /device-local/i,
-    );
+    expect(rowOf("tabs-disabled").querySelector('[data-scope="device"]')).not.toBeNull();
     expect(
       screen.queryByTestId("settings-category-general-dirty"),
     ).not.toBeInTheDocument();
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
-      "No unsaved changes",
-    );
+    expect(screen.queryByTestId("settings-footer")).not.toBeInTheDocument();
     // Closing needs no confirmation.
     const onClose = vi.fn();
-    fireEvent.click(screen.getByTestId("settings-cancel"));
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expect(
       screen.queryByTestId("settings-confirm-close"),
     ).not.toBeInTheDocument();
@@ -2706,7 +2721,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       "setting-harness-descriptor-rejected-opencode",
     );
     expect(row).toHaveTextContent("refused: missing `command`");
-    expect(row).toHaveClass("text-st-failed");
+    expect(row.querySelector(".set-bad")).not.toBeNull();
   });
 });
 
@@ -2754,7 +2769,8 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
   });
 
   function sectionLabels(page: HTMLElement): string[] {
-    return within(within(page).getByTestId("settings-subcolumn"))
+    expect(page).not.toHaveAttribute("hidden");
+    return within(screen.getByTestId("settings-subcolumn"))
       .getAllByRole("button")
       .map((b) => b.textContent?.replace("Unsaved changes", "").trim() ?? "");
   }
@@ -2774,18 +2790,15 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     // The instance form fields sit in Harness & models.
     const harness = screen.getByTestId("settings-section-body-harness-models");
     expect(
-      within(harness).getByTestId("setting-default-harness"),
+      within(harness).getByTestId("setting-row-default-harness"),
     ).toBeInTheDocument();
     expect(
       within(harness).queryByTestId("instance-skill-selector"),
     ).not.toBeInTheDocument();
 
-    // Agent profiles: inline, `saves as you go`, list-first (no editor until Edit / New profile).
+    // Agent profiles: inline, saved at once, list-first (no editor until Edit / New profile).
     const profiles = screen.getByTestId("settings-section-body-agent-profiles");
-    expect(within(profiles).getByText("saves as you go")).toHaveAttribute(
-      "title",
-      expect.stringMatching(/Save button below does not apply/),
-    );
+    expect(screen.getByTestId("settings-section-agent-profiles-scope")).toHaveAttribute("title", "Saved at once");
     const panel = within(profiles).getByTestId("agent-profiles-panel");
     expect(
       await within(panel).findByText("claude very easy"),
@@ -2804,7 +2817,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     const panel = screen.getByTestId("agent-profiles-panel");
     await within(panel).findByText("claude very easy");
 
-    fireEvent.click(within(panel).getByTestId("agent-profile-new"));
+    fireEvent.click(screen.getByTestId("agent-profile-new"));
     const modal = screen.getByRole("dialog", { name: "New agent profile" });
     const create = within(modal).getByRole("button", { name: "Create" });
     expect(create).toBeDisabled();
@@ -2847,12 +2860,9 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
         "fast",
       ),
     ).toBeInTheDocument();
-    // Modal closed; the form stayed clean, so Save stayed disabled — panel writes are not form writes.
+    // Modal closed; the form stayed clean, so no Save bar — panel writes are not form writes.
     expect(screen.queryByTestId("agent-profile-modal")).not.toBeInTheDocument();
-    expect(screen.getByTestId("settings-save")).toBeDisabled();
-    expect(screen.getByTestId("settings-footer-status")).toHaveTextContent(
-      "No unsaved changes",
-    );
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
     expect(updateSettingsMock).not.toHaveBeenCalled();
   });
 
@@ -2888,13 +2898,13 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
       within(skills).getByTestId("instance-skill-selector"),
     ).toBeInTheDocument();
     expect(
-      within(skills).queryByText("saves as you go"),
+      screen.queryByTestId("settings-section-skills-scope"),
     ).not.toBeInTheDocument();
-    const card = within(skills).getByTestId("setting-skill-bank-card");
+    const card = skills;
     await waitFor(() =>
       expect(
         within(card).getByTestId("setting-skills-count"),
-      ).toHaveTextContent("0 skills · 0 folders · ~/.pdo/skills"),
+      ).toHaveTextContent("0 skills · 0 folders"),
     );
     expect(
       within(skills).queryByTestId("skill-bank-panel"),
@@ -2929,13 +2939,13 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
       within(defaultSandbox).getByTestId("setting-default-sandbox"),
     ).toBeInTheDocument();
     expect(
-      within(defaultSandbox).queryByText("saves as you go"),
+      screen.queryByTestId("settings-section-sandbox-scope"),
     ).not.toBeInTheDocument();
 
     const staging = screen.getByTestId(
       "settings-section-body-staging-profiles",
     );
-    expect(within(staging).getByText("saves as you go")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-section-staging-profiles-scope")).toBeInTheDocument();
     expect(
       (await within(staging).findAllByText("full")).length,
     ).toBeGreaterThan(0);
@@ -2944,9 +2954,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     const provisioning = screen.getByTestId(
       "settings-section-body-worktree-provisioning",
     );
-    expect(
-      within(provisioning).getByText("saves as you go"),
-    ).toBeInTheDocument();
+    expect(screen.getByTestId("settings-section-worktree-provisioning-scope")).toBeInTheDocument();
     expect(
       await within(provisioning).findByRole("button", {
         name: "Save provisioning",
@@ -3003,7 +3011,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
       await waitFor(() => expect(heard).toHaveBeenCalledTimes(1));
       expect(fetchSettingsMock.mock.calls.length).toBeGreaterThan(before);
       // The form is still clean: the panel's write went straight to the daemon.
-      expect(screen.getByTestId("settings-save")).toBeDisabled();
+      expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
       expect(updateSettingsMock).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener("pdo:settings-changed", heard);
@@ -3052,12 +3060,11 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     ).not.toHaveAttribute("data-landed");
   });
 
-  it("Save is disabled while the form is clean and enabled once a field changes", async () => {
+  it("Save shows once a field changes, and goes with the draft once saved", async () => {
     const user = userEvent.setup();
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
-    const save = screen.getByTestId("settings-save");
-    expect(save).toBeDisabled();
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("settings-category-agents"));
     await user.click(screen.getByTestId("setting-default-harness-select"));
     await user.click(
@@ -3065,6 +3072,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
         "setting-default-harness-select-option-opencode",
       ),
     );
+    const save = screen.getByTestId("settings-save");
     expect(save).toBeEnabled();
     expect(
       screen.getByTestId("settings-section-harness-models-dirty"),
@@ -3094,7 +3102,7 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     expect(
       screen.queryByTestId("settings-section-harness-models-dirty"),
     ).not.toBeInTheDocument();
-    expect(save).toBeDisabled();
+    expect(screen.getByTestId("settings-save")).toBeDisabled();
   });
 
   it("a changed instance-tier skill selection dirties the Skills row and persists with Save", async () => {
@@ -3160,7 +3168,7 @@ describe("SettingsSurface — Tutorials (#823)", () => {
     });
   });
 
-  it("sits in General, badged as this browser's memory", async () => {
+  it("sits in General, marked as this browser's memory", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
     expect(
@@ -3168,8 +3176,8 @@ describe("SettingsSurface — Tutorials (#823)", () => {
     ).toBeInTheDocument();
     expect(screen.getByTestId("settings-tutorials")).toBeInTheDocument();
     expect(
-      screen.getByTestId("settings-section-tutorials-device-local"),
-    ).toHaveTextContent("Device-local");
+      screen.getByTestId("settings-section-tutorials-scope"),
+    ).toHaveAttribute("data-scope", "device");
   });
 
   it("closes the surface, then starts the tour", async () => {
@@ -3194,9 +3202,7 @@ describe("SettingsSurface — Tutorials (#823)", () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
     fireEvent.click(screen.getByTestId("tutorials-reset"));
-    expect(screen.getByTestId("settings-footer")).toHaveTextContent(
-      "No unsaved changes",
-    );
+    expect(screen.queryByTestId("settings-footer")).not.toBeInTheDocument();
   });
 
   it("asks about a dirty form before leaving for a tour, and cancels the tour if you stay", async () => {
@@ -3275,7 +3281,7 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
     const body = await screen.findByTestId(
       "settings-section-body-stats-absorptions",
     );
-    expect(within(body).getByText("saves as you go")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-section-stats-absorptions-scope")).toHaveAttribute("data-scope", "live");
     expect(
       screen.getByTestId("settings-section-stats-absorptions"),
     ).toHaveTextContent("Stats absorptions");
@@ -3317,7 +3323,7 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
     );
     expect(within(body).queryByText("Digest")).not.toBeInTheDocument();
     expect(updateSettingsMock).not.toHaveBeenCalled();
-    expect(screen.getByTestId("settings-save")).toBeDisabled();
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
   });
 
   it("lists the Node and Model absorptions in their own groups, the Node's under its pipeline (#892)", async () => {
@@ -3544,9 +3550,10 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
   };
   const railLabels = async () => {
     const rail = await screen.findByRole("tablist", { name: "Settings categories" });
+    // The label, without the icon an extension's page wears.
     return within(rail)
       .getAllByRole("tab")
-      .map((t) => t.textContent);
+      .map((t) => t.querySelector(".set-nav__label")?.textContent);
   };
 
   beforeEach(() => {
@@ -3593,8 +3600,8 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
     await user.click(screen.getByTestId("settings-category-demo:prefs"));
     expect(screen.getByTestId("prefs")).toHaveTextContent("demo settings/page path=");
     expect(window.location.hash).toBe("#/ext/demo/settings/page");
-    // The page owns its writes: the core's Save footer is not in view.
-    expect(screen.queryByTestId("settings-footer")).not.toBeInTheDocument();
+    // The page owns its writes and its content: no search line, no Save bar.
+    expect(screen.queryByTestId("settings-search")).not.toBeInTheDocument();
     await user.click(screen.getByText("deeper"));
     expect(screen.getByTestId("prefs")).toHaveTextContent("path=deep/inside");
     expect(window.location.hash).toBe("#/ext/demo/settings/page/deep/inside");
@@ -3603,7 +3610,7 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
     expect(screen.getByText("panel of the extension")).toBeVisible();
     expect(screen.queryByTestId("prefs")).not.toBeInTheDocument();
     expect(window.location.hash).toBe("");
-    expect(screen.getByTestId("settings-footer")).toBeInTheDocument();
+    expect(screen.getByTestId("settings-search")).toBeInTheDocument();
   });
 
   it("lands on the page its deep link names, and leaves the link on close", async () => {

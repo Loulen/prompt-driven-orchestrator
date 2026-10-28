@@ -256,12 +256,12 @@ export default function ProvisioningRulesEditor({
             </span>
           </button>
           {marker && (
-            <div className="min-w-0 truncate text-right text-text-3" style={{ fontSize: 10 }} title={marker}>
+            <div className="min-w-0 truncate text-right text-text-3 text-xs" title={marker}>
               {marker}
             </div>
           )}
         </div>
-        <div className="mt-0.5 text-text-3" style={{ fontSize: 10 }}>
+        <div className="mt-0.5 text-text-3 text-xs">
           {SUBTITLE}
         </div>
       </div>
@@ -331,11 +331,8 @@ export default function ProvisioningRulesEditor({
                       return (
                         <div
                           key={`${rule.scope}-${rule.pattern}`}
-                          className={`flex items-center justify-between font-mono text-text-3 ${redeclared ? "line-through opacity-60" : ""}`}
-                          style={{
-                            fontSize: 9,
-                            textDecorationLine: redeclared ? "line-through" : "none",
-                          }}
+                          className={`flex items-center justify-between font-mono text-2xs text-text-3 ${redeclared ? "line-through opacity-60" : ""}`}
+                          style={{ textDecorationLine: redeclared ? "line-through" : "none" }}
                         >
                           <span className="truncate">{rule.pattern}</span>
                           <span className="ml-1 shrink-0 rounded bg-surface-2 px-1">
@@ -349,7 +346,7 @@ export default function ProvisioningRulesEditor({
                       rule.mode === key &&
                       scopePrecedes(rule.scope, level),
                   ) && (
-                    <div className="text-text-3" style={{ fontSize: 9 }}>No inherited rules</div>
+                    <div className="text-text-3 text-2xs">No inherited rules</div>
                   )}
                 </div>
                 <div className="relative">
@@ -364,11 +361,10 @@ export default function ProvisioningRulesEditor({
                     readOnly={readOnly}
                     aria-invalid={conflictingPatterns[key].size > 0}
                     rows={5}
-                    className={`w-full resize-y bg-surface-1 p-2 pr-14 font-mono text-text outline-none ${conflictingPatterns[key].size ? "ring-1 ring-inset ring-st-failed" : ""}`}
+                    className={`w-full resize-y bg-surface-1 p-2 pr-14 font-mono text-xs text-text outline-none ${conflictingPatterns[key].size ? "ring-1 ring-inset ring-st-failed" : ""}`}
                     placeholder={"one pattern per line\n!path excludes"}
-                    style={{ fontSize: 10 }}
                   />
-                  <div className="pointer-events-none absolute right-2 top-2 space-y-[2px] text-right font-mono text-text-3" style={{ fontSize: 10 }}>
+                  <div className="pointer-events-none absolute right-2 top-2 space-y-[2px] text-right font-mono text-text-3 text-xs">
                     {rules[key].map((pattern) => (
                       <div
                         key={pattern}

@@ -1,10 +1,11 @@
 import { FolderGit2, X } from "lucide-react";
 import { tildify } from "../../../lib/homePath";
+import { Button, IconButton } from "../../../shared/ui/kit";
 
 /**
  * A repository of the Projet shown in Settings › Projects (CORE-96): its path,
- * its remote, the other Projets holding it (ADR-0087), the « default primary »
- * mark — or « Make default » on hover — and its removal.
+ * its remote, how many other Projets hold it (ADR-0087, named in the tooltip),
+ * the « default » mark — or « Make default » on hover — and its removal.
  */
 export default function ProjectRepositoryRow({
   path,
@@ -27,61 +28,41 @@ export default function ProjectRepositoryRow({
   onRemove: () => void;
 }) {
   return (
-    <div
-      className="group/repo flex items-center gap-2.5 rounded-md border border-line-soft bg-surface-2/50 px-2.5 py-2"
-      data-testid="project-repo-row"
-      data-path={path}
-      title={path}
-    >
-      <FolderGit2 size={13} className="shrink-0 text-text-3" />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate font-mono text-text" style={{ fontSize: "11.5px" }}>
-            {tildify(path, home)}
-          </span>
-          {primary && (
-            <span
-              className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-primary"
-              style={{ fontSize: "9.5px" }}
-              data-testid="project-repo-primary"
-            >
-              default primary
-            </span>
-          )}
-          {!primary && editable && (
-            <button
-              type="button"
-              onClick={onMakePrimary}
-              className="hidden shrink-0 rounded px-1.5 py-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover/repo:inline-flex group-focus-within/repo:inline-flex"
-              style={{ fontSize: "10px" }}
-              data-testid="project-repo-make-primary"
-            >
-              Make default
-            </button>
-          )}
-        </div>
-        <div className="flex min-w-0 items-center gap-1 text-text-3" style={{ fontSize: "10.5px" }}>
-          <span className="truncate font-mono" data-testid="project-repo-remote">
-            {remote === undefined ? "…" : (remote ?? "no remote")}
-          </span>
-          {alsoIn.length > 0 && (
-            <span className="shrink-0" data-testid="project-repo-also-in">
-              · also in {alsoIn.join(", ")}
-            </span>
-          )}
-        </div>
-      </div>
+    <div className="set-rrow" data-testid="project-repo-row" data-path={path} title={path}>
+      <FolderGit2 size={13} strokeWidth={1.5} aria-hidden />
+      <span className="set-mono set-ellipsis set-rrow__path">{tildify(path, home)}</span>
+      {primary && (
+        <span className="d-chip" title="Preselected as the target in New Run" data-testid="project-repo-primary">
+          default
+        </span>
+      )}
+      {!primary && editable && (
+        <Button size="sm" tone="ghost" className="set-hover" onClick={onMakePrimary} data-testid="project-repo-make-primary">
+          Make default
+        </Button>
+      )}
+      <span
+        className="set-mono set-ellipsis set-rrow__remote"
+        title={remote ?? "no remote"}
+        data-testid="project-repo-remote"
+      >
+        {remote === undefined ? "…" : (remote ?? "no remote")}
+      </span>
+      {alsoIn.length > 0 && (
+        <span className="d-chip" title={`Also in ${alsoIn.join(", ")}`} data-testid="project-repo-also-in">
+          +{alsoIn.length}
+        </span>
+      )}
       {editable && (
-        <button
-          type="button"
+        <IconButton
+          icon={X}
+          label={`Remove ${path} from the project`}
+          description="The folder stays on disk"
+          size="sm"
+          className="set-hover"
           onClick={onRemove}
-          aria-label={`Remove ${path} from the project`}
-          title="Remove from the project (the folder stays on disk)"
-          className="shrink-0 rounded p-1 text-text-3 transition-colors hover:bg-hover hover:text-text-2"
           data-testid="project-repo-remove"
-        >
-          <X size={12} />
-        </button>
+        />
       )}
     </div>
   );

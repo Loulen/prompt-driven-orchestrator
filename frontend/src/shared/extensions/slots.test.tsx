@@ -6,7 +6,7 @@ import type { ExtensionEntry } from "../generated/ExtensionEntry";
 import type { Attributes } from "./attributes";
 import ExtensionDetailTab from "./ExtensionDetailTab";
 import ExtensionListFilters from "./ExtensionListFilters";
-import ExtensionSettingsPanels from "./ExtensionSettingsPanels";
+import ExtensionSettingsPanels from "../../settings/components/settingsSurface/ExtensionPanels";
 import { useDetailTabs } from "./catalogue";
 import type { ListFilterProps, TabProps } from "./contract";
 import { resetPages } from "./deepLink";
@@ -112,9 +112,9 @@ describe("the UI slots", () => {
     serve([testExtension()]);
     render(<ExtensionSettingsPanels active />);
     expect(await screen.findByText("settings panel of the extension")).toBeInTheDocument();
-    expect(screen.getByTestId("extension-settings-test:settings")).toHaveTextContent(
-      "Added by the extension Test extension 0.0.0",
-    );
+    const section = screen.getByTestId("extension-settings-test:settings");
+    expect(section).toHaveTextContent("Test extension");
+    expect(section.querySelector('[title="Added by the extension Test extension 0.0.0"]')).not.toBeNull();
   });
 
   it("adds a list filter that sets the attribute filter", async () => {

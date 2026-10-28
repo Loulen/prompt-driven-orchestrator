@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Search } from "lucide-react";
+import { FolderSearch, TriangleAlert } from "lucide-react";
+import { Button, IconButton, TextInput } from "../../shared/ui/kit";
 import FsExplorerModal from "../../workspace/components/FsExplorerModal";
 import { dockerfileStartDir } from "../model/paths";
 import type { SandboxProfile } from "../model/sandbox";
@@ -64,83 +65,58 @@ export default function ProfileImageEditor({
       (pending?.kind === "registry" && pending.ref.length > 0));
 
   return (
-    <div className="flex flex-col gap-1.5" data-testid="staging-profile-image">
-      <span className="text-text-3" style={{ fontSize: "10.5px" }}>
-        Image
-      </span>
-      <select
-        value={kind}
-        onChange={(e) => chooseKind(e.target.value as "default" | "dockerfile" | "registry")}
-        disabled={busy}
-        aria-label="Image source"
-        data-testid="staging-image-kind"
-        className="w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 font-mono text-text focus:border-primary focus:outline-none disabled:opacity-40"
-        style={{ fontSize: "11px" }}
-      >
-        <option value="default">default (PDO's own sandbox image)</option>
-        <option value="dockerfile">dockerfile (build from a Dockerfile)</option>
-        <option value="registry">registry (pull an explicit ref)</option>
-      </select>
-
-      {kind === "default" && (
-        <div className="text-text-3" style={{ fontSize: "10.5px" }} data-testid="staging-image-none">
-          PDO's own image, whose tag is the SHA-256 of the bytes of the Dockerfile it seeded at{" "}
-          <span className="font-mono">~/.pdo/sandbox/Dockerfile</span> — edit that file to change
-          the image, or pick another kind here.
-        </div>
-      )}
-
-      {kind === "dockerfile" && (
-        <>
-          <div className="flex items-center gap-2">
-            <div className="relative min-w-0 flex-1">
-              <input
-                value={path}
-                onChange={(e) => setPath(e.target.value)}
-                placeholder="/path/to/Dockerfile.chrome-dev"
-                aria-label="Dockerfile path"
-                data-testid="staging-image-path"
-                className="w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 pr-8 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
-                style={{ fontSize: "11px" }}
-                autoComplete="off"
-              />
-              <button
-                type="button"
-                onClick={() => setPickerOpen(true)}
-                className="absolute inset-y-0 right-0 flex items-center px-2 text-text-3 transition-colors hover:text-text-2"
-                title="Browse for a Dockerfile"
-                aria-label="Browse for a Dockerfile"
-                data-testid="staging-image-browse"
-              >
-                <Search size={12} />
-              </button>
-            </div>
-            <button
-              type="button"
-              onClick={() => pending && onWrite(pending)}
-              disabled={!canSet}
-              data-testid="staging-image-set"
-              className="shrink-0 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 transition-colors hover:border-primary disabled:opacity-40"
-              style={{ fontSize: "11px" }}
-            >
+    <div className="set-group" data-testid="staging-profile-image">
+      <span className="d-caps set-group__head">Image</span>
+      <div className="set-line">
+        <select
+          value={kind}
+          onChange={(e) => chooseKind(e.target.value as "default" | "dockerfile" | "registry")}
+          disabled={busy}
+          aria-label="Image source"
+          data-testid="staging-image-kind"
+          className="d-input d-input--mono set-ctl-w"
+        >
+          <option value="default">default</option>
+          <option value="dockerfile">dockerfile</option>
+          <option value="registry">registry</option>
+        </select>
+        {kind === "default" && (
+          <span
+            className="set-faint set-mono set-ellipsis text-xs"
+            title="Its tag is the SHA-256 of the bytes of the Dockerfile seeded there: edit that file to change the image"
+            data-testid="staging-image-none"
+          >
+            ~/.pdo/sandbox/Dockerfile
+          </span>
+        )}
+        {kind === "dockerfile" && (
+          <>
+            <TextInput
+              mono
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              placeholder="/path/to/Dockerfile.chrome-dev"
+              aria-label="Dockerfile path"
+              title="Self-contained (empty build context, no COPY); its bytes' SHA-256 tags the image, a suffix names it"
+              data-testid="staging-image-path"
+              autoComplete="off"
+            />
+            <IconButton
+              icon={FolderSearch}
+              label="Browse for a Dockerfile"
+              size="sm"
+              onClick={() => setPickerOpen(true)}
+              data-testid="staging-image-browse"
+            />
+            <Button size="sm" onClick={() => pending && onWrite(pending)} disabled={!canSet} data-testid="staging-image-set">
               Set
-            </button>
-          </div>
-          <div className="text-text-3" style={{ fontSize: "10.5px" }}>
-            Every Run on this profile builds (or pulls) the image whose tag is the SHA-256 of this
-            file's bytes — editing the file changes the tag, hence a rebuild. It must be{" "}
-            <strong>self-contained</strong>: the build context is deliberately empty, so no{" "}
-            <span className="font-mono">COPY</span>. A filename like{" "}
-            <span className="font-mono">Dockerfile.chrome-dev</span> also names the image (
-            <span className="font-mono">pdo-sandbox-chrome-dev</span>).
-          </div>
-        </>
-      )}
-
-      {kind === "registry" && (
-        <>
-          <div className="flex items-center gap-2">
-            <input
+            </Button>
+          </>
+        )}
+        {kind === "registry" && (
+          <>
+            <TextInput
+              mono
               value={ref}
               onChange={(e) => setRef(e.target.value)}
               onKeyDown={(e) => {
@@ -149,34 +125,26 @@ export default function ProfileImageEditor({
               placeholder="ghcr.io/owner/image:tag"
               aria-label="Image reference"
               data-testid="staging-image-ref"
-              className="min-w-0 flex-1 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
-              style={{ fontSize: "11px" }}
               autoComplete="off"
             />
-            <button
-              type="button"
-              onClick={() => pending && onWrite(pending)}
-              disabled={!canSet}
-              data-testid="staging-image-set"
-              className="shrink-0 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 transition-colors hover:border-primary disabled:opacity-40"
-              style={{ fontSize: "11px" }}
-            >
+            <Button size="sm" onClick={() => pending && onWrite(pending)} disabled={!canSet} data-testid="staging-image-set">
               Set
-            </button>
-          </div>
-          {/* Load-bearing copy: the two properties an explicit ref LOSES. Without them the first
-              failed pull looks like a PDO bug. */}
-          <div
-            className="text-st-await"
-            style={{ fontSize: "10.5px" }}
-            data-testid="staging-image-ref-no-fallback"
-          >
-            Pulled as-is, with <strong>no local build to fall back on</strong>: an explicit ref has
-            no Dockerfile, so it has no content hash and nothing to rebuild — a failed pull{" "}
-            <strong>fails the Run</strong>, naming the ref. PDO also cannot check that the image
-            contains <span className="font-mono">claude</span>; that is on whoever supplies it.
-          </div>
-        </>
+            </Button>
+          </>
+        )}
+      </div>
+      {/* Load-bearing: the two properties an explicit ref LOSES. Without them the first
+          failed pull looks like a bug of the daemon. */}
+      {kind === "registry" && (
+        <div
+          className="set-warn"
+          title="An explicit ref has no Dockerfile, hence no content hash and nothing to rebuild: a failed pull fails the Run, naming the ref. Nothing checks that the image contains the harness."
+          data-testid="staging-image-ref-no-fallback"
+        >
+          <TriangleAlert size={13} strokeWidth={1.5} aria-hidden />
+          <span>No local build to fall back on</span>
+          <span className="set-faint set-ellipsis">a failed pull fails the Run</span>
+        </div>
       )}
 
       {pickerOpen && (

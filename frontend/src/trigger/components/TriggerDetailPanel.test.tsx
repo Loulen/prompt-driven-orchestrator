@@ -196,7 +196,7 @@ describe("TriggerDetailPanel", () => {
     expect(screen.queryByTestId("fire-guard-output-toggle")).not.toBeInTheDocument();
   });
 
-  it("reveals exit code + both streams behind the toggle on a guard-exit-nonzero row", async () => {
+  it("reveals both streams behind the toggle on a guard-exit-nonzero row, the exit code staying in its column", async () => {
     fetchTriggerFires.mockResolvedValue([
       fire({
         id: 6,
@@ -217,7 +217,7 @@ describe("TriggerDetailPanel", () => {
     toggle.click();
 
     const output = await screen.findByTestId("fire-guard-output");
-    expect(output).toHaveTextContent("7");
+    expect(output).not.toHaveTextContent("exit");
     expect(output).toHaveTextContent("checked 0 issues");
     expect(output).toHaveTextContent("gh: no work to do");
   });
@@ -244,7 +244,7 @@ describe("TriggerDetailPanel", () => {
     expect(output).not.toHaveTextContent("stdout");
   });
 
-  it("shows the toggle when only the exit code is present (empty streams)", async () => {
+  it("has no toggle when only the exit code is present: the Exit column already shows it", async () => {
     // A bare `exit 3` guard prints nothing; the exit code alone is the diagnostic.
     fetchTriggerFires.mockResolvedValue([
       fire({
@@ -259,11 +259,9 @@ describe("TriggerDetailPanel", () => {
     ]);
     render(<TriggerDetailPanel trigger={trigger()} onSelectRun={noop} />);
 
-    (await screen.findByTestId("fire-guard-output-toggle")).click();
-    const output = await screen.findByTestId("fire-guard-output");
-    expect(output).toHaveTextContent("3");
-    expect(output).not.toHaveTextContent("stdout");
-    expect(output).not.toHaveTextContent("stderr");
+    const row = await screen.findByTestId("fire-entry");
+    expect(row.lastElementChild).toHaveTextContent("3");
+    expect(screen.queryByTestId("fire-guard-output-toggle")).not.toBeInTheDocument();
   });
 
   const GUARD = "gh issue list --label ready-for-agent";

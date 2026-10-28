@@ -137,7 +137,9 @@ describe("ProjectsPanel", () => {
     expect(screen.getByTestId("project-detail-name")).toHaveTextContent("Checkout");
     expect(screen.getByTestId("project-detail-runs")).toHaveTextContent("2 runs");
 
-    expect(within(row("/home/me/code/shop-web")).getByText("~/code/shop-web")).toBeInTheDocument();
+    // Cut in its middle: the repository's name (the last segment) stays whole.
+    expect(within(row("/home/me/code/shop-web")).getByTestId("project-repo-path")).toHaveTextContent("~/code/shop-web");
+    expect(within(row("/home/me/code/shop-web")).getByTestId("project-repo-path-tail")).toHaveTextContent(/^\/shop-web$/);
     expect(within(row("/home/me/code/shop-web")).getByTestId("project-repo-primary")).toBeInTheDocument();
     await waitFor(() =>
       expect(within(row("/home/me/code/shop-web")).getByTestId("project-repo-remote")).toHaveTextContent(

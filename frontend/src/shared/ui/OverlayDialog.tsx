@@ -48,14 +48,29 @@ export default function OverlayDialog({
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     const d = ref.current;
+    if (!d) return;
     // A disabled autofocus target (the Run name while auto-named) takes no
     // focus: the body's first control does, so typing never lands on the opener.
-    const target =
-      d?.querySelector<HTMLElement>("[data-autofocus]:not(:disabled)") ??
-      d?.querySelector<HTMLElement>(`.d-frame__body :is(${FOCUSABLE})`) ??
-      d;
-    target?.focus({ preventScroll: true });
-    return () => opener?.focus?.({ preventScroll: true });
+    const focusFirst = () =>
+      (
+        d.querySelector<HTMLElement>("[data-autofocus]:not(:disabled)") ??
+        d.querySelector<HTMLElement>(`.d-frame__body :is(${FOCUSABLE})`) ??
+        d
+      ).focus({ preventScroll: true });
+    focusFirst();
+    // The form settles after the opening (a mode swaps a section, a setting
+    // disables the focused control): a focus dropped to the page comes back,
+    // else Tab, Escape and Ctrl+Enter would miss the dialog.
+    const lost = () => {
+      const a = document.activeElement as HTMLElement | null;
+      if (!a || a === document.body || (d.contains(a) && a.matches(":disabled"))) focusFirst();
+    };
+    const watch = new MutationObserver(lost);
+    watch.observe(d, { subtree: true, childList: true, attributes: true, attributeFilter: ["disabled"] });
+    return () => {
+      watch.disconnect();
+      opener?.focus?.({ preventScroll: true });
+    };
   }, []);
   return (
     <div

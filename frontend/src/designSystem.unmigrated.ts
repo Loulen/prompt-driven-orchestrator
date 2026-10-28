@@ -166,6 +166,5 @@ export const UNMIGRATED: readonly string[] = [
   "workspace/components/projects/NewRepositoryForm.tsx",
   "workspace/components/projects/ProjectDetail.tsx",
   "workspace/components/projects/ProjectList.tsx",
-  "workspace/components/projects/ProjectRepositoryRow.tsx",
   "workspace/components/projects/ProjectsPanel.tsx",
 ];

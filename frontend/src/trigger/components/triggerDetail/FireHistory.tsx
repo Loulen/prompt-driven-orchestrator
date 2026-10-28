@@ -60,10 +60,9 @@ function FireEntry({ fire, onSelectRun }: { fire: TriggerFire; onSelectRun: (run
 
   // The disclosure is scoped strictly to `guard-exit-nonzero` rows (#244/D2):
   // `guard-error` already surfaces its detail via `reason`, and legacy/other
-  // rows carry no captured streams. `!= null` on the code so a legit `0` counts.
+  // rows carry no captured streams. The exit code has its own column.
   const hasGuardOutput =
-    fire.outcome === "guard-exit-nonzero" &&
-    (fire.guard_exit_code != null || !!fire.guard_stdout?.trim() || !!fire.guard_stderr?.trim());
+    fire.outcome === "guard-exit-nonzero" && (!!fire.guard_stdout?.trim() || !!fire.guard_stderr?.trim());
   const word = outcomeWord(fire.outcome);
   const manual = fire.source === "manual";
   const SourceIcon = manual ? Hand : Clock;
@@ -128,7 +127,6 @@ function FireEntry({ fire, onSelectRun }: { fire: TriggerFire; onSelectRun: (run
             <GuardOutput
               stdout={fire.guard_stdout}
               stderr={fire.guard_stderr}
-              exitCode={fire.guard_exit_code}
               data-testid="fire-guard-output"
             />
           </td>

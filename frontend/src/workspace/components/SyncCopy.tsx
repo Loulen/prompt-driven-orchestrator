@@ -8,7 +8,7 @@ import type { BranchGap } from "../model/branchSelect";
 export function Title({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return (
     <div
-      className="flex items-start gap-1.5 font-semibold text-fg"
+      className="flex items-start gap-1.5 font-semibold text-text"
       style={{ fontSize: "11.5px" }}
       data-testid="sync-popover-title"
     >
@@ -20,7 +20,7 @@ export function Title({ icon, children }: { icon: React.ReactNode; children: Rea
 
 export function Body({ children }: { children: React.ReactNode }) {
   return (
-    <p className="mt-1.5 leading-snug text-fg-3" style={{ fontSize: "10.5px" }}>
+    <p className="mt-1.5 leading-snug text-text-3" style={{ fontSize: "10.5px" }}>
       {children}
     </p>
   );

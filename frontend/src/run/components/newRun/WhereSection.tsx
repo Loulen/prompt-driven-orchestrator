@@ -9,7 +9,7 @@ import { tildify } from "../../../lib/homePath";
 import ProjectCombobox from "./ProjectCombobox";
 import RemoteRepoHint from "./RemoteRepoHint";
 
-const LABEL = "font-medium text-fg-2 flex items-center gap-1.5";
+const LABEL = "font-medium text-text-2 flex items-center gap-1.5";
 
 /**
  * ── WHERE ── the Projet the Run is launched in (ADR-0087), its target
@@ -52,7 +52,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
   const showProject = offeredProjects.length > 0 || projectId !== null;
   return (
     <div className="flex flex-col gap-3 pb-4 border-b border-line">
-      <span className="text-fg-4 uppercase tracking-wider font-medium" style={{ fontSize: "10px" }}>
+      <span className="text-text-3 uppercase tracking-wider font-medium" style={{ fontSize: "10px" }}>
         Where
       </span>
 
@@ -60,7 +60,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
       {showProject && (
         <div className="flex flex-col gap-1.5">
           <label htmlFor="launch-project" className={LABEL} style={{ fontSize: "11.5px" }}>
-            <Briefcase size={12} className="text-fg-3" />
+            <Briefcase size={12} className="text-text-3" />
             Project
           </label>
           <ProjectCombobox
@@ -76,11 +76,11 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
       {/* Target repository (primary — target_repos[0], #465) */}
       <div className="flex flex-col gap-1.5">
         <label htmlFor="target-repo" className={LABEL} style={{ fontSize: "11.5px" }}>
-          <FolderGit2 size={12} className="text-fg-3" />
+          <FolderGit2 size={12} className="text-text-3" />
           Target repository
           {(secondaryRepos.length > 0 || launchProject) && (
             <span
-              className="rounded bg-bg-4 px-1.5 py-0.5 font-medium text-fg-3"
+              className="rounded bg-surface-2 px-1.5 py-0.5 font-medium text-text-3"
               style={{ fontSize: "9.5px" }}
               data-testid="primary-repo-badge"
             >
@@ -108,7 +108,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
           badge={
             isProjectDefault ? (
               <span
-                className="rounded border border-line bg-bg-4 px-1.5 py-px font-mono text-fg-2"
+                className="rounded border border-line bg-surface-2 px-1.5 py-px font-mono text-text-2"
                 style={{ fontSize: "9.5px" }}
                 title={`Default repository of ${launchProject.name}`}
                 data-testid="project-default-badge"
@@ -129,7 +129,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
       {repoValid && (
         <div className="flex flex-col gap-1.5">
           <label htmlFor="source-branch" className={LABEL} style={{ fontSize: "11.5px" }}>
-            <GitBranch size={12} className="text-fg-3" />
+            <GitBranch size={12} className="text-text-3" />
             Source branch
           </label>
           {/* #802/ADR-0070: the quick pick renders the held value verbatim, so the
@@ -157,7 +157,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
           read-only by default. */}
       {repoValid && launchProject && projectRepos.length > 0 && (
         <div className="flex flex-col gap-1.5" data-testid="project-repos">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+          <span className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
             Other repositories of {launchProject.name}
           </span>
           {projectRepos.map((path) => {
@@ -179,18 +179,18 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
             return (
               <label
                 key={path}
-                className="flex cursor-pointer items-center gap-2 rounded-md border border-line bg-bg-3/60 px-2.5 py-1.5 transition-colors hover:border-line-strong"
+                className="flex cursor-pointer items-center gap-2 rounded-md border border-line bg-surface-2/60 px-2.5 py-1.5 transition-colors hover:border-line-strong"
                 data-testid="project-repo-unchecked"
                 data-path={path}
               >
                 <input
                   type="checkbox"
-                  className="accent-acc"
+                  className="accent-primary"
                   checked={false}
                   onChange={() => toggleProjectSecondary(path, true)}
                   aria-label={`Use ${path} as a secondary repository`}
                 />
-                <span className="min-w-0 flex-1 truncate font-mono text-fg-3" style={{ fontSize: "12px" }} title={path}>
+                <span className="min-w-0 flex-1 truncate font-mono text-text-3" style={{ fontSize: "12px" }} title={path}>
                   {tildify(path, home)}
                 </span>
               </label>
@@ -218,7 +218,7 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
           <button
             type="button"
             onClick={addSecondary}
-            className="self-start rounded-md border border-dashed border-line-strong bg-transparent px-2.5 py-1.5 font-medium text-fg-3 transition-colors hover:border-acc hover:text-acc"
+            className="self-start rounded-md border border-dashed border-line-strong bg-transparent px-2.5 py-1.5 font-medium text-text-3 transition-colors hover:border-primary hover:text-primary"
             style={{ fontSize: "11.5px" }}
             data-testid="add-secondary-repo"
           >

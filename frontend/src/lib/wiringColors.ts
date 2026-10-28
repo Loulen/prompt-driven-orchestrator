@@ -1,6 +1,6 @@
 /**
  * The wiring palette (#844). Amber all the way through — the same family the
- * selected edge already uses (`--color-edge-selected`), so « this is wiring » is
+ * selected edge already uses (`--selected-edge`), so « this is wiring » is
  * one colour story from the rim glow to the preview path to the grid to the
  * drop-target ring. Green is the app's accent and already means something else on
  * a card.

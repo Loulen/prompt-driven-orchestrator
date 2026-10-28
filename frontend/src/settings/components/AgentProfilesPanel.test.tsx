@@ -268,7 +268,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
     await user.click(screen.getByTestId("agent-profile-new"));
 
     const modal = screen.getByTestId("agent-profile-modal");
-    expect(modal).toHaveClass("flex", "flex-col", "max-h-[85vh]");
+    expect(modal).toHaveClass("flex", "flex-col", "max-h-[calc(85vh/var(--app-zoom,1))]");
     const body = screen.getByTestId("agent-profile-body");
     expect(body).toHaveClass("min-h-0", "overflow-y-auto");
     expect(body).toContainElement(within(modal).getByLabelText("Name"));

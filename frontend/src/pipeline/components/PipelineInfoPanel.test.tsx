@@ -604,7 +604,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
 
     rerender(panel("yaml"));
     expect(screen.queryByTestId("assistant-tab")).toBeNull();
-    expect(screen.getByTestId("info-tab-yaml").className).toContain("border-acc");
+    expect(screen.getByTestId("info-tab-yaml").className).toContain("border-primary");
   });
 
   it("controlled: a tab the context lacks resolves to Info", () => {
@@ -618,7 +618,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
         assistantId="alpha"
       />,
     );
-    expect(screen.getByTestId("info-tab-info").className).toContain("border-acc");
+    expect(screen.getByTestId("info-tab-info").className).toContain("border-primary");
   });
 });
 
@@ -649,7 +649,7 @@ describe("PipelineInfoPanel — Diff tab (#748)", () => {
     expect(link).toHaveTextContent("−11");
     expect(link).toHaveTextContent("4 files");
     fireEvent.click(link);
-    expect(screen.getByTestId("info-tab-diff").className).toContain("border-acc");
+    expect(screen.getByTestId("info-tab-diff").className).toContain("border-primary");
     // Info's body is gone: the Diff tab owns the panel now.
     expect(screen.queryByTestId("run-stats")).toBeNull();
   });

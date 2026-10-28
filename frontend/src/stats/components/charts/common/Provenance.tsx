@@ -21,7 +21,7 @@ export function ProvenanceMark({
         role="img"
         aria-label={copy}
         data-testid={`stats-provenance-${target}`}
-        className="ml-0.5 align-super text-fg-4"
+        className="ml-0.5 align-super text-text-3"
         style={{ fontSize: "8.5px" }}
       >
         ?
@@ -57,7 +57,7 @@ export function ProvenanceName({
     <span className="inline-flex items-baseline gap-0.5">
       <Tooltip content={tooltip} side="top">
         <span
-          className={`${mono ? "font-mono" : ""} cursor-help whitespace-pre-line underline decoration-dotted decoration-transparent underline-offset-2 hover:decoration-fg-4`}
+          className={`${mono ? "font-mono" : ""} cursor-help whitespace-pre-line underline decoration-dotted decoration-transparent underline-offset-2 hover:decoration-text-3`}
           data-testid={`stats-${target}-name`}
         >
           {name}

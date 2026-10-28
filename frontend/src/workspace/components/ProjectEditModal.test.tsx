@@ -350,7 +350,7 @@ describe("ProjectEditModal — bounded to the window (#940)", () => {
   it("scrolls only its body: title and Save stay outside it, the member list nests in it", () => {
     renderModal();
     const modal = screen.getByTestId("project-edit-modal");
-    expect(modal).toHaveClass("flex", "flex-col", "max-h-[85vh]");
+    expect(modal).toHaveClass("flex", "flex-col", "max-h-[calc(85vh/var(--app-zoom,1))]");
     const body = screen.getByTestId("project-edit-body");
     expect(body).toHaveClass("min-h-0", "overflow-y-auto");
     expect(body).not.toHaveTextContent("Name project");

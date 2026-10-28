@@ -43,12 +43,12 @@ export default function AssistantPanel() {
       data-testid="assistant-tab"
     >
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <Bot size={14} className="text-fg-3" />
-        <span className="text-fg-2" style={{ fontSize: "11px" }}>
+        <Bot size={14} className="text-text-3" />
+        <span className="text-text-2" style={{ fontSize: "11px" }}>
           Pipeline Assistant
         </span>
         {session && (
-          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+          <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
             {session}
           </span>
         )}
@@ -65,7 +65,7 @@ export default function AssistantPanel() {
         <TmuxTerminal session={session} expanded status="running" />
       ) : (
         <div
-          className="flex flex-1 items-center justify-center gap-2 text-fg-4"
+          className="flex flex-1 items-center justify-center gap-2 text-text-3"
           style={{ fontSize: "11.5px" }}
           data-testid="assistant-loading"
         >

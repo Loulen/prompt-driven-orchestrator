@@ -65,7 +65,7 @@ export default function TerminalToolbar({
 }: Props) {
   return (
     <div
-      className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
+      className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-text-3"
       style={{ fontSize: "11px" }}
       data-testid="term-toolbar"
     >
@@ -77,14 +77,14 @@ export default function TerminalToolbar({
       ) : (
         <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
       )}
-      <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+      <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
         {session}
       </span>
       <span
         className={`rounded border px-1 py-px font-mono ${
           connected
             ? "border-st-done/30 text-st-done"
-            : "border-line-strong text-fg-4"
+            : "border-line-strong text-text-3"
         }`}
         style={{ fontSize: "9px" }}
       >
@@ -109,7 +109,7 @@ export default function TerminalToolbar({
           <button
             onClick={onTakeControl}
             aria-label={TAKE_CONTROL_LABEL}
-            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text"
             data-testid="term-take-control"
           >
             <Hand size={12} />
@@ -120,7 +120,7 @@ export default function TerminalToolbar({
       {watchers > 0 && (
         <Tooltip content={watchedLabel(watchers)}>
           <span
-            className="flex h-5 items-center gap-0.5 px-1 font-mono text-fg-4"
+            className="flex h-5 items-center gap-0.5 px-1 font-mono text-text-3"
             style={{ fontSize: "10px" }}
             data-testid="term-watchers"
             aria-label={watchedLabel(watchers)}
@@ -147,8 +147,8 @@ export default function TerminalToolbar({
             aria-label="Import files"
             className={`flex h-5 w-5 items-center justify-center rounded transition-colors ${
               importDisabledReason
-                ? "cursor-default text-fg-5"
-                : "cursor-pointer text-fg-3 hover:bg-bg-4 hover:text-fg"
+                ? "cursor-default text-text-3"
+                : "cursor-pointer text-text-3 hover:bg-hover hover:text-text"
             }`}
             data-testid="term-import"
           >
@@ -173,8 +173,8 @@ export default function TerminalToolbar({
           aria-label="Copy selection"
           className={`flex h-5 w-5 items-center justify-center rounded transition-colors ${
             hasSelection
-              ? "cursor-pointer text-fg-3 hover:bg-bg-4 hover:text-fg"
-              : "cursor-default text-fg-5"
+              ? "cursor-pointer text-text-3 hover:bg-hover hover:text-text"
+              : "cursor-default text-text-3"
           }`}
           data-testid="term-copy"
           data-feedback={copyFeedback ?? undefined}
@@ -186,7 +186,7 @@ export default function TerminalToolbar({
         <Tooltip content={expanded ? COLLAPSE_LABEL : EXPAND_LABEL}>
           <button
             onClick={onExpand}
-            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text"
             data-testid="term-expand"
           >
             {expanded ? (
@@ -203,7 +203,7 @@ export default function TerminalToolbar({
         <Tooltip content="Detach to OS terminal">
           <button
             onClick={onDetach}
-            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text"
             data-testid="term-detach"
           >
             <ExternalLink size={12} />

@@ -34,7 +34,6 @@ import NodeDetailHeader from "../../run/components/nodeDetail/NodeDetailHeader";
 import ReviewFileHeader from "../../review/components/ReviewFileHeader";
 import Toaster from "../ui/Toaster";
 import { resetToasts } from "../ui/toast";
-import { TooltipProvider } from "../ui/tooltip";
 import type { Project } from "../../workspace/model/project";
 import type { CommandContext } from "./contract";
 import ExtensionContextProvider from "./ExtensionContextProvider";
@@ -111,12 +110,12 @@ function shell(children: ReactNode, selected: RunState | null = null) {
   const runs = [{ run_id: "r1", pipeline_name: "demo", status: "running", effective_repo: "/repos/pdo", project_id: "p1" }] as unknown as RunListEntry[];
   const projects = [{ id: "p1", name: "PDO", members: ["/repos/pdo"] }] as unknown as Project[];
   return (
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={selected} runs={runs} projects={projects}>
         {children}
         <Toaster />
       </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
 }
 

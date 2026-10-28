@@ -91,10 +91,10 @@ export default function RepositoriesSection({
       data-testid="run-repositories"
     >
       <span
-        className="font-medium text-fg-2 flex items-center gap-1.5"
+        className="font-medium text-text-2 flex items-center gap-1.5"
         style={{ fontSize: "11.5px" }}
       >
-        <FolderGit2 size={12} className="text-fg-3" />
+        <FolderGit2 size={12} className="text-text-3" />
         Repositories
       </span>
 
@@ -108,19 +108,19 @@ export default function RepositoriesSection({
           « Run branch » to drift from — a chip there would be a zero dressed up as a
           measurement. */}
       <div
-        className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5"
+        className="flex items-center gap-2 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5"
         data-testid="primary-repo-row"
       >
         <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate font-mono text-fg" title={run.target_repo ?? ""}>
+          <span className="truncate font-mono text-text" title={run.target_repo ?? ""}>
             {run.target_repo}
           </span>
           <span
-            className="flex items-center gap-1 font-mono text-fg-4"
+            className="flex items-center gap-1 font-mono text-text-3"
             style={{ fontSize: "10px" }}
             data-testid="primary-repo-cut"
           >
-            <GitBranch size={10} className="shrink-0 text-fg-4" />
+            <GitBranch size={10} className="shrink-0 text-text-3" />
             {run.source_branch ?? "HEAD"}
             {run.fork_sha && ` · ${run.fork_sha.slice(0, 8)}`}
             {/* Icon only, reason on hover: the Info tab already says it in full
@@ -130,7 +130,7 @@ export default function RepositoriesSection({
             {run.source_fetch_error && (
               <span
                 role="img"
-                className="flex shrink-0 items-center text-st-stale"
+                className="flex shrink-0 items-center text-st-skipped"
                 title={`Fetch failed before the cut — cut from local state. ${run.source_fetch_error.message}`}
                 aria-label={`Fetch failed before the cut — cut from local state. ${run.source_fetch_error.message}`}
                 data-testid="primary-repo-fetch-failed"
@@ -147,7 +147,7 @@ export default function RepositoriesSection({
           testid="primary-repo-drift"
         />
         <span
-          className="rounded bg-bg-4 px-1.5 py-0.5 font-medium text-fg-3"
+          className="rounded bg-surface-2 px-1.5 py-0.5 font-medium text-text-3"
           style={{ fontSize: "9.5px" }}
           data-testid="primary-repo-badge"
         >
@@ -161,18 +161,18 @@ export default function RepositoriesSection({
       {secondaries.map((pin) => (
         <div
           key={pin.alias}
-          className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5"
+          className="flex items-center gap-2 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5"
           data-testid={`secondary-repo-${pin.alias}`}
         >
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate font-mono text-fg" title={pin.repo}>
+            <span className="truncate font-mono text-text" title={pin.repo}>
               {pin.repo}
             </span>
             <span
-              className="flex items-center gap-1 font-mono text-fg-4"
+              className="flex items-center gap-1 font-mono text-text-3"
               style={{ fontSize: "10px" }}
             >
-              <GitBranch size={10} className="text-fg-4" />
+              <GitBranch size={10} className="text-text-3" />
               {pin.base_branch ?? "HEAD"} · {pin.sha.slice(0, 8)}
             </span>
           </div>
@@ -180,7 +180,7 @@ export default function RepositoriesSection({
               secondary (the default) gets a discreet WRITABLE badge; only an
               opted-in read-only pin shows READ-ONLY. */}
           <span
-            className="rounded bg-bg-4 px-1.5 py-0.5 font-medium text-fg-3"
+            className="rounded bg-surface-2 px-1.5 py-0.5 font-medium text-text-3"
             style={{ fontSize: "9.5px" }}
             data-testid={`secondary-repo-mode-${pin.alias}`}
           >
@@ -191,7 +191,7 @@ export default function RepositoriesSection({
               type="button"
               onClick={() => removeSecondary(pin.alias)}
               disabled={busy}
-              className="rounded-md border border-line-strong bg-bg-3 p-1.5 text-fg-3 transition-colors hover:border-st-failed hover:text-st-failed disabled:opacity-40"
+              className="rounded-md border border-line-strong bg-surface-2 p-1.5 text-text-3 transition-colors hover:border-st-failed hover:text-st-failed disabled:opacity-40"
               aria-label={`Remove secondary repository ${pin.alias}`}
               data-testid={`remove-secondary-repo-${pin.alias}`}
             >
@@ -216,7 +216,7 @@ export default function RepositoriesSection({
             type="button"
             onClick={addDraft}
             disabled={busy || draft.valid !== true || !draft.path.trim()}
-            className="self-start rounded-md border border-acc bg-transparent px-2.5 py-1.5 font-medium text-acc transition-colors hover:bg-acc hover:text-bg disabled:opacity-40"
+            className="self-start rounded-md border border-primary bg-transparent px-2.5 py-1.5 font-medium text-primary transition-colors hover:bg-primary hover:text-primary-ink disabled:opacity-40"
             style={{ fontSize: "11.5px" }}
             data-testid="confirm-add-secondary-repo"
           >
@@ -232,7 +232,7 @@ export default function RepositoriesSection({
             setDraft({ path: "", baseBranch: "", valid: null, readOnly: false })
           }
           disabled={busy}
-          className="flex items-center gap-1 self-start rounded-md border border-dashed border-line-strong bg-transparent px-2.5 py-1.5 font-medium text-fg-3 transition-colors hover:border-acc hover:text-acc disabled:opacity-40"
+          className="flex items-center gap-1 self-start rounded-md border border-dashed border-line-strong bg-transparent px-2.5 py-1.5 font-medium text-text-3 transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
           style={{ fontSize: "11.5px" }}
           data-testid="add-secondary-repo"
         >
@@ -243,7 +243,7 @@ export default function RepositoriesSection({
 
       {error && (
         <div
-          className="rounded border border-st-failed/30 bg-st-failed-bg px-2 py-1.5 text-st-failed"
+          className="rounded border border-st-failed/30 bg-st-failed/14 px-2 py-1.5 text-st-failed"
           style={{ fontSize: "10.5px" }}
           data-testid="run-repos-error"
         >
@@ -252,7 +252,7 @@ export default function RepositoriesSection({
       )}
 
       {editable && (
-        <p className="text-fg-4" style={{ fontSize: "10px" }} data-testid="spawn-visibility-note">
+        <p className="text-text-3" style={{ fontSize: "10px" }} data-testid="spawn-visibility-note">
           Applies to nodes launched after this change; running nodes keep their
           current context.
         </p>

@@ -8,7 +8,7 @@ import {
   YAxis,
 } from "recharts";
 import type { StatsOverview } from "../../../../shared/generated/StatsOverview";
-import { Tooltip, TooltipProvider } from "../../../../shared/ui/tooltip";
+import { Tooltip } from "../../../../shared/ui/tooltip";
 import { ChartFrame, EmptyNote } from "../common/ChartPrimitives";
 import { AXIS_PROPS, CHART } from "../common/chartTheme";
 
@@ -36,22 +36,22 @@ export function RunsTab({
         // carries no `run_failed` of its own, so the series is 0 by
         // construction; a Run that failed, was reopened and then completed is
         // the one shape that can still count.
-        <TooltipProvider>
+        <>
           <div className="mb-3" style={{ fontSize: "11px" }}>
             <Tooltip
               content="0 by construction: a completed run has no run_failed of its own."
               side="top"
             >
               <span
-                className="rounded bg-bg-3 px-2 py-1 text-fg-2"
+                className="rounded bg-surface-2 px-2 py-1 text-text-2"
                 data-testid="stats-kpi-errors-completed-only"
               >
-                Errors: <span className="font-mono text-fg">{totalErrors}</span>{" "}
+                Errors: <span className="font-mono text-text">{totalErrors}</span>{" "}
                 (completed only)
               </span>
             </Tooltip>
           </div>
-        </TooltipProvider>
+        </>
       )}
       <ChartFrame>
         <BarChart data={data} margin={{ top: 8, right: 8, left: -18 }}>

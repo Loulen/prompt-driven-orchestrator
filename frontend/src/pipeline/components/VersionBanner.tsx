@@ -38,7 +38,7 @@ export default function VersionBanner({
   };
   return (
     <div
-      className="absolute left-3 right-3 top-3 z-10 flex items-center gap-2 rounded-md border border-line bg-bg-2/95 px-3 py-1.5 text-fg-3 shadow-lg backdrop-blur-sm"
+      className="absolute left-3 right-3 top-3 z-10 flex items-center gap-2 rounded-md border border-line bg-surface-1/95 px-3 py-1.5 text-text-3 shadow-lg backdrop-blur-sm"
       style={{ fontSize: "11px" }}
       data-testid="version-banner"
     >
@@ -47,24 +47,24 @@ export default function VersionBanner({
           onClick={onToggleInfo}
           aria-label="Pipeline info"
           aria-pressed={infoOpen}
-          className={`grid h-5 w-5 shrink-0 cursor-pointer place-items-center rounded transition-colors hover:bg-bg-4 hover:text-fg ${
-            infoOpen ? "bg-bg-4 text-fg" : "text-fg-3"
+          className={`grid h-5 w-5 shrink-0 cursor-pointer place-items-center rounded transition-colors hover:bg-hover hover:text-text ${
+            infoOpen ? "bg-surface-2 text-text" : "text-text-3"
           }`}
           data-testid="version-banner-info"
         >
           <Info size={12} />
         </button>
       )}
-      <History size={12} className="shrink-0 text-fg-4" />
+      <History size={12} className="shrink-0 text-text-3" />
       <span className="min-w-0 truncate">
-        Viewing <span className="font-mono text-fg">v{version.number}</span>
+        Viewing <span className="font-mono text-text">v{version.number}</span>
         {" · "}
-        <span className="font-mono text-fg">{version.title}</span>, read-only · <SavedBy actor={version.author} /> on{" "}
+        <span className="font-mono text-text">{version.title}</span>, read-only · <SavedBy actor={version.author} /> on{" "}
         {savedOn(version.savedAt)}
       </span>
       <button
         onClick={() => void restore()}
-        className="ml-auto flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+        className="ml-auto flex shrink-0 cursor-pointer items-center gap-1 rounded-md bg-primary px-2 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
         data-testid="version-banner-restore"
       >
         <RotateCcw size={11} />

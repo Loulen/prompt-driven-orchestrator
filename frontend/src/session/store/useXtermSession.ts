@@ -129,7 +129,7 @@ export function useXtermSession(
       // Nothing to type into: the socket is not opened at all below.
       disableStdin: isFrozen,
       fontSize: BASE_FONT_SIZE,
-      fontFamily: "'Geist Mono Variable', monospace",
+      fontFamily: "'Geist Mono', monospace",
       theme: terminalTheme(resolved),
       allowTransparency: false,
       scrollback: 5000,

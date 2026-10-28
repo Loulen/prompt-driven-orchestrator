@@ -10,7 +10,6 @@ import type { Decision, OperationQuestion } from "../../../shared/authorization/
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import ExtensionContextProvider from "../../../shared/extensions/ExtensionContextProvider";
 import { resetExtensions } from "../../../shared/extensions/store";
-import { TooltipProvider } from "../../../shared/ui/tooltip";
 import { useSelectionStore } from "../../../stores/selectionStore";
 import { useRunsPane } from "../../store/runsList/useRunsPane";
 import { useGestureRightsStore } from "../../store/gestureRightsStore";
@@ -72,11 +71,11 @@ function List() {
 
 function renderList() {
   return render(
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={null} runs={RUNS} projects={[]}>
         <List />
       </ExtensionContextProvider>
-    </TooltipProvider>,
+    </>,
   );
 }
 
@@ -106,11 +105,11 @@ describe("the gestures of the Runs list (CORE-42)", () => {
     const { rerender } = renderList();
     await waitFor(() => expect(asked).toHaveBeenCalledTimes(1));
     rerender(
-      <TooltipProvider>
+      <>
         <ExtensionContextProvider selectedRun={null} runs={RUNS} projects={[]}>
           <List />
         </ExtensionContextProvider>
-      </TooltipProvider>,
+      </>,
     );
     await act(async () => {});
     expect(asked).toHaveBeenCalledTimes(1);

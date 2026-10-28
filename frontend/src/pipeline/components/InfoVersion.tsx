@@ -16,7 +16,7 @@ export function InfoVersionLine({ run, pipelineId }: { run: RunState | null; pip
       ? `version · ${versionLabel({ number: shown.number, title: shown.title })} · read only`
       : `template · ${versionLabel(lastVersionOf(pipelines, pipelineId ?? ""))}`;
   return (
-    <div className="mt-0.5 truncate font-mono text-fg-4" style={{ fontSize: "10px" }} data-testid="info-panel-version">
+    <div className="mt-0.5 truncate font-mono text-text-3" style={{ fontSize: "10px" }} data-testid="info-panel-version">
       {line}
     </div>
   );
@@ -32,7 +32,7 @@ export function NewerVersionPill({ run }: { run: RunState | null }) {
   if (last.number <= launched.number) return null;
   return (
     <span
-      className="shrink-0 rounded border border-st-await/40 bg-st-await-bg px-1.5 py-0.5 font-mono text-st-await"
+      className="shrink-0 rounded border border-st-await/40 bg-st-await/14 px-1.5 py-0.5 font-mono text-st-await"
       style={{ fontSize: "9.5px" }}
       data-testid="newer-version"
       title={`This Run launched v${launched.number}; the pipeline is at v${last.number} now`}

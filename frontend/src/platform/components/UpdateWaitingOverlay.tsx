@@ -38,33 +38,33 @@ export default function UpdateWaitingOverlay({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-bg-0/80 backdrop-blur-sm"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-surface-0/80 backdrop-blur-sm"
       data-testid="update-waiting"
       data-phase={flow.phase}
     >
-      <div className="w-[400px] rounded-lg border border-line bg-bg-2 p-5 shadow-lg">
+      <div className="w-[400px] rounded-lg border border-line bg-surface-1 p-5 shadow-lg">
         {terminalFailure ? (
           <>
             <h3 className="flex items-center gap-2 font-medium text-st-failed" style={{ fontSize: "13px" }}>
               <TriangleAlert size={14} />
               {flow.phase === "same-version" ? "Update did not take effect" : "Update failed"}
             </h3>
-            <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }} data-testid="update-waiting-error">
+            <p className="mt-2 text-text-3" style={{ fontSize: "12px" }} data-testid="update-waiting-error">
               {flow.error}
             </p>
             {flow.attempt && (
-              <p className="mt-1.5 font-mono text-fg-4" style={{ fontSize: "11px" }}>
+              <p className="mt-1.5 font-mono text-text-3" style={{ fontSize: "11px" }}>
                 attempt {flow.attempt.attempt_id} · {flow.attempt.command}
               </p>
             )}
-            <p className="mt-2 text-fg-4" style={{ fontSize: "11.5px" }}>
+            <p className="mt-2 text-text-3" style={{ fontSize: "11.5px" }}>
               The attempt's log is in Settings › Version & update.
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={onOpenVersionSettings}
-                className="rounded px-3 py-1.5 text-fg-3 hover:bg-bg-3 hover:text-fg-2"
+                className="rounded px-3 py-1.5 text-text-3 hover:bg-hover hover:text-text-2"
                 style={{ fontSize: "12px" }}
                 data-testid="update-waiting-open-settings"
               >
@@ -74,7 +74,7 @@ export default function UpdateWaitingOverlay({
                 type="button"
                 onClick={onDismiss}
                 autoFocus
-                className="rounded border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 hover:border-acc"
+                className="rounded border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:border-primary"
                 style={{ fontSize: "12px" }}
                 data-testid="update-waiting-dismiss"
               >
@@ -84,20 +84,20 @@ export default function UpdateWaitingOverlay({
           </>
         ) : (
           <>
-            <h3 className="flex items-center gap-2 font-medium text-fg" style={{ fontSize: "13px" }}>
-              <Loader2 size={14} className="animate-spin text-acc" />
+            <h3 className="flex items-center gap-2 font-medium text-text" style={{ fontSize: "13px" }}>
+              <Loader2 size={14} className="animate-spin text-primary" />
               Updating PDO{flow.fromVersion ? ` from v${flow.fromVersion}` : ""}…
             </h3>
-            <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }} data-testid="update-waiting-message">
+            <p className="mt-2 text-text-3" style={{ fontSize: "12px" }} data-testid="update-waiting-message">
               {updateFlowMessage(flow)}
             </p>
-            <p className="mt-1.5 text-fg-4" style={{ fontSize: "11.5px" }}>
+            <p className="mt-1.5 text-text-3" style={{ fontSize: "11.5px" }}>
               The page reloads on its own once the daemon answers with the new version. Agent
               tmux sessions keep running meanwhile.
             </p>
             {slow && (
               <p
-                className="mt-2 flex items-start gap-1.5 rounded border border-st-await/50 bg-st-await-bg px-2.5 py-1.5 text-st-await"
+                className="mt-2 flex items-start gap-1.5 rounded border border-st-await/50 bg-st-await/14 px-2.5 py-1.5 text-st-await"
                 style={{ fontSize: "11.5px" }}
                 data-testid="update-waiting-slow"
               >
@@ -113,7 +113,7 @@ export default function UpdateWaitingOverlay({
                 <button
                   type="button"
                   onClick={onDismiss}
-                  className="rounded px-3 py-1.5 text-fg-3 hover:bg-bg-3 hover:text-fg-2"
+                  className="rounded px-3 py-1.5 text-text-3 hover:bg-hover hover:text-text-2"
                   style={{ fontSize: "12px" }}
                   data-testid="update-waiting-dismiss"
                 >

@@ -191,7 +191,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
     <>
         <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
       <div
-        className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
+        className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-text-2"
         style={{ fontSize: "11.5px" }}
       >
         Pipelines
@@ -205,7 +205,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
         />
         <button
           onClick={() => setShowImportModal(true)}
-          className="grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+          className="grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-surface-2 text-text-3 transition-colors hover:bg-hover hover:text-text"
           title="Import a workflow"
           data-testid="import-workflow-button"
         >
@@ -214,7 +214,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
         <button
           onClick={() => setShowNewModal(true)}
           data-testid="new-pipeline-button"
-          className="ml-1.5 grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+          className="ml-1.5 grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-surface-2 text-text-3 transition-colors hover:bg-hover hover:text-text"
           title="New pipeline"
         >
           <Plus size={12} />
@@ -245,13 +245,13 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
         >
           {pipelines.length === 0 && (
             <div
-              className="px-3 py-4 text-center text-fg-4"
+              className="px-3 py-4 text-center text-text-3"
               style={{ fontSize: "11px" }}
             >
               {allPipelines.length > 0 ? "No pipelines match filters" : "No pipelines found"}
               {allPipelines.length > 0 && (
                 <button
-                  className="mt-1 block w-full cursor-pointer text-acc hover:underline"
+                  className="mt-1 block w-full cursor-pointer text-primary hover:underline"
                   onClick={() => setAttributeFilter({})}
                 >
                   Clear filters

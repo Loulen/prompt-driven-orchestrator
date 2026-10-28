@@ -97,7 +97,7 @@ export default function CategoryPage({
         data-testid="settings-subcolumn"
       >
         <div
-          className="mb-2 px-2 uppercase tracking-wider text-fg-4"
+          className="mb-2 px-2 uppercase tracking-wider text-text-3"
           style={{ fontSize: "10px" }}
         >
           {category.label}
@@ -116,8 +116,8 @@ export default function CategoryPage({
                   data-dirty={dirty ? "true" : undefined}
                   className={`flex w-full items-center justify-between gap-2 border-l-2 px-2 py-1 text-left ${
                     isActive
-                      ? "border-acc bg-acc-bg text-fg"
-                      : "border-transparent text-fg-3 hover:text-fg-2"
+                      ? "border-primary bg-selected text-text"
+                      : "border-transparent text-text-3 hover:text-text-2"
                   }`}
                   style={{ fontSize: "11.5px" }}
                 >

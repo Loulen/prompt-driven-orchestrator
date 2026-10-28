@@ -24,35 +24,35 @@ export default function DeleteProfileDialog({
   const pointing = referents.triggers.length + (referents.instance_default ? 1 : 0);
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim"
       onClick={(e) => {
         e.stopPropagation();
         onCancel();
       }}
     >
       <div
-        className="w-[420px] rounded-lg border border-line bg-bg-4 p-4 shadow-xl"
+        className="w-[420px] rounded-lg border border-line bg-surface-2 p-4 shadow-xl"
         onClick={(e) => e.stopPropagation()}
         data-testid="staging-profile-delete-dialog"
       >
-        <h3 className="font-semibold text-fg" style={{ fontSize: "12.5px" }}>
+        <h3 className="font-semibold text-text" style={{ fontSize: "12.5px" }}>
           Delete profile <span className="font-mono">{referents.name}</span>?
         </h3>
         {pointing > 0 ? (
           <>
-            <p className="mt-2 text-fg-2" style={{ fontSize: "11.5px" }}>
+            <p className="mt-2 text-text-2" style={{ fontSize: "11.5px" }}>
               {pointing} thing{pointing === 1 ? "" : "s"} still point at it. Deleting will{" "}
               <strong>not</strong> repoint them — the next Run they produce{" "}
               <strong>fails</strong>, it does not fall back to a default.
             </p>
             <ul className="mt-1.5 flex flex-col gap-0.5" data-testid="staging-profile-referents">
               {referents.instance_default && (
-                <li className="text-fg-3" style={{ fontSize: "10.5px" }}>
+                <li className="text-text-3" style={{ fontSize: "10.5px" }}>
                   · Instance default sandbox
                 </li>
               )}
               {referents.triggers.map((t) => (
-                <li key={t.id} className="text-fg-3" style={{ fontSize: "10.5px" }}>
+                <li key={t.id} className="text-text-3" style={{ fontSize: "10.5px" }}>
                   · Trigger <span className="font-mono">{t.name}</span>
                   {t.enabled ? "" : " (disabled)"}
                 </li>
@@ -60,13 +60,13 @@ export default function DeleteProfileDialog({
             </ul>
           </>
         ) : (
-          <p className="mt-2 text-fg-2" style={{ fontSize: "11.5px" }}>
+          <p className="mt-2 text-text-2" style={{ fontSize: "11.5px" }}>
             Nothing points at it.
           </p>
         )}
         {referents.runs.length > 0 && (
           <p
-            className="mt-2 text-fg-4"
+            className="mt-2 text-text-3"
             style={{ fontSize: "10.5px" }}
             data-testid="staging-profile-referent-runs"
           >
@@ -77,7 +77,7 @@ export default function DeleteProfileDialog({
         <div className="mt-4 flex items-center justify-end gap-2">
           <button
             onClick={onCancel}
-            className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+            className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
             style={{ fontSize: "11.5px" }}
           >
             Cancel
@@ -86,7 +86,7 @@ export default function DeleteProfileDialog({
             onClick={onConfirm}
             disabled={busy}
             data-testid="staging-profile-delete-confirm"
-            className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-bg-1 transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40"
             style={{ fontSize: "11.5px" }}
           >
             Delete

@@ -23,13 +23,13 @@ export function EmptyState({
       className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center"
       data-testid={testid}
     >
-      <span className="grid h-7 w-7 place-items-center rounded border border-line bg-bg-3 text-fg-3">
+      <span className="grid h-7 w-7 place-items-center rounded border border-line bg-surface-2 text-text-3">
         {icon}
       </span>
-      <div className="text-fg-3" style={{ fontSize: "11.5px" }}>
+      <div className="text-text-3" style={{ fontSize: "11.5px" }}>
         {title}
       </div>
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="text-text-3" style={{ fontSize: "10.5px" }}>
         {subtitle}
       </div>
       {action}
@@ -40,11 +40,11 @@ export function EmptyState({
 export function Skeleton() {
   return (
     <div className="flex flex-col gap-2 px-3 py-3" data-testid="diff-loading" aria-busy>
-      <div className="h-3 w-24 animate-pulse rounded bg-bg-4" />
+      <div className="h-3 w-24 animate-pulse rounded bg-surface-2" />
       <div className="mt-1 h-px bg-line" />
-      <div className="h-3 w-3/4 animate-pulse rounded bg-bg-3" />
-      <div className="h-3 w-full animate-pulse rounded bg-bg-3" />
-      <div className="h-3 w-2/3 animate-pulse rounded bg-bg-3" />
+      <div className="h-3 w-3/4 animate-pulse rounded bg-surface-2" />
+      <div className="h-3 w-full animate-pulse rounded bg-surface-2" />
+      <div className="h-3 w-2/3 animate-pulse rounded bg-surface-2" />
     </div>
   );
 }
@@ -68,7 +68,7 @@ export function MiniBar({ additions, deletions }: { additions: number; deletions
         <span
           key={i}
           className={`h-2 w-1.5 rounded-[1px] ${
-            total === 0 ? "bg-bg-4" : i < green ? "bg-st-done" : "bg-st-failed"
+            total === 0 ? "bg-surface-2" : i < green ? "bg-st-done" : "bg-st-failed"
           }`}
         />
       ))}
@@ -104,12 +104,12 @@ export function FilePath({ file }: { file: DiffFile }) {
     <span className="min-w-0 truncate font-mono" title={isMove ? `${file.old_path} → ${file.new_path}` : key}>
       {isMove && file.old_path && (
         <>
-          <span className="text-fg-4">{file.old_path}</span>
-          <span className="text-fg-4"> → </span>
+          <span className="text-text-3">{file.old_path}</span>
+          <span className="text-text-3"> → </span>
         </>
       )}
-      <span className="text-fg-4">{dir}</span>
-      <span className="text-fg-2">{name || "(unknown path)"}</span>
+      <span className="text-text-3">{dir}</span>
+      <span className="text-text-2">{name || "(unknown path)"}</span>
     </span>
   );
 }
@@ -132,7 +132,7 @@ export function Badge({ file }: { file: DiffFile }) {
       ? "border-st-done/40 text-st-done"
       : label === "deleted"
         ? "border-st-failed/40 text-st-failed"
-        : "border-line-strong text-fg-4";
+        : "border-line-strong text-text-3";
   return (
     <span
       className={`shrink-0 rounded border px-1 leading-4 ${tone}`}

@@ -15,11 +15,11 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
   return (
     <div className="flex flex-col gap-3 pb-1">
       <div className="flex flex-col gap-1.5">
-        <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+        <label className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
           Trigger name
         </label>
         <input
-          className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+          className="w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
           style={{ fontSize: "12px" }}
           placeholder="e.g. Nightly audit"
           value={triggerName}
@@ -29,7 +29,7 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+        <label className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
           Schedule
         </label>
         <div className="flex flex-wrap gap-1">
@@ -39,8 +39,8 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
               onClick={() => setCronPresetId(p.id)}
               className={`rounded border px-2 py-1 font-medium transition-colors ${
                 cronPresetId === p.id
-                  ? "border-acc bg-acc-bg text-acc"
-                  : "border-line-strong bg-bg-3 text-fg-3 hover:text-fg"
+                  ? "border-primary bg-selected text-primary"
+                  : "border-line-strong bg-surface-2 text-text-3 hover:text-text"
               }`}
               style={{ fontSize: "11px" }}
               data-testid={`preset-${p.id}`}
@@ -52,8 +52,8 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
             onClick={() => setCronPresetId("custom")}
             className={`rounded border px-2 py-1 font-medium transition-colors ${
               cronPresetId === "custom"
-                ? "border-acc bg-acc-bg text-acc"
-                : "border-line-strong bg-bg-3 text-fg-3 hover:text-fg"
+                ? "border-primary bg-selected text-primary"
+                : "border-line-strong bg-surface-2 text-text-3 hover:text-text"
             }`}
             style={{ fontSize: "11px" }}
             data-testid="preset-custom"
@@ -64,8 +64,8 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
 
         {cronPresetId === "daily" && (
           <div className="flex items-center gap-1.5" style={{ fontSize: "11px" }}>
-            <Clock size={12} className="text-fg-4" />
-            <span className="text-fg-3">at</span>
+            <Clock size={12} className="text-text-3" />
+            <span className="text-text-3">at</span>
             <input
               type="number"
               min={0}
@@ -74,10 +74,10 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
               onChange={(e) =>
                 setDailyHour(Math.max(0, Math.min(23, Number(e.target.value) || 0)))
               }
-              className="w-12 rounded border border-line-strong bg-bg-3 px-1 py-0.5 text-fg focus:border-acc focus:outline-none"
+              className="w-12 rounded border border-line-strong bg-surface-2 px-1 py-0.5 text-text focus:border-primary focus:outline-none"
               data-testid="daily-hour"
             />
-            <span className="text-fg-3">:</span>
+            <span className="text-text-3">:</span>
             <input
               type="number"
               min={0}
@@ -86,7 +86,7 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
               onChange={(e) =>
                 setDailyMinute(Math.max(0, Math.min(59, Number(e.target.value) || 0)))
               }
-              className="w-12 rounded border border-line-strong bg-bg-3 px-1 py-0.5 text-fg focus:border-acc focus:outline-none"
+              className="w-12 rounded border border-line-strong bg-surface-2 px-1 py-0.5 text-text focus:border-primary focus:outline-none"
               data-testid="daily-minute"
             />
           </div>
@@ -94,7 +94,7 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
 
         {cronPresetId === "custom" && (
           <input
-            className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+            className="w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
             style={{ fontSize: "12px" }}
             placeholder="*/15 * * * *  (min hour dom month dow)"
             value={rawCron}
@@ -103,21 +103,21 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
           />
         )}
 
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
           cron: {resolvedCron || "—"}
         </span>
-        <span className="text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="text-text-3" style={{ fontSize: "10px" }}>
           Triggers fire only while the daemon is running (best-effort in v1).
         </span>
       </div>
 
       {/* Guard command (Trigger mode only, #161) */}
       <div className="flex flex-col gap-1.5">
-        <label className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+        <label className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
           Guard command (optional)
         </label>
         <textarea
-          className="w-full resize-y rounded-md border border-line-strong bg-bg-3 px-2.5 py-2 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+          className="w-full resize-y rounded-md border border-line-strong bg-surface-2 px-2.5 py-2 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
           style={{ fontSize: "12px" }}
           rows={2}
           placeholder="e.g. gh issue list --label ready-for-agent"
@@ -130,7 +130,7 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
           }}
           data-testid="guard-command-input"
         />
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           Runs before each fire from the target repo. Exit 0 fires (its stdout becomes the
           Run input); a non-zero exit skips. Bounded by a 60s timeout.
         </span>
@@ -143,7 +143,7 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
             onClick={onTestGuard}
             disabled={!repoValid || guardCommand.trim().length === 0 || guardTesting}
             title={!repoValid ? "Select a valid target repository first" : undefined}
-            className="flex w-fit items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-medium text-fg-2 transition-colors hover:bg-bg-4 disabled:opacity-40"
+            className="flex w-fit items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 font-medium text-text-2 transition-colors hover:bg-hover disabled:opacity-40"
             style={{ fontSize: "11px" }}
             data-testid="guard-test-button"
           >
@@ -152,7 +152,7 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
 
           {guardTestError && (
             <div
-              className="rounded-md border border-st-failed/30 bg-st-failed-bg px-2.5 py-1.5 text-st-failed"
+              className="rounded-md border border-st-failed/30 bg-st-failed/14 px-2.5 py-1.5 text-st-failed"
               style={{ fontSize: "10.5px" }}
               data-testid="guard-test-error"
             >
@@ -191,34 +191,34 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
       {/* Overlap policy (#239): allow concurrent fires, optionally capped. */}
       <div className="flex flex-col gap-1.5">
         <label
-          className="flex items-center gap-1.5 font-medium text-fg-2"
+          className="flex items-center gap-1.5 font-medium text-text-2"
           style={{ fontSize: "11.5px" }}
         >
           <input
             type="checkbox"
             checked={allowOverlap}
             onChange={(e) => setAllowOverlap(e.target.checked)}
-            className="accent-acc"
+            className="accent-primary"
             data-testid="overlap-allow-checkbox"
           />
           Allow concurrent fires
         </label>
         {allowOverlap && (
           <div className="flex items-center gap-1.5" style={{ fontSize: "11px" }}>
-            <span className="text-fg-3">Max concurrent runs</span>
+            <span className="text-text-3">Max concurrent runs</span>
             <input
               type="number"
               min={1}
               placeholder="∞"
               value={maxConcurrent}
               onChange={(e) => setMaxConcurrent(e.target.value)}
-              className="w-16 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg focus:border-acc focus:outline-none"
+              className="w-16 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 text-text focus:border-primary focus:outline-none"
               data-testid="max-concurrent-input"
             />
-            <span className="text-fg-4">Blank = unlimited</span>
+            <span className="text-text-3">Blank = unlimited</span>
           </div>
         )}
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           By default a trigger skips a tick while its previous run is still live. Allow
           concurrent fires to let runs stack, optionally capped at N simultaneous runs.
         </span>

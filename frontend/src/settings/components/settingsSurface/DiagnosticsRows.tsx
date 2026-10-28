@@ -54,13 +54,13 @@ export function PriceTableRows({
           onClick={() => onOpenStats?.({ tab: "cost", pricingOpen: true })}
           disabled={!onOpenStats}
           data-testid="settings-open-stats-pricing"
-          className="flex items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 text-text-2 hover:border-primary disabled:opacity-40"
           style={{ fontSize: 11 }}
         >
           Open Stats › Cost › Pricing details
           <ExternalLink size={11} />
         </button>
-        <span className="text-fg-3" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           Sync lives in Stats, next to the numbers it changes. Costs resolve{" "}
           <span className="font-mono">manual → fetched → built-in</span>.
         </span>
@@ -114,7 +114,7 @@ export function HarnessDescriptorRows({ settings }: { settings: InstanceSettings
           {view.reason}
         </KeyValueRow>
       )}
-      <p className="px-0.5 text-fg-4" style={{ fontSize: "10.5px" }}>
+      <p className="px-0.5 text-text-3" style={{ fontSize: "10.5px" }}>
         A refresh re-reads the models a harness offers, even at the same version; every open browser
         gets the new list.
       </p>
@@ -140,17 +140,17 @@ function HarnessRow({
   const fresh = probed === "probed just now";
   return (
     <div
-      className="flex items-center gap-3 rounded bg-bg-3 px-2.5 py-1.5 text-fg-3"
+      className="flex items-center gap-3 rounded bg-surface-2 px-2.5 py-1.5 text-text-3"
       style={{ fontSize: "10.5px" }}
       data-testid={`setting-harness-row-${harness.name}`}
     >
-      <span className="w-20 shrink-0 truncate font-mono text-fg-2">{harness.name}</span>
+      <span className="w-20 shrink-0 truncate font-mono text-text-2">{harness.name}</span>
       {!harness.installed ? (
-        <span className="text-fg-4">not installed</span>
+        <span className="text-text-3">not installed</span>
       ) : (
         <>
-          <span className="shrink-0 font-mono text-fg-4">{harness.version ?? "—"}</span>
-          <span className="shrink-0 font-mono text-fg-2" data-testid={`setting-harness-models-${harness.name}`}>
+          <span className="shrink-0 font-mono text-text-3">{harness.version ?? "—"}</span>
+          <span className="shrink-0 font-mono text-text-2" data-testid={`setting-harness-models-${harness.name}`}>
             {modelCount(models.length)}
           </span>
         </>
@@ -166,7 +166,7 @@ function HarnessRow({
         </span>
       ) : (
         harness.installed && (
-          <span className={fresh ? "text-acc" : "text-fg-4"} data-testid={`setting-harness-probed-${harness.name}`}>
+          <span className={fresh ? "text-primary" : "text-text-3"} data-testid={`setting-harness-probed-${harness.name}`}>
             {probed}
           </span>
         )
@@ -176,7 +176,7 @@ function HarnessRow({
         onClick={onRefresh}
         disabled={probing || !harness.installed}
         title={harness.installed ? "Probe the models of this harness again" : "Its binary is not installed"}
-        className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-2 px-2 py-0.5 text-fg-2 hover:border-acc disabled:opacity-50"
+        className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-surface-1 px-2 py-0.5 text-text-2 hover:border-primary disabled:opacity-50"
         data-testid={`setting-harness-refresh-${harness.name}`}
       >
         <RefreshCw size={10} className={probing ? "animate-spin" : undefined} />

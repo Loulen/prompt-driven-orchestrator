@@ -141,7 +141,7 @@ describe("Stats absorption — selection (#890)", () => {
     await ctrlClick(user, masterRow(22));
 
     expect(masterRow(22)).toHaveAttribute("data-checked", "true");
-    expect(masterRow(22).className).toContain("bg-acc-bg");
+    expect(masterRow(22).className).toContain("bg-selected");
     // The detail did not open: the table still reads « Total ».
     expect(screen.queryByText("Total / interactive")).not.toBeInTheDocument();
     // The design removed the discoverability line: one row selected shows
@@ -276,7 +276,7 @@ describe("Stats absorption — the Combine modal (#890)", () => {
     expect(screen.queryByTestId("stats-combine-modal")).not.toBeInTheDocument();
     expect(screen.queryByTestId("bulk-action-bar")).not.toBeInTheDocument();
     // The absorbent is briefly ringed.
-    expect(masterRow(22).className).toContain("ring-acc");
+    expect(masterRow(22).className).toContain("ring-primary");
   });
 
   it("Escape closes the modal first, then the selection", async () => {
@@ -597,7 +597,7 @@ describe("Stats absorption — Nodes (#892)", () => {
 
     await ctrlClick(user, nodeRow("Review"));
     expect(nodeRow("Review")).toHaveAttribute("data-checked", "true");
-    expect(nodeRow("Review").className).toContain("bg-acc-bg");
+    expect(nodeRow("Review").className).toContain("bg-selected");
     await user.click(
       within(nodeRow("Code review")).getByTestId("stats-row-select"),
     );
@@ -634,7 +634,7 @@ describe("Stats absorption — Nodes (#892)", () => {
       }),
     );
     await waitFor(() => expect(onAbsorptionsChanged).toHaveBeenCalledTimes(1));
-    expect(nodeRow("Code review").className).toContain("ring-acc");
+    expect(nodeRow("Code review").className).toContain("ring-primary");
   });
 
   it("refuses, visibly, a selection that mixes Pipeline and Node rows", async () => {

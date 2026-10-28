@@ -152,7 +152,7 @@ test("no text pills are present on any node", async ({ page }) => {
     // Count elements that exactly match the pill text — this catches pills
     // but not node labels like "Review Loop" which contain "loop" as substring.
     const exactPills = page.locator(
-      `span.border:has-text("${pillText}"), span.border-acc:has-text("${pillText}")`
+      `span.border:has-text("${pillText}"), span.border-primary:has-text("${pillText}")`
     );
     await expect(exactPills).toHaveCount(0);
   }

@@ -1,5 +1,5 @@
 import { Download } from "lucide-react";
-import { Tooltip, TooltipProvider } from "../../../shared/ui/tooltip";
+import { Tooltip } from "../../../shared/ui/tooltip";
 
 export const DOWNLOAD_FILE = "Download";
 
@@ -21,7 +21,7 @@ export default function DownloadButton({
 }) {
   return (
     // Own provider, as CopyButton: mounted by surfaces outside the app-level one.
-    <TooltipProvider>
+    <>
       <Tooltip content={label}>
         <a
           href={href}
@@ -30,11 +30,11 @@ export default function DownloadButton({
           data-testid={testId}
           // Never the row's click: a download must not also open the artifact.
           onClick={(e) => e.stopPropagation()}
-          className={`flex items-center rounded p-1 text-fg-3 hover:bg-bg-3 hover:text-fg ${className}`}
+          className={`flex items-center rounded p-1 text-text-3 hover:bg-hover hover:text-text ${className}`}
         >
           <Download size={13} aria-hidden="true" />
         </a>
       </Tooltip>
-    </TooltipProvider>
+    </>
   );
 }

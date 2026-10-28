@@ -1,6 +1,5 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TooltipProvider } from "../../../shared/ui/tooltip";
 import type { PortIO } from "../../api/nodes";
 
 const fetchArtifactMock = vi.fn();
@@ -29,9 +28,9 @@ function preview(exists: boolean): PortIO {
 
 function renderRow(port: PortIO, onOpen = vi.fn()) {
   render(
-    <TooltipProvider>
+    <>
       <PortRow port={port} kind="output" runId="run-1" nodeId="worker" onOpen={onOpen} />
-    </TooltipProvider>,
+    </>,
   );
   return onOpen;
 }

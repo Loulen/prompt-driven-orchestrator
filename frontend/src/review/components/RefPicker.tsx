@@ -95,12 +95,12 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
         data-ref={value}
         title={current ? `${current.label}${current.sha ? ` · ${current.sha}` : ""}` : value}
         className={`flex max-w-[280px] items-center gap-1.5 rounded border px-2 py-0.5 text-left transition-colors ${
-          open ? "border-fg-4 bg-bg-4" : "border-line-strong bg-bg-3 hover:border-fg-4 hover:bg-bg-4"
+          open ? "border-text-3 bg-surface-2" : "border-line-strong bg-surface-2 hover:border-text-3 hover:bg-hover"
         } ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}
         style={{ fontSize: "10.5px" }}
       >
         {isNode && (
-          <span className="uppercase tracking-wider text-fg-4" style={{ fontSize: "9.5px" }}>
+          <span className="uppercase tracking-wider text-text-3" style={{ fontSize: "9.5px" }}>
             node
           </span>
         )}
@@ -110,37 +110,37 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
             aria-hidden
           />
         )}
-        <span className="truncate text-fg">{current?.label ?? (refs ? value : "…")}</span>
+        <span className="truncate text-text">{current?.label ?? (refs ? value : "…")}</span>
         {current && (
-          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+          <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
             {shortSha(current.sha ?? (current.kind === "live" ? current.git_ref : null))}
           </span>
         )}
-        <ChevronDown size={10} className="shrink-0 text-fg-4" />
+        <ChevronDown size={10} className="shrink-0 text-text-3" />
       </button>
 
       {open && refs && (
         <div
           role="listbox"
           data-testid={`review-ref-popover-${side}`}
-          className="absolute left-0 top-[30px] z-50 w-[340px] overflow-hidden rounded-md border border-line-strong bg-bg-2 shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
+          className="absolute left-0 top-[30px] z-50 w-[340px] overflow-hidden rounded-md border border-line-strong bg-surface-1 shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
         >
           <div className="flex items-center gap-1.5 border-b border-line px-2 py-1.5">
-            <Search size={11} className="text-fg-4" />
+            <Search size={11} className="text-text-3" />
             <input
               ref={inputRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filter refs by node or sha…"
               data-testid={`review-ref-filter-${side}`}
-              className="flex-1 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg outline-none focus:border-acc-border"
+              className="flex-1 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 text-text outline-none focus:border-primary/30"
               style={{ fontSize: "11px" }}
             />
           </div>
 
           <div className="py-1">
             <div
-              className="px-2.5 pb-0.5 pt-1 uppercase tracking-wider text-fg-4"
+              className="px-2.5 pb-0.5 pt-1 uppercase tracking-wider text-text-3"
               style={{ fontSize: "9.5px" }}
             >
               Run
@@ -161,19 +161,19 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
                     data-testid={`review-ref-option-${r.id}`}
                     title={dis ? "Already used on the other side" : r.git_ref}
                     className={`grid w-full grid-cols-[14px_1fr_auto] items-center gap-2 px-2.5 py-1 text-left ${
-                      sel ? "bg-acc-bg" : ""
-                    } ${dis ? "cursor-not-allowed opacity-45" : "cursor-pointer hover:bg-bg-3"}`}
+                      sel ? "bg-selected" : ""
+                    } ${dis ? "cursor-not-allowed opacity-45" : "cursor-pointer hover:bg-hover"}`}
                     style={{ fontSize: "11px" }}
                   >
-                    <span className="text-acc">{sel && <Check size={11} />}</span>
+                    <span className="text-primary">{sel && <Check size={11} />}</span>
                     <span className="truncate">
-                      <span className="text-fg">{r.label}</span>
-                      <span className="text-fg-4" style={{ fontSize: "10px" }}>
+                      <span className="text-text">{r.label}</span>
+                      <span className="text-text-3" style={{ fontSize: "10px" }}>
                         {" "}
                         · {r.git_ref}
                       </span>
                     </span>
-                    <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+                    <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
                       {shortSha(r.sha)}
                     </span>
                   </button>
@@ -183,14 +183,14 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
 
           <div className="border-t border-line py-1">
             <div
-              className="flex items-center justify-between px-2.5 pb-0.5 pt-1 uppercase tracking-wider text-fg-4"
+              className="flex items-center justify-between px-2.5 pb-0.5 pt-1 uppercase tracking-wider text-text-3"
               style={{ fontSize: "9.5px" }}
             >
               <span>Deliveries</span>
-              <span className="normal-case tracking-normal text-fg-5">click a node to set both sides</span>
+              <span className="normal-case tracking-normal text-text-3">click a node to set both sides</span>
             </div>
             {refs.deliveries.length === 0 && (
-              <div className="px-2.5 py-1 text-fg-4" style={{ fontSize: "10.5px" }}>
+              <div className="px-2.5 py-1 text-text-3" style={{ fontSize: "10.5px" }}>
                 No node has delivered yet.
               </div>
             )}
@@ -221,10 +221,10 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
                       title={dis ? "Already used on the other side" : id}
                       className={`flex items-center gap-1 rounded border px-1.5 py-px ${
                         sel
-                          ? "border-acc-border bg-acc-bg text-acc"
+                          ? "border-primary/30 bg-selected text-primary"
                           : liveStyle
-                            ? "border-st-running/40 bg-st-running-bg text-st-running"
-                            : "border-line-strong bg-bg-3 text-fg-3 hover:border-fg-4 hover:text-fg"
+                            ? "border-st-running/40 bg-st-running/14 text-st-running"
+                            : "border-line-strong bg-surface-2 text-text-3 hover:border-text-3 hover:text-text"
                       } ${dis ? "cursor-not-allowed opacity-40" : "cursor-pointer"}`}
                       style={{ fontSize: "10px" }}
                     >
@@ -232,7 +232,7 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
                         <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" aria-hidden />
                       )}
                       {label}
-                      <span className="font-mono text-fg-4">{sha}</span>
+                      <span className="font-mono text-text-3">{sha}</span>
                     </button>
                   );
                 };
@@ -252,19 +252,19 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
                           ? "Review this delivery: before → after"
                           : "Review the live branch: Run tip → live"
                       }
-                      className="flex w-full cursor-pointer items-center gap-1.5 px-2.5 pb-px pt-0.5 text-left text-fg-3 hover:bg-bg-3"
+                      className="flex w-full cursor-pointer items-center gap-1.5 px-2.5 pb-px pt-0.5 text-left text-text-3 hover:bg-hover"
                       style={{ fontSize: "10.5px" }}
                     >
-                      <span className="text-fg-2">{d.node_name}</span>
-                      <span className="font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
+                      <span className="text-text-2">{d.node_name}</span>
+                      <span className="font-mono text-text-3" style={{ fontSize: "9.5px" }}>
                         {d.node_id}
                       </span>
-                      <span className="text-fg-4">iter {d.iter}</span>
+                      <span className="text-text-3">iter {d.iter}</span>
                       <span
                         className={`rounded-full border px-1.5 ${
                           d.status === "delivered"
-                            ? "border-acc-border bg-acc-bg text-acc"
-                            : "border-st-running/40 bg-st-running-bg text-st-running"
+                            ? "border-primary/30 bg-selected text-primary"
+                            : "border-st-running/40 bg-st-running/14 text-st-running"
                         }`}
                         style={{ fontSize: "9.5px" }}
                       >
@@ -281,7 +281,7 @@ export default function RefPicker({ side, value, other, refs, disabled, onPick, 
               })}
           </div>
 
-          <div className="border-t border-line px-2.5 py-1 text-fg-4" style={{ fontSize: "10px" }}>
+          <div className="border-t border-line px-2.5 py-1 text-text-3" style={{ fontSize: "10px" }}>
             Refs are frozen SHAs from the event log; <span className="text-st-running">live</span> follows
             the node's sub-worktree; <span className="text-st-running">Working tree</span> is the Run's worktree
             as it is now, uncommitted edits included.

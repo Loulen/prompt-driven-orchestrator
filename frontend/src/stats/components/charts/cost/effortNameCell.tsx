@@ -10,7 +10,7 @@ export function effortNameCell(row: StatsEffortCostEntity): React.ReactNode {
     // element, and the tooltip is a description, not a second control.
     return (
       <Tooltip content={NOT_SET_COPY} side="top">
-        <span className="italic text-fg-4">not set</span>
+        <span className="italic text-text-3">not set</span>
       </Tooltip>
     );
   }

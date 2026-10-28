@@ -34,7 +34,7 @@ export default function LintBanner({ items, onDismiss }: Props) {
       {items.map((item, i) => (
         <div
           key={item.kind === "nudge" ? item.id : `lint-${i}`}
-          className="flex items-start gap-2 rounded border border-st-await/30 bg-st-await/5 px-2 py-1.5 text-fg-3"
+          className="flex items-start gap-2 rounded border border-st-await/30 bg-st-await/5 px-2 py-1.5 text-text-3"
           style={{ fontSize: "10.5px" }}
         >
           <Info size={12} className="mt-0.5 shrink-0 text-st-await" />
@@ -45,7 +45,7 @@ export default function LintBanner({ items, onDismiss }: Props) {
               onClick={() => onDismiss(item.id)}
               aria-label="Dismiss suggestion"
               data-testid={`lint-banner-dismiss-${item.id}`}
-              className="ml-auto -mr-0.5 shrink-0 rounded p-0.5 text-fg-4 hover:text-fg-2 focus-visible:outline focus-visible:outline-1"
+              className="ml-auto -mr-0.5 shrink-0 rounded p-0.5 text-text-3 hover:text-text-2 focus-visible:outline focus-visible:outline-1"
             >
               <X size={12} />
             </button>

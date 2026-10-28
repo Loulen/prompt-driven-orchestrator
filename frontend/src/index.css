@@ -1,258 +1,83 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+/* The shared design system's tokens (ADR-0091): the very file the daemon serves
+   at `/shared/tokens.css` to the pages an extension publishes outside the
+   interface. Palette of both themes, type scale, heights, radii, fonts. */
+@import "../public/shared/tokens.css";
+/* The primitives of the shared module `@pdo/extension-ui` and their dense
+   classes, used by the core and by the extensions' UI. */
+@import "./shared/ui/kit/kit.css";
 
 @custom-variant dark (&:is(.dark *));
 
-@font-face {
-  font-family: "Geist";
-  src: url("https://cdn.jsdelivr.net/npm/geist@1/dist/fonts/geist-sans/Geist-Variable.woff2") format("woff2");
-  font-weight: 100 900;
-  font-display: swap;
-}
+/* Tailwind's utilities paint through the tokens' roles: `bg-surface-1`,
+   `text-text-2`, `border-line`, `bg-primary`, `text-st-failed`, `bg-hover`…
+   `reference`: Tailwind declares none of these on `:root`, the token sheet
+   does, per theme; `inline`: a utility reads the role itself, so a container
+   that redefines `--primary` (the inspector's amber scope) re-tints its
+   utilities. Its own palette, sizes and radii are dropped: the tokens only. */
+@theme inline reference {
+  --color-*: initial;
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-selected: var(--selected);
+  --color-selected-edge: var(--selected-edge);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-line-strong: var(--line-strong);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-primary: var(--primary);
+  --color-primary-hi: var(--primary-hi);
+  --color-primary-ink: var(--primary-ink);
+  --color-focus-ring: var(--focus-ring);
+  --color-scrim: var(--scrim);
+  --color-dim: var(--dim);
+  --color-dim-soft: var(--dim-soft);
+  --color-st-running: var(--color-st-running);
+  --color-st-await: var(--color-st-await);
+  --color-st-done: var(--color-st-done);
+  --color-st-blocked: var(--color-st-blocked);
+  --color-st-failed: var(--color-st-failed);
+  --color-st-skipped: var(--color-st-skipped);
 
-@font-face {
-  font-family: "Geist Mono";
-  src: url("https://cdn.jsdelivr.net/npm/geist@1/dist/fonts/geist-mono/GeistMono-Variable.woff2") format("woff2");
-  font-weight: 100 900;
-  font-display: swap;
-}
+  /* The type scale, 10 to 16 px. */
+  --text-*: initial;
+  --text-2xs: var(--fs-2xs);
+  --text-2xs--line-height: var(--lh-ui);
+  --text-xs: var(--fs-xs);
+  --text-xs--line-height: var(--lh-ui);
+  --text-sm: var(--fs-sm);
+  --text-sm--line-height: var(--lh-ui);
+  --text-md: var(--fs-md);
+  --text-md--line-height: var(--lh-ui);
+  --text-lg: var(--fs-lg);
+  --text-lg--line-height: var(--lh-ui);
+  --text-xl: var(--fs-xl);
+  --text-xl--line-height: var(--lh-ui);
 
-@theme {
-  /* PDO surfaces */
-  --color-bg-0: #0a0c10;
-  --color-bg-1: #0f1115;
-  --color-bg-2: #14171d;
-  --color-bg-3: #1a1e25;
-  --color-bg-4: #232831;
-  --color-bg-5: #2c323d;
-
-  /* PDO lines */
-  --color-line: #1f242c;
-  --color-line-strong: #2a313b;
-  --color-line-soft: #181c22;
-
-  /* PDO text */
-  --color-fg: #e6e8eb;
-  --color-fg-2: #aab1bd;
-  --color-fg-3: #767e8c;
-  --color-fg-4: #525a68;
-  --color-fg-5: #383e48;
-
-  /* PDO accent */
-  --color-acc: #10b981;
-  --color-acc-dim: #0e8f66;
-  --color-acc-bg: rgba(16, 185, 129, 0.12);
-  --color-acc-border: rgba(16, 185, 129, 0.32);
-  /* Brighter accent for the hover of a filled accent button (#759 —
-     was a hard-coded #14cf92 in three review controls). */
-  --color-acc-hi: #14cf92;
-  /* Text ON a filled accent surface. Near-black over the light-on-dark
-     green; near-white once the light theme darkens the accent (#759). */
-  --color-on-acc: #04140d;
-  /* Same, for the Inspector's amber scope (`.panel-r`). */
-  --color-on-acc-warn: #1a0f00;
-
-  /* PDO status */
-  --color-st-running: #3b82f6;
-  --color-st-running-bg: rgba(59, 130, 246, 0.14);
-  --color-st-await: #f59e0b;
-  --color-st-await-bg: rgba(245, 158, 11, 0.14);
-  --color-st-await-border: rgba(245, 158, 11, 0.34);
-  --color-st-done: #10b981;
-  --color-st-done-bg: rgba(16, 185, 129, 0.14);
-  --color-st-done-hl: rgba(16, 185, 129, 0.28);
-  --color-st-blocked: #f97316;
-  --color-st-blocked-bg: rgba(249, 115, 22, 0.14);
-  --color-st-failed: #ef4444;
-  --color-st-failed-bg: rgba(239, 68, 68, 0.14);
-  --color-st-failed-hl: rgba(239, 68, 68, 0.30);
-  --color-st-failed-border: rgba(239, 68, 68, 0.30);
-  /* Graceful no-op terminal (#245): a calm slate, distinct from failed (red),
-     done (green) and archived (gray) — "fired but nothing to do". */
-  --color-st-skipped: #64748b;
-  --color-st-skipped-bg: rgba(100, 116, 139, 0.14);
-  --color-st-archived: #6b7280;
-  --color-st-stopped: #9ca3af;
-  --color-st-stopped-bg: rgba(156, 163, 175, 0.14);
-  --color-st-stale: #d97706;
-  --color-st-stale-bg: rgba(217, 119, 6, 0.14);
-  /* Interrupted (#598 / ADR-0049): an infra incident, recoverable — a warm amber
-     distinct from failed (red). "La session est morte, pas le travail." */
-  --color-st-interrupted: #f59e0b;
-  --color-st-interrupted-bg: rgba(245, 158, 11, 0.14);
-  --color-st-paused: #f97316;
-  --color-st-paused-bg: rgba(249, 115, 22, 0.14);
-  --color-st-pending: #4b5563;
-
-  /* Edit-mode chrome */
-  --color-edit-tint: #a78bfa;
-
-  /* Selected edge — pastel orange (#177). Selection is the dominant edge signal
-     (PRD #143): the selected edge is orange, every other edge is grey. */
-  --color-edge-selected: #fdba74;
-
-  /* Stats charts (#759). recharts takes resolved colours as props, so these are
-     read at render time through `cssColor` rather than applied as classes. */
-  --color-chart-runs: #58a6ff;
-  --color-chart-errors: #f85149;
-  --color-chart-fires: #3fb950;
-  --color-chart-grid: #30363d;
-  --color-chart-axis: #8b949e;
-  --color-chart-tooltip-bg: #161b22;
-
-  /* Drop shadow. Deeper on a dark ground, where a shadow has to fight the
-     surface; softer on a light one, where black at 0.4 reads as grime. */
-  --color-shadow: rgba(0, 0, 0, 0.4);
-
-  /* #823 — the Projecteur's dim. Deep enough that the lit target is the only
-     thing the eye lands on, light enough that the app stays readable behind it:
-     a tour teaches where things ARE, so it must not black the room out. */
-  --color-tour-dim: rgba(0, 0, 0, 0.62);
-
-  /* #825 — the dim of a step whose lit area is a whole panel to roam in (the
-     wait for a node to finish). Lighter, because the reader is meant to READ in
-     there — the terminal behind it is the point of the step, not its backdrop. */
-  --color-tour-dim-soft: rgba(0, 0, 0, 0.48);
-
-  /* Typography */
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
-
-  /* Radii */
-  --radius-sm: 4px;
-  --radius: 6px;
-  --radius-lg: 10px;
+  /* Controls 2 px, panes square; `rounded-full` stays for dots and avatars. */
+  --radius-*: initial;
+  --radius: var(--radius-ui);
+  --radius-xs: var(--radius-ui);
+  --radius-sm: var(--radius-ui);
+  --radius-md: var(--radius-ui);
+  --radius-lg: var(--radius-ui);
+  --radius-xl: var(--radius-ui);
+  --radius-2xl: var(--radius-ui);
+  --radius-3xl: var(--radius-ui);
+  --radius-4xl: var(--radius-ui);
 }
 
 @theme inline {
-  --font-heading: var(--font-sans);
-  --color-background: var(--color-bg-1);
-  --color-foreground: var(--color-fg);
-  --color-card: var(--color-bg-2);
-  --color-card-foreground: var(--color-fg);
-  --color-popover: var(--color-bg-2);
-  --color-popover-foreground: var(--color-fg);
-  --color-primary: var(--color-acc);
-  --color-primary-foreground: var(--color-on-acc);
-  --color-secondary: var(--color-bg-3);
-  --color-secondary-foreground: var(--color-fg);
-  --color-muted: var(--color-bg-3);
-  --color-muted-foreground: var(--color-fg-3);
-  --color-accent: var(--color-bg-3);
-  --color-accent-foreground: var(--color-fg);
-  --color-destructive: var(--color-st-failed);
-  --color-border: var(--color-line);
-  --color-input: var(--color-line-strong);
-  --color-ring: var(--color-acc);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
-}
-
-/* ---------------------------------------------------------------------------
- * Light theme (#759). One override block, not a second stylesheet: every
- * component already paints through the semantic tokens above, so redefining the
- * tokens here re-themes the whole app.
- *
- * `data-theme` carries a RESOLVED value — `light` or `dark`, never `system`.
- * `main.tsx` (and the inline script in `index.html`, before first paint) writes
- * it from the stored preference or `prefers-color-scheme`. No media query here:
- * one source of truth, so the stored choice and the OS default can never fight.
- *
- * Surfaces invert their ROLE, not their index: `bg-2` is the panel that pops
- * (white on a grey page), `bg-3` the control that recedes, `bg-4`/`bg-5` hover
- * and pressed — which darken here where they lightened in the dark theme. Both
- * directions mean the same thing: more separation from the page.
- *
- * Every text colour is measured against every copy-bearing surface in
- * `themePalette.test.ts`; nothing below is eyeballed.
- * ------------------------------------------------------------------------- */
-:root[data-theme="light"] {
-  /* PDO surfaces */
-  --color-bg-0: #e7eaee;
-  --color-bg-1: #f6f7f9;
-  --color-bg-2: #ffffff;
-  --color-bg-3: #eef0f4;
-  --color-bg-4: #e3e6eb;
-  --color-bg-5: #d7dbe2;
-
-  /* PDO lines */
-  --color-line: #dfe3e9;
-  --color-line-strong: #c9cfd8;
-  --color-line-soft: #ebeef2;
-
-  /* PDO text */
-  --color-fg: #14181f;
-  --color-fg-2: #3d4553;
-  --color-fg-3: #4a5261;
-  /* Captions and helper copy. `text-fg-4` appears 500+ times in this codebase,
-     so it is TEXT and owes 4.5:1 — which squeezes it close to fg-3. The dark
-     theme keeps its historical 2.40:1 here (declared debt, see
-     themePalette.test.ts); the light theme starts clean and does not inherit it. */
-  --color-fg-4: #5e6674;
-  --color-fg-5: #8b93a1;
-
-  /* PDO accent — the green darkens so it can carry text on white */
-  --color-acc: #03714f;
-  --color-acc-dim: #065f46;
-  --color-acc-hi: #04996b;
-  --color-acc-bg: rgba(3, 113, 79, 0.10);
-  --color-acc-border: rgba(3, 113, 79, 0.30);
-  --color-on-acc: #f2fbf7;
-  --color-on-acc-warn: #fff7ed;
-
-  /* PDO status */
-  --color-st-running: #1d4ed8;
-  --color-st-running-bg: rgba(29, 78, 216, 0.10);
-  --color-st-await: #8f4506;
-  --color-st-await-bg: rgba(143, 69, 6, 0.10);
-  --color-st-await-border: rgba(143, 69, 6, 0.30);
-  --color-st-done: #03714f;
-  --color-st-done-bg: rgba(3, 113, 79, 0.10);
-  --color-st-done-hl: rgba(3, 113, 79, 0.24);
-  --color-st-blocked: #9a3412;
-  --color-st-blocked-bg: rgba(154, 52, 18, 0.10);
-  --color-st-failed: #b91c1c;
-  --color-st-failed-bg: rgba(185, 28, 28, 0.10);
-  --color-st-failed-hl: rgba(185, 28, 28, 0.24);
-  --color-st-failed-border: rgba(185, 28, 28, 0.30);
-  --color-st-skipped: #475569;
-  --color-st-skipped-bg: rgba(71, 85, 105, 0.10);
-  --color-st-archived: #4b5563;
-  --color-st-stopped: #565e6c;
-  --color-st-stopped-bg: rgba(86, 94, 108, 0.10);
-  --color-st-stale: #8f4506;
-  --color-st-stale-bg: rgba(143, 69, 6, 0.10);
-  --color-st-interrupted: #8f4506;
-  --color-st-interrupted-bg: rgba(143, 69, 6, 0.10);
-  --color-st-paused: #9a3412;
-  --color-st-paused-bg: rgba(154, 52, 18, 0.10);
-  --color-st-pending: #767e8c;
-
-  /* Edit-mode chrome */
-  --color-edit-tint: #6d28d9;
-
-  /* Selected edge */
-  --color-edge-selected: #9a3412;
-
-  /* Stats charts */
-  --color-chart-runs: #0b5cc4;
-  --color-chart-errors: #b0201a;
-  --color-chart-fires: #1a7f37;
-  --color-chart-grid: #d6dae0;
-  --color-chart-axis: #4a5261;
-  --color-chart-tooltip-bg: #ffffff;
-
-  /* Shadow */
-  --color-shadow: rgba(20, 24, 31, 0.16);
-
-  /* Projecteur dim (#823). Lighter on a light ground: the same black at 0.62
-     over a white app reads as a power cut rather than a spotlight. */
-  --color-tour-dim: rgba(20, 24, 31, 0.45);
-  --color-tour-dim-soft: rgba(20, 24, 31, 0.32);
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-code);
+  --font-heading: var(--font-ui);
 }
 
 *,
@@ -269,20 +94,46 @@ body,
   padding: 0;
 }
 
+/* The UI scale (Settings › Interface, `lib/uiScale.ts`): the app is drawn with
+   CSS `zoom` on its root, `--app-zoom` on <html>. A length in viewport units
+   inside it is divided by the zoom; a position written from screen pixels
+   (a rect, a pointer) goes through `toCss()`. The canvas leaves the zoom
+   (`.pdo-unzoom`) and carries the scale in its own viewport zoom. */
+#root {
+  position: relative;
+  height: calc(100dvh / var(--app-zoom, 1));
+  zoom: var(--app-zoom, 1);
+}
+.pdo-unzoom {
+  zoom: calc(1 / var(--app-zoom, 1));
+}
+/* A control drawn inside the canvas, back at the UI scale. */
+.pdo-rezoom {
+  zoom: var(--app-zoom, 1);
+}
+
 body {
-  font-family: var(--font-sans);
-  color: var(--color-fg);
-  background: var(--color-bg-1);
-  font-size: 13px;
-  line-height: 1.45;
-  letter-spacing: -0.005em;
+  font-family: var(--font-ui);
+  color: var(--text);
+  background: var(--surface-0);
+  font-size: var(--fs-md);
+  font-weight: 450;
+  line-height: var(--lh-ui);
   -webkit-font-smoothing: antialiased;
-  font-feature-settings: "ss01", "cv11";
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01", "tnum";
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-line outline-focus-ring;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+  }
+  :where(time, .num, td, .tnum) {
+    font-variant-numeric: tabular-nums;
   }
 }
 
@@ -300,11 +151,11 @@ body {
   gap: 5px;
   height: 18px;
   padding: 0 7px;
-  background: var(--color-bg-3);
-  border: 1px solid var(--color-line-strong);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
   border-radius: 9px;
-  color: var(--color-fg-2);
-  font-family: var(--font-mono);
+  color: var(--text-2);
+  font-family: var(--font-code);
   font-size: 10.5px;
   letter-spacing: 0.005em;
   white-space: nowrap;
@@ -316,7 +167,7 @@ body {
   height: 8px;
   display: grid;
   place-items: center;
-  color: var(--color-fg-3);
+  color: var(--text-3);
 }
 .port-pill .pp-chev svg {
   display: block;
@@ -367,8 +218,8 @@ body {
 /* Drop-target highlight — amber, only on input pills of hovered node
    (refs docs/design/project/winners.css §2, .port-pill.is-drop) */
 .port-pill.is-drop {
-  background: var(--color-st-await-bg);
-  border-color: var(--color-st-await-border);
+  background: color-mix(in oklab, var(--color-st-await) 14%, transparent);
+  border-color: color-mix(in oklab, var(--color-st-await) 30%, transparent);
   color: var(--color-st-await);
 }
 .port-pill.is-drop .pp-chev {
@@ -377,27 +228,25 @@ body {
 
 /* Inspector scope — amber accent (refs docs/design/project/winners.css §3) */
 .panel-r {
-  --color-acc: var(--color-st-await);
-  --color-acc-dim: var(--color-st-stale);
-  --color-acc-hi: var(--color-st-await);
-  --color-acc-bg: var(--color-st-await-bg);
-  --color-acc-border: var(--color-st-await-border);
-  --color-on-acc: var(--color-on-acc-warn);
-  --color-primary-foreground: var(--color-on-acc-warn);
+  --primary: var(--color-st-await);
+  --primary-hi: var(--color-st-await);
+  --primary-ink: var(--color-paper);
+  --selected: color-mix(in oklab, var(--color-st-await) 14%, transparent);
+  --selected-edge: var(--color-st-await);
 }
 
 /* Inspector output card — O3 tab head (refs docs/design/project/winners.css §5) */
 .op-tab {
   margin-bottom: 12px;
-  font-family: var(--font-sans);
+  font-family: var(--font-ui);
 }
 .op-tab .op-head {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: var(--color-bg-3);
-  border: 1px solid var(--color-line-strong);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
   border-radius: 8px 8px 0 0;
   border-bottom: none;
   width: 92%;
@@ -408,7 +257,7 @@ body {
 .op-tab.collapsed .op-head {
   border-radius: 8px;
   width: 100%;
-  border-bottom: 1px solid var(--color-line-strong);
+  border-bottom: 1px solid var(--line-strong);
 }
 .op-tab .op-head .port-row {
   flex: 1;
@@ -422,7 +271,7 @@ body {
   height: 18px;
   display: grid;
   place-items: center;
-  color: var(--color-fg-3);
+  color: var(--text-3);
   cursor: pointer;
   transition: transform 150ms;
   border: none;
@@ -433,8 +282,8 @@ body {
   transform: rotate(-90deg);
 }
 .op-tab .op-body {
-  background: var(--color-bg-2);
-  border: 1px solid var(--color-line-strong);
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
   border-radius: 0 8px 8px 8px;
   padding: 10px 12px 12px;
   display: flex;
@@ -444,17 +293,17 @@ body {
 
 /* Optional expected-content guidance on agentic outputs (#573). */
 .exp {
-  background: var(--color-bg-1);
-  border: 1px solid var(--color-line);
+  background: var(--surface-0);
+  border: 1px solid var(--line);
   border-radius: 6px;
 }
 .exp:hover {
-  background: var(--color-bg-2);
-  border-color: var(--color-line-strong);
+  background: var(--surface-1);
+  border-color: var(--line-strong);
 }
 .exp.expanded {
-  background: var(--color-bg-2);
-  border-color: var(--color-acc-border);
+  background: var(--surface-1);
+  border-color: color-mix(in oklab, var(--primary) 30%, transparent);
 }
 .exp-trigger {
   width: 100%;
@@ -465,34 +314,34 @@ body {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: var(--color-fg-4);
+  color: var(--text-3);
   cursor: pointer;
   text-align: left;
 }
 .exp-trigger:focus-visible {
   outline: none;
-  border-color: var(--color-acc);
-  box-shadow: 0 0 0 1px var(--color-acc);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
 }
 .exp-label {
   flex: none;
-  color: var(--color-fg-2);
-  font-family: var(--font-sans);
+  color: var(--text-2);
+  font-family: var(--font-ui);
   font-size: 11px;
 }
 .exp-preview {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  color: var(--color-fg-3);
-  font-family: var(--font-mono);
+  color: var(--text-3);
+  font-family: var(--font-code);
   font-size: 10.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .exp-preview.empty {
-  color: var(--color-fg-5);
-  font-family: var(--font-sans);
+  color: var(--text-3);
+  font-family: var(--font-ui);
 }
 .exp-chevron {
   flex: none;
@@ -510,24 +359,24 @@ body {
   padding: 6px 8px;
   resize: none;
   overflow-y: hidden;
-  border: 1px solid var(--color-line-strong);
+  border: 1px solid var(--line-strong);
   border-radius: 4px;
   outline: none;
-  background: var(--color-bg-3);
-  color: var(--color-fg);
-  font-family: var(--font-mono);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-code);
   font-size: 11px;
   line-height: 1.5;
 }
 .exp textarea:focus {
-  border-color: var(--color-acc);
+  border-color: var(--primary);
 }
 .exp-footer {
   display: flex;
   justify-content: space-between;
   padding: 4px 8px 6px;
-  color: var(--color-fg-5);
-  font-family: var(--font-mono);
+  color: var(--text-3);
+  font-family: var(--font-code);
   font-size: 9.5px;
 }
 
@@ -537,8 +386,8 @@ body {
   align-items: center;
   gap: 6px;
   padding: 6px 8px;
-  background: var(--color-bg-1);
-  border: 1px solid var(--color-line);
+  background: var(--surface-0);
+  border: 1px solid var(--line);
   border-radius: 6px;
   flex-wrap: wrap;
 }
@@ -547,31 +396,31 @@ body {
   min-width: 100px;
   background: transparent;
   border: 1px solid transparent;
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 11.5px;
-  color: var(--color-fg);
+  color: var(--text);
   padding: 4px 6px;
   border-radius: 4px;
 }
 .fld .fld-name:hover {
-  background: var(--color-bg-2);
+  background: var(--surface-1);
 }
 .fld .fld-name:focus {
   outline: none;
-  background: var(--color-bg-2);
+  background: var(--surface-1);
   border-color: var(--color-st-await);
   box-shadow: 0 0 0 1px var(--color-st-await);
 }
 .fld .fld-type {
   flex: 0 0 96px;
-  background: var(--color-bg-2);
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-fg-2);
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  color: var(--text-2);
   padding: 4px 8px;
   border-radius: 4px;
   font: inherit;
   font-size: 11.5px;
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   cursor: pointer;
 }
 .fld .fld-del {
@@ -582,29 +431,29 @@ body {
   border-radius: 4px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--color-fg-4);
+  color: var(--text-3);
   cursor: pointer;
 }
 .fld .fld-del:hover {
   color: var(--color-st-failed);
-  background: var(--color-st-failed-bg);
-  border-color: var(--color-st-failed-border);
+  background: color-mix(in oklab, var(--color-st-failed) 14%, transparent);
+  border-color: color-mix(in oklab, var(--color-st-failed) 30%, transparent);
 }
 .fld-enum {
   flex: 1 1 100%;
   margin-top: 6px;
   padding: 8px;
-  background: var(--color-bg-2);
-  border: 1px solid var(--color-line);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
   border-radius: 5px;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 .fld-enum .fld-enum-h {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 9.5px;
-  color: var(--color-fg-4);
+  color: var(--text-3);
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -619,19 +468,19 @@ body {
   gap: 4px;
   height: 22px;
   padding: 0 8px;
-  background: var(--color-bg-3);
-  border: 1px solid var(--color-line-strong);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
   border-radius: 4px;
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 11px;
-  color: var(--color-fg);
+  color: var(--text);
 }
 .fld-chip .fld-chip-del {
   display: grid;
   place-items: center;
   background: transparent;
   border: none;
-  color: var(--color-fg-4);
+  color: var(--text-3);
   cursor: pointer;
   opacity: 0;
   transition: opacity 150ms;
@@ -649,13 +498,13 @@ body {
 }
 .fld-add-row input {
   flex: 1;
-  background: var(--color-bg-1);
-  border: 1px solid var(--color-line-strong);
+  background: var(--surface-0);
+  border: 1px solid var(--line-strong);
   border-radius: 4px;
-  color: var(--color-fg);
+  color: var(--text);
   font: inherit;
   font-size: 11.5px;
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   padding: 5px 8px;
 }
 .fld-add-row input:focus {
@@ -666,8 +515,8 @@ body {
 .fld-add-row .fld-add-btn {
   height: 26px;
   padding: 0 12px;
-  background: var(--color-acc-bg);
-  border: 1px solid var(--color-acc-border);
+  background: var(--selected);
+  border: 1px solid color-mix(in oklab, var(--primary) 30%, transparent);
   color: var(--color-st-await);
   border-radius: 4px;
   font-size: 11.5px;
@@ -678,22 +527,22 @@ body {
   align-self: flex-start;
   padding: 4px 10px;
   border-radius: 4px;
-  border: 1px dashed var(--color-line-strong);
+  border: 1px dashed var(--line-strong);
   background: transparent;
-  color: var(--color-fg-4);
-  font-family: var(--font-mono);
+  color: var(--text-3);
+  font-family: var(--font-code);
   font-size: 11px;
   cursor: pointer;
 }
 .fld-add-field:hover {
-  color: var(--color-acc);
-  border-color: var(--color-acc-border);
+  color: var(--primary);
+  border-color: color-mix(in oklab, var(--primary) 30%, transparent);
 }
 
 /* Switch branch card — S1 AND rail (refs docs/design/project/winners.css §7) */
 .sb-card {
-  background: var(--color-bg-2);
-  border: 1px solid var(--color-line-strong);
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
   margin-bottom: 10px;
   overflow: hidden;
@@ -703,10 +552,10 @@ body {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  background: var(--color-bg-3);
+  background: var(--surface-2);
 }
 .sb-card .sb-grip {
-  color: var(--color-fg-4);
+  color: var(--text-3);
   cursor: grab;
 }
 .sb-card .sb-name {
@@ -714,8 +563,8 @@ body {
   min-width: 0;
   background: transparent;
   border: 1px solid transparent;
-  color: var(--color-fg);
-  font-family: var(--font-mono);
+  color: var(--text);
+  font-family: var(--font-code);
   font-size: 12px;
   font-weight: 600;
   padding: 3px 6px;
@@ -723,7 +572,7 @@ body {
 }
 .sb-card .sb-name:focus {
   outline: none;
-  background: var(--color-bg-1);
+  background: var(--surface-0);
   border-color: var(--color-st-await);
   box-shadow: 0 0 0 1px var(--color-st-await);
 }
@@ -735,17 +584,17 @@ body {
   border-radius: 4px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--color-fg-4);
+  color: var(--text-3);
   cursor: pointer;
 }
 .sb-card .sb-icon-btn:hover {
   color: var(--color-st-failed);
-  background: var(--color-st-failed-bg);
-  border-color: var(--color-st-failed-border);
+  background: color-mix(in oklab, var(--color-st-failed) 14%, transparent);
+  border-color: color-mix(in oklab, var(--color-st-failed) 30%, transparent);
 }
 .sb-card .sb-body {
   padding: 10px 12px 12px;
-  border-top: 1px solid var(--color-line);
+  border-top: 1px solid var(--line);
 }
 .sb-card .sb-conds {
   position: relative;
@@ -761,7 +610,7 @@ body {
   top: 4px;
   bottom: 4px;
   width: 1.5px;
-  background: var(--color-line-strong);
+  background: var(--line-strong);
 }
 .sb-card .sb-conds.multi::after {
   content: "AND";
@@ -769,11 +618,11 @@ body {
   left: -1px;
   top: 50%;
   transform: translateY(-50%) rotate(-90deg);
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 9px;
   letter-spacing: 0.18em;
-  color: var(--color-fg-4);
-  background: var(--color-bg-2);
+  color: var(--text-3);
+  background: var(--surface-1);
   padding: 2px 4px;
 }
 .sb-card .sb-conds.single::before,
@@ -788,12 +637,12 @@ body {
 }
 .sb-cond .sb-input,
 .sb-cond .sb-select {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 11.5px;
-  background: var(--color-bg-1);
-  border: 1px solid var(--color-line-strong);
+  background: var(--surface-0);
+  border: 1px solid var(--line-strong);
   border-radius: 4px;
-  color: var(--color-fg);
+  color: var(--text);
   padding: 5px 8px;
 }
 .sb-cond .sb-input:focus,
@@ -810,7 +659,7 @@ body {
   border-radius: 4px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--color-fg-4);
+  color: var(--text-3);
   cursor: pointer;
 }
 .sb-add-cond {
@@ -820,16 +669,16 @@ body {
   margin-top: 4px;
   padding: 4px 8px;
   border-radius: 4px;
-  border: 1px dashed var(--color-line-strong);
+  border: 1px dashed var(--line-strong);
   background: transparent;
-  color: var(--color-fg-4);
-  font-family: var(--font-mono);
+  color: var(--text-3);
+  font-family: var(--font-code);
   font-size: 10.5px;
   cursor: pointer;
 }
 .sb-add-cond:hover {
-  color: var(--color-acc);
-  border-color: var(--color-acc-border);
+  color: var(--primary);
+  border-color: color-mix(in oklab, var(--primary) 30%, transparent);
 }
 .sb-add-cond:disabled {
   cursor: not-allowed;
@@ -838,14 +687,14 @@ body {
 
 .sb-default {
   border-style: dashed;
-  background: var(--color-bg-1);
+  background: var(--surface-0);
 }
 .sb-default .sb-head {
   background: transparent;
 }
 .sb-default .sb-name {
   font-style: italic;
-  color: var(--color-fg-3);
+  color: var(--text-3);
 }
 .sb-default .sb-pin {
   display: inline-flex;
@@ -853,10 +702,10 @@ body {
   height: 18px;
   padding: 0 6px;
   border-radius: 9px;
-  background: var(--color-bg-3);
-  border: 1px solid var(--color-line-strong);
-  color: var(--color-fg-3);
-  font-family: var(--font-mono);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  color: var(--text-3);
+  font-family: var(--font-code);
   font-size: 9.5px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -864,20 +713,20 @@ body {
 .sb-default .sb-body {
   padding: 8px 12px 10px;
   font-size: 11.5px;
-  color: var(--color-fg-3);
-  font-family: var(--font-mono);
+  color: var(--text-3);
+  font-family: var(--font-code);
 }
 
 .artifact-markdown {
-  font-family: var(--font-sans);
+  font-family: var(--font-ui);
   font-size: 12px;
   line-height: 1.55;
-  color: var(--color-fg-2);
+  color: var(--text-2);
 }
 .artifact-markdown h1,
 .artifact-markdown h2,
 .artifact-markdown h3 {
-  color: var(--color-fg);
+  color: var(--text);
   font-weight: 600;
   margin: 1em 0 0.5em;
 }
@@ -891,23 +740,23 @@ body {
 .artifact-markdown ol { margin: 0.5em 0; padding-left: 1.5em; }
 .artifact-markdown ul { list-style: disc; }
 .artifact-markdown ol { list-style: decimal; }
-.artifact-markdown a { color: var(--color-acc); text-decoration: underline; text-underline-offset: 2px; }
-.artifact-markdown a:hover { color: var(--color-fg); }
+.artifact-markdown a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.artifact-markdown a:hover { color: var(--text); }
 .artifact-markdown li { margin: 0.25em 0; }
 .artifact-markdown code {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 11px;
-  background: var(--color-bg-0);
-  border: 1px solid var(--color-line);
+  background: var(--surface-0);
+  border: 1px solid var(--line);
   border-radius: 3px;
   padding: 1px 4px;
 }
 .artifact-markdown pre {
-  background: var(--color-bg-0);
-  border: 1px solid var(--color-line);
+  background: var(--surface-0);
+  border: 1px solid var(--line);
   border-radius: 5px;
   padding: 8px 10px;
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 10.5px;
   overflow-x: auto;
   margin: 0.5em 0;
@@ -925,20 +774,20 @@ body {
 }
 .artifact-markdown th,
 .artifact-markdown td {
-  border: 1px solid var(--color-line);
+  border: 1px solid var(--line);
   padding: 4px 8px;
   text-align: left;
 }
 .artifact-markdown th {
-  background: var(--color-bg-3);
+  background: var(--surface-2);
   font-weight: 600;
-  color: var(--color-fg);
+  color: var(--text);
 }
 .artifact-markdown blockquote {
-  border-left: 3px solid var(--color-acc);
+  border-left: 3px solid var(--primary);
   margin: 0.5em 0;
   padding: 0.25em 0.75em;
-  color: var(--color-fg-3);
+  color: var(--text-3);
 }
 /* #240 — mermaid diagram inside an artifact. Clamp wide diagrams to the 560px
    modal; scroll horizontally if they still overflow; center otherwise. */
@@ -947,8 +796,8 @@ body {
   max-width: 100%;
   overflow-x: auto;
   text-align: center;
-  background: var(--color-bg-0);
-  border: 1px solid var(--color-line);
+  background: var(--surface-0);
+  border: 1px solid var(--line);
   border-radius: 5px;
   padding: 10px;
 }
@@ -960,7 +809,7 @@ body {
 
 /* #691: a programmatic Settings open pulses the landed section once. */
 @keyframes pdo-section-land {
-  0% { box-shadow: 0 0 0 0 var(--color-acc); background: color-mix(in oklab, var(--color-acc) 14%, transparent); }
+  0% { box-shadow: 0 0 0 0 var(--primary); background: color-mix(in oklab, var(--primary) 14%, transparent); }
   60% { box-shadow: 0 0 0 3px transparent; }
   100% { box-shadow: none; background: transparent; }
 }
@@ -976,34 +825,34 @@ body {
  * deleted = st-failed, plain = bg-2). Scoped to the page so nothing else moves.
  * ------------------------------------------------------------------------- */
 .pdo-review .diff-tailwindcss-wrapper {
-  --diff-border--: var(--color-line);
-  --diff-plain-content--: var(--color-bg-2);
-  --diff-plain-lineNumber--: var(--color-bg-2);
-  --diff-plain-lineNumber-color--: var(--color-fg-4);
-  --diff-expand-content--: var(--color-bg-2);
-  --diff-expand-lineNumber--: var(--color-bg-2);
-  --diff-expand-lineNumber-color--: var(--color-fg-4);
-  --diff-add-content--: var(--color-st-done-bg);
-  --diff-add-content-highlight--: var(--color-st-done-hl);
-  --diff-add-lineNumber--: var(--color-st-done-bg);
-  --diff-del-content--: var(--color-st-failed-bg);
-  --diff-del-content-highlight--: var(--color-st-failed-hl);
-  --diff-del-lineNumber--: var(--color-st-failed-bg);
-  --diff-empty-content--: var(--color-bg-3);
-  --diff-hunk-content--: var(--color-bg-3);
-  --diff-hunk-content-color--: var(--color-fg-4);
-  --diff-hunk-lineNumber--: var(--color-bg-3);
-  --diff-hunk-lineNumber-hover--: var(--color-bg-5);
-  --diff-add-widget--: var(--color-acc);
-  --diff-add-widget-color--: var(--color-on-acc);
-  color: var(--color-fg);
+  --diff-border--: var(--line);
+  --diff-plain-content--: var(--surface-1);
+  --diff-plain-lineNumber--: var(--surface-1);
+  --diff-plain-lineNumber-color--: var(--text-3);
+  --diff-expand-content--: var(--surface-1);
+  --diff-expand-lineNumber--: var(--surface-1);
+  --diff-expand-lineNumber-color--: var(--text-3);
+  --diff-add-content--: color-mix(in oklab, var(--color-st-done) 14%, transparent);
+  --diff-add-content-highlight--: color-mix(in oklab, var(--color-st-done) 28%, transparent);
+  --diff-add-lineNumber--: color-mix(in oklab, var(--color-st-done) 14%, transparent);
+  --diff-del-content--: color-mix(in oklab, var(--color-st-failed) 14%, transparent);
+  --diff-del-content-highlight--: color-mix(in oklab, var(--color-st-failed) 28%, transparent);
+  --diff-del-lineNumber--: color-mix(in oklab, var(--color-st-failed) 14%, transparent);
+  --diff-empty-content--: var(--surface-2);
+  --diff-hunk-content--: var(--surface-2);
+  --diff-hunk-content-color--: var(--text-3);
+  --diff-hunk-lineNumber--: var(--surface-2);
+  --diff-hunk-lineNumber-hover--: var(--active);
+  --diff-add-widget--: var(--primary);
+  --diff-add-widget-color--: var(--primary-ink);
+  color: var(--text);
 }
 .pdo-review .diff-tailwindcss-wrapper .diff-style-root {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
 }
 /* The hunk-separator expanders: PDO accent on hover, like the prototype. */
 .pdo-review .diff-line-hunk-action button:hover {
-  color: var(--color-acc);
+  color: var(--primary);
 }
 
 /* #751: a review reply that just landed over the WebSocket — 2 s outline flash. */
@@ -1034,7 +883,7 @@ body {
    messages (shared/markdown/rehypeMarkQuery). */
 mark.query-mark {
   background: var(--color-st-await);
-  color: var(--color-on-acc-warn);
+  color: var(--primary-ink);
   border-radius: 3px;
   padding: 0 2px;
 }

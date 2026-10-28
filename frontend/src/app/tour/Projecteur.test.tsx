@@ -49,7 +49,7 @@ describe("the Projecteur dims and absorbs", () => {
     const right = screen.getByTestId("projecteur-blocker-right");
 
     for (const el of [top, bottom, left, right]) {
-      expect(el).toHaveClass("bg-tour-dim");
+      expect(el).toHaveClass("bg-dim");
       // Outside the hole, the layer takes the click instead of the app.
       expect(el).toHaveClass("pointer-events-auto");
     }
@@ -66,7 +66,7 @@ describe("the Projecteur dims and absorbs", () => {
 
   it("dims everything when there is no target left to light", () => {
     render(<Projecteur hole={null} />);
-    expect(screen.getByTestId("projecteur-blocker-all")).toHaveClass("bg-tour-dim");
+    expect(screen.getByTestId("projecteur-blocker-all")).toHaveClass("bg-dim");
     expect(screen.queryByTestId("projecteur-blocker-top")).not.toBeInTheDocument();
     expect(screen.queryByTestId("projecteur-hole")).not.toBeInTheDocument();
   });
@@ -90,7 +90,7 @@ describe("the Projecteur dims and absorbs", () => {
   // #825 — the wait step lights a whole panel to roam in, not a control to hit.
   it("lightens the dim and drops the ring when the zone IS the target", () => {
     render(<Projecteur hole={HOLE} zone={HOLE} wide />);
-    expect(screen.getByTestId("projecteur-blocker-top")).toHaveClass("bg-tour-dim-soft");
+    expect(screen.getByTestId("projecteur-blocker-top")).toHaveClass("bg-dim-soft");
     expect(screen.getByTestId("projecteur-zone")).toHaveClass("border-dashed");
     // A ring around six hundred pixels would read as « click this », and this is
     // the one step with nothing to click.

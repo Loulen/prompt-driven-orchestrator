@@ -9,15 +9,15 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
   const zipInput = useRef<HTMLInputElement>(null);
   return (
     <div className="flex items-center gap-2 px-3 py-2.5">
-      <label className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2 py-1.5">
-        <Search size={12} className="shrink-0 text-fg-4" />
+      <label className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2 py-1.5">
+        <Search size={12} className="shrink-0 text-text-3" />
         <input
           value={panel.filter}
           onChange={(event) => panel.setFilter(event.target.value)}
           placeholder="Filter skills…"
           aria-label="Filter skills"
           data-testid="skill-filter"
-          className="min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-4"
+          className="min-w-0 flex-1 bg-transparent text-text outline-none placeholder:text-text-3"
           style={{ fontSize: "11.5px" }}
         />
       </label>
@@ -27,7 +27,7 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
         aria-label="New folder"
         title="New folder"
         data-testid="skill-new-folder"
-        className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-bg-3 px-2 py-1.5 text-fg-2 hover:border-acc"
+        className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-1.5 text-text-2 hover:border-primary"
       >
         <Folder size={12} />
         <span style={{ fontSize: "12px", lineHeight: 1 }}>+</span>
@@ -43,7 +43,7 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
           aria-haspopup="menu"
           aria-expanded={addMenuOpen}
           data-testid="skill-add"
-          className="flex shrink-0 items-center gap-1 rounded-md bg-acc px-2.5 py-1.5 font-medium text-bg-1 hover:opacity-90"
+          className="flex shrink-0 items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 font-medium text-surface-0 hover:opacity-90"
           style={{ fontSize: "11.5px" }}
         >
           <Plus size={12} />
@@ -54,7 +54,7 @@ export default function BankToolbar({ panel }: { panel: SkillBankPanelState }) {
           <div
             role="menu"
             data-testid="skill-add-menu"
-            className="absolute right-0 top-8 z-10 w-64 rounded-md border border-line bg-bg-4 p-1 shadow-xl"
+            className="absolute right-0 top-8 z-10 w-64 rounded-md border border-line bg-surface-2 p-1 shadow-xl"
             onClick={(event) => event.stopPropagation()}
           >
             <MenuItem

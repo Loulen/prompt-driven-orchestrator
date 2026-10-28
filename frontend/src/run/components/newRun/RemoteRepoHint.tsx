@@ -24,13 +24,13 @@ export default function RemoteRepoHint({ clone, home }: { clone: RepoClone; home
           <button
             type="button"
             onClick={cancelClone}
-            className="text-fg-4 hover:text-fg-2"
+            className="text-text-3 hover:text-text-2"
             data-testid="remote-repo-cancel"
           >
             Cancel
           </button>
         </div>
-        <div className="h-1 overflow-hidden rounded-full bg-bg-5">
+        <div className="h-1 overflow-hidden rounded-full bg-surface-2">
           <div
             className="h-full rounded-full bg-st-running transition-[width] duration-300"
             style={{ width: `${progressPercent(cloneJob)}%` }}
@@ -57,7 +57,7 @@ export default function RemoteRepoHint({ clone, home }: { clone: RepoClone; home
               aria-label="Folder to clone into"
               spellCheck={false}
               data-testid="remote-repo-path"
-              className="min-w-0 flex-1 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-mono text-fg outline-none focus:border-st-running"
+              className="min-w-0 flex-1 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 font-mono text-text outline-none focus:border-st-running"
             />
           </>
         ) : cloneTarget?.cloned && clonePath === null ? (

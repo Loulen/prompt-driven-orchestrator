@@ -79,17 +79,17 @@ export default function CloneRepositoryForm({
 
   return (
     <div
-      className="flex flex-col gap-2 rounded-md border border-st-running/50 bg-bg-2 px-3 py-2.5"
+      className="flex flex-col gap-2 rounded-md border border-st-running/50 bg-surface-1 px-3 py-2.5"
       data-testid={job ? "project-clone-job" : "project-clone"}
       data-state={job?.state}
     >
-      <div className="flex items-center gap-1.5 font-medium text-fg" style={{ fontSize: "11.5px" }}>
+      <div className="flex items-center gap-1.5 font-medium text-text" style={{ fontSize: "11.5px" }}>
         <Globe size={12} className="text-st-running" />
         Clone from a URL
       </div>
       {job ? (
         <div
-          className="truncate rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg"
+          className="truncate rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text"
           style={{ fontSize: "12px" }}
           title={job.url}
           data-testid="project-clone-job-url"
@@ -115,11 +115,11 @@ export default function CloneRepositoryForm({
           placeholder="https://github.com/acme/app.git"
           spellCheck={false}
           data-testid="project-clone-url"
-          className="min-w-0 rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg outline-none focus:border-st-running"
+          className="min-w-0 rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text outline-none focus:border-st-running"
           style={{ fontSize: "12px" }}
         />
       )}
-      <div className="flex items-center justify-between gap-2 text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="flex items-center justify-between gap-2 text-text-3" style={{ fontSize: "10.5px" }}>
         <span className="flex min-w-0 items-center gap-1.5 truncate">
           {editingPath !== null && !job ? (
             <>
@@ -131,28 +131,28 @@ export default function CloneRepositoryForm({
                 aria-label="Folder to clone into"
                 spellCheck={false}
                 data-testid="project-clone-path"
-                className="min-w-0 flex-1 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-mono text-fg outline-none focus:border-st-running"
+                className="min-w-0 flex-1 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 font-mono text-text outline-none focus:border-st-running"
                 style={{ fontSize: "11px" }}
               />
             </>
           ) : path ? (
             <>
               Into{" "}
-              <span className="font-mono text-fg-3" data-testid="project-clone-into">
+              <span className="font-mono text-text-3" data-testid="project-clone-into">
                 {tildify(path, home)}
               </span>
               {!job && (
                 <button
                   type="button"
                   onClick={() => setEditingPath(tildify(path, home))}
-                  className="underline decoration-dotted hover:text-fg-2"
+                  className="underline decoration-dotted hover:text-text-2"
                   data-testid="project-clone-change"
                 >
                   change
                 </button>
               )}
               {!job && shownTarget?.cloned && editingPath === null && (
-                <span className="text-acc" data-testid="project-clone-reused">
+                <span className="text-primary" data-testid="project-clone-reused">
                   · already cloned, reused
                 </span>
               )}
@@ -167,7 +167,7 @@ export default function CloneRepositoryForm({
       {running && job && (
         <>
           <div className="flex items-center justify-between gap-2" style={{ fontSize: "10.5px" }}>
-            <span className="flex items-center gap-1.5 text-fg-2" data-testid="project-clone-progress">
+            <span className="flex items-center gap-1.5 text-text-2" data-testid="project-clone-progress">
               <Loader2 size={11} className="animate-spin text-st-running" />
               {progressLine(job)}
             </span>
@@ -175,20 +175,20 @@ export default function CloneRepositoryForm({
               <button
                 type="button"
                 onClick={onCancelClone}
-                className="text-fg-4 hover:text-fg-2"
+                className="text-text-3 hover:text-text-2"
                 data-testid="project-clone-cancel"
               >
                 Cancel
               </button>
             )}
           </div>
-          <div className="h-1 overflow-hidden rounded-full bg-bg-4">
+          <div className="h-1 overflow-hidden rounded-full bg-surface-2">
             <div
               className="h-full rounded-full bg-st-running transition-[width] duration-300"
               style={{ width: `${progressPercent(job)}%` }}
             />
           </div>
-          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          <div className="text-text-3" style={{ fontSize: "10.5px" }}>
             You can close Settings: the clone goes on, and the repository joins {projectName} when it
             is done.
           </div>
@@ -206,7 +206,7 @@ export default function CloneRepositoryForm({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded px-2.5 py-1 text-fg-3 hover:bg-bg-4"
+            className="rounded px-2.5 py-1 text-text-3 hover:bg-hover"
             style={{ fontSize: "11px" }}
             data-testid="project-clone-dismiss"
           >
@@ -217,7 +217,7 @@ export default function CloneRepositoryForm({
               type="button"
               onClick={onRetry}
               data-testid="project-clone-retry"
-              className="rounded bg-acc px-2.5 py-1 font-medium text-on-acc hover:bg-acc-dim"
+              className="rounded bg-primary px-2.5 py-1 font-medium text-primary-ink hover:bg-primary-hi"
               style={{ fontSize: "11px" }}
             >
               Try again
@@ -229,7 +229,7 @@ export default function CloneRepositoryForm({
                 onClick={() => void clone()}
                 disabled={!valid || busy}
                 data-testid="project-clone-start"
-                className="rounded bg-acc px-2.5 py-1 font-medium text-on-acc hover:bg-acc-dim disabled:opacity-50"
+                className="rounded bg-primary px-2.5 py-1 font-medium text-primary-ink hover:bg-primary-hi disabled:opacity-50"
                 style={{ fontSize: "11px" }}
               >
                 {busy ? "Starting…" : shownTarget?.cloned && editingPath === null ? "Add" : "Clone and add"}

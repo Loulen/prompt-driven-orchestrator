@@ -8,14 +8,14 @@ export default function RunNowErrorToast({
 }) {
   return (
     <div
-      className="fixed bottom-3 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded border border-st-failed bg-bg-2 px-3 py-2 text-fg"
+      className="fixed bottom-3 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded border border-st-failed bg-surface-1 px-3 py-2 text-text"
       style={{ fontSize: "11.5px" }}
       data-testid="run-now-error"
     >
       <span>{error}</span>
       <button
         onClick={onDismiss}
-        className="text-fg-3 hover:text-fg"
+        className="text-text-3 hover:text-text"
         data-testid="run-now-error-dismiss"
       >
         ✕

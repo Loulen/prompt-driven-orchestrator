@@ -83,11 +83,11 @@ export default function ChangelogModal({
       testId="changelog-modal"
       header={
         <div className="flex min-w-0 items-center gap-2.5" data-testid="changelog-header">
-          <span className="font-medium text-fg" style={{ fontSize: "13px" }}>
+          <span className="font-medium text-text" style={{ fontSize: "13px" }}>
             What's new
           </span>
           {installed && (
-            <span className="flex items-center gap-1.5 font-mono text-fg-4" style={{ fontSize: "11px" }}>
+            <span className="flex items-center gap-1.5 font-mono text-text-3" style={{ fontSize: "11px" }}>
               <span>
                 {update != null && isDistribution(update) ? installedVersionLabel(update) : `v${installed}`}
               </span>
@@ -104,7 +104,7 @@ export default function ChangelogModal({
               )}
               {upToDate && (
                 <span
-                  className="rounded-full border border-st-done/40 bg-st-done-bg px-1.5 leading-[14px] text-st-done"
+                  className="rounded-full border border-st-done/40 bg-st-done/14 px-1.5 leading-[14px] text-st-done"
                   style={{ fontSize: "9.5px" }}
                   data-testid="changelog-uptodate"
                 >
@@ -158,10 +158,10 @@ function Banner({
 }) {
   const cls =
     tone === "await"
-      ? "border-st-await/50 bg-st-await-bg text-st-await"
+      ? "border-st-await/50 bg-st-await/14 text-st-await"
       : tone === "failed"
-        ? "border-st-failed/50 bg-st-failed-bg text-st-failed"
-        : "border-line bg-bg-0 text-fg-3";
+        ? "border-st-failed/50 bg-st-failed/14 text-st-failed"
+        : "border-line bg-surface-0 text-text-3";
   return (
     <div
       className={`mb-3 flex items-start gap-2 rounded border px-3 py-2 ${cls}`}
@@ -212,35 +212,35 @@ function ChangelogFooter({
     <div className="flex items-end justify-between gap-4" data-testid="changelog-footer">
       <div className="flex min-w-0 flex-col gap-0.5" style={{ fontSize: "11px" }}>
         {update == null ? (
-          <span className="text-fg-4">Loading the daemon's version state…</span>
+          <span className="text-text-3">Loading the daemon's version state…</span>
         ) : unknown ? (
           <>
-            <span className="flex items-center gap-1.5 text-fg-3">
+            <span className="flex items-center gap-1.5 text-text-3">
               <TriangleAlert size={12} className="text-st-await" />
               {noCommand
                 ? `${update.channel_name} declares no update command — PDO will not update it.`
                 : "Install method not detected — PDO will not update itself."}
             </span>
             {update.manual_command != null && (
-              <span className="text-fg-4" data-testid="changelog-manual-command">
+              <span className="text-text-3" data-testid="changelog-manual-command">
                 {update.manual_command}
               </span>
             )}
             {update.apply_blocked_reason && (
-              <span className="text-fg-4" data-testid="changelog-apply-blocked">
+              <span className="text-text-3" data-testid="changelog-apply-blocked">
                 {update.apply_blocked_reason}
               </span>
             )}
           </>
         ) : (
           <>
-            <span className="text-fg-4">
+            <span className="text-text-3">
               {upToDate
                 ? "Nothing to update. To reinstall manually:"
                 : "To update, run in a terminal (the daemon restarts, tmux sessions survive):"}
             </span>
             <code
-              className="truncate font-mono text-fg-2"
+              className="truncate font-mono text-text-2"
               style={{ fontSize: "11px" }}
               data-testid="changelog-manual-command"
             >
@@ -253,7 +253,7 @@ function ChangelogFooter({
         <button
           type="button"
           onClick={onOpenVersionSettings}
-          className="flex items-center gap-1.5 rounded px-2 py-1.5 text-fg-3 hover:bg-bg-3 hover:text-fg-2"
+          className="flex items-center gap-1.5 rounded px-2 py-1.5 text-text-3 hover:bg-hover hover:text-text-2"
           style={{ fontSize: "11px" }}
           data-testid="changelog-open-settings"
         >
@@ -264,7 +264,7 @@ function ChangelogFooter({
           <button
             type="button"
             onClick={() => void copy()}
-            className="flex items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc"
+            className="flex items-center gap-1.5 rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 text-text-2 hover:border-primary"
             style={{ fontSize: "11px" }}
             title="Copy the manual update command"
             data-testid="changelog-copy-command"
@@ -281,8 +281,8 @@ function ChangelogFooter({
             disabled={!canOfferUpdate(update)}
             className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 disabled:opacity-40 ${
               upToDate
-                ? "border-line-strong bg-bg-3 text-fg-2 hover:border-acc"
-                : "border-acc bg-acc text-bg-0 hover:bg-acc/90"
+                ? "border-line-strong bg-surface-2 text-text-2 hover:border-primary"
+                : "border-primary bg-primary text-surface-0 hover:bg-primary/90"
             }`}
             style={{ fontSize: "11px" }}
             title={updateNotOfferedReason(update) ?? `Update ${update.channel_name} from the app`}

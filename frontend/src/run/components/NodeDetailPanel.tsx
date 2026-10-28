@@ -224,7 +224,7 @@ export default function NodeDetailPanel({
   const closeModal = useCallback(() => setModal(null), []);
 
   return (
-    <aside className="flex h-full flex-col bg-bg-2">
+    <aside className="flex h-full flex-col bg-surface-1">
       {/* Header */}
       <NodeDetailHeader
         node={node}

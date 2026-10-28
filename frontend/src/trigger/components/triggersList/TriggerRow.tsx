@@ -58,11 +58,11 @@ export default function TriggerRow({
       onClick={onSelect}
       className={`group flex w-full cursor-pointer items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left transition-colors ${
         rowSelected
-          ? "border-l-acc bg-acc-bg text-fg"
+          ? "border-l-primary bg-selected text-text"
           : isSelected
-            ? "border-l-transparent bg-bg-3 text-fg"
-            : "border-l-transparent text-fg-2 hover:bg-bg-3/50"
-      } ${suspension ? "bg-st-interrupted/5" : ""} ${t.enabled ? "" : "opacity-60"}`}
+            ? "border-l-transparent bg-surface-2 text-text"
+            : "border-l-transparent text-text-2 hover:bg-hover/50"
+      } ${suspension ? "bg-st-await/5" : ""} ${t.enabled ? "" : "opacity-60"}`}
       style={{ fontSize: "11.5px" }}
       data-testid="trigger-row"
       // #911: one row addressable by id, the way `data-run-row` is for Runs.
@@ -81,11 +81,11 @@ export default function TriggerRow({
         {/* The « suspended » pill wraps under the name rather than eat it in a
             narrow panel (or once the hover actions take their room). */}
         <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="trigger-name-line">
-          <span className={`max-w-full truncate font-medium ${suspension ? "text-fg-3" : ""}`}>{t.name}</span>
+          <span className={`max-w-full truncate font-medium ${suspension ? "text-text-3" : ""}`}>{t.name}</span>
           {suspension && <SuspendedPill suspension={suspension} />}
         </div>
         <div
-          className="mt-0.5 flex items-center gap-1.5 truncate text-fg-4"
+          className="mt-0.5 flex items-center gap-1.5 truncate text-text-3"
           style={{ fontSize: "10px" }}
         >
           <span className="truncate font-mono">{t.pipeline_name}</span>
@@ -115,7 +115,7 @@ export default function TriggerRow({
       </div>
       {!t.enabled && !suspension && (
         <span
-          className="shrink-0 rounded border border-line-strong px-1 py-px text-fg-4"
+          className="shrink-0 rounded border border-line-strong px-1 py-px text-text-3"
           style={{ fontSize: "9px" }}
         >
           disabled
@@ -126,7 +126,7 @@ export default function TriggerRow({
         <span
           role="button"
           title="Run now (test this trigger)"
-          className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-acc"
+          className="cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-primary"
           onClick={(e) => {
             e.stopPropagation();
             onRunNow?.();
@@ -138,7 +138,7 @@ export default function TriggerRow({
         <span
           role="button"
           title="Edit trigger"
-          className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg"
+          className="cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text"
           onClick={(e) => {
             e.stopPropagation();
             onEdit?.();
@@ -150,7 +150,7 @@ export default function TriggerRow({
         <span
           role="button"
           title="Delete trigger"
-          className="cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-st-failed"
+          className="cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-st-failed"
           onClick={(e) => {
             e.stopPropagation();
             onDelete();
@@ -197,8 +197,8 @@ export default function TriggerRow({
               ? "Disable trigger"
               : "Enable trigger"
         }
-        className={`shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-bg-4 ${
-          on ? "text-acc" : "text-fg-4"
+        className={`shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-hover ${
+          on ? "text-primary" : "text-text-3"
         }`}
         onClick={(e) => {
           e.stopPropagation();

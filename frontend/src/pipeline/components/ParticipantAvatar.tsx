@@ -23,7 +23,7 @@ export function ParticipantAvatar({ participant, size = 16 }: { participant: Dra
       <span
         title={title}
         aria-label={title}
-        className="grid shrink-0 place-items-center rounded-full text-bg-0"
+        className="grid shrink-0 place-items-center rounded-full text-surface-0"
         style={{ ...style, background: color }}
         data-testid="draft-participant"
         data-assistant="true"
@@ -45,7 +45,7 @@ export function ParticipantAvatar({ participant, size = 16 }: { participant: Dra
     <span
       title={title}
       aria-label={title}
-      className="grid shrink-0 place-items-center rounded-full font-semibold text-bg-0"
+      className="grid shrink-0 place-items-center rounded-full font-semibold text-surface-0"
       style={{ ...style, background: color }}
       data-testid="draft-participant"
     >
@@ -76,7 +76,7 @@ export function ParticipantStack({ participants, size = 16 }: { participants: Dr
 export function SelectedByLabel({ participant }: { participant: DraftParticipant }) {
   return (
     <span
-      className="pointer-events-none absolute z-[5] flex items-center gap-0.5 whitespace-nowrap rounded-t px-1 font-medium text-bg-0"
+      className="pointer-events-none absolute z-[5] flex items-center gap-0.5 whitespace-nowrap rounded-t px-1 font-medium text-surface-0"
       style={{ top: -15, left: -1.5, fontSize: "9.5px", lineHeight: "14px", background: presenceColor(participant) }}
       data-testid="selected-by"
     >

@@ -42,7 +42,7 @@ export default function StatusBar({
 
   return (
     <footer
-      className="flex h-[22px] shrink-0 items-center gap-3.5 border-t border-line bg-bg-2 px-3 font-mono text-fg-3"
+      className="flex h-[22px] shrink-0 items-center gap-3.5 border-t border-line bg-surface-1 px-3 font-mono text-text-3"
       style={{ fontSize: "11px" }}
     >
       <span className="flex items-center gap-1.5">

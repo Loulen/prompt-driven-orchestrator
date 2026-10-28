@@ -11,13 +11,13 @@ export default function RunNameSection({ form }: { form: NewRunForm }) {
         {mode === "run" && (
           <>
             <label
-              className="font-medium text-fg-2"
+              className="font-medium text-text-2"
               style={{ fontSize: "11.5px" }}
             >
               Name
             </label>
             <input
-              className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none disabled:opacity-50"
+              className="w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none disabled:opacity-50"
               style={{ fontSize: "12px" }}
               placeholder="e.g. Fix auth bug"
               value={runName}
@@ -28,14 +28,14 @@ export default function RunNameSection({ form }: { form: NewRunForm }) {
           </>
         )}
         <label
-          className="flex items-center gap-1.5 text-fg-3"
+          className="flex items-center gap-1.5 text-text-3"
           style={{ fontSize: "10.5px" }}
         >
           <input
             type="checkbox"
             checked={autoName}
             onChange={(e) => setAutoName(e.target.checked)}
-            className="accent-acc"
+            className="accent-primary"
             data-testid="auto-name-checkbox"
           />
           {mode === "trigger"

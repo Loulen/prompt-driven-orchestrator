@@ -163,7 +163,7 @@ export default function TmuxTerminal({
         <Tooltip content={READ_ONLY_HINT} disabled={!spectating}>
           <div
             ref={containerRef}
-            className={`min-h-0 flex-1 bg-bg-0${spectating ? " overflow-auto" : ""}`}
+            className={`min-h-0 flex-1 bg-surface-0${spectating ? " overflow-auto" : ""}`}
             style={TERMINAL_TYPOGRAPHY_RESET}
             data-testid="xterm-container"
             data-role={mode === "live" ? termRole.role : undefined}
@@ -173,17 +173,17 @@ export default function TmuxTerminal({
             stays readable underneath, and offer the way back. */}
         {veiled && (
           <div
-            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2.5 bg-bg-0/60 backdrop-blur-sm"
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2.5 bg-surface-0/60 backdrop-blur-sm"
             data-testid="term-veil"
             role="status"
           >
-            <span className="text-fg-2" style={{ fontSize: "12px" }}>
+            <span className="text-text-2" style={{ fontSize: "12px" }}>
               {CONNECTION_CLOSED_LABEL}
             </span>
             <button
               type="button"
               onClick={reconnect}
-              className="flex cursor-pointer items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
+              className="flex cursor-pointer items-center gap-1.5 rounded border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 transition-colors hover:bg-hover hover:text-text"
               style={{ fontSize: "11px" }}
               data-testid="term-reconnect"
             >

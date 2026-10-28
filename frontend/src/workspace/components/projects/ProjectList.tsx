@@ -59,15 +59,15 @@ export default function ProjectList({
             data-testid="projects-list-item"
             data-project-id={project.id}
             className={`flex items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors ${
-              selected ? "bg-bg-3 text-fg" : "text-fg-2 hover:bg-bg-3/60"
+              selected ? "bg-surface-2 text-text" : "text-text-2 hover:bg-hover/60"
             }`}
             style={{ fontSize: "11.5px" }}
           >
-            <Briefcase size={12} className="shrink-0 text-fg-4" />
+            <Briefcase size={12} className="shrink-0 text-text-3" />
             <span className={`min-w-0 flex-1 truncate ${selected ? "font-semibold" : ""}`}>
               {project.name}
             </span>
-            <span className="shrink-0 font-mono text-fg-4" style={{ fontSize: "10px" }}>
+            <span className="shrink-0 font-mono text-text-3" style={{ fontSize: "10px" }}>
               {repoCount(project.members.length)}
             </span>
           </button>
@@ -76,7 +76,7 @@ export default function ProjectList({
 
       {/* A pencil's draft too: no naming without the right to create. */}
       {draft && canCreate ? (
-        <div className="mt-1 flex flex-col gap-1 rounded-md border border-acc-border bg-bg-3 px-2 py-1.5">
+        <div className="mt-1 flex flex-col gap-1 rounded-md border border-primary/30 bg-surface-2 px-2 py-1.5">
           <input
             autoFocus
             value={draft.name}
@@ -93,11 +93,11 @@ export default function ProjectList({
                 onDraft(null);
               }
             }}
-            className="w-full bg-transparent text-fg outline-none placeholder:text-fg-4"
+            className="w-full bg-transparent text-text outline-none placeholder:text-text-3"
             style={{ fontSize: "11.5px" }}
           />
           {draft.members.length > 0 && (
-            <span className="truncate text-fg-4" style={{ fontSize: "10px" }} data-testid="projects-new-members">
+            <span className="truncate text-text-3" style={{ fontSize: "10px" }} data-testid="projects-new-members">
               with {draft.members.map((path) => tildify(path, home)).join(", ")}
             </span>
           )}
@@ -105,7 +105,7 @@ export default function ProjectList({
             <button
               type="button"
               onClick={() => onDraft(null)}
-              className="rounded px-2 py-0.5 text-fg-3 hover:bg-bg-4"
+              className="rounded px-2 py-0.5 text-text-3 hover:bg-hover"
               style={{ fontSize: "10.5px" }}
             >
               Cancel
@@ -115,7 +115,7 @@ export default function ProjectList({
               onClick={() => void create()}
               disabled={!draft.name.trim() || creating}
               data-testid="projects-new-create"
-              className="rounded bg-acc px-2 py-0.5 font-medium text-on-acc hover:bg-acc-dim disabled:opacity-50"
+              className="rounded bg-primary px-2 py-0.5 font-medium text-primary-ink hover:bg-primary-hi disabled:opacity-50"
               style={{ fontSize: "10.5px" }}
             >
               {creating ? "Creating…" : "Create"}
@@ -128,7 +128,7 @@ export default function ProjectList({
             type="button"
             onClick={() => onDraft({ name: "", members: [] })}
             data-testid="projects-new"
-            className="mt-1 flex items-center gap-1.5 self-start rounded-md border border-line px-2.5 py-1.5 text-fg-3 transition-colors hover:border-acc hover:text-acc"
+            className="mt-1 flex items-center gap-1.5 self-start rounded-md border border-line px-2.5 py-1.5 text-text-3 transition-colors hover:border-primary hover:text-primary"
             style={{ fontSize: "11px" }}
           >
             <Plus size={11} />

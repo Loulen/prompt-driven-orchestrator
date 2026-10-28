@@ -51,7 +51,7 @@ export function PerformanceSummary({
 
   return (
     <>
-      <div className="mt-4 text-fg" data-testid="stats-performance-headline">
+      <div className="mt-4 text-text" data-testid="stats-performance-headline">
         {headlineValue(contexts)} median peak context ·{" "}
         {headlineValue(durations)} median {durationWord(mode)} ·{" "}
         {headlineValue(steered)} steered
@@ -69,7 +69,7 @@ export function PerformanceSummary({
       {/* #819 — the zoom and the scales moved up into the band; what is
           left here is the caption that says what the plots below draw. */}
       <div
-        className="mt-5 text-fg-4"
+        className="mt-5 text-text-3"
         data-testid="stats-performance-toolbar"
         style={{ fontSize: "10.5px" }}
       >

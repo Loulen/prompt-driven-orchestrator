@@ -125,7 +125,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
 
   const yamlTab = page.getByTestId("info-tab-yaml");
-  await expect(yamlTab).toHaveClass(/border-acc/);
+  await expect(yamlTab).toHaveClass(/border-primary/);
 
   // YAML content should be visible
   const yamlContent = page.getByTestId("info-yaml-content");

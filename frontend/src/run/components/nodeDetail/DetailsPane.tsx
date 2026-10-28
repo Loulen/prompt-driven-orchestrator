@@ -111,7 +111,7 @@ export default function DetailsPane({
               data-active={active}
               onClick={() => onSelectTab(tab)}
               className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 py-1.5 transition-colors ${
-                active ? "border-b-2 border-acc font-medium text-fg" : "text-fg-3 hover:text-fg-2"
+                active ? "border-b-2 border-primary font-medium text-text" : "text-text-3 hover:text-text-2"
               }`}
               style={{ fontSize: "11px" }}
             >
@@ -131,7 +131,7 @@ export default function DetailsPane({
               data-active={active}
               onClick={() => onSelectTab(t.key)}
               className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap px-2 py-1.5 transition-colors ${
-                active ? "border-b-2 border-acc font-medium text-fg" : "text-fg-3 hover:text-fg-2"
+                active ? "border-b-2 border-primary font-medium text-text" : "text-text-3 hover:text-text-2"
               }`}
               style={{ fontSize: "11px" }}
             >

@@ -32,13 +32,13 @@ export default function ExtensionListFilters({
   if (filters.length === 0) return null;
   return (
     <div
-      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-2 py-1.5 text-fg-3"
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-2 py-1.5 text-text-3"
       style={{ fontSize: "10px" }}
       data-testid={`extension-filters-${resource}`}
     >
       {location === "projects/filter" && (
         <span
-          className="shrink-0 rounded border border-line-strong px-1 py-px uppercase tracking-wide text-fg-4"
+          className="shrink-0 rounded border border-line-strong px-1 py-px uppercase tracking-wide text-text-3"
           style={{ fontSize: "9px" }}
           title="These filters apply to the Project the items belong to"
           data-testid="extension-filters-project-tag"

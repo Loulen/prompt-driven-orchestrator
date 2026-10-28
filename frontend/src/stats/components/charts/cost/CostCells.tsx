@@ -11,11 +11,11 @@ export function HarnessCards({ aggregate }: { aggregate: StatsCostAggregate }) {
       {aggregate.harnesses.map((metric) => (
         <div
           key={metric.harness}
-          className="rounded-md border border-line bg-bg-3 p-3"
+          className="rounded-md border border-line bg-surface-2 p-3"
           data-testid={`stats-harness-card-${metric.harness}`}
         >
           <div
-            className="mb-2 flex items-center gap-1.5 text-fg-3"
+            className="mb-2 flex items-center gap-1.5 text-text-3"
             style={{ fontSize: "10.5px" }}
           >
             <span
@@ -24,10 +24,10 @@ export function HarnessCards({ aggregate }: { aggregate: StatsCostAggregate }) {
             />
             {metric.harness}
           </div>
-          <div className="font-mono text-fg" style={{ fontSize: "15px" }}>
+          <div className="font-mono text-text" style={{ fontSize: "15px" }}>
             {formatCostAmount(metric.usd, metric.partial, metric.estimated)}
           </div>
-          <div className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
+          <div className="mt-1 text-text-3" style={{ fontSize: "10px" }}>
             {metric.median_usd === null
               ? "— median"
               : `${formatCostAmount(metric.median_usd, metric.partial, metric.estimated)} median`}
@@ -45,7 +45,7 @@ export function CostCell({
   metric: StatsHarnessCost | undefined;
   unit: "Run" | "execution";
 }) {
-  if (!metric) return <span className="font-mono text-fg-4">—</span>;
+  if (!metric) return <span className="font-mono text-text-3">—</span>;
   const detail = coverage(metric, unit);
   return (
     <div className="flex flex-col items-end font-mono">
@@ -56,7 +56,7 @@ export function CostCell({
         <button
           type="button"
           aria-label={detail}
-          className="text-fg-4 underline decoration-dotted underline-offset-2"
+          className="text-text-3 underline decoration-dotted underline-offset-2"
           style={{ fontSize: "9.5px" }}
         >
           {metric.median_usd === null

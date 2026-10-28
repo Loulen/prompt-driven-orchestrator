@@ -80,11 +80,11 @@ function MidPath({ path, className }: { path: string; className: string }) {
       data-testid="target-repo-path"
     >
       {head && (
-        <span className="min-w-[1ch] shrink truncate text-fg-2" data-testid="target-repo-path-head">
+        <span className="min-w-[1ch] shrink truncate text-text-2" data-testid="target-repo-path-head">
           {head}
         </span>
       )}
-      <span className="max-w-full shrink-0 truncate text-fg" data-testid="target-repo-path-tail">
+      <span className="max-w-full shrink-0 truncate text-text" data-testid="target-repo-path-tail">
         {tail}
       </span>
     </span>
@@ -190,14 +190,14 @@ export default function RepoCombobox({
       {/* CORE-108: one row — the leading icon, the text box, the mark, the loupe.
           The mark and the loupe are siblings of the text box, so a long path
           shrinks before them and never runs under them. */}
-      <div className={`flex items-center rounded-md border bg-bg-3 transition-colors ${borderClass}`}>
+      <div className={`flex items-center rounded-md border bg-surface-2 transition-colors ${borderClass}`}>
         {leading && <span className="pointer-events-none flex shrink-0 items-center pl-2.5">{leading}</span>}
         <div className="relative min-w-0 flex-1">
           <input
             ref={inputRef}
             id="target-repo"
-            className={`w-full bg-transparent ${pad} py-1.5 font-mono placeholder:text-fg-4 focus:outline-none ${
-              showPath ? "text-transparent" : "text-fg"
+            className={`w-full bg-transparent ${pad} py-1.5 font-mono placeholder:text-text-3 focus:outline-none ${
+              showPath ? "text-transparent" : "text-text"
             }`}
             style={{ fontSize: "12px" }}
             placeholder="/path/to/your/repo"
@@ -216,7 +216,7 @@ export default function RepoCombobox({
           <button
             type="button"
             onClick={openExplorer}
-            className="flex shrink-0 items-center self-stretch px-2.5 text-fg-4 transition-colors hover:text-fg-2"
+            className="flex shrink-0 items-center self-stretch px-2.5 text-text-3 transition-colors hover:text-text-2"
             title="Browse for a repository"
             aria-label="Browse for a repository"
             data-testid="repo-browse-trigger"
@@ -232,7 +232,7 @@ export default function RepoCombobox({
                 setDropdownOpen((o) => !o);
                 inputRef.current?.focus();
               }}
-              className="flex shrink-0 items-center self-stretch px-2.5 text-fg-4 transition-colors hover:text-fg-2"
+              className="flex shrink-0 items-center self-stretch px-2.5 text-text-3 transition-colors hover:text-text-2"
               aria-label="Show the repositories"
               data-testid="repo-groups-trigger"
             >
@@ -243,7 +243,7 @@ export default function RepoCombobox({
       </div>
       {hint}
       {!hint && repoValidating && (
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           Validating...
         </span>
       )}
@@ -253,25 +253,25 @@ export default function RepoCombobox({
         </span>
       )}
       {!hint && repoValid && !repoError && (
-        <span className="text-acc" style={{ fontSize: "10.5px" }} data-testid="repo-valid">
+        <span className="text-primary" style={{ fontSize: "10.5px" }} data-testid="repo-valid">
           Valid git repository
         </span>
       )}
       {help && (
-        <span className="block text-fg-4" style={{ fontSize: "10.5px" }} data-testid="repo-help">
+        <span className="block text-text-3" style={{ fontSize: "10.5px" }} data-testid="repo-help">
           {help}
         </span>
       )}
 
       {showGroups && (
         <div
-          className="absolute left-0 right-0 z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-line bg-bg-4 py-1 shadow-lg"
+          className="absolute left-0 right-0 z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-line bg-surface-2 py-1 shadow-lg"
           data-testid="repo-groups-dropdown"
         >
           {shownGroups.map((group) => (
             <div key={group.label} role="group" aria-label={group.label} data-testid="repo-group">
               <div
-                className="px-2.5 pb-0.5 pt-1.5 font-medium uppercase tracking-wider text-fg-4"
+                className="px-2.5 pb-0.5 pt-1.5 font-medium uppercase tracking-wider text-text-3"
                 style={{ fontSize: "9.5px" }}
               >
                 {group.label}
@@ -281,8 +281,8 @@ export default function RepoCombobox({
                   key={repo}
                   type="button"
                   title={repo}
-                  className={`flex w-full items-center gap-2 px-2.5 py-1 text-left font-mono text-fg transition-colors hover:bg-bg-5 ${
-                    repo === value ? "bg-bg-5" : ""
+                  className={`flex w-full items-center gap-2 px-2.5 py-1 text-left font-mono text-text transition-colors hover:bg-active ${
+                    repo === value ? "bg-surface-2" : ""
                   }`}
                   style={{ fontSize: "12px" }}
                   onMouseDown={(e) => {
@@ -292,14 +292,14 @@ export default function RepoCombobox({
                   data-testid="repo-group-item"
                 >
                   <span className="min-w-0 flex-1 truncate">{tildify(repo, home)}</span>
-                  {repo === value && <Check size={14} className="shrink-0 text-acc" />}
+                  {repo === value && <Check size={14} className="shrink-0 text-primary" />}
                 </button>
               ))}
             </div>
           ))}
           {groupsNote && (
             <div
-              className="mt-1 border-t border-line px-2.5 pb-0.5 pt-1.5 text-fg-4"
+              className="mt-1 border-t border-line px-2.5 pb-0.5 pt-1.5 text-text-3"
               style={{ fontSize: "10.5px" }}
               data-testid="repo-groups-note"
             >
@@ -311,7 +311,7 @@ export default function RepoCombobox({
 
       {!grouped && showDropdown && (
         <ul
-          className="absolute left-0 right-0 z-50 mt-1 max-h-52 overflow-y-auto rounded-md border border-line bg-bg-4 shadow-lg"
+          className="absolute left-0 right-0 z-50 mt-1 max-h-52 overflow-y-auto rounded-md border border-line bg-surface-2 shadow-lg"
           data-testid="recent-repos-dropdown"
         >
           {filtered.map((repo) => {
@@ -321,8 +321,8 @@ export default function RepoCombobox({
               <li key={repo}>
                 <button
                   type="button"
-                  className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-bg-5 ${
-                    isActive ? "bg-bg-5" : ""
+                  className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-active ${
+                    isActive ? "bg-surface-2" : ""
                   }`}
                   onMouseDown={(e) => {
                     e.preventDefault();
@@ -331,17 +331,17 @@ export default function RepoCombobox({
                   data-testid="recent-repo-item"
                 >
                   <div className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate font-mono font-semibold text-fg" style={{ fontSize: "12px" }}>
+                    <span className="truncate font-mono font-semibold text-text" style={{ fontSize: "12px" }}>
                       {folder}
                     </span>
                     {parent && (
-                      <span className="truncate font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+                      <span className="truncate font-mono text-text-3" style={{ fontSize: "10.5px" }}>
                         {parent}
                       </span>
                     )}
                   </div>
                   {isActive && (
-                    <Check size={14} className="shrink-0 text-acc" />
+                    <Check size={14} className="shrink-0 text-primary" />
                   )}
                 </button>
               </li>

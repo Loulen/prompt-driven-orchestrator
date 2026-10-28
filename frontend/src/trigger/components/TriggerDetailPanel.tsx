@@ -75,15 +75,15 @@ export default function TriggerDetailPanel({
   }, []);
 
   return (
-    <aside className="flex h-full flex-col overflow-y-auto bg-bg-2" data-testid="trigger-detail-panel">
+    <aside className="flex h-full flex-col overflow-y-auto bg-surface-1" data-testid="trigger-detail-panel">
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <Zap size={14} className="shrink-0 text-acc" />
+        <Zap size={14} className="shrink-0 text-primary" />
         <div className="min-w-0">
-          <div className="truncate font-medium text-fg" style={{ fontSize: "12.5px" }}>
+          <div className="truncate font-medium text-text" style={{ fontSize: "12.5px" }}>
             {trigger.name}
           </div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-fg-4" style={{ fontSize: "10px" }}>
+          <div className="mt-0.5 flex items-center gap-1.5 text-text-3" style={{ fontSize: "10px" }}>
             <span>trigger</span>
             {!trigger.enabled && (
               <span
@@ -102,11 +102,11 @@ export default function TriggerDetailPanel({
           nor by Run now, until the extension lifts the suspension. */}
       {trigger.suspension && (
         <div
-          className="border-b border-st-interrupted/30 bg-st-interrupted-bg px-3 py-2 text-fg-2"
+          className="border-b border-st-await/30 bg-st-await/14 px-3 py-2 text-text-2"
           style={{ fontSize: "10.5px" }}
           data-testid="trigger-detail-suspension"
         >
-          <div className="font-medium text-st-interrupted">Suspended · does not fire</div>
+          <div className="font-medium text-st-await">Suspended · does not fire</div>
           <div className="mt-0.5 whitespace-pre-line break-words">{suspensionTooltip(trigger.suspension)}</div>
         </div>
       )}
@@ -122,8 +122,8 @@ export default function TriggerDetailPanel({
                 onClick={() => setTabKey(key)}
                 className={`shrink-0 cursor-pointer whitespace-nowrap px-2 py-1.5 transition-colors ${
                   (activeTab?.key ?? null) === key
-                    ? "border-b-2 border-acc font-medium text-fg"
-                    : "text-fg-3 hover:text-fg-2"
+                    ? "border-b-2 border-primary font-medium text-text"
+                    : "text-text-3 hover:text-text-2"
                 }`}
               >
                 {label}
@@ -140,7 +140,7 @@ export default function TriggerDetailPanel({
       {/* Configuration */}
       <div className="flex flex-col gap-2 p-3" style={{ fontSize: "11.5px" }}>
         <span
-          className="font-medium uppercase tracking-wider text-fg-4"
+          className="font-medium uppercase tracking-wider text-text-3"
           style={{ fontSize: "10px" }}
         >
           Configuration
@@ -148,20 +148,20 @@ export default function TriggerDetailPanel({
 
         {trigger.last_editor && (
           <ConfigRow icon={<User size={12} />} label="Last editor">
-            <span className="truncate text-fg-2" data-testid="trigger-last-editor">
+            <span className="truncate text-text-2" data-testid="trigger-last-editor">
               <ActorLabel actor={trigger.last_editor} />
             </span>
           </ConfigRow>
         )}
 
         <ConfigRow icon={<Layers size={12} />} label="Pipeline">
-          <span className="font-mono text-fg-2">{trigger.pipeline_name || trigger.pipeline_id}</span>
+          <span className="font-mono text-text-2">{trigger.pipeline_name || trigger.pipeline_id}</span>
         </ConfigRow>
 
         {trigger.target_repo && (
           <ConfigRow icon={<FolderGit2 size={12} />} label="Repo">
             <span
-              className="truncate font-mono text-fg-2"
+              className="truncate font-mono text-text-2"
               title={trigger.target_repo}
               data-testid="trigger-detail-repo"
             >
@@ -172,18 +172,18 @@ export default function TriggerDetailPanel({
 
         {trigger.source_branch && (
           <ConfigRow icon={<GitBranch size={12} />} label="Branch">
-            <span className="font-mono text-fg-2">{trigger.source_branch}</span>
+            <span className="font-mono text-text-2">{trigger.source_branch}</span>
           </ConfigRow>
         )}
 
         <ConfigRow icon={<Clock size={12} />} label="Schedule">
-          <span className="text-fg-2" data-testid="trigger-detail-schedule">
+          <span className="text-text-2" data-testid="trigger-detail-schedule">
             {humanizeCron(trigger.cron)}
           </span>
         </ConfigRow>
 
         <ConfigRow icon={<Layers size={12} />} label="Overlap">
-          <span className="text-fg-2" data-testid="trigger-detail-overlap">
+          <span className="text-text-2" data-testid="trigger-detail-overlap">
             {overlapLabel(trigger)}
           </span>
         </ConfigRow>
@@ -198,9 +198,9 @@ export default function TriggerDetailPanel({
 
         {trigger.input_template && (
           <div className="flex flex-col gap-1">
-            <div className="text-fg-3">Input template</div>
+            <div className="text-text-3">Input template</div>
             <pre
-              className="whitespace-pre-wrap rounded border border-line bg-bg-3 px-2 py-1.5 font-mono text-fg-2"
+              className="whitespace-pre-wrap rounded border border-line bg-surface-2 px-2 py-1.5 font-mono text-text-2"
               style={{ fontSize: "10.5px" }}
               data-testid="trigger-detail-input"
             >
@@ -210,7 +210,7 @@ export default function TriggerDetailPanel({
         )}
 
         <ConfigRow icon={<Clock size={12} />} label="Next fire">
-          <span className="font-mono text-fg-2">{formatFireTs(trigger.next_fire_at) ?? "—"}</span>
+          <span className="font-mono text-text-2">{formatFireTs(trigger.next_fire_at) ?? "—"}</span>
         </ConfigRow>
       </div>
 

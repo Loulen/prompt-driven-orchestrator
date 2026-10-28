@@ -3,9 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Prompt Driven Orchestrator</title>
-    <!-- Theme guard (#759): stamps the resolved theme on <html> before the
-         bundle loads, so the page never paints one theme and flips to the
+    <title>Acogni Driver</title>
+    <link rel="icon" type="image/svg+xml" href="/shared/favicon.svg" />
+    <!-- Theme guard (#759): stamps the resolved theme, and the UI scale, on
+         <html> before the bundle loads, so the page never paints one theme and flips to the
          other. Deliberately duplicates the rule in `src/lib/theme.ts` — a
          module import would be too late; `src/noFlashTheme.test.ts` runs THIS
          script and asserts the two agree. Keep it dependency-free and total:
@@ -34,6 +35,15 @@
               : "dark";
         document.documentElement.setAttribute("data-theme", theme);
         document.documentElement.style.colorScheme = theme;
+      } catch (e) {}
+      // Same rule as lib/uiScale.ts: a stored 100, 110 or 120, else 120.
+      try {
+        var scale = null;
+        try {
+          scale = Number(localStorage.getItem("pdo.ui.scale"));
+        } catch (e) {}
+        if (scale !== 100 && scale !== 110 && scale !== 120) scale = 120;
+        document.documentElement.style.setProperty("--app-zoom", String(scale / 100));
       } catch (e) {}
     </script>
     <!-- The React the extensions' UI bundles import (ADR-0081): the front's own,

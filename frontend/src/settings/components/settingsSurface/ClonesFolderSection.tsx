@@ -30,12 +30,12 @@ export default function ClonesFolderSection({ section, values, settings, dirty, 
           value={values.clonesFolder}
           onChange={(e) => setField("clonesFolder", e.target.value)}
           aria-invalid={invalid || undefined}
-          className={`w-full max-w-[640px] rounded-md border bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:outline-none ${
+          className={`w-full max-w-[640px] rounded-md border bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:outline-none ${
             invalid
               ? "border-st-failed"
               : isDirty
                 ? "border-st-await focus:border-st-await"
-                : "border-line-strong focus:border-acc"
+                : "border-line-strong focus:border-primary"
           }`}
           style={{ fontSize: "12px" }}
         />

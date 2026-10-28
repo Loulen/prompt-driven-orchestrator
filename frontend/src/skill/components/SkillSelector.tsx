@@ -152,14 +152,14 @@ export default function SkillSelector({
         data-testid={testId}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className={`flex w-full items-center gap-2 rounded border bg-bg-3 px-2 py-1.5 text-left ${
+        className={`flex w-full items-center gap-2 rounded border bg-surface-2 px-2 py-1.5 text-left ${
           hasMissing ? "border-st-blocked" : "border-line-strong"
-        } text-fg-2 ${readOnly ? "opacity-80" : ""}`}
+        } text-text-2 ${readOnly ? "opacity-80" : ""}`}
       >
         <Sparkles size={11} className="shrink-0" />
         <span className="min-w-0 flex-1">
           <span className="block truncate font-medium" style={{ fontSize: 10.5 }}>{label}</span>
-          <span className="block truncate text-fg-4" style={{ fontSize: 9.5 }} data-testid={`${testId}-count`}>
+          <span className="block truncate text-text-3" style={{ fontSize: 9.5 }} data-testid={`${testId}-count`}>
             {activeCountLabel(resolved.activeCount)}
           </span>
         </span>
@@ -178,7 +178,7 @@ export default function SkillSelector({
             <TriangleAlert size={11} />
           </span>
         )}
-        <ChevronDown size={11} className="shrink-0 text-fg-4" />
+        <ChevronDown size={11} className="shrink-0 text-text-3" />
       </button>
 
       {addedChips.length > 0 && (
@@ -187,7 +187,7 @@ export default function SkillSelector({
             <li
               key={skill.id}
               data-testid={`${testId}-added-${skill.id}`}
-              className="rounded border border-st-await/35 bg-st-await-bg px-1.5 py-0.5 font-mono text-st-await"
+              className="rounded border border-st-await/35 bg-st-await/14 px-1.5 py-0.5 font-mono text-st-await"
               style={{ fontSize: 10 }}
             >
               {bank.skills.find((known) => known.id === skill.id)?.name ?? skill.name} · added
@@ -203,7 +203,7 @@ export default function SkillSelector({
         <div
           role="dialog"
           data-testid={`${testId}-popover`}
-          className="absolute left-0 z-40 mt-1 w-full min-w-[280px] rounded border border-line-strong bg-bg-4 p-1.5 shadow-xl"
+          className="absolute left-0 z-40 mt-1 w-full min-w-[280px] rounded border border-line-strong bg-surface-2 p-1.5 shadow-xl"
         >
           {hasMissing && (
             <ul className="mb-1 flex flex-col gap-0.5 border-b border-line pb-1" data-testid={`${testId}-missing`}>
@@ -231,10 +231,10 @@ export default function SkillSelector({
                         if (readOnly) return;
                         onChange(removeRef(own, row.id));
                       }}
-                      className="accent-acc"
+                      className="accent-primary"
                     />
                     <TriangleAlert size={10} className="shrink-0" />
-                    <span className={`min-w-0 flex-1 truncate font-mono line-through ${isOwn ? "" : "text-fg-4"}`}>
+                    <span className={`min-w-0 flex-1 truncate font-mono line-through ${isOwn ? "" : "text-text-3"}`}>
                       {row.name}
                     </span>
                     {!isOwn &&
@@ -242,7 +242,7 @@ export default function SkillSelector({
                         <span
                           key={t}
                           data-tier={t}
-                          className="rounded border border-line px-1 uppercase tracking-wider text-fg-4"
+                          className="rounded border border-line px-1 uppercase tracking-wider text-text-3"
                           style={{ fontSize: 8 }}
                         >
                           {SKILL_TIER_LABEL[t]}
@@ -259,11 +259,11 @@ export default function SkillSelector({
             onChange={(event) => setFilter(event.target.value)}
             placeholder="Filter skills…"
             data-testid={`${testId}-filter`}
-            className="mb-1 w-full rounded border border-line bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
+            className="mb-1 w-full rounded border border-line bg-surface-2 px-2 py-1 text-text outline-none focus:border-primary"
             style={{ fontSize: 10.5 }}
           />
           {bank.skills.length === 0 ? (
-            <p className="px-1 py-2 text-fg-4" style={{ fontSize: 10 }} data-testid={`${testId}-empty`}>
+            <p className="px-1 py-2 text-text-3" style={{ fontSize: 10 }} data-testid={`${testId}-empty`}>
               The bank is empty. Add skills in Settings → Skills.
             </p>
           ) : (
@@ -276,7 +276,7 @@ export default function SkillSelector({
                   return (
                     <li
                       key={`f-${row.folder.id}`}
-                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-bg-3"
+                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-hover"
                       style={{ paddingLeft: 4 + row.depth * 12, fontSize: 10.5 }}
                       data-testid={`${testId}-folder-${row.folder.id}`}
                     >
@@ -290,20 +290,20 @@ export default function SkillSelector({
                         }}
                         disabled={readOnly || skills.length === 0}
                         onChange={() => toggleFolder(row.folder!.id)}
-                        className="accent-acc"
+                        className="accent-primary"
                       />
                       {/* The chevron stays live in read-only: folding a folder
                           reads the tree, it changes no selection. */}
                       <button
                         type="button"
                         onClick={() => toggleExpanded(row.folder!.id)}
-                        className="flex min-w-0 flex-1 items-center gap-1 text-left text-fg-2"
+                        className="flex min-w-0 flex-1 items-center gap-1 text-left text-text-2"
                         aria-expanded={row.expanded}
                       >
                         {row.expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-                        {row.expanded ? <FolderOpen size={11} className="text-fg-4" /> : <Folder size={11} className="text-fg-4" />}
+                        {row.expanded ? <FolderOpen size={11} className="text-text-3" /> : <Folder size={11} className="text-text-3" />}
                         <span className="truncate">{row.folder.name}</span>
-                        <span className="text-fg-4" style={{ fontSize: 9 }}>{row.count}</span>
+                        <span className="text-text-3" style={{ fontSize: 9 }}>{row.count}</span>
                       </button>
                     </li>
                   );
@@ -316,7 +316,7 @@ export default function SkillSelector({
                   return (
                     <li
                       key={`s-${skill.id}`}
-                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-bg-3"
+                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-hover"
                       style={{ paddingLeft: 4 + row.depth * 12, fontSize: 10.5 }}
                       data-testid={`${testId}-option-${skill.id}`}
                     >
@@ -327,7 +327,7 @@ export default function SkillSelector({
                         checked={isOwn || !!from}
                         disabled={locked}
                         onChange={() => toggleSkill(skill.id, skill.name)}
-                        className="accent-acc"
+                        className="accent-primary"
                         title={from && !isOwn ? `Inherited from the ${from.map((t) => SKILL_TIER_LABEL[t].toLowerCase()).join(", ")} tier` : undefined}
                       />
                       {/* The name is the target everyone aims at — a picker whose
@@ -339,12 +339,12 @@ export default function SkillSelector({
                         disabled={locked}
                         onClick={() => toggleSkill(skill.id, skill.name)}
                         data-testid={`${testId}-label-${skill.id}`}
-                        className={`min-w-0 flex-1 truncate text-left font-mono disabled:cursor-default ${from && !isOwn ? "text-fg-4" : "text-fg"}`}
+                        className={`min-w-0 flex-1 truncate text-left font-mono disabled:cursor-default ${from && !isOwn ? "text-text-3" : "text-text"}`}
                       >
                         {skill.name}
                       </button>
                       {from && !isOwn && (
-                        <span className="rounded border border-line px-1 uppercase tracking-wider text-fg-4" style={{ fontSize: 8 }}>
+                        <span className="rounded border border-line px-1 uppercase tracking-wider text-text-3" style={{ fontSize: 8 }}>
                           {from.map((t) => SKILL_TIER_LABEL[t]).join(" · ")}
                         </span>
                       )}
@@ -355,7 +355,7 @@ export default function SkillSelector({
               })}
             </ul>
           )}
-          <p className="mt-1 border-t border-line px-1 pt-1 text-fg-4" style={{ fontSize: 9 }}>
+          <p className="mt-1 border-t border-line px-1 pt-1 text-text-3" style={{ fontSize: 9 }}>
             {readOnly
               ? "Frozen: this selection is read-only here."
               : "Inherited skills are greyed and cannot be removed here (additive union). Checking a folder checks its skills now."}

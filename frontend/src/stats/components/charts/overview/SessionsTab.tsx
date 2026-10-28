@@ -72,7 +72,7 @@ export function SessionsTab({
           />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+          <div className="mb-3 text-text-3" style={{ fontSize: "10.5px" }}>
             Total{selected ? ` / ${selected.name}` : ""}
           </div>
           <SessionTable
@@ -107,7 +107,7 @@ export function SessionTable({
       className="w-full table-fixed text-left"
       style={{ fontSize: "11px" }}
     >
-      <thead className="text-fg-4">
+      <thead className="text-text-3">
         <tr>
           <th className="pb-2 font-medium">Name</th>
           <th className="w-20 pb-2 text-right font-medium">Total</th>
@@ -130,7 +130,7 @@ export function SessionTable({
           return (
             <tr
               key={row.id}
-              className={`group border-t border-line text-fg-2 ${pick.className}`}
+              className={`group border-t border-line text-text-2 ${pick.className}`}
               tabIndex={0}
               data-testid="stats-session-row"
               {...pick.rowProps}

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Popover } from "@base-ui/react/popover";
 import { ArrowRight, Calendar, Check, ChevronDown } from "lucide-react";
+import { appRoot } from "../../shared/ui/zoom";
 import {
   DATE_PRESETS,
   dateFilterLabel,
@@ -52,8 +53,8 @@ export default function RunDateFilterMenu({
         type="button"
         data-testid={`run-filter-date-${key}`}
         aria-pressed={selected}
-        className={`flex w-full cursor-pointer items-center justify-between rounded px-2 py-1.5 text-left text-fg-2 transition-colors hover:bg-bg-4 ${
-          selected ? "bg-bg-4 text-fg" : ""
+        className={`flex w-full cursor-pointer items-center justify-between rounded px-2 py-1.5 text-left text-text-2 transition-colors hover:bg-hover ${
+          selected ? "bg-surface-2 text-text" : ""
         }`}
         style={{ fontSize: "11px" }}
         onClick={() => {
@@ -62,7 +63,7 @@ export default function RunDateFilterMenu({
         }}
       >
         {text}
-        {selected && <Check size={11} className="text-acc" />}
+        {selected && <Check size={11} className="text-primary" />}
       </button>
     );
   };
@@ -72,8 +73,8 @@ export default function RunDateFilterMenu({
       <Popover.Trigger
         data-testid="run-filter-date"
         title={label ? dateModeHint(value.mode) : "Date"}
-        className={`flex min-w-0 max-w-full flex-[1_0_auto] cursor-pointer items-center justify-between gap-1 rounded border px-1.5 py-0.5 text-left outline-none transition-colors hover:bg-bg-4 data-[popup-open]:border-acc ${
-          label !== null ? "border-acc bg-bg-3 text-acc" : "border-line-strong bg-bg-3 text-fg-4"
+        className={`flex min-w-0 max-w-full flex-[1_0_auto] cursor-pointer items-center justify-between gap-1 rounded border px-1.5 py-0.5 text-left outline-none transition-colors hover:bg-hover data-[popup-open]:border-primary ${
+          label !== null ? "border-primary bg-surface-2 text-primary" : "border-line-strong bg-surface-2 text-text-3"
         }`}
         style={{ fontSize: "10px" }}
       >
@@ -83,16 +84,16 @@ export default function RunDateFilterMenu({
         </span>
         <ChevronDown size={9} className="shrink-0" />
       </Popover.Trigger>
-      <Popover.Portal>
+      <Popover.Portal container={appRoot()}>
         <Popover.Positioner className="isolate z-50 outline-none" side="bottom" align="end" sideOffset={4}>
           <Popover.Popup
             data-testid="run-filter-date-menu"
-            className="w-[240px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg outline-none"
+            className="w-[240px] rounded-md border border-line-strong bg-surface-2 p-1 shadow-lg outline-none"
           >
             <div
               role="radiogroup"
               aria-label="Date mode"
-              className="mb-1 grid grid-cols-2 gap-0.5 rounded border border-line bg-bg-2 p-0.5"
+              className="mb-1 grid grid-cols-2 gap-0.5 rounded border border-line bg-surface-1 p-0.5"
             >
               {MODES.map(({ mode, label: text }) => (
                 <button
@@ -102,7 +103,7 @@ export default function RunDateFilterMenu({
                   aria-checked={value.mode === mode}
                   data-testid={`run-filter-date-mode-${mode}`}
                   className={`cursor-pointer rounded py-1 text-center transition-colors ${
-                    value.mode === mode ? "bg-bg-4 text-fg" : "text-fg-3 hover:text-fg-2"
+                    value.mode === mode ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"
                   }`}
                   style={{ fontSize: "11px" }}
                   onClick={() => onChange({ ...value, mode })}
@@ -114,7 +115,7 @@ export default function RunDateFilterMenu({
             {option("any", "Any time", null)}
             {DATE_PRESETS.map(({ preset, label: text }) => option(preset, text, { preset }))}
             <div className="mt-1 border-t border-line px-2 pb-1 pt-2">
-              <div className="mb-1.5 text-fg-4" style={{ fontSize: "10px" }}>
+              <div className="mb-1.5 text-text-3" style={{ fontSize: "10px" }}>
                 Custom range
               </div>
               <div className="flex items-center gap-1">
@@ -124,21 +125,21 @@ export default function RunDateFilterMenu({
                   data-testid="run-filter-date-from"
                   value={days.from}
                   onChange={(e) => setCustom("from", e.target.value)}
-                  className="min-w-0 flex-1 rounded border border-line-strong bg-bg-2 px-1.5 py-1 font-mono text-fg-2 outline-none focus:border-acc"
+                  className="min-w-0 flex-1 rounded border border-line-strong bg-surface-1 px-1.5 py-1 font-mono text-text-2 outline-none focus:border-primary"
                   style={{ fontSize: "10px" }}
                 />
-                <ArrowRight size={10} className="shrink-0 text-fg-3" />
+                <ArrowRight size={10} className="shrink-0 text-text-3" />
                 <input
                   type="date"
                   aria-label="To"
                   data-testid="run-filter-date-to"
                   value={days.to}
                   onChange={(e) => setCustom("to", e.target.value)}
-                  className="min-w-0 flex-1 rounded border border-line-strong bg-bg-2 px-1.5 py-1 font-mono text-fg-2 outline-none focus:border-acc"
+                  className="min-w-0 flex-1 rounded border border-line-strong bg-surface-1 px-1.5 py-1 font-mono text-text-2 outline-none focus:border-primary"
                   style={{ fontSize: "10px" }}
                 />
               </div>
-              <p className="mt-2 text-fg-4" style={{ fontSize: "10px" }} data-testid="run-filter-date-hint">
+              <p className="mt-2 text-text-3" style={{ fontSize: "10px" }} data-testid="run-filter-date-hint">
                 {dateModeHint(value.mode)}
               </p>
             </div>

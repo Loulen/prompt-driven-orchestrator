@@ -156,17 +156,17 @@ export default function PipelineInfoPanel({
 
   return (
     <aside
-      className="flex h-full flex-col bg-bg-2 overflow-y-auto"
+      className="flex h-full flex-col bg-surface-1 overflow-y-auto"
       data-testid="pipeline-info-panel"
     >
       <div
-        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-fg-2"
+        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-text-2"
         style={{ fontSize: "11.5px" }}
       >
         <span>Pipeline info</span>
         <button
           onClick={onClose}
-          className="grid h-5 w-5 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
+          className="grid h-5 w-5 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text"
           data-testid="info-panel-close"
           // #397: no Tooltip here to borrow a name from — the `X` icon is
           // `aria-hidden`, so the label has to be explicit.
@@ -195,8 +195,8 @@ export default function PipelineInfoPanel({
               }}
               className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2 py-1.5 transition-colors cursor-pointer ${
                 shownTab === t.id
-                  ? "border-b-2 border-acc text-fg font-medium"
-                  : "text-fg-3 hover:text-fg-2"
+                  ? "border-b-2 border-primary text-text font-medium"
+                  : "text-text-3 hover:text-text-2"
               }`}
             >
               <t.icon size={12} />
@@ -210,7 +210,7 @@ export default function PipelineInfoPanel({
               )}
               {t.id === "diff" && unreadReplies > 0 ? (
                 <span
-                  className="inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-[7px] bg-st-running px-1 font-semibold text-white"
+                  className="inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-[7px] bg-st-running px-1 font-semibold text-primary-ink"
                   style={{ fontSize: "9.5px" }}
                   title={`${unreadReplies} review comment${unreadReplies === 1 ? "" : "s"} with an unread reply — open the Review page`}
                   data-testid="diff-tab-unread"
@@ -240,8 +240,8 @@ export default function PipelineInfoPanel({
               }}
               className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2 py-1.5 transition-colors cursor-pointer ${
                 activeExtension?.key === t.key
-                  ? "border-b-2 border-acc text-fg font-medium"
-                  : "text-fg-3 hover:text-fg-2"
+                  ? "border-b-2 border-primary text-text font-medium"
+                  : "text-text-3 hover:text-text-2"
               }`}
             >
               {t.contribution.label}
@@ -286,7 +286,7 @@ export default function PipelineInfoPanel({
           {run.target_repo ? (
             <RepositoriesSection key={run.run_id} run={run} onEdited={onRefreshRun} />
           ) : (
-            <div className="px-3 py-3 text-fg-4" style={{ fontSize: "11px" }} data-testid="repositories-tab-empty">
+            <div className="px-3 py-3 text-text-3" style={{ fontSize: "11px" }} data-testid="repositories-tab-empty">
               This Run recorded no target repository — it works in the daemon's own checkout.
             </div>
           )}

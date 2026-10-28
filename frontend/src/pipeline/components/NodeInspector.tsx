@@ -192,9 +192,9 @@ export default function NodeInspector({
   const addPromptSkill = readOnly || runNode?.skills != null ? undefined : promptAdds.add;
 
   return (
-    <aside ref={asideRef} className="flex h-full flex-col bg-bg-2 overflow-y-auto">
+    <aside ref={asideRef} className="flex h-full flex-col bg-surface-1 overflow-y-auto">
       <div
-        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-fg-2"
+        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-text-2"
         style={{ fontSize: "11.5px" }}
       >
         <span>Node Inspector</span>
@@ -213,7 +213,7 @@ export default function NodeInspector({
         <SectionHead title="Identity" />
         <Field label="ID">
           <span
-            className="block w-full cursor-pointer select-all rounded border border-line bg-bg-3 px-2 py-1 font-mono text-fg-3"
+            className="block w-full cursor-pointer select-all rounded border border-line bg-surface-2 px-2 py-1 font-mono text-text-3"
             style={{ fontSize: "10px" }}
             title="Click to copy"
             onClick={() => void copyToClipboard(node.id)}
@@ -237,10 +237,10 @@ export default function NodeInspector({
         <SectionHead title="Type" />
         <div
           data-testid={isScript ? "script-type-label" : "agent-type-label"}
-          className="flex items-center gap-2 rounded border border-fg-4 bg-bg-3 px-2 py-1 font-medium text-fg"
+          className="flex items-center gap-2 rounded border border-text-3 bg-surface-2 px-2 py-1 font-medium text-text"
           style={{ fontSize: "10px" }}
         >
-          <NodeTypeIcon type={node.type} size={11} className="shrink-0 text-fg-3" />
+          <NodeTypeIcon type={node.type} size={11} className="shrink-0 text-text-3" />
           <span>{isScript ? "script (deterministic bash)" : node.type}</span>
         </div>
 
@@ -312,7 +312,7 @@ export default function NodeInspector({
             perf-reviewer`). The node declares no inputs. */}
         <SectionHead title="Inputs" count={pooledInputs.length} />
         {pooledInputs.length === 0 ? (
-          <p className="px-1 py-1 text-fg-4" style={{ fontSize: "10px" }}>
+          <p className="px-1 py-1 text-text-3" style={{ fontSize: "10px" }}>
             No inputs — wire an output into this node to create one.
           </p>
         ) : (

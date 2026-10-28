@@ -41,27 +41,27 @@ export default function ConfirmCloseTabsModal({ open, tabs, onCancel, onConfirm 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="close-tabs-backdrop"
       onClick={onCancel}
     >
       <div
-        className="flex max-h-[85vh] w-[380px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+        className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[380px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
         style={{ fontSize: "12px" }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* #940: bounded to the window like New Run — a long list scrolls, the
             actions stay visible. */}
-        <h3 className="shrink-0 font-medium text-fg" style={{ fontSize: "13px" }}>
+        <h3 className="shrink-0 font-medium text-text" style={{ fontSize: "13px" }}>
           Discard unsaved changes?
         </h3>
         <div className="min-h-0 overflow-y-auto" data-testid="close-tabs-body">
-        <p className="mt-2 text-fg-2">
+        <p className="mt-2 text-text-2">
           {plural ? `${unsaved.length} tabs have` : "1 tab has"} unsaved changes:{" "}
           {unsaved.map((tab, i) => (
             <span key={tab.id}>
               {i > 0 && ", "}
-              <code className="rounded bg-bg-4 px-1 py-0.5 font-mono text-fg">
+              <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-text">
                 {tab.id}.yaml
               </code>
             </span>
@@ -73,7 +73,7 @@ export default function ConfirmCloseTabsModal({ open, tabs, onCancel, onConfirm 
           <button
             onClick={onCancel}
             data-testid="close-tabs-cancel"
-            className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+            className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
             style={{ fontSize: "11.5px" }}
           >
             Cancel
@@ -81,7 +81,7 @@ export default function ConfirmCloseTabsModal({ open, tabs, onCancel, onConfirm 
           <button
             onClick={onConfirm}
             data-testid="close-tabs-confirm"
-            className="rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80"
+            className="rounded-md bg-st-failed px-3 py-1.5 text-primary-ink transition-colors hover:bg-st-failed/80"
             style={{ fontSize: "11.5px" }}
           >
             Close {plural ? "tabs" : "tab"} anyway

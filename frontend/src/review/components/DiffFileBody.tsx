@@ -99,22 +99,22 @@ export default function FileBody({
             {shown.map((r, idx) => {
               if (r.kind === "hunk") {
                 return (
-                  <tr key={idx} className="bg-bg-3/60 text-fg-4" data-testid="diff-hunk">
+                  <tr key={idx} className="bg-surface-2/60 text-text-3" data-testid="diff-hunk">
                     <td
                       colSpan={2}
-                      className="sticky left-0 z-[1] bg-bg-3 px-2 text-right select-none"
+                      className="sticky left-0 z-[1] bg-surface-2 px-2 text-right select-none"
                       aria-hidden
                     />
-                    <td className="whitespace-pre px-2 text-acc/70" colSpan={2}>
+                    <td className="whitespace-pre px-2 text-primary/70" colSpan={2}>
                       <span className="flex items-center gap-2">
                         <span>
                           {r.text}
-                          {r.header && <span className="text-fg-4"> {r.header}</span>}
+                          {r.header && <span className="text-text-3"> {r.header}</span>}
                         </span>
                         {/* Context expansion lives on the Review page (#749). */}
                         <a
                           href={reviewHref}
-                          className="ml-auto pl-4 text-fg-5 hover:text-fg-3"
+                          className="ml-auto pl-4 text-text-3 hover:text-text-3"
                           title="Expand context on the Review page"
                           tabIndex={-1}
                         >
@@ -128,33 +128,33 @@ export default function FileBody({
               const { line, segs } = r;
               const rowTone =
                 line.kind === "add"
-                  ? "bg-st-done-bg"
+                  ? "bg-st-done/14"
                   : line.kind === "del"
-                    ? "bg-st-failed-bg"
+                    ? "bg-st-failed/14"
                     : "";
               const gutterTone =
                 line.kind === "add"
-                  ? "bg-st-done-bg"
+                  ? "bg-st-done/14"
                   : line.kind === "del"
-                    ? "bg-st-failed-bg"
-                    : "bg-bg-2";
+                    ? "bg-st-failed/14"
+                    : "bg-surface-1";
               const marker = line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ";
               const markerTone =
                 line.kind === "add"
                   ? "text-st-done"
                   : line.kind === "del"
                     ? "text-st-failed"
-                    : "text-fg-5";
+                    : "text-text-3";
               return (
                 <tr key={idx} className={rowTone} data-testid={`diff-line-${line.kind}`}>
                   <td
-                    className={`sticky left-0 z-[1] w-8 min-w-8 pl-2 pr-1 text-right text-fg-5 select-none ${gutterTone}`}
+                    className={`sticky left-0 z-[1] w-8 min-w-8 pl-2 pr-1 text-right text-text-3 select-none ${gutterTone}`}
                     aria-hidden
                   >
                     {line.old_no ?? ""}
                   </td>
                   <td
-                    className={`sticky left-8 z-[1] w-8 min-w-8 pr-2 text-right text-fg-5 select-none ${gutterTone}`}
+                    className={`sticky left-8 z-[1] w-8 min-w-8 pr-2 text-right text-text-3 select-none ${gutterTone}`}
                     aria-hidden
                   >
                     {line.new_no ?? ""}
@@ -162,7 +162,7 @@ export default function FileBody({
                   <td className={`w-3 pl-2 select-none ${markerTone}`} aria-hidden>
                     {marker}
                   </td>
-                  <td className={`whitespace-pre pr-4 ${line.kind === "context" ? "text-fg-3" : "text-fg"}`}>
+                  <td className={`whitespace-pre pr-4 ${line.kind === "context" ? "text-text-3" : "text-text"}`}>
                     {segs ? <Highlighted segs={segs} kind={line.kind} /> : line.content}
                   </td>
                 </tr>
@@ -174,7 +174,7 @@ export default function FileBody({
       {truncated && (
         <button
           onClick={onShowAll}
-          className="w-full py-1.5 text-center text-acc transition-colors hover:bg-bg-3 cursor-pointer"
+          className="w-full py-1.5 text-center text-primary transition-colors hover:bg-hover cursor-pointer"
           style={{ fontSize: "10.5px" }}
           data-testid="diff-show-more"
         >

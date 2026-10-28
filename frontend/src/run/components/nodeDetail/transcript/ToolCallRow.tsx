@@ -80,7 +80,7 @@ export default function ToolCallRow({
       data-entry={index}
       data-focused={focusNonce !== undefined || undefined}
       className={`rounded-md border ${
-        focusNonce !== undefined ? "border-st-await bg-st-await-bg" : "border-line bg-bg-1"
+        focusNonce !== undefined ? "border-st-await bg-st-await/14" : "border-line bg-surface-0"
       }`}
     >
       <button
@@ -88,27 +88,27 @@ export default function ToolCallRow({
         data-testid="transcript-tool-toggle"
         aria-expanded={open}
         onClick={toggle}
-        className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 px-2 py-1.5 text-left hover:bg-bg-3"
+        className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 px-2 py-1.5 text-left hover:bg-hover"
         style={{ fontSize: "11px" }}
       >
         {open ? (
-          <ChevronDown size={11} className="shrink-0 text-fg-4" />
+          <ChevronDown size={11} className="shrink-0 text-text-3" />
         ) : (
-          <ChevronRight size={11} className="shrink-0 text-fg-4" />
+          <ChevronRight size={11} className="shrink-0 text-text-3" />
         )}
-        <Wrench size={10} className="shrink-0 text-fg-4" />
-        <span className="shrink-0 font-mono font-medium text-fg-2">{name}</span>
-        <span className="min-w-0 truncate font-mono text-fg-4" title={summary}>
+        <Wrench size={10} className="shrink-0 text-text-3" />
+        <span className="shrink-0 font-mono font-medium text-text-2">{name}</span>
+        <span className="min-w-0 truncate font-mono text-text-3" title={summary}>
           {summary}
         </span>
         {/* Out of the ellipsis: a long path never hides what the call did. */}
         {diff && (
-          <span className="shrink-0 font-mono text-fg-4" data-testid="transcript-tool-diffstat">
+          <span className="shrink-0 font-mono text-text-3" data-testid="transcript-tool-diffstat">
             +{diff.added} −{diff.removed}
           </span>
         )}
         {outputBytes !== undefined && (
-          <span className="shrink-0 whitespace-nowrap font-mono text-fg-4" data-testid="transcript-tool-size">
+          <span className="shrink-0 whitespace-nowrap font-mono text-text-3" data-testid="transcript-tool-size">
             · {formatBytes(outputBytes)}
           </span>
         )}
@@ -130,7 +130,7 @@ export default function ToolCallRow({
               {error}
             </div>
           ) : detail === null ? (
-            <div className="text-fg-4" style={{ fontSize: "11px" }}>
+            <div className="text-text-3" style={{ fontSize: "11px" }}>
               Loading…
             </div>
           ) : (
@@ -147,7 +147,7 @@ export default function ToolCallRow({
                 testId="transcript-tool-output"
               />
               {detail.truncated && (
-                <div className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
+                <div className="mt-1 text-text-3" style={{ fontSize: "10px" }}>
                   Output cut: the rest stays in the session file.
                 </div>
               )}
@@ -164,7 +164,7 @@ function Diff({ lines }: { lines: TranscriptDiffLine[] }) {
   return (
     <pre
       data-testid="transcript-tool-diff"
-      className="max-h-64 overflow-auto rounded bg-bg-0 py-1.5 font-mono"
+      className="max-h-64 overflow-auto rounded bg-surface-0 py-1.5 font-mono"
       style={{ fontSize: "10.5px", lineHeight: 1.5 }}
     >
       {lines.map((line, i) => (
@@ -176,7 +176,7 @@ function Diff({ lines }: { lines: TranscriptDiffLine[] }) {
               ? "text-st-done"
               : line.op === "remove"
                 ? "text-st-failed"
-                : "text-fg-4"
+                : "text-text-3"
           }`}
         >
           {line.op === "add" ? "+ " : line.op === "remove" ? "- " : "  "}
@@ -200,13 +200,13 @@ function Block({
 }) {
   return (
     <div className="mt-1 first:mt-0">
-      <div className="mb-0.5 text-fg-4" style={{ fontSize: "10px" }}>
+      <div className="mb-0.5 text-text-3" style={{ fontSize: "10px" }}>
         {label}
       </div>
       <pre
         data-testid={testId}
-        className={`max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-bg-0 p-1.5 font-mono ${
-          error ? "text-st-failed" : "text-fg-3"
+        className={`max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-surface-0 p-1.5 font-mono ${
+          error ? "text-st-failed" : "text-text-3"
         }`}
         style={{ fontSize: "10.5px", lineHeight: 1.5 }}
       >

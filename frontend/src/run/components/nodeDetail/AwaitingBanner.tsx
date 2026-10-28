@@ -112,7 +112,7 @@ export default function AwaitingBanner({
   }
   return (
     <div
-      className="flex items-start gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2"
+      className="flex items-start gap-2 border-b border-st-await/30 bg-st-await/14 px-3 py-2"
       data-testid="awaiting-banner"
       data-cause={cause}
       data-terminal-live={terminalLive}
@@ -135,12 +135,12 @@ export default function AwaitingBanner({
           )}
         </div>
         {body && (
-          <span className="break-words text-fg" style={{ fontSize: "11px", lineHeight: 1.45 }} data-testid="awaiting-banner-message">
+          <span className="break-words text-text" style={{ fontSize: "11px", lineHeight: 1.45 }} data-testid="awaiting-banner-message">
             {body}
           </span>
         )}
         {hint && (
-          <span className="text-fg-3" style={{ fontSize: "10px", lineHeight: 1.4 }} data-testid="awaiting-banner-hint">
+          <span className="text-text-3" style={{ fontSize: "10px", lineHeight: 1.4 }} data-testid="awaiting-banner-hint">
             {hint}
           </span>
         )}

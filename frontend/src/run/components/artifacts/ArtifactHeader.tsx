@@ -45,12 +45,12 @@ export default function ArtifactHeader({
     <div className="flex items-center justify-between border-b border-line px-4 py-3">
       {header ?? (
         <div className="flex items-center gap-2">
-          <span className="font-medium text-fg" style={{ fontSize: "13px" }}>
+          <span className="font-medium text-text" style={{ fontSize: "13px" }}>
             {portName}
           </span>
           {path && (
             <span
-              className="font-mono text-fg-4"
+              className="font-mono text-text-3"
               style={{ fontSize: "10px" }}
             >
               {path}
@@ -65,13 +65,13 @@ export default function ArtifactHeader({
               data-testid="iter-prev"
               onClick={goPrevIter}
               disabled={iterIndex <= 0}
-              className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
+              className="rounded p-0.5 text-text-3 hover:bg-hover hover:text-text disabled:text-text-3"
               aria-label="Previous iteration"
             >
               <ChevronLeft size={14} />
             </button>
             <span
-              className="font-mono text-fg-3"
+              className="font-mono text-text-3"
               style={{ fontSize: "11px" }}
             >
               iter {iter} of {iterNumbers[iterNumbers.length - 1]}
@@ -80,7 +80,7 @@ export default function ArtifactHeader({
               data-testid="iter-next"
               onClick={goNextIter}
               disabled={iterIndex >= iterNumbers.length - 1}
-              className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
+              className="rounded p-0.5 text-text-3 hover:bg-hover hover:text-text disabled:text-text-3"
               aria-label="Next iteration"
             >
               <ChevronRight size={14} />
@@ -92,13 +92,13 @@ export default function ArtifactHeader({
             <button
               onClick={() => setFileIndex(Math.max(0, fileIndex - 1))}
               disabled={fileIndex === 0}
-              className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
+              className="rounded p-0.5 text-text-3 hover:bg-hover hover:text-text disabled:text-text-3"
               aria-label="Previous file"
             >
               <ChevronLeft size={14} />
             </button>
             <span
-              className="font-mono text-fg-3"
+              className="font-mono text-text-3"
               style={{ fontSize: "11px" }}
             >
               file {fileIndex + 1} of {total}
@@ -108,7 +108,7 @@ export default function ArtifactHeader({
                 setFileIndex(Math.min(total - 1, fileIndex + 1))
               }
               disabled={fileIndex === total - 1}
-              className="rounded p-0.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:text-fg-5"
+              className="rounded p-0.5 text-text-3 hover:bg-hover hover:text-text disabled:text-text-3"
               aria-label="Next file"
             >
               <ChevronRight size={14} />
@@ -126,7 +126,7 @@ export default function ArtifactHeader({
         )}
         <button
           onClick={onClose}
-          className="rounded p-1 text-fg-3 hover:bg-bg-3 hover:text-fg"
+          className="rounded p-1 text-text-3 hover:bg-hover hover:text-text"
           aria-label="Close"
         >
           <X size={14} />

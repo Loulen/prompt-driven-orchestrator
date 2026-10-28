@@ -11,13 +11,13 @@ export function GapChip({ gap }: { gap: BranchGap | null }) {
   if (!gap) return null;
   if (gap.kind === "level") {
     return (
-      <Check size={11} className="shrink-0 text-fg-4" aria-label="up to date" />
+      <Check size={11} className="shrink-0 text-text-3" aria-label="up to date" />
     );
   }
   if (gap.kind === "unknown") {
     return (
       <span
-        className="shrink-0 font-mono text-fg-4"
+        className="shrink-0 font-mono text-text-3"
         style={{ fontSize: "10px" }}
         title="Gap unknown — the last fetch failed"
       >
@@ -29,7 +29,7 @@ export function GapChip({ gap }: { gap: BranchGap | null }) {
   return (
     <span
       className={`shrink-0 rounded px-1 py-0.5 font-mono font-medium ${
-        ahead ? "bg-st-running-bg text-st-running" : "bg-st-await-bg text-st-await"
+        ahead ? "bg-st-running/14 text-st-running" : "bg-st-await/14 text-st-await"
       }`}
       style={{ fontSize: "9.5px" }}
       data-testid="branch-gap-chip"
@@ -69,31 +69,31 @@ export function SyncButton({
 }) {
   const gap = state.kind === "gap" ? state.gap : null;
   let border = "border-line-strong";
-  let icon = <RefreshCw size={12} className="text-fg-3" />;
+  let icon = <RefreshCw size={12} className="text-text-3" />;
   let title = "Source branch freshness";
 
   switch (state.kind) {
     case "fetching":
-      icon = <RefreshCw size={12} className="animate-spin text-fg-4" />;
+      icon = <RefreshCw size={12} className="animate-spin text-text-3" />;
       title = "Fetching all remotes…";
       break;
     case "unknown":
-      border = "border-dashed border-fg-4";
-      icon = <CloudOff size={12} className="text-fg-3" />;
+      border = "border-dashed border-text-3";
+      icon = <CloudOff size={12} className="text-text-3" />;
       title = "Gap unknown — the last fetch failed";
       break;
     case "remote":
-      border = "border-acc-border";
-      icon = <Cloud size={12} className="text-acc" />;
+      border = "border-primary/30";
+      icon = <Cloud size={12} className="text-primary" />;
       title = "Remote ref — as of the last fetch";
       break;
     case "no-upstream":
-      icon = <Laptop size={12} className="text-fg-3" />;
+      icon = <Laptop size={12} className="text-text-3" />;
       title = "No upstream branch";
       break;
     case "level":
-      border = "border-acc-border";
-      icon = <Check size={12} className="text-acc" />;
+      border = "border-primary/30";
+      icon = <Check size={12} className="text-primary" />;
       title = `Up to date with ${state.upstream}`;
       break;
     case "gap":
@@ -110,8 +110,8 @@ export function SyncButton({
   // "this branch is level", not a badge we paint ourselves after a click.
   const running = ff.kind === "running";
   if (running) {
-    border = "border-acc-border";
-    icon = <RefreshCw size={12} className="animate-spin text-acc" />;
+    border = "border-primary/30";
+    icon = <RefreshCw size={12} className="animate-spin text-primary" />;
     title = `Fast-forwarding ${branchName}…`;
   }
 
@@ -123,7 +123,7 @@ export function SyncButton({
         title={title}
         aria-label={title}
         aria-expanded={open}
-        className={`flex items-center gap-1 rounded-md border bg-bg-3 px-2 py-1.5 transition-colors hover:bg-bg-4 ${border}`}
+        className={`flex items-center gap-1 rounded-md border bg-surface-2 px-2 py-1.5 transition-colors hover:bg-hover ${border}`}
         data-testid={`${testIdPrefix}-sync`}
         data-sync-state={running ? "fast-forwarding" : state.kind}
       >

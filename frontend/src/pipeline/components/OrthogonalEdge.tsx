@@ -177,10 +177,10 @@ export default function OrthogonalEdge({
   const missingPorts = data?.missingPorts ?? [];
   const broken = missingPorts.length > 0;
   const strokeColor = isSelected
-    ? "var(--color-edge-selected, #fdba74)"
+    ? "var(--selected-edge)"
     : broken
       ? "var(--color-st-failed)"
-      : data?.strokeColor ?? "var(--color-fg-4)";
+      : data?.strokeColor ?? "var(--text-3)";
 
   // Anchor the condition pill at the path's arc-length midpoint (#176) — the
   // median vertex drifts off-center on unbalanced routes and stacks sibling
@@ -276,14 +276,14 @@ export default function OrthogonalEdge({
                   // what looks like a drag is the pane panning underneath.
                   pointerEvents: "all",
                   zIndex: labelZ,
-                  fontFamily: "var(--font-mono, monospace)",
+                  fontFamily: "var(--font-code, monospace)",
                   fontSize: 9.5,
                   lineHeight: 1.3,
                   whiteSpace: "nowrap",
                   cursor: "grab",
-                  color: "var(--color-fg-2)",
-                  background: "var(--color-bg-3)",
-                  border: "1px solid var(--color-line)",
+                  color: "var(--text-2)",
+                  background: "var(--surface-2)",
+                  border: "1px solid var(--line)",
                   borderRadius: 2,
                   padding: "1px 4px",
                 }}
@@ -316,10 +316,10 @@ export default function OrthogonalEdge({
             style={{
               position: "absolute",
               transform: `translate(-50%, -50%) translate(${labelPoint.x}px, ${labelPoint.y}px)`,
-              fontFamily: "var(--font-mono, monospace)",
+              fontFamily: "var(--font-code, monospace)",
               fontSize: 10,
-              color: "var(--color-fg)",
-              background: "var(--color-bg-2, #1e1e1e)",
+              color: "var(--text)",
+              background: "var(--surface-1)",
               border: `1px solid ${strokeColor}`,
               borderRadius: 6,
               padding: "3px 6px",

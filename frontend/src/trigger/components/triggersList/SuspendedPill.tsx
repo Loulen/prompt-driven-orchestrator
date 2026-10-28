@@ -1,6 +1,6 @@
 import { Pause } from "lucide-react";
 import type { TriggerSuspension } from "../../../shared/generated/TriggerSuspension";
-import { Tooltip, TooltipProvider } from "../../../shared/ui/tooltip";
+import { Tooltip } from "../../../shared/ui/tooltip";
 import { suspensionTooltip } from "../../model/suspension";
 
 /**
@@ -12,13 +12,13 @@ import { suspensionTooltip } from "../../model/suspension";
  */
 export default function SuspendedPill({ suspension }: { suspension: TriggerSuspension }) {
   return (
-    <TooltipProvider>
+    <>
       <Tooltip content={suspensionTooltip(suspension)}>
         <span
           role="note"
           tabIndex={0}
           aria-label={`Suspended: ${suspension.reason}`}
-          className="inline-flex min-w-0 max-w-full items-center gap-0.5 overflow-hidden rounded-full border border-st-interrupted/50 bg-st-interrupted-bg px-1.5 py-px text-st-interrupted"
+          className="inline-flex min-w-0 max-w-full items-center gap-0.5 overflow-hidden rounded-full border border-st-await/50 bg-st-await/14 px-1.5 py-px text-st-await"
           style={{ fontSize: "9px" }}
           data-testid="trigger-suspended"
         >
@@ -26,6 +26,6 @@ export default function SuspendedPill({ suspension }: { suspension: TriggerSuspe
           <span className="truncate">suspended</span>
         </span>
       </Tooltip>
-    </TooltipProvider>
+    </>
   );
 }

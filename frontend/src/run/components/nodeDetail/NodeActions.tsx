@@ -53,7 +53,7 @@ export default function NodeActions({
         <a
           href={reviewUrl(runId, reviewTarget.pair)}
           data-testid="node-review-shortcut"
-          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:border-fg-4 hover:text-fg"
+          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:border-text-3 hover:text-text"
           style={{ fontSize: "11.5px", fontWeight: 500 }}
         >
           <GitCompareArrows size={12} />
@@ -76,9 +76,9 @@ export default function NodeActions({
                   disabled={isReleasing}
                   data-testid="release-completion-btn"
                   data-primary={releaseIsPrimary || undefined}
-                  className={`flex min-w-[140px] flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-await/40 bg-st-await-bg px-3 py-1.5 text-st-await transition-colors hover:border-st-await/60 hover:bg-st-await/20 disabled:cursor-wait disabled:opacity-70 ${
+                  className={`flex min-w-[140px] flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-await/40 bg-st-await/14 px-3 py-1.5 text-st-await transition-colors hover:border-st-await/60 hover:bg-st-await/20 disabled:cursor-wait disabled:opacity-70 ${
                     completionReleased ? "border-dashed" : ""
-                  } ${releaseIsPrimary ? "ring-2 ring-st-await/50 ring-offset-1 ring-offset-bg" : ""}`}
+                  } ${releaseIsPrimary ? "ring-2 ring-st-await/50 ring-offset-1 ring-offset-surface-1" : ""}`}
                   style={{ fontSize: "11.5px", fontWeight: 500 }}
                 >
                   {isReleasing ? (
@@ -100,7 +100,7 @@ export default function NodeActions({
                 onClick={markComplete}
                 title="Take the artifacts as they are and complete the node now"
                 data-testid="mark-complete-btn"
-                className="flex min-w-[140px] flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done-bg px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
+                className="flex min-w-[140px] flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md border border-st-done/40 bg-st-done/14 px-3 py-1.5 text-st-done transition-colors hover:border-st-done/60 hover:bg-st-done/20"
                 style={{ fontSize: "11.5px", fontWeight: 500 }}
               >
                 <CheckCircle size={12} />

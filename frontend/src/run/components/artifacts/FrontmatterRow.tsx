@@ -4,8 +4,8 @@ export default function FrontmatterRow({ field, value }: { field: string; value:
     typeof value === "object" ? JSON.stringify(value) : String(value);
   return (
     <>
-      <span className="text-fg-3">{field}</span>
-      <span className="text-fg">{display}</span>
+      <span className="text-text-3">{field}</span>
+      <span className="text-text">{display}</span>
     </>
   );
 }

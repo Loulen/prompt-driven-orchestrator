@@ -1,14 +1,15 @@
 /**
- * Transient messages at the bottom of the window, styled like App's run-now
- * error: an `error` toast has the failed border, an `info` one the strong line,
- * a `warning` one the awaiting amber. Each goes away after a few seconds, or on
- * its ✕. A toast may carry a title and one action button (« Take control »).
+ * Transient messages at the bottom right of the window, one line each: the
+ * kind's icon in its status colour, the text, an action, the close. Each goes
+ * away after a few seconds, or on its ✕. A toast may carry a title and one
+ * action button (« Take control »). The extensions post theirs through
+ * `toast()` of `@pdo/extension-ui`, into the same stack.
  */
 
 import type { ReactNode } from "react";
 import { create } from "zustand";
 
-export type ToastKind = "info" | "error" | "warning";
+export type ToastKind = "info" | "success" | "warning" | "error";
 
 /** The one button a toast may offer; clicking it also dismisses the toast. */
 export interface ToastAction {

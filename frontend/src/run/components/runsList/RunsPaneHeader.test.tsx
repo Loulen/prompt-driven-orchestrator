@@ -9,7 +9,6 @@ import {
 import { runCreationRights, UNKNOWN_RIGHTS } from "../../model/runCreationRights";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import type { Project } from "../../../workspace/model/project";
-import { TooltipProvider } from "../../../shared/ui/tooltip";
 
 vi.mock("../../../shared/extensions/ExtensionActions", () => ({
   ExtensionActionButtons: () => null,
@@ -26,9 +25,9 @@ const P1 = { id: "p1", name: "PDO", members: ["/r"] } as unknown as Project;
 function renderHeader() {
   const onNewRun = vi.fn();
   render(
-    <TooltipProvider>
+    <>
       <RunsPaneHeader pane={pane} onNewRun={onNewRun} />
-    </TooltipProvider>,
+    </>,
   );
   return onNewRun;
 }

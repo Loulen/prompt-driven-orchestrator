@@ -3,7 +3,6 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
 import { useEditStore } from "../store/editStore";
 import { type OpenPipeline } from "../store/editState";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 // jsdom has no ResizeObserver; ReactFlow's container measurement needs it
 // (mirrors LintBannerDuplication.test.tsx).
@@ -140,14 +139,14 @@ function seedTab(tab: OpenPipeline) {
 
 function renderCanvas() {
   return render(
-    <TooltipProvider>
+    <>
       <EditCanvas
         libraryEntries={[]}
         libraryPipelines={[]}
         onLibraryDelete={() => {}}
         onLibraryPipelinesChanged={() => {}}
       />
-    </TooltipProvider>,
+    </>,
   );
 }
 

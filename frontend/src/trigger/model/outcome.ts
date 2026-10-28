@@ -14,11 +14,11 @@ export function outcomeDot(outcome: string | null | undefined): string {
     case "skipped-overlap":
     case "skipped-suspended":
     case "guard-exit-nonzero":
-      return "bg-st-paused";
+      return "bg-st-blocked";
     case "guard-error":
       return "bg-st-blocked";
     default:
-      return "bg-st-archived";
+      return "bg-st-skipped";
   }
 }
 
@@ -33,11 +33,11 @@ export function outcomeRing(outcome: string | null | undefined): string {
     case "skipped-overlap":
     case "skipped-suspended":
     case "guard-exit-nonzero":
-      return "border-st-paused";
+      return "border-st-blocked";
     case "guard-error":
       return "border-st-blocked";
     default:
-      return "border-st-archived";
+      return "border-st-skipped";
   }
 }
 

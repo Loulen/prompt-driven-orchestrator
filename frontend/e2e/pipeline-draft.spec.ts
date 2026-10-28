@@ -70,7 +70,19 @@ async function second(browser: Browser): Promise<Page> {
   const baseURL = test.info().project.use.baseURL!;
   const context = await browser.newContext({
     baseURL,
-    storageState: { cookies: [], origins: [{ origin: baseURL, localStorage: [{ name: "pdo.tour.offered", value: "1" }] }] },
+    // The suite's own storage (playwright.config.ts): no tour, the UI scale at 100 %.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: baseURL,
+          localStorage: [
+            { name: "pdo.tour.offered", value: "1" },
+            { name: "pdo.ui.scale", value: "100" },
+          ],
+        },
+      ],
+    },
   });
   return context.newPage();
 }

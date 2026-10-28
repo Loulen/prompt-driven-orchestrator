@@ -28,7 +28,7 @@ export function performanceEffortName(row: PerformanceEffortEntity): React.React
     // The "not set" bucket: hovering the italic word explains it (ADR-0065 §1).
     return (
       <Tooltip content={NOT_SET_COPY} side="top">
-        <span className="italic text-fg-4">not set</span>
+        <span className="italic text-text-3">not set</span>
       </Tooltip>
     );
   }

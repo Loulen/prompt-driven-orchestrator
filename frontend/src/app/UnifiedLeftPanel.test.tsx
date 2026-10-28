@@ -590,7 +590,7 @@ describe("UnifiedLeftPanel run status dot", () => {
       failed: "bg-st-failed",
       skipped: "bg-st-skipped",
       halted: "bg-st-blocked",
-      paused: "bg-st-paused",
+      paused: "bg-st-blocked",
     };
     for (const [status, cls] of Object.entries(expected)) {
       const { unmount } = renderPanel({
@@ -617,7 +617,7 @@ describe("UnifiedLeftPanel run status dot", () => {
     // surface stays in place. Do NOT "repair" this dot by rebranching a producer.
     renderPanel({ runs: run({ status: "running", stalled: true }) });
     const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-stale");
+    expect(dot.className).toContain("bg-st-skipped");
     expect(dot.className).not.toContain("animate-pulse");
     // It must not fall through to the active-running blue dot.
     expect(dot.className).not.toContain("bg-st-running");
@@ -628,7 +628,7 @@ describe("UnifiedLeftPanel run status dot", () => {
     const dot = screen.getByTestId("run-status-dot");
     expect(dot.className).toContain("bg-st-running");
     expect(dot.className).toContain("animate-pulse");
-    expect(dot.className).not.toContain("bg-st-stale");
+    expect(dot.className).not.toContain("bg-st-skipped");
   });
 
   // #503: the dot was the whole failure signal — a Run that had actually shipped
@@ -2153,7 +2153,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     const pills = within(row("epic")).getByTestId("run-child-pills");
     expect(within(pills).getByTestId("run-child-pills-stale")).toHaveTextContent("1");
     expect(within(pills).queryByTestId("run-child-pills-running")).not.toBeInTheDocument();
-    expect(within(pills).getByTestId("run-child-pills-stale").querySelector(".bg-st-stale")).not.toBeNull();
+    expect(within(pills).getByTestId("run-child-pills-stale").querySelector(".bg-st-skipped")).not.toBeNull();
   });
 
   it("the chevron collapses / expands the subtree without selecting the run", () => {
@@ -2211,7 +2211,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     const toggle = screen.getByTestId("run-tree-toggle-all");
     expect(toggle).toHaveAttribute("data-state", "expanded");
     expect(toggle).toHaveAttribute("aria-label", "Collapse all child runs");
-    expect(toggle.className).not.toContain("border-acc");
+    expect(toggle.className).not.toContain("border-primary");
 
     fireEvent.click(toggle);
     expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);

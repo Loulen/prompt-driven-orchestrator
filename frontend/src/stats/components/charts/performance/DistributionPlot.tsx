@@ -56,7 +56,7 @@ export function DistributionPlot({
         <button
           type="button"
           aria-label={detail}
-          className="text-left text-fg-4 underline decoration-dotted underline-offset-2"
+          className="text-left text-text-3 underline decoration-dotted underline-offset-2"
         >
           — {value.missing_reasons[0] ?? "not measurable"}
         </button>
@@ -88,7 +88,7 @@ export function DistributionPlot({
       >
         {ghost && (
           <span
-            className="absolute top-[4px] h-[7px] border border-dashed border-fg-4 opacity-40"
+            className="absolute top-[4px] h-[7px] border border-dashed border-text-3 opacity-40"
             data-testid="performance-wallclock-ghost"
             style={{
               left: pct(ghost.q1),
@@ -98,7 +98,7 @@ export function DistributionPlot({
         )}
         {zoom !== "box" && (
           <span
-            className="absolute top-[7px] h-px bg-fg-4"
+            className="absolute top-[7px] h-px bg-text-3"
             data-testid={`performance-${metric}-whisker`}
             style={{ left: pct(low), width: pct(high - low) }}
           />
@@ -112,12 +112,12 @@ export function DistributionPlot({
           }}
         />
         <span
-          className="absolute top-[3px] h-[9px] w-px bg-fg"
+          className="absolute top-[3px] h-[9px] w-px bg-text"
           style={{ left: pct(stats.median) }}
         />
         {clippedLow && (
           <span
-            className="absolute left-0 top-0 font-mono leading-4 text-fg-4"
+            className="absolute left-0 top-0 font-mono leading-4 text-text-3"
             style={{ fontSize: "9px" }}
             data-testid={`performance-${metric}-clip-low`}
           >
@@ -126,7 +126,7 @@ export function DistributionPlot({
         )}
         {clippedHigh && (
           <span
-            className="absolute right-0 top-0 font-mono leading-4 text-fg-4"
+            className="absolute right-0 top-0 font-mono leading-4 text-text-3"
             style={{ fontSize: "9px" }}
             data-testid={`performance-${metric}-clip-high`}
           >
@@ -138,7 +138,7 @@ export function DistributionPlot({
         <button
           type="button"
           aria-label={detail}
-          className="w-fit text-left font-mono text-fg-4 underline decoration-dotted underline-offset-2"
+          className="w-fit text-left font-mono text-text-3 underline decoration-dotted underline-offset-2"
           style={{ fontSize: "9.5px" }}
         >
           {formatPerformanceValue(stats.median, metric)} median · n=
@@ -155,7 +155,7 @@ export function DistributionPlot({
             </span>
           ) : null}
           {rowMax !== null && (
-            <span className="text-fg-5">
+            <span className="text-text-3">
               {" "}
               · ⤒ {formatPerformanceValue(rowMax, metric)}
             </span>

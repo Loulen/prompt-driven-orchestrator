@@ -46,7 +46,7 @@ function TopbarEndButton({ element, onClick }: { element: ContributionElement; o
         onClick={onClick}
         aria-label={label}
         data-testid={`extension-topbar-end-${element.key}`}
-        className="grid h-6 w-6 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
+        className="grid h-6 w-6 place-items-center rounded text-text-3 transition-colors hover:bg-active hover:text-text"
       >
         <ExtensionIcon url={icon} label={label} />
       </button>

@@ -6,12 +6,12 @@ describe("trigger outcome model", () => {
   it("maps every outcome to its status dot and ring", () => {
     expect(outcomeDot("fired")).toBe("bg-st-done");
     expect(outcomeDot("error")).toBe("bg-st-failed");
-    expect(outcomeDot("skipped-overlap")).toBe("bg-st-paused");
-    expect(outcomeDot("guard-exit-nonzero")).toBe("bg-st-paused");
+    expect(outcomeDot("skipped-overlap")).toBe("bg-st-blocked");
+    expect(outcomeDot("guard-exit-nonzero")).toBe("bg-st-blocked");
     expect(outcomeDot("guard-error")).toBe("bg-st-blocked");
-    expect(outcomeDot(undefined)).toBe("bg-st-archived");
+    expect(outcomeDot(undefined)).toBe("bg-st-skipped");
     expect(outcomeRing("fired")).toBe("border-st-done");
-    expect(outcomeRing(null)).toBe("border-st-archived");
+    expect(outcomeRing(null)).toBe("border-st-skipped");
   });
 
   it("says when a Trigger never fired", () => {

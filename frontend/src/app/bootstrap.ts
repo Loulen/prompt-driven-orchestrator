@@ -1,4 +1,5 @@
 import { initTheme } from "../hooks/useTheme";
+import { initUiScale } from "../lib/uiScale";
 import { extensionUiModule } from "../shared/extensions/uiModule";
 import { shareWithExtensions } from "../shared/extensions/shared";
 import { useEditStore } from "../pipeline/store/editStore";
@@ -12,6 +13,8 @@ import { startDraftSessions } from "../pipeline/store/draftSessions";
  * takes ownership of it, so a later `prefers-color-scheme` flip is honoured
  * while the preference is `system`.
  *
+ * The UI scale is painted the same way (`lib/uiScale.ts`).
+ *
  * ADR-0081: share the front's React, and the shared module `@pdo/extension-ui`
  * (amendment #32), with the extensions' UI bundles before any of them can load.
  *
@@ -19,6 +22,7 @@ import { startDraftSessions } from "../pipeline/store/draftSessions";
  */
 export function bootstrap(): void {
   initTheme();
+  initUiScale();
   shareWithExtensions(extensionUiModule);
   startDraftSessions(useEditStore);
 }

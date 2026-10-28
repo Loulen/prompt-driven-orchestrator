@@ -23,13 +23,13 @@ export function SelectedMarker() {
     <>
       <span
         aria-hidden
-        className="absolute inset-y-1 left-0 w-[3px] rounded-full bg-acc"
+        className="absolute inset-y-1 left-0 w-[3px] rounded-full bg-primary"
       />
       {/* `size-[13px]`, not just `size={13}`: the menu row sizes every svg
           without a `size-*` class to 16 px, which pushes the check over the name. */}
       <Check
         size={13}
-        className="absolute left-1.5 top-1/2 size-[13px] -translate-y-1/2 text-acc"
+        className="absolute left-1.5 top-1/2 size-[13px] -translate-y-1/2 text-primary"
       />
     </>
   );
@@ -91,8 +91,8 @@ export default function HarnessSelect({
   const rowClass = (selected: boolean, installed: boolean) =>
     cn(
       "relative pl-6 font-mono",
-      selected && "bg-acc-bg text-acc",
-      !installed && "text-fg-4",
+      selected && "bg-selected text-primary",
+      !installed && "text-text-3",
     );
 
   const renderOption = (o: HarnessOption) => {
@@ -108,7 +108,7 @@ export default function HarnessSelect({
         {selected && <SelectedMarker />}
         <span className="truncate">{o.name}</span>
         {!o.installed && (
-          <span className="ml-auto pl-3 text-[0.9em] text-fg-4">
+          <span className="ml-auto pl-3 text-[0.9em] text-text-3">
             not installed
           </span>
         )}
@@ -125,19 +125,19 @@ export default function HarnessSelect({
         data-testid={testId}
         disabled={disabled}
         className={cn(
-          "flex cursor-pointer items-center justify-between gap-2 text-left outline-none transition-colors focus:border-acc data-[popup-open]:border-acc disabled:cursor-not-allowed disabled:opacity-40",
+          "flex cursor-pointer items-center justify-between gap-2 text-left outline-none transition-colors focus:border-primary data-[popup-open]:border-primary disabled:cursor-not-allowed disabled:opacity-40",
           className,
         )}
         style={style}
       >
-        <span className={cn("truncate", value ? "font-mono" : "text-fg-3")}>
+        <span className={cn("truncate", value ? "font-mono" : "text-text-3")}>
           {value || inheritLabel}
         </span>
-        <ChevronDown size={12} className="shrink-0 text-fg-4" />
+        <ChevronDown size={12} className="shrink-0 text-text-3" />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         data-testid={testId ? `${testId}-menu` : undefined}
-        className="text-fg"
+        className="text-text"
         style={style}
         side="bottom"
         align="start"
@@ -150,7 +150,7 @@ export default function HarnessSelect({
           {inheritSelected && <SelectedMarker />}
           <span className="truncate font-sans">{inheritLabel}</span>
           {inheritHint && (
-            <span className="ml-auto pl-3 font-mono text-fg-4">
+            <span className="ml-auto pl-3 font-mono text-text-3">
               {inheritHint}
             </span>
           )}
@@ -160,7 +160,7 @@ export default function HarnessSelect({
           <DropdownMenuGroup>
             <DropdownMenuLabel
               data-testid={testId ? `${testId}-section-builtin` : undefined}
-              className="uppercase tracking-wider text-fg-4"
+              className="uppercase tracking-wider text-text-3"
             >
               Built-in
             </DropdownMenuLabel>
@@ -171,7 +171,7 @@ export default function HarnessSelect({
           <DropdownMenuGroup>
             <DropdownMenuLabel
               data-testid={testId ? `${testId}-section-descriptors` : undefined}
-              className="uppercase tracking-wider text-fg-4"
+              className="uppercase tracking-wider text-text-3"
             >
               From descriptors
             </DropdownMenuLabel>
@@ -180,7 +180,7 @@ export default function HarnessSelect({
         )}
 
         <div
-          className="mt-1 border-t border-line px-1.5 pt-1.5 pb-0.5 leading-snug text-fg-4"
+          className="mt-1 border-t border-line px-1.5 pt-1.5 pb-0.5 leading-snug text-text-3"
           style={{ fontSize: "10px" }}
         >
           <span className="font-medium">Built-in</span> = embedded harnesses.{" "}

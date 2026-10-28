@@ -105,7 +105,7 @@ export default function UnifiedLeftPanel({
   };
 
   return (
-    <aside className="flex h-full flex-col bg-bg-2">
+    <aside className="flex h-full flex-col bg-surface-1">
       {/* Three-tab strip: Runs · Triggers · Library (#160) */}
       <div role="tablist" className="flex h-[36px] shrink-0 items-stretch border-b border-line">
         {tabs.map((tab) => (
@@ -119,8 +119,8 @@ export default function UnifiedLeftPanel({
             onClick={() => setActiveTab(tab.id)}
             className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 border-b-2 font-medium transition-colors ${
               activeTab === tab.id
-                ? "border-acc text-fg"
-                : "border-transparent text-fg-4 hover:text-fg-2"
+                ? "border-primary text-text"
+                : "border-transparent text-text-3 hover:text-text-2"
             }`}
             style={{ fontSize: "11.5px" }}
           >
@@ -129,7 +129,7 @@ export default function UnifiedLeftPanel({
             {activeTab !== tab.id && selCounts[tab.id] > 0 && (
               <span
                 data-testid={`tab-badge-${tab.id}`}
-                className="rounded-full bg-acc px-1.5 font-semibold text-on-acc"
+                className="rounded-full bg-primary px-1.5 font-semibold text-primary-ink"
                 style={{ fontSize: "9px" }}
               >
                 {selCounts[tab.id]}

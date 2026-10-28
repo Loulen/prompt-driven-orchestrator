@@ -35,7 +35,7 @@ export default function SettingsFooter({
       data-testid="settings-footer"
     >
       <span
-        className={isDirty || saveState.status === "saved" ? "text-st-await" : "text-fg-4"}
+        className={isDirty || saveState.status === "saved" ? "text-st-await" : "text-text-3"}
         style={{ fontSize: "11px" }}
         data-testid="settings-footer-status"
         data-dirty={isDirty ? "true" : undefined}
@@ -57,7 +57,7 @@ export default function SettingsFooter({
           type="button"
           onClick={onCancel}
           data-testid="settings-cancel"
-          className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+          className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
           style={{ fontSize: "11.5px" }}
         >
           Cancel
@@ -70,7 +70,7 @@ export default function SettingsFooter({
           // is a panel's own. A dangling stored default keeps it clickable so the blocker
           // is read next to the button, not guessed.
           disabled={saveState.status === "saving" || !loaded || (!isDirty && !missingDefaultProfile)}
-          className="rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+          className="rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
           style={{ fontSize: "11.5px" }}
           data-testid="settings-save"
         >

@@ -12,11 +12,11 @@ export default function Section({ section, children }: { section: SettingsSectio
       style={{ scrollMarginTop: 16 }}
     >
       <div className="flex flex-col gap-1">
-        <h3 className="flex items-center gap-2 font-semibold text-fg" style={{ fontSize: "13px" }}>
+        <h3 className="flex items-center gap-2 font-semibold text-text" style={{ fontSize: "13px" }}>
           {section.label}
           {section.readOnly && (
             <span
-              className="rounded bg-bg-3 px-1.5 py-0.5 font-normal text-fg-4"
+              className="rounded bg-surface-2 px-1.5 py-0.5 font-normal text-text-3"
               style={{ fontSize: "9.5px" }}
             >
               read-only
@@ -24,7 +24,7 @@ export default function Section({ section, children }: { section: SettingsSectio
           )}
           {section.ownPersistence && (
             <span
-              className="rounded bg-bg-3 px-1.5 py-0.5 font-normal text-fg-4"
+              className="rounded bg-surface-2 px-1.5 py-0.5 font-normal text-text-3"
               style={{ fontSize: "9.5px" }}
               title="Each edit is written when you make it. The Save button below does not apply here."
             >
@@ -33,7 +33,7 @@ export default function Section({ section, children }: { section: SettingsSectio
           )}
           {section.deviceLocal && (
             <span
-              className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 font-normal text-acc"
+              className="rounded-full border border-primary/30 bg-selected px-2 py-0.5 font-normal text-primary"
               style={{ fontSize: "9.5px" }}
               data-testid={`settings-section-${section.id}-device-local`}
             >
@@ -41,7 +41,7 @@ export default function Section({ section, children }: { section: SettingsSectio
             </span>
           )}
         </h3>
-        <p className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <p className="text-text-3" style={{ fontSize: "10.5px" }}>
           {section.description}
         </p>
       </div>

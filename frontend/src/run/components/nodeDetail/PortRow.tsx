@@ -60,9 +60,9 @@ export default function PortRow({
   const copyTarget = kind === "output" && !isImage && !isFiles ? existing[0] : undefined;
   const { status: copyStatus, error: copyError, copy } = useCopyToClipboard();
 
-  let dotClass = "bg-fg-5";
+  let dotClass = "bg-text-3";
   if (inheritedOnly) {
-    dotClass = "bg-fg-5";
+    dotClass = "bg-text-3";
   } else if (anyExists && port.repeated && port.files.length > 1) {
     dotClass = "bg-st-running";
   } else if (anyExists) {
@@ -113,12 +113,12 @@ export default function PortRow({
       {/* Name + path */}
       <div className="min-w-0 text-left">
         <div className="flex items-center gap-1.5">
-          <span className="font-mono text-fg" style={{ fontSize: "11.5px" }}>
+          <span className="font-mono text-text" style={{ fontSize: "11.5px" }}>
             {port.port}
           </span>
           {port.repeated && (
             <span
-              className="rounded border border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-4"
+              className="rounded border border-line-strong bg-surface-2 px-1 py-px font-mono text-text-3"
               style={{ fontSize: "9px" }}
             >
               repeated
@@ -126,7 +126,7 @@ export default function PortRow({
           )}
           {(isImage || isHtml || isFiles) && (
             <span
-              className="rounded border border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-4"
+              className="rounded border border-line-strong bg-surface-2 px-1 py-px font-mono text-text-3"
               style={{ fontSize: "9px" }}
               data-testid="port-type-badge"
             >
@@ -135,7 +135,7 @@ export default function PortRow({
           )}
           {inheritedOnly && (
             <span
-              className="relative rounded border border-st-stopped/50 bg-bg-4 px-1 py-px font-mono text-st-stopped"
+              className="relative rounded border border-st-skipped/50 bg-surface-2 px-1 py-px font-mono text-st-skipped"
               style={{ fontSize: "9px" }}
               title="Present before this execution started — a previous execution's output, not this one's result"
               data-testid="inherited-badge"
@@ -145,7 +145,7 @@ export default function PortRow({
           )}
           {inheritedSome && (
             <span
-              className="relative rounded border border-st-stopped/50 bg-bg-4 px-1 py-px font-mono text-st-stopped"
+              className="relative rounded border border-st-skipped/50 bg-surface-2 px-1 py-px font-mono text-st-skipped"
               style={{ fontSize: "9px" }}
               title={`${inheritedCount} of ${existing.length} files were present before this execution started — a previous execution's output, not this one's result`}
               data-testid="inherited-badge"
@@ -161,7 +161,7 @@ export default function PortRow({
             className="relative"
           />
         </div>
-        <div className="mt-0.5 truncate font-mono text-fg-3" style={{ fontSize: "10.5px" }}>
+        <div className="mt-0.5 truncate font-mono text-text-3" style={{ fontSize: "10.5px" }}>
           {displayPath}
         </div>
       </div>
@@ -169,7 +169,7 @@ export default function PortRow({
       {/* Meta + copy + arrow icon */}
       <div className="flex items-center gap-2">
         {anyExists && totalSize > 0 && (
-          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+          <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
             {formatSize(totalSize)}
           </span>
         )}
@@ -201,7 +201,7 @@ export default function PortRow({
         />
         {anyExists && (
           <span
-            className="font-mono text-fg-3"
+            className="font-mono text-text-3"
             style={{ fontSize: "10.5px" }}
             aria-hidden="true"
           >
@@ -245,7 +245,7 @@ export default function PortRow({
           ))}
           {imageFiles.length > 4 && (
             <span
-              className="flex h-12 w-12 items-center justify-center rounded border border-line bg-bg-0 font-mono text-fg-4"
+              className="flex h-12 w-12 items-center justify-center rounded border border-line bg-surface-0 font-mono text-text-3"
               style={{ fontSize: "10px" }}
             >
               +{imageFiles.length - 4}
@@ -272,7 +272,7 @@ export default function PortRow({
       {/* #779: input files — the chips of the New run dialog, read-only */}
       {attachmentFiles.length > 0 && (
         <div className="col-span-3 mt-1 flex flex-col gap-1" data-testid="input-files">
-          <div className="text-fg-4" style={{ fontSize: "10px", fontWeight: 500 }}>
+          <div className="text-text-3" style={{ fontSize: "10px", fontWeight: 500 }}>
             Input files
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -291,7 +291,7 @@ export default function PortRow({
       {/* Frontmatter card (spans full width below) */}
       {frontmatter && Object.keys(frontmatter).length > 0 && (
         <div
-          className="col-span-3 mt-1 grid rounded border border-line bg-bg-0 p-1.5 font-mono"
+          className="col-span-3 mt-1 grid rounded border border-line bg-surface-0 p-1.5 font-mono"
           data-testid="frontmatter-card"
           style={{
             fontSize: "10px",
@@ -326,7 +326,7 @@ export default function PortRow({
           data-testid="port-row"
           data-port={port.port}
           data-kind={kind}
-          className="port-row group relative grid w-full items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 transition-colors hover:bg-bg-4"
+          className="port-row group relative grid w-full items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-2 transition-colors hover:bg-hover"
           style={gridStyle}
         >
           <button
@@ -334,7 +334,7 @@ export default function PortRow({
             onClick={onOpen}
             data-testid="port-row-open"
             aria-label={`Open ${port.port}`}
-            className="absolute inset-0 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-acc"
+            className="absolute inset-0 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
           />
           {children}
         </div>
@@ -348,7 +348,7 @@ export default function PortRow({
       data-testid="port-row"
       data-port={port.port}
       data-kind={kind}
-      className="port-row grid items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 opacity-60"
+      className="port-row grid items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-2 opacity-60"
       style={gridStyle}
     >
       {children}
@@ -362,8 +362,8 @@ function FrontmatterKV({ field, value }: { field: string; value: unknown }) {
     typeof value === "object" ? JSON.stringify(value) : String(value);
   return (
     <>
-      <span className="text-fg-3">{field}</span>
-      <span className="text-fg">{display}</span>
+      <span className="text-text-3">{field}</span>
+      <span className="text-text">{display}</span>
     </>
   );
 }

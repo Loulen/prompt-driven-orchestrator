@@ -88,7 +88,7 @@ describe("ConfirmCloseTabsModal — bounded to the window (#940)", () => {
     render(<ConfirmCloseTabsModal open tabs={tabs} onCancel={() => {}} onConfirm={() => {}} />);
     const body = screen.getByTestId("close-tabs-body");
     expect(body).toHaveClass("min-h-0", "overflow-y-auto");
-    expect(body.parentElement).toHaveClass("flex", "flex-col", "max-h-[85vh]");
+    expect(body.parentElement).toHaveClass("flex", "flex-col", "max-h-[calc(85vh/var(--app-zoom,1))]");
     expect(body).toHaveTextContent("tab_59.yaml");
     expect(body).not.toContainElement(screen.getByTestId("close-tabs-confirm"));
   });

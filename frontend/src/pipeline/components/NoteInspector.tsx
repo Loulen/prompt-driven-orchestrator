@@ -24,16 +24,16 @@ export default function NoteInspector() {
 
   return (
     <aside
-      className="flex h-full flex-col bg-bg-2 overflow-y-auto"
+      className="flex h-full flex-col bg-surface-1 overflow-y-auto"
       data-testid="note-inspector"
     >
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <StickyNote size={14} className="shrink-0 text-acc" />
+        <StickyNote size={14} className="shrink-0 text-primary" />
         <div className="min-w-0">
-          <div className="truncate font-medium text-fg" style={{ fontSize: "12.5px" }}>
+          <div className="truncate font-medium text-text" style={{ fontSize: "12.5px" }}>
             Note
           </div>
-          <div className="mt-0.5 text-fg-4" style={{ fontSize: "10px" }}>
+          <div className="mt-0.5 text-text-3" style={{ fontSize: "10px" }}>
             canvas note — documentation only
           </div>
         </div>
@@ -47,10 +47,10 @@ export default function NoteInspector() {
           data-testid="note-content"
           rows={8}
           placeholder="Write a note…"
-          className="w-full resize-y rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
+          className="w-full resize-y rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text outline-none focus:border-primary"
           style={{ fontSize: "11.5px", lineHeight: 1.5 }}
         />
-        <div className="text-fg-4" style={{ fontSize: "10px", lineHeight: 1.6 }}>
+        <div className="text-text-3" style={{ fontSize: "10px", lineHeight: 1.6 }}>
           A note is inert: it never runs, has no ports, and does not affect the
           pipeline diff (the synced/diverged star stays put).
         </div>

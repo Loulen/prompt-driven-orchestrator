@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { StatsPerformanceEntity } from "../../../../shared/generated/StatsPerformanceEntity";
-import { Tooltip, TooltipProvider } from "../../../../shared/ui/tooltip";
+import { Tooltip } from "../../../../shared/ui/tooltip";
 import type { MasterSelection } from "../../../store/absorptionSelection";
 import { coupleRows } from "../../../model/statsAbsorption";
 import type { DurationMode, StatsZoom } from "../../../model/statsFilters";
@@ -126,7 +126,7 @@ export function PerformanceTable({
   const cellProps = { harnesses, mode, zoom, independentAxis };
 
   return (
-    <TooltipProvider>
+    <>
       <table
         className="w-full table-fixed text-left"
         style={{ fontSize: "11px" }}
@@ -154,7 +154,7 @@ export function PerformanceTable({
                   tabIndex={rowSelection ? 0 : undefined}
                   {...pick.rowProps}
                 >
-                  <td className={`py-2 pr-2 text-fg-2 ${child ? "pl-7" : ""}`}>
+                  <td className={`py-2 pr-2 text-text-2 ${child ? "pl-7" : ""}`}>
                     <span className="inline-flex items-center gap-1">
                       {pick.control}
                       {couples.length > 0 ? (
@@ -170,7 +170,7 @@ export function PerformanceTable({
                               return next;
                             })
                           }
-                          className="shrink-0 hover:text-fg"
+                          className="shrink-0 hover:text-text"
                         >
                           {couplesExpanded.has(row.id) ? (
                             <ChevronDown size={12} />
@@ -191,7 +191,7 @@ export function PerformanceTable({
                               return next;
                             })
                           }
-                          className="shrink-0 hover:text-fg"
+                          className="shrink-0 hover:text-text"
                         >
                           {expanded.has(row.id) ? (
                             <ChevronDown size={12} />
@@ -207,7 +207,7 @@ export function PerformanceTable({
                             type="button"
                             aria-label={`Open ${row.name}`}
                             onClick={() => onOpen(row)}
-                            className="text-left hover:text-fg"
+                            className="text-left hover:text-text"
                           >
                             {content}
                           </button>
@@ -243,7 +243,7 @@ export function PerformanceTable({
                       return (
                         <tr
                           key={`${row.id}-${pair.key}`}
-                          className={`group border-t border-line bg-bg-3/40 text-fg-3 ${coupled.className}`}
+                          className={`group border-t border-line bg-surface-2/40 text-text-3 ${coupled.className}`}
                           data-testid="stats-performance-model-effort-row"
                           tabIndex={coupled.control ? 0 : undefined}
                           {...coupled.rowProps}
@@ -262,10 +262,10 @@ export function PerformanceTable({
                                     pair.model_provenance,
                                   )}
                                 />
-                                <span className="text-fg-4">·</span>
+                                <span className="text-text-3">·</span>
                                 {pair.effort === null ? (
                                   <Tooltip content={NOT_SET_COPY} side="top">
-                                    <span className="italic text-fg-4">
+                                    <span className="italic text-text-3">
                                       not set
                                     </span>
                                   </Tooltip>
@@ -303,6 +303,6 @@ export function PerformanceTable({
           })}
         </tbody>
       </table>
-    </TooltipProvider>
+    </>
   );
 }

@@ -46,7 +46,7 @@ export default function ReviewBanners({
     <>
       {tipMoved && !isArchived && (
         <div
-          className="sticky top-0 z-[15] flex items-center gap-2.5 border-b border-st-running/35 bg-st-running-bg px-3 py-1.5 text-st-running"
+          className="sticky top-0 z-[15] flex items-center gap-2.5 border-b border-st-running/35 bg-st-running/14 px-3 py-1.5 text-st-running"
           style={{ fontSize: "11px" }}
           data-testid="review-tip-moved"
         >
@@ -59,12 +59,12 @@ export default function ReviewBanners({
           >
             Reload
           </button>
-          <span className="text-fg-4">Your scroll position is kept.</span>
+          <span className="text-text-3">Your scroll position is kept.</span>
         </div>
       )}
       {showsWorktree && !tipMoved && !isArchived && run?.status === "running" && (
         <div
-          className="flex items-center gap-2.5 border-b border-line bg-bg-2 px-3 py-1 text-fg-3"
+          className="flex items-center gap-2.5 border-b border-line bg-surface-1 px-3 py-1 text-text-3"
           style={{ fontSize: "10.5px" }}
           data-testid="review-worktree-note"
         >
@@ -73,7 +73,7 @@ export default function ReviewBanners({
           <button
             type="button"
             onClick={reload}
-            className="cursor-pointer rounded border border-line-strong px-2 py-px hover:bg-bg-3"
+            className="cursor-pointer rounded border border-line-strong px-2 py-px hover:bg-hover"
           >
             Reload
           </button>
@@ -81,7 +81,7 @@ export default function ReviewBanners({
       )}
       {nodeDelivered && refs && (
         <div
-          className="sticky top-0 z-[15] flex items-center gap-2.5 border-b border-st-running/35 bg-st-running-bg px-3 py-1.5 text-st-running"
+          className="sticky top-0 z-[15] flex items-center gap-2.5 border-b border-st-running/35 bg-st-running/14 px-3 py-1.5 text-st-running"
           style={{ fontSize: "11px" }}
           data-testid="review-node-delivered"
         >
@@ -103,7 +103,7 @@ export default function ReviewBanners({
 
       {sendDisabledReason && !isArchived && (
         <div
-          className="mx-3 mt-2.5 flex items-center gap-2 rounded-md border border-st-await/35 bg-st-await-bg px-2.5 py-1.5 text-fg-2"
+          className="mx-3 mt-2.5 flex items-center gap-2 rounded-md border border-st-await/35 bg-st-await/14 px-2.5 py-1.5 text-text-2"
           style={{ fontSize: "11px" }}
           data-testid="review-branch-gone"
         >
@@ -113,12 +113,12 @@ export default function ReviewBanners({
 
       {notice && (
         <div
-          className="mx-3 mt-2.5 flex items-center gap-2 rounded-md border border-st-await/35 bg-st-await-bg px-2.5 py-1.5 text-fg-2"
+          className="mx-3 mt-2.5 flex items-center gap-2 rounded-md border border-st-await/35 bg-st-await/14 px-2.5 py-1.5 text-text-2"
           style={{ fontSize: "11px" }}
           data-testid="review-notice"
         >
           {notice}
-          <button type="button" onClick={() => setNotice(null)} className="ml-auto cursor-pointer text-fg-3 hover:text-fg">
+          <button type="button" onClick={() => setNotice(null)} className="ml-auto cursor-pointer text-text-3 hover:text-text">
             ✕
           </button>
         </div>
@@ -126,19 +126,19 @@ export default function ReviewBanners({
 
       {delivery && !isArchived && (
         <div
-          className="mx-3 mt-2.5 flex items-center gap-2 rounded-md border border-acc-border bg-acc-bg px-2.5 py-1.5 text-fg-2"
+          className="mx-3 mt-2.5 flex items-center gap-2 rounded-md border border-primary/30 bg-selected px-2.5 py-1.5 text-text-2"
           style={{ fontSize: "11px" }}
           data-testid="review-delivery-chip"
         >
-          ◈ Reviewing the delivery of <span className="font-medium text-acc">{delivery.node_name}</span> · iter{" "}
+          ◈ Reviewing the delivery of <span className="font-medium text-primary">{delivery.node_name}</span> · iter{" "}
           {delivery.iter}
           {delivery.status === "running" && (
-            <span className="text-fg-4">(live sub-worktree, not merged back yet)</span>
+            <span className="text-text-3">(live sub-worktree, not merged back yet)</span>
           )}
           <button
             type="button"
             onClick={() => setPair(defaults)}
-            className="ml-auto cursor-pointer text-fg-3 hover:text-fg"
+            className="ml-auto cursor-pointer text-text-3 hover:text-text"
             style={{ fontSize: "10.5px" }}
             data-testid="review-whole-run"
           >

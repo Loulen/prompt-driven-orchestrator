@@ -98,7 +98,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
 
   return (
     <div
-      className="absolute left-3 top-3 z-10 flex items-center gap-0.5 rounded-md border border-line bg-bg-2/90 p-1 backdrop-blur-sm shadow-lg"
+      className="absolute left-3 top-3 z-10 flex items-center gap-0.5 rounded-md border border-line bg-surface-1/90 p-1 backdrop-blur-sm shadow-lg"
       data-testid="edit-toolbar"
     >
       {/* #315: every editing affordance is suppressed on a read-only archived
@@ -111,32 +111,32 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
           <DropdownMenu>
             <DropdownMenuTrigger
               data-testid="toolbar-add"
-              className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0 data-[popup-open]:bg-bg-4 data-[popup-open]:text-fg"
+              className="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0 data-[popup-open]:bg-hover data-[popup-open]:text-text"
               aria-label="Add"
             >
               <Plus size={14} />
             </DropdownMenuTrigger>
             <DropdownMenuContent
-              className="min-w-[160px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg"
+              className="min-w-[160px] rounded-md border border-line-strong bg-surface-2 p-1 shadow-lg"
               side="bottom"
               align="start"
             >
               <DropdownMenuItem
                 data-testid="add-menu-node"
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover"
                 style={{ fontSize: "11.5px" }}
                 onClick={() => onAddNode("agent")}
               >
-                <Box size={13} className="shrink-0 text-fg-4" />
+                <Box size={13} className="shrink-0 text-text-3" />
                 <span>Node</span>
               </DropdownMenuItem>
               <DropdownMenuItem
                 data-testid="add-menu-note"
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover"
                 style={{ fontSize: "11.5px" }}
                 onClick={() => onAddNote()}
               >
-                <StickyNote size={13} className="shrink-0 text-fg-4" />
+                <StickyNote size={13} className="shrink-0 text-text-3" />
                 <span>Note</span>
               </DropdownMenuItem>
               {/* #345: 4th way to create a node — from a pasted/uploaded YAML
@@ -144,11 +144,11 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
                   foreign-workflow import). */}
               <DropdownMenuItem
                 data-testid="add-menu-node-from-yaml"
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover"
                 style={{ fontSize: "11.5px" }}
                 onClick={() => onAddNodeFromYaml()}
               >
-                <FilePlus size={13} className="shrink-0 text-fg-4" />
+                <FilePlus size={13} className="shrink-0 text-text-3" />
                 <span>Add node from YAML…</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -170,7 +170,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
             <button
               data-testid="toolbar-script"
               onClick={() => onAddNode("script")}
-              className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+              className="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
             >
               <SquareTerminal size={14} />
             </button>
@@ -183,7 +183,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
               data-testid="toolbar-undo"
               onClick={() => undo()}
               disabled={!canUndo}
-              className="grid h-7 w-7 place-items-center rounded text-fg-3 transition-colors enabled:cursor-pointer hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0 disabled:cursor-not-allowed disabled:text-fg-5 disabled:hover:bg-transparent disabled:hover:text-fg-5"
+              className="grid h-7 w-7 place-items-center rounded text-text-3 transition-colors enabled:cursor-pointer hover:bg-hover hover:text-text active:bg-primary active:text-surface-0 disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent disabled:hover:text-text-3"
             >
               <Undo2 size={14} />
             </button>
@@ -194,7 +194,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
               data-testid="toolbar-redo"
               onClick={() => redo()}
               disabled={!canRedo}
-              className="grid h-7 w-7 place-items-center rounded text-fg-3 transition-colors enabled:cursor-pointer hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0 disabled:cursor-not-allowed disabled:text-fg-5 disabled:hover:bg-transparent disabled:hover:text-fg-5"
+              className="grid h-7 w-7 place-items-center rounded text-text-3 transition-colors enabled:cursor-pointer hover:bg-hover hover:text-text active:bg-primary active:text-surface-0 disabled:cursor-not-allowed disabled:text-text-3 disabled:hover:bg-transparent disabled:hover:text-text-3"
             >
               <Redo2 size={14} />
             </button>
@@ -222,7 +222,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
                 data-testid="toolbar-reopen"
                 aria-label="Reopen run"
                 onClick={onReopen}
-                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-acc transition-colors hover:bg-bg-4 active:bg-acc active:text-bg-0"
+                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-primary transition-colors hover:bg-hover active:bg-primary active:text-surface-0"
               >
                 <Play size={14} />
               </button>
@@ -235,7 +235,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
                 data-testid="toolbar-retry-all"
                 aria-label="Retry all"
                 onClick={onRetryAll}
-                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
               >
                 <RotateCcw size={14} />
               </button>
@@ -248,7 +248,7 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
                 data-testid="toolbar-open-shell"
                 aria-label="Open shell in worktree"
                 onClick={onOpenShell}
-                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+                className="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
               >
                 <Terminal size={14} />
               </button>
@@ -272,19 +272,19 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
               aria-label={reviewTitle}
               data-pending={reviewPending > 0 ? reviewPending : undefined}
               data-tone={reviewPending > 0 ? reviewTone : undefined}
-              className="relative grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+              className="relative grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
             >
               <FileDiff size={14} />
               {reviewPending > 0 && (
                 <span
                   data-testid="toolbar-review-pill"
                   aria-hidden
-                  className={`absolute -right-[5px] -top-1 box-border grid h-[15px] min-w-[15px] place-items-center rounded-[8px] border-2 border-bg-2 px-1 font-sans font-semibold leading-none ${
+                  className={`absolute -right-[5px] -top-1 box-border grid h-[15px] min-w-[15px] place-items-center rounded-[8px] border-2 border-surface-1 px-1 font-sans font-semibold leading-none ${
                     reviewTone === "proposed"
-                      ? "bg-st-await text-on-acc-warn"
+                      ? "bg-st-await text-primary-ink"
                       : reviewTone === "unread"
-                        ? "bg-st-running text-white"
-                        : "bg-st-running-bg text-st-running shadow-[inset_0_0_0_1px_rgba(59,130,246,.35)]"
+                        ? "bg-st-running text-primary-ink"
+                        : "bg-st-running/14 text-st-running shadow-[inset_0_0_0_1px_rgba(59,130,246,.35)]"
                   }`}
                   style={{ fontSize: "9.5px" }}
                 >
@@ -323,8 +323,8 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
                 onClick={onOpenAssistant}
                 className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${
                   assistantActive
-                    ? "bg-acc text-bg-0"
-                    : "text-fg-3 hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+                    ? "bg-primary text-surface-0"
+                    : "text-text-3 hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
                 }`}
               >
                 <Bot size={14} />
@@ -341,8 +341,8 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
                 onClick={onToggleInfo}
                 className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${
                   infoOpen
-                    ? "bg-acc text-bg-0"
-                    : "text-fg-3 hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+                    ? "bg-primary text-surface-0"
+                    : "text-text-3 hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
                 }`}
               >
                 <Info size={14} />

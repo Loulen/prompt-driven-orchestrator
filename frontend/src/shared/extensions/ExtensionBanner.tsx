@@ -20,7 +20,7 @@ export default function ExtensionBanner() {
           key={entry.id}
           role="status"
           data-testid={`extension-banner-${entry.id}`}
-          className="flex items-start gap-2 rounded border border-st-await/30 bg-st-await/5 px-2 py-1.5 text-fg-3"
+          className="flex items-start gap-2 rounded border border-st-await/30 bg-st-await/5 px-2 py-1.5 text-text-3"
           style={{ fontSize: "10.5px" }}
         >
           <Info size={12} className="mt-0.5 shrink-0 text-st-await" />

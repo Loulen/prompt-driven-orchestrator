@@ -224,7 +224,7 @@ export default function ReviewFileCard({
       data-proposed={sentStates.proposed}
       data-resolved={sentStates.resolved}
       data-outdated={nOutdated}
-      className="mx-3 my-2.5 overflow-hidden rounded-md border border-line bg-bg-2"
+      className="mx-3 my-2.5 overflow-hidden rounded-md border border-line bg-surface-1"
     >
       {anchorCss && <style>{anchorCss}</style>}
       <ReviewFileHeader
@@ -251,15 +251,15 @@ export default function ReviewFileCard({
             />
           )}
           {file.binary ? (
-            <div className="px-4 py-[18px] text-center text-fg-4" style={{ fontSize: "11px" }}>
+            <div className="px-4 py-[18px] text-center text-text-3" style={{ fontSize: "11px" }}>
               Binary file, not shown
             </div>
           ) : pureRename ? (
-            <div className="px-4 py-[18px] text-center text-fg-4" style={{ fontSize: "11px" }}>
+            <div className="px-4 py-[18px] text-center text-text-3" style={{ fontSize: "11px" }}>
               Renamed without changes
             </div>
           ) : file.hunks.length === 0 ? (
-            <div className="px-4 py-[18px] text-center text-fg-4" style={{ fontSize: "11px" }}>
+            <div className="px-4 py-[18px] text-center text-text-3" style={{ fontSize: "11px" }}>
               No content changes
             </div>
           ) : (
@@ -333,7 +333,7 @@ export default function ReviewFileCard({
             />
           )}
           {contents.kind === "failed" && hasBody && (
-            <div className="border-t border-line px-3 py-1 text-fg-4" style={{ fontSize: "10px" }}>
+            <div className="border-t border-line px-3 py-1 text-text-3" style={{ fontSize: "10px" }}>
               Full file content unavailable at these refs — context expansion disabled for this file.
             </div>
           )}

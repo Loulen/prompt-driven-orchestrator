@@ -46,7 +46,7 @@ export function CombinedIcon({
         event.stopPropagation();
         onOpen();
       }}
-      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-line-strong bg-bg-3 px-1.5 font-mono text-fg-3 transition-colors hover:border-acc hover:text-fg-2"
+      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-line-strong bg-surface-2 px-1.5 font-mono text-text-3 transition-colors hover:border-primary hover:text-text-2"
       style={{ fontSize: "9.5px", lineHeight: "15px" }}
     >
       <Combine size={10} aria-hidden="true" />
@@ -80,7 +80,7 @@ export function GlobalAbsorptionIcon({
         event.stopPropagation();
         onOpen();
       }}
-      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-dashed border-line bg-bg-2 px-1.5 font-mono text-fg-4 opacity-80 transition-colors hover:border-line-strong hover:text-fg-3"
+      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-dashed border-line bg-surface-1 px-1.5 font-mono text-text-3 opacity-80 transition-colors hover:border-line-strong hover:text-text-3"
       style={{ fontSize: "9.5px", lineHeight: "15px" }}
     >
       <Combine size={10} aria-hidden="true" />
@@ -109,7 +109,7 @@ export function UncombineButton({
       disabled={disabled}
       onClick={onClick}
       data-testid="stats-uncombine"
-      className="shrink-0 cursor-pointer rounded border border-line-strong bg-bg-3 p-1 text-fg-2 transition-colors hover:border-st-failed hover:text-st-failed disabled:opacity-50"
+      className="shrink-0 cursor-pointer rounded border border-line-strong bg-surface-2 p-1 text-text-2 transition-colors hover:border-st-failed hover:text-st-failed disabled:opacity-50"
     >
       <X size={12} strokeWidth={2.5} />
     </button>
@@ -129,14 +129,14 @@ export function ModalFrame({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid={`${testid}-backdrop`}
       onClick={onDismiss}
     >
       <div
         role="dialog"
         aria-modal="true"
-        className="w-[400px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+        className="w-[400px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
         style={{ fontSize: "12px" }}
         onClick={(event) => event.stopPropagation()}
         data-testid={testid}
@@ -175,13 +175,13 @@ export function MembersModal<T extends AbsorbableRow>({
   return (
     <ModalFrame testid="stats-members-modal" onDismiss={onClose}>
       <h3
-        className="flex items-center gap-2 font-medium text-fg"
+        className="flex items-center gap-2 font-medium text-text"
         style={{ fontSize: "13px" }}
       >
-        <Combine size={14} className="shrink-0 text-acc" aria-hidden="true" />
+        <Combine size={14} className="shrink-0 text-primary" aria-hidden="true" />
         {absorbent.name}
       </h3>
-      <p className="mt-1.5 text-fg-3" style={{ fontSize: "11.5px" }}>
+      <p className="mt-1.5 text-text-3" style={{ fontSize: "11.5px" }}>
         Counts the runs of {plural(members.length, `other ${NOUN[dimension]}`)}{" "}
         too.
       </p>
@@ -191,11 +191,11 @@ export function MembersModal<T extends AbsorbableRow>({
       >
         <li className="flex items-center justify-between gap-3 px-3 py-2">
           <span
-            className={`truncate text-fg ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+            className={`truncate text-text ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
           >
             {absorbent.name}
           </span>
-          <span className="shrink-0 text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="shrink-0 text-text-3" style={{ fontSize: "10.5px" }}>
             keeps its name
           </span>
         </li>
@@ -207,11 +207,11 @@ export function MembersModal<T extends AbsorbableRow>({
           >
             <span className="min-w-0">
               <span
-                className={`block truncate text-fg ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+                className={`block truncate text-text ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
               >
                 {member.name}
               </span>
-              <span className="block text-fg-4" style={{ fontSize: "10.5px" }}>
+              <span className="block text-text-3" style={{ fontSize: "10.5px" }}>
                 {[
                   activity(count.ofMember(member), count.word, member.last_run),
                   provenanceNote(member.provenance),
@@ -228,13 +228,13 @@ export function MembersModal<T extends AbsorbableRow>({
           </li>
         ))}
       </ul>
-      <p className="mt-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+      <p className="mt-3 text-text-3" style={{ fontSize: "10.5px" }}>
         Uncombining the last one brings every row back. All combinations are
         also listed in Settings › General › Stats absorptions.
       </p>
       {error && (
         <div
-          className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+          className="mt-3 rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
           data-testid="stats-absorption-error"
         >
           {error}
@@ -245,7 +245,7 @@ export function MembersModal<T extends AbsorbableRow>({
           type="button"
           onClick={onClose}
           data-testid="stats-members-close"
-          className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+          className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
           style={{ fontSize: "11.5px" }}
         >
           Close
@@ -276,19 +276,19 @@ export function GlobalMembersModal<T extends AbsorbableRow>({
   return (
     <ModalFrame testid="stats-global-members-modal" onDismiss={onClose}>
       <h3
-        className="flex items-center gap-2 font-medium text-fg"
+        className="flex items-center gap-2 font-medium text-text"
         style={{ fontSize: "13px" }}
       >
-        <Combine size={14} className="shrink-0 text-fg-4" aria-hidden="true" />
+        <Combine size={14} className="shrink-0 text-text-3" aria-hidden="true" />
         <span className="truncate font-mono">{absorbent.name}</span>
         <span
-          className="shrink-0 rounded-full border border-dashed border-line px-1.5 text-fg-4"
+          className="shrink-0 rounded-full border border-dashed border-line px-1.5 text-text-3"
           style={{ fontSize: "9.5px" }}
         >
           Global absorption
         </span>
       </h3>
-      <p className="mt-1.5 text-fg-3" style={{ fontSize: "11.5px" }}>
+      <p className="mt-1.5 text-text-3" style={{ fontSize: "11.5px" }}>
         Counts the runs of {plural(members.length, "other couple")} too, because
         models or efforts are combined on the « By model » axis. It applies to
         every node, and is undone there, not here.
@@ -298,8 +298,8 @@ export function GlobalMembersModal<T extends AbsorbableRow>({
         data-testid="stats-global-members-list"
       >
         <li className="flex items-center justify-between gap-3 px-3 py-2">
-          <span className="truncate font-mono text-fg">{absorbent.name}</span>
-          <span className="shrink-0 text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="truncate font-mono text-text">{absorbent.name}</span>
+          <span className="shrink-0 text-text-3" style={{ fontSize: "10.5px" }}>
             keeps its name
           </span>
         </li>
@@ -310,10 +310,10 @@ export function GlobalMembersModal<T extends AbsorbableRow>({
             data-testid="stats-global-member-row"
           >
             <span className="min-w-0">
-              <span className="block truncate font-mono text-fg">
+              <span className="block truncate font-mono text-text">
                 {member.name}
               </span>
-              <span className="block text-fg-4" style={{ fontSize: "10.5px" }}>
+              <span className="block text-text-3" style={{ fontSize: "10.5px" }}>
                 {activity(count.ofMember(member), count.word, member.last_run)}
               </span>
             </span>
@@ -325,7 +325,7 @@ export function GlobalMembersModal<T extends AbsorbableRow>({
           type="button"
           onClick={onOpenAxis}
           data-testid="stats-global-open-axis"
-          className="cursor-pointer text-acc underline-offset-2 hover:underline"
+          className="cursor-pointer text-primary underline-offset-2 hover:underline"
           style={{ fontSize: "11.5px" }}
         >
           Open the « By model » axis
@@ -334,7 +334,7 @@ export function GlobalMembersModal<T extends AbsorbableRow>({
           type="button"
           onClick={onClose}
           data-testid="stats-global-members-close"
-          className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+          className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
           style={{ fontSize: "11.5px" }}
         >
           Close

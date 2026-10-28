@@ -26,22 +26,22 @@ export default function IterSelector({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        className="flex cursor-pointer items-center gap-0.5 whitespace-nowrap rounded px-1 py-0.5 font-mono text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+        className="flex cursor-pointer items-center gap-0.5 whitespace-nowrap rounded px-1 py-0.5 font-mono text-text-3 transition-colors hover:bg-hover hover:text-text-2"
         style={{ fontSize: "10px" }}
       >
         iter {selectedIter}
-        <ChevronDown size={10} className="text-fg-4" />
+        <ChevronDown size={10} className="text-text-3" />
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        className="min-w-[180px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg"
+        className="min-w-[180px] rounded-md border border-line-strong bg-surface-2 p-1 shadow-lg"
         side="bottom"
         align="start"
       >
         {latestFirst.map((it) => (
           <DropdownMenuItem
             key={it.iter}
-            className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4 ${
-              it.iter === selectedIter ? "bg-bg-4" : ""
+            className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover ${
+              it.iter === selectedIter ? "bg-surface-2" : ""
             }`}
             style={{ fontSize: "11px" }}
             onClick={() => onSelect(it.iter)}
@@ -52,7 +52,7 @@ export default function IterSelector({
             />
             <span className="font-mono">iter {it.iter}</span>
             <span
-              className="ml-auto font-mono text-fg-4"
+              className="ml-auto font-mono text-text-3"
               style={{ fontSize: "10px" }}
             >
               <IterOptionDuration timing={it} mode={durationMode} />

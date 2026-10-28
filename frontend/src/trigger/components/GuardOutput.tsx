@@ -25,8 +25,8 @@ export default function GuardOutput({
   return (
     <div className="flex flex-col gap-1 pt-0.5" data-testid={testId}>
       {exitCode != null && (
-        <div className="text-fg-4" style={{ fontSize: "10px" }}>
-          exit code <span className="font-mono text-fg-2">{exitCode}</span>
+        <div className="text-text-3" style={{ fontSize: "10px" }}>
+          exit code <span className="font-mono text-text-2">{exitCode}</span>
         </div>
       )}
       {stdout?.trim() && <GuardStream label="stdout" text={stdout} />}
@@ -39,11 +39,11 @@ export default function GuardOutput({
 function GuardStream({ label, text }: { label: string; text: string }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <div className="text-fg-4" style={{ fontSize: "10px" }}>
+      <div className="text-text-3" style={{ fontSize: "10px" }}>
         {label}
       </div>
       <pre
-        className="overflow-x-auto whitespace-pre-wrap rounded border border-line bg-bg-0 px-2 py-1.5 font-mono text-fg-3"
+        className="overflow-x-auto whitespace-pre-wrap rounded border border-line bg-surface-0 px-2 py-1.5 font-mono text-text-3"
         style={{ fontSize: "10px" }}
       >
         {text}

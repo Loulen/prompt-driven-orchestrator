@@ -157,7 +157,7 @@ export default function PipelineSelect({
         // `data-pipeline-id` repeats it for anything that must build a query.
         data-testid={`pipeline-select-option-${pipeline.id}`}
         data-pipeline-id={pipeline.id}
-        className={`relative pl-6 font-mono ${isSelected ? "bg-acc-bg text-acc" : ""}`}
+        className={`relative pl-6 font-mono ${isSelected ? "bg-selected text-primary" : ""}`}
         onClick={() => choose(pipeline.id)}
         onKeyDown={(e) => onOptionKeyDown(e, index)}
       >
@@ -166,7 +166,7 @@ export default function PipelineSelect({
           {highlightSegments(pipeline.name, query).map((seg, s) => (
             <span
               key={s}
-              className={seg.match ? "underline decoration-acc underline-offset-2" : undefined}
+              className={seg.match ? "underline decoration-primary underline-offset-2" : undefined}
             >
               {seg.text}
             </span>
@@ -184,7 +184,7 @@ export default function PipelineSelect({
   ) => (
     <DropdownMenuGroup data-testid={`pipeline-select-section-${key}`}>
       <DropdownMenuLabel
-        className="px-1.5 pt-1.5 pb-0.5 font-sans uppercase tracking-wider text-fg-4"
+        className="px-1.5 pt-1.5 pb-0.5 font-sans uppercase tracking-wider text-text-3"
         style={{ fontSize: "9.5px" }}
       >
         {label}
@@ -194,7 +194,7 @@ export default function PipelineSelect({
       ) : (
         <div
           data-testid={`pipeline-select-section-${key}-empty`}
-          className="px-2 py-1 text-fg-4"
+          className="px-2 py-1 text-text-3"
           style={{ fontSize: "10.5px" }}
         >
           {query ? `No match for “${query}”` : empty}
@@ -225,22 +225,22 @@ export default function PipelineSelect({
         // pipeline is free to change.
         data-pipeline-id={value || undefined}
         disabled={disabled}
-        className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-left font-mono text-fg outline-none transition-colors focus:border-acc data-[popup-open]:border-acc disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 text-left font-mono text-text outline-none transition-colors focus:border-primary data-[popup-open]:border-primary disabled:cursor-not-allowed disabled:opacity-40"
         style={{ fontSize: "12px" }}
       >
-        <span className={`truncate ${selected ? "" : "font-sans text-fg-3"}`}>
+        <span className={`truncate ${selected ? "" : "font-sans text-text-3"}`}>
           {selected ? selected.name : placeholder}
         </span>
-        <ChevronDown size={12} className="shrink-0 text-fg-4" />
+        <ChevronDown size={12} className="shrink-0 text-text-3" />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         data-testid="pipeline-select-menu"
-        className="text-fg"
+        className="text-text"
         side="bottom"
         align="start"
       >
         <div className="mb-1 flex items-center gap-1.5 border-b border-line px-1.5 pb-1.5">
-          <Search size={12} className="shrink-0 text-fg-4" />
+          <Search size={12} className="shrink-0 text-text-3" />
           <input
             ref={filterRef}
             value={query}
@@ -249,12 +249,12 @@ export default function PipelineSelect({
             placeholder="Filter pipelines…"
             aria-label="Filter pipelines"
             data-testid="pipeline-select-filter"
-            className="min-w-0 flex-1 bg-transparent text-fg placeholder:text-fg-4 focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-text placeholder:text-text-3 focus:outline-none"
             style={{ fontSize: "11.5px" }}
           />
           {query && (
             <kbd
-              className="shrink-0 rounded border border-line px-1 font-mono text-fg-4"
+              className="shrink-0 rounded border border-line px-1 font-mono text-text-3"
               style={{ fontSize: "10px" }}
             >
               esc
@@ -267,7 +267,7 @@ export default function PipelineSelect({
           // an action.
           <div
             data-testid="pipeline-select-empty"
-            className="px-2 py-2.5 text-center text-fg-4"
+            className="px-2 py-2.5 text-center text-text-3"
             style={{ fontSize: "11px" }}
           >
             No pipeline matches “{query}”
@@ -299,12 +299,12 @@ export default function PipelineSelect({
               // Folding is not a choice: the menu stays open.
               closeOnClick={false}
               onClick={() => setShowTests((v) => !v)}
-              className="gap-1 font-sans text-fg-3"
+              className="gap-1 font-sans text-text-3"
               style={{ fontSize: "11px" }}
             >
               {showTests ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
               <span>{showTests ? "Hide test pipelines" : "Show test pipelines"}</span>
-              <span className="ml-auto text-fg-4" style={{ fontSize: "10px" }}>
+              <span className="ml-auto text-text-3" style={{ fontSize: "10px" }}>
                 {sections.test.length}
               </span>
             </DropdownMenuItem>

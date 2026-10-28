@@ -14,7 +14,7 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
   return (
     <div className={`flex w-[330px] shrink-0 flex-col gap-4 overflow-y-auto ${editing ? "" : "opacity-60"}`}>
       <section>
-        <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+        <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
           Checks
         </h4>
         {editing ? (
@@ -22,41 +22,41 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
             {checks.map((check) => (
               <li
                 key={check.id}
-                className="flex items-center gap-2 text-fg-2"
+                className="flex items-center gap-2 text-text-2"
                 style={{ fontSize: "11.5px" }}
                 data-testid={`check-${check.id}`}
                 data-state={check.state}
               >
                 <CheckDot state={check.state} />
-                <span className={check.state === "fail" ? "text-fg" : check.state === "pending" ? "text-fg-4" : ""}>
+                <span className={check.state === "fail" ? "text-text" : check.state === "pending" ? "text-text-3" : ""}>
                   {check.label}
                 </span>
               </li>
             ))}
           </ul>
         ) : (
-          <div className="flex items-center gap-2 text-fg-3" style={{ fontSize: "11.5px" }}>
+          <div className="flex items-center gap-2 text-text-3" style={{ fontSize: "11.5px" }}>
             <CheckDot state="pass" /> All five pass
           </div>
         )}
       </section>
 
       <section>
-        <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+        <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
           Will appear as
         </h4>
         <div
-          className={`rounded-md border border-line bg-bg-3 px-3 py-2.5 ${validation.valid ? "" : "opacity-70"}`}
+          className={`rounded-md border border-line bg-surface-2 px-3 py-2.5 ${validation.valid ? "" : "opacity-70"}`}
           data-testid="paste-skill-preview"
         >
-          <div className={`font-semibold ${preview.name ? "text-fg" : "text-fg-4"}`} style={{ fontSize: "12.5px" }}>
+          <div className={`font-semibold ${preview.name ? "text-text" : "text-text-3"}`} style={{ fontSize: "12.5px" }}>
             {previewName}
           </div>
-          <div className={`mt-0.5 ${preview.description ? "text-fg-3" : "text-fg-4"}`} style={{ fontSize: "11px" }}>
+          <div className={`mt-0.5 ${preview.description ? "text-text-3" : "text-text-3"}`} style={{ fontSize: "11px" }}>
             {previewDescription}
           </div>
           {staged.length > 0 && (
-            <div className="mt-1.5 text-fg-4" style={{ fontSize: "10.5px" }}>
+            <div className="mt-1.5 text-text-3" style={{ fontSize: "10.5px" }}>
               + {staged.length} file{staged.length === 1 ? "" : "s"}
             </div>
           )}
@@ -64,11 +64,11 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
         {reason && editing && (
           <div
             role="alert"
-            className="mt-2 rounded-md border border-st-failed/50 bg-st-failed-bg px-3 py-2 text-fg-2"
+            className="mt-2 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2"
             style={{ fontSize: "11px" }}
             data-testid="paste-skill-reason"
           >
-            <strong className="text-fg">
+            <strong className="text-text">
               {checks.find((c) => c.id === "unique")?.state === "fail" && !failingOther(checks)
                 ? "Name already taken."
                 : "Cannot create."}
@@ -79,18 +79,18 @@ export default function PasteSkillSidebar({ paste, folders }: { paste: PasteSkil
       </section>
 
       <section>
-        <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+        <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
           Folder
         </h4>
-        <label className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5">
-          <Folder size={12} className="shrink-0 text-fg-3" />
+        <label className="flex items-center gap-2 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5">
+          <Folder size={12} className="shrink-0 text-text-3" />
           <select
             value={folderId ?? ""}
             disabled={!editing}
             onChange={(event) => setFolderId(event.target.value || null)}
             aria-label="Folder"
             data-testid="paste-skill-folder"
-            className="w-full bg-transparent text-fg outline-none"
+            className="w-full bg-transparent text-text outline-none"
             style={{ fontSize: "11.5px" }}
           >
             <option value="">Root of the bank</option>
@@ -118,7 +118,7 @@ function failingOther(checks: { id: CheckId; state: CheckState }[]): boolean {
 function CheckDot({ state }: { state: CheckState }) {
   if (state === "pass") {
     return (
-      <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-acc/20 text-acc">
+      <span className="grid h-3.5 w-3.5 place-items-center rounded-full bg-primary/20 text-primary">
         <Check size={9} strokeWidth={3} />
       </span>
     );

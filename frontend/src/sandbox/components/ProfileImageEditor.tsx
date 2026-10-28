@@ -65,7 +65,7 @@ export default function ProfileImageEditor({
 
   return (
     <div className="flex flex-col gap-1.5" data-testid="staging-profile-image">
-      <span className="text-fg-3" style={{ fontSize: "10.5px" }}>
+      <span className="text-text-3" style={{ fontSize: "10.5px" }}>
         Image
       </span>
       <select
@@ -74,7 +74,7 @@ export default function ProfileImageEditor({
         disabled={busy}
         aria-label="Image source"
         data-testid="staging-image-kind"
-        className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-mono text-fg focus:border-acc focus:outline-none disabled:opacity-40"
+        className="w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 font-mono text-text focus:border-primary focus:outline-none disabled:opacity-40"
         style={{ fontSize: "11px" }}
       >
         <option value="default">default (PDO's own sandbox image)</option>
@@ -83,7 +83,7 @@ export default function ProfileImageEditor({
       </select>
 
       {kind === "default" && (
-        <div className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="staging-image-none">
+        <div className="text-text-3" style={{ fontSize: "10.5px" }} data-testid="staging-image-none">
           PDO's own image, whose tag is the SHA-256 of the bytes of the Dockerfile it seeded at{" "}
           <span className="font-mono">~/.pdo/sandbox/Dockerfile</span> — edit that file to change
           the image, or pick another kind here.
@@ -100,14 +100,14 @@ export default function ProfileImageEditor({
                 placeholder="/path/to/Dockerfile.chrome-dev"
                 aria-label="Dockerfile path"
                 data-testid="staging-image-path"
-                className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 pr-8 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+                className="w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 pr-8 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
                 style={{ fontSize: "11px" }}
                 autoComplete="off"
               />
               <button
                 type="button"
                 onClick={() => setPickerOpen(true)}
-                className="absolute inset-y-0 right-0 flex items-center px-2 text-fg-4 transition-colors hover:text-fg-2"
+                className="absolute inset-y-0 right-0 flex items-center px-2 text-text-3 transition-colors hover:text-text-2"
                 title="Browse for a Dockerfile"
                 aria-label="Browse for a Dockerfile"
                 data-testid="staging-image-browse"
@@ -120,13 +120,13 @@ export default function ProfileImageEditor({
               onClick={() => pending && onWrite(pending)}
               disabled={!canSet}
               data-testid="staging-image-set"
-              className="shrink-0 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:border-acc disabled:opacity-40"
+              className="shrink-0 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 transition-colors hover:border-primary disabled:opacity-40"
               style={{ fontSize: "11px" }}
             >
               Set
             </button>
           </div>
-          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          <div className="text-text-3" style={{ fontSize: "10.5px" }}>
             Every Run on this profile builds (or pulls) the image whose tag is the SHA-256 of this
             file's bytes — editing the file changes the tag, hence a rebuild. It must be{" "}
             <strong>self-contained</strong>: the build context is deliberately empty, so no{" "}
@@ -149,7 +149,7 @@ export default function ProfileImageEditor({
               placeholder="ghcr.io/owner/image:tag"
               aria-label="Image reference"
               data-testid="staging-image-ref"
-              className="min-w-0 flex-1 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+              className="min-w-0 flex-1 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
               style={{ fontSize: "11px" }}
               autoComplete="off"
             />
@@ -158,7 +158,7 @@ export default function ProfileImageEditor({
               onClick={() => pending && onWrite(pending)}
               disabled={!canSet}
               data-testid="staging-image-set"
-              className="shrink-0 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:border-acc disabled:opacity-40"
+              className="shrink-0 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 transition-colors hover:border-primary disabled:opacity-40"
               style={{ fontSize: "11px" }}
             >
               Set

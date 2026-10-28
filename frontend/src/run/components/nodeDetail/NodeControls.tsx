@@ -39,7 +39,7 @@ export default function NodeControls({
         className={
           node.status === "running"
             ? "flex cursor-pointer items-center gap-1 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-0.5 text-st-failed transition-colors hover:bg-st-failed/20"
-            : "flex items-center gap-1 rounded border border-line bg-bg-3 px-2 py-0.5 text-fg-4 opacity-50"
+            : "flex items-center gap-1 rounded border border-line bg-surface-2 px-2 py-0.5 text-text-3 opacity-50"
         }
         style={{ fontSize: "10.5px", fontWeight: 500 }}
       >

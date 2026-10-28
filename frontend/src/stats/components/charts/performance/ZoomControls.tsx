@@ -62,7 +62,7 @@ export function ZoomSegments({
       role="radiogroup"
       aria-label="Box-plot zoom"
       data-testid="stats-performance-zoom"
-      className="flex items-center gap-0.5 rounded border border-line bg-bg-3 p-0.5"
+      className="flex items-center gap-0.5 rounded border border-line bg-surface-2 p-0.5"
       onKeyDown={(event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
@@ -92,7 +92,7 @@ export function ZoomSegments({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(level)}
             className={`flex items-center gap-1.5 rounded px-2 py-0.5 transition-colors ${
-              selected ? "bg-bg-5 text-fg" : "text-fg-3 hover:text-fg-2"
+              selected ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"
             }`}
           >
             <ZoomGlyph level={level} />
@@ -124,16 +124,16 @@ export function IndependentScalesSwitch({
         data-testid="stats-performance-independent-scales"
         onClick={() => onChange(!checked)}
         className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-          checked ? "bg-acc" : "bg-fg-5"
+          checked ? "bg-primary" : "bg-text-3"
         }`}
       >
         <span
-          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
+          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-surface-0 transition-all ${
             checked ? "left-3" : "left-0.5"
           }`}
         />
       </button>
-      <span className="text-fg-3">Independent scales</span>
+      <span className="text-text-3">Independent scales</span>
     </span>
   );
 }

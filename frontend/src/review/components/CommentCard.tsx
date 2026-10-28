@@ -86,7 +86,7 @@ export default function CommentCard({
   const label = anchorLabel(entry.anchor);
   const body = (text: string) => (
     <div
-      className="artifact-markdown px-2.5 py-2 text-fg [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
+      className="artifact-markdown px-2.5 py-2 text-text [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
       style={{ fontSize: "11.5px", lineHeight: 1.5 }}
       data-testid="review-comment-body"
     >
@@ -117,21 +117,21 @@ export default function CommentCard({
   if (sending) {
     return (
       <div
-        className="my-2 ml-3 mr-3 max-w-[720px] overflow-hidden rounded-md border border-line-strong bg-bg-2 font-sans opacity-70"
+        className="my-2 ml-3 mr-3 max-w-[720px] overflow-hidden rounded-md border border-line-strong bg-surface-1 font-sans opacity-70"
         style={{ fontSize: "11px", whiteSpace: "normal" }}
         data-testid="review-comment"
         data-state="sending"
         data-anchor={label}
       >
-        <div className="flex items-center gap-2 border-b border-line bg-bg-3 px-2.5 py-[5px] text-fg-3" style={{ fontSize: "10.5px" }}>
+        <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-2.5 py-[5px] text-text-3" style={{ fontSize: "10.5px" }}>
           <Badge kind="sent">
             <Spinner /> Sending
           </Badge>
-          <span className="font-medium text-fg-2">you</span>
-          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+          <span className="font-medium text-text-2">you</span>
+          <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
             {label}
           </span>
-          <span className="text-fg-4">· {startingManager ? "starting the manager…" : "handing over…"}</span>
+          <span className="text-text-3">· {startingManager ? "starting the manager…" : "handing over…"}</span>
         </div>
         {body(d.text)}
       </div>
@@ -140,26 +140,26 @@ export default function CommentCard({
 
   return (
     <div
-      className="group my-2 ml-3 mr-3 max-w-[720px] overflow-hidden rounded-md border border-line-strong bg-bg-2 font-sans"
+      className="group my-2 ml-3 mr-3 max-w-[720px] overflow-hidden rounded-md border border-line-strong bg-surface-1 font-sans"
       style={{ fontSize: "11px", whiteSpace: "normal" }}
       data-testid="review-comment"
       data-state="draft"
       data-anchor={label}
     >
-      <div className="flex items-center gap-2 border-b border-line bg-bg-3 px-2.5 py-[5px] text-fg-3" style={{ fontSize: "10.5px" }}>
+      <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-2.5 py-[5px] text-text-3" style={{ fontSize: "10.5px" }}>
         <Badge kind="draft">✎ Draft</Badge>
-        <span className="font-medium text-fg-2">you</span>
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="font-medium text-text-2">you</span>
+        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
           {label}
         </span>
-        <span className="text-fg-4">· {relativeTime(d.updated_at)}</span>
+        <span className="text-text-3">· {relativeTime(d.updated_at)}</span>
         <span className="ml-auto inline-flex gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
           <button
             type="button"
             onClick={onEdit}
             title="Edit draft"
             data-testid="review-comment-edit"
-            className="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-4 hover:text-fg-2"
+            className="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-text-3 hover:bg-hover hover:text-text-2"
           >
             <Pencil size={11} />
           </button>
@@ -168,14 +168,14 @@ export default function CommentCard({
             onClick={onDelete}
             title="Delete draft"
             data-testid="review-comment-delete"
-            className="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-4 hover:text-st-failed"
+            className="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-text-3 hover:bg-hover hover:text-st-failed"
           >
             <Trash2 size={11} />
           </button>
         </span>
       </div>
       {body(d.text)}
-      <div className="flex items-center gap-2 border-t border-line px-2.5 py-[5px] text-fg-4" style={{ fontSize: "10px" }}>
+      <div className="flex items-center gap-2 border-t border-line px-2.5 py-[5px] text-text-3" style={{ fontSize: "10px" }}>
         <span>Only in this browser until sent.</span>
         <span className="ml-auto">
           <button
@@ -184,7 +184,7 @@ export default function CommentCard({
             disabled={!!sendDisabledReason}
             title={sendDisabledReason ?? "Send this comment to the manager (one message)"}
             data-testid="review-comment-send"
-            className="cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 hover:bg-bg-4 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+            className="cursor-pointer rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-45"
             style={{ fontSize: "10.5px" }}
           >
             ↗ Send to manager

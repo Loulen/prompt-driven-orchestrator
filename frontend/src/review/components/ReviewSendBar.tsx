@@ -27,12 +27,12 @@ export default function ReviewSendBar({ drafts, sentCount, sending, managerRunni
   return (
     <div className="sticky bottom-2 z-[15] mx-3" data-testid="review-send-bar">
       <div
-        className="flex items-center gap-2.5 rounded-md border border-acc-border px-3 py-1.5 text-fg-2 shadow-[0_-6px_24px_rgba(0,0,0,.35)] backdrop-blur-[4px]"
+        className="flex items-center gap-2.5 rounded-md border border-primary/30 px-3 py-1.5 text-text-2 shadow-[0_-6px_24px_rgba(0,0,0,.35)] backdrop-blur-[4px]"
         style={{ fontSize: "11px", background: "rgba(20,23,29,.96)" }}
       >
         <Badge kind="draft">✎ {drafts.length}</Badge>
         <span>
-          <span className="font-medium text-fg">{plural(drafts.length, "draft")}</span> ready to send
+          <span className="font-medium text-text">{plural(drafts.length, "draft")}</span> ready to send
           {sentCount > 0 && <span> · {sentCount} already sent</span>}
         </span>
         <span className="inline-flex flex-wrap gap-1">
@@ -43,7 +43,7 @@ export default function ReviewSendBar({ drafts, sentCount, sending, managerRunni
               onClick={() => onJump(d)}
               title={d.text.slice(0, 80)}
               data-testid="review-send-chip"
-              className="cursor-pointer rounded-[3px] border border-line-strong bg-bg-3 px-[5px] font-mono text-fg-3 hover:border-st-await hover:text-fg"
+              className="cursor-pointer rounded-[3px] border border-line-strong bg-surface-2 px-[5px] font-mono text-text-3 hover:border-st-await hover:text-text"
               style={{ fontSize: "9.5px" }}
             >
               {anchorLabel(d)}
@@ -51,7 +51,7 @@ export default function ReviewSendBar({ drafts, sentCount, sending, managerRunni
           ))}
         </span>
         <span className="flex-1" />
-        <span className="text-fg-4" data-testid="review-send-bar-note">
+        <span className="text-text-3" data-testid="review-send-bar-note">
           {sendDisabledReason ?? `One message to the manager${managerRunning ? "" : " · starts it first"}`}
         </span>
         <button
@@ -60,7 +60,7 @@ export default function ReviewSendBar({ drafts, sentCount, sending, managerRunni
           disabled={!!sendDisabledReason || sending}
           title={sendDisabledReason ?? undefined}
           data-testid="review-send-all"
-          className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-acc bg-acc px-2 py-0.5 font-semibold text-on-acc hover:bg-acc-hi disabled:cursor-not-allowed disabled:opacity-45"
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded border border-primary bg-primary px-2 py-0.5 font-semibold text-primary-ink hover:bg-primary-hi disabled:cursor-not-allowed disabled:opacity-45"
           style={{ fontSize: "10.5px" }}
         >
           {sending ? <Spinner /> : "↗"} Send all to manager

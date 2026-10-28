@@ -9,22 +9,22 @@ import { cssColor } from "../../../../lib/cssColor";
  */
 export const CHART = {
   get runs() {
-    return cssColor("--color-chart-runs", "#58a6ff");
+    return cssColor("--color-st-running");
   },
   get errors() {
-    return cssColor("--color-chart-errors", "#f85149");
+    return cssColor("--color-st-failed");
   },
   get fires() {
-    return cssColor("--color-chart-fires", "#3fb950");
+    return cssColor("--color-st-done");
   },
   get grid() {
-    return cssColor("--color-chart-grid", "#30363d");
+    return cssColor("--line");
   },
   get axis() {
-    return cssColor("--color-chart-axis", "#8b949e");
+    return cssColor("--text-3");
   },
   get tooltipBg() {
-    return cssColor("--color-chart-tooltip-bg", "#161b22");
+    return cssColor("--surface-2");
   },
 };
 

@@ -230,7 +230,7 @@ export default function ProvisioningRulesEditor({
 
   return (
     <section
-      className="@container rounded-md border border-line bg-bg-3"
+      className="@container rounded-md border border-line bg-surface-2"
       data-testid={`provisioning-${level}`}
     >
       <div className={`px-3 py-2 ${open ? "border-b border-line" : ""}`}>
@@ -243,37 +243,37 @@ export default function ProvisioningRulesEditor({
               if (!blocked) setExpanded(!open);
             }}
             title={blocked ? "Fix the provisioning issue to collapse" : undefined}
-            className="flex max-w-full shrink-0 cursor-pointer items-center gap-1 text-left font-medium text-fg"
+            className="flex max-w-full shrink-0 cursor-pointer items-center gap-1 text-left font-medium text-text"
             data-testid="provisioning-toggle"
           >
             {open ? (
-              <ChevronDown size={12} aria-hidden="true" className="shrink-0 text-fg-4" />
+              <ChevronDown size={12} aria-hidden="true" className="shrink-0 text-text-3" />
             ) : (
-              <ChevronRight size={12} aria-hidden="true" className="shrink-0 text-fg-4" />
+              <ChevronRight size={12} aria-hidden="true" className="shrink-0 text-text-3" />
             )}
             <span className="truncate">
-              Provisioning <span className="font-normal text-fg-4">· {summary}</span>
+              Provisioning <span className="font-normal text-text-3">· {summary}</span>
             </span>
           </button>
           {marker && (
-            <div className="min-w-0 truncate text-right text-fg-4" style={{ fontSize: 10 }} title={marker}>
+            <div className="min-w-0 truncate text-right text-text-3" style={{ fontSize: 10 }} title={marker}>
               {marker}
             </div>
           )}
         </div>
-        <div className="mt-0.5 text-fg-4" style={{ fontSize: 10 }}>
+        <div className="mt-0.5 text-text-3" style={{ fontSize: 10 }}>
           {SUBTITLE}
         </div>
       </div>
       {open && (
         <div id={bodyId} data-testid="provisioning-body">
           {leading && <div className="border-b border-line px-3 py-2">{leading}</div>}
-          <div className="flex items-center gap-4 border-b border-line px-3 py-1.5 text-fg-4">
+          <div className="flex items-center gap-4 border-b border-line px-3 py-1.5 text-text-3">
             {SCOPES.map(
               (scope) => (
                 <span
                   key={scope}
-                  className={scope === level ? "border-b-2 border-acc pb-1 text-fg" : ""}
+                  className={scope === level ? "border-b-2 border-primary pb-1 text-text" : ""}
                 >
                   {LEVEL_LABELS[scope]} · {ruleCounts.get(scope) ?? 0}
                 </span>
@@ -286,7 +286,7 @@ export default function ProvisioningRulesEditor({
             <div
               key={`${conflict.scope}-${conflict.relative_path}`}
               role="alert"
-              className="m-2 rounded border border-st-failed bg-red-950/30 px-2 py-1.5 text-st-failed"
+              className="m-2 rounded border border-st-failed bg-st-failed/14 px-2 py-1.5 text-st-failed"
             >
               Mode conflict in {LEVEL_LABELS[conflict.scope]} — {conflict.relative_path} is
               declared as {conflict.modes.join(" and ")}. Keep one.{" "}
@@ -317,7 +317,7 @@ export default function ProvisioningRulesEditor({
                   {key}
                   <InfoHint label={`About ${key}`} content={hint} />
                 </div>
-                <div className="space-y-1 border-b border-line bg-bg-2 px-2 py-1.5">
+                <div className="space-y-1 border-b border-line bg-surface-1 px-2 py-1.5">
                   {(visiblePlan?.rules ?? [])
                     .filter(
                       (rule) =>
@@ -331,14 +331,14 @@ export default function ProvisioningRulesEditor({
                       return (
                         <div
                           key={`${rule.scope}-${rule.pattern}`}
-                          className={`flex items-center justify-between font-mono text-fg-4 ${redeclared ? "line-through opacity-60" : ""}`}
+                          className={`flex items-center justify-between font-mono text-text-3 ${redeclared ? "line-through opacity-60" : ""}`}
                           style={{
                             fontSize: 9,
                             textDecorationLine: redeclared ? "line-through" : "none",
                           }}
                         >
                           <span className="truncate">{rule.pattern}</span>
-                          <span className="ml-1 shrink-0 rounded bg-bg-4 px-1">
+                          <span className="ml-1 shrink-0 rounded bg-surface-2 px-1">
                             {LEVEL_LABELS[rule.scope]} · {rule.paths.length + rule.excluded_paths.length}
                           </span>
                         </div>
@@ -349,7 +349,7 @@ export default function ProvisioningRulesEditor({
                       rule.mode === key &&
                       scopePrecedes(rule.scope, level),
                   ) && (
-                    <div className="text-fg-4" style={{ fontSize: 9 }}>No inherited rules</div>
+                    <div className="text-text-3" style={{ fontSize: 9 }}>No inherited rules</div>
                   )}
                 </div>
                 <div className="relative">
@@ -364,11 +364,11 @@ export default function ProvisioningRulesEditor({
                     readOnly={readOnly}
                     aria-invalid={conflictingPatterns[key].size > 0}
                     rows={5}
-                    className={`w-full resize-y bg-bg-2 p-2 pr-14 font-mono text-fg outline-none ${conflictingPatterns[key].size ? "ring-1 ring-inset ring-st-failed" : ""}`}
+                    className={`w-full resize-y bg-surface-1 p-2 pr-14 font-mono text-text outline-none ${conflictingPatterns[key].size ? "ring-1 ring-inset ring-st-failed" : ""}`}
                     placeholder={"one pattern per line\n!path excludes"}
                     style={{ fontSize: 10 }}
                   />
-                  <div className="pointer-events-none absolute right-2 top-2 space-y-[2px] text-right font-mono text-fg-4" style={{ fontSize: 10 }}>
+                  <div className="pointer-events-none absolute right-2 top-2 space-y-[2px] text-right font-mono text-text-3" style={{ fontSize: 10 }}>
                     {rules[key].map((pattern) => (
                       <div
                         key={pattern}

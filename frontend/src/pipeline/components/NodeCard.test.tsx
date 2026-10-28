@@ -22,8 +22,8 @@ describe("NodeCard", () => {
     // "done" one — a short-circuited branch must not read as a branch that ran.
     ["skipped", "border-st-skipped"],
     ["failed", "border-st-failed"],
-    ["stopped", "border-st-stopped"],
-    ["stale", "border-st-stale"],
+    ["stopped", "border-st-skipped"],
+    ["stale", "border-st-skipped"],
   ])("status %s applies border class %s", (status, expectedClass) => {
     const { container } = render(
       <NodeCard status={status}><span>child</span></NodeCard>,
@@ -37,7 +37,7 @@ describe("NodeCard", () => {
     );
     const card = container.firstElementChild!;
     expect(card.className).toContain("border-line-strong");
-    expect(card.className).not.toContain("border-st-pending");
+    expect(card.className).not.toContain("border-st-skipped");
   });
 
   it("failed nodes show the red overlay badge at top-right", () => {
@@ -60,8 +60,8 @@ describe("NodeCard", () => {
       <NodeCard status="running" selected><span>child</span></NodeCard>,
     );
     const card = container.firstElementChild as HTMLElement;
-    expect(card.style.boxShadow).toContain("var(--color-bg-1)");
-    expect(card.style.boxShadow).toContain("var(--color-acc)");
+    expect(card.style.boxShadow).toContain("var(--surface-0)");
+    expect(card.style.boxShadow).toContain("var(--primary)");
   });
 
   it("selected + failed shows both the ring and the badge", () => {
@@ -69,7 +69,7 @@ describe("NodeCard", () => {
       <NodeCard status="failed" selected><span>child</span></NodeCard>,
     );
     const card = container.firstElementChild as HTMLElement;
-    expect(card.style.boxShadow).toContain("var(--color-acc)");
+    expect(card.style.boxShadow).toContain("var(--primary)");
     expect(screen.getByTestId("failed-badge")).toBeInTheDocument();
   });
 

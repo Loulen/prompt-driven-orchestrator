@@ -78,10 +78,10 @@ export default function BehaviorSection({
         >
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-fg-3">
-                <Play size={11} className="text-fg-4" />
+              <span className="flex items-center gap-1.5 text-text-3">
+                <Play size={11} className="text-text-3" />
                 On demand
-                {onDemandFrozen && <Lock size={9} className="text-fg-4" />}
+                {onDemandFrozen && <Lock size={9} className="text-text-3" />}
               </span>
               <button
                 data-testid="node-on-demand-toggle"
@@ -90,17 +90,17 @@ export default function BehaviorSection({
                 onClick={() => handleField("on_demand", !isOnDemand)}
                 className={`relative h-5 w-9 rounded-full transition-colors ${
                   onDemandFrozen || readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer"
-                } ${isOnDemand ? "bg-acc" : "bg-bg-5"}`}
+                } ${isOnDemand ? "bg-primary" : "bg-surface-2"}`}
               >
                 <span
-                  className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
+                  className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-text transition-transform ${
                     isOnDemand ? "translate-x-[16px]" : "translate-x-0"
                   }`}
                 />
               </button>
             </div>
             {onDemandFrozen && (
-              <span className="text-fg-4" style={{ fontSize: "9.5px" }}>
+              <span className="text-text-3" style={{ fontSize: "9.5px" }}>
                 Already launched in this run.
               </span>
             )}
@@ -118,7 +118,7 @@ export default function BehaviorSection({
         >
           <div className="flex flex-col gap-1">
             <div className="flex items-center justify-between">
-              <span className="text-fg-3">Interactive</span>
+              <span className="text-text-3">Interactive</span>
               <button
                 data-testid="node-interactive-toggle"
                 aria-pressed={isInteractive}
@@ -126,10 +126,10 @@ export default function BehaviorSection({
                 onClick={() => setInteractive(!isInteractive)}
                 className={`relative h-5 w-9 rounded-full transition-colors ${
                   readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer"
-                } ${isInteractive ? "bg-acc" : "bg-bg-5"}`}
+                } ${isInteractive ? "bg-primary" : "bg-surface-2"}`}
               >
                 <span
-                  className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
+                  className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-text transition-transform ${
                     isInteractive ? "translate-x-[16px]" : "translate-x-0"
                   }`}
                 />
@@ -171,10 +171,10 @@ export default function BehaviorSection({
           >
             <div className="flex flex-col gap-1">
               <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-fg-3">
-                  <GitFork size={11} className="text-fg-4" />
+                <span className="flex items-center gap-1.5 text-text-3">
+                  <GitFork size={11} className="text-text-3" />
                   Orchestrator
-                  {orchestratorFrozen && <Lock size={9} className="text-fg-4" />}
+                  {orchestratorFrozen && <Lock size={9} className="text-text-3" />}
                 </span>
                 <button
                   data-testid="node-orchestrator-toggle"
@@ -183,17 +183,17 @@ export default function BehaviorSection({
                   onClick={() => setOrchestrator(!isOrchestrator)}
                   className={`relative h-5 w-9 rounded-full transition-colors ${
                     orchestratorFrozen || readOnly ? "cursor-not-allowed opacity-60" : "cursor-pointer"
-                  } ${isOrchestrator ? "bg-acc" : "bg-bg-5"}`}
+                  } ${isOrchestrator ? "bg-primary" : "bg-surface-2"}`}
                 >
                   <span
-                    className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-fg transition-transform ${
+                    className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-text transition-transform ${
                       isOrchestrator ? "translate-x-[16px]" : "translate-x-0"
                     }`}
                   />
                 </button>
               </div>
               {orchestratorFrozen && (
-                <span className="text-fg-4" style={{ fontSize: "9.5px" }}>
+                <span className="text-text-3" style={{ fontSize: "9.5px" }}>
                   Frozen at spawn — an edit applies to the next NodeRun.
                 </span>
               )}

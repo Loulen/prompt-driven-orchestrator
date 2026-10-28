@@ -25,11 +25,11 @@ export default function IOSection({
   return (
     <div className="border-t border-line">
       <div
-        className="flex items-center gap-1.5 px-3 py-1.5 text-fg-3"
+        className="flex items-center gap-1.5 px-3 py-1.5 text-text-3"
         style={{ fontSize: "11px" }}
       >
         {title}
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
           {ports.length}
         </span>
       </div>

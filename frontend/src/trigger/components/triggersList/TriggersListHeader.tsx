@@ -17,7 +17,7 @@ export default function TriggersListHeader({
   return (
     <>
       <div
-        className="flex h-[36px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
+        className="flex h-[36px] shrink-0 items-center border-b border-line px-3 font-medium text-text-2"
         style={{ fontSize: "11.5px" }}
       >
         Triggers
@@ -38,8 +38,8 @@ export default function TriggersListHeader({
             data-testid="triggers-pause-switch"
             className={`flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 transition-colors ${
               paused
-                ? "bg-st-await-bg text-st-await"
-                : "text-fg-4 hover:bg-bg-4 hover:text-fg-2"
+                ? "bg-st-await/14 text-st-await"
+                : "text-text-3 hover:bg-hover hover:text-text-2"
             }`}
             style={{ fontSize: "10.5px" }}
           >
@@ -48,7 +48,7 @@ export default function TriggersListHeader({
           </span>
           <button
             onClick={onNewTrigger}
-            className="flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+            className="flex cursor-pointer items-center gap-1 rounded bg-primary px-1.5 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
             style={{ fontSize: "10.5px" }}
           >
             <Plus size={10} />
@@ -59,7 +59,7 @@ export default function TriggersListHeader({
 
       {paused && (
         <div
-          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2"
+          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await/14 px-3 py-2"
           data-testid="triggers-paused-banner"
         >
           <AlertCircle size={14} className="shrink-0 text-st-await" />

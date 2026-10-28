@@ -28,20 +28,20 @@ export default function ProjectRepositoryRow({
 }) {
   return (
     <div
-      className="group/repo flex items-center gap-2.5 rounded-md border border-line-soft bg-bg-3/50 px-2.5 py-2"
+      className="group/repo flex items-center gap-2.5 rounded-md border border-line-soft bg-surface-2/50 px-2.5 py-2"
       data-testid="project-repo-row"
       data-path={path}
       title={path}
     >
-      <FolderGit2 size={13} className="shrink-0 text-fg-4" />
+      <FolderGit2 size={13} className="shrink-0 text-text-3" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate font-mono text-fg" style={{ fontSize: "11.5px" }}>
+          <span className="truncate font-mono text-text" style={{ fontSize: "11.5px" }}>
             {tildify(path, home)}
           </span>
           {primary && (
             <span
-              className="shrink-0 rounded bg-acc/15 px-1.5 py-0.5 text-acc"
+              className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-primary"
               style={{ fontSize: "9.5px" }}
               data-testid="project-repo-primary"
             >
@@ -52,7 +52,7 @@ export default function ProjectRepositoryRow({
             <button
               type="button"
               onClick={onMakePrimary}
-              className="hidden shrink-0 rounded px-1.5 py-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/repo:inline-flex group-focus-within/repo:inline-flex"
+              className="hidden shrink-0 rounded px-1.5 py-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover/repo:inline-flex group-focus-within/repo:inline-flex"
               style={{ fontSize: "10px" }}
               data-testid="project-repo-make-primary"
             >
@@ -60,7 +60,7 @@ export default function ProjectRepositoryRow({
             </button>
           )}
         </div>
-        <div className="flex min-w-0 items-center gap-1 text-fg-4" style={{ fontSize: "10.5px" }}>
+        <div className="flex min-w-0 items-center gap-1 text-text-3" style={{ fontSize: "10.5px" }}>
           <span className="truncate font-mono" data-testid="project-repo-remote">
             {remote === undefined ? "…" : (remote ?? "no remote")}
           </span>
@@ -77,7 +77,7 @@ export default function ProjectRepositoryRow({
           onClick={onRemove}
           aria-label={`Remove ${path} from the project`}
           title="Remove from the project (the folder stays on disk)"
-          className="shrink-0 rounded p-1 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2"
+          className="shrink-0 rounded p-1 text-text-3 transition-colors hover:bg-hover hover:text-text-2"
           data-testid="project-repo-remove"
         >
           <X size={12} />

@@ -3,36 +3,36 @@ import { cssColor } from "../../lib/cssColor";
 import { useTheme } from "../../hooks/useTheme";
 
 // mermaid bakes colours into the generated SVG's own <style>, so a CSS `var()`
-// would not resolve inside it — the values must be RESOLVED hex. #759: they are
+// would not resolve inside it — the values must be RESOLVED colours. #759: they are
 // resolved from the live palette at initialize() time instead of being frozen
 // dark, and `ensureMermaid` re-initializes when the theme changes, so a diagram
 // re-rendered after a switch comes back in the new palette.
 function themeVars() {
-  const c = (token: `--color-${string}`, fallback: string) => cssColor(token, fallback);
+  const c = (token: `--${string}`) => cssColor(token);
   return {
-    background: c("--color-bg-2", "#14171d"), // modal body
-    primaryColor: c("--color-bg-3", "#1a1e25"), // node fill
-    primaryBorderColor: c("--color-line-strong", "#2a313b"),
-    primaryTextColor: c("--color-fg", "#e6e8eb"),
-    secondaryColor: c("--color-bg-4", "#232831"),
-    secondaryBorderColor: c("--color-line-strong", "#2a313b"),
-    secondaryTextColor: c("--color-fg-2", "#aab1bd"),
-    tertiaryColor: c("--color-bg-1", "#0f1115"),
-    tertiaryBorderColor: c("--color-line", "#1f242c"),
-    tertiaryTextColor: c("--color-fg-2", "#aab1bd"),
-    lineColor: c("--color-fg-3", "#767e8c"), // edge stroke
-    textColor: c("--color-fg-2", "#aab1bd"),
-    mainBkg: c("--color-bg-3", "#1a1e25"),
-    nodeBorder: c("--color-line-strong", "#2a313b"),
-    nodeTextColor: c("--color-fg", "#e6e8eb"),
-    edgeLabelBackground: c("--color-bg-2", "#14171d"), // opaque chip so labels stay legible
-    noteBkgColor: c("--color-bg-4", "#232831"),
-    noteBorderColor: c("--color-line-strong", "#2a313b"),
-    noteTextColor: c("--color-fg", "#e6e8eb"),
-    clusterBkg: c("--color-bg-1", "#0f1115"),
-    clusterBorder: c("--color-line", "#1f242c"),
-    activeTaskBkgColor: c("--color-acc", "#10b981"),
-    titleColor: c("--color-fg", "#e6e8eb"),
+    background: c("--surface-1"), // modal body
+    primaryColor: c("--surface-2"), // node fill
+    primaryBorderColor: c("--line-strong"),
+    primaryTextColor: c("--text"),
+    secondaryColor: c("--surface-2"),
+    secondaryBorderColor: c("--line-strong"),
+    secondaryTextColor: c("--text-2"),
+    tertiaryColor: c("--surface-0"),
+    tertiaryBorderColor: c("--line"),
+    tertiaryTextColor: c("--text-2"),
+    lineColor: c("--text-3"), // edge stroke
+    textColor: c("--text-2"),
+    mainBkg: c("--surface-2"),
+    nodeBorder: c("--line-strong"),
+    nodeTextColor: c("--text"),
+    edgeLabelBackground: c("--surface-1"), // opaque chip so labels stay legible
+    noteBkgColor: c("--surface-2"),
+    noteBorderColor: c("--line-strong"),
+    noteTextColor: c("--text"),
+    clusterBkg: c("--surface-0"),
+    clusterBorder: c("--line"),
+    activeTaskBkgColor: c("--primary"),
+    titleColor: c("--text"),
     fontSize: "12px",
   };
 }
@@ -51,7 +51,7 @@ async function ensureMermaid(theme: string) {
       suppressErrorRendering: true,
       theme: "base",
       themeVariables: themeVars(),
-      fontFamily: '"Geist", ui-sans-serif, system-ui, -apple-system, sans-serif',
+      fontFamily: '"Archivo", ui-sans-serif, system-ui, sans-serif',
       secure: [
         "secure",
         "securityLevel",

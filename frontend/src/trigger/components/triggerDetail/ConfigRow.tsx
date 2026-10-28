@@ -10,7 +10,7 @@ export default function ConfigRow({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className="flex w-20 shrink-0 items-center gap-1.5 text-fg-3">
+      <span className="flex w-20 shrink-0 items-center gap-1.5 text-text-3">
         {icon}
         {label}
       </span>

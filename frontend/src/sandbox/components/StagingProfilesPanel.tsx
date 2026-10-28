@@ -99,7 +99,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
         {/* ── the profile list ── */}
         <div className="flex flex-col gap-1">
           {profiles == null ? (
-            <div className="text-fg-4" style={{ fontSize: "12px" }} data-testid="staging-profiles-loading">
+            <div className="text-text-3" style={{ fontSize: "12px" }} data-testid="staging-profiles-loading">
               Loading…
             </div>
           ) : (
@@ -108,8 +108,8 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
                 key={p.name}
                 className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 transition-colors ${
                   p.name === selected
-                    ? "border-acc bg-bg-3"
-                    : "border-line-strong bg-bg-3 hover:border-line"
+                    ? "border-primary bg-surface-2"
+                    : "border-line-strong bg-surface-2 hover:border-line"
                 }`}
               >
                 <button
@@ -118,10 +118,10 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
                   data-testid={`staging-profile-row-${p.name}`}
                   className="flex min-w-0 flex-1 items-center gap-2 text-left"
                 >
-                  <span className="truncate font-mono text-fg" style={{ fontSize: "12px" }}>
+                  <span className="truncate font-mono text-text" style={{ fontSize: "12px" }}>
                     {p.name}
                   </span>
-                  <span className="shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
+                  <span className="shrink-0 text-text-3" style={{ fontSize: "10px" }}>
                     {p.materialised ? "edited" : p.virtual ? "built-in" : ""}
                   </span>
                 </button>
@@ -133,7 +133,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
                     onClick={() => void askDelete(p.name)}
                     aria-label={`Delete ${p.name}`}
                     data-testid={`staging-profile-delete-${p.name}`}
-                    className="shrink-0 rounded p-1 text-fg-4 transition-colors hover:bg-bg-5 hover:text-st-failed"
+                    className="shrink-0 rounded p-1 text-text-3 transition-colors hover:bg-active hover:text-st-failed"
                   >
                     <Trash2 size={13} />
                   </button>
@@ -154,7 +154,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
                 }}
                 placeholder="full-no-mcp"
                 data-testid="staging-profile-new-name"
-                className="min-w-0 flex-1 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+                className="min-w-0 flex-1 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
                 style={{ fontSize: "12px" }}
               />
               <button
@@ -162,7 +162,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
                 onClick={() => void create()}
                 disabled={busy || newName.trim().length === 0}
                 data-testid="staging-profile-create"
-                className="shrink-0 rounded-md bg-acc px-2.5 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+                className="shrink-0 rounded-md bg-primary px-2.5 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
                 style={{ fontSize: "11px" }}
               >
                 Create
@@ -173,13 +173,13 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
               type="button"
               onClick={() => setCreating(true)}
               data-testid="staging-profile-new"
-              className="mt-1 flex items-center gap-1.5 self-start rounded-md px-1 py-1 text-fg-3 transition-colors hover:text-fg"
+              className="mt-1 flex items-center gap-1.5 self-start rounded-md px-1 py-1 text-text-3 transition-colors hover:text-text"
               style={{ fontSize: "11px" }}
             >
               <Plus size={12} /> New profile
             </button>
           )}
-          <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          <div className="text-text-3" style={{ fontSize: "10.5px" }}>
             Lowercase letters, digits and <span className="font-mono">-</span>. A new profile
             starts as a copy of the built-in default; unchecking an entry stores the
             difference, so a later PDO release that adds an entry still shows up here.
@@ -188,7 +188,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
 
         {error && (
           <div
-            className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+            className="rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
             style={{ fontSize: "11.5px" }}
             data-testid="staging-profiles-error"
           >
@@ -199,7 +199,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
         {/* ── the selected profile's entries ── */}
         {current && (
           <div className="flex flex-col gap-3 border-t border-line pt-4">
-            <h3 className="font-medium text-fg-2" style={{ fontSize: "12px" }}>
+            <h3 className="font-medium text-text-2" style={{ fontSize: "12px" }}>
               <span className="font-mono">{current.name}</span> — entries
             </h3>
 
@@ -232,7 +232,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
                 tomorrow, and unchecking one a future release will add must be remembered. */}
             {current.inactive_disabled.length > 0 && (
               <div
-                className="text-fg-4"
+                className="text-text-3"
                 style={{ fontSize: "10.5px" }}
                 data-testid="staging-profile-inactive-disabled"
               >
@@ -242,7 +242,7 @@ export default function StagingProfilesPanel({ home, onChanged }: PanelProps) {
             )}
             {current.redundant_extras.length > 0 && (
               <div
-                className="text-fg-4"
+                className="text-text-3"
                 style={{ fontSize: "10.5px" }}
                 data-testid="staging-profile-redundant-extras"
               >

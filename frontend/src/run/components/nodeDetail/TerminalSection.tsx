@@ -107,7 +107,7 @@ export default function TerminalSection({
       ref={frameRef}
       className={
         expanded
-          ? `fixed inset-4 z-[41] flex flex-col overflow-hidden rounded-lg border-[1.5px] bg-bg-2 transition-[border-color,box-shadow] duration-[250ms] ${STATUS_BORDER[node.status]}`
+          ? `fixed inset-4 z-[41] flex flex-col overflow-hidden rounded-lg border-[1.5px] bg-surface-1 transition-[border-color,box-shadow] duration-[250ms] ${STATUS_BORDER[node.status]}`
           : "flex h-full flex-col overflow-hidden"
       }
       style={
@@ -161,14 +161,14 @@ export default function TerminalSection({
       ) : (
         <div className="flex h-full flex-col" data-testid="pending-placeholder">
           <div
-            className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
+            className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-text-3"
             style={{ fontSize: "11px" }}
           >
-            <span className="h-1.5 w-1.5 rounded-full bg-fg-5" />
+            <span className="h-1.5 w-1.5 rounded-full bg-text-3" />
             Terminal
           </div>
-          <div className="flex flex-1 items-center justify-center bg-bg-0">
-            <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <div className="flex flex-1 items-center justify-center bg-surface-0">
+            <span className="text-text-3" style={{ fontSize: "11px" }}>
               {terminalPlaceholder(node)}
             </span>
           </div>
@@ -227,11 +227,11 @@ export default function TerminalSection({
           type="button"
           onClick={() => setTerminalView("split")}
           data-testid="term-restore"
-          className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3 transition-colors hover:text-fg-2"
+          className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-text-3 transition-colors hover:text-text-2"
           style={{ fontSize: "11px" }}
           title="Agrandir le terminal"
         >
-          <span className="h-1.5 w-1.5 rounded-full bg-fg-5" />
+          <span className="h-1.5 w-1.5 rounded-full bg-text-3" />
           Terminal
           <span className="flex-1" />
           <Maximize2 size={12} />

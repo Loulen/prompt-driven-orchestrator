@@ -12,7 +12,7 @@ export default function SandboxField({ form, onManageStagingProfiles }: { form: 
     <div className="flex items-baseline justify-between">
       <label
         htmlFor="sandbox-select"
-        className="font-medium text-fg-2"
+        className="font-medium text-text-2"
         style={{ fontSize: "11.5px" }}
       >
         Sandbox
@@ -22,7 +22,7 @@ export default function SandboxField({ form, onManageStagingProfiles }: { form: 
           type="button"
           onClick={onManageStagingProfiles}
           data-testid="new-run-manage-staging-profiles"
-          className="text-fg-3 underline-offset-2 hover:text-acc hover:underline"
+          className="text-text-3 underline-offset-2 hover:text-primary hover:underline"
           style={{ fontSize: "10.5px" }}
         >
           Manage staging profiles…
@@ -35,7 +35,7 @@ export default function SandboxField({ form, onManageStagingProfiles }: { form: 
       value={sandbox}
       onChange={(e) => setSandbox(e.target.value)}
       title={dockerUnavailable ? sandboxReason : undefined}
-      className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none disabled:opacity-40"
+      className="w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text transition-colors focus:border-primary focus:outline-none disabled:opacity-40"
       style={{ fontSize: "12px" }}
     >
       {/* #452: run mode names the resolved default, because the choice is made
@@ -111,7 +111,7 @@ export default function SandboxField({ form, onManageStagingProfiles }: { form: 
     )}
     {dockerUnavailable && (
       <span
-        className="text-fg-4"
+        className="text-text-3"
         style={{ fontSize: "10.5px" }}
         data-testid="sandbox-docker-warning"
       >
@@ -123,7 +123,7 @@ export default function SandboxField({ form, onManageStagingProfiles }: { form: 
         the safe answer here — the daemon resolves its own default. */}
     {settingsFailed && !settings && (
       <span
-        className="text-fg-4"
+        className="text-text-3"
         style={{ fontSize: "10.5px" }}
         data-testid="sandbox-settings-error"
       >

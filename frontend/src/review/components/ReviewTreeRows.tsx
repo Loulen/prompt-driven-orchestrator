@@ -14,7 +14,7 @@ const LETTER_CLASS: Record<"A" | "M" | "D" | "R", string> = {
   A: "text-st-done",
   M: "text-st-await",
   D: "text-st-failed",
-  R: "text-edit-tint",
+  R: "text-st-running",
 };
 
 /** Indent per tree level, in px. */
@@ -44,17 +44,17 @@ export function DirRow({
       data-testid="review-dir-row"
       data-path={node.path}
       data-open={open}
-      className="grid w-full cursor-pointer grid-cols-[10px_12px_1fr_auto] items-center gap-1 rounded py-[3px] pr-1.5 text-left text-fg-3 hover:bg-bg-3"
+      className="grid w-full cursor-pointer grid-cols-[10px_12px_1fr_auto] items-center gap-1 rounded py-[3px] pr-1.5 text-left text-text-3 hover:bg-hover"
       style={{ fontSize: "11px", paddingLeft: 6 + depth * INDENT }}
     >
-      <Chevron size={10} className="text-fg-4" aria-hidden />
-      <Icon size={11} className="text-fg-4" aria-hidden />
+      <Chevron size={10} className="text-text-3" aria-hidden />
+      <Icon size={11} className="text-text-3" aria-hidden />
       <span className="truncate font-mono" style={{ fontSize: "10.5px" }}>
         {node.name}
       </span>
       {count > 0 ? (
         <span
-          className="inline-flex items-center gap-px font-mono text-fg-4"
+          className="inline-flex items-center gap-px font-mono text-text-3"
           style={{ fontSize: "10px" }}
           title={`${plural(count, "unresolved comment")} in this folder`}
           data-testid="review-dir-comments"
@@ -100,7 +100,7 @@ export function FileRow({
       data-path={p}
       data-current={cur}
       className={`grid w-full cursor-pointer grid-cols-[14px_1fr_auto] items-center gap-1.5 rounded py-[3px] pr-1.5 text-left ${
-        cur ? "bg-bg-3 shadow-[inset_2px_0_0_var(--color-acc)]" : "hover:bg-bg-3"
+        cur ? "bg-surface-2 shadow-[inset_2px_0_0_var(--primary)]" : "hover:bg-hover"
       }`}
       style={{ fontSize: "11px", paddingLeft: 6 + depth * INDENT }}
     >
@@ -110,14 +110,14 @@ export function FileRow({
       >
         {letter}
       </span>
-      <span className={`truncate font-mono ${cur ? "text-fg" : "text-fg-2"}`} style={{ fontSize: "10.5px" }}>
+      <span className={`truncate font-mono ${cur ? "text-text" : "text-text-2"}`} style={{ fontSize: "10.5px" }}>
         {baseName(p)}
       </span>
       <span className="flex items-center gap-1 font-mono" style={{ fontSize: "10px" }}>
         {drafts > 0 && <Badge kind="draft">{drafts}</Badge>}
         {outdated > 0 && (
           <span
-            className="inline-flex items-center text-st-stale"
+            className="inline-flex items-center text-st-skipped"
             title={`${outdated} outdated — the line changed on this destination`}
             data-testid="review-file-row-outdated"
           >
@@ -133,7 +133,7 @@ export function FileRow({
               </span>
             )}
             {st.open > 0 && (
-              <span className="inline-flex items-center gap-px text-fg-4" title={`${st.open} open`}>
+              <span className="inline-flex items-center gap-px text-text-3" title={`${st.open} open`}>
                 <StateIcon state="open" size={9} />
                 {st.open}
               </span>
@@ -148,9 +148,9 @@ export function FileRow({
           sent > 0 && <Badge kind="sent">{sent}</Badge>
         )}
         {file.binary ? (
-          <span className="text-fg-4">bin</span>
+          <span className="text-text-3">bin</span>
         ) : pureRename ? (
-          <span className="text-fg-4">→</span>
+          <span className="text-text-3">→</span>
         ) : (
           <>
             <span className="text-st-done">+{file.additions}</span>
@@ -162,7 +162,7 @@ export function FileRow({
             <i
               key={i}
               className={`block h-2 w-[3px] rounded-[1px] ${
-                b === "a" ? "bg-st-done" : b === "d" ? "bg-st-failed" : "bg-bg-4"
+                b === "a" ? "bg-st-done" : b === "d" ? "bg-st-failed" : "bg-surface-2"
               }`}
             />
           ))}

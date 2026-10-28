@@ -42,7 +42,7 @@ export function PerformanceAside({
   return (
     <aside className="w-[290px] shrink-0 border-r border-line pr-4">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           Ranked by {performanceSortLabel(sort, mode)} (median)
         </span>
         <span className="flex items-center gap-1.5">
@@ -52,7 +52,7 @@ export function PerformanceAside({
             onChange={(event) =>
               onAxisChange(event.target.value as PerformanceAxis)
             }
-            className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+            className="rounded border border-line bg-surface-2 px-2 py-1 text-text-2"
           >
             <option value="pipeline">By pipeline</option>
             <option value="model">By model</option>
@@ -63,7 +63,7 @@ export function PerformanceAside({
             onChange={(event) =>
               onSortChange(event.target.value as PerformanceMetric)
             }
-            className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+            className="rounded border border-line bg-surface-2 px-2 py-1 text-text-2"
           >
             <option value="context">By context</option>
             <option value="duration">By {durationWord(mode)}</option>
@@ -87,7 +87,7 @@ export function PerformanceAside({
         onSelect={onSelect}
       />
       {axis === "model" && (
-        <div className="mt-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+        <div className="mt-3 text-text-3" style={{ fontSize: "10.5px" }}>
           Model ids verbatim, one row per id — the same id run through two
           harnesses is one row, one column per harness. Hover a model or an
           effort for where the value was read.

@@ -157,7 +157,7 @@ export default function ProjectsPanel({
             gestures={gestures}
           />
         ) : (
-          <div className="flex-1 px-1 py-2 text-fg-4" style={{ fontSize: "11px" }} data-testid="projects-empty">
+          <div className="flex-1 px-1 py-2 text-text-3" style={{ fontSize: "11px" }} data-testid="projects-empty">
             No project yet. A project groups the repositories a team works on; New Run starts from one.
           </div>
         )}

@@ -223,7 +223,7 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
     it("covers the application and exposes Performance as the fifth side-rail section", async () => {
       render(<StatsModal open onClose={() => {}} />);
 
-      expect(await screen.findByTestId("stats-modal")).toHaveClass("h-screen", "w-screen");
+      expect(await screen.findByTestId("stats-modal")).toHaveClass("h-[calc(100dvh/var(--app-zoom,1))]", "w-[calc(100vw/var(--app-zoom,1))]");
       const rail = screen.getByRole("tablist", { name: "Stats sections" });
       expect(rail).toHaveClass("flex-col");
       expect(screen.getAllByRole("tab")).toHaveLength(5);
@@ -798,11 +798,11 @@ describe("StatsModal — Pricing details in the shell's secondary panel (#944)",
   it("shows the trigger's open state, not only aria-expanded", async () => {
     const { user } = await openPricing();
     const trigger = screen.getByTestId("stats-pricing-trigger");
-    expect(trigger).toHaveClass("border-acc", "bg-acc/15");
+    expect(trigger).toHaveClass("border-primary", "bg-primary/15");
 
     await user.click(trigger);
-    expect(trigger).not.toHaveClass("border-acc");
-    expect(trigger).toHaveClass("border-line", "bg-bg-3");
+    expect(trigger).not.toHaveClass("border-primary");
+    expect(trigger).toHaveClass("border-line", "bg-surface-2");
   });
 
   it("returns focus to the trigger on ✕, Escape and the toggle", async () => {

@@ -125,7 +125,7 @@ export default function SharedPromptField({
         >
           <span className="absolute block" style={{ width: 1.5, height: 14, background: presenceColor(participant) }} />
           <span
-            className="absolute whitespace-nowrap rounded-sm px-0.5 font-sans text-bg-0"
+            className="absolute whitespace-nowrap rounded-sm px-0.5 font-sans text-surface-0"
             style={{ top: -11, left: 0, fontSize: "8.5px", lineHeight: "11px", background: presenceColor(participant) }}
           >
             {firstName(participant)}

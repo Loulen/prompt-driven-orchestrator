@@ -6,13 +6,12 @@ import type { LibraryEntry } from "../model/library";
 import { fetchSettings } from "../../settings/api/settings";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../api/library";
 import { useEditStore } from "../store/editStore";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 function renderInspector(props: Parameters<typeof NodeInspector>[0]) {
   return render(
-    <TooltipProvider>
+    <>
       <NodeInspector {...props} />
-    </TooltipProvider>,
+    </>,
   );
 }
 
@@ -969,9 +968,9 @@ describe("NodeInspector — the model field does not follow the selection (#617)
 
     useEditStore.setState({ selection: { kind: "node", id: "cop" } });
     rerender(
-      <TooltipProvider>
+      <>
         <NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} />
-      </TooltipProvider>,
+      </>,
     );
 
     expect((await field()).value).toBe("");

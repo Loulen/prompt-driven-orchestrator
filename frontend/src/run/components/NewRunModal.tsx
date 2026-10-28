@@ -81,12 +81,12 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       onClick={requestClose}
       onPaste={handlePaste}
     >
       <div
-        className="w-[480px] max-h-[85vh] flex flex-col rounded-lg border border-line bg-bg-4 shadow-xl"
+        className="w-[480px] max-h-[calc(85vh/var(--app-zoom,1))] flex flex-col rounded-lg border border-line bg-surface-2 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -124,7 +124,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
           {mode === "trigger" && triggerInputRejectReason && !error && (
             <div
-              className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+              className="mt-3 rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
               style={{ fontSize: "11.5px" }}
               data-testid="trigger-reject-reason"
             >
@@ -148,7 +148,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
           {error && (
             <div
-              className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+              className="mt-3 rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
               style={{ fontSize: "11.5px" }}
               data-testid="launch-error"
             >

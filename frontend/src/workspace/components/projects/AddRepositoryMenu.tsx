@@ -55,7 +55,7 @@ export default function AddRepositoryMenu({
     onChoose(choice);
   };
   const item =
-    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg";
+    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-text-2 transition-colors hover:bg-hover hover:text-text";
 
   return (
     <div ref={root} className="relative self-start">
@@ -65,7 +65,7 @@ export default function AddRepositoryMenu({
         aria-expanded={open}
         data-testid="project-add-repo"
         className={`flex items-center gap-1.5 rounded-md border border-dashed px-2.5 py-1.5 transition-colors ${
-          open ? "border-acc text-acc" : "border-line-strong text-fg-3 hover:border-acc hover:text-acc"
+          open ? "border-primary text-primary" : "border-line-strong text-text-3 hover:border-primary hover:text-primary"
         }`}
         style={{ fontSize: "11px" }}
       >
@@ -75,13 +75,13 @@ export default function AddRepositoryMenu({
       {open && (
         <div
           role="menu"
-          className="absolute left-0 top-full z-10 mt-1.5 w-[380px] rounded-md border border-line-strong bg-bg-2 p-1 shadow-xl"
+          className="absolute left-0 top-full z-10 mt-1.5 w-[380px] rounded-md border border-line-strong bg-surface-1 p-1 shadow-xl"
           style={{ fontSize: "11px" }}
           data-testid="project-add-repo-menu"
         >
           {recent.length > 0 && (
             <>
-              <div className="px-2 pb-1 pt-1.5 uppercase tracking-wider text-fg-4" style={{ fontSize: "9.5px" }}>
+              <div className="px-2 pb-1 pt-1.5 uppercase tracking-wider text-text-3" style={{ fontSize: "9.5px" }}>
                 Recent
               </div>
               {recent.map((path) => (
@@ -94,7 +94,7 @@ export default function AddRepositoryMenu({
                   onClick={() => choose({ kind: "recent", path })}
                   data-testid="project-add-repo-recent"
                 >
-                  <History size={12} className="shrink-0 text-fg-4" />
+                  <History size={12} className="shrink-0 text-text-3" />
                   <span className="truncate font-mono">{tildify(path, home)}</span>
                 </button>
               ))}
@@ -109,9 +109,9 @@ export default function AddRepositoryMenu({
               onClick={() => choose({ kind: "local" })}
               data-testid="project-add-repo-local"
             >
-              <HardDrive size={12} className="shrink-0 text-fg-4" />
+              <HardDrive size={12} className="shrink-0 text-text-3" />
               <span className="flex-1">Local folder…</span>
-              <span className="text-fg-4" style={{ fontSize: "9.5px" }}>explorer</span>
+              <span className="text-text-3" style={{ fontSize: "9.5px" }}>explorer</span>
             </button>
           )}
           {canCreateRepository && (
@@ -134,9 +134,9 @@ export default function AddRepositoryMenu({
               onClick={() => choose({ kind: "new" })}
               data-testid="project-add-repo-new"
             >
-              <FolderPlus size={12} className="shrink-0 text-fg-4" />
+              <FolderPlus size={12} className="shrink-0 text-text-3" />
               <span className="flex-1">New empty repository…</span>
-              <span className="text-fg-4" style={{ fontSize: "9.5px" }}>git init</span>
+              <span className="text-text-3" style={{ fontSize: "9.5px" }}>git init</span>
             </button>
           )}
         </div>

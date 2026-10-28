@@ -10,7 +10,7 @@ function Fields({ fields }: { fields: string[] }) {
   if (fields.length === 0) return null;
   return (
     <>
-      : <span className="text-fg">{fieldsLabel(fields)}</span>
+      : <span className="text-text">{fieldsLabel(fields)}</span>
     </>
   );
 }
@@ -19,8 +19,8 @@ function NoticeText({ notice, me }: { notice: DraftNotice; me: Actor | null }) {
   if (notice.kind === "external_edit") {
     return (
       <span className="min-w-0">
-        <span className="font-mono text-fg">{notice.file}</span> was changed outside PDO. Kept as{" "}
-        <span className="font-mono text-fg">
+        <span className="font-mono text-text">{notice.file}</span> was changed outside PDO. Kept as{" "}
+        <span className="font-mono text-text">
           v{notice.version.number} · {notice.version.title}
         </span>{" "}
         and merged into the draft
@@ -61,7 +61,7 @@ export default function DraftNoticeBanner({
         <div
           key={id}
           role="status"
-          className="flex items-start gap-2 rounded border border-st-running/40 bg-st-running-bg px-2 py-1.5 text-fg-2"
+          className="flex items-start gap-2 rounded border border-st-running/40 bg-st-running/14 px-2 py-1.5 text-text-2"
           style={{ fontSize: "10.5px" }}
           data-testid="draft-notice"
           data-kind={notice.kind}
@@ -87,7 +87,7 @@ export default function DraftNoticeBanner({
               type="button"
               onClick={() => onDismiss(id)}
               aria-label="Dismiss notice"
-              className="-mr-0.5 rounded p-0.5 text-fg-4 hover:text-fg-2 focus-visible:outline focus-visible:outline-1"
+              className="-mr-0.5 rounded p-0.5 text-text-3 hover:text-text-2 focus-visible:outline focus-visible:outline-1"
               data-testid="draft-notice-dismiss"
             >
               <X size={12} />

@@ -42,18 +42,18 @@ export default function NewPipelineModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim">
       <div
         // #823: the *First pipeline* tour watches for the dialog itself (its
         // presence ends the « create a new pipeline » step); the naming step
         // lights only the field, so Create stays under the dim until asked (#837).
         data-testid="new-pipeline-dialog"
-        className="w-[360px] rounded-lg border border-line bg-bg-4 p-4"
+        className="w-[360px] rounded-lg border border-line bg-surface-2 p-4"
         style={{ fontSize: "12px" }}
       >
-        <div className="mb-3 font-medium text-fg">New Pipeline</div>
+        <div className="mb-3 font-medium text-text">New Pipeline</div>
 
-        <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
+        <label className="mb-1 block text-text-3" style={{ fontSize: "11px" }}>
           Name
         </label>
         <input
@@ -66,7 +66,7 @@ export default function NewPipelineModal({ onClose }: { onClose: () => void }) {
           }}
           placeholder="my-pipeline"
           data-testid="new-pipeline-name"
-          className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
+          className="mb-3 w-full rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text outline-none focus:border-primary"
           autoFocus
           onKeyDown={(e) => e.key === "Enter" && handleCreate()}
         />
@@ -85,7 +85,7 @@ export default function NewPipelineModal({ onClose }: { onClose: () => void }) {
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
+            className="rounded border border-line-strong bg-surface-2 px-3 py-1 text-text-3 transition-colors hover:text-text"
           >
             Cancel
           </button>
@@ -93,7 +93,7 @@ export default function NewPipelineModal({ onClose }: { onClose: () => void }) {
             onClick={handleCreate}
             data-testid="new-pipeline-create"
             disabled={!name.trim()}
-            className="rounded bg-acc px-3 py-1 font-medium text-bg-0 transition-colors hover:bg-acc-dim disabled:opacity-50"
+            className="rounded bg-primary px-3 py-1 font-medium text-surface-0 transition-colors hover:bg-primary-hi disabled:opacity-50"
           >
             Create
           </button>

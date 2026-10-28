@@ -17,7 +17,7 @@ export default function InspectorTabs({
   children,
 }: Props) {
   return (
-    <div className="flex h-full flex-col bg-bg-2">
+    <div className="flex h-full flex-col bg-surface-1">
       <div className="flex shrink-0 border-b border-line">
         <TabButton
           active={activeTab === "run"}
@@ -55,8 +55,8 @@ function TabButton({
       onClick={onClick}
       className={`flex-1 cursor-pointer py-2 text-center transition-colors ${
         active
-          ? "border-b-2 border-acc font-medium text-fg"
-          : "text-fg-3 hover:text-fg-2"
+          ? "border-b-2 border-primary font-medium text-text"
+          : "text-text-3 hover:text-text-2"
       }`}
       style={{ fontSize: "11.5px" }}
     >

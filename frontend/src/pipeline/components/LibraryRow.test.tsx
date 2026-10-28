@@ -160,20 +160,20 @@ describe("LibraryRow selection", () => {
   it("marks the open editor tab with the selected background", () => {
     renderRow({ onOpen: () => {}, selected: true });
     const cls = screen.getByTestId("row").className;
-    expect(cls).toContain("bg-bg-3 text-fg");
-    // Not the unselected pair (whose `hover:bg-bg-3/50` also contains "bg-bg-3").
-    expect(cls).not.toContain("hover:bg-bg-3/50");
+    expect(cls).toContain("bg-surface-2 text-text");
+    // Not the unselected pair (whose `hover:bg-hover/50` also contains "bg-surface-2").
+    expect(cls).not.toContain("hover:bg-hover/50");
   });
 
   it("leaves an unselected row on the hover-only background", () => {
     renderRow({ onOpen: () => {}, selected: false });
     const cls = screen.getByTestId("row").className;
-    expect(cls).toContain("text-fg-2 hover:bg-bg-3/50");
+    expect(cls).toContain("text-text-2 hover:bg-hover/50");
   });
 
   it("defaults to unselected when `selected` is omitted", () => {
     renderRow({ onOpen: () => {} });
-    expect(screen.getByTestId("row").className).toContain("hover:bg-bg-3/50");
+    expect(screen.getByTestId("row").className).toContain("hover:bg-hover/50");
   });
 });
 

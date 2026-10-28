@@ -27,7 +27,7 @@ const RUN_STATUS_LABEL: Record<RunStatus, string> = {
 function runStatusDot(status: RunStatus): string {
   if (status === "failed") return "bg-st-failed";
   if (status === "awaiting_user") return "bg-st-await";
-  if (status === "paused") return "bg-st-stopped";
+  if (status === "paused") return "bg-st-skipped";
   if (isLiveRun(status)) return "bg-st-running";
   return "bg-st-done";
 }
@@ -69,7 +69,7 @@ export function ChildCountPills({
         key={id}
         data-testid={`${testId}-${id}`}
         title={`${n} ${label} child run${n > 1 ? "s" : ""}${hint}`}
-        className="inline-flex items-center gap-1 font-mono text-fg-2"
+        className="inline-flex items-center gap-1 font-mono text-text-2"
         style={{ fontSize: fs, lineHeight: 1 }}
       >
         <span className={`inline-block rounded-full ${bg}`} style={{ width: dot, height: dot }} />
@@ -81,7 +81,7 @@ export function ChildCountPills({
     <>
       {item(counts.finished, "bg-st-done", "finished", "finished")}
       {item(counts.failed, "bg-st-failed", "failed", "failed")}
-      {item(counts.stale, "bg-st-stale", "stale", "stale")}
+      {item(counts.stale, "bg-st-skipped", "stale", "stale")}
       {item(counts.running, "bg-st-running", "running", "running")}
     </>
   );
@@ -90,7 +90,7 @@ export function ChildCountPills({
       <span
         role="button"
         tabIndex={-1}
-        className="inline-flex cursor-pointer items-center gap-2 rounded px-0.5 hover:bg-bg-4"
+        className="inline-flex cursor-pointer items-center gap-2 rounded px-0.5 hover:bg-hover"
         data-testid={testId}
         aria-label={label}
         onClick={(e) => {
@@ -151,10 +151,10 @@ function ChildRow({
       data-awaiting={awaiting || undefined}
       className={`group flex flex-col gap-0.5 rounded border px-2 py-1.5 ${
         failed
-          ? "border-st-failed/40 bg-st-failed-bg/40"
+          ? "border-st-failed/40 bg-st-failed/6"
           : awaiting
-            ? "border-st-await/40 bg-st-await-bg/40"
-            : "border-line bg-bg-3"
+            ? "border-st-await/40 bg-st-await/6"
+            : "border-line bg-surface-2"
       }`}
     >
       <div className="flex items-center gap-1.5">
@@ -167,7 +167,7 @@ function ChildRow({
           data-testid="orchestration-child-title"
           onClick={() => onOpen(child.run_id)}
           title="Open this child run — the back arrow brings you back here"
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left font-medium text-fg hover:text-acc hover:underline"
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left font-medium text-text hover:text-primary hover:underline"
           style={{ fontSize: "11.5px" }}
         >
           <span className="truncate">{child.name || child.run_id}</span>
@@ -183,7 +183,7 @@ function ChildRow({
           </span>
         )}
       </div>
-      <div className="flex items-center gap-1 pl-3 font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
+      <div className="flex items-center gap-1 pl-3 font-mono text-text-3" style={{ fontSize: "9.5px" }}>
         <span className="truncate">{child.pipeline_name}</span>
         {started && (
           <span>
@@ -225,15 +225,15 @@ export function OrchestrationTab({
     return (
       <div
         data-testid="orchestration-empty"
-        className="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 py-8 text-center text-fg-4"
+        className="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 py-8 text-center text-text-3"
         style={{ fontSize: "11px" }}
       >
-        <GitFork size={16} className="text-fg-5" />
+        <GitFork size={16} className="text-text-3" />
         {nodeLive ? (
           <>
-            <span className="text-fg-3">No child run yet.</span>
+            <span className="text-text-3">No child run yet.</span>
             <span>
-              The agent creates them with <code className="font-mono text-fg-3">pdo run create</code>; they
+              The agent creates them with <code className="font-mono text-text-3">pdo run create</code>; they
               will appear here as they start.
             </span>
           </>
@@ -248,7 +248,7 @@ export function OrchestrationTab({
       {nodeAwaiting && counts.failed > 0 && (
         <div
           data-testid="orchestration-failed-banner"
-          className="rounded border border-st-failed/40 bg-st-failed-bg px-2 py-1.5 text-st-failed"
+          className="rounded border border-st-failed/40 bg-st-failed/14 px-2 py-1.5 text-st-failed"
           style={{ fontSize: "10.5px", lineHeight: 1.45 }}
         >
           {counts.failed} child run{counts.failed > 1 ? "s" : ""} failed — the node waits for you. Open the
@@ -256,7 +256,7 @@ export function OrchestrationTab({
         </div>
       )}
       {nodeLive && counts.running > 0 && (
-        <div className="flex items-center gap-1.5 text-fg-4" style={{ fontSize: "10px" }}>
+        <div className="flex items-center gap-1.5 text-text-3" style={{ fontSize: "10px" }}>
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-st-running" />
           Node completes once every child is terminal.
         </div>
@@ -266,7 +266,7 @@ export function OrchestrationTab({
           <ChildRow key={child.run_id} child={child} onOpen={onOpenChild} />
         ))}
       </ul>
-      <div className="flex items-center justify-between font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
+      <div className="flex items-center justify-between font-mono text-text-3" style={{ fontSize: "9.5px" }}>
         <span>
           {childRuns.length} child run{childRuns.length > 1 ? "s" : ""}
         </span>

@@ -74,7 +74,7 @@ export default function AgentSection({
         added={addedSkills}
       />
       {runNode?.skills && (
-        <p className="text-fg-4" style={{ fontSize: 9.5 }} data-testid="node-skills-frozen">
+        <p className="text-text-3" style={{ fontSize: 9.5 }} data-testid="node-skills-frozen">
           Frozen at spawn:{" "}
           {runNode.skills.length === 0
             ? "none"

@@ -69,7 +69,7 @@ export function PerformanceFilterBand({
         <UncombinedChip checked={uncombined} onChange={onUncombinedChange} />
       )}
       <BandDivider />
-      <span className="text-fg-4">Duration</span>
+      <span className="text-text-3">Duration</span>
       <DurationModeSegments value={mode} onChange={onDurationModeChange} />
       {mode !== "total" && (
         <WaitCoverage

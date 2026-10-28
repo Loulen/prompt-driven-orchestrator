@@ -30,7 +30,7 @@ export function DurationModeSegments({
       role="radiogroup"
       aria-label="Duration mode"
       data-testid="stats-duration-mode"
-      className="flex items-center gap-0.5 rounded border border-line bg-bg-3 p-0.5"
+      className="flex items-center gap-0.5 rounded border border-line bg-surface-2 p-0.5"
       onKeyDown={(event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
@@ -58,7 +58,7 @@ export function DurationModeSegments({
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(mode)}
             className={`rounded px-2 py-0.5 transition-colors ${
-              selected ? "bg-bg-5 text-fg" : "text-fg-3 hover:text-fg-2"
+              selected ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"
             }`}
           >
             {DURATION_MODE_LABEL[mode]}
@@ -87,7 +87,7 @@ export function WaitCoverage({
         role="img"
         aria-label={copy}
         data-testid="stats-wait-coverage"
-        className="inline-flex text-fg-4"
+        className="inline-flex text-text-3"
       >
         <Info size={12} />
       </span>
@@ -116,7 +116,7 @@ export function NodeKindChips({
     );
   return (
     <>
-      <span className="ml-1 text-fg-4">Node kind</span>
+      <span className="ml-1 text-text-3">Node kind</span>
       {ALL_NODE_KINDS.map((kind) => {
         const on = nodeKinds.includes(kind);
         return (
@@ -128,13 +128,13 @@ export function NodeKindChips({
             onClick={() => toggleKind(kind)}
             className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 capitalize ${
               on
-                ? "border-st-done bg-st-done/15 text-fg"
-                : "border-line bg-bg-3 text-fg-4 line-through"
+                ? "border-st-done bg-st-done/15 text-text"
+                : "border-line bg-surface-2 text-text-3 line-through"
             }`}
           >
             {on && <Check size={10} strokeWidth={3} aria-hidden="true" />}
             {kind}
-            <span className="font-mono text-fg-4">{counts[kind]}</span>
+            <span className="font-mono text-text-3">{counts[kind]}</span>
           </button>
         );
       })}

@@ -19,7 +19,7 @@ export default function DraftPresence() {
       <ParticipantStack participants={participants} />
       {draft.synced && !draft.canWrite && (
         <span
-          className="rounded border border-line-strong px-1 font-mono text-fg-3"
+          className="rounded border border-line-strong px-1 font-mono text-text-3"
           style={{ fontSize: "10px" }}
           data-testid="draft-read-only"
           title="You may read this pipeline, not change it"
@@ -33,7 +33,7 @@ export default function DraftPresence() {
         </span>
       )}
       {draft.changes > 0 && (
-        <span className="whitespace-nowrap font-mono text-fg-4" style={{ fontSize: "10px" }} data-testid="draft-changes">
+        <span className="whitespace-nowrap font-mono text-text-3" style={{ fontSize: "10px" }} data-testid="draft-changes">
           draft · {changes} since v{last}
         </span>
       )}

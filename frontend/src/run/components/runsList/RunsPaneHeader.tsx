@@ -27,7 +27,7 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
   useRecheckRunCreationRights(!canCreate);
   return (
     <div
-      className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
+      className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-text-2"
       style={{ fontSize: "11.5px" }}
     >
       Runs
@@ -67,7 +67,7 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
                   },
             );
           }}
-          className="cursor-pointer rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3 hover:border-acc hover:text-fg"
+          className="cursor-pointer rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 text-text-3 hover:border-primary hover:text-text"
           style={{ fontSize: "10.5px" }}
         >
           Project
@@ -77,7 +77,7 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
         <button
           onClick={onNewRun}
           data-testid="new-run-button"
-          className={`${availableRepos.length > 0 && canOpenProjectSettings ? "ml-1.5" : ""} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
+          className={`${availableRepos.length > 0 && canOpenProjectSettings ? "ml-1.5" : ""} flex cursor-pointer items-center gap-1 rounded bg-primary px-1.5 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi`}
           style={{ fontSize: "10.5px" }}
         >
           <Plus size={10} />
@@ -94,7 +94,7 @@ export default function RunsPaneHeader({ pane, onNewRun }: Props) {
             <button
               disabled
               data-testid="new-run-button"
-              className="flex cursor-not-allowed items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc opacity-50"
+              className="flex cursor-not-allowed items-center gap-1 rounded bg-primary px-1.5 py-0.5 font-medium text-primary-ink opacity-50"
               style={{ fontSize: "10.5px" }}
             >
               <Plus size={10} />

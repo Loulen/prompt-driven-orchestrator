@@ -50,7 +50,7 @@ export default function CenterPane({
   const pageTabCount = useMountedPages((s) => s.tabs.length);
   const activePage = useActivePage();
   const placeholder = (
-    <div className="flex h-full items-center justify-center text-fg-4" style={{ fontSize: "12px" }}>
+    <div className="flex h-full items-center justify-center text-text-3" style={{ fontSize: "12px" }}>
       Select a run or open a pipeline to get started
     </div>
   );
@@ -66,16 +66,16 @@ export default function CenterPane({
               type="button"
               data-testid="orchestrator-back-bar"
               onClick={handleBackToOrchestrator}
-              className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-line bg-bg-2 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
+              className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-line bg-surface-1 px-3 py-1 text-text-3 transition-colors hover:text-text"
               style={{ fontSize: "11px" }}
               title="Back to the orchestrator node, on its Orchestration tab"
             >
               <ArrowLeft size={12} />
               <span>
-                Back to <span className="font-medium text-fg-2">{orchestratorReturn.nodeName}</span>
-                <span className="text-fg-4"> · {orchestratorReturn.parentRunName}</span>
+                Back to <span className="font-medium text-text-2">{orchestratorReturn.nodeName}</span>
+                <span className="text-text-3"> · {orchestratorReturn.parentRunName}</span>
               </span>
-              <span className="ml-auto flex items-center gap-1 text-fg-4" style={{ fontSize: "10px" }}>
+              <span className="ml-auto flex items-center gap-1 text-text-3" style={{ fontSize: "10px" }}>
                 <GitFork size={10} /> child run
               </span>
             </button>

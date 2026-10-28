@@ -1,7 +1,6 @@
 import { useState } from "react";
 import type { StatsPerformance } from "../../../../shared/generated/StatsPerformance";
 import type { StatsPerformanceEntity } from "../../../../shared/generated/StatsPerformanceEntity";
-import { TooltipProvider } from "../../../../shared/ui/tooltip";
 import { useStatsAbsorption } from "../../../store/useStatsAbsorption";
 import type { CoupleRow } from "../../../model/statsAbsorption";
 import {
@@ -94,7 +93,7 @@ export function PerformanceTab({
 
   if (error) {
     return (
-      <div className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed">
+      <div className="rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed">
         {error}
       </div>
     );
@@ -135,12 +134,12 @@ export function PerformanceTab({
   // pane emptied BY the cohort must still carry the one control that refills it
   // (a fresh instance with no completed run would otherwise be a dead end).
   const emptyPane = (note: React.ReactNode) => (
-    <TooltipProvider>
+    <>
       <div data-testid="stats-chart-performance">
         {filterStrip}
         {note}
       </div>
-    </TooltipProvider>
+    </>
   );
 
   if (nodeKinds.length === 0) {
@@ -278,7 +277,7 @@ export function PerformanceTab({
   return (
     // #810 — the band, the master-list « filtered » marks and the card « i » all
     // carry tooltips outside `PerformanceTable`'s own provider.
-    <TooltipProvider>
+    <>
       <div
         className="relative flex min-h-full flex-col"
         data-testid="stats-chart-performance"
@@ -320,7 +319,7 @@ export function PerformanceTab({
                 crumbs={clickableCrumbs}
               />
             ) : (
-              <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+              <div className="mb-3 text-text-3" style={{ fontSize: "10.5px" }}>
                 Total{selected ? ` / ${selected.name}` : ""}
               </div>
             )}
@@ -367,6 +366,6 @@ export function PerformanceTab({
         </div>
         {absorption.overlay}
       </div>
-    </TooltipProvider>
+    </>
   );
 }

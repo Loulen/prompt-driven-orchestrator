@@ -6,15 +6,15 @@ import { FolderOpen, Square } from "lucide-react";
 export function DropOverlay({ count, hint, title }: { count: number; hint: string; title?: string }) {
   return (
     <div
-      className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-acc/70 bg-bg-1/70"
+      className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary/70 bg-surface-0/70"
       data-testid="skill-drop-overlay"
       role="status"
     >
-      <div className="flex flex-col gap-2 rounded-lg border border-line bg-bg-4 p-3 shadow-xl">
-        <div className="rounded-md border border-line-strong bg-bg-3 px-8 py-3 text-center font-semibold text-fg" style={{ fontSize: "14px" }}>
+      <div className="flex flex-col gap-2 rounded-lg border border-line bg-surface-2 p-3 shadow-xl">
+        <div className="rounded-md border border-line-strong bg-surface-2 px-8 py-3 text-center font-semibold text-text" style={{ fontSize: "14px" }}>
           {title ?? `Drop to attach ${count} file${count === 1 ? "" : "s"}`}
         </div>
-        <div className="rounded-md border border-acc/40 bg-bg-3 px-4 py-2.5 text-center text-fg-3" style={{ fontSize: "11px" }}>
+        <div className="rounded-md border border-primary/40 bg-surface-2 px-4 py-2.5 text-center text-text-3" style={{ fontSize: "11px" }}>
           {hint}
         </div>
       </div>
@@ -60,12 +60,12 @@ export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabl
           openPicker();
         }
       }}
-      className={`flex items-center gap-2 rounded-md border border-dashed border-line-strong bg-bg-3 text-fg-3 outline-none transition-colors focus-visible:border-acc hover:border-acc/60 ${
+      className={`flex items-center gap-2 rounded-md border border-dashed border-line-strong bg-surface-2 text-text-3 outline-none transition-colors focus-visible:border-primary hover:border-primary/60 ${
         compact ? "px-2.5 py-1.5" : "px-3 py-2"
       } ${disabled ? "opacity-50" : "cursor-pointer"}`}
       style={{ fontSize: "10.5px" }}
     >
-      <Square size={11} className="shrink-0 text-fg-4" aria-hidden />
+      <Square size={11} className="shrink-0 text-text-3" aria-hidden />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <button
         type="button"
@@ -75,7 +75,7 @@ export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabl
           event.stopPropagation();
           onBrowse();
         }}
-        className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-bg-4 px-2 py-1 text-fg-2 hover:border-acc disabled:opacity-50"
+        className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-text-2 hover:border-primary disabled:opacity-50"
         style={{ fontSize: "10.5px" }}
       >
         <FolderOpen size={10} />

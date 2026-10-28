@@ -330,9 +330,9 @@ export default function RightPane({
               />
             )}
             {!selectedNode && selectedNodeType !== "start" && isArchived && selectedRun && (
-              <aside className="flex h-full flex-col items-center justify-center bg-bg-2 text-fg-4" style={{ fontSize: "12px" }}>
+              <aside className="flex h-full flex-col items-center justify-center bg-surface-1 text-text-3" style={{ fontSize: "12px" }}>
                 <div className="text-center px-6">
-                  <div className="font-medium text-fg-3">Run archived</div>
+                  <div className="font-medium text-text-3">Run archived</div>
                   <div className="mt-1">No live state available. Select a node to view its final status.</div>
                 </div>
               </aside>

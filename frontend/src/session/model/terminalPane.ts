@@ -80,17 +80,17 @@ export function paneIndicator(
   const isActive =
     status === "running" || status === "awaiting_user" || status === "stale";
   if (mode === "probing") {
-    return { dotClass: "bg-fg-5", statusLabel: "reading pane…" };
+    return { dotClass: "bg-text-3", statusLabel: "reading pane…" };
   }
   if (mode === "frozen") {
     // Named, not dressed up as a connection: what is on screen is the pane PDO
     // froze when it reaped the session, and the reap is the invariant, not a fault.
     return {
-      dotClass: "bg-fg-5",
+      dotClass: "bg-text-3",
       statusLabel: frozen?.preserved ? "snapshot · session reaped" : "no pane kept",
     };
   }
-  if (!connected) return { dotClass: "bg-fg-5", statusLabel: "disconnected" };
+  if (!connected) return { dotClass: "bg-text-3", statusLabel: "disconnected" };
   if (isActive) {
     return { dotClass: "animate-pulse bg-st-running", statusLabel: "attached · live" };
   }

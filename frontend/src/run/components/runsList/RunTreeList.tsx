@@ -75,7 +75,7 @@ export default function RunTreeList({
     >
       {runs.length === 0 && (
         <div
-          className="px-3 py-4 text-center text-fg-4"
+          className="px-3 py-4 text-center text-text-3"
           style={{ fontSize: "11px" }}
           data-testid="runs-empty"
         >
@@ -92,14 +92,14 @@ export default function RunTreeList({
       )}
       {runs.length > 0 && filterActive && filteredRuns.length === 0 && (
         <div
-          className="px-3 py-4 text-center text-fg-4"
+          className="px-3 py-4 text-center text-text-3"
           style={{ fontSize: "11px" }}
           data-testid="run-filter-empty"
         >
           No runs match filters
           <button
             data-testid="run-filter-empty-clear"
-            className="mt-1 block w-full cursor-pointer text-acc hover:underline"
+            className="mt-1 block w-full cursor-pointer text-primary hover:underline"
             onClick={() => {
               setRunFilter(EMPTY_RUN_FILTER);
               setAttributeFilter({});
@@ -124,7 +124,7 @@ export default function RunTreeList({
               data-collapsed={collapsed ? "true" : "false"}
             >
               <div
-                className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
+                className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-surface-2/40 px-3 font-medium text-text-3"
                 style={{ fontSize: "10px" }}
                 title={group.title}
               >
@@ -135,7 +135,7 @@ export default function RunTreeList({
                   aria-expanded={!collapsed}
                   aria-label={collapsed ? `Expand ${group.label}` : `Collapse ${group.label}`}
                   title={collapsed ? "Expand project" : "Collapse project"}
-                  className="grid h-4 w-3 shrink-0 cursor-pointer place-items-center rounded text-fg-4 transition-colors hover:text-fg-2"
+                  className="grid h-4 w-3 shrink-0 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:text-text-2"
                   data-testid="run-group-chevron"
                 >
                   {collapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
@@ -156,13 +156,13 @@ export default function RunTreeList({
                   testId="run-group-select-all"
                 />
                 <span
-                  className={`truncate ${group.deleted ? "italic text-fg-4" : ""}`}
+                  className={`truncate ${group.deleted ? "italic text-text-3" : ""}`}
                   data-testid="run-repo-label"
                   data-deleted={group.deleted ? "true" : undefined}
                 >
                   {group.label}
                 </span>
-                <span className="shrink-0 font-mono font-normal text-fg-4" data-testid="run-group-count">
+                <span className="shrink-0 font-mono font-normal text-text-3" data-testid="run-group-count">
                   {groupRuns.length}
                   {collapsed && awaiting > 0 && ` · ${awaiting} awaiting`}
                 </span>
@@ -170,7 +170,7 @@ export default function RunTreeList({
                 {!group.deleted && canOpenProjectSettings && (
                 <button
                   onClick={() => openProjectSettings(group)}
-                  className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/hdr:inline-flex"
+                  className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover/hdr:inline-flex"
                   title={group.kind === "project" ? "Edit project" : "Name project"}
                   aria-label={group.kind === "project" ? "Edit project" : "Name project"}
                   data-testid="run-group-pencil"
@@ -200,7 +200,7 @@ export default function RunTreeList({
         <div data-testid="run-archived-section" className="border-t border-line">
           <button
             onClick={() => setArchivedOpen((o) => !o)}
-            className="flex w-full items-center gap-1.5 px-3 py-2 text-fg-2 transition-colors hover:bg-bg-3 cursor-pointer"
+            className="flex w-full items-center gap-1.5 px-3 py-2 text-text-2 transition-colors hover:bg-hover cursor-pointer"
             style={{ fontSize: "11.5px" }}
             data-testid="run-archived-toggle"
           >

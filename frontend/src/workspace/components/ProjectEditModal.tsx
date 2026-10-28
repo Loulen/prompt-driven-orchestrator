@@ -222,12 +222,12 @@ export default function ProjectEditModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="project-edit-backdrop"
       onClick={cancel}
     >
       <div
-        className="flex max-h-[85vh] w-[440px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-4"
+        className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-2"
         style={{ fontSize: "12px" }}
         role="dialog"
         aria-label="Edit project"
@@ -238,10 +238,10 @@ export default function ProjectEditModal({
             never shrink, only the body scrolls when the content overflows; the
             borders mark where the scrolling body is cut off. */}
         <div className="shrink-0 border-b border-line px-4 pb-3 pt-4">
-          <div className="mb-1 font-medium text-fg">
+          <div className="mb-1 font-medium text-text">
             {editing ? "Edit project" : "Name project"}
           </div>
-          <p className="text-fg-4" style={{ fontSize: "11px" }}>
+          <p className="text-text-3" style={{ fontSize: "11px" }}>
             Group repositories that work together under one name. A repository may
             be in several projects; the settings here apply to every Run launched in
             this project, on its default primary repository unless another is chosen.
@@ -249,7 +249,7 @@ export default function ProjectEditModal({
         </div>
 
         <div className="min-h-0 overflow-y-auto px-4 pt-3" data-testid="project-edit-body">
-        <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
+        <label className="mb-1 block text-text-3" style={{ fontSize: "11px" }}>
           Name
         </label>
         <input
@@ -259,7 +259,7 @@ export default function ProjectEditModal({
             setError(null);
           }}
           data-testid="project-name-input"
-          className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none focus:border-acc"
+          className="mb-3 w-full rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text outline-none focus:border-primary"
           style={{ fontSize: "11px" }}
         />
 
@@ -306,7 +306,7 @@ export default function ProjectEditModal({
         )}
         </div>
 
-        <label className="mb-1 block text-fg-3" style={{ fontSize: "11px" }}>
+        <label className="mb-1 block text-text-3" style={{ fontSize: "11px" }}>
           Member repositories
         </label>
         <ProjectMembersList
@@ -341,7 +341,7 @@ export default function ProjectEditModal({
         <div className="flex justify-end gap-2">
           <button
             onClick={cancel}
-            className="cursor-pointer rounded border border-line-strong px-3 py-1 text-fg-3 transition-colors hover:bg-bg-3"
+            className="cursor-pointer rounded border border-line-strong px-3 py-1 text-text-3 transition-colors hover:bg-hover"
             style={{ fontSize: "11px" }}
             data-testid="project-edit-cancel"
           >
@@ -350,7 +350,7 @@ export default function ProjectEditModal({
           <button
             onClick={handleSave}
             disabled={!canSave}
-            className="cursor-pointer rounded bg-acc px-3 py-1 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:cursor-not-allowed disabled:opacity-50"
+            className="cursor-pointer rounded bg-primary px-3 py-1 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:cursor-not-allowed disabled:opacity-50"
             style={{ fontSize: "11px" }}
             data-testid="project-edit-save"
           >

@@ -31,7 +31,7 @@ export default function FileEditor({
 
   return (
     <div
-      className="flex min-h-[320px] min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-bg-3"
+      className="flex min-h-[320px] min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-surface-2"
       data-testid="skill-file-editor"
       data-path={editor.path}
       data-dirty={dirty || undefined}
@@ -39,16 +39,16 @@ export default function FileEditor({
     >
       <div className="flex items-center gap-2 border-b border-line px-3 py-2" style={{ fontSize: "11px" }}>
         <span
-          className={`h-2 w-2 shrink-0 rounded-full ${dirty ? "bg-st-await" : "bg-acc/60"}`}
+          className={`h-2 w-2 shrink-0 rounded-full ${dirty ? "bg-st-await" : "bg-primary/60"}`}
           aria-label={dirty ? "unsaved" : "saved"}
           data-testid="skill-file-editor-dot"
         />
-        <span className="truncate font-mono text-fg">{editor.path}</span>
-        {dirty && <span className="text-fg-4">· unsaved</span>}
+        <span className="truncate font-mono text-text">{editor.path}</span>
+        {dirty && <span className="text-text-3">· unsaved</span>}
         <span className="flex-1" />
         {leave ? (
           <span className="flex items-center gap-1.5" data-testid="skill-file-leave-prompt">
-            <span className="text-fg-2">Unsaved changes.</span>
+            <span className="text-text-2">Unsaved changes.</span>
             <button
               type="button"
               onClick={() => {
@@ -59,7 +59,7 @@ export default function FileEditor({
                   }
                 });
               }}
-              className="rounded-md bg-acc px-2 py-0.5 font-medium text-bg-1 hover:opacity-90"
+              className="rounded-md bg-primary px-2 py-0.5 font-medium text-surface-0 hover:opacity-90"
               style={{ fontSize: "10.5px" }}
               data-testid="skill-file-leave-save"
             >
@@ -72,7 +72,7 @@ export default function FileEditor({
                 leave();
                 onLeaveSettled();
               }}
-              className="rounded-md border border-line-strong bg-bg-4 px-2 py-0.5 text-fg-2 hover:border-st-failed"
+              className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-st-failed"
               style={{ fontSize: "10.5px" }}
               data-testid="skill-file-leave-discard"
             >
@@ -81,7 +81,7 @@ export default function FileEditor({
             <button
               type="button"
               onClick={onLeaveSettled}
-              className="rounded-md border border-line-strong bg-bg-4 px-2 py-0.5 text-fg-2 hover:border-acc"
+              className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary"
               style={{ fontSize: "10.5px" }}
               data-testid="skill-file-leave-stay"
             >
@@ -89,7 +89,7 @@ export default function FileEditor({
             </button>
           </span>
         ) : (
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="text-text-3" style={{ fontSize: "10.5px" }}>
             plain text · ⌘S saves
           </span>
         )}
@@ -102,18 +102,18 @@ export default function FileEditor({
           disabled={dirty}
           aria-label="Close editor"
           title={dirty ? "Save or revert first" : "Close"}
-          className="grid h-5 w-5 place-items-center rounded text-fg-4 hover:bg-bg-4 hover:text-fg disabled:opacity-30"
+          className="grid h-5 w-5 place-items-center rounded text-text-3 hover:bg-hover hover:text-text disabled:opacity-30"
         >
           ✕
         </button>
       </div>
 
       {editor.loading ? (
-        <div className="p-3 text-fg-4" style={{ fontSize: "11px" }}>
+        <div className="p-3 text-text-3" style={{ fontSize: "11px" }}>
           Loading…
         </div>
       ) : binary ? (
-        <div className="flex flex-1 items-center justify-center p-6 text-fg-4" style={{ fontSize: "11.5px" }} data-testid="skill-file-binary">
+        <div className="flex flex-1 items-center justify-center p-6 text-text-3" style={{ fontSize: "11.5px" }} data-testid="skill-file-binary">
           binary file · {formatBytes(editor.content?.size ?? 0)}
         </div>
       ) : (
@@ -125,7 +125,7 @@ export default function FileEditor({
           aria-label={`${editor.path} text`}
           aria-invalid={editor.error ? true : undefined}
           data-testid="skill-file-text"
-          className="min-h-[220px] flex-1 resize-none bg-bg-1 p-3 font-mono text-fg outline-none"
+          className="min-h-[220px] flex-1 resize-none bg-surface-0 p-3 font-mono text-text outline-none"
           style={{ fontSize: "11.5px", lineHeight: 1.55 }}
         />
       )}
@@ -133,17 +133,17 @@ export default function FileEditor({
       {editor.error && (
         <div
           role="alert"
-          className="border-t border-st-failed/50 bg-st-failed-bg px-3 py-2 text-fg-2"
+          className="border-t border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2"
           style={{ fontSize: "11px" }}
           data-testid="skill-file-error"
         >
-          <strong className="text-fg">{isSkillMd ? "Cannot save SKILL.md." : "Cannot save."}</strong> {editor.error}
+          <strong className="text-text">{isSkillMd ? "Cannot save SKILL.md." : "Cannot save."}</strong> {editor.error}
         </div>
       )}
 
       {!binary && !editor.loading && (
         <div className="flex items-center gap-2 border-t border-line px-3 py-2" style={{ fontSize: "10.5px" }}>
-          <span className="text-fg-4">
+          <span className="text-text-3">
             {locked
               ? "Read-only — managed by PDO"
               : editor.savedAt
@@ -159,7 +159,7 @@ export default function FileEditor({
                 onClick={files.revert}
                 disabled={!dirty}
                 data-testid="skill-file-revert"
-                className="rounded-md border border-line-strong bg-bg-4 px-2.5 py-1 text-fg-2 hover:border-acc disabled:opacity-40"
+                className="rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 hover:border-primary disabled:opacity-40"
               >
                 Revert
               </button>
@@ -168,7 +168,7 @@ export default function FileEditor({
                 onClick={() => void files.save()}
                 disabled={!dirty || files.saving}
                 data-testid="skill-file-save"
-                className="rounded-md bg-acc px-2.5 py-1 font-medium text-bg-1 hover:opacity-90 disabled:opacity-40"
+                className="rounded-md bg-primary px-2.5 py-1 font-medium text-surface-0 hover:opacity-90 disabled:opacity-40"
               >
                 {files.saving ? "Saving…" : "Save"}
               </button>

@@ -5,6 +5,7 @@ import type { TourRect } from "../../hooks/tour/tourView";
 import type { TourChecklistItem, TourDef, TourStep } from "../../lib/tourDef";
 import type { TourIllustration } from "../../lib/tourPanels";
 import { copyToClipboard } from "../../shared/lib/clipboard";
+import { cssViewport } from "../../shared/ui/zoom";
 
 /**
  * The instruction card of a running tour (#823).
@@ -91,11 +92,7 @@ export default function TourPopover({
   useLayoutEffect(() => {
     const height = cardRef.current?.offsetHeight ?? 150;
     setPlacement(
-      placePopover(
-        hole,
-        { width: WIDTH, height },
-        { width: window.innerWidth, height: window.innerHeight },
-      ),
+      placePopover(hole, { width: WIDTH, height }, cssViewport()),
     );
   }, [hole, step.id, body, note, checklist]);
 
@@ -111,16 +108,16 @@ export default function TourPopover({
       data-testid="tour-popover"
       data-step={step.id}
       data-side={placement.side}
-      className="pointer-events-auto absolute flex flex-col gap-2 rounded-lg border border-line-strong bg-bg-2 p-3 shadow-lg"
+      className="pointer-events-auto absolute flex flex-col gap-2 rounded-lg border border-line-strong bg-surface-1 p-3 shadow-lg"
       style={{ top: placement.top, left: placement.left, width: WIDTH, fontSize: "11.5px" }}
     >
       <span
         aria-hidden="true"
-        className={`absolute h-2.5 w-2.5 rotate-45 border-line-strong bg-bg-2 ${arrowClass(placement.side)}`}
+        className={`absolute h-2.5 w-2.5 rotate-45 border-line-strong bg-surface-1 ${arrowClass(placement.side)}`}
       />
       <div className="flex items-center justify-between gap-2">
         <span
-          className="font-semibold uppercase tracking-wide text-acc"
+          className="font-semibold uppercase tracking-wide text-primary"
           style={{ fontSize: "9.5px", letterSpacing: "0.08em" }}
           data-testid="tour-progress"
         >
@@ -133,7 +130,7 @@ export default function TourPopover({
           onClick={onQuit}
           data-testid="tour-quit"
           title="Quit tour (Esc)"
-          className="flex shrink-0 cursor-pointer items-center gap-0.5 text-fg-4 transition-colors hover:text-fg-2"
+          className="flex shrink-0 cursor-pointer items-center gap-0.5 text-text-3 transition-colors hover:text-text-2"
           style={{ fontSize: "9.5px" }}
         >
           <X size={9} />
@@ -141,11 +138,11 @@ export default function TourPopover({
         </button>
       </div>
 
-      <div className="font-semibold text-fg" style={{ fontSize: "13px" }}>
+      <div className="font-semibold text-text" style={{ fontSize: "13px" }}>
         {step.title}
       </div>
       {body && (
-        <p className="text-fg-2" style={{ fontSize: "11px", lineHeight: 1.5 }} data-testid="tour-body">
+        <p className="text-text-2" style={{ fontSize: "11px", lineHeight: 1.5 }} data-testid="tour-body">
           {body}
         </p>
       )}
@@ -161,7 +158,7 @@ export default function TourPopover({
               key={item.label}
               data-testid={`tour-checklist-${item.label}`}
               data-done={item.done ? "true" : "false"}
-              className={`flex items-start gap-1.5 ${item.done ? "text-acc" : "text-fg-4"}`}
+              className={`flex items-start gap-1.5 ${item.done ? "text-primary" : "text-text-3"}`}
               style={{ fontSize: "10.5px" }}
             >
               {item.done ? (
@@ -174,7 +171,7 @@ export default function TourPopover({
                 {item.badge && (
                   <span
                     data-testid="tour-checklist-badge"
-                    className="rounded bg-st-failed-bg px-1 font-mono text-st-failed"
+                    className="rounded bg-st-failed/14 px-1 font-mono text-st-failed"
                     style={{ fontSize: "9px" }}
                   >
                     {item.badge}
@@ -194,15 +191,15 @@ export default function TourPopover({
       )}
 
       {note && (
-        <p className="text-fg-3" style={{ fontSize: "10.5px", lineHeight: 1.5 }} data-testid="tour-note">
+        <p className="text-text-3" style={{ fontSize: "10.5px", lineHeight: 1.5 }} data-testid="tour-note">
           {note}
         </p>
       )}
 
       {step.copyBlock && (
-        <div className="flex items-start gap-1.5 rounded border border-line bg-bg-3 p-1.5">
+        <div className="flex items-start gap-1.5 rounded border border-line bg-surface-2 p-1.5">
           <pre
-            className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-fg-2"
+            className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-text-2"
             style={{ fontSize: "10px", lineHeight: 1.5 }}
             data-testid="tour-copy-block"
           >
@@ -213,10 +210,10 @@ export default function TourPopover({
             onClick={copy}
             data-testid="tour-copy"
             aria-label="Copy the block"
-            className="flex shrink-0 cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-4 px-1.5 py-0.5 text-fg-3 transition-colors hover:text-fg"
+            className="flex shrink-0 cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 text-text-3 transition-colors hover:text-text"
             style={{ fontSize: "10px" }}
           >
-            {copied ? <Check size={11} className="text-acc" /> : <Copy size={11} />}
+            {copied ? <Check size={11} className="text-primary" /> : <Copy size={11} />}
             {copied ? "Copied" : "Copy"}
           </button>
         </div>
@@ -226,18 +223,18 @@ export default function TourPopover({
           with nothing turning reads as a freeze. */}
       {waiting && (
         <div
-          className="flex items-center gap-2 rounded border border-line bg-bg-3 px-2 py-1.5 text-fg-3"
+          className="flex items-center gap-2 rounded border border-line bg-surface-2 px-2 py-1.5 text-text-3"
           style={{ fontSize: "10.5px" }}
           data-testid="tour-waiting"
         >
-          <LoaderCircle size={11} className="shrink-0 animate-spin text-acc" />
+          <LoaderCircle size={11} className="shrink-0 animate-spin text-primary" />
           {step.waitingNote}
         </div>
       )}
 
       {/* Progress bar — the same count as the label, for the glance rather than the read. */}
-      <div className="h-0.5 w-full overflow-hidden rounded-full bg-bg-4">
-        <div className="h-full bg-acc" style={{ width: `${(stepNumber / total) * 100}%` }} />
+      <div className="h-0.5 w-full overflow-hidden rounded-full bg-surface-2">
+        <div className="h-full bg-primary" style={{ width: `${(stepNumber / total) * 100}%` }} />
       </div>
 
       {/* Not rendered at all when the step has neither: a step that is simply
@@ -250,7 +247,7 @@ export default function TourPopover({
               type="button"
               onClick={onSkip}
               data-testid="tour-skip"
-              className="cursor-pointer text-fg-3 transition-colors hover:text-fg"
+              className="cursor-pointer text-text-3 transition-colors hover:text-text"
               style={{ fontSize: "10.5px" }}
             >
               Skip
@@ -264,7 +261,7 @@ export default function TourPopover({
               onClick={onNext}
               disabled={!ready}
               data-testid="tour-next"
-              className="cursor-pointer rounded bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:cursor-not-allowed disabled:opacity-40"
+              className="cursor-pointer rounded bg-primary px-2 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:cursor-not-allowed disabled:opacity-40"
               style={{ fontSize: "10.5px" }}
             >
               Next
@@ -272,7 +269,7 @@ export default function TourPopover({
           ) : (
             step.advanceHint && (
               <span
-                className="text-right font-mono text-fg-4"
+                className="text-right font-mono text-text-3"
                 style={{ fontSize: "9.5px" }}
                 data-testid="tour-advance-hint"
               >
@@ -294,7 +291,7 @@ export default function TourPopover({
 function Illustration({ illustration }: { illustration: TourIllustration }) {
   return (
     <ul
-      className="flex flex-col overflow-hidden rounded border border-line bg-bg-1"
+      className="flex flex-col overflow-hidden rounded border border-line bg-surface-0"
       data-testid="tour-illustration"
       aria-label="Example"
     >
@@ -309,8 +306,8 @@ function Illustration({ illustration }: { illustration: TourIllustration }) {
             data-testid="tour-illustration-dot"
             className={`block h-2 w-2 shrink-0 rounded-full ${row.dotClass} ${row.pulse ? "animate-pulse" : ""}`}
           />
-          <span className="min-w-0 flex-1 truncate font-medium text-fg-2">{row.label}</span>
-          <span className="shrink-0 text-fg-4" style={{ fontSize: "9.5px" }}>
+          <span className="min-w-0 flex-1 truncate font-medium text-text-2">{row.label}</span>
+          <span className="shrink-0 text-text-3" style={{ fontSize: "9.5px" }}>
             {row.detail}
           </span>
         </li>
@@ -335,7 +332,7 @@ export function TourAside({ rect, text }: { rect: TourRect; text: string }) {
   useLayoutEffect(() => {
     const height = ref.current?.offsetHeight ?? 60;
     setPlacement(
-      placePopover(rect, { width: ASIDE_WIDTH, height }, { width: window.innerWidth, height: window.innerHeight }),
+      placePopover(rect, { width: ASIDE_WIDTH, height }, cssViewport()),
     );
   }, [rect, text]);
 
@@ -345,12 +342,12 @@ export function TourAside({ rect, text }: { rect: TourRect; text: string }) {
       data-testid="tour-aside"
       data-side={placement.side}
       role="note"
-      className="pointer-events-none absolute rounded-md border border-acc-border bg-bg-3 px-2 py-1.5 text-fg-2 shadow-md"
+      className="pointer-events-none absolute rounded-md border border-primary/30 bg-surface-2 px-2 py-1.5 text-text-2 shadow-md"
       style={{ top: placement.top, left: placement.left, width: ASIDE_WIDTH, fontSize: "10.5px", lineHeight: 1.45 }}
     >
       <span
         aria-hidden="true"
-        className={`absolute h-2 w-2 rotate-45 border-acc-border bg-bg-3 ${arrowClass(placement.side)}`}
+        className={`absolute h-2 w-2 rotate-45 border-primary/30 bg-surface-2 ${arrowClass(placement.side)}`}
       />
       {text}
     </div>

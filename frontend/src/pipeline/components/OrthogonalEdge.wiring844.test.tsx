@@ -122,7 +122,7 @@ function edgeData(overrides: Partial<OrthogonalEdgeData> = {}): OrthogonalEdgeDa
     targetAnchor: { side: "top", offset: 80 },
     isConditional: false,
     isElse: false,
-    strokeColor: "var(--color-fg-4)",
+    strokeColor: "var(--text-3)",
     dashed: false,
     ...overrides,
   };

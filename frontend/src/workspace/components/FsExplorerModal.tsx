@@ -212,7 +212,7 @@ export default function FsExplorerModal({
 
   return (
     <div
-      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-black/50`}
+      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-scrim`}
       data-testid={`${testIdPrefix}-backdrop`}
       onClick={(e) => {
         // Unconditional `stopPropagation`: keeps a backdrop click from bubbling up the
@@ -228,7 +228,7 @@ export default function FsExplorerModal({
         aria-modal="true"
         aria-labelledby={title ? `${modalId}-title` : undefined}
         aria-label={title ? undefined : mode === "file" ? "Choose a file" : "Choose a folder"}
-        className="flex max-h-[70vh] w-[460px] flex-col rounded-lg border border-line bg-bg-4 shadow-xl focus:outline-none"
+        className="flex max-h-[calc(70vh/var(--app-zoom,1))] w-[460px] flex-col rounded-lg border border-line bg-surface-2 shadow-xl focus:outline-none"
         data-testid={modalId}
         onClick={(e) => e.stopPropagation()}
       >
@@ -236,7 +236,7 @@ export default function FsExplorerModal({
           <div className="border-b border-line px-3 py-2">
             <span
               id={`${modalId}-title`}
-              className="font-semibold text-fg"
+              className="font-semibold text-text"
               style={{ fontSize: "12.5px" }}
             >
               {title}
@@ -250,7 +250,7 @@ export default function FsExplorerModal({
             type="button"
             onClick={() => parent && void navigateTo(parent)}
             disabled={parent == null}
-            className="flex shrink-0 items-center justify-center rounded p-1 text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
+            className="flex shrink-0 items-center justify-center rounded p-1 text-text-3 transition-colors hover:bg-active hover:text-text disabled:opacity-30 disabled:hover:bg-transparent"
             title="Up one level"
             aria-label="Up one level"
             data-testid={`${testIdPrefix}-up`}
@@ -258,7 +258,7 @@ export default function FsExplorerModal({
             <ArrowUp size={14} />
           </button>
           <span
-            className="min-w-0 flex-1 truncate font-mono text-fg-2"
+            className="min-w-0 flex-1 truncate font-mono text-text-2"
             style={{ fontSize: "11.5px" }}
             title={currentDir}
             data-testid={`${testIdPrefix}-path`}
@@ -279,18 +279,18 @@ export default function FsExplorerModal({
             </div>
           )}
           {truncated && (
-            <div className="px-3 py-1 text-fg-4" style={{ fontSize: "10.5px" }}>
+            <div className="px-3 py-1 text-text-3" style={{ fontSize: "10.5px" }}>
               {/* FROZEN COPY: `RepoCombobox.test.tsx` asserts /Showing first 1000/. */}
               Showing first 1000 {mode === "file" ? "entries" : "folders"}
             </div>
           )}
           {loading && entries.length === 0 && (
-            <div className="px-3 py-2 text-fg-4" style={{ fontSize: "11.5px" }}>
+            <div className="px-3 py-2 text-text-3" style={{ fontSize: "11.5px" }}>
               Loading…
             </div>
           )}
           {!loading && !error && entries.length === 0 && (
-            <div className="px-3 py-2 text-fg-4" style={{ fontSize: "11.5px" }}>
+            <div className="px-3 py-2 text-text-3" style={{ fontSize: "11.5px" }}>
               {emptyLabel}
             </div>
           )}
@@ -301,8 +301,8 @@ export default function FsExplorerModal({
                   type="button"
                   onClick={(event) => handleRow(entry, event)}
                   aria-pressed={multi && !entry.is_dir ? pickedMany.includes(entry.path) : undefined}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-bg-5 ${
-                    picked === entry.path || pickedMany.includes(entry.path) ? "bg-bg-5" : ""
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-active ${
+                    picked === entry.path || pickedMany.includes(entry.path) ? "bg-surface-2" : ""
                   }`}
                   data-testid={`${testIdPrefix}-entry`}
                   // #824: which entry this row is. Every row shares one testid,
@@ -315,23 +315,23 @@ export default function FsExplorerModal({
                     <span
                       aria-hidden
                       className={`grid h-3 w-3 shrink-0 place-items-center rounded-sm border ${
-                        pickedMany.includes(entry.path) ? "border-acc bg-acc" : "border-line-strong"
+                        pickedMany.includes(entry.path) ? "border-primary bg-primary" : "border-line-strong"
                       }`}
                     />
                   )}
                   {entry.is_git_repo ? (
                     <FolderGit2
                       size={14}
-                      className="shrink-0 text-acc"
+                      className="shrink-0 text-primary"
                       data-testid={`${testIdPrefix}-git-dot`}
                     />
                   ) : entry.is_dir || mode === "dir" ? (
-                    <Folder size={14} className="shrink-0 text-fg-4" />
+                    <Folder size={14} className="shrink-0 text-text-3" />
                   ) : (
-                    <FileIcon size={14} className="shrink-0 text-fg-4" />
+                    <FileIcon size={14} className="shrink-0 text-text-3" />
                   )}
                   <span
-                    className="min-w-0 flex-1 truncate font-mono text-fg"
+                    className="min-w-0 flex-1 truncate font-mono text-text"
                     style={{ fontSize: "12px" }}
                   >
                     {entry.name}
@@ -339,7 +339,7 @@ export default function FsExplorerModal({
                   {entry.is_symlink && (
                     <Link2
                       size={12}
-                      className="shrink-0 text-fg-4"
+                      className="shrink-0 text-text-3"
                       aria-label="symlink"
                       data-testid={`${testIdPrefix}-symlink`}
                     />
@@ -353,14 +353,14 @@ export default function FsExplorerModal({
         {/* Footer: cancel + confirm */}
         <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2">
           {multi && (
-            <span className="mr-auto text-fg-4" style={{ fontSize: "10.5px" }} data-testid={`${testIdPrefix}-count`}>
+            <span className="mr-auto text-text-3" style={{ fontSize: "10.5px" }} data-testid={`${testIdPrefix}-count`}>
               {pickedMany.length} selected · click toggles, ⇧-click ranges
             </span>
           )}
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-3 py-1.5 text-fg-3 transition-colors hover:text-fg"
+            className="rounded-md px-3 py-1.5 text-text-3 transition-colors hover:text-text"
             style={{ fontSize: "11.5px" }}
           >
             Cancel
@@ -369,7 +369,7 @@ export default function FsExplorerModal({
             type="button"
             onClick={confirm}
             disabled={!confirmTarget}
-            className="rounded-md bg-acc px-3 py-1.5 font-medium text-bg-1 transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40"
             style={{ fontSize: "11.5px" }}
             data-testid={`${testIdPrefix}-select`}
           >

@@ -117,7 +117,7 @@ export default function ProjectDetail({
 
   return (
     <div
-      className="flex min-w-0 flex-1 flex-col gap-3 rounded-md border border-line bg-bg-1 px-3.5 py-3"
+      className="flex min-w-0 flex-1 flex-col gap-3 rounded-md border border-line bg-surface-0 px-3.5 py-3"
       data-testid="project-detail"
       data-project-id={project.id}
     >
@@ -137,11 +137,11 @@ export default function ProjectDetail({
                 setRenaming(null);
               }
             }}
-            className="min-w-0 rounded border border-acc bg-bg-3 px-1.5 py-0.5 font-semibold text-fg outline-none"
+            className="min-w-0 rounded border border-primary bg-surface-2 px-1.5 py-0.5 font-semibold text-text outline-none"
             style={{ fontSize: "13px" }}
           />
         ) : (
-          <span className="truncate font-semibold text-fg" style={{ fontSize: "13px" }} data-testid="project-detail-name">
+          <span className="truncate font-semibold text-text" style={{ fontSize: "13px" }} data-testid="project-detail-name">
             {project.name}
           </span>
         )}
@@ -152,17 +152,17 @@ export default function ProjectDetail({
             aria-label="Rename project"
             title="Rename"
             data-testid="project-rename"
-            className="shrink-0 rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2"
+            className="shrink-0 rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2"
           >
             <Pencil size={11} />
           </button>
         )}
-        <span className="shrink-0 font-mono text-fg-4" style={{ fontSize: "10.5px" }} data-testid="project-detail-runs">
+        <span className="shrink-0 font-mono text-text-3" style={{ fontSize: "10.5px" }} data-testid="project-detail-runs">
           {runCount(runs)}
         </span>
         {!editable && (
           <span
-            className="shrink-0 rounded bg-bg-3 px-1.5 py-0.5 text-fg-4"
+            className="shrink-0 rounded bg-surface-2 px-1.5 py-0.5 text-text-3"
             style={{ fontSize: "9.5px" }}
             title="You may read this project, not change it."
             data-testid="project-read-only"
@@ -177,7 +177,7 @@ export default function ProjectDetail({
               onClick={gestures.openSettings}
               title="Agent, skills, worktree provisioning and extension settings of this project"
               data-testid="project-more-settings"
-              className="flex items-center gap-1 rounded border border-line-strong px-2 py-1 text-fg-3 transition-colors hover:border-acc hover:text-fg"
+              className="flex items-center gap-1 rounded border border-line-strong px-2 py-1 text-text-3 transition-colors hover:border-primary hover:text-text"
               style={{ fontSize: "10.5px" }}
             >
               <SlidersHorizontal size={11} />
@@ -200,17 +200,17 @@ export default function ProjectDetail({
       </div>
 
       <div className="flex items-baseline justify-between gap-2">
-        <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+        <span className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
           Repositories
         </span>
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           the default primary is preselected in New Run
         </span>
       </div>
 
       <div className="flex flex-col gap-1.5" data-testid="project-detail-repos">
         {project.members.length === 0 && (
-          <div className="px-1 text-fg-4" style={{ fontSize: "11px" }}>
+          <div className="px-1 text-text-3" style={{ fontSize: "11px" }}>
             No repository yet.
           </div>
         )}

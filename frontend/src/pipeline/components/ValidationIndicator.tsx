@@ -1,7 +1,7 @@
 import { FlaskConical, Folders, Globe } from "lucide-react";
 import type { PipelineValidation } from "../../shared/generated/PipelineValidation";
 import type { Project } from "../../workspace/model/project";
-import { Tooltip, TooltipProvider } from "../../shared/ui/tooltip";
+import { Tooltip } from "../../shared/ui/tooltip";
 import { validationSummary, validationTooltip } from "../model/pipelineValidation";
 
 /**
@@ -26,7 +26,7 @@ export default function ValidationIndicator({
   // Its own provider: the indicator sits in rows and bars that are rendered on
   // their own too (tests), and a Radix tooltip needs one above it.
   return (
-    <TooltipProvider>
+    <>
       <Tooltip content={tooltip}>
         <span
           data-testid={testId}
@@ -35,7 +35,7 @@ export default function ValidationIndicator({
           aria-label={tooltip}
           role="img"
           className={`inline-flex shrink-0 items-center gap-0.5 font-sans ${
-            summary.all || summary.count > 0 ? "text-fg-3" : "text-fg-5"
+            summary.all || summary.count > 0 ? "text-text-3" : "text-text-3"
           }`}
           style={{ fontSize: "10px" }}
         >
@@ -43,6 +43,6 @@ export default function ValidationIndicator({
           <span>{summary.all ? "All" : summary.count}</span>
         </span>
       </Tooltip>
-    </TooltipProvider>
+    </>
   );
 }

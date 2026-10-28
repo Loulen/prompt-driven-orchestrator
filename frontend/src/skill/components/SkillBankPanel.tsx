@@ -76,11 +76,11 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             onRequestDelete={(ref) => void panel.askDelete(ref)}
             emptyState={
               !loaded ? (
-                <div className="px-4 py-6 text-fg-4" style={{ fontSize: "11px" }}>
+                <div className="px-4 py-6 text-text-3" style={{ fontSize: "11px" }}>
                   Loading…
                 </div>
               ) : filter.trim() ? (
-                <div className="px-4 py-6 text-fg-4" style={{ fontSize: "11px" }}>
+                <div className="px-4 py-6 text-text-3" style={{ fontSize: "11px" }}>
                   No skill matches “{filter.trim()}”.
                 </div>
               ) : null
@@ -92,7 +92,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
           <ExportSelectionBar bank={bank} panel={panel} />
         ) : (
         <div
-          className="flex items-center justify-between gap-2 border-t border-line px-3 py-2 text-fg-4"
+          className="flex items-center justify-between gap-2 border-t border-line px-3 py-2 text-text-3"
           style={{ fontSize: "10.5px" }}
           data-testid="skill-bank-footer"
         >

@@ -171,8 +171,8 @@ test("Diff tab lists the Run's changed files with correct counts, collapses and 
   await expect(alpha.getByTestId("diff-line-del")).toHaveCount(readmeStat.del);
   await expect(alpha.getByTestId("diff-line-add")).toHaveCount(readmeStat.add);
   await expect(alpha.getByTestId("diff-line-add").first()).toContainText("e2e diff tab — edited title");
-  await expect(alpha.getByTestId("diff-line-add").first()).toHaveClass(/bg-st-done-bg/);
-  await expect(alpha.getByTestId("diff-line-del").first()).toHaveClass(/bg-st-failed-bg/);
+  await expect(alpha.getByTestId("diff-line-add").first()).toHaveClass(/bg-st-done\/14/);
+  await expect(alpha.getByTestId("diff-line-del").first()).toHaveClass(/bg-st-failed\/14/);
 
   // Step 3 — collapse: header only; expand: lines back.
   await alpha.getByTestId("diff-file-header").click();

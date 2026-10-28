@@ -2,7 +2,7 @@ import { Fragment, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { StatsCostEntity } from "../../../../shared/generated/StatsCostEntity";
 import { harnessColor } from "../../../../harness/model/color";
-import { Tooltip, TooltipProvider } from "../../../../shared/ui/tooltip";
+import { Tooltip } from "../../../../shared/ui/tooltip";
 import type { MasterSelection } from "../../../store/absorptionSelection";
 import { coupleRows } from "../../../model/statsAbsorption";
 import { pairMetric } from "../../../model/cost";
@@ -48,12 +48,12 @@ export function CostTable({
   // table on the drill path, so a stale expanded set never leaks across Nodes.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   return (
-    <TooltipProvider>
+    <>
       <table
         className="w-full table-fixed text-left"
         style={{ fontSize: "11px" }}
       >
-        <thead className="text-fg-4">
+        <thead className="text-text-3">
           <tr>
             <th className="pb-2 font-medium">Name</th>
             <th className="w-28 pb-2 text-right font-medium">Total</th>
@@ -81,7 +81,7 @@ export function CostTable({
             return (
               <Fragment key={row.id}>
                 <tr
-                  className={`group border-t border-line text-fg-2 ${pick.className}`}
+                  className={`group border-t border-line text-text-2 ${pick.className}`}
                   tabIndex={0}
                   data-testid="stats-detail-row"
                   {...pick.rowProps}
@@ -102,7 +102,7 @@ export function CostTable({
                               return next;
                             })
                           }
-                          className="shrink-0 hover:text-fg"
+                          className="shrink-0 hover:text-text"
                         >
                           {expanded.has(row.id) ? (
                             <ChevronDown size={12} />
@@ -118,7 +118,7 @@ export function CostTable({
                             type="button"
                             aria-label={`Open ${row.name}`}
                             onClick={() => onOpen(row)}
-                            className="text-left hover:text-fg"
+                            className="text-left hover:text-text"
                           >
                             {content}
                           </button>
@@ -165,7 +165,7 @@ export function CostTable({
                       return (
                         <tr
                           key={`${row.id}-${pair.key}`}
-                          className={`group border-t border-line bg-bg-3/40 text-fg-3 ${coupled.className}`}
+                          className={`group border-t border-line bg-surface-2/40 text-text-3 ${coupled.className}`}
                           data-testid="stats-model-effort-row"
                           tabIndex={coupled.control ? 0 : undefined}
                           {...coupled.rowProps}
@@ -181,10 +181,10 @@ export function CostTable({
                                   harnesses={pair.harnesses}
                                   target="model"
                                 />
-                                <span className="text-fg-4">·</span>
+                                <span className="text-text-3">·</span>
                                 {pair.effort === null ? (
                                   <Tooltip content={NOT_SET_COPY} side="top">
-                                    <span className="italic text-fg-4">
+                                    <span className="italic text-text-3">
                                       not set
                                     </span>
                                   </Tooltip>
@@ -222,6 +222,6 @@ export function CostTable({
           })}
         </tbody>
       </table>
-    </TooltipProvider>
+    </>
   );
 }

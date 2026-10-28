@@ -249,8 +249,8 @@ export default function SourceBranchField({
                 openPicker();
               }
             }}
-            className={`flex w-full items-center gap-2 rounded-md border bg-bg-3 px-2.5 py-1.5 text-left font-mono text-fg transition-colors focus:outline-none disabled:opacity-40 ${
-              pickerOpen ? "border-acc" : "border-line-strong hover:border-fg-4"
+            className={`flex w-full items-center gap-2 rounded-md border bg-surface-2 px-2.5 py-1.5 text-left font-mono text-text transition-colors focus:outline-none disabled:opacity-40 ${
+              pickerOpen ? "border-primary" : "border-line-strong hover:border-text-3"
             }`}
             style={{ fontSize: "12px" }}
             data-testid={`${testIdPrefix}-trigger`}
@@ -260,11 +260,11 @@ export default function SourceBranchField({
               {value || (triggerDisabled ? "Loading branches…" : "Select a branch")}
             </span>
             {selectedAge && (
-              <span className="shrink-0 text-fg-4" style={{ fontSize: "11px" }}>
+              <span className="shrink-0 text-text-3" style={{ fontSize: "11px" }}>
                 {selectedAge}
               </span>
             )}
-            <ChevronDown size={12} className="shrink-0 text-fg-4" />
+            <ChevronDown size={12} className="shrink-0 text-text-3" />
           </button>
 
           {pickerOpen && (
@@ -346,7 +346,7 @@ export default function SourceBranchField({
                 aria-label={localBranchWarning(selected)}
                 data-testid={`${testIdPrefix}-local-warning`}
               >
-                <TriangleAlert size={12} className="text-fg-4" aria-hidden />
+                <TriangleAlert size={12} className="text-text-3" aria-hidden />
               </span>
             )}
           </span>

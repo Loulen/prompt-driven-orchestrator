@@ -28,7 +28,7 @@ export function ChartFrame({ children }: { children: React.ReactElement }) {
 export function EmptyNote({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="px-1 py-8 text-center text-fg-4"
+      className="px-1 py-8 text-center text-text-3"
       style={{ fontSize: "11.5px" }}
     >
       {children}
@@ -50,7 +50,7 @@ export function CohortLine({
   return (
     <div
       data-testid="stats-cohort-line"
-      className={completedOnly ? "text-st-await" : "text-fg-4"}
+      className={completedOnly ? "text-st-await" : "text-text-3"}
       style={{ fontSize: "10.5px" }}
     >
       Cohort: runs started in the period
@@ -69,7 +69,7 @@ export function CohortLine({
 export function HarnessLegend({ harnesses }: { harnesses: string[] }) {
   return (
     <div
-      className="flex flex-wrap gap-3 text-fg-3"
+      className="flex flex-wrap gap-3 text-text-3"
       style={{ fontSize: "10.5px" }}
     >
       {harnesses.map((harness) => (

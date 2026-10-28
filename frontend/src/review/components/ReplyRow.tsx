@@ -22,22 +22,22 @@ export default function ReplyRow({ reply: r, first, unread }: { reply: ReviewRep
       data-unread={unread ? "true" : undefined}
       data-proposes={r.proposes_resolution ? "true" : undefined}
     >
-      <span className="mt-px text-fg-3" title={authorLabel(r.author, name)}>
+      <span className="mt-px text-text-3" title={authorLabel(r.author, name)}>
         <AuthorGlyph kind={kind} size={12} />
       </span>
       <div className="min-w-0">
-        <div className="flex items-center gap-1.5 text-fg-3" style={{ fontSize: "10.5px" }}>
+        <div className="flex items-center gap-1.5 text-text-3" style={{ fontSize: "10.5px" }}>
           {name && (
-            <span className="text-fg-2" data-testid="review-reply-actor">
+            <span className="text-text-2" data-testid="review-reply-actor">
               {kind === "user" ? name : `${name} (agent)`}
             </span>
           )}
           {kind === "node" && (
-            <span className="font-mono text-fg-2" style={{ fontSize: "10px" }} title={`node ${r.author}`}>
+            <span className="font-mono text-text-2" style={{ fontSize: "10px" }} title={`node ${r.author}`}>
               {r.author}
             </span>
           )}
-          <span className="text-fg-4">{relativeTime(r.at)}</span>
+          <span className="text-text-3">{relativeTime(r.at)}</span>
           {r.proposes_resolution && (
             <span className="inline-flex items-center text-st-await" title="Proposes to resolve" data-testid="review-reply-proposes">
               <Hourglass size={10} />
@@ -48,7 +48,7 @@ export default function ReplyRow({ reply: r, first, unread }: { reply: ReviewRep
           )}
         </div>
         <div
-          className="artifact-markdown text-fg [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
+          className="artifact-markdown text-text [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
           style={{ fontSize: "11.5px", lineHeight: 1.5 }}
           data-testid="review-reply-body"
         >

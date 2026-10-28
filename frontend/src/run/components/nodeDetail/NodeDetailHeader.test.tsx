@@ -158,10 +158,10 @@ describe("NodeDetailHeader duration", () => {
     expect(label).toHaveTextContent("8m 31s active");
     expect(label).toHaveAccessibleName("8m 31s active. Click to show total time");
     // Both units read the same: grey, dotted underline.
-    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-fg-4", "decoration-dotted");
+    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-text-3", "decoration-dotted");
     fireEvent.click(label);
     expect(label).toHaveTextContent("12m 4s total");
-    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-fg-4", "decoration-dotted");
+    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-text-3", "decoration-dotted");
   });
 
   it("is a native button, so Enter and Space switch it too", () => {

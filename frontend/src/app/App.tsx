@@ -15,7 +15,6 @@ import { useUpdateFlow } from "../platform/store/useUpdateFlow";
 import TopBar from "./TopBar";
 import { useTriggers } from "../trigger/store/useTriggers";
 import { useTriggersPause } from "../trigger/store/useTriggersPause";
-import { TooltipProvider } from "../shared/ui/tooltip";
 import Toaster from "../shared/ui/Toaster";
 import ExtensionContextProvider from "../shared/extensions/ExtensionContextProvider";
 import { useEditStore } from "../pipeline/store/editStore";
@@ -235,10 +234,10 @@ export default function App() {
   const rightPane = useCollapsibleRightPane(rightPaneCollapsed, layout.persistedSize, DEFAULT_SIZES.right);
 
   return (
-    <TooltipProvider>
+    <>
     {/* ADR-0081 #29: every extension contribution receives the selected Run and its Projet. */}
     <ExtensionContextProvider selectedRun={selectedRun} runs={runs} projects={projects}>
-    <div className="flex h-full flex-col bg-bg-1 text-fg">
+    <div className="flex h-full flex-col bg-surface-0 text-text">
       <TopBar
         onOpenSettings={() => openSettings()}
         onOpenStats={() => openStats()}
@@ -395,6 +394,6 @@ export default function App() {
       <Toaster />
     </div>
     </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
 }

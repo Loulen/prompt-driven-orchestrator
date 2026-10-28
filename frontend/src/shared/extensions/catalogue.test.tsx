@@ -12,7 +12,6 @@ import { registerTransientOverlay } from "../../lib/overlays";
 import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../markdown/plugins";
 import { resetToasts } from "../ui/toast";
 import Toaster from "../ui/Toaster";
-import { TooltipProvider } from "../ui/tooltip";
 import type { Project } from "../../workspace/model/project";
 import { projectOfRun } from "./context";
 import ExtensionContextProvider from "./ExtensionContextProvider";
@@ -102,12 +101,12 @@ function runState(id: string, status = "running"): RunState {
 
 function renderShell(selected: RunState | null = runState("r1")) {
   const ui = (run: RunState | null) => (
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={run} runs={runs} projects={projects}>
         <TopBar onOpenSettings={() => {}} onOpenStats={() => {}} />
         <Toaster />
       </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
   const view = render(ui(selected));
   return { ...view, select: (run: RunState | null) => view.rerender(ui(run)) };

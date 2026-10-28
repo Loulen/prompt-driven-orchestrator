@@ -73,8 +73,8 @@ export function Switch({
       onClick={() => onToggle(!on)}
       className={`flex items-center justify-between gap-2 rounded border px-2 py-1.5 ${
         on
-          ? "border-acc bg-bg-3 text-acc"
-          : "border-line-strong bg-bg-3 text-fg-3 hover:border-acc hover:text-acc"
+          ? "border-primary bg-surface-2 text-primary"
+          : "border-line-strong bg-surface-2 text-text-3 hover:border-primary hover:text-primary"
       }`}
       data-testid={testId}
       title={title}
@@ -83,18 +83,18 @@ export function Switch({
         {icon}
         {label}
         {note && (
-          <span className="text-fg-4" style={{ fontSize: "9.5px" }} data-testid={`${testId}-note`}>
+          <span className="text-text-3" style={{ fontSize: "9.5px" }} data-testid={`${testId}-note`}>
             {note}
           </span>
         )}
       </span>
       <span
         className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-          on ? "bg-acc" : "bg-fg-5"
+          on ? "bg-primary" : "bg-text-3"
         }`}
       >
         <span
-          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
+          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-surface-0 transition-all ${
             on ? "left-3" : "left-0.5"
           }`}
         />
@@ -133,7 +133,7 @@ export function ConditionRowEditor({
       <select
         value={row.port}
         onChange={(e) => onUpdate({ port: e.target.value })}
-        className="min-w-0 shrink-0 rounded border border-line-strong bg-bg-3 px-1.5 py-1 font-mono text-fg-2"
+        className="min-w-0 shrink-0 rounded border border-line-strong bg-surface-2 px-1.5 py-1 font-mono text-text-2"
         style={{ fontSize: "10.5px", maxWidth: "88px" }}
         data-testid="condition-port-dropdown"
         title="The carried output whose frontmatter this condition reads"
@@ -152,7 +152,7 @@ export function ConditionRowEditor({
       <select
         value={row.field}
         onChange={(e) => onUpdate({ field: e.target.value })}
-        className="flex-1 rounded border border-line-strong bg-bg-3 px-1.5 py-1 font-mono text-fg"
+        className="flex-1 rounded border border-line-strong bg-surface-2 px-1.5 py-1 font-mono text-text"
         // A floor, not `min-w-0`: the property name is the point of the row, so
         // it is the last control allowed to shrink.
         style={{ fontSize: "10.5px", minWidth: "124px" }}
@@ -172,7 +172,7 @@ export function ConditionRowEditor({
       <select
         value={row.op}
         onChange={(e) => onUpdate({ op: e.target.value as Operator })}
-        className="rounded border border-line-strong bg-bg-3 px-1.5 py-1 font-mono text-fg"
+        className="rounded border border-line-strong bg-surface-2 px-1.5 py-1 font-mono text-text"
         style={{ fontSize: "10.5px" }}
         data-testid="op-dropdown"
       >
@@ -195,7 +195,7 @@ export function ConditionRowEditor({
         <div className="flex overflow-hidden rounded border border-line-strong" data-testid="bool-toggle">
           <button
             onClick={() => onUpdate({ value: "true", valueType: "bool" })}
-            className={`px-2 py-1 ${row.value === "true" ? "bg-acc text-bg-1" : "bg-bg-3 text-fg-3"}`}
+            className={`px-2 py-1 ${row.value === "true" ? "bg-primary text-surface-0" : "bg-surface-2 text-text-3"}`}
             style={{ fontSize: "10.5px" }}
             data-testid="bool-true"
           >
@@ -203,7 +203,7 @@ export function ConditionRowEditor({
           </button>
           <button
             onClick={() => onUpdate({ value: "false", valueType: "bool" })}
-            className={`px-2 py-1 ${row.value === "false" ? "bg-acc text-bg-1" : "bg-bg-3 text-fg-3"}`}
+            className={`px-2 py-1 ${row.value === "false" ? "bg-primary text-surface-0" : "bg-surface-2 text-text-3"}`}
             style={{ fontSize: "10.5px" }}
             data-testid="bool-false"
           >
@@ -214,7 +214,7 @@ export function ConditionRowEditor({
         <select
           value={row.value}
           onChange={(e) => onUpdate({ value: e.target.value })}
-          className="min-w-0 flex-1 rounded border border-line-strong bg-bg-3 px-1.5 py-1 font-mono text-fg"
+          className="min-w-0 flex-1 rounded border border-line-strong bg-surface-2 px-1.5 py-1 font-mono text-text"
           style={{ fontSize: "10.5px" }}
           data-testid="value-dropdown"
         >
@@ -229,7 +229,7 @@ export function ConditionRowEditor({
         <input
           value={row.value}
           onChange={(e) => onUpdate({ value: e.target.value })}
-          className="min-w-0 flex-1 rounded border border-line-strong bg-bg-3 px-1.5 py-1 font-mono text-fg"
+          className="min-w-0 flex-1 rounded border border-line-strong bg-surface-2 px-1.5 py-1 font-mono text-text"
           style={{ fontSize: "10.5px" }}
           placeholder={isList ? "a, b, c" : "value"}
           data-testid="value-input"
@@ -238,7 +238,7 @@ export function ConditionRowEditor({
 
       <button
         onClick={onDelete}
-        className="shrink-0 rounded p-1 text-fg-4 hover:text-st-failed"
+        className="shrink-0 rounded p-1 text-text-3 hover:text-st-failed"
         data-testid="delete-condition"
         title="Delete condition"
       >

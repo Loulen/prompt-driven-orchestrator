@@ -86,7 +86,7 @@ export default function AgentsSections({
           catalog={catalog}
           inheritLabel="Default (claude floor)"
           data-testid="setting-default-harness-select"
-          className={`w-full rounded border bg-bg-3 px-2 py-1 text-fg ${
+          className={`w-full rounded border bg-surface-2 px-2 py-1 text-text ${
             dirty.has("default-harness") ? "border-st-await" : "border-line-strong"
           }`}
           style={{ fontSize: "11px" }}
@@ -125,7 +125,7 @@ export default function AgentsSections({
         {[...catalog.builtin, ...catalog.descriptors].map((h) => (
           <label
             key={h.name}
-            className="flex items-center gap-2 text-fg-3"
+            className="flex items-center gap-2 text-text-3"
             style={{ fontSize: "11px" }}
           >
             <span className="w-16 font-mono">{h.name}</span>
@@ -140,7 +140,7 @@ export default function AgentsSections({
               }
               placeholder="account default"
               data-testid={`setting-default-model-${h.name}`}
-              className={`flex-1 rounded border bg-bg-3 px-2 py-1 text-fg ${
+              className={`flex-1 rounded border bg-surface-2 px-2 py-1 text-text ${
                 dirty.has("harness-models")
                   ? "border-st-await"
                   : "border-line-strong"
@@ -210,7 +210,7 @@ export default function AgentsSections({
           data-testid="setting-manager-profile"
           value={values.managerProfile}
           onChange={(e) => setField("managerProfile", e.target.value)}
-          className={`w-[280px] rounded-md border bg-bg-3 px-2.5 py-1.5 text-fg transition-colors focus:border-acc focus:outline-none ${
+          className={`w-[280px] rounded-md border bg-surface-2 px-2.5 py-1.5 text-text transition-colors focus:border-primary focus:outline-none ${
             dirty.has("manager-profile") ? "border-st-await" : "border-line-strong"
           }`}
           style={{ fontSize: "12px" }}
@@ -256,14 +256,14 @@ export default function AgentsSections({
       {/* The bank is a journey of its own (browse, read, import, update from
           source): it opens as its own surface, not inline. */}
       <div
-        className="flex items-center justify-between gap-3 rounded-md border border-line bg-bg-3/40 px-3 py-2.5"
+        className="flex items-center justify-between gap-3 rounded-md border border-line bg-surface-2/40 px-3 py-2.5"
         data-testid="setting-skill-bank-card"
       >
         <div className="flex flex-col gap-0.5">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+          <span className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
             Skill bank
           </span>
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="setting-skills-count">
+          <span className="text-text-3" style={{ fontSize: "10.5px" }} data-testid="setting-skills-count">
             {skillsLoaded
               ? `${skillBank.skills.length} skill${skillBank.skills.length === 1 ? "" : "s"} · ${skillBank.folders.length} folder${skillBank.folders.length === 1 ? "" : "s"} · ~/.pdo/skills`
               : ""}
@@ -273,7 +273,7 @@ export default function AgentsSections({
           type="button"
           data-testid="setting-open-skill-bank"
           onClick={onOpenSkillBank}
-          className="flex items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 transition-colors hover:border-acc"
+          className="flex items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 text-text-2 transition-colors hover:border-primary"
           style={{ fontSize: 11 }}
         >
           <FileText size={11} />

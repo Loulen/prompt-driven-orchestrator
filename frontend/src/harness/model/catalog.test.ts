@@ -5,8 +5,8 @@ import type { HarnessOption } from "./catalog";
 
 describe("harnessColor (#638)", () => {
   it("pins Copilot blue and Claude orange", () => {
-    expect(harnessColor("copilot")).toBe("rgb(88, 166, 255)");
-    expect(harnessColor("claude")).toBe("rgb(240, 136, 62)");
+    expect(harnessColor("copilot")).toBe("#58a6ff");
+    expect(harnessColor("claude")).toBe("#f0883e");
   });
 
   it("assigns a stable colour to a future harness", () => {

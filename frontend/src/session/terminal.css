@@ -1,0 +1,29 @@
+/*
+ * The terminal's palette (#759): xterm paints on a canvas, so
+ * `session/model/terminalTheme.ts` reads these tokens resolved (`cssColor`).
+ * An always-dark screen whatever the theme of the interface, and ANSI colours
+ * are not app chrome (`red` stays red): one palette, on `:root` only.
+ */
+:root {
+  --term-background: rgb(11 11 13);
+  --term-foreground: rgb(174 177 181);
+  --term-cursor: rgb(210 212 215);
+  --term-selection-background: rgb(59 130 246 / 0.349);
+  --term-selection-inactive-background: rgb(59 130 246 / 0.2);
+  --term-black: rgb(11 11 13);
+  --term-red: rgb(239 68 68);
+  --term-green: rgb(16 185 129);
+  --term-yellow: rgb(245 158 11);
+  --term-blue: rgb(59 130 246);
+  --term-magenta: rgb(139 92 246);
+  --term-cyan: rgb(6 182 212);
+  --term-white: rgb(210 212 215);
+  --term-bright-black: rgb(90 98 112);
+  --term-bright-red: rgb(248 113 113);
+  --term-bright-green: rgb(52 211 153);
+  --term-bright-yellow: rgb(251 191 36);
+  --term-bright-blue: rgb(96 165 250);
+  --term-bright-magenta: rgb(167 139 250);
+  --term-bright-cyan: rgb(34 211 238);
+  --term-bright-white: rgb(248 250 252);
+}

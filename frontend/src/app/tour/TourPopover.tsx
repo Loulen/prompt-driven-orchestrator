@@ -95,6 +95,8 @@ export default function TourPopover({
       data-testid="tour-popover"
       data-step={step.id}
       data-side={placement.side}
+      // A group, not a dialog: a dialog on screen owns Escape, and Escape here quits the tour.
+      role="group"
       aria-label={`${tour.title} · step ${stepNumber} of ${total}`}
       className="tr-frame tr-card pointer-events-auto"
       style={{ top: placement.top, left: placement.left, width: WIDTH }}

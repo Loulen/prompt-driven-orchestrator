@@ -88,7 +88,7 @@ const STEPS: TourStep[] = [
     // nobody can make — the button is gone.
     body: (o) =>
       pipelineCreated(o)
-        ? "Enter already created it: the file is written and opened it in the editor, with a Start and an End marker already in place."
+        ? "Enter already created it: the file is written and open in the editor, with a Start and an End marker already in place."
         : "Click Create. The file is written and opened in the editor, with a Start and an End marker already in place.",
     target: () => ['[data-testid="new-pipeline-create"]'],
     waitingFor: "the Create button",

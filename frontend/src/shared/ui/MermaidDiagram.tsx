@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { cssColor } from "../../lib/cssColor";
+import { cssColor, cssToken } from "../../lib/cssColor";
 import { useTheme } from "../../hooks/useTheme";
 
 // mermaid bakes colours into the generated SVG's own <style>, so a CSS `var()`
@@ -35,14 +35,8 @@ function themeVars() {
     titleColor: c("--text"),
   };
   // The labels' size: the type scale's secondary text, read live like the colours.
-  vars.fontSize = cssLength("--fs-sm", "12px");
+  vars.fontSize = cssToken("--fs-sm", "12px");
   return vars;
-}
-
-/** A length token of the design system, resolved; `fallback` without a stylesheet. */
-function cssLength(token: `--${string}`, fallback: string): string {
-  if (typeof getComputedStyle !== "function" || typeof document === "undefined") return fallback;
-  return getComputedStyle(document.documentElement).getPropertyValue(token).trim() || fallback;
 }
 
 // Initialize ONCE at module scope. initialize() is synchronous (returns void).

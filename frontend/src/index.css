@@ -18,6 +18,9 @@
 @import "./app/tour/tour.css";
 /* The artifact viewer and « What's new ». */
 @import "./run/components/artifacts/artifact.css";
+/* The colours painted out of CSS: the terminal's palette, the harnesses' series. */
+@import "./session/terminal.css";
+@import "./harness/harness.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -236,53 +239,51 @@ body {
   color: var(--color-st-await);
 }
 
-/* The long read: an artifact, « What's new », a transcript message. 13 px at
-   1.6, headings on the type scale. */
+/* Markdown in the app: a transcript message, a Review comment, the files of a
+   skill. The long read (an artifact, « What's new ») is larger: `.art__read`. */
 .artifact-markdown {
   font-family: var(--font-ui);
-  font-size: var(--fs-md);
-  line-height: 1.6;
-  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text-2);
 }
 .artifact-markdown h1,
 .artifact-markdown h2,
 .artifact-markdown h3 {
   color: var(--text);
   font-weight: var(--w-strong);
-  line-height: 1.3;
   margin: 1em 0 0.5em;
 }
-.artifact-markdown h1 { font-size: var(--fs-xl); }
-.artifact-markdown h2 { font-size: var(--fs-lg); }
-.artifact-markdown h3 { font-size: var(--fs-md); }
-.artifact-markdown > :first-child { margin-top: 0; }
-.artifact-markdown p { margin: 0 0 var(--g-4); }
+.artifact-markdown h1 { font-size: var(--fs-lg); }
+.artifact-markdown h2 { font-size: var(--fs-md); }
+.artifact-markdown h3 { font-size: var(--fs-sm); }
+.artifact-markdown p { margin: 0.5em 0; }
 /* Tailwind preflight strips `list-style`; artifacts (and the #698 changelog) are
    bullet-heavy, so restore the markers. */
 .artifact-markdown ul,
-.artifact-markdown ol { margin: 0 0 var(--g-4); padding-left: 20px; }
+.artifact-markdown ol { margin: 0.5em 0; padding-left: 1.5em; }
 .artifact-markdown ul { list-style: disc; }
 .artifact-markdown ol { list-style: decimal; }
-.artifact-markdown a { color: var(--color-st-running); }
-.artifact-markdown a:hover { text-decoration: underline; text-decoration-color: var(--primary); text-underline-offset: 2px; }
-.artifact-markdown li { margin: 2px 0; }
-.artifact-markdown strong { font-weight: var(--w-strong); }
+.artifact-markdown a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.artifact-markdown a:hover { color: var(--text); }
+.artifact-markdown li { margin: 0.25em 0; }
 .artifact-markdown code {
   font-family: var(--font-code);
-  font-size: var(--fs-sm);
-  background: var(--hover);
+  font-size: var(--fs-xs);
+  background: var(--surface-0);
+  border: 1px solid var(--line);
   border-radius: var(--radius-ui);
-  padding: 0 4px;
+  padding: 1px 4px;
 }
 .artifact-markdown pre {
-  background: var(--surface-1);
-  border: 1px solid var(--line-soft);
-  padding: var(--g-3) var(--g-4);
+  background: var(--surface-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  padding: 8px 10px;
   font-family: var(--font-code);
-  font-size: var(--fs-sm);
-  line-height: 1.5;
+  font-size: var(--fs-xs);
   overflow-x: auto;
-  margin: 0 0 var(--g-4);
+  margin: 0.5em 0;
 }
 .artifact-markdown pre code {
   background: none;
@@ -292,24 +293,25 @@ body {
 .artifact-markdown table {
   border-collapse: collapse;
   width: 100%;
-  margin: 0 0 var(--g-4);
-  font-size: var(--fs-sm);
+  margin: 0.5em 0;
+  font-size: var(--fs-xs);
 }
 .artifact-markdown th,
 .artifact-markdown td {
-  border-bottom: 1px solid var(--line-soft);
-  padding: 3px var(--g-4) 3px 0;
+  border: 1px solid var(--line);
+  padding: 4px 8px;
   text-align: left;
 }
 .artifact-markdown th {
-  font-weight: var(--w-medium);
-  color: var(--text-3);
+  background: var(--surface-2);
+  font-weight: var(--w-strong);
+  color: var(--text);
 }
 .artifact-markdown blockquote {
-  border-left: 2px solid var(--primary);
-  margin: 0 0 var(--g-4);
-  padding: var(--g-1) var(--g-4);
-  color: var(--text-2);
+  border-left: 3px solid var(--primary);
+  margin: 0.5em 0;
+  padding: 0.25em 0.75em;
+  color: var(--text-3);
 }
 /* #240 — mermaid diagram inside an artifact. Clamp wide diagrams to the 560px
    modal; scroll horizontally if they still overflow; center otherwise. */

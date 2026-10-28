@@ -444,8 +444,8 @@ describe("TmuxTerminal", () => {
     expect(config.cursorBlink).toBe(true);
     const theme = config.theme as Record<string, string>;
     // An always-dark screen, whatever the theme of the interface.
-    expect(theme.background).toBe("rgb(11, 11, 13)");
-    expect(theme.foreground).toBe("rgb(174, 177, 181)");
+    expect(theme.background).toBe("#0b0b0d");
+    expect(theme.foreground).toBe("#aeb1b5");
   });
 
   it("wheel event scrolls xterm buffer instead of propagating", () => {

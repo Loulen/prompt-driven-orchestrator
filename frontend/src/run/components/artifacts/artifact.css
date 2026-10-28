@@ -128,6 +128,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* The long read: 13 px at 1.6, 76 characters, headings on the type scale. */
   .art__read {
     max-width: 76ch;
   }
@@ -199,4 +200,70 @@
   .art__body > .art__banner:first-child {
     margin-top: 0;
   }
+}
+
+/* Outside the layer: they override `.artifact-markdown` (index.css), which is
+   not in one either. */
+.art__read.artifact-markdown {
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: 1.6;
+}
+.art__read.artifact-markdown > :first-child {
+  margin-top: 0;
+}
+.art__read.artifact-markdown h1,
+.art__read.artifact-markdown h2,
+.art__read.artifact-markdown h3 {
+  line-height: 1.3;
+}
+.art__read.artifact-markdown h1 {
+  font-size: var(--fs-xl);
+}
+.art__read.artifact-markdown h2 {
+  font-size: var(--fs-lg);
+}
+.art__read.artifact-markdown h3 {
+  font-size: var(--fs-md);
+}
+.art__read.artifact-markdown p,
+.art__read.artifact-markdown ul,
+.art__read.artifact-markdown ol,
+.art__read.artifact-markdown pre,
+.art__read.artifact-markdown table {
+  margin: 0 0 var(--g-4);
+}
+.art__read.artifact-markdown a {
+  color: var(--color-st-running);
+  text-decoration: none;
+}
+.art__read.artifact-markdown a:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--primary);
+}
+.art__read.artifact-markdown code,
+.art__read.artifact-markdown pre {
+  font-size: var(--fs-sm);
+}
+.art__read.artifact-markdown code {
+  border: 0;
+  background: var(--hover);
+}
+.art__read.artifact-markdown pre {
+  border-color: var(--line-soft);
+  background: var(--surface-1);
+}
+.art__read.artifact-markdown table {
+  font-size: var(--fs-sm);
+}
+.art__read.artifact-markdown th,
+.art__read.artifact-markdown td {
+  border-width: 0 0 1px;
+  border-color: var(--line-soft);
+  padding: 3px var(--g-4) 3px 0;
+}
+.art__read.artifact-markdown th {
+  background: none;
+  color: var(--text-3);
+  font-weight: var(--w-medium);
 }

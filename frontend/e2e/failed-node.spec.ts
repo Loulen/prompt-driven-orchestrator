@@ -215,7 +215,7 @@ test("Mark complete succeeds after creating output files", async ({
   await expect(page.getByText("Missing outputs:")).not.toBeVisible();
 
   // Node status transitions to Completed.
-  await expect(page.getByText("Completed")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("node-status-badge")).toHaveText("Completed", { timeout: 5_000 });
 });
 
 test("Mark complete on a failed run reopens it before output validation", async ({

@@ -10,7 +10,7 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.57.0 — Champ de commande : palette, Actions et Sources de recherche (CORE-112)
+## 2.58.0 — Champ de commande : palette, Actions et Sources de recherche (CORE-112)
 
 - **`pdo-extension-api` 0.18.0**, sans rupture : l'emplacement `palette` (le Champ de
   commande, Ctrl+K) accepte les Actions globales et le nouveau type de contribution Source de
@@ -23,6 +23,13 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   `docs/reference/extension-ui.md`.
 - La palette retient les cinq derniers éléments ouverts (`pdo.palette.recent`, par
   navigateur) et les propose sur une requête vide.
+
+## 2.57.0 — Save univoque d'un pipeline (CORE-111)
+
+- Le Save d'un pipeline offre trois issues exclusives : nouvelle version, nouvelle version en
+  gardant l'ancienne à part comme pipeline `<nom> (vN)`, ou remplacement de la dernière version
+  (même numéro). La combinaison « remplacer et garder » disparaît.
+- Kit partagé : une touche (`Kbd`) dans un bouton prend la couleur du bouton.
 
 ## 2.56.0 — Filtres des Runs dans un entonnoir (CORE-110)
 

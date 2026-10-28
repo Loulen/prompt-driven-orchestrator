@@ -263,13 +263,17 @@ const VERDICT_TONE: Record<string, StatusTone> = {
   false: "failed",
 };
 
-/** A frontmatter as key and value chips, a verdict-like value tinted. */
+const toneOf = (v: unknown) => VERDICT_TONE[display(v).toLowerCase()];
+
+/** A frontmatter as key and value chips on one line, a verdict-like value
+ *  tinted and first, since the row may only have room for one. */
 export function FrontmatterChips({ values }: { values: Record<string, unknown> }) {
   const entries = Object.entries(values);
+  const chips = [...entries].sort(([, a], [, b]) => Number(!toneOf(a)) - Number(!toneOf(b)));
   return (
     <span className="ri-fm" data-testid="frontmatter-card" title={entries.map(([k, v]) => `${k}: ${display(v)}`).join("\n")}>
-      {entries.map(([k, v]) => {
-        const tone = VERDICT_TONE[display(v).toLowerCase()];
+      {chips.map(([k, v]) => {
+        const tone = toneOf(v);
         return (
           <span key={k} className="ri-fm__chip" data-st={tone}>
             <span className="ri-fm__k">{k}</span>

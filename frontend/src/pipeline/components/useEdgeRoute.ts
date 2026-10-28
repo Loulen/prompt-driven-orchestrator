@@ -33,6 +33,8 @@ export interface EdgeRoute {
   step: number;
   leg: number;
   tgtRect: Rect | null;
+  /** Every card on the canvas, this edge's own two included. */
+  cards: Rect[];
 }
 
 /**
@@ -198,5 +200,10 @@ export function useEdgeRoute(
     [points],
   );
 
-  return { points, handles, targetPt, srcSide, tgtSide, step, leg, tgtRect };
+  const cards = useMemo(
+    () => [...obstacles, ...(srcRect ? [srcRect] : []), ...(tgtRect ? [tgtRect] : [])],
+    [obstacles, srcRect, tgtRect],
+  );
+
+  return { points, handles, targetPt, srcSide, tgtSide, step, leg, tgtRect, cards };
 }

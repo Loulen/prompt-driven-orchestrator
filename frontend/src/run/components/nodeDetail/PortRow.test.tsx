@@ -8,7 +8,7 @@ vi.mock("../../api/artifacts", async (importOriginal) => ({
   fetchArtifact: (...args: unknown[]) => fetchArtifactMock(...args),
 }));
 
-import PortRow from "./PortRow";
+import PortRow, { FrontmatterChips } from "./PortRow";
 
 function preview(exists: boolean): PortIO {
   return {
@@ -127,5 +127,16 @@ describe("PortRow — downloads", () => {
   it("a port with nothing on disk offers no download", () => {
     renderRow(preview(false));
     expect(screen.queryByTestId("port-download")).not.toBeInTheDocument();
+  });
+});
+
+describe("FrontmatterChips", () => {
+  it("puts the verdict first, every key in the tooltip", () => {
+    render(<FrontmatterChips values={{ score: 7, status: "draft", verdict: "PASS" }} />);
+    const card = screen.getByTestId("frontmatter-card");
+    const chips = card.querySelectorAll(".ri-fm__chip");
+    expect(chips[0]).toHaveTextContent("verdictPASS");
+    expect(chips[0]).toHaveAttribute("data-st", "done");
+    expect(card).toHaveAttribute("title", "score: 7\nstatus: draft\nverdict: PASS");
   });
 });

@@ -3,23 +3,21 @@
  * color each (the daemon deals them out), and a first name.
  */
 
+import type { CSSProperties } from "react";
 import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
 import { actorLabel } from "../../shared/lib/actor";
 
-/** One color per participant, by the index the daemon gave it. */
-export const PRESENCE_COLORS = [
-  "#a78bfa",
-  "#38bdf8",
-  "#f472b6",
-  "#fbbf24",
-  "#34d399",
-  "#fb923c",
-  "#2dd4bf",
-  "#f87171",
-] as const;
+/** How many colors the participants share (`--presence-0` … in `inspect.css`). */
+export const PRESENCE_COLOR_COUNT = 6;
 
+/** One color per participant, by the index the daemon gave it: a theme token. */
 export function presenceColor(participant: Pick<DraftParticipant, "color">): string {
-  return PRESENCE_COLORS[participant.color % PRESENCE_COLORS.length];
+  return `var(--presence-${participant.color % PRESENCE_COLOR_COUNT})`;
+}
+
+/** The participant's color, as the `--pc` its marks paint with. */
+export function presenceStyle(participant: Pick<DraftParticipant, "color">): CSSProperties {
+  return { ["--pc" as string]: presenceColor(participant) };
 }
 
 /**

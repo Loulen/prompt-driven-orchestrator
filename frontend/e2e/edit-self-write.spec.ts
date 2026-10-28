@@ -84,7 +84,7 @@ test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) 
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.getByText("alpha", { exact: true }).first().click();
 
-  const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
+  const promptArea = page.getByTestId("node-prompt-input");
   await expect(promptArea).toBeVisible();
 
   // First edit + explicit save (auto-save removed in #35).
@@ -112,6 +112,6 @@ test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) 
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.getByText("alpha", { exact: true }).first().click();
 
-  const reloaded = page.getByPlaceholder("Enter the node's role prompt...");
+  const reloaded = page.getByTestId("node-prompt-input");
   await expect(reloaded).toHaveValue("MARKER_A_then_MARKER_B");
 });

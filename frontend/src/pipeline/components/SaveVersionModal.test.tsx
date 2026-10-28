@@ -69,7 +69,7 @@ describe("SaveVersionModal (ADR-0088)", () => {
       keep_old: true,
     });
     await waitFor(() =>
-      expect(toast).toHaveBeenCalledWith("Saved feature-with-review v9 · kept feature-with-review (v8)", "success"),
+      expect(toast).toHaveBeenCalledWith("Saved v9 · kept feature-with-review (v8)", "success"),
     );
   });
 
@@ -123,7 +123,7 @@ describe("SaveVersionModal (ADR-0088)", () => {
     fireEvent.click(choice("Keep v8 apart"));
     fireEvent.click(confirm());
     await waitFor(() =>
-      expect(toast).toHaveBeenCalledWith("Saved feature-with-review v10 · kept feature-with-review (v9)", "success"),
+      expect(toast).toHaveBeenCalledWith("Saved v10 · kept feature-with-review (v9)", "success"),
     );
   });
 

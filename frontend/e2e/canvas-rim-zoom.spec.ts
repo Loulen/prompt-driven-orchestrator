@@ -205,7 +205,7 @@ test("renaming a wired output applies on validation, its edges and inputs follow
   await field.fill("spec-v2");
   // Nothing moves while typing.
   await expect(page.getByTestId("edge-output-label-e-0-spec")).toBeVisible();
-  await expect(page.getByTestId("port-rename-pending")).toContainText("2 edges suivent");
+  await expect(page.getByTestId("port-rename-pending")).toContainText("2 edges follow");
   // Under the card, as in the design, not in its head.
   await expect(page.getByTestId("output-port-notices-spec").getByTestId("port-rename-pending")).toBeVisible();
   await field.press("Enter");
@@ -222,7 +222,7 @@ test("renaming a wired output applies on validation, its edges and inputs follow
   const again = page.getByTestId("output-port-card-spec-v2").getByLabel("Port name");
   await again.fill("verdict");
   await again.press("Enter");
-  await expect(page.getByTestId("port-rename-refusal")).toContainText("« verdict » existe déjà");
+  await expect(page.getByTestId("port-rename-refusal")).toContainText("\"verdict\" is taken");
   await again.press("Escape");
   await expect(page.getByTestId("output-port-card-spec-v2")).toBeVisible();
 });

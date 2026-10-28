@@ -1,5 +1,6 @@
 import type { PooledInput, PooledInputSource } from "../../lib/derivePooledInputs";
-import { Tooltip } from "../../shared/ui/tooltip";
+import { FileText, X } from "lucide-react";
+import { Chip } from "../../shared/ui/kit";
 
 /**
  * One derived (emergent) input in the node inspector. Inputs are NOT declared
@@ -27,64 +28,50 @@ export default function PooledInputRow({
     <div
       data-port={input.name}
       data-testid={`pooled-input-${input.name}`}
-      className={`flex items-start gap-2 px-1 py-2 transition-colors ${
-        isLast ? "" : "border-b border-line-soft"
-      } ${highlighted ? "bg-selected" : ""}`}
+      className={`ei-input${highlighted ? " ei-row--hl" : ""}`}
+      data-last={isLast || undefined}
     >
-      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-text-3" />
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex items-center gap-1.5">
-          <span className="font-mono text-text" style={{ fontSize: "11px" }}>
-            {input.name}
+      <span className="ei-line">
+        <FileText size={14} strokeWidth={1.5} aria-hidden className="ei-ic" />
+        <span className="d-mono ei-trunc" title={input.name}>
+          {input.name}
+        </span>
+        {input.repeated && (
+          <span title="repeated: accumulates iter-* artifacts from the source (read off the edge)">
+            <Chip mono>rpt</Chip>
           </span>
-          {input.repeated && (
-            <Tooltip content="repeated: accumulates iter-* artifacts from the source (read off the edge).">
-              <span className="text-primary" style={{ fontSize: "9px" }}>
-                rpt
-              </span>
-            </Tooltip>
-          )}
-          {pooled && (
-            <Tooltip content="Pooled input: several same-named edges land here as one logical list.">
-              <span
-                className="rounded bg-surface-2 px-1 text-text-3"
-                style={{ fontSize: "9px" }}
+        )}
+        {pooled && (
+          <span title="Pooled input: several same-named edges land here as one logical list">
+            <Chip mono>pooled · {input.sources.length}</Chip>
+          </span>
+        )}
+      </span>
+      <span className="ei-input__srcs">
+        <span aria-hidden>←</span>
+        {input.sources.map((s, i) => (
+          <span key={s.edgeIndex} className="ei-input__src">
+            {s.label}
+            {onDeleteSource && (
+              <button
+                type="button"
+                data-testid={`pooled-input-${input.name}-delete-${s.nodeId}`}
+                onClick={() => onDeleteSource(s)}
+                className="ei-x"
+                aria-label={`Delete input source ${s.label}`}
+                title={
+                  s.sharedEdge
+                    ? `Drop this input: unticks '${s.port}' on the incoming edge`
+                    : "Delete this input source: removes the incoming edge"
+                }
               >
-                pooled · {input.sources.length}
-              </span>
-            </Tooltip>
-          )}
-        </div>
-        <div className="flex min-w-0 items-baseline gap-1 text-text-3" style={{ fontSize: "10px" }}>
-          <span className="shrink-0 text-text-3 font-mono">{"←"}</span>
-          <span className="flex min-w-0 flex-wrap items-baseline font-mono">
-            {input.sources.map((s, i) => (
-              <span key={s.edgeIndex} className="flex min-w-0 items-baseline break-words">
-                {s.label}
-                {onDeleteSource && (
-                  <Tooltip
-                    content={
-                      s.sharedEdge
-                        ? `Drop this input (unticks the '${s.port}' output on the incoming edge, which carries others).`
-                        : "Delete this input source (removes the incoming edge)."
-                    }
-                  >
-                    <button
-                      data-testid={`pooled-input-${input.name}-delete-${s.nodeId}`}
-                      onClick={() => onDeleteSource(s)}
-                      className="ml-0.5 cursor-pointer rounded px-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text"
-                      aria-label={`Delete input source ${s.label}`}
-                    >
-                      ×
-                    </button>
-                  </Tooltip>
-                )}
-                {i < input.sources.length - 1 && <span className="mr-1">,</span>}
-              </span>
-            ))}
+                <X size={10} strokeWidth={2} aria-hidden />
+              </button>
+            )}
+            {i < input.sources.length - 1 && <span>,</span>}
           </span>
-        </div>
-      </div>
+        ))}
+      </span>
     </div>
   );
 }

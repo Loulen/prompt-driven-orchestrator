@@ -25,7 +25,8 @@ import ExportNodeYamlModal from "./ExportNodeYamlModal";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
 import LintBanner from "./LintBanner";
 import { DraftNotices } from "./DraftNoticeBanner";
-import VersionBanner from "./VersionBanner";
+import { VersionLine } from "./VersionBanner";
+import DraftPresence from "./DraftPresence";
 import RunSearchHost from "../../run/components/runSearch/RunSearchHost";
 import WaitingForStartedNodesBanner, { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
 import DragConnectionLine from "./DragConnectionLine";
@@ -226,11 +227,24 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     : null;
 
   return (
-    <div className="relative flex-1" ref={reactFlowRef}>
-      {/* ADR-0088: a version shown read only has its banner where the toolbar sits. */}
-      {tab.version ? (
-        <VersionBanner version={tab.version} infoOpen={infoOpen} onToggleInfo={onToggleInfo} />
-      ) : (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {/* The lines under the tab bar, full width, above the canvas (ADR-0088):
+          the version shown read only, an older version a Run launched, or the
+          draft's changes; then what changed the shared draft from outside the
+          canvas (a file written outside, the library assistant), then the
+          lint. #225: lint is an edit-mode affordance — suppressed on run tabs. */}
+      <div className="shrink-0">
+        <VersionLine tab={tab} run={activeRunState} infoOpen={infoOpen} onToggleInfo={onToggleInfo} />
+        {tab.runId == null && tab.version == null && (
+          <>
+            <DraftNotices tab={tab} />
+            {visibleItems.length > 0 && <LintBanner items={visibleItems} onDismiss={dismiss} />}
+          </>
+        )}
+      </div>
+    <div className="relative min-h-0 flex-1" ref={reactFlowRef}>
+      {/* ADR-0088: a version shown read only takes no edit: no toolbar. */}
+      {tab.version ? null : (
         <EditToolbar
           onAddNode={handleAddNode}
           onAddNote={handleAddNote}
@@ -259,18 +273,12 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           runEdit={runEdit}
         />
       )}
-      {/* #225: lint diagnostics are an edit-mode affordance — suppress on run tabs.
-          NOTE: this also suppresses lint while editing-during-run (ADR-0007), a
-          deliberate trade-off ratified at PR time. `tab` is non-null here (early
-          return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
       <WaitingForStartedNodesBanner run={activeRunState} />
       <RunSearchHost run={activeRunState} onCloseInfo={onCloseInfo} />
-      {/* ADR-0088: what changed the shared draft from outside the canvas (a
-          file written outside PDO, the library assistant), above the lint. */}
-      {tab.runId == null && tab.version == null && (visibleItems.length > 0 || (tab.draft?.notices.length ?? 0) > 0) && (
-        <div className="absolute left-0 right-0 top-10 z-10">
-          <DraftNotices tab={tab} />
-          {visibleItems.length > 0 && <LintBanner items={visibleItems} onDismiss={dismiss} />}
+      {/* ADR-0088: who else has the shared draft open, at the top right. */}
+      {tab.runId == null && tab.version == null && (
+        <div className="absolute right-3 top-3 z-10">
+          <DraftPresence />
         </div>
       )}
 
@@ -386,6 +394,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       {confirmRetryAll && <RetryAllConfirmModal onConfirm={handleRetryAll} onCancel={() => setConfirmRetryAll(false)} />}
       <NodePlayRetryConfirm nodePlay={nodePlay} />
       {finishConfirm && <FinishEditingConfirmModal {...finishConfirm} />}
+    </div>
     </div>
   );
 }

@@ -169,7 +169,7 @@ export default function LibraryRow({
           when the icons appear. */}
       <div className="flex shrink-0 flex-col items-end justify-between gap-1">
       <div className="flex h-4 items-center gap-2" data-testid="library-row-actions">
-      {draft && <ParticipantStack participants={draft.participants} size={14} />}
+      {draft && <ParticipantStack participants={draft.participants} size="sm" />}
       {onRenameStart && !renaming && (
         <span
           className="hidden shrink-0 group-hover:inline-flex"

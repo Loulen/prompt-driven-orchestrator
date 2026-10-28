@@ -17,24 +17,24 @@ describe("OutputPortCard — O3 tab-head card", () => {
     onSchemaChange: vi.fn(),
   };
 
-  it("renders an .op-tab card with .op-head and .op-body", () => {
+  it("renders a port row with its head and its body", () => {
     render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
     const card = screen.getByTestId("output-port-card-out");
-    expect(card.classList.contains("op-tab")).toBe(true);
-    expect(card.querySelector(".op-head")).toBeTruthy();
-    expect(card.querySelector(".op-body")).toBeTruthy();
+    expect(card.classList.contains("ei-port")).toBe(true);
+    expect(card.querySelector(".ei-port__head")).toBeTruthy();
+    expect(card.querySelector(".ei-port__body")).toBeTruthy();
   });
 
   it("header contains the InspectorPortRow (port-row class)", () => {
     render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
-    const head = screen.getByTestId("output-port-card-out").querySelector(".op-head")!;
+    const head = screen.getByTestId("output-port-card-out").querySelector(".ei-port__head")!;
     expect(head.querySelector(".port-row")).toBeTruthy();
   });
 
-  it("default state is expanded (no collapsed class)", () => {
+  it("default state is expanded", () => {
     render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
     const card = screen.getByTestId("output-port-card-out");
-    expect(card.classList.contains("collapsed")).toBe(false);
+    expect(card).not.toHaveAttribute("data-collapsed");
   });
 
   it("chevron click collapses the card", () => {
@@ -42,13 +42,13 @@ describe("OutputPortCard — O3 tab-head card", () => {
     const card = screen.getByTestId("output-port-card-out");
     const chevron = screen.getByLabelText("Toggle output body");
     fireEvent.click(chevron);
-    expect(card.classList.contains("collapsed")).toBe(true);
+    expect(card).toHaveAttribute("data-collapsed", "true");
   });
 
   it("when collapsed, body is not rendered", () => {
     render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
     fireEvent.click(screen.getByLabelText("Toggle output body"));
-    expect(screen.getByTestId("output-port-card-out").querySelector(".op-body")).toBeNull();
+    expect(screen.getByTestId("output-port-card-out").querySelector(".ei-port__body")).toBeNull();
   });
 
   it("expanding again restores the body", () => {
@@ -56,7 +56,7 @@ describe("OutputPortCard — O3 tab-head card", () => {
     const chevron = screen.getByLabelText("Toggle output body");
     fireEvent.click(chevron);
     fireEvent.click(chevron);
-    expect(screen.getByTestId("output-port-card-out").querySelector(".op-body")).toBeTruthy();
+    expect(screen.getByTestId("output-port-card-out").querySelector(".ei-port__body")).toBeTruthy();
   });
 
   it("passes port updates through to onUpdate", () => {
@@ -75,7 +75,7 @@ describe("OutputPortCard — O3 tab-head card", () => {
     expect(onRemove).toHaveBeenCalled();
   });
 
-  it("sibling cards each have op-tab class with margin for separation", () => {
+  it("sibling cards each draw as a port row", () => {
     render(
       <Wrapper>
         <OutputPortCard {...baseProps} />
@@ -88,22 +88,22 @@ describe("OutputPortCard — O3 tab-head card", () => {
     const cards = screen.getAllByTestId(/^output-port-card-/);
     expect(cards).toHaveLength(2);
     for (const card of cards) {
-      expect(card.classList.contains("op-tab")).toBe(true);
+      expect(card.classList.contains("ei-port")).toBe(true);
     }
   });
 
   it("body contains the OutputSchemaEditor", () => {
     render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
-    const body = screen.getByTestId("output-port-card-out").querySelector(".op-body")!;
+    const body = screen.getByTestId("output-port-card-out").querySelector(".ei-port__body")!;
     expect(body.querySelector("[data-testid='output-schema-editor']")).toBeTruthy();
   });
 
   it("puts the type selector in the name row, where L/T/R/B and rpt used to be", () => {
     render(<OutputPortCard {...baseProps} />, { wrapper: Wrapper });
     const card = screen.getByTestId("output-port-card-out");
-    const row = card.querySelector(".op-head .port-row")!;
+    const row = card.querySelector(".ei-port__head .port-row")!;
     expect(row.contains(screen.getByTestId("port-type-select"))).toBe(true);
-    expect(card.querySelector(".op-body")!.contains(screen.getByTestId("port-type-select"))).toBe(false);
+    expect(card.querySelector(".ei-port__body")!.contains(screen.getByTestId("port-type-select"))).toBe(false);
     expect(screen.queryByRole("switch", { name: /repeated/i })).toBeNull();
     expect(screen.queryByTitle("top")).toBeNull();
   });
@@ -242,9 +242,9 @@ describe("OutputPortCard — O3 tab-head card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add expected content" }));
 
     const textarea = screen.getByLabelText("Expected content");
-    expect(textarea.closest(".exp")).toHaveClass("expanded");
-    expect(screen.getByText("guide l'agent · non vérifié")).toBeInTheDocument();
-    expect(screen.getByText("échap replie")).toBeInTheDocument();
+    expect(textarea.closest(".ei-exp")).toHaveAttribute("data-open", "true");
+    expect(screen.getByRole("button", { name: "Add expected content" })).toHaveAttribute("title", "Guides the agent, never checked");
+    expect(textarea).toHaveAttribute("title", "Esc folds");
   });
 
   it("does not offer expected content on deterministic outputs", () => {

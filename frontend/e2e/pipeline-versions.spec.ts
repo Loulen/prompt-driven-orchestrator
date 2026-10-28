@@ -92,7 +92,8 @@ test("save versions, view and restore one, launch the last, keep the old as a pi
   await history.getByTestId("version-row-1").hover();
   await history.getByTestId("version-view-1").click();
   await expect(page.getByTestId(`tab-title-__version__${PIPELINE_NAME}@1`)).toHaveText(`${PIPELINE_NAME}.yaml @ v1`);
-  await expect(page.getByTestId("version-banner")).toContainText("Viewing v1");
+  await expect(page.getByTestId("version-banner")).toContainText("v1");
+  await expect(page.getByTestId("version-banner")).toContainText("read only");
   await page.getByTestId("version-banner-restore").click();
   await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
   await page.getByTestId("info-tab-info").click();

@@ -1,5 +1,7 @@
 import { useCallback } from "react";
-import { ArrowRight, Plus, Layers, Tags } from "lucide-react";
+import { ArrowRight, Infinity as Always, Plus } from "lucide-react";
+import { EmptyState, IconButton, KeyValue, Section } from "../../shared/ui/kit";
+import "./inspect.css";
 import { useEditStore } from "../store/editStore";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EdgeTriggerStatus } from "../model/pipeline";
@@ -18,18 +20,8 @@ import {
   type EdgeConditionField,
 } from "../../lib/edgeFields";
 import { resolveOutputLabels } from "../../lib/edgeLabels";
-import { SectionHead } from "./InspectorPrimitives";
 import { OutputsSection, RoutingSection, TriggerStatusView } from "./EdgeDetailSections";
 import { ConditionRowEditor, ElseToggle, Switch } from "./EdgeWhenControls";
-
-/**
- * The panel is 400 px wide by design (#843): a condition row now carries five
- * controls — output, property, operator, value, delete — and they do not fit
- * narrower. The right pane is user-resizable, so this is a floor with a
- * horizontal scroll behind it rather than a fixed width: crushing the row would
- * reintroduce the shows-one-sends-another trap the dropdowns exist to avoid.
- */
-const PANEL_MIN_WIDTH = 400;
 
 interface Props {
   /**
@@ -175,175 +167,166 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
 
   const fromName = sourceNode?.name ?? edge.source.node;
   const toName = targetNode?.name ?? edge.target.node;
+  const route = `${fromName}.${ports.join("+")} → ${toName}.${edge.target.port}`;
+  // The fields a condition may read: every carried output's schema, plus `iter`.
+  const available = ports.flatMap((port) =>
+    fieldsFor(port)
+      .filter((f) => !f.isIter)
+      .map((f) => ({ port, f })),
+  );
 
   return (
-    // The right pane is user-resizable; the panel keeps its 400 px design
-    // width as a FLOOR with a horizontal scroll behind it, because crushing a
-    // condition row (output · property · operator · value · delete) is how a
-    // control ends up showing one thing and sending another.
-    <div className="h-full overflow-x-auto bg-surface-1">
-      <aside
-        className="flex h-full flex-col bg-surface-1 overflow-y-auto"
-        style={{ minWidth: PANEL_MIN_WIDTH }}
-        data-testid="edge-detail-panel"
+    <aside className="ei" data-testid="edge-detail-panel">
+      {/* Header — route. The route line names every carried output. */}
+      <div className="ei-bar">
+        <span className="ei-bar__title">
+          <ArrowRight size={14} strokeWidth={1.5} aria-hidden />
+          <span className="ei-trunc" title={fromName}>
+            {fromName}
+          </span>
+          <span className="ei-bar__sub" data-testid="edge-route-ports">
+            .{ports.join("+")}
+          </span>
+          <ArrowRight size={12} strokeWidth={1.5} aria-hidden />
+          <span className="ei-trunc" title={toName}>
+            {toName}
+          </span>
+        </span>
+      </div>
+      <div className="ei-idline" title={route}>
+        {route}
+      </div>
+
+      {/* Outputs (#843) — first section: what the edge CARRIES comes before
+          when it fires and how it is routed. One edge, one firing, one
+          emergent input per carried port (ADR-0073). */}
+      <Section title="Outputs" count={ports.length} flush>
+        <OutputsSection declared={declared} carried={ports} targetName={toName} onToggle={handleTogglePort} />
+      </Section>
+
+      {/* When — a fallback (else) edge fires iff no sibling (same source output
+          port) matched. Mutually exclusive with a `when:` predicate (ADR-0011),
+          so toggling it on suppresses the predicate editor. */}
+      <Section
+        title="When"
+        count={isElse ? undefined : rows.length}
+        flush
+        aside={
+          isElse ? undefined : (
+            <IconButton icon={Plus} size="sm" label="Add condition" onClick={handleAddCondition} data-testid="add-condition" />
+          )
+        }
       >
-        {/* Header — route. The route line names every carried output. */}
-        <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-          <ArrowRight size={14} className="shrink-0 text-primary" />
-          <div className="min-w-0">
-            <div className="flex items-center gap-1 font-medium text-text" style={{ fontSize: "12.5px" }}>
-              <span className="truncate">{fromName}</span>
-              <span className="font-mono text-text-3" style={{ fontSize: "10.5px" }} data-testid="edge-route-ports">
-                .{ports.join("+")}
-              </span>
-              <ArrowRight size={11} className="shrink-0 text-text-3" />
-              <span className="truncate">{toName}</span>
-            </div>
-            <div className="mt-0.5 text-text-3" style={{ fontSize: "10px" }}>
-              edge · {ports.length > 1 ? `${ports.length} outputs carried` : "conditional route"}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
-          {/* Outputs (#843) — first section: what the edge CARRIES comes before
-              when it fires and how it is routed. One edge, one firing, one
-              emergent input per carried port (ADR-0073). */}
-          <SectionHead title="Outputs" count={ports.length} />
-          <OutputsSection
-            declared={declared}
-            carried={ports}
-            targetName={toName}
-            onToggle={handleTogglePort}
-          />
-
-          {/* When */}
-          <SectionHead title="When" count={isElse ? undefined : rows.length} />
-
-          {/* Default (else) — a fallback edge fires iff no sibling (same source
-              output port) matched. Mutually exclusive with a `when:` predicate
-              (ADR-0011), so toggling it on suppresses the predicate editor. */}
+        <div className="ei-pad">
           <ElseToggle isElse={isElse} onToggle={handleToggleElse} />
-
-          {isElse ? (
-            <div
-              className="text-text-3"
-              style={{ fontSize: "10px", lineHeight: 1.6 }}
-              data-testid="else-active-note"
-            >
-              Default branch — fires only when <span className="text-text-3">no sibling edge</span>{" "}
-              (same source output port) matched. A default edge carries no
-              condition; turn this off to author a <span className="font-mono">when:</span> predicate.
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2" data-testid="when-editor">
-              {rows.map((row, i) => (
-                <ConditionRowEditor
-                  key={i}
-                  row={row}
-                  ports={ports}
-                  fields={fieldsFor(row.port)}
-                  onUpdate={(updates) => handleUpdateRow(i, updates)}
-                  onDelete={() => handleDeleteRow(i)}
-                />
-              ))}
-              <button
-                onClick={handleAddCondition}
-                className="flex items-center gap-1 self-start rounded border border-line-strong bg-surface-2 px-2 py-1 text-text-3 hover:border-primary hover:text-primary"
-                style={{ fontSize: "10.5px" }}
-                data-testid="add-condition"
-              >
-                <Plus size={12} />
-                Add condition
-              </button>
-              {rows.length === 0 && (
-                <div className="text-text-3" style={{ fontSize: "10px" }}>
-                  No condition — this edge always fires.
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Available fields — irrelevant for a default edge (no predicate). */}
-          {!isElse && (
-            <>
-              <SectionHead title="Available fields" />
-              <div className="text-text-3" style={{ fontSize: "10px", lineHeight: 1.6 }}>
-                Output schema of{" "}
-                {ports.map((p, i) => (
-                  <span key={p}>
-                    {i > 0 && ", "}
-                    <span className="font-mono text-text-3">
-                      {fromName}.{p}
-                    </span>
-                  </span>
-                ))}
-                , plus <span className="font-mono text-primary">iter</span> — the counter of
-                the enclosing region. Each condition row reads the output named on its
-                left.
-              </div>
-            </>
-          )}
-
-          {/* Routing — orthogonal edge shaping (#154, design screen 14). The
-              per-edge "Re-route automatically" reset lives here, not on the canvas. */}
-          <SectionHead title="Routing" />
-          <RoutingSection
-            edge={edge}
-            onResetAuto={() => {
-              if (edgeIndex == null) return;
-              // Drop the pinned route: back to deterministic right-angle auto.
-              updateEdge(edgeIndex, { mode: "auto", waypoints: null });
-            }}
-          />
-
-          {/* Display (#845) — how this edge is DRAWN: whether its carried
-              outputs are named on the canvas, and whether it passes over or
-              under the node cards. Both are layout, and the footnote says so:
-              they travel in the file but never move the library star. */}
-          <SectionHead title="Display" />
-          <div className="flex flex-col gap-2" data-testid="display-section">
-            <Switch
-              icon={<Tags size={12} className="shrink-0" />}
-              label="Output labels"
-              // "· default" means UNSET — the toggle follows the source node's
-              // declared output count. It disappears as soon as the author
-              // decides, even if they decide on the same value.
-              note={edge.show_output_labels == null ? "· default" : undefined}
-              on={resolveOutputLabels(edge.show_output_labels, declared.length)}
-              onToggle={(next) => {
-                if (edgeIndex == null) return;
-                // Toggling back to the derived default writes the value rather
-                // than clearing it: the author has now decided, and adding a
-                // second output to the source node must not silently flip the
-                // labels back on.
-                updateEdge(edgeIndex, { show_output_labels: next });
-              }}
-              testId="toggle-output-labels"
-              title="Show the name of each carried output near the arrow's base"
-            />
-            <Switch
-              icon={<Layers size={12} className="shrink-0" />}
-              label="Draw under nodes"
-              on={edge.below_nodes === true}
-              onToggle={(next) => {
-                if (edgeIndex == null) return;
-                updateEdge(edgeIndex, { below_nodes: next });
-              }}
-              testId="toggle-under-nodes"
-              title="Edges draw above nodes by default; this one goes below"
-            />
-            <div className="text-text-3" style={{ fontSize: "10px", lineHeight: 1.5 }} data-testid="display-layout-note">
-              Layout only — saved in the file, ignored by the semantic diff.
-            </div>
-          </div>
-
-          {/* Runtime trigger status — panel-only (never on canvas) */}
-          <SectionHead title="Runtime" />
-          <TriggerStatusView trigger={trigger} />
         </div>
-      </aside>
-    </div>
+        {isElse ? (
+          <div
+            className="ei-row ei-meta"
+            title="A default edge carries no condition: turn Else off to author a when: predicate"
+            data-testid="else-active-note"
+          >
+            Fires when no sibling edge matched
+          </div>
+        ) : (
+          <div data-testid="when-editor">
+            {rows.map((row, i) => (
+              <ConditionRowEditor
+                key={i}
+                row={row}
+                ports={ports}
+                fields={fieldsFor(row.port)}
+                onUpdate={(updates) => handleUpdateRow(i, updates)}
+                onDelete={() => handleDeleteRow(i)}
+              />
+            ))}
+            {rows.length === 0 && (
+              <div title="No condition: this edge always fires">
+                <EmptyState icon={Always} layout="row">
+                  Always
+                </EmptyState>
+              </div>
+            )}
+          </div>
+        )}
+      </Section>
+
+      {/* Available fields — irrelevant for a default edge (no predicate). */}
+      {!isElse && (
+        <Section title="Fields" count={available.length + 1} flush>
+          <div className="ei-pad" title="Each condition reads the output named on its left; iter is the counter of the enclosing region">
+            <KeyValue
+              rows={[
+                ...available.map(({ port, f }) => ({
+                  k: `${port}.${f.name}`,
+                  mono: true,
+                  v: `${f.decl?.type ?? "any"}${f.decl?.allowed?.length ? ` · ${f.decl.allowed.join("|")}` : ""}`,
+                })),
+                { k: "iter", mono: true, v: "region counter" },
+              ]}
+            />
+          </div>
+        </Section>
+      )}
+
+      {/* Routing — orthogonal edge shaping (#154, design screen 14). The
+          per-edge "Re-route automatically" reset lives here, not on the canvas. */}
+      <Section title="Routing">
+        <RoutingSection
+          edge={edge}
+          onResetAuto={() => {
+            if (edgeIndex == null) return;
+            // Drop the pinned route: back to deterministic right-angle auto.
+            updateEdge(edgeIndex, { mode: "auto", waypoints: null });
+          }}
+        />
+      </Section>
+
+      {/* Display (#845) — how this edge is DRAWN: whether its carried
+          outputs are named on the canvas, and whether it passes over or
+          under the node cards. Both are layout: they travel in the file but
+          never move the library star. */}
+      <Section title="Display">
+        <div data-testid="display-section">
+          <Switch
+            label="Labels"
+            // "· default" means UNSET — the toggle follows the source node's
+            // declared output count. It disappears as soon as the author
+            // decides, even if they decide on the same value.
+            note={edge.show_output_labels == null ? "· default" : undefined}
+            on={resolveOutputLabels(edge.show_output_labels, declared.length)}
+            onToggle={(next) => {
+              if (edgeIndex == null) return;
+              // Toggling back to the derived default writes the value rather
+              // than clearing it: the author has now decided, and adding a
+              // second output to the source node must not silently flip the
+              // labels back on.
+              updateEdge(edgeIndex, { show_output_labels: next });
+            }}
+            testId="toggle-output-labels"
+            title="Output labels: the name of each carried output near the arrow's base"
+          />
+          <Switch
+            label="Under nodes"
+            on={edge.below_nodes === true}
+            onToggle={(next) => {
+              if (edgeIndex == null) return;
+              updateEdge(edgeIndex, { below_nodes: next });
+            }}
+            testId="toggle-under-nodes"
+            title="Draw under nodes: edges draw above nodes by default"
+          />
+          <div className="ei-meta" title="Saved in the file, ignored by the semantic diff" data-testid="display-layout-note">
+            Layout only
+          </div>
+        </div>
+      </Section>
+
+      {/* Runtime trigger status — panel-only (never on canvas) */}
+      <Section title="Runtime" flush>
+        <TriggerStatusView trigger={trigger} />
+      </Section>
+    </aside>
   );
 }
 

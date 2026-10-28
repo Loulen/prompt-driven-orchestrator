@@ -133,7 +133,7 @@ beforeEach(() => {
 });
 
 describe("Pipeline info — Info tab on a template (#948)", () => {
-  it("shows header → Identity → Variables → Canvas → Stats → note, and no Description block", () => {
+  it("shows header → Identity → Variables → Canvas → Graph, and no Description block", () => {
     render(<StorePanel />);
     const panel = screen.getByTestId("pipeline-info-panel");
     const order = [
@@ -142,7 +142,6 @@ describe("Pipeline info — Info tab on a template (#948)", () => {
       screen.getByTestId("info-panel-variables"),
       screen.getByTestId("pipeline-meta-canvas"),
       screen.getByTestId("info-stats"),
-      screen.getByText(/The Manager tab becomes available/),
     ];
     for (let i = 1; i < order.length; i++) {
       expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -169,7 +168,7 @@ describe("Pipeline info — Info tab on a template (#948)", () => {
   it("has no free « Version » field: a Save numbers the versions (ADR-0088)", () => {
     render(<StorePanel />);
     expect(screen.queryByTestId("pipeline-version-input")).not.toBeInTheDocument();
-    expect(screen.getByTestId("info-panel-version")).toHaveTextContent("template · v1");
+    expect(screen.getByTestId("info-panel-version")).toHaveTextContent("v1");
   });
 
   it("checks 'Prompt required' by default when the flag is absent", () => {
@@ -361,7 +360,8 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
       expect(within(meta).queryByRole("checkbox")).not.toBeInTheDocument();
       expect(within(meta).queryByRole("combobox")).not.toBeInTheDocument();
       expect(within(meta).queryByRole("radiogroup")).not.toBeInTheDocument();
-      expect(within(meta).queryByRole("button")).not.toBeInTheDocument();
+      // Only the sections' fold heads: nothing that edits.
+      expect(within(meta).queryAllByRole("button").filter((b) => !b.classList.contains("d-sec__toggle"))).toEqual([]);
       expect(screen.queryByText("Description")).not.toBeInTheDocument();
     },
   );
@@ -391,7 +391,7 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
     });
     const run = makeRun({ pipeline_id: "my-pipeline", pipeline_version: { number: 7, title: "Add reviewer loop" } });
     const { rerender } = render(<StorePanel run={run} />);
-    expect(screen.getByTestId("info-panel-version")).toHaveTextContent(`run ${run.run_id.slice(-8)} · v7 · Add reviewer loop`);
+    expect(screen.getByTestId("info-panel-version")).toHaveTextContent("launched v7 · Add reviewer loop");
     expect(screen.getByTestId("newer-version")).toHaveTextContent("v8 is out");
     rerender(<StorePanel run={{ ...run, pipeline_version: { number: 8, title: "external edit" } }} />);
     expect(screen.queryByTestId("newer-version")).not.toBeInTheDocument();

@@ -223,21 +223,8 @@ export default function App() {
   const { layout, rightPane, frozen, left, right } = useShellLayout(rightPaneCollapsed);
 
   // CORE-112: what the command field lists and acts on.
-  const paletteNewRun = useCallback(() => openNewRunModal({ kind: "run" }), [openNewRunModal]);
-  const paletteNewTrigger = useCallback(() => openNewRunModal({ kind: "new-trigger" }), [openNewRunModal]);
-  const paletteSettings = useCallback(() => openSettings(), [openSettings]);
-  const paletteStats = useCallback(() => openStats(), [openStats]);
   usePaletteHostSync(
-    {
-      runs,
-      triggers,
-      openRun: handleSelectRun,
-      openTrigger: launch.handleSelectTrigger,
-      newRun: paletteNewRun,
-      newTrigger: paletteNewTrigger,
-      openSettings: paletteSettings,
-      openStats: paletteStats,
-    },
+    { runs, triggers, openRun: handleSelectRun, openTrigger: launch.handleSelectTrigger, openNewRunModal, openSettings, openStats },
     { selectedTrigger, selectedRun, editTab, canvas: selection, pipelines },
   );
 

@@ -1,4 +1,5 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import type { OpenIntent } from "../../run/components/NewRunModal";
 import type { OpenPipeline, Selection } from "../../pipeline/store/editState";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { RunState } from "../../shared/generated/RunState";
@@ -49,17 +50,27 @@ export function paletteSelection({ selectedTrigger, selectedRun, editTab, canvas
   return null;
 }
 
+/** What the shell opens: a Run, a Trigger, the New Run form, Settings, Stats. */
+interface ShellGestures extends Pick<PaletteHost, "runs" | "triggers" | "openRun" | "openTrigger"> {
+  openNewRunModal: (intent: OpenIntent) => void;
+  openSettings: () => void;
+  openStats: () => void;
+}
+
 /** Hand the command field the shell's lists, selection and gestures. */
-export function usePaletteHostSync(
-  host: Omit<PaletteHost, "selection">,
-  selection: SelectionInput,
-): void {
+export function usePaletteHostSync(shell: ShellGestures, selection: SelectionInput): void {
   const { selectedTrigger, selectedRun, editTab, canvas, pipelines } = selection;
   const selected = useMemo(
     () => paletteSelection({ selectedTrigger, selectedRun, editTab, canvas, pipelines }),
     [selectedTrigger, selectedRun, editTab, canvas, pipelines],
   );
-  const { runs, triggers, openRun, openTrigger, newRun, newTrigger, openSettings, openStats } = host;
+  const { runs, triggers, openRun, openTrigger, openNewRunModal } = shell;
+  const newRun = useCallback(() => openNewRunModal({ kind: "run" }), [openNewRunModal]);
+  const newTrigger = useCallback(() => openNewRunModal({ kind: "new-trigger" }), [openNewRunModal]);
+  const settings = shell.openSettings;
+  const stats = shell.openStats;
+  const openSettings = useCallback(() => settings(), [settings]);
+  const openStats = useCallback(() => stats(), [stats]);
   useEffect(() => {
     usePaletteHost.getState().setHost({
       runs,

@@ -10,6 +10,20 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.58.0 — Champ de commande : palette, Actions et Sources de recherche (CORE-112)
+
+- **`pdo-extension-api` 0.18.0**, sans rupture : l'emplacement `palette` (le Champ de
+  commande, Ctrl+K) accepte les Actions globales et le nouveau type de contribution Source de
+  recherche (`UiContribution::search`, `type: "search"`), dont la fonction répond aux requêtes
+  tapées (au plus 50 résultats gardés, abandonnée après 5 s, isolée dans son groupe en cas
+  d'erreur). Une commande peut déclarer l'Opération qu'elle fait (`UiCommand::guarded_by`,
+  `operation` sur le fil) : le core masque alors, partout, l'Action que l'Autorisation
+  d'opération refuse. Le module partagé `@pdo/extension-ui` passe en 0.18.0 (types
+  `SearchResult`, `SearchFunction`, `PaletteContext`). Détails dans
+  `docs/reference/extension-ui.md`.
+- La palette retient les cinq derniers éléments ouverts (`pdo.palette.recent`, par
+  navigateur) et les propose sur une requête vide.
+
 ## 2.57.0 — Save univoque d'un pipeline (CORE-111)
 
 - Le Save d'un pipeline offre trois issues exclusives : nouvelle version, nouvelle version en

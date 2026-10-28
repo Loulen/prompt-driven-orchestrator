@@ -24,6 +24,9 @@ impl UiLocation {
                 )
             }
             UiLocation::ReviewComposer => matches!(element, UiElement::Completion { .. }),
+            UiLocation::Palette => {
+                matches!(element, UiElement::Action { .. } | UiElement::Search { .. })
+            }
             UiLocation::Settings
             | UiLocation::ProjectEdit
             | UiLocation::RunNew
@@ -56,7 +59,8 @@ impl UiLocation {
 
     /// Whether this location is one of the Action locations (amendment #30): a
     /// bar or a menu that accepts actions, and only actions except for
-    /// `review/file`, which also takes Decorations (amendment #31).
+    /// `review/file`, which also takes Decorations (amendment #31), and
+    /// `palette`, which also takes Sources de recherche (0.18).
     pub fn is_action_location(self) -> bool {
         matches!(
             self,
@@ -74,6 +78,7 @@ impl UiLocation {
                 | UiLocation::ReviewToolbar
                 | UiLocation::ReviewFile
                 | UiLocation::SkillMenu
+                | UiLocation::Palette
         )
     }
 }

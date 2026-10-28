@@ -44,6 +44,7 @@ import AppSurfaces from "./AppSurfaces";
 import StatusBar from "./StatusBar";
 import UpdateModals from "./UpdateModals";
 import EditorModals from "./EditorModals";
+import { usePaletteHostSync } from "./palette/usePaletteHostSync";
 
 /** The app shell: the Runs, Triggers and Projets on the left, the canvas in the
  *  center, the inspector on the right, the status bar, and every global modal. */
@@ -220,6 +221,12 @@ export default function App() {
   });
 
   const { layout, rightPane, frozen, left, right } = useShellLayout(rightPaneCollapsed);
+
+  // CORE-112: what the command field lists and acts on.
+  usePaletteHostSync(
+    { runs, triggers, openRun: handleSelectRun, openTrigger: launch.handleSelectTrigger, openNewRunModal, openSettings, openStats },
+    { selectedTrigger, selectedRun, editTab, canvas: selection, pipelines },
+  );
 
   return (
     <>

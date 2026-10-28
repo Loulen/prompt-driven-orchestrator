@@ -94,15 +94,17 @@ export function useRunNavigation({
     [selectedRun, selection, handleSelectRun, setOrchestratorReturn],
   );
   // The child run opens on the node that needs a look (its banner at once),
-  // as soon as its state is the selected one; a selection made meanwhile wins.
+  // as soon as its state is the selected one; a node of the child selected
+  // meanwhile wins, the parent's orchestrator (still selected) does not.
   // `orchestratorReturn` re-runs it when the child's state arrived before the
-  // landing was recorded (opening a tab always clears the selection first).
+  // landing was recorded.
   useEffect(() => {
     if (!landOnChild.current || selectedRun?.run_id !== landOnChild.current) return;
     landOnChild.current = null;
     const nodeId = childLandingNode(selectedRun);
-    if (nodeId && selection.kind === "none") setSelection({ kind: "node", id: nodeId });
-  }, [orchestratorReturn, selectedRun, selection.kind, setSelection]);
+    const childNodeSelected = selection.kind === "node" && selection.id != null && selection.id in selectedRun.nodes;
+    if (nodeId && !childNodeSelected) setSelection({ kind: "node", id: nodeId });
+  }, [orchestratorReturn, selectedRun, selection.kind, selection.id, setSelection]);
   const handleBackToOrchestrator = useCallback(async () => {
     if (!orchestratorReturn) return;
     const { parentRunId, nodeId } = orchestratorReturn;

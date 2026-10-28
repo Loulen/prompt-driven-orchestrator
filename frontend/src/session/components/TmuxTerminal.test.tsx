@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { DEFAULT_UI_SCALE, setUiScale } from "../../lib/uiScale";
 
 globalThis.ResizeObserver = class {
   observe() {}
@@ -1116,6 +1117,19 @@ describe("TmuxTerminal", () => {
 
     beforeEach(() => {
       localStorage.clear();
+      // The font sizes below are the 100 % ones; the UI scale multiplies them.
+      setUiScale(100);
+    });
+    afterEach(() => {
+      setUiScale(DEFAULT_UI_SCALE);
+    });
+
+    it("carries the UI scale in its font, drawn out of the app's zoom", async () => {
+      setUiScale(120);
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "solo" });
+      expect(term.options.fontSize).toBeCloseTo(13.2);
+      expect(screen.getByTestId("xterm-container").className).toContain("pdo-unzoom");
     });
 
     it("passes the poste in the socket URL, stable across mounts and shared through localStorage", () => {

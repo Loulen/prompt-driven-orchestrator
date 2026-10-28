@@ -16,7 +16,8 @@ import {
 } from "../model/terminalRole";
 import { posteId } from "../model/poste";
 import { isHeartbeatFrame, TERMINAL_SILENCE_MS, VEIL_GRACE_MS } from "../model/terminalConnection";
-import { BASE_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
+import { BASE_FONT_SIZE, MIN_SPECTATOR_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
+import { uiZoom, useUiScale } from "../../lib/uiScale";
 import { terminalTheme } from "../model/terminalTheme";
 import {
   sendResize,
@@ -53,6 +54,16 @@ export interface XtermSession {
 }
 
 /**
+ * The terminal's font size at the UI scale. The terminal is drawn out of the
+ * app's CSS zoom (`.pdo-unzoom`): xterm maps the pointer to its cells in screen
+ * pixels, and under a zoom the selection drifted from the mouse. The scale
+ * goes in the font instead.
+ */
+function baseFontSize(): number {
+  return BASE_FONT_SIZE * uiZoom();
+}
+
+/**
  * The xterm of a session and its PTY socket (`WS /sessions/<session>/pty`): the
  * live attach, or — for a frozen pane — the snapshot written straight into the
  * same xterm with no socket at all (#617).
@@ -64,6 +75,13 @@ export function useXtermSession(
   frozen: FrozenPane | null,
 ): XtermSession {
   const terminalRef = useRef<Terminal | null>(null);
+  // The grid's layout (fit, or the spectator's font), run again on a new UI
+  // scale: the terminal is drawn out of the app's zoom, its font carries it.
+  const layoutRef = useRef<(() => void) | null>(null);
+  const scale = useUiScale();
+  useEffect(() => {
+    layoutRef.current?.();
+  }, [scale]);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<ProbedSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -123,7 +141,7 @@ export function useXtermSession(
       cursorBlink: !isFrozen,
       // Nothing to type into: the socket is not opened at all below.
       disableStdin: isFrozen,
-      fontSize: BASE_FONT_SIZE,
+      fontSize: baseFontSize(),
       fontFamily: "'Geist Mono', monospace",
       // An always-dark screen, whatever the theme of the interface.
       theme: terminalTheme(),
@@ -191,10 +209,15 @@ export function useXtermSession(
       const current = roleRef.current;
       if (current.role === "spectator") {
         const pilot = current.pilot;
-        const size = spectatorFontSize(pilot, (fontSize) => {
-          term.options.fontSize = fontSize;
-          return fitAddon.proposeDimensions();
-        });
+        const size = spectatorFontSize(
+          pilot,
+          (fontSize) => {
+            term.options.fontSize = fontSize;
+            return fitAddon.proposeDimensions();
+          },
+          baseFontSize(),
+          MIN_SPECTATOR_FONT_SIZE * uiZoom(),
+        );
         term.options.fontSize = size;
         resizeAvoidingAltBufferCorruption(term, pilot, () => {
           term.resize(pilot.cols, pilot.rows);
@@ -202,8 +225,8 @@ export function useXtermSession(
         });
         return;
       }
-      if (term.options && term.options.fontSize !== BASE_FONT_SIZE) {
-        term.options.fontSize = BASE_FONT_SIZE;
+      if (term.options && term.options.fontSize !== baseFontSize()) {
+        term.options.fontSize = baseFontSize();
       }
       const apply = () => {
         fitAddon.fit();
@@ -323,6 +346,7 @@ export function useXtermSession(
 
     const resizeObserver = new ResizeObserver(layout);
     resizeObserver.observe(container);
+    layoutRef.current = layout;
 
     return () => {
       stopPointer();
@@ -338,6 +362,7 @@ export function useXtermSession(
       roleRef.current = SOLO;
       setTermRole(SOLO);
       clearTakenOver();
+      layoutRef.current = null;
       term.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;

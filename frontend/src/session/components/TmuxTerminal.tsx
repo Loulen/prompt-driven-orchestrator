@@ -166,7 +166,8 @@ export default function TmuxTerminal({
         <Tooltip content={READ_ONLY_HINT} disabled={!spectating}>
           <div
             ref={containerRef}
-            className={`ri-term-screen min-h-0 flex-1${spectating ? " overflow-auto" : ""}`}
+            // Out of the app's zoom (see `useXtermSession`): the font carries the scale.
+            className={`ri-term-screen pdo-unzoom min-h-0 flex-1${spectating ? " overflow-auto" : ""}`}
             style={TERMINAL_TYPOGRAPHY_RESET}
             data-testid="xterm-container"
             data-role={mode === "live" ? termRole.role : undefined}

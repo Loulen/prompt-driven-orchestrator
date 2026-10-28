@@ -526,3 +526,4 @@ button.ri-port__name:hover { text-decoration: underline; }
 .ri-dur__dot[data-st="running"] { animation: ri-pulse 1.6s ease-in-out infinite; }
 .ri-dur__dot[data-st="awaiting"] { --st: var(--color-st-await); }
 @media (prefers-reduced-motion: reduce) { .ri-dur__dot { animation: none !important; } }
+.ri-port__line[data-open] { cursor: pointer; }

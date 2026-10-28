@@ -114,13 +114,18 @@ export default function PortRow({
       data-pending={anyExists ? undefined : true}
       className="port-row ri-port"
     >
-      <div className="ri-port__line">
+      {/* A written port opens from anywhere on its line, as before; its tools
+          keep their own clicks. */}
+      <div className="ri-port__line" data-open={anyExists || undefined} onClick={anyExists ? onOpen : undefined}>
         <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-label={portType} role="img" />
         {anyExists ? (
           // The name opens the artifact; the tools at the end keep their own clicks.
           <button
             type="button"
-            onClick={onOpen}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen();
+            }}
             data-testid="port-row-open"
             aria-label={`Open ${port.port}`}
             className="ri-port__name"
@@ -155,12 +160,14 @@ export default function PortRow({
           </span>
         )}
         {frontmatter && Object.keys(frontmatter).length > 0 && <FrontmatterChips values={frontmatter} />}
-        <ExtensionDecorations<PortItemContext> location="port/item" extra={decorated} className="relative" />
+        <span className="contents" onClick={(e) => e.stopPropagation()}>
+          <ExtensionDecorations<PortItemContext> location="port/item" extra={decorated} className="relative" />
+        </span>
         <span className="ri-port__where" title={tip}>
           {displayPath}
         </span>
         {anyExists && totalSize > 0 && <span className="ri-port__size">{formatSize(totalSize)}</span>}
-        <span className="ri-port__tools">
+        <span className="ri-port__tools" onClick={(e) => e.stopPropagation()}>
           {copyTarget && (
             <CopyButton
               status={copyStatus}

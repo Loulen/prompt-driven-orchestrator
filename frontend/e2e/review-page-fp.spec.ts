@@ -291,7 +291,7 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openRunNodeDetails(page, run_id, "beta");
   const shortcut = page.getByTestId("node-review-shortcut");
-  await expect(shortcut).toHaveText(/Review this node's delivery/);
+  await expect(shortcut).toHaveAccessibleName(/Review this node's delivery/);
   await shortcut.click();
   await expect(page).toHaveURL(/from=node%3Abeta%3A1%3Abefore&to=node%3Abeta%3A1%3Aafter/);
   await expect(page.getByTestId("review-delivery-chip")).toContainText("Reviewing the delivery of beta · iter 1", {

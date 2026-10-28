@@ -116,12 +116,15 @@ function LiveRow({
   const Icon = isFolder ? (images.length > 0 ? Images : Files) : FileText;
   return (
     <div data-testid="live-row" data-live={artifact.name} data-produced="true" className="ri-port">
-      <div className="ri-port__line">
+      <div className="ri-port__line" data-open onClick={onOpen}>
         <span className="ri-dot" data-live aria-label="live" role="img" />
         <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-hidden />
         <button
           type="button"
-          onClick={onOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
           aria-label={`Open ${artifact.name}`}
           data-testid="live-row-open"
           className="ri-port__name"
@@ -137,7 +140,7 @@ function LiveRow({
           {subline}
         </span>
         {totalSize > 0 && <span className="ri-port__size">{formatSize(totalSize)}</span>}
-        <span className="ri-port__tools">
+        <span className="ri-port__tools" onClick={(e) => e.stopPropagation()}>
           {downloadHref && (
             <Tooltip label="Download">
               <a

@@ -81,7 +81,7 @@ async function openNewRunOn(page: Page, projectId: string, repo: string) {
 async function closeNewRun(page: Page) {
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("pipeline-select-menu")).toBeHidden();
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByTestId("target-repo-input")).toBeHidden();
 }
 

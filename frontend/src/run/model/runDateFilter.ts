@@ -94,20 +94,7 @@ function shortDay(d: Date, now: Date): string {
   });
 }
 
-/** The filter button's words: `null` for any time. */
-export function dateFilterLabel(f: RunDateFilter, now: Date): string | null {
-  if (f.range === null) return null;
-  const range = f.range;
-  if ("preset" in range) return DATE_PRESETS.find((p) => p.preset === range.preset)!.short;
-  const from = parseDay(range.from);
-  const to = parseDay(range.to);
-  if (!from || !to) return `${range.from} → ${range.to}`;
-  return range.from === range.to
-    ? shortDay(from, now)
-    : `${shortDay(from, now)} → ${shortDay(to, now)}`;
-}
-
-/** What the mode keeps, in the words of the menu's footnote. */
+/** What the mode keeps, in the words of its tooltip. */
 export function dateModeHint(mode: DateMode): string {
   return mode === "active"
     ? "Active: a Run with any event in the range, archived ones included."

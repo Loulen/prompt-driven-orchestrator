@@ -243,7 +243,8 @@ test("the four slots show the test extension's contributions", async ({ page }) 
   await expect(events).toContainText(`RunStarted (${runId})`);
   await page.getByRole("button", { name: "Close Test events" }).click();
 
-  // List filter → only the Run carrying the attribute stays.
+  // List filter, a row of the funnel's menu → only the Run carrying the attribute stays.
+  await page.getByTestId("run-filter-funnel").click();
   const filter = page.getByLabel("Started by");
   await expect(filter).toBeVisible();
   await filter.fill("alice");
@@ -251,6 +252,7 @@ test("the four slots show the test extension's contributions", async ({ page }) 
   await filter.fill("bob");
   await expect(page.getByTestId("run-filter-empty")).toBeVisible();
   await filter.fill("");
+  await page.keyboard.press("Escape");
 
   // Detail tab of the Run → its attributes.
   await page.getByText(runId.slice(0, 20)).first().click({ position: { x: 5, y: 5 } });
@@ -352,6 +354,9 @@ test("Action locations: the header, a row's « ⋯ » menu with its when, a fail
   expect(played.commands()).toContainEqual(
     expect.objectContaining({ location: "runs/bulk", selection: { kind: "run", ids: [runId] } }),
   );
+  // The toasts stack over the bottom of the window, the bulk bar's end included.
+  const dismiss = page.getByRole("button", { name: "Dismiss" });
+  while ((await dismiss.count()) > 0) await dismiss.first().click();
   await page.getByTestId("bulk-clear").click();
 });
 

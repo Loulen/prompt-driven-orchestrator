@@ -220,12 +220,14 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
   });
 
   describe("StatsModal — full-screen Stats window (#638)", () => {
-    it("covers the application and exposes Performance as the fifth side-rail section", async () => {
+    it("covers the application and exposes Performance as the fifth tab of the strip", async () => {
       render(<StatsModal open onClose={() => {}} />);
 
       expect(await screen.findByTestId("stats-modal")).toHaveClass("h-[calc(100dvh/var(--app-zoom,1))]", "w-[calc(100vw/var(--app-zoom,1))]");
       const rail = screen.getByRole("tablist", { name: "Stats sections" });
-      expect(rail).toHaveClass("flex-col");
+      // A strip of tabs under the header, not a side rail.
+      expect(rail).not.toHaveClass("flex-col");
+      expect(rail.closest("[data-testid='stats-modal']")?.querySelector("header")).not.toContainElement(rail);
       expect(screen.getAllByRole("tab")).toHaveLength(5);
       expect(screen.getByTestId("stats-tab-performance")).toHaveTextContent("Performance");
       expect(screen.getByRole("group", { name: "Period" })).toBeInTheDocument();
@@ -798,11 +800,10 @@ describe("StatsModal — Pricing details in the shell's secondary panel (#944)",
   it("shows the trigger's open state, not only aria-expanded", async () => {
     const { user } = await openPricing();
     const trigger = screen.getByTestId("stats-pricing-trigger");
-    expect(trigger).toHaveClass("border-primary", "bg-primary/15");
+    expect(trigger).toHaveAttribute("aria-pressed", "true");
 
     await user.click(trigger);
-    expect(trigger).not.toHaveClass("border-primary");
-    expect(trigger).toHaveClass("border-line", "bg-surface-2");
+    expect(trigger).toHaveAttribute("aria-pressed", "false");
   });
 
   it("returns focus to the trigger on ✕, Escape and the toggle", async () => {

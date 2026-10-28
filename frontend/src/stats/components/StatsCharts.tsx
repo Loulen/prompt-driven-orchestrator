@@ -17,6 +17,13 @@ import { PerformanceTab } from "./charts/performance/PerformanceTab";
 export type StatsTab =
   "runs" | "sessions" | "triggers" | "cost" | "performance";
 
+/** What a tab draws around its content: the filter bar (its drill path on the
+ *  left, its own controls before the cohort) and the cohort line. */
+export interface TabFrame {
+  band: (crumbs?: React.ReactNode, controls?: React.ReactNode) => React.ReactNode;
+  cohort: React.ReactNode;
+}
+
 export interface StatsChartsProps {
   tab: StatsTab;
   overview: StatsOverview | null;
@@ -93,55 +100,70 @@ export default function StatsCharts({
       />
     );
   }
-  const body = () => {
-    if (tab === "cost")
-      return (
-        <CostTab
-          cost={cost}
-          error={costError}
-          uncombined={uncombined}
-          onAbsorptionsChanged={onAbsorptionsChanged}
-        />
-      );
-    if (!overview) return <EmptyNote>Loading…</EmptyNote>;
-    if (tab === "runs")
-      return <RunsTab overview={overview} completedOnly={completedOnly} />;
-    if (tab === "sessions")
-      return (
-        <SessionsTab
-          overview={overview}
-          uncombined={uncombined}
-          onAbsorptionsChanged={onAbsorptionsChanged}
-        />
-      );
-    return <TriggersTab overview={overview} />;
+  // The bar and the cohort line every tab but Performance opens with (#819):
+  // the tab draws them, so the bar can carry its drill path on the left.
+  const frame: TabFrame = {
+    band: (crumbs, controls) => (
+      <CohortOnlyBand
+        label={TAB_BAND_LABEL[tab]}
+        completedOnly={completedOnly}
+        onCompletedOnlyChange={onCompletedOnlyChange}
+        crumbs={crumbs}
+        uncombined={
+          // Overview (the Runs tab) has no Pipeline rows: nothing to uncombine.
+          tab !== "runs" && showUncombined
+            ? { checked: uncombined, onChange: onUncombinedChange }
+            : undefined
+        }
+      >
+        {controls}
+      </CohortOnlyBand>
+    ),
+    cohort: (
+      <CohortLine
+        completedOnly={completedOnly}
+        note={
+          // Trigger fires are not Runs: the cohort selects which Runs are
+          // counted, and says so rather than implying it filtered the fires.
+          tab === "triggers"
+            ? "trigger fires are not filtered by run status"
+            : undefined
+        }
+      />
+    ),
   };
+  if (tab === "cost")
+    return (
+      <CostTab
+        cost={cost}
+        error={costError}
+        uncombined={uncombined}
+        onAbsorptionsChanged={onAbsorptionsChanged}
+        frame={frame}
+      />
+    );
+  if (tab === "sessions" && overview)
+    return (
+      <SessionsTab
+        overview={overview}
+        uncombined={uncombined}
+        onAbsorptionsChanged={onAbsorptionsChanged}
+        frame={frame}
+      />
+    );
   return (
-    <>
-      <div className="flex min-h-full flex-col gap-3">
-        <CohortOnlyBand
-          label={TAB_BAND_LABEL[tab]}
-          completedOnly={completedOnly}
-          onCompletedOnlyChange={onCompletedOnlyChange}
-          uncombined={
-            // Overview (the Runs tab) has no Pipeline rows: nothing to uncombine.
-            tab !== "runs" && showUncombined
-              ? { checked: uncombined, onChange: onUncombinedChange }
-              : undefined
-          }
-        />
-        <CohortLine
-          completedOnly={completedOnly}
-          note={
-            // Trigger fires are not Runs: the cohort selects which Runs are
-            // counted, and says so rather than implying it filtered the fires.
-            tab === "triggers"
-              ? "trigger fires are not filtered by run status"
-              : undefined
-          }
-        />
-        <div className="min-h-0 flex-1">{body()}</div>
+    <div className="sx-tab">
+      {frame.band()}
+      <div className="sx-page">
+        {frame.cohort}
+        {!overview ? (
+          <EmptyNote>Loading…</EmptyNote>
+        ) : tab === "runs" ? (
+          <RunsTab overview={overview} completedOnly={completedOnly} />
+        ) : (
+          <TriggersTab overview={overview} />
+        )}
       </div>
-    </>
+    </div>
   );
 }

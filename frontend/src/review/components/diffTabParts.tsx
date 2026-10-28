@@ -26,10 +26,10 @@ export function EmptyState({
       <span className="grid h-7 w-7 place-items-center rounded border border-line bg-surface-2 text-text-3">
         {icon}
       </span>
-      <div className="text-text-3" style={{ fontSize: "11.5px" }}>
+      <div className="text-text-3 text-sm">
         {title}
       </div>
-      <div className="text-text-3" style={{ fontSize: "10.5px" }}>
+      <div className="text-text-3 text-xs">
         {subtitle}
       </div>
       {action}
@@ -51,7 +51,7 @@ export function Skeleton() {
 
 export function Counts({ additions, deletions }: { additions: number; deletions: number }) {
   return (
-    <span className="shrink-0 font-mono tabular-nums" style={{ fontSize: "10.5px" }}>
+    <span className="shrink-0 font-mono tabular-nums text-xs">
       <span className="text-st-done">+{additions}</span>{" "}
       <span className="text-st-failed">−{deletions}</span>
     </span>
@@ -135,8 +135,7 @@ export function Badge({ file }: { file: DiffFile }) {
         : "border-line-strong text-text-3";
   return (
     <span
-      className={`shrink-0 rounded border px-1 leading-4 ${tone}`}
-      style={{ fontSize: "9.5px" }}
+      className={`text-2xs shrink-0 rounded border px-1 leading-4 ${tone}`}
       data-testid="diff-file-badge"
     >
       {label}

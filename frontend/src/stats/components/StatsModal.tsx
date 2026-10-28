@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { RotateCw } from "lucide-react";
+import { Blocks, Coins, Cpu, Gauge, Play, Receipt, RotateCw, Timer, type LucideIcon } from "lucide-react";
 import FullWindowShell from "../../shared/ui/FullWindowShell";
+import { IconButton } from "../../shared/ui/kit";
+import { StatsIcon } from "../../shared/ui/brand/AccentIcons";
 import { useLocationContext, useStatsTabs } from "../../shared/extensions/catalogue";
 import type { StatsTabContext } from "../../shared/extensions/contract";
 import ExtensionStatsTab from "../../shared/extensions/ExtensionStatsTab";
@@ -8,7 +10,7 @@ import { fetchStatsAbsorptions } from "../api/absorptions";
 import { syncCostPrices } from "../api/prices";
 import { useStats } from "../store/useStats";
 import type { SyncCostPricesReport } from "../model/prices";
-import { presetPeriod, PRESETS, type Preset } from "../model/period";
+import { periodDays, presetPeriod, PRESETS, type Preset } from "../model/period";
 import type { StatsTab } from "./StatsCharts";
 import { PricingDetailsContent } from "./PricingDetails";
 import {
@@ -32,12 +34,12 @@ interface Props {
   initialPricingOpen?: boolean;
 }
 
-const TABS: { id: StatsTab; label: string }[] = [
-  { id: "runs", label: "Runs" },
-  { id: "sessions", label: "Sessions" },
-  { id: "triggers", label: "Triggers" },
-  { id: "cost", label: "Cost" },
-  { id: "performance", label: "Performance" },
+const TABS: { id: StatsTab; label: string; icon: LucideIcon }[] = [
+  { id: "runs", label: "Runs", icon: Play },
+  { id: "sessions", label: "Sessions", icon: Cpu },
+  { id: "triggers", label: "Triggers", icon: Timer },
+  { id: "cost", label: "Cost", icon: Coins },
+  { id: "performance", label: "Performance", icon: Gauge },
 ];
 
 const isCoreTab = (id: string): id is StatsTab => TABS.some((item) => item.id === id);
@@ -187,9 +189,20 @@ function StatsSurface({
   // deliberate reading is not an anomaly to flag. The extensions' tabs follow
   // the core's.
   const rail = [
-    ...TABS,
-    ...extensionTabs.map((item) => ({ id: item.key, label: item.contribution.label })),
+    ...TABS.map(({ id, label, icon: Icon }) => ({
+      id,
+      label,
+      icon: <Icon size={13} strokeWidth={1.5} aria-hidden />,
+    })),
+    ...extensionTabs.map((item) => ({
+      id: item.key,
+      label: item.contribution.label,
+      // A tab contribution carries no icon of its own.
+      icon: <Blocks size={13} strokeWidth={1.5} aria-hidden />,
+    })),
   ];
+  const railLabel = rail.find((item) => item.id === (tab ?? active))?.label;
+  const days = periodDays(preset, period);
 
   const onSyncPrices = async () => {
     setSyncing(true);
@@ -217,11 +230,21 @@ function StatsSurface({
   return (
     <FullWindowShell
       title="Stats"
+      titleIcon={<StatsIcon size={16} strokeWidth={1.5} aria-hidden />}
+      subtitle={railLabel}
       testId="stats-modal"
       onClose={onClose}
       onEscape={onEscape}
       closeLabel="Close stats"
       rail={rail}
+      railPlacement="top"
+      railAside={
+        days && (
+          <span className="font-mono text-xs whitespace-nowrap text-text-2" data-testid="stats-period-days">
+            {days}
+          </span>
+        )
+      }
       activeRail={tab ?? active}
       onRailChange={(id) => {
         setActive(id);
@@ -234,74 +257,53 @@ function StatsSurface({
       // x-axis labels they had been hiding. `caret-color:transparent`: nothing
       // in Stats is editable, so Chrome's caret browsing paints no blinking
       // caret on a clicked label; inputs and textareas keep theirs.
-      mainClassName={`min-w-0 flex-1 overflow-y-auto p-5 [scrollbar-gutter:stable] [caret-color:transparent] [&_input]:[caret-color:auto] [&_textarea]:[caret-color:auto] ${refreshing ? "opacity-65" : ""}`}
-      headerExtras={
-        // #819 — the period is the only global setting left in the bar: every
-        // other filter belongs to the tab it changes, in that tab's band.
-        <div className="flex items-center gap-1">
-          <div
-            className="flex items-center gap-1"
-            role="group"
-            aria-label="Period"
+      mainClassName={`sx-main min-w-0 flex-1 overflow-y-auto bg-surface-0 [scrollbar-gutter:stable] [caret-color:transparent] [&_input]:[caret-color:auto] [&_textarea]:[caret-color:auto] ${refreshing ? "opacity-65" : ""}`}
+      headerActions={
+        <>
+          <span
+            className="text-xs whitespace-nowrap text-text-3"
+            data-testid="stats-computed-at"
           >
+            {computedAt
+              ? `Computed ${computedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+              : "Computing…"}
+          </span>
+          {/* #819 — the period is the only global setting left in the bar: every
+              other filter belongs to the tab it changes, in that tab's band. */}
+          <div className="d-seg d-seg--sm sx-period" role="group" aria-label="Period">
             {PRESETS.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 aria-pressed={preset === item.id}
                 data-testid={`stats-period-${item.id}`}
+                title={item.title}
                 onClick={() => setPreset(item.id)}
-                className={`rounded-md border px-2.5 py-1 ${
-                  preset === item.id
-                    ? "border-primary bg-primary/15 text-text"
-                    : "border-line-strong bg-surface-2 text-text-2"
-                }`}
-                style={{ fontSize: "11px" }}
+                className="d-seg__btn"
               >
                 {item.label}
               </button>
             ))}
           </div>
-        </div>
-      }
-      headerActions={
-        <>
-          <div
-            className="text-text-3"
-            style={{ fontSize: "10.5px" }}
-            data-testid="stats-computed-at"
-          >
-            {computedAt
-              ? `Computed ${computedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-              : "Computing…"}
-          </div>
-          <button
-            type="button"
+          <IconButton
+            icon={RotateCw}
+            label="Refresh"
             onClick={refresh}
             disabled={refreshing}
             data-testid="stats-refresh"
-            className="flex items-center gap-1.5 rounded border border-line bg-surface-2 px-2 py-1 text-text-2 disabled:opacity-60"
-          >
-            <RotateCw size={12} className={refreshing ? "animate-spin" : ""} />
-            Refresh
-          </button>
+            className={refreshing ? "sx-spin" : undefined}
+          />
           {tab === "cost" && (
-            // A toggle (#944): reclicking it, the panel open, closes it. Open, it takes the
-            // active look of the period presets so the toggle reads as one.
-            <button
-              type="button"
-              onClick={() => setPricingOpen((value) => !value)}
+            // A toggle (#944): reclicking it, the panel open, closes it.
+            <IconButton
+              icon={Receipt}
+              label="Pricing details"
+              pressed={pricingOpen}
               aria-expanded={pricingOpen}
+              badge={cost ? cost.total.unpriced_models.length + cost.total.missing_reasons.length || null : null}
+              onClick={() => setPricingOpen((value) => !value)}
               data-testid="stats-pricing-trigger"
-              className={`rounded border px-2 py-1 ${
-                pricingOpen ? "border-primary bg-primary/15 text-text" : "border-line bg-surface-2 text-text-2"
-              }`}
-            >
-              Pricing details
-              {cost && cost.total.unpriced_models.length + cost.total.missing_reasons.length > 0
-                ? ` (${cost.total.unpriced_models.length + cost.total.missing_reasons.length})`
-                : ""}
-            </button>
+            />
           )}
         </>
       }
@@ -320,7 +322,7 @@ function StatsSurface({
                   onClick={onSyncPrices}
                   disabled={syncing}
                   data-testid="stats-sync-prices"
-                  className="rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-text-2 disabled:opacity-40"
+                  className="d-btn d-btn--sm"
                 >
                   {syncing ? "Syncing…" : "Sync costs"}
                 </button>
@@ -333,24 +335,20 @@ function StatsSurface({
       }
     >
       {tab && error && (
-        <div
-          className="mb-3 rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
-          data-testid="stats-error"
-        >
+        <div className="sx-err sx-err--page" role="alert" data-testid="stats-error">
           {error}
         </div>
       )}
       {extensionTab && (
         // Keyed per tab: one tab's error boundary must not carry over to the next.
-        <ExtensionStatsTab key={extensionTab.key} tab={extensionTab} context={extensionContext} />
+        <div className="sx-page">
+          <ExtensionStatsTab key={extensionTab.key} tab={extensionTab} context={extensionContext} />
+        </div>
       )}
       {tab && (
       <Suspense
         fallback={
-          <div
-            className="min-h-[220px] px-1 py-8 text-center text-text-3"
-            data-testid="stats-charts-loading"
-          >
+          <div className="sx-empty" data-testid="stats-charts-loading">
             Loading charts…
           </div>
         }

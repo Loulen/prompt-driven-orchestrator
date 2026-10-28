@@ -1,4 +1,4 @@
-import { Bell, Eye, EyeOff, MessageSquare } from "lucide-react";
+import { Bell, Eye, EyeOff, MessageSquare, Send } from "lucide-react";
 import { plural } from "../model/commentStatus";
 import { StateIcon } from "./commentBits";
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
@@ -36,19 +36,17 @@ export default function ReviewCommentPills({ pairDrafts, send, sendDisabledReaso
           disabled={!!sendDisabledReason || sendingKeys.size > 0}
           title={sendDisabledReason ?? "Send every draft to the manager as one message"}
           data-testid="review-send-pill"
-          className="flex cursor-pointer items-center gap-1 rounded border border-primary/30 bg-selected px-2 py-0.5 text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-45"
-          style={{ fontSize: "10.5px" }}
+          className="rv-pill rv-pill--primary"
         >
-          ↗ Send {plural(pairDrafts.length, "draft")} to manager
+          <Send size={12} strokeWidth={1.5} aria-hidden /> Send {plural(pairDrafts.length, "draft")} to manager
         </button>
         {sentCount > 0 && (
           <span
-            className="flex items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-st-running"
+            className="rv-pill text-st-running"
             title={`${sentCount} sent, awaiting reply`}
             data-testid="review-sent-pill"
-            style={{ fontSize: "10.5px" }}
           >
-            ↗ {sentCount} sent
+            <Send size={12} strokeWidth={1.5} aria-hidden /> {sentCount} sent
           </span>
         )}
       </>
@@ -61,10 +59,9 @@ export default function ReviewCommentPills({ pairDrafts, send, sendDisabledReaso
             onClick={jumpUnread}
             title={`${plural(unreadComments.length, "comment")} with an unread reply — jump to the first`}
             data-testid="review-unread-pill"
-            className="flex cursor-pointer items-center gap-1 rounded border border-st-running bg-st-running px-2 py-0.5 font-semibold text-primary-ink hover:opacity-90"
-            style={{ fontSize: "10.5px" }}
+            className="rv-pill rv-pill--unread"
           >
-            <Bell size={11} /> {unreadComments.length}
+            <Bell size={12} strokeWidth={1.5} /> {unreadComments.length}
           </button>
         )}
         {sentCount === 0 ? (
@@ -74,10 +71,9 @@ export default function ReviewCommentPills({ pairDrafts, send, sendDisabledReaso
             disabled={cycleEntries.length === 0}
             title="Jump to the next comment  ( c / C )"
             data-testid="review-comments-pill"
-            className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 hover:text-text-2 disabled:cursor-not-allowed disabled:opacity-50"
-            style={{ fontSize: "10.5px" }}
+            className="rv-pill"
           >
-            <MessageSquare size={11} /> 0 comments
+            <MessageSquare size={12} strokeWidth={1.5} /> 0 comments
           </button>
         ) : (
           <span className="flex items-center gap-1" data-testid="review-state-pills">
@@ -87,10 +83,9 @@ export default function ReviewCommentPills({ pairDrafts, send, sendDisabledReaso
                 onClick={() => jumpComment(1)}
                 title={`${plural(pairStates.open, "open comment")} — jump to the next  ( c / C )`}
                 data-testid="review-comments-pill"
-                className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 hover:text-text-2"
-                style={{ fontSize: "10.5px" }}
+                className="rv-pill"
               >
-                <StateIcon state="open" size={11} /> {pairStates.open}
+                <StateIcon state="open" size={12} /> {pairStates.open}
               </button>
             )}
             {pairStates.proposed > 0 && (
@@ -99,20 +94,18 @@ export default function ReviewCommentPills({ pairDrafts, send, sendDisabledReaso
                 onClick={() => jumpComment(1)}
                 title={`${pairStates.proposed} resolution${pairStates.proposed === 1 ? "" : "s"} proposed — your call`}
                 data-testid="review-proposed-pill"
-                className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 hover:text-text-2"
-                style={{ fontSize: "10.5px" }}
+                className="rv-pill"
               >
-                <StateIcon state="proposed" size={11} /> {pairStates.proposed}
+                <StateIcon state="proposed" size={12} /> {pairStates.proposed}
               </button>
             )}
             {pairStates.resolved > 0 && (
               <span
                 title={`${pairStates.resolved} resolved (skipped by c / C)`}
                 data-testid="review-resolved-pill"
-                className="flex items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3"
-                style={{ fontSize: "10.5px" }}
+                className="rv-pill"
               >
-                <StateIcon state="resolved" size={11} /> {pairStates.resolved}
+                <StateIcon state="resolved" size={12} /> {pairStates.resolved}
               </span>
             )}
             <button
@@ -121,11 +114,9 @@ export default function ReviewCommentPills({ pairDrafts, send, sendDisabledReaso
               aria-pressed={!showResolved}
               title={showResolved ? "Hide resolved comments" : "Show resolved comments"}
               data-testid="review-toggle-resolved"
-              className={`grid h-5 w-[22px] cursor-pointer place-items-center rounded border border-line-strong ${
-                showResolved ? "bg-surface-2 text-text-3 hover:text-text-2" : "bg-surface-2 text-text"
-              }`}
+              className="d-icon"
             >
-              {showResolved ? <Eye size={11} /> : <EyeOff size={11} />}
+              {showResolved ? <Eye size={14} strokeWidth={1.5} /> : <EyeOff size={14} strokeWidth={1.5} />}
             </button>
           </span>
         )}

@@ -749,8 +749,9 @@ describe("StatsCharts — harness drill-down (#638)", () => {
       expect(screen.getByTestId("stats-harness-card-copilot")).toHaveTextContent("$2.00");
       expect(screen.getByTestId("stats-harness-card-opencode")).toHaveTextContent("—");
       expect(screen.getByText(/1 Run without computable cost/i)).toBeInTheDocument();
+      // The headline figure first on the line: the total, its median per Run.
       expect(screen.getByTestId("stats-selection-headline")).toHaveTextContent(
-        "~$7.00† total · ~$1.50† median per Run",
+        "Total ~$7.00† ~$1.50† median per Run",
       );
       expect(screen.queryByText("~$0.00")).not.toBeInTheDocument();
 
@@ -823,8 +824,8 @@ describe("StatsCharts — Cost « By model » (#735, ADR-0065)", () => {
     expect(
       within(modelRows[1]).queryAllByTestId("stats-provenance-model"),
     ).toHaveLength(0);
-    // The axis hint, only on By model.
-    expect(screen.getByText(/Model ids verbatim, one row per id/i)).toBeInTheDocument();
+    // The axis hint, only on By model: an « i » whose tooltip says it.
+    expect(screen.getByRole("img", { name: /Model ids verbatim, one row per id/i })).toBeInTheDocument();
   });
 
   it("says where each harness read a model value on hover, provider included (#736)", async () => {
@@ -850,7 +851,7 @@ describe("StatsCharts — Cost « By model » (#735, ADR-0065)", () => {
     expect(
       screen.queryByRole("columnheader", { name: /opencode/ }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText(/has no cost source and is not on this axis/)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /has no cost source and is not on this axis/ })).toBeInTheDocument();
   });
 
   it("drills model → effort → pipeline → node and pops back through the crumbs", async () => {
@@ -2318,7 +2319,7 @@ describe("StatsCharts — the cohort band of the other tabs (#819)", () => {
     return onCompletedOnlyChange;
   };
 
-  it("gives each tab a band naming it, opening on all runs", () => {
+  it("gives each tab a bar naming it, opening on all runs", () => {
     for (const [tab, label] of [
       ["runs", "Overview filters"],
       ["sessions", "Sessions filters"],
@@ -2334,8 +2335,7 @@ describe("StatsCharts — the cohort band of the other tabs (#819)", () => {
         />,
       );
       const band = screen.getByTestId("stats-filter-band");
-      expect(band).toHaveTextContent(label);
-      expect(band).toHaveTextContent("default: all runs");
+      expect(band).toHaveAttribute("aria-label", label);
       expect(screen.getByTestId("stats-completed-only")).toHaveAttribute(
         "aria-checked",
         "false",
@@ -2619,5 +2619,44 @@ describe("StatsCharts — Performance zoom, median and axes (#811)", () => {
     await user.click(screen.getByRole("option", { name: /Spiky/ }));
     expect(screen.getByRole("radio", { name: "Box" })).toHaveAttribute("aria-checked", "true");
     expect(durationPlots()[0]).toHaveAttribute("data-scale-max", "40000");
+  });
+});
+
+describe("StatsCharts — the breakdown tables (`overlays.statsBreakdown`)", () => {
+  const twoPipelines: StatsOverview = {
+    ...OVERVIEW,
+    sessions_by_pipeline: [
+      { ...OVERVIEW.sessions_by_pipeline[0], id: "a", name: "Alpha", executions: 3 },
+      {
+        ...OVERVIEW.sessions_by_pipeline[0],
+        id: "b",
+        name: "Beta with a name long enough to be cut by the column",
+        executions: 9,
+        harnesses: [{ harness: "claude", executions: 9 }],
+      },
+    ],
+  };
+  const names = () =>
+    screen.getAllByTestId("stats-session-row").map((row) => within(row).getAllByText(/./)[0].textContent);
+
+  it("sort by a column on a click on its header, then the other way round", async () => {
+    const user = userEvent.setup();
+    render(<StatsCharts tab="sessions" overview={twoPipelines} cost={null} costError={null} />);
+    // The largest first, its share bar in the accent.
+    expect(names()[0]).toMatch(/^Beta/);
+    const total = screen.getByRole("columnheader", { name: /Total/ });
+    expect(total).toHaveAttribute("aria-sort", "descending");
+    await user.click(within(total).getByRole("button"));
+    expect(total).toHaveAttribute("aria-sort", "ascending");
+    expect(names()[0]).toBe("Alpha");
+    await user.click(within(screen.getByRole("columnheader", { name: /Name/ })).getByRole("button"));
+    expect(names()).toEqual(["Alpha", "Beta with a name long enough to be cut by the column"]);
+  });
+
+  it("put the figures of a tab on one line, the headline first", () => {
+    render(<StatsCharts tab="runs" overview={OVERVIEW} cost={null} costError={null} />);
+    const cells = document.querySelectorAll(".sx-kpi__cell");
+    expect(cells.length).toBeGreaterThan(1);
+    expect(cells[0]).toHaveTextContent(/^Runs/);
   });
 });

@@ -12,6 +12,8 @@ export interface RailItem {
   /** What the dot means, for screen readers and the hover title. Defaults to
    *  Settings' « Unsaved changes » — Stats says why its numbers moved instead. */
   dirtyLabel?: string;
+  /** Drawn before the label in a strip of tabs (`railPlacement="top"`). */
+  icon?: ReactNode;
 }
 
 /**
@@ -44,6 +46,8 @@ interface Props {
   title: string;
   /** Drawn before the title (an extension page's icon). */
   titleIcon?: ReactNode;
+  /** After the title, lighter: what the surface shows (Stats' tab). */
+  subtitle?: string;
   /** Rendered after the title, in the header row (Stats' period presets, etc.). */
   headerExtras?: ReactNode;
   /** Right-aligned header content, before the close button (hints, refresh…). */
@@ -53,9 +57,14 @@ interface Props {
   rail?: RailItem[];
   activeRail?: string;
   onRailChange?: (id: string) => void;
-  /** Rail width in px. Stats keeps 144; Settings needs 176 for "Sandbox & worktrees". */
+  /** Width of a left rail in px; Settings needs 176 for "Sandbox & worktrees". */
   railWidth?: number;
   railAriaLabel?: string;
+  /** Where the rail sits: a column on the left, or a strip of tabs under the
+   *  header (Stats), navigated with ←→. */
+  railPlacement?: "left" | "top";
+  /** Right end of the strip of tabs (Stats' period dates). */
+  railAside?: ReactNode;
   /** `data-testid` prefix of a rail entry: `${prefix}-${id}`. */
   railTestIdPrefix?: string;
   /** The secondary panel, framed by the shell (Stats' pricing details, Settings' skill bank). */
@@ -77,7 +86,8 @@ interface Props {
 
 /**
  * The full-window surface Stats, Settings and the extensions' pages share (#690): overlay,
- * header (title + ✕), optional left rail navigated with ↑↓, main slot, optional secondary panel
+ * header (title + ✕), optional rail (a left column navigated with ↑↓, or a strip of tabs under
+ * the header navigated with ←→), main slot, optional secondary panel
  * and optional footer.
  *
  * The shell owns Escape: ignored while a tooltip is open (the tooltip consumes it), else
@@ -88,6 +98,7 @@ interface Props {
 export default function FullWindowShell({
   title,
   titleIcon,
+  subtitle,
   headerExtras,
   headerActions,
   rail,
@@ -95,6 +106,8 @@ export default function FullWindowShell({
   onRailChange,
   railWidth = 144,
   railAriaLabel,
+  railPlacement = "left",
+  railAside,
   railTestIdPrefix,
   drawer,
   footer,
@@ -121,6 +134,69 @@ export default function FullWindowShell({
     return () => window.removeEventListener("keydown", onKey);
   }, [onEscape, onClose]);
 
+  const top = railPlacement === "top";
+  // The keys that move along the rail: ↑↓ in a column, ←→ in a strip of tabs.
+  const [prevKey, nextKey] = top ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
+  const railNav = rail ? (
+    <nav
+      className={
+        top
+          ? "flex min-w-0 items-stretch overflow-x-auto"
+          : "flex shrink-0 flex-col gap-px border-r border-line bg-surface-1 p-2"
+      }
+      style={top ? undefined : { width: railWidth }}
+      role="tablist"
+      aria-label={railAriaLabel}
+      onKeyDown={(event) => {
+        if (event.key !== prevKey && event.key !== nextKey) return;
+        event.preventDefault();
+        const index = rail.findIndex((item) => item.id === activeRail);
+        const delta = event.key === nextKey ? 1 : -1;
+        const next = rail[(index + delta + rail.length) % rail.length];
+        onRailChange?.(next.id);
+        document.querySelector<HTMLElement>(`[data-testid='${railTestIdPrefix}-${next.id}']`)?.focus();
+      }}
+    >
+      {rail.map((item) => {
+        const on = activeRail === item.id;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            tabIndex={on ? 0 : -1}
+            data-testid={`${railTestIdPrefix}-${item.id}`}
+            data-dirty={item.dirty ? "true" : undefined}
+            onClick={() => onRailChange?.(item.id)}
+            className={
+              top
+                ? `relative flex shrink-0 items-center gap-1.5 px-2.5 text-md whitespace-nowrap ${
+                    on
+                      ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary"
+                      : "text-text-2 hover:text-text"
+                  }`
+                : `flex h-(--h-row) items-center justify-between gap-2 rounded px-2 text-left text-md ${
+                    on ? "bg-selected text-text" : "text-text-2 hover:bg-hover hover:text-text"
+                  }`
+            }
+          >
+            {top && item.icon}
+            <span>{item.label}</span>
+            {item.dirty && (
+              <span
+                aria-label={item.dirtyLabel ?? "Unsaved changes"}
+                title={item.dirtyLabel ?? "Unsaved changes"}
+                data-testid={`${railTestIdPrefix}-${item.id}-dirty`}
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-await"
+              />
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  ) : null;
+
   return (
     <div className="fixed inset-0 z-50 bg-surface-1">
       <div className="relative flex h-[calc(100dvh/var(--app-zoom,1))] w-[calc(100vw/var(--app-zoom,1))] flex-col bg-surface-2" data-testid={testId}>
@@ -131,6 +207,7 @@ export default function FullWindowShell({
           <h2 className="flex min-w-0 shrink-0 items-center gap-2 text-lg leading-none font-semibold whitespace-nowrap text-text">
             {titleIcon}
             {title}
+            {subtitle && <span className="truncate font-normal text-text-2">{subtitle}</span>}
           </h2>
           <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">{headerExtras}</div>
           <div className="flex shrink-0 items-center gap-2">{headerActions}</div>
@@ -138,52 +215,15 @@ export default function FullWindowShell({
           <IconButton icon={X} label={closeLabel} kbd="Esc" onClick={onClose} />
         </header>
 
+        {rail && railPlacement === "top" && (
+          <div className="flex h-(--h-bar) shrink-0 items-stretch gap-3 border-b border-line bg-surface-1 pr-3 pl-1">
+            {railNav}
+            <span className="flex-1" />
+            {railAside && <div className="flex min-w-0 items-center">{railAside}</div>}
+          </div>
+        )}
         <div className="flex min-h-0 flex-1">
-          {rail && (
-            <nav
-              className="flex shrink-0 flex-col gap-px border-r border-line bg-surface-1 p-2"
-              style={{ width: railWidth }}
-              role="tablist"
-              aria-label={railAriaLabel}
-              onKeyDown={(event) => {
-                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-                event.preventDefault();
-                const index = rail.findIndex((item) => item.id === activeRail);
-                const delta = event.key === "ArrowDown" ? 1 : -1;
-                const next = rail[(index + delta + rail.length) % rail.length];
-                onRailChange?.(next.id);
-                document
-                  .querySelector<HTMLElement>(`[data-testid='${railTestIdPrefix}-${next.id}']`)
-                  ?.focus();
-              }}
-            >
-              {rail.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeRail === item.id}
-                  tabIndex={activeRail === item.id ? 0 : -1}
-                  data-testid={`${railTestIdPrefix}-${item.id}`}
-                  data-dirty={item.dirty ? "true" : undefined}
-                  onClick={() => onRailChange?.(item.id)}
-                  className={`flex h-(--h-row) items-center justify-between gap-2 rounded px-2 text-left text-md ${
-                    activeRail === item.id ? "bg-selected text-text" : "text-text-2 hover:bg-hover hover:text-text"
-                  }`}
-                >
-                  <span>{item.label}</span>
-                  {item.dirty && (
-                    <span
-                      aria-label={item.dirtyLabel ?? "Unsaved changes"}
-                      title={item.dirtyLabel ?? "Unsaved changes"}
-                      data-testid={`${railTestIdPrefix}-${item.id}-dirty`}
-                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-await"
-                    />
-                  )}
-                </button>
-              ))}
-            </nav>
-          )}
+          {rail && railPlacement === "left" && railNav}
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <main className={mainClassName}>{children}</main>

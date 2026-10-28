@@ -5,12 +5,20 @@
 
 export type Preset = "7d" | "30d" | "90d" | "all";
 
-export const PRESETS: { id: Preset; label: string }[] = [
-  { id: "7d", label: "7 days" },
-  { id: "30d", label: "30 days" },
-  { id: "90d", label: "90 days" },
-  { id: "all", label: "All time" },
+export const PRESETS: { id: Preset; label: string; title: string }[] = [
+  { id: "7d", label: "7d", title: "7 days" },
+  { id: "30d", label: "30d", title: "30 days" },
+  { id: "90d", label: "90d", title: "90 days" },
+  { id: "all", label: "All", title: "All time" },
 ];
+
+/** The days a window covers, `to` excluded: `2026-09-29 – 2026-10-28`; none for « All time ». */
+export function periodDays(preset: Preset, period: { from: string; to: string }): string | null {
+  if (preset === "all") return null;
+  const last = new Date(period.to);
+  last.setUTCDate(last.getUTCDate() - 1);
+  return `${period.from.slice(0, 10)} – ${last.toISOString().slice(0, 10)}`;
+}
 
 function utcDayStart(date: Date): string {
   return new Date(

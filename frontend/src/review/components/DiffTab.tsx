@@ -169,8 +169,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
         action={
           <button
             onClick={reload}
-            className="rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2 cursor-pointer"
-            style={{ fontSize: "10.5px" }}
+            className="rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2 cursor-pointer text-xs"
           >
             Retry
           </button>
@@ -203,8 +202,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
     >
       {/* Sticky summary */}
       <div
-        className="sticky top-0 z-10 flex h-9 shrink-0 items-center gap-2 border-b border-line bg-surface-1 px-3"
-        style={{ fontSize: "11px" }}
+        className="sticky top-0 z-10 flex h-9 shrink-0 items-center gap-2 border-b border-line bg-surface-1 px-3 text-xs"
         data-testid="diff-summary"
       >
         <span className="text-text-2">
@@ -213,8 +211,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
         <Counts additions={diff.additions} deletions={diff.deletions} />
         {pastLedger && currentFile ? (
           <span
-            className="min-w-0 truncate font-mono text-text-3"
-            style={{ fontSize: "10.5px" }}
+            className="min-w-0 truncate font-mono text-text-3 text-xs"
             data-testid="diff-summary-current"
             title={fileKey(currentFile)}
           >
@@ -222,8 +219,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           </span>
         ) : (
           <span
-            className="min-w-0 truncate font-mono text-text-3"
-            style={{ fontSize: "10.5px" }}
+            className="min-w-0 truncate font-mono text-text-3 text-xs"
             data-testid="diff-summary-refs"
           >
             {shortSha(diff.from_sha ?? diff.from_ref)} → {shortSha(diff.to_sha ?? diff.to_ref)}
@@ -232,8 +228,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {reloading && (
             <span
-              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running/14 px-1.5 py-px text-st-running"
-              style={{ fontSize: "10px" }}
+              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running/14 px-1.5 py-px text-st-running text-2xs"
               data-testid="diff-updating"
             >
               <span className="h-1.5 w-1.5 rounded-full bg-st-running animate-pulse" />
@@ -243,8 +238,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           {!reloading && changedSinceLoad && (
             <button
               onClick={reload}
-              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running/14 px-1.5 py-px text-st-running transition-colors hover:border-st-running cursor-pointer"
-              style={{ fontSize: "10px" }}
+              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running/14 px-1.5 py-px text-st-running transition-colors hover:border-st-running cursor-pointer text-2xs"
               data-testid="diff-changed-reload"
             >
               <span className="h-1.5 w-1.5 rounded-full bg-st-running" />
@@ -254,8 +248,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           {pastLedger && (
             <button
               onClick={scrollToLedger}
-              className="flex items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2 cursor-pointer"
-              style={{ fontSize: "10.5px" }}
+              className="flex items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2 cursor-pointer text-xs"
               data-testid="diff-files-button"
             >
               <List size={11} />
@@ -266,8 +259,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           <a
             href={reviewUrl(run.run_id)}
             title="Open the Review page"
-            className="flex items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2"
-            style={{ fontSize: "10.5px" }}
+            className="flex items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2 text-xs"
             data-testid="diff-review-button"
           >
             <SquareArrowOutUpRight size={11} />
@@ -275,8 +267,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
             {pendingCount(run.review_comments) > 0 && (
               // #750: pending review comments (sent, not resolved) — CONTEXT.md « Accès rapide Review ».
               <span
-                className="ml-0.5 inline-flex h-[14px] items-center rounded-[7px] bg-st-running/14 px-[5px] font-medium text-st-running"
-                style={{ fontSize: "9.5px" }}
+                className="ml-0.5 inline-flex h-[14px] items-center rounded-[7px] bg-st-running/14 px-[5px] font-medium text-st-running text-2xs"
                 title={`${pendingCount(run.review_comments)} review comment(s) pending — sent, not resolved`}
                 data-testid="diff-review-pending"
               >
@@ -289,8 +280,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
 
       {isLarge && (
         <div
-          className="border-b border-line bg-surface-2 px-3 py-1.5 text-text-3"
-          style={{ fontSize: "10.5px" }}
+          className="border-b border-line bg-surface-2 px-3 py-1.5 text-text-3 text-xs"
           data-testid="diff-large-banner"
         >
           Large diff — files collapsed
@@ -307,10 +297,9 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
               <button
                 key={key}
                 onClick={() => scrollToFile(key)}
-                className={`flex items-center gap-2 rounded px-1 py-px text-left transition-colors hover:bg-hover cursor-pointer ${
+                className={`text-xs flex items-center gap-2 rounded px-1 py-px text-left transition-colors hover:bg-hover cursor-pointer ${
                   isCurrent ? "bg-surface-2" : ""
                 }`}
-                style={{ fontSize: "10.5px" }}
                 data-testid="diff-ledger-row"
                 title={key}
               >
@@ -322,7 +311,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
             );
           })}
         </div>
-        <div className="mt-1.5 flex items-center gap-1 text-text-3" style={{ fontSize: "10.5px" }}>
+        <div className="mt-1.5 flex items-center gap-1 text-text-3 text-xs">
           <button
             onClick={collapseAll}
             className="hover:text-text-2 cursor-pointer"
@@ -355,8 +344,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
             >
               <button
                 onClick={() => toggleFile(key)}
-                className="flex w-full items-center gap-1.5 border-b border-line px-3 py-1.5 text-left transition-colors hover:bg-hover cursor-pointer"
-                style={{ fontSize: "10.5px" }}
+                className="flex w-full items-center gap-1.5 border-b border-line px-3 py-1.5 text-left transition-colors hover:bg-hover cursor-pointer text-xs"
                 data-testid="diff-file-header"
                 aria-expanded={!isCollapsed}
               >

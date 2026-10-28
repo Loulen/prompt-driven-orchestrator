@@ -22,14 +22,14 @@ function combineSubtitle(
   scopeName: string | undefined,
 ): string {
   if (dimension === "node")
-    return `Stats will read them as one node${scopeName ? ` of ${scopeName}` : ""}, in every tab. Keep the name of:`;
+    return `Stats will read them as one node${scopeName ? ` of ${scopeName}` : ""}, in every tab.`;
   if (dimension === "model")
-    return "Stats will read them as one model in Cost and Performance, the couples of every node included. Keep the name of:";
+    return "Stats will read them as one model in Cost and Performance, the couples of every node included.";
   if (dimension === "effort")
-    return `Stats will read them as one effort of ${scopeName ?? "this model"}, in Cost and Performance, the couples of every node included. Keep the name of:`;
+    return `Stats will read them as one effort of ${scopeName ?? "this model"}, in Cost and Performance, the couples of every node included.`;
   if (dimension === "couple")
-    return `Stats will read them as one couple of ${scopeName ?? "this node"} only, in Cost and Performance. Keep the name of:`;
-  return "Stats will read them as one pipeline, in every tab. Keep the name of:";
+    return `Stats will read them as one couple of ${scopeName ?? "this node"} only, in Cost and Performance.`;
+  return "Stats will read them as one pipeline, in every tab.";
 }
 
 export function CombineModal<T extends AbsorbableRow>({
@@ -98,21 +98,53 @@ export function CombineModal<T extends AbsorbableRow>({
   const alreadyCombined = chosen.absorbed?.length ?? 0;
 
   return (
-    <ModalFrame testid="stats-combine-modal" onDismiss={onCancel}>
-      <h3
-        className="flex items-center gap-2 font-medium text-text"
-        style={{ fontSize: "13px" }}
-      >
-        <Combine size={14} className="shrink-0 text-primary" aria-hidden="true" />
-        Combine {rows.length} {NOUN[dimension]}s
-      </h3>
-      <p className="mt-1.5 text-text-3" style={{ fontSize: "11.5px" }}>
-        {combineSubtitle(dimension, scopeName)}
-      </p>
+    <ModalFrame
+      testid="stats-combine-modal"
+      onDismiss={onCancel}
+      icon={<Combine size={14} strokeWidth={1.5} className="sx-acc" aria-hidden="true" />}
+      title={`Combine ${rows.length} ${NOUN[dimension]}s`}
+      footerNote={
+        <span data-testid="stats-combine-consequence" title="Nothing is rewritten: undo it any time from the combined icon on its row.">
+          {/* No count here (#906): the absorbent's own count is not the combined
+              one, and Runs overlap across members, so no sum would be honest. */}
+          {otherLabel} will be counted under{" "}
+          <span className="font-mono text-text">{chosen.name}</span>
+          {alreadyCombined > 0
+            ? `, together with the ${plural(alreadyCombined, NOUN[dimension])} already combined into it`
+            : ""}
+          . Nothing is rewritten: undo it any time from the combined icon on its
+          row.
+        </span>
+      }
+      actions={
+        <>
+          <button
+            type="button"
+            onClick={onCancel}
+            data-testid="stats-combine-cancel"
+            className="d-btn"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onCombine(chosen)}
+            data-testid="stats-combine-confirm"
+            className="d-btn d-btn--primary"
+            title="Combine (Enter)"
+          >
+            Combine
+          </button>
+        </>
+      }
+    >
+      <p className="d-meta m-0">{combineSubtitle(dimension, scopeName)}</p>
+      <div className="d-caps">Keep the name of</div>
       <div
         role="radiogroup"
         aria-label="Keep the name of"
-        className="mt-3 flex flex-col gap-1.5"
+        className="flex flex-col gap-1"
       >
         {rows.map((row) => {
           const checked = row.id === chosen.id;
@@ -129,82 +161,30 @@ export function CombineModal<T extends AbsorbableRow>({
               aria-checked={checked}
               data-testid="stats-combine-option"
               onClick={() => setChosenId(row.id)}
-              className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-left transition-colors ${
-                checked ? "border-primary bg-selected" : "border-line hover:bg-hover"
-              }`}
+              className="sx-combine__opt"
             >
-              {checked ? (
-                <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-primary text-primary-ink">
-                  <Check size={11} strokeWidth={3} />
-                </span>
-              ) : (
+              <span className="sx-radio" aria-hidden="true">
+                {checked && <Check size={10} strokeWidth={2.5} />}
+              </span>
+              <span className="sx-mlist__two">
                 <span
-                  className="h-4 w-4 shrink-0 rounded-full border-2 border-text-3"
-                  aria-hidden="true"
-                />
-              )}
-              <span className="min-w-0">
-                <span
-                  className={`block truncate text-text ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
-                  style={{ fontSize: "12px" }}
+                  className={`sx-mlist__name ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+                  title={row.name}
                 >
                   {row.name}
                 </span>
-                <span
-                  className="block text-text-3"
-                  style={{ fontSize: "10.5px" }}
-                >
-                  {notes.join(" · ")}
-                </span>
+                <span className="d-meta">{notes.join(" · ")}</span>
               </span>
+              {checked && <span className="d-chip shrink-0">keeps its name</span>}
             </button>
           );
         })}
       </div>
-      <p
-        className="mt-3 text-text-3"
-        style={{ fontSize: "11px" }}
-        data-testid="stats-combine-consequence"
-      >
-        {/* No count here (#906): the absorbent's own count is not the combined
-            one, and Runs overlap across members, so no sum would be honest. */}
-        {otherLabel} will be counted under{" "}
-        <span className="text-text">{chosen.name}</span>
-        {alreadyCombined > 0
-          ? `, together with the ${plural(alreadyCombined, NOUN[dimension])} already combined into it`
-          : ""}
-        . Nothing is rewritten: undo it any time from the combined icon on its
-        row.
-      </p>
       {error && (
-        <div
-          className="mt-3 rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
-          data-testid="stats-absorption-error"
-        >
+        <div className="sx-err" data-testid="stats-absorption-error">
           {error}
         </div>
       )}
-      <div className="mt-4 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onCancel}
-          data-testid="stats-combine-cancel"
-          className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
-          style={{ fontSize: "11.5px" }}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onCombine(chosen)}
-          data-testid="stats-combine-confirm"
-          className="cursor-pointer rounded-md bg-primary px-3 py-1.5 text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-60"
-          style={{ fontSize: "11.5px" }}
-        >
-          Combine
-        </button>
-      </div>
     </ModalFrame>
   );
 }

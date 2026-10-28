@@ -92,8 +92,7 @@ export default function FileBody({
     <div className="border-b border-line" data-testid="diff-file-body">
       <div className="overflow-x-auto">
         <table
-          className="w-max min-w-full border-collapse font-mono select-text"
-          style={{ fontSize: "10.5px", lineHeight: "18px" }}
+          className="w-max min-w-full border-collapse font-mono text-xs leading-[18px] select-text"
         >
           <tbody>
             {shown.map((r, idx) => {
@@ -174,8 +173,7 @@ export default function FileBody({
       {truncated && (
         <button
           onClick={onShowAll}
-          className="w-full py-1.5 text-center text-primary transition-colors hover:bg-hover cursor-pointer"
-          style={{ fontSize: "10.5px" }}
+          className="w-full py-1.5 text-center text-primary transition-colors hover:bg-hover cursor-pointer text-xs"
           data-testid="diff-show-more"
         >
           Show {hidden} more lines

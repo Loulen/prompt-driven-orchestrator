@@ -1,4 +1,5 @@
-import { ChevronsDownUp, ChevronsUpDown, PanelLeftClose } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, PanelLeftClose, Search } from "lucide-react";
+import { IconButton } from "../../shared/ui/kit";
 import type { RefObject } from "react";
 import type { DiffFile } from "../../shared/generated/DiffFile";
 import { filePath } from "../../run/model/runRefs";
@@ -54,6 +55,8 @@ interface Props {
   counts?: Map<string, { drafts: number; sent: number }>;
   /** #751: per-path sent-comment state counts (replace the plain "sent" badge when given). */
   stateCounts?: Map<string, StateCounts>;
+  /** Files marked « Viewed » for this pair: a check on the row, the name dimmed. */
+  viewed?: Set<string>;
   /** #752: per-path outdated count — a history glyph on the row when ≥ 1. */
   outdatedCounts?: Map<string, number>;
   /** #750: the Comments section — current pair first, other pairs greyed. */
@@ -74,6 +77,7 @@ export default function ReviewFileList({
   currentIndex,
   onSelect,
   onClose,
+  viewed,
   counts,
   stateCounts: states,
   outdatedCounts,
@@ -93,51 +97,46 @@ export default function ReviewFileList({
   };
 
   return (
-    <aside
-      className="flex min-h-0 flex-col overflow-hidden border-r border-line bg-surface-0"
-      data-testid="review-file-list"
-    >
-      <div className="flex items-center gap-1.5 px-2.5 pb-1.5 pt-2 text-text-3" style={{ fontSize: "10.5px" }}>
-        <button
-          type="button"
+    <aside className="rv-tree" data-testid="review-file-list">
+      <div className="rv-tree__head">
+        <IconButton
+          icon={PanelLeftClose}
+          label="Hide file list"
+          kbd="["
+          size="sm"
           onClick={onClose}
-          title="Hide file list  ( [ )"
           data-testid="review-list-close"
-          className="grid h-5 w-5 cursor-pointer place-items-center rounded text-text-3 hover:bg-hover hover:text-text-2"
-        >
-          <PanelLeftClose size={12} />
-        </button>
-        <input
-          ref={filterRef}
-          value={filter}
-          onChange={(e) => onFilterChange(e.target.value)}
-          placeholder="Filter files…   /"
-          data-testid="review-file-filter"
-          className="min-w-0 flex-1 rounded border border-line bg-surface-1 px-1.5 py-0.5 text-text outline-none focus:border-primary/30"
-          style={{ fontSize: "11px" }}
         />
-        <span className="font-mono text-text-3" data-testid="review-file-count">
+        <label className="rv-search">
+          <Search size={13} strokeWidth={1.5} aria-hidden />
+          <input
+            ref={filterRef}
+            value={filter}
+            onChange={(e) => onFilterChange(e.target.value)}
+            placeholder="Filter files"
+            aria-label="Filter files (/)"
+            title="Filter files (/)"
+            data-testid="review-file-filter"
+          />
+        </label>
+        <span className="rv-bar__meta" title="Files" data-testid="review-file-count">
           {matching}
         </span>
         {onToggleAllDirs && (
-          <button
-            type="button"
+          <IconButton
+            icon={allDirsCollapsed ? ChevronsUpDown : ChevronsDownUp}
+            label={allDirsCollapsed ? "Expand all folders" : "Collapse all folders"}
+            size="sm"
             onClick={onToggleAllDirs}
-            title={allDirsCollapsed ? "Expand all folders" : "Collapse all folders"}
             data-testid="review-dirs-toggle"
             data-collapsed={allDirsCollapsed ? "true" : "false"}
-            className="grid h-5 w-5 cursor-pointer place-items-center rounded text-text-3 hover:bg-hover hover:text-text-2"
-          >
-            {allDirsCollapsed ? <ChevronsUpDown size={12} /> : <ChevronsDownUp size={12} />}
-          </button>
+          />
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-1.5 pb-2.5">
+      <div className="rv-tree__scroll" role="tree" aria-label="Files">
         {rows.length === 0 && (
-          <div className="px-2 py-2.5 text-text-3" style={{ fontSize: "11px" }}>
-            {files.length === 0 ? "No files" : "No file matches"}
-          </div>
+          <div className="px-4 py-2 text-sm text-text-3">{files.length === 0 ? "No files" : "No file matches"}</div>
         )}
         {rows.map(({ node, depth, open }) =>
           node.kind === "dir" ? (
@@ -160,24 +159,23 @@ export default function ReviewFileList({
               sent={counts?.get(node.path)?.sent ?? 0}
               states={states?.get(node.path)}
               outdated={outdatedCounts?.get(node.path) ?? 0}
+              viewed={viewed?.has(node.path) ?? false}
             />
           ),
         )}
 
         {comments && (
-          <div className="mt-3" data-testid="review-comments-section">
-            <div
-              className="flex items-center justify-between px-1.5 pb-1 pt-1.5 uppercase text-text-3"
-              style={{ fontSize: "10px", letterSpacing: ".04em" }}
-            >
-              <span>Comments</span>
+          <section className="rv-csec" data-testid="review-comments-section" aria-label="Comments">
+            <div className="rv-csec__head">
+              <span className="d-caps">Comments</span>
+              <span className="rv-grow" />
               {comments.current.length + comments.other.length > 0 && (
-                <span className="inline-flex items-center gap-1.5 normal-case tracking-normal" data-testid="review-comments-count">
+                <span className="d-meta inline-flex items-center gap-1.5" data-testid="review-comments-count">
                   {plural(comments.current.filter((e) => e.kind === "draft").length, "draft")} ·{" "}
                   {comments.current.filter((e) => e.kind === "sent").length} sent
                   {needsYou > 0 && (
                     <span className="inline-flex items-center gap-px text-st-await" title={`${needsYou} need${needsYou === 1 ? "s" : ""} your decision`} data-testid="review-needs-you">
-                      <Hourglass size={9} />
+                      <Hourglass size={10} />
                       {needsYou}
                     </span>
                   )}
@@ -185,9 +183,7 @@ export default function ReviewFileList({
               )}
             </div>
             {comments.current.length + comments.other.length === 0 ? (
-              <div className="px-1.5 py-1 text-text-3" style={{ fontSize: "10px" }}>
-                None yet. Hover a line number and press +.
-              </div>
+              <div className="px-4 py-1 text-xs text-text-3">None yet</div>
             ) : (
               <>
                 {current.map((e) => (
@@ -198,45 +194,10 @@ export default function ReviewFileList({
                 ))}
               </>
             )}
-          </div>
+          </section>
         )}
       </div>
-
-      <div
-        className="mt-auto flex flex-wrap gap-2 border-t border-line px-2.5 py-2 text-text-3"
-        style={{ fontSize: "10px" }}
-      >
-        <span>
-          <Kbd>j</Kbd>/<Kbd>k</Kbd> file
-        </span>
-        <span>
-          <Kbd>n</Kbd>/<Kbd>p</Kbd> hunk
-        </span>
-        <span>
-          <Kbd>←</Kbd>/<Kbd>→</Kbd> fold folder
-        </span>
-        <span>
-          <Kbd>u</Kbd> view
-        </span>
-        <span>
-          <Kbd>[</Kbd> list
-        </span>
-        <span>
-          <Kbd>c</Kbd>/<Kbd>C</Kbd> comment
-        </span>
-      </div>
     </aside>
-  );
-}
-
-function Kbd({ children }: { children: string }) {
-  return (
-    <kbd
-      className="rounded-[3px] border border-b-2 border-line-strong bg-surface-2 px-1 font-mono text-text-3"
-      style={{ fontSize: "10px" }}
-    >
-      {children}
-    </kbd>
   );
 }
 
@@ -271,24 +232,20 @@ function CommentRow({ entry, pair, onClick }: { entry: ReviewEntry; pair?: strin
       data-kind={entry.kind}
       data-review-state={state ?? undefined}
       data-other-pair={pair ? "true" : undefined}
-      className={`grid w-full cursor-pointer grid-cols-[auto_auto_1fr_auto] items-center gap-1.5 rounded px-1.5 py-[3px] text-left hover:bg-hover ${
-        pair || state === "resolved" ? "opacity-55" : ""
-      }`}
-      style={{ fontSize: "10.5px" }}
+      data-dim={pair || state === "resolved" ? "true" : undefined}
+      className="rv-crow"
     >
       {state ? (
         <span className={`inline-block h-1.5 w-1.5 rounded-full ${DOT_CLASS[state]}`} aria-hidden />
       ) : (
         <Badge kind="draft">✎</Badge>
       )}
-      <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
-        {anchorLabel(entry.anchor)}
-      </span>
-      <span className="truncate text-text-3">{pair ? `at ${pair}` : first}</span>
+      <span className="rv-crow__at">{anchorLabel(entry.anchor)}</span>
+      <span className="truncate">{pair ? `at ${pair}` : first}</span>
       {state && (
-        <span className="inline-flex items-center gap-1 text-text-3" title={stateTitle}>
-          <StateIcon state={state} size={9} />
-          {lastActor && <AuthorGlyph kind={authorKind(lastActor)} size={9} />}
+        <span className="inline-flex items-center gap-1" title={stateTitle}>
+          <StateIcon state={state} size={10} />
+          {lastActor && <AuthorGlyph kind={authorKind(lastActor)} size={10} />}
         </span>
       )}
     </button>

@@ -117,8 +117,7 @@ export function DistributionPlot({
         />
         {clippedLow && (
           <span
-            className="absolute left-0 top-0 font-mono leading-4 text-text-3"
-            style={{ fontSize: "9px" }}
+            className="absolute left-0 top-0 font-mono leading-4 text-text-3 text-2xs"
             data-testid={`performance-${metric}-clip-low`}
           >
             ‹
@@ -126,8 +125,7 @@ export function DistributionPlot({
         )}
         {clippedHigh && (
           <span
-            className="absolute right-0 top-0 font-mono leading-4 text-text-3"
-            style={{ fontSize: "9px" }}
+            className="absolute right-0 top-0 font-mono leading-4 text-text-3 text-2xs"
             data-testid={`performance-${metric}-clip-high`}
           >
             ›
@@ -138,8 +136,7 @@ export function DistributionPlot({
         <button
           type="button"
           aria-label={detail}
-          className="w-fit text-left font-mono text-text-3 underline decoration-dotted underline-offset-2"
-          style={{ fontSize: "9.5px" }}
+          className="w-fit text-left font-mono text-text-3 underline decoration-dotted underline-offset-2 text-2xs"
         >
           {formatPerformanceValue(stats.median, metric)} median · n=
           {value.measured}

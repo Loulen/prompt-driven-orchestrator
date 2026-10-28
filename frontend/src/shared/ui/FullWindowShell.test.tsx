@@ -142,3 +142,48 @@ describe("FullWindowShell — secondary panel frame (#944)", () => {
     });
   });
 });
+
+describe("FullWindowShell — a strip of tabs under the header", () => {
+  function Strip() {
+    const [active, setActive] = useState("a");
+    return (
+      <FullWindowShell
+        title="Surface"
+        subtitle={active === "a" ? "Alpha" : "Beta"}
+        testId="surface"
+        rail={[
+          { id: "a", label: "Alpha", icon: <span data-testid="icon-a" /> },
+          { id: "b", label: "Beta" },
+        ]}
+        railPlacement="top"
+        railAside={<span data-testid="strip-aside">dates</span>}
+        activeRail={active}
+        onRailChange={setActive}
+        railAriaLabel="Sections"
+        railTestIdPrefix="surface-tab"
+        onClose={() => {}}
+        closeLabel="Close surface"
+      >
+        <p>Main</p>
+      </FullWindowShell>
+    );
+  }
+
+  it("draws the tabs with their icons, the aside at the end, and walks them with ← →", () => {
+    render(<Strip />);
+    const strip = screen.getByRole("tablist", { name: "Sections" });
+    expect(screen.getByTestId("surface-header")).not.toContainElement(strip);
+    expect(within(strip).getByTestId("icon-a")).toBeInTheDocument();
+    expect(screen.getByTestId("strip-aside")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-header")).toHaveTextContent("SurfaceAlpha");
+
+    fireEvent.keyDown(strip, { key: "ArrowRight" });
+    expect(screen.getByTestId("surface-tab-b")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("surface-header")).toHaveTextContent("SurfaceBeta");
+    // ↑ ↓ belong to the left rail only.
+    fireEvent.keyDown(strip, { key: "ArrowDown" });
+    expect(screen.getByTestId("surface-tab-b")).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(strip, { key: "ArrowLeft" });
+    expect(screen.getByTestId("surface-tab-a")).toHaveAttribute("aria-selected", "true");
+  });
+});

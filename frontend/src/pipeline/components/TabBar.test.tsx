@@ -43,10 +43,6 @@ function rightClickTab(id: string) {
   fireEvent.contextMenu(btn);
 }
 
-beforeEach(() => {
-  // jsdom doesn't implement scrollIntoView (called by TabBar's active-tab effect).
-  Element.prototype.scrollIntoView = vi.fn();
-});
 
 describe("TabBar context menu (#342)", () => {
   it("renders one tab per open pipeline", () => {

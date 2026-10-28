@@ -17,6 +17,7 @@ import { useMountedPages } from "../../platform/store/mountedPages";
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
 import { Button, Tooltip } from "../../shared/ui/kit";
 import { useOverflowing } from "../../hooks/useOverflowing";
+import { useActiveTabInView } from "../../hooks/useActiveTabInView";
 import TabContextMenu from "./TabContextMenu";
 import { OpenTabsMenu, TabKind, TabLabel } from "./TabParts";
 import { tabTitle } from "./tabTitle";
@@ -72,7 +73,6 @@ export default function TabBar({
   const saveVersionFor = useEditStore((s) => s.saveVersionFor);
   const closeSaveVersion = useEditStore((s) => s.closeSaveVersion);
   const lastSavedAt = useEditStore((s) => s.lastSavedAt);
-  const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
 
   const pipelines = useEditStore((s) => s.pipelines);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
@@ -123,21 +123,8 @@ export default function TabBar({
   const activeLastSaved = activeTabId ? lastSavedAt[activeTabId] : undefined;
   const savedAgo = useRelativeTime(activeLastSaved);
 
-  const setTabRef = useCallback((id: string, el: HTMLButtonElement | null) => {
-    if (el) {
-      tabRefs.current.set(id, el);
-    } else {
-      tabRefs.current.delete(id);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!activeTabId) return;
-    const el = tabRefs.current.get(activeTabId);
-    if (el) {
-      el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-    }
-  }, [activeTabId]);
+  // The active tab stays in view: a Run, a pipeline or a mounted page.
+  useActiveTabInView(listRef, activePage != null ? `page:${activePage}` : activeTabId);
 
   if (openTabs.length === 0 && pageTabCount === 0) return null;
 
@@ -163,7 +150,6 @@ export default function TabBar({
           return (
             <DocTab
               key={tab.id}
-              ref={(el) => setTabRef(tab.id, el)}
               active={isActive}
               dirty={tab.dirty}
               external={tab.externalDirty}

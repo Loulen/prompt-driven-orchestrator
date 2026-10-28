@@ -5,7 +5,8 @@ import { usePalette } from "./paletteStore";
 /**
  * The command palette under the top bar: a query field and the results. It
  * lists nothing yet: the extensions' Actions and search Sources fill it.
- * Escape or a click outside closes it.
+ * Escape or a click outside closes it, and the focus goes back where it was:
+ * the command field when it opened the palette.
  */
 export default function CommandPalette() {
   const open = usePalette((s) => s.open);
@@ -14,7 +15,12 @@ export default function CommandPalette() {
   const hide = usePalette((s) => s.hide);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (open) input.current?.focus();
+    if (!open) return;
+    const before = document.activeElement;
+    input.current?.focus();
+    return () => {
+      if (before instanceof HTMLElement && before !== document.body && before.isConnected) before.focus();
+    };
   }, [open]);
   if (!open) return null;
   return (

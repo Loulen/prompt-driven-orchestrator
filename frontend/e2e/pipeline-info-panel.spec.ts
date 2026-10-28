@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { confirmSaveVersion, openPipelineForEdit, runMultipart, E2E_TARGET_REPO } from "./helpers";
 import type { Page } from "@playwright/test";
 
@@ -32,10 +32,9 @@ async function dismissConflictIfPresent(page: Page): Promise<void> {
 //    through `i`, reflected in the YAML tab, written by Save; read-only on a Run;
 //    an empty canvas selection shows no pipeline settings on the right.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-info-panel-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance pipelines the daemon watches.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Post-refonte the parser requires exactly one start node (zero inputs, one

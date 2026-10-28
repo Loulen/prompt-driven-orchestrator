@@ -133,10 +133,13 @@ export interface OpenPipeline {
  * `saveError` implies `dirty` (it follows a failed save that leaves `dirty`),
  * but we spell it out so the guard reads as "would we lose anything the user
  * can't get back". `externalDirty` is intentionally excluded — it's the
- * transient 2 s hot-reload flash, not user work.
+ * transient 2 s hot-reload flash, not user work. A live shared draft
+ * (ADR-0088) holds its changes for everyone: closing its tab loses none.
  */
 export function hasUnsavedWork(t: OpenPipeline): boolean {
-  return t.dirty || t.saveError != null;
+  if (t.saveError != null) return true;
+  if (t.draft?.status === "live" && t.draft.synced) return false;
+  return t.dirty;
 }
 
 /**

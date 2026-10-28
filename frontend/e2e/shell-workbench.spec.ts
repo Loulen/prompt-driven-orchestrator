@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 
 // Layer 3b — the Workbench shell in a real browser: the 36 px top bar and its
 // command field, the 22 px status bar, three extensions on `topbar/end` and a
-// `statusbar` decoration side by side, and 15 document tabs that scroll, list
-// themselves in a menu, reorder by drag and close.
+// `statusbar` decoration side by side, and 15 document tabs that scroll, keep
+// the active one in view, list themselves in a menu, reorder by drag and close.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
@@ -176,6 +176,22 @@ test("15 tabs scroll, list themselves in a menu, reorder by drag and close", asy
   const first = page.getByTestId(`tab-title-${pipelineName(0)}`).locator("xpath=ancestor::button[1]");
   await expect(first).toHaveAttribute("aria-selected", "true");
   await expect(first).toBeInViewport();
+
+  // A mounted page opened by its link, after them all, comes into view too.
+  const pageName = `${PREFIX}-guide`;
+  await page.route("**/pages", (route) =>
+    route.fulfill({
+      json: [{ name: pageName, directory: "/tmp", run_id: null, node_id: null, created_at: "2026-10-28T00:00:00Z", guide: null }],
+    }),
+  );
+  await page.evaluate((name) => {
+    window.location.hash = `#/pages/${name}`;
+  }, pageName);
+  const pageTab = page.getByTestId(`page-tab-${pageName}`);
+  await expect(pageTab).toHaveAttribute("aria-selected", "true");
+  await expect(pageTab).toBeInViewport({ ratio: 1 });
+  await page.getByTestId(`page-tab-close-${pageName}`).click();
+  await expect(pageTab).toHaveCount(0);
 
   // Drag the first tab past the third.
   const order = () =>

@@ -217,3 +217,16 @@ describe("useResizableLayout — collapsible panel (#949)", () => {
     expect(reloaded.result.current.persistedSize("right")).toBe(35);
   });
 });
+
+describe("useResizableLayout — restore", () => {
+  it("adapts a stored layout to this window, and leaves the defaults alone", () => {
+    const defaults = makeLayout(15, 60, 25);
+    const restore = (stored: Layout) => ({ ...stored, left: stored.left * 2, center: stored.center - stored.left });
+    const { result: fresh } = renderHook(() => useResizableLayout("run", PANEL_IDS, defaults, undefined, restore));
+    expect(fresh.current.defaultLayout).toEqual(defaults);
+
+    localStorage.setItem("pdo.layout.run", JSON.stringify(makeLayout(10, 70, 20)));
+    const { result } = renderHook(() => useResizableLayout("run", PANEL_IDS, defaults, undefined, restore));
+    expect(result.current.defaultLayout).toEqual(makeLayout(20, 60, 20));
+  });
+});

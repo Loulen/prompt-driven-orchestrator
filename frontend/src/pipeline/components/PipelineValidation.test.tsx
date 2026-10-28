@@ -31,8 +31,6 @@ const bravo: Project = { id: "prj-bravo", name: "Bravo", members: ["/repos/bravo
 
 beforeEach(() => {
   vi.mocked(api.setPipelineValidation).mockReset();
-  // jsdom doesn't implement scrollIntoView (called by TabBar's active-tab effect).
-  Element.prototype.scrollIntoView = vi.fn();
 });
 
 describe("ValidationIndicator", () => {

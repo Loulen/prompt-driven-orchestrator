@@ -116,9 +116,7 @@ describe("EditToolbar", () => {
 
     await user.hover(screen.getByTestId("toolbar-script"));
     await waitFor(() => {
-      expect(screen.getByTestId("tooltip-content")).toHaveTextContent(
-        "Script node (deterministic bash)",
-      );
+      expect(screen.getByTestId("tooltip-content")).toHaveTextContent("Script node");
     });
   });
 
@@ -128,10 +126,10 @@ describe("EditToolbar", () => {
     // Each name is the button's own visible tooltip text, verbatim.
     const NAMES: [string, string][] = [
       ["toolbar-add", "Add"],
-      ["toolbar-library", "Library · L"],
-      ["toolbar-script", "Script node (deterministic bash)"],
-      ["toolbar-undo", "Undo · Ctrl+Z"],
-      ["toolbar-redo", "Redo · Ctrl+Y"],
+      ["toolbar-library", "Library"],
+      ["toolbar-script", "Script node"],
+      ["toolbar-undo", "Undo"],
+      ["toolbar-redo", "Redo"],
       ["toolbar-info", "Pipeline info"],
     ];
 
@@ -153,8 +151,8 @@ describe("EditToolbar", () => {
     it("undo/redo stay named while disabled", () => {
       renderToolbar();
       expect(screen.getByTestId("toolbar-undo")).toBeDisabled();
-      expect(screen.getByTestId("toolbar-undo")).toHaveAccessibleName("Undo · Ctrl+Z");
-      expect(screen.getByTestId("toolbar-redo")).toHaveAccessibleName("Redo · Ctrl+Y");
+      expect(screen.getByTestId("toolbar-undo")).toHaveAccessibleName("Undo");
+      expect(screen.getByTestId("toolbar-redo")).toHaveAccessibleName("Redo");
     });
 
     it("the read-only archived toolbar still names its lone info button (#315)", () => {
@@ -196,11 +194,11 @@ describe("EditToolbar", () => {
     it("turns solid blue on an unread reply and amber on a proposed resolution", () => {
       const { unmount } = renderToolbar({ reviewHref: "/runs/r1/review", reviewPending: 2, reviewTone: "unread" });
       expect(screen.getByTestId("toolbar-review")).toHaveAttribute("data-tone", "unread");
-      expect(screen.getByTestId("toolbar-review-pill").className).toContain("bg-st-running ");
+      expect(screen.getByTestId("toolbar-review-pill")).toHaveAttribute("data-tone", "unread");
       unmount();
       renderToolbar({ reviewHref: "/runs/r1/review", reviewPending: 2, reviewTone: "proposed" });
       expect(screen.getByTestId("toolbar-review")).toHaveAttribute("data-tone", "proposed");
-      expect(screen.getByTestId("toolbar-review-pill").className).toContain("bg-st-await");
+      expect(screen.getByTestId("toolbar-review-pill")).toHaveAttribute("data-tone", "proposed");
     });
 
     it("adds no button — the core count is unchanged — and the old toggle is gone", () => {
@@ -289,8 +287,6 @@ describe("EditToolbar", () => {
       const i = screen.getByTestId("toolbar-info");
       expect(bot).toHaveAttribute("aria-pressed", assistant);
       expect(i).toHaveAttribute("aria-pressed", info);
-      expect(bot.className.includes("bg-primary text-surface-0")).toBe(assistant === "true");
-      expect(i.className.includes("bg-primary text-surface-0")).toBe(info === "true");
     });
   });
 });
@@ -482,7 +478,6 @@ describe("EditToolbar run « pilotage » and the Edit pencil (ADR-0085)", () => 
     renderToolbar({ readOnly: true, runEdit: edit });
     const trigger = screen.getByTestId("toolbar-edit");
     expect(trigger).toHaveTextContent("");
-    expect(trigger).toHaveAttribute("title", "Edit");
     expect(trigger).toHaveAccessibleName("Edit");
     await user.click(trigger);
     expect(await screen.findByTestId("toolbar-edit-for-run")).toHaveTextContent(/^Edit for this run$/);

@@ -80,7 +80,7 @@ describe("NodeDetailPanel — Review shortcut (#749)", () => {
       />,
     );
     const link = screen.getByTestId("node-review-shortcut");
-    expect(link).toHaveTextContent("Review this node's delivery");
+    expect(link).toHaveAccessibleName("Review this node's delivery");
     expect(link).toHaveAttribute("href", "/runs/run-1/review?from=node%3Aimpl%3A2%3Abefore&to=node%3Aimpl%3A2%3Aafter");
   });
 
@@ -92,7 +92,7 @@ describe("NodeDetailPanel — Review shortcut (#749)", () => {
       />,
     );
     const link = screen.getByTestId("node-review-shortcut");
-    expect(link).toHaveTextContent("Review live changes");
+    expect(link).toHaveAccessibleName("Review live changes");
     expect(link).toHaveAttribute("href", "/runs/run-1/review?from=tip&to=live%3Aimpl");
   });
 

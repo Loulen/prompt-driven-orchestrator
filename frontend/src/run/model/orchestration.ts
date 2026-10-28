@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HarnessCost } from "../../shared/generated/HarnessCost";
 import type { RunStatus } from "../../shared/generated/RunStatus";
+import type { RunState } from "../../shared/generated/RunState";
+import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import { isLiveRun } from "./runStatus";
 import { formatEstCost } from "./costLabel";
 import type { WsMessage } from "./liveStream";
@@ -181,4 +183,18 @@ export function childrenOfNode(
 ): RunChildEntry[] {
   if (!data || data.run_id !== runId) return [];
   return data.nodes.find((g) => g.node_id === nodeId)?.children ?? [];
+}
+
+/** What a child run opened from the Orchestration tab lands on, in this order:
+ *  the node waiting for someone, a failed one, a running one. */
+const LANDING_ORDER: NodeStatus[] = ["awaiting_user", "failed", "running"];
+
+/** The node a child run opened from the Orchestration tab selects, so its
+ *  banner shows at once; null when none needs a look. */
+export function childLandingNode(run: RunState): string | null {
+  for (const status of LANDING_ORDER) {
+    const def = run.node_defs.find((d) => run.nodes[d.id]?.status === status);
+    if (def) return def.id;
+  }
+  return null;
 }

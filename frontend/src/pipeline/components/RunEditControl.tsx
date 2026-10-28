@@ -1,5 +1,5 @@
-import { Check, ExternalLink, Pencil } from "lucide-react";
-import { Tooltip } from "../../shared/ui/tooltip";
+import { ExternalLink, Pencil } from "lucide-react";
+import { IconButton, Tooltip } from "../../shared/ui/kit";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -20,55 +20,35 @@ export interface RunEdit {
  * The one way out of « pilotage »: following a Run never modifies it, editing is
  * an explicit gesture, for this Run only unless the user later overwrites the
  * default pipeline from Save. A pencil opens « Edit for this run » / « Edit
- * source pipeline »; while editing, « Finish editing » takes its place.
+ * source pipeline »; while editing, the pressed pencil is « Finish editing ».
  */
 export default function RunEditControl({ runEdit }: { runEdit: RunEdit }) {
   if (runEdit.editing) {
+    // While editing, the pencil stays pressed: a click is « Finish editing ».
     return (
-      <Tooltip content="Back to following the run: the canvas locks again">
-        <button
-          data-testid="toolbar-finish-editing"
-          onClick={runEdit.onFinishEditing}
-          className="flex h-7 cursor-pointer items-center gap-1 rounded px-2 text-primary transition-colors hover:bg-hover active:bg-primary active:text-surface-0"
-          style={{ fontSize: "11px" }}
-        >
-          <Check size={13} />
-          <span>Finish editing</span>
-        </button>
-      </Tooltip>
+      <IconButton
+        icon={Pencil}
+        label="Finish editing"
+        pressed
+        data-testid="toolbar-finish-editing"
+        onClick={runEdit.onFinishEditing}
+      />
     );
   }
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        data-testid="toolbar-edit"
-        className="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text data-[popup-open]:bg-hover data-[popup-open]:text-text"
-        aria-label="Edit"
-        title="Edit"
-      >
-        <Pencil size={13} />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        className="min-w-[200px] rounded-md border border-line-strong bg-surface-2 p-1 shadow-lg"
-        side="bottom"
-        align="start"
-      >
-        <DropdownMenuItem
-          data-testid="toolbar-edit-for-run"
-          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover"
-          style={{ fontSize: "11.5px" }}
-          onClick={runEdit.onEditForRun}
-        >
-          <Pencil size={12} className="shrink-0 text-text-3" />
+      <Tooltip label="Edit">
+        <DropdownMenuTrigger data-testid="toolbar-edit" className="d-icon" aria-label="Edit">
+          <Pencil size={14} strokeWidth={1.5} aria-hidden />
+        </DropdownMenuTrigger>
+      </Tooltip>
+      <DropdownMenuContent className="cv-menu" side="bottom" align="start">
+        <DropdownMenuItem data-testid="toolbar-edit-for-run" className="cv-menu__item" onClick={runEdit.onEditForRun}>
+          <Pencil size={14} strokeWidth={1.5} aria-hidden />
           Edit for this run
         </DropdownMenuItem>
-        <DropdownMenuItem
-          data-testid="toolbar-edit-source"
-          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover"
-          style={{ fontSize: "11.5px" }}
-          onClick={runEdit.onEditSource}
-        >
-          <ExternalLink size={12} className="shrink-0 text-text-3" />
+        <DropdownMenuItem data-testid="toolbar-edit-source" className="cv-menu__item" onClick={runEdit.onEditSource}>
+          <ExternalLink size={14} strokeWidth={1.5} aria-hidden />
           Edit source pipeline
         </DropdownMenuItem>
       </DropdownMenuContent>

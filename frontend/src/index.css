@@ -232,15 +232,6 @@ body {
   color: var(--color-st-await);
 }
 
-/* Inspector scope — amber accent (refs docs/design/project/winners.css §3) */
-.panel-r {
-  --primary: var(--color-st-await);
-  --primary-hi: var(--color-st-await);
-  --primary-ink: var(--color-paper);
-  --selected: color-mix(in oklab, var(--color-st-await) 14%, transparent);
-  --selected-edge: var(--color-st-await);
-}
-
 .artifact-markdown {
   font-family: var(--font-ui);
   font-size: 12px;

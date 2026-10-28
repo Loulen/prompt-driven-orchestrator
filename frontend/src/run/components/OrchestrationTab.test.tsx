@@ -78,7 +78,8 @@ describe("OrchestrationTab with an awaiting child (#588)", () => {
     );
     const rows = screen.getAllByTestId("orchestration-child");
     expect(rows[0]).toHaveAttribute("data-awaiting", "true");
-    expect(rows[0].className).toContain("border-st-await");
+    // Tinted in the awaiting tone (inspector.css `.ri-orch__row[data-st]`).
+    expect(rows[0]).toHaveAttribute("data-st", "awaiting_user");
     expect(screen.getByTestId("orchestration-child-awaiting")).toHaveTextContent("awaiting you");
     expect(rows[1]).not.toHaveAttribute("data-awaiting");
     // An awaiting child stays in the running bucket (no awaiting pill).

@@ -15,6 +15,8 @@ import type { Trigger } from "../generated/Trigger";
 import type { Project } from "../../workspace/model/project";
 import type { DecorationContext, DecorationProps, ListFilterProps, SectionProps, TabProps } from "./contract";
 import ExtensionDecorations from "./ExtensionDecorations";
+import { ReactFlowProvider } from "@xyflow/react";
+import { EditNode } from "../../pipeline/components/EditNode";
 import ExtensionSections from "./ExtensionSections";
 import { useSectionForm } from "./sectionForm";
 import { hostReactMajor } from "./shared";
@@ -460,6 +462,45 @@ describe("the trigger/item decorations", () => {
     // On one line at the end of the row's first line: the row keeps its 46 px.
     expect(marks.closest(".lp-deco")).not.toBeNull();
     expect(marks.className).toContain("flex-nowrap");
+  });
+});
+
+describe("the canvas/node decorations", () => {
+  function nodeProps(nodeType: "agent" | "start") {
+    return {
+      id: nodeType,
+      data: {
+        label: nodeType,
+        nodeId: nodeType,
+        nodeType,
+        status: "pending",
+        reached: false,
+        inputs: [],
+        outputs: [{ name: "out" }],
+        interactive: false,
+      },
+      selected: false,
+      type: "edit",
+      zIndex: 0,
+      isConnectable: true,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      dragging: false,
+      deletable: true,
+      selectable: true,
+      draggable: true,
+    } as unknown as Parameters<typeof EditNode>[0];
+  }
+
+  it.each(["agent", "start"] as const)("mark the %s card, a marker included", async (nodeType) => {
+    serve([extension("demo", [at("canvas/node", "decoration", "b", "Badge")])]);
+    render(
+      <ReactFlowProvider>
+        <EditNode {...nodeProps(nodeType)} />
+      </ReactFlowProvider>,
+    );
+    expect(await screen.findByTestId("badge")).toHaveTextContent(`canvas/node:${nodeType}`);
+    expect(screen.getByTestId("node-card")).toContainElement(screen.getByTestId("badge"));
   });
 });
 

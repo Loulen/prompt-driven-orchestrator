@@ -8,6 +8,8 @@ import { isNodeIsolated } from "../../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../../lib/nodePlacement";
 import type { EditorPipelineDef } from "../model/pipeline";
 import { deriveLoopRegions } from "./loopRegionDerivation";
+import { nodeAgentLabel } from "../model/nodeAgent";
+import type { AgentProfile } from "../../shared/generated/AgentProfile";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -48,6 +50,7 @@ export function deriveEditNodes(
   pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
   agentProfileIds: ReadonlySet<string> = new Set(),
+  agentProfiles: readonly AgentProfile[] = [],
 ): Node[] {
   // A single-member loop region renders as a compact badge on the member's card
   // instead of a box (ADR-0011 / #148, #151; the LoopRegion type's "compact
@@ -72,6 +75,7 @@ export function deriveEditNodes(
     // gives no position for is on screen all the same, and a new card must not
     // land on it.
     const fallback = fallbackNodeSpot(i);
+    const nodeRun = runState?.nodes?.[n.id];
     return {
       id: n.id,
       type: "edit",
@@ -116,6 +120,18 @@ export function deriveEditNodes(
         // on-demand node the Run never launched is drawn greyed with its ▶.
         onDemand: n.on_demand ?? false,
         inRun: runState != null,
+        // The card's meta grid: what runs the node, and in a Run its
+        // iteration, its time and its cost.
+        agent: nodeAgentLabel(n, agentProfiles, nodeRun?.harness),
+        run: nodeRun
+          ? {
+              iter: nodeRun.iter,
+              iterations: nodeRun.iterations?.length ?? 0,
+              startedAt: nodeRun.started_at,
+              completedAt: nodeRun.completed_at,
+              cost: nodeRun.cost ?? null,
+            }
+          : undefined,
       },
     };
   });

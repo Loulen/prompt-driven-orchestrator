@@ -6,7 +6,8 @@ import "./inspect.css";
 
 /**
  * Under the head of Pipeline info (ADR-0088): the version a Run launched,
- * the last one of a template, the one a read-only tab shows.
+ * the last one of a template, the one a read-only tab shows; on a Run, the
+ * « vN is out » pill after it.
  */
 export function InfoVersionLine({ run, pipelineId }: { run: RunState | null; pipelineId: string | null }) {
   const pipelines = useEditStore((s) => s.pipelines);
@@ -26,12 +27,13 @@ export function InfoVersionLine({ run, pipelineId }: { run: RunState | null; pip
       <span className="d-mono" title={line} data-testid="info-panel-version">
         {line}
       </span>
+      <NewerVersionPill run={run} />
     </div>
   );
 }
 
 /** « vN is out »: a Run launched an older version than the pipeline's last; it opens the pipeline. */
-export function NewerVersionPill({ run }: { run: RunState | null }) {
+function NewerVersionPill({ run }: { run: RunState | null }) {
   const pipelines = useEditStore((s) => s.pipelines);
   const openPipeline = useEditStore((s) => s.openPipeline);
   const launched = run?.pipeline_version ?? null;

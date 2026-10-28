@@ -115,6 +115,9 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
   // --- scroll tracking: which file is on screen, are we past the ledger -----
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const ledgerRef = useRef<HTMLDivElement | null>(null);
+  const summaryRef = useRef<HTMLDivElement | null>(null);
+  // The sticky summary wraps onto a second line in a narrow pane: its height is read, not assumed.
+  const summaryHeight = () => summaryRef.current?.offsetHeight || 28;
   const headerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [pastLedger, setPastLedger] = useState(false);
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -129,8 +132,8 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
     let idx = 0;
     files.forEach((f, i) => {
       const h = headerRefs.current.get(fileKey(f));
-      // 32px: the sticky summary's height and a little — a header tucked under it counts as passed.
-      if (h && h.offsetTop <= top + 32) idx = i;
+      // The sticky summary's height and a little: a header tucked under it counts as passed.
+      if (h && h.offsetTop <= top + summaryHeight() + 4) idx = i;
     });
     setCurrentIdx(idx);
   }, [files]);
@@ -140,7 +143,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
     const el = scrollRef.current;
     if (!h || !el) return;
     // The summary line is sticky: land the header just under it.
-    el.scrollTo({ top: Math.max(0, h.offsetTop - 28) });
+    el.scrollTo({ top: Math.max(0, h.offsetTop - summaryHeight()) });
   };
   const scrollToLedger = () => scrollRef.current?.scrollTo({ top: 0 });
 
@@ -195,7 +198,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
   return (
     <div ref={scrollRef} onScroll={onScroll} data-testid="diff-tab" className="pi-diff">
       {/* Sticky summary */}
-      <div className="pi-diffhead" data-testid="diff-summary">
+      <div ref={summaryRef} className="pi-diffhead" data-testid="diff-summary">
         <Counts additions={diff.additions} deletions={diff.deletions} />
         <Chip>
           {diff.files_changed} {diff.files_changed === 1 ? "file" : "files"}

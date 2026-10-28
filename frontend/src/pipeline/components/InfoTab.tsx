@@ -4,7 +4,7 @@
  */
 
 import { useMemo } from "react";
-import { Clock, Coins, FileCode, GitCompare, Layers } from "lucide-react";
+import { Archive, Clock, Coins, FileCode, GitCompare, Layers, Lock } from "lucide-react";
 import type { RunState } from "../../shared/generated/RunState";
 import { isLiveRun } from "../../run/model/runStatus";
 import { formatDuration, useRunDuration } from "../../run/model/runDuration";
@@ -18,7 +18,7 @@ import PipelineMetaSections from "./PipelineMetaSections";
 import { PipelineConfigSections } from "./ExtensionInspectorSections";
 import { inspectorSection } from "./inspectorSection";
 import { useEditStore } from "../store/editStore";
-import { InfoVersionLine, NewerVersionPill } from "./InfoVersion";
+import { InfoVersionLine } from "./InfoVersion";
 import { shortSavedAgo } from "../model/versions";
 import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { RunInfoContext } from "../../shared/extensions/contract";
@@ -158,7 +158,7 @@ export function InfoTab({
   const waiting = run?.waiting_for_started_nodes ?? 0;
 
   return (
-    <div data-testid="info-tab">
+    <div className="pi-info" data-testid="info-tab">
       <div className="pi-head">
         {run ? (
           <StatusIcon kind="run" status={run.status} />
@@ -175,11 +175,11 @@ export function InfoTab({
         ) : (
           <Chip>template</Chip>
         )}
-        <NewerVersionPill run={run} />
         {/* #315: a Run's settings are read-only; canvas edits apply to it only. */}
         {run && (
-          <span data-testid="run-info-note">
+          <span className="pi-head__note" data-testid="run-info-note">
             <Chip
+              icon={run.status === "archived" ? Archive : Lock}
               title={
                 run.status === "archived"
                   ? "Archived run · read-only · outputs preserved"

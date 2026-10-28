@@ -49,6 +49,7 @@ export default function AgentSection({
     <>
       <FormRow label="Agent" help="Inherit, a profile, or a combination of its own">
         <NodeAgentControl
+          key={node.id}
           choice={node.agent_choice}
           onChange={(agentChoice) => handleField("agent_choice", agentChoice)}
           profiles={agentProfiles}

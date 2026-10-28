@@ -408,6 +408,14 @@
     .d-field:has(> .d-field__ctl > .ei-agent) {
       grid-template-columns: minmax(0, 1fr);
     }
+    /* the model, the longest value, on its own line under harness and effort */
+    .ei-agent__pick {
+      flex-wrap: wrap;
+    }
+    .ei-agent__pick > .ei-agent__model {
+      flex-basis: 100%;
+      order: 1;
+    }
   }
   .ei-agent__line {
     min-width: 0;
@@ -850,11 +858,26 @@
   }
   .pi-head__name {
     flex: 0 1 auto;
-    min-width: 0;
+    /* the name keeps a few letters when the head is narrow, the chips give way */
+    min-width: min(8ch, 100%);
     overflow: hidden;
     font-weight: var(--w-strong);
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .pi-info {
+    container-type: inline-size;
+  }
+  /* a narrow pane: the read-only chip keeps its icon, the name keeps the room */
+  @container (max-width: 320px) {
+    .pi-head__note .d-chip__t {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
   }
   .pi-vline {
     display: flex;
@@ -1178,20 +1201,27 @@
     z-index: 10;
     display: flex;
     flex: none;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--g-3);
+    gap: 0 var(--g-3);
     min-width: 0;
-    height: 28px;
+    min-height: 28px;
     padding: 0 var(--g-2) 0 var(--pad-x);
     border-bottom: 1px solid var(--line);
     background: var(--surface-1);
     font-size: var(--fs-sm);
+  }
+  /* the refs keep their two shas; the actions wrap onto a second line rather than leave the pane */
+  .pi-diffhead > .ei-trunc {
+    flex: 1 1 0;
+    min-width: 17ch;
   }
   .pi-diffhead__end {
     display: inline-flex;
     flex: none;
     align-items: center;
     gap: var(--g-2);
+    min-height: 28px;
     margin-left: auto;
   }
   .pi-counts {

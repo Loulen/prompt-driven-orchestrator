@@ -83,7 +83,7 @@ export default function PipelineMetaSections({
           {readOnly ? (
             <KeyValue
               rows={[
-                { k: "Name", v: <span data-testid="pipeline-meta-name">{pipeline.name}</span>, tip: pipeline.name },
+                { k: "Name", v: <span className="ei-trunc" data-testid="pipeline-meta-name">{pipeline.name}</span>, tip: pipeline.name },
                 {
                   k: "Prompt",
                   v: <span data-testid="pipeline-meta-prompt-required">{promptRequired ? "Yes" : "No"}</span>,

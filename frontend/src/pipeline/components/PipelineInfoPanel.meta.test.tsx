@@ -393,6 +393,8 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
     const { rerender } = render(<StorePanel run={run} />);
     expect(screen.getByTestId("info-panel-version")).toHaveTextContent("launched v7 · Add reviewer loop");
     expect(screen.getByTestId("newer-version")).toHaveTextContent("v8 is out");
+    // On the version line, like the prototype: the head keeps its width for the name.
+    expect(screen.getByTestId("info-panel-version").parentElement).toContainElement(screen.getByTestId("newer-version"));
     rerender(<StorePanel run={{ ...run, pipeline_version: { number: 8, title: "external edit" } }} />);
     expect(screen.queryByTestId("newer-version")).not.toBeInTheDocument();
     useEditStore.setState({ pipelines: [] });

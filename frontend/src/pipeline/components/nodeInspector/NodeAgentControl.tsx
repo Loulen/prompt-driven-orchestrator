@@ -5,7 +5,7 @@ import type { AgentCombination } from "../../../settings/model/settings";
 import { combinationLabel, resolveAgentChoice } from "../../../settings/model/agentProfiles";
 import type { HarnessCatalog } from "../../../harness/model/catalog";
 import { customDefaults, effortOffer, findHarnessOption } from "../../../harness/model/catalog";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Segmented, Select, TextInput } from "../../../shared/ui/kit";
 
 type Mode = AgentChoice["mode"];
@@ -51,7 +51,8 @@ function CustomModel({
         mono
         autoFocus={draft != null && models.length > 0}
         aria-label="Model"
-        title="Model"
+        title={value ? `Model · ${value}` : "Model"}
+        className="ei-agent__model"
         placeholder="model"
         value={draft ?? value ?? ""}
         onChange={(e) => setDraft(e.target.value)}
@@ -65,7 +66,7 @@ function CustomModel({
     );
   }
   return (
-    <span className="ei-agent__slot" data-testid={testId}>
+    <span className="ei-agent__slot ei-agent__model" data-testid={testId}>
       <Select<string>
         label="Model"
         mono
@@ -116,13 +117,21 @@ export default function NodeAgentControl({
   // #798: the effort offer is read against the model this choice has selected.
   const effort = effortOffer(harnessOption, custom.model);
 
+  // What Profile and Custom last held on this node: switching back returns to it.
+  const held = useRef<{ profile?: string; custom?: AgentCombination }>({});
+  useEffect(() => {
+    if (choice?.mode === "profile") held.current.profile = choice.profile_id;
+    else if (choice?.mode === "custom")
+      held.current.custom = { harness: choice.harness, model: choice.model ?? null, effort: choice.effort ?? null };
+  }, [choice]);
+
   const switchMode = (next: Mode) => {
     if (next === mode) return;
     if (next === "inherit") onChange({ mode: "inherit" });
     else if (next === "profile") {
-      const first = profiles[0];
-      if (first) onChange({ mode: "profile", profile_id: first.id });
-    } else onChange({ mode: "custom", ...customDefaults(catalog, inherited) });
+      const back = profiles.find((p) => p.id === held.current.profile) ?? profiles[0];
+      if (back) onChange({ mode: "profile", profile_id: back.id });
+    } else onChange({ mode: "custom", ...(held.current.custom ?? customDefaults(catalog, inherited)) });
   };
 
   return (
@@ -202,7 +211,11 @@ export default function NodeAgentControl({
       )}
       <span
         className="ei-agent__line"
-        title={broken ? `Profile ${resolved.brokenId} is missing: the next tier resolves` : "Resolved agent"}
+        title={
+          broken
+            ? `Profile ${resolved.brokenId} is missing: the next tier resolves`
+            : `Resolved agent · ${combinationLabel(resolved.combination)}`
+        }
       >
         {broken && <TriangleAlert size={10} strokeWidth={1.75} aria-hidden />}{" "}
         {broken ? `missing · ${combinationLabel(resolved.combination)}` : combinationLabel(resolved.combination)}

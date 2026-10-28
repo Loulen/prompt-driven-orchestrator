@@ -63,6 +63,25 @@ describe("NodeAgentControl (inspector.agentControl)", () => {
     expect(onChange).toHaveBeenLastCalledWith({ mode: "custom", harness: "claude", model: null, effort: null });
   });
 
+  it("returns to the profile or the combination a mode held, after Inherit", () => {
+    const profiles = [...PROFILES, { id: "fast", name: "Fast", harness: "claude", model: "sonnet", effort: "low" }] as AgentProfile[];
+    const onChange = vi.fn();
+    const props = { onChange, profiles, catalog: OFFERING, inherited: INHERITED, testId: "node-agent-control" };
+    const { rerender } = render(<NodeAgentControl {...props} choice={{ mode: "profile", profile_id: "fast" }} />);
+    rerender(<NodeAgentControl {...props} choice={{ mode: "custom", harness: "claude", model: "opus", effort: "high" }} />);
+    rerender(<NodeAgentControl {...props} choice={{ mode: "inherit" }} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Profile" }));
+    expect(onChange).toHaveBeenLastCalledWith({ mode: "profile", profile_id: "fast" });
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+    expect(onChange).toHaveBeenLastCalledWith({ mode: "custom", harness: "claude", model: "opus", effort: "high" });
+  });
+
+  it("names the resolved combination in its tooltip, the model alone on a line when narrow", () => {
+    renderControl({ choice: { mode: "custom", harness: "claude", model: "opus", effort: "high" }, catalog: OFFERING });
+    expect(screen.getByTitle("Resolved agent · claude · opus · high")).toBeInTheDocument();
+    expect(screen.getByTestId("node-agent-control-custom-model")).toHaveClass("ei-agent__model");
+  });
+
   it("puts harness, model and effort on one line", () => {
     renderControl({ choice: { mode: "custom", harness: "claude", model: "opus", effort: "high" }, catalog: OFFERING });
     const custom = screen.getByTestId("node-agent-control-custom");

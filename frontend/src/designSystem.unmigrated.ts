@@ -110,7 +110,6 @@ export const UNMIGRATED: readonly string[] = [
   "run/components/CleanupConfirmModal.tsx",
   "run/components/ForgetRunModal.tsx",
   "run/components/NewRunModal.tsx",
-  "run/components/OrchestrationTab.tsx",
   "run/components/RepositoriesSection.tsx",
   "run/components/RunDateFilterMenu.tsx",
   "run/components/RunFilters.tsx",

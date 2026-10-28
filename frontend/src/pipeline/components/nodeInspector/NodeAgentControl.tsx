@@ -5,6 +5,7 @@ import type { AgentCombination } from "../../../settings/model/settings";
 import { combinationLabel, resolveAgentChoice } from "../../../settings/model/agentProfiles";
 import type { HarnessCatalog } from "../../../harness/model/catalog";
 import { customDefaults, effortOffer, findHarnessOption } from "../../../harness/model/catalog";
+import { useState } from "react";
 import { Segmented, Select, TextInput } from "../../../shared/ui/kit";
 
 type Mode = AgentChoice["mode"];
@@ -17,6 +18,73 @@ const MODES: { value: Mode; label: string; title: string }[] = [
 
 /** The value of a picker that stands for "the harness's default". */
 const DEFAULT = "";
+/** The model picker's entry that opens a field for an id the harness does not list. */
+const OTHER = "\u0000other";
+
+/**
+ * The model of a Custom agent: the harness's models, or any id typed in a
+ * field (a harness that lists none, or « other… »), kept on Enter or blur.
+ */
+function CustomModel({
+  value,
+  models,
+  contexts,
+  onChange,
+  testId,
+}: {
+  value: string | null;
+  models: string[];
+  contexts: Record<string, string>;
+  onChange: (model: string | null) => void;
+  testId: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  if (models.length === 0 || draft != null) {
+    const commit = () => {
+      if (draft == null) return;
+      const next = draft.trim() || null;
+      setDraft(null);
+      if (next !== value) onChange(next);
+    };
+    return (
+      <TextInput
+        mono
+        autoFocus={draft != null && models.length > 0}
+        aria-label="Model"
+        title="Model"
+        placeholder="model"
+        value={draft ?? value ?? ""}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          else if (e.key === "Escape") setDraft(null);
+        }}
+        data-testid={testId}
+      />
+    );
+  }
+  return (
+    <span className="ei-agent__slot" data-testid={testId}>
+      <Select<string>
+        label="Model"
+        mono
+        value={value ?? DEFAULT}
+        onChange={(model) => {
+          if (model === OTHER) setDraft(value ?? "");
+          else onChange(model === DEFAULT ? null : model);
+        }}
+        options={[
+          { value: DEFAULT, label: "default" },
+          // A model the catalogue does not list stays shown, as it is stored.
+          ...(value && !models.includes(value) ? [{ value, label: value }] : []),
+          ...models.map((m) => ({ value: m, label: m, hint: contexts[m] })),
+          { value: OTHER, label: "other…" },
+        ]}
+      />
+    </span>
+  );
+}
 
 /**
  * The agent of a node (`inspector.agentControl`): Inherit, Profile or Custom
@@ -92,43 +160,27 @@ export default function NodeAgentControl({
             mono
             value={custom.harness}
             onChange={(harness) =>
-              onChange({ mode: "custom", ...customDefaults(catalog, { harness, model: null, effort: custom.effort ?? null }) })
+              // A new harness starts from its own model and effort.
+              onChange({ mode: "custom", ...customDefaults(catalog, { harness, model: null, effort: null }) })
             }
-            options={[...catalog.builtin, ...catalog.descriptors].map((h) => ({
-              value: h.name,
-              label: h.name,
-              disabled: !h.installed,
-              hint: h.installed ? undefined : "not installed",
-            }))}
+            options={[
+              // A harness the catalogue no longer lists stays shown, as it is stored.
+              ...(harnessOption ? [] : [{ value: custom.harness, label: custom.harness, hint: "unknown" }]),
+              ...[...catalog.builtin, ...catalog.descriptors].map((h) => ({
+                value: h.name,
+                label: h.name,
+                disabled: !h.installed,
+                hint: h.installed ? undefined : "not installed",
+              })),
+            ]}
           />
-          {harnessOption && harnessOption.models.length > 0 ? (
-            <span className="ei-agent__slot" data-testid={`${testId}-custom-model`}>
-              <Select<string>
-                label="Model"
-                mono
-                value={custom.model ?? DEFAULT}
-                onChange={(model) => onChange({ mode: "custom", ...custom, model: model === DEFAULT ? null : model })}
-                options={[
-                  { value: DEFAULT, label: "default" },
-                  // A model the catalogue no longer lists stays shown, as it is stored.
-                  ...(custom.model && !harnessOption.models.includes(custom.model)
-                    ? [{ value: custom.model, label: custom.model }]
-                    : []),
-                  ...harnessOption.models.map((m) => ({ value: m, label: m, hint: harnessOption.modelContexts[m] })),
-                ]}
-              />
-            </span>
-          ) : (
-            <TextInput
-              mono
-              aria-label="Model"
-              title="Model"
-              placeholder="model"
-              value={custom.model ?? ""}
-              onChange={(e) => onChange({ mode: "custom", ...custom, model: e.target.value.trim() || null })}
-              data-testid={`${testId}-custom-model`}
-            />
-          )}
+          <CustomModel
+            value={custom.model ?? null}
+            models={harnessOption?.models ?? []}
+            contexts={harnessOption?.modelContexts ?? {}}
+            onChange={(model) => onChange({ mode: "custom", ...custom, model })}
+            testId={`${testId}-custom-model`}
+          />
           {(harnessOption?.hasEffort ?? true) && (effort.levels.length > 0 || custom.effort) && (
             <span className="ei-agent__slot" data-testid={`${testId}-custom-effort`}>
               <Select<string>
@@ -139,7 +191,7 @@ export default function NodeAgentControl({
                 options={[
                   { value: DEFAULT, label: "default" },
                   ...(custom.effort && !effort.levels.includes(custom.effort)
-                    ? [{ value: custom.effort, label: custom.effort, hint: "unsupported" }]
+                    ? [{ value: custom.effort, label: custom.effort, hint: effort.authoritative ? "unsupported" : undefined }]
                     : []),
                   ...effort.levels.map((l) => ({ value: l, label: l })),
                 ]}

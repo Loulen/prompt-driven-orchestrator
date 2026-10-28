@@ -168,7 +168,7 @@ export default function PipelineMetaSections({
               <KeyValue
                 rows={variables.map(([name, def]) => ({
                   k: name,
-                  v: <span data-testid="pipeline-variable-row">{`${def.type} = ${formatVariableValue(def.default)}`}</span>,
+                  v: <span data-testid="pipeline-variable-value">{`${def.type} = ${formatVariableValue(def.default)}`}</span>,
                   mono: true,
                   tip: `${def.type} = ${formatVariableValue(def.default)}`,
                 }))}

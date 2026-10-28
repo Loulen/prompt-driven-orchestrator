@@ -35,15 +35,18 @@ export function ParticipantAvatar({ participant, size = "md" }: { participant: D
   );
 }
 
-/** One avatar per person: someone in two sessions is still one participant. */
+/**
+ * One avatar per person: someone in two sessions is still one participant,
+ * drawn as the session that writes when one does.
+ */
 function onePerPerson(participants: DraftParticipant[]): DraftParticipant[] {
-  const seen = new Set<string>();
-  return participants.filter((p) => {
+  const byPerson = new Map<string, DraftParticipant>();
+  for (const p of participants) {
     const key = p.assistant ? `connection:${p.connection}` : JSON.stringify(p.actor);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    const seen = byPerson.get(key);
+    if (!seen || (!seen.can_write && p.can_write)) byPerson.set(key, p);
+  }
+  return [...byPerson.values()];
 }
 
 /** The participants side by side, overlapping a little; past `max`, a count. */

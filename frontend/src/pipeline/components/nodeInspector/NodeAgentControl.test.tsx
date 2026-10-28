@@ -84,6 +84,39 @@ describe("NodeAgentControl (inspector.agentControl)", () => {
     expect(onChange).toHaveBeenLastCalledWith({ mode: "custom", harness: "claude", model: "sonnet", effort: "medium" });
   });
 
+  it("starts a new harness from its own model and effort", () => {
+    const catalog: HarnessCatalog = {
+      builtin: [
+        ...OFFERING.builtin,
+        { name: "opencode", installed: true, models: ["gpt"], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: false, version: null },
+      ],
+      descriptors: [],
+    };
+    const onChange = renderControl({ choice: { mode: "custom", harness: "claude", model: "opus", effort: "high" }, catalog });
+    fireEvent.click(screen.getByRole("button", { name: "Harness" }));
+    fireEvent.click(screen.getByRole("option", { name: /opencode/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ mode: "custom", harness: "opencode", model: "gpt", effort: null });
+  });
+
+  it("keeps a typed model on blur, whole", () => {
+    const onChange = renderControl({ choice: { mode: "custom", harness: "claude", model: null, effort: null } });
+    const input = screen.getByRole("textbox", { name: "Model" });
+    fireEvent.change(input, { target: { value: "my model " } });
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.blur(input);
+    expect(onChange).toHaveBeenLastCalledWith({ mode: "custom", harness: "claude", model: "my model", effort: null });
+  });
+
+  it("types a model the harness does not list", () => {
+    const onChange = renderControl({ choice: { mode: "custom", harness: "claude", model: "opus", effort: null }, catalog: OFFERING });
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    fireEvent.click(screen.getByRole("option", { name: /other/ }));
+    const input = screen.getByRole("textbox", { name: "Model" });
+    fireEvent.change(input, { target: { value: "opus-next" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onChange).toHaveBeenLastCalledWith({ mode: "custom", harness: "claude", model: "opus-next", effort: null });
+  });
+
   it("only shows on a read-only node: no picker, the modes disabled", () => {
     const onChange = renderControl({ choice: { mode: "custom", harness: "claude", model: "opus", effort: null }, readOnly: true });
     expect(screen.queryByTestId("node-agent-control-custom")).toBeNull();

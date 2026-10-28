@@ -49,7 +49,6 @@ export function StatusLetter({ status }: { status: DiffFile["status"] }) {
   );
 }
 
-/** The file name in clear, its folder dimmed after it; `old → new` for a rename/copy. */
 /** The characters a long file name keeps at its end when it is cut. */
 const NAME_TAIL = 10;
 
@@ -67,6 +66,7 @@ function FileName({ name }: { name: string }) {
   );
 }
 
+/** The file name in clear, its folder dimmed after it; `old → new` for a rename/copy. */
 export function FilePath({ file }: { file: DiffFile }) {
   const isMove = file.status === "renamed" || file.status === "copied";
   const key = fileKey(file);

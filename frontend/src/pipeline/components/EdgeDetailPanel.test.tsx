@@ -188,6 +188,15 @@ describe("EdgeDetailPanel", () => {
     expect((edge.when as Record<string, Record<string, unknown>>).verdict).toEqual({ eq: "FAIL" });
   });
 
+  it("moves a row onto a held field with another operator, keeping both values", () => {
+    seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" }, iter: { gte: 2 } } });
+    render(<EdgeDetailPanel />);
+    fireEvent.change(screen.getAllByTestId("field-dropdown")[1], { target: { value: "verdict" } });
+    const when = useEditStore.getState().openTabs[0].pipeline.edges[0].when as Record<string, Record<string, unknown>>;
+    expect(when.verdict.eq).toBe("FAIL");
+    expect(Object.keys(when.verdict)).toHaveLength(2);
+  });
+
   it("offers iter as a selectable condition field", () => {
     seedEdge(baseEdge);
     render(<EdgeDetailPanel />);

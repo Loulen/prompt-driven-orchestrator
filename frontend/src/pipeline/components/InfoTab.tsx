@@ -277,7 +277,7 @@ export function InfoTab({
                     {
                       k: "Started",
                       v: <span data-testid="run-started">{startedAgo(run.started_at)}</span>,
-                      tip: new Date(run.started_at).toLocaleString(),
+                      tip: Number.isNaN(Date.parse(run.started_at)) ? run.started_at : new Date(run.started_at).toLocaleString(),
                     },
                   ]
                 : []),

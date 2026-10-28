@@ -17,7 +17,9 @@ import {
   edgeConditionFields,
   isBoolField,
   clampOperator,
+  isConditionHeld,
   nextFreeCondition,
+  operatorsForField,
   type EdgeConditionField,
 } from "../../lib/edgeFields";
 import { resolveOutputLabels } from "../../lib/edgeLabels";
@@ -95,8 +97,7 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
     if (edgeIndex == null) return;
     const on = ports.includes(port);
     // At least one output is always carried (#843). Refusing the last tick is
-    // the rule; the hint under the list says so rather than leaving a checkbox
-    // that looks live and does nothing.
+    // the rule; the locked checkbox and its tooltip say so.
     if (on && ports.length === 1) return;
     const next = inDeclarationOrder(
       on ? ports.filter((p) => p !== port) : [...ports, port],
@@ -159,6 +160,18 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
         fields,
       );
     });
+    // Two rows on one field and operator would share one value in the clause:
+    // a row moved onto a held pair takes another operator of its field, and is
+    // left as it was when the field has none left.
+    const others = rows.filter((_, idx) => idx !== i);
+    const row = next[i];
+    if (isConditionHeld(others, row)) {
+      const op = operatorsForField(fieldsFor(row.port), row.field).find(
+        (candidate) => !isConditionHeld(others, { ...row, op: candidate }),
+      );
+      if (!op || updates.op !== undefined) return;
+      next[i] = { ...row, op };
+    }
     commitRows(next, ports);
   };
 

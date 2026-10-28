@@ -10,6 +10,15 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.56.0 — Filtres des Runs dans un entonnoir (CORE-110)
+
+- Les emplacements `runs/filter` et `projects/filter` changent de place, sans changer d'API :
+  leurs contributions sont des lignes du menu de l'entonnoir de l'en-tête des Runs, après les
+  filtres du core. Un attribut posé compte comme un filtre actif et « Clear all » le vide.
+  `runs/header` se place avant l'entonnoir et « New Run ». Détails dans
+  `docs/reference/extension-ui.md`.
+- Le bouton « Project » de l'en-tête des Runs disparaît : les Projets se règlent dans Settings.
+
 ## 2.55.0 — Shell Workbench (CORE-109)
 
 - Les emplacements d'extension du shell changent de place, sans changer d'API :

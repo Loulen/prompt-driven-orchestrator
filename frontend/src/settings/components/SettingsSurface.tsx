@@ -1,16 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { CircleDot, Loader2, Search } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import FullWindowShell from "../../shared/ui/FullWindowShell";
-import { Button, EmptyState, IconButton } from "../../shared/ui/kit";
+import { EmptyState } from "../../shared/ui/kit";
 import { SettingsIcon } from "../../shared/ui/brand/AccentIcons";
-import TutorialsSection from "../../app/tour/TutorialsSection";
 import { harnessCatalog } from "../../harness/model/catalog";
-import VersionUpdateSection from "../../platform/components/VersionUpdateSection";
 import { useSkillBank } from "../../skill/store/useSkillBank";
 import { useSettingsPanels } from "../../shared/extensions/catalogue";
 import { leaveSettingsPage } from "../../shared/extensions/deepLink";
-import StatsAbsorptionsPanel from "../../stats/components/StatsAbsorptionsPanel";
-import { updateSettings } from "../api/settings";
 import {
   SETTINGS_CATEGORIES,
   type SettingsCategoryId,
@@ -22,67 +18,23 @@ import { useSettingsForm } from "../store/useSettingsForm";
 import { settingsPageOpen, useSettingsExtensionPages } from "../store/useSettingsExtensionPages";
 import AgentsSections from "./settingsSurface/AgentsSections";
 import CategoryPage from "./settingsSurface/CategoryPage";
+import GeneralCategory from "./settingsSurface/GeneralCategory";
 import { HarnessDescriptorRows, PriceTableRows } from "./settingsSurface/DiagnosticsRows";
-import { RunsSection, SessionsSection } from "./settingsSurface/GeneralSections";
-import InterfaceSection from "./settingsSurface/InterfaceSection";
-import PublicUrlSection from "./settingsSurface/PublicUrlSection";
 import { ConfirmCloseDialog } from "./settingsSurface/overlays";
 import SandboxSections from "./settingsSurface/SandboxSections";
 import ExtensionPanels from "./settingsSurface/ExtensionPanels";
 import { SearchContext, searching, type SettingsQuery } from "./settingsSurface/search";
-import Section, { SectionExtra } from "./settingsSurface/Section";
-import SettingsRail, { type SettingsRailEntry } from "./settingsSurface/SettingsRail";
+import { NoSettings, SearchLine } from "./settingsSurface/SearchLine";
+import SettingsRail from "./settingsSurface/SettingsRail";
+import { settingsRail } from "./settingsSurface/rail";
 import SettingsFooter from "./settingsSurface/SettingsFooter";
 import TelemetrySections from "./settingsSurface/TelemetrySections";
-import ProjectsSections, { type ProjectsSource } from "./settingsSurface/ProjectsSections";
+import ProjectsSections from "./settingsSurface/ProjectsSections";
 import { skillBankDrawer } from "./settingsSurface/skillBankDrawer";
-import type { ProjectsEntry } from "../../workspace/model/projectsSettings";
+import type { SettingsSurfaceProps } from "./settingsSurface/surfaceProps";
+import { useFound, useSaveShortcut } from "./settingsSurface/hooks";
 
-export interface SettingsPosition {
-  category: SettingsCategoryId;
-  section?: SettingsSectionId;
-  /** Settings › Projects (CORE-96): the Projet to show, or a new one to name. */
-  project?: ProjectsEntry;
-}
-
-export interface StatsOpenIntent {
-  tab: "cost";
-  pricingOpen: boolean;
-}
-
-interface Props {
-  open: boolean;
-  onClose: () => void;
-  /**
-   * Live NodeRun-session count, so the cap field can preview how the pending cap
-   * relates to the sessions running right now (reuses `SessionCounter`).
-   */
-  liveSessions?: number;
-  /**
-   * Called after a successful save so the caller can refresh derived UI — e.g.
-   * `refreshSessions()` to update the status-bar cap live.
-   */
-  onSaved?: () => void;
-  /**
-   * Programmatic entry (#690, story 18): where to land. Read once at mount — the host
-   * bumps the component `key` when it wants a new position applied. Without it the
-   * surface lands on the last visited category › section of this page session, else
-   * General › Interface.
-   */
-  initialPosition?: SettingsPosition;
-  /** Diagnostics › Price table links to Stats › Cost › Pricing details (one surface at a time). */
-  onOpenStats?: (intent: StatsOpenIntent) => void;
-  /** #698: Version & update › « What's new » opens the changelog modal over the surface. */
-  onOpenChangelog?: () => void;
-  /** #699: Version & update › « Update » — the host owns the confirm and the waiting flow. */
-  onRequestUpdate?: () => void;
-  /** #823: Tutorials › Start / Replay. Fired AFTER this surface has closed. */
-  onStartTour?: (tourId: string) => void;
-  /** #823: Tutorials › Full tour. Fired AFTER this surface has closed. */
-  onStartFullTour?: () => void;
-  /** CORE-96: the live Projets and the Runs Settings › Projects counts. */
-  projects?: ProjectsSource;
-}
+export type { SettingsPosition, StatsOpenIntent } from "./settingsSurface/surfaceProps";
 
 /** The rail entry of the extensions' settings panels (ADR-0081), shown only when one exists. */
 const EXTENSIONS = "extensions";
@@ -124,7 +76,7 @@ export default function SettingsSurface({
   onStartTour,
   onStartFullTour,
   projects,
-}: Props) {
+}: SettingsSurfaceProps) {
   const { settings, settled, save, refresh } = useSettings(open);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
   const { bank: skillBank, loaded: skillsLoaded, refresh: refreshSkills } = useSkillBank(open);
@@ -159,12 +111,6 @@ export default function SettingsSurface({
   const pagesRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const found = useFound(pagesRef, searching(query) && open);
-  // #697: the Version & update switch writes `update_check` at the change — outside
-  // the form's dirty set, like « Check now ».
-  const toggleUpdateCheck = useCallback(async (on: boolean) => {
-    await updateSettings({ update_check: on });
-    announceSettingsChanged();
-  }, []);
   /** #823 — a Tutorials Start waiting for this surface to actually close. */
   const pendingTour = useRef<(() => void) | null>(null);
 
@@ -224,35 +170,14 @@ export default function SettingsSurface({
 
   // Ctrl+S saves the instance form, not while an extension's page or the close
   // confirmation is on screen.
-  const saveNow = useRef<(() => Promise<boolean>) | null>(null);
-  useLayoutEffect(() => {
-    saveNow.current = extensionPages.active || confirmClose ? null : form.handleSave;
-  });
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "s" || !(event.ctrlKey || event.metaKey) || event.defaultPrevented) return;
-      if (!saveNow.current) return;
-      event.preventDefault();
-      void saveNow.current();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
+  useSaveShortcut(open, extensionPages.active || confirmClose ? null : form.handleSave);
 
   if (!open) return null;
 
-  const coreRail: SettingsRailEntry[] = SETTINGS_CATEGORIES.map((item) => ({
-    id: item.id,
-    label: item.label,
-    dirty: rollup.categories.has(item.id),
-  }));
-  const extensionRail: SettingsRailEntry[] = [
-    ...(extensionPanels.length > 0 ? [{ id: EXTENSIONS, label: "Extensions" }] : []),
-    ...extensionPages.rail,
-  ];
-  if (extensionRail.length > 0) extensionRail[0] = { ...extensionRail[0], group: true };
-  const rail = [...coreRail, ...extensionRail];
+  const rail = settingsRail(
+    SETTINGS_CATEGORIES.map((item) => ({ id: item.id, label: item.label, dirty: rollup.categories.has(item.id) })),
+    [...(extensionPanels.length > 0 ? [{ id: EXTENSIONS, label: "Extensions" }] : []), ...extensionPages.rail],
+  );
   const known = SETTINGS_CATEGORIES.some((item) => item.id === category) || extensionPages.active;
   // An extension page (or the Extensions entry) whose extension left: back to General.
   const shownCategory = known || (category === EXTENSIONS && extensionPanels.length > 0) ? category : "general";
@@ -321,32 +246,14 @@ export default function SettingsSurface({
         />
         <div className="set-right">
           {!extensionPages.active && (
-            <div className="set-search">
-              <label className="set-search__field">
-                <Search size={14} strokeWidth={1.5} aria-hidden />
-                <input
-                  ref={searchRef}
-                  className="set-search__input"
-                  placeholder="Search settings"
-                  aria-label="Search settings"
-                  data-testid="settings-search"
-                  value={needle}
-                  onChange={(e) => setNeedle(e.target.value)}
-                />
-                {inSearch && (
-                  <span className="set-search__count" data-testid="settings-search-count">
-                    {found.rows}
-                  </span>
-                )}
-              </label>
-              <IconButton
-                icon={CircleDot}
-                label="Modified only"
-                pressed={modifiedOnly}
-                onClick={() => setModifiedOnly((on) => !on)}
-                data-testid="settings-modified-only"
-              />
-            </div>
+            <SearchLine
+              ref={searchRef}
+              needle={needle}
+              onNeedle={setNeedle}
+              count={inSearch ? found.rows : null}
+              modifiedOnly={modifiedOnly}
+              onModifiedOnly={setModifiedOnly}
+            />
           )}
           <SearchContext.Provider value={query}>
             <div ref={pagesRef} className={inSearch ? "set-pages set-pages--search" : "set-pages"}>
@@ -364,42 +271,19 @@ export default function SettingsSurface({
                 onSectionChange={(section) => rememberSection(item.id, section)}
               >
                 {item.id === "general" && (
-                  <>
-                    <InterfaceSection section={item.sections[0]} />
-                    {formProps ? (
-                      <>
-                        <PublicUrlSection section={item.sections[1]} {...formProps} />
-                        <SessionsSection
-                          section={item.sections[2]}
-                          {...formProps}
-                          liveSessions={liveSessions}
-                        />
-                        <RunsSection section={item.sections[3]} {...formProps} />
-                      </>
-                    ) : (
-                      loading
-                    )}
-                    <VersionUpdateSection
-                      section={item.sections[4]}
-                      onRequestUpdate={onRequestUpdate}
-                      active={open}
-                      onOpenChangelog={onOpenChangelog}
-                      onToggleCheck={toggleUpdateCheck}
-                    />
-                    {/* #823 — guided tours. Every entry closes this surface first:
-                        a tour points at the app, which is underneath it. */}
-                    <TutorialsSection
-                      section={item.sections[5]}
-                      onStartTour={(tourId) => startTourAfterClose(() => onStartTour?.(tourId))}
-                      onStartFullTour={() => startTourAfterClose(() => onStartFullTour?.())}
-                    />
-                    {/* #891 — Stats absorptions: saves as you go, whatever `GET /settings` said. */}
-                    <Section section={item.sections[6]}>
-                      <SectionExtra>
-                        <StatsAbsorptionsPanel active={open} />
-                      </SectionExtra>
-                    </Section>
-                  </>
+                  <GeneralCategory
+                    sections={item.sections}
+                    form={formProps}
+                    loading={loading}
+                    liveSessions={liveSessions}
+                    active={open}
+                    onRequestUpdate={onRequestUpdate}
+                    onOpenChangelog={onOpenChangelog}
+                    // #823 — guided tours. Every entry closes this surface first: a tour
+                    // points at the app, which is underneath it.
+                    onStartTour={(tourId) => startTourAfterClose(() => onStartTour?.(tourId))}
+                    onStartFullTour={() => startTourAfterClose(() => onStartFullTour?.())}
+                  />
                 )}
 
                 {item.id === "agents" &&
@@ -466,22 +350,12 @@ export default function SettingsSurface({
               )}
               {!inSearch && extensionPages.content}
               {inSearch && found.sections === 0 && (
-                <EmptyState
-                  icon={Search}
-                  action={
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        setNeedle("");
-                        setModifiedOnly(false);
-                      }}
-                    >
-                      Clear
-                    </Button>
-                  }
-                >
-                  No settings
-                </EmptyState>
+                <NoSettings
+                  onClear={() => {
+                    setNeedle("");
+                    setModifiedOnly(false);
+                  }}
+                />
               )}
             </div>
           </SearchContext.Provider>
@@ -520,35 +394,4 @@ export default function SettingsSurface({
       )}
     </>
   );
-}
-
-/**
- * Under a search: how many setting rows show, and how many sections. A section with no
- * row found and whose name is not found hides; read from the page after each change.
- */
-function useFound(pagesRef: RefObject<HTMLDivElement | null>, active: boolean) {
-  const [found, setFound] = useState({ rows: 0, sections: 1 });
-  const measure = useCallback(() => {
-    const pages = pagesRef.current;
-    if (!pages) return;
-    let sections = 0;
-    for (const section of pages.querySelectorAll<HTMLElement>(".set-sec")) {
-      const show = !active || !!section.dataset.labelMatch || !!section.querySelector(".set-row");
-      section.hidden = !show;
-      if (show) sections += 1;
-    }
-    const rows = pages.querySelectorAll(".set-row").length;
-    setFound((current) =>
-      current.rows === rows && current.sections === sections ? current : { rows, sections },
-    );
-  }, [pagesRef, active]);
-  useLayoutEffect(measure);
-  useEffect(() => {
-    const pages = pagesRef.current;
-    if (!active || !pages || typeof MutationObserver === "undefined") return;
-    const observer = new MutationObserver(measure);
-    observer.observe(pages, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [pagesRef, active, measure]);
-  return found;
 }

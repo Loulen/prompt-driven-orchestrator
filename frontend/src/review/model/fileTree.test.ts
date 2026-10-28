@@ -51,6 +51,16 @@ describe("buildFileTree (CORE-84)", () => {
     expect(shape(buildFileTree(["a/x.ts", "a/b/y.ts"]))).toEqual(["a/", "  b/", "    y.ts", "  x.ts"]);
   });
 
+  it("orders the files of a folder naturally, a number read as a number", () => {
+    expect(shape(buildFileTree(["d/m1.ts", "d/m10.ts", "d/m11.ts", "d/m2.ts"]))).toEqual([
+      "d/",
+      "  m1.ts",
+      "  m2.ts",
+      "  m10.ts",
+      "  m11.ts",
+    ]);
+  });
+
   it("never folds a file into its folder's name", () => {
     expect(shape(buildFileTree(["a/b/only.ts"]))).toEqual(["a/b/", "  only.ts"]);
     expect(shape(buildFileTree([]))).toEqual([]);

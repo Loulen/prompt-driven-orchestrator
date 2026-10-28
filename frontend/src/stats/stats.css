@@ -26,22 +26,34 @@
 }
 
 /* ------------------------------------------------------------ filter bar */
+/* One line whatever the width: the drill path shrinks first, then the bar
+ * scrolls sideways rather than growing a second row. */
 .sx-filt {
   position: sticky;
   top: 0;
   z-index: 15;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: var(--g-2) var(--g-3);
-  min-height: var(--h-bar);
-  padding: var(--g-2) var(--g-5);
+  gap: var(--g-3);
+  height: var(--h-bar);
+  padding: 0 var(--g-5);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
   border-bottom: 1px solid var(--line);
   background: var(--surface-1);
   font-size: var(--fs-sm);
   flex: none;
 }
-.sx-grow {
+.sx-filt > * {
+  flex: none;
+}
+.sx-filt > .sx-crumbs {
+  flex: 0 1 auto;
+}
+.sx-grow,
+.sx-filt > .sx-grow {
   flex: 1 1 auto;
 }
 .sx-vsep {
@@ -49,10 +61,6 @@
   height: 16px;
   background: var(--line);
   flex: none;
-}
-.sx-filt__label {
-  color: var(--text-3);
-  white-space: nowrap;
 }
 
 /* The drill path: All › pipeline › node. */
@@ -189,9 +197,6 @@ button.sx-crumb:hover {
   border: 1px solid color-mix(in oklch, var(--color-st-failed) 40%, transparent);
   color: var(--color-st-failed);
   font-size: var(--fs-sm);
-}
-.sx-err--page {
-  margin: var(--g-4) var(--g-5) 0;
 }
 .sx-mono {
   font-family: var(--font-code);

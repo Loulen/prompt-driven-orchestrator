@@ -1,7 +1,8 @@
 // The Review page's file tree (CORE-84): the diff's paths as nested folders,
 // the way a forge's "Files changed" shows them. Folders come before files at
-// each level (first-seen order), files keep the diff's order, and a chain of
-// folders that each hold a single folder reads as one row (`src/a/b`).
+// each level (first-seen order), files in natural order (`m2` before `m10`,
+// where the diff sorts them as text), and a chain of folders that each hold a
+// single folder reads as one row (`src/a/b`).
 //
 // A folder is keyed by its full path — for a compressed row, the path of its
 // last segment — and that key is what the collapse state holds.
@@ -36,6 +37,8 @@ export function buildFileTree(paths: string[]): TreeNode[] {
   return toNodes(root, "");
 }
 
+const NATURAL = new Intl.Collator(undefined, { numeric: true });
+
 function toNodes(b: Building, prefix: string): TreeNode[] {
   const dirs: TreeNode[] = [...b.dirs].map(([part, child]) => {
     let name = part;
@@ -49,7 +52,9 @@ function toNodes(b: Building, prefix: string): TreeNode[] {
     }
     return { kind: "dir", path, name, children: toNodes(at, `${path}/`) };
   });
-  const files: TreeNode[] = b.files.map((f) => ({ kind: "file", ...f }));
+  const files: TreeNode[] = [...b.files]
+    .sort((x, y) => NATURAL.compare(x.name, y.name))
+    .map((f) => ({ kind: "file", ...f }));
   return [...dirs, ...files];
 }
 

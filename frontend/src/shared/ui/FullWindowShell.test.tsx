@@ -186,4 +186,22 @@ describe("FullWindowShell — a strip of tabs under the header", () => {
     fireEvent.keyDown(strip, { key: "ArrowLeft" });
     expect(screen.getByTestId("surface-tab-a")).toHaveAttribute("aria-selected", "true");
   });
+
+  it("cuts a long tab name, named in full on hover, and scrolls the tab chosen into view", () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      render(<Strip />);
+      const label = screen.getByText("Beta");
+      expect(label).toHaveClass("truncate");
+      expect(label).toHaveAttribute("title", "Beta");
+      fireEvent.keyDown(screen.getByRole("tablist", { name: "Sections" }), { key: "ArrowRight" });
+      expect((scrollIntoView.mock.instances.at(-1) as unknown as HTMLElement).dataset.testid).toBe("surface-tab-b");
+    } finally {
+      // jsdom ships none: put back its absence, not an own `undefined`.
+      if (original) Element.prototype.scrollIntoView = original;
+      else delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+  });
 });

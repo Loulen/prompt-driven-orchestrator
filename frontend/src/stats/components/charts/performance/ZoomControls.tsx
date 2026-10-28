@@ -1,3 +1,4 @@
+import { Tooltip } from "../../../../shared/ui/tooltip";
 import type { StatsZoom } from "../../../model/statsFilters";
 import { ZOOM_LABEL, ZOOM_LEVELS } from "../../../model/performance";
 
@@ -48,7 +49,8 @@ export function ZoomGlyph({ level }: { level: StatsZoom }) {
   );
 }
 
-/** The three-position zoom control: one radiogroup, roving tabindex, ← → walk
+/** The three-position zoom control, glyphs named by their tooltip so the bar
+ *  holds on one line: one radiogroup, roving tabindex, ← → walk
  *  the levels (a select would hide two of the three states behind a click). */
 export function ZoomSegments({
   value,
@@ -83,19 +85,20 @@ export function ZoomSegments({
       {ZOOM_LEVELS.map((level) => {
         const selected = level === value;
         return (
-          <button
-            key={level}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            data-zoom={level}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onChange(level)}
-            className="d-seg__btn"
-          >
-            <ZoomGlyph level={level} />
-            {ZOOM_LABEL[level]}
-          </button>
+          <Tooltip key={level} content={ZOOM_LABEL[level]}>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              aria-label={ZOOM_LABEL[level]}
+              data-zoom={level}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => onChange(level)}
+              className="d-seg__btn"
+            >
+              <ZoomGlyph level={level} />
+            </button>
+          </Tooltip>
         );
       })}
     </div>
@@ -103,6 +106,7 @@ export function ZoomSegments({
 }
 
 /** « Independent scales »: each row on its own axis instead of the shared one.
+ *  The name is the tooltip, so the bar holds on one line.
  *  Same switch idiom as Settings › Interface — this is a per-browser reading
  *  preference, not a daemon knob. */
 export function IndependentScalesSwitch({
@@ -113,7 +117,7 @@ export function IndependentScalesSwitch({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <span className="flex items-center gap-2">
+    <Tooltip content="Independent scales">
       <button
         type="button"
         role="switch"
@@ -125,7 +129,6 @@ export function IndependentScalesSwitch({
       >
         <span className="d-switch__knob" aria-hidden />
       </button>
-      <span className="sx-filt__label">Independent scales</span>
-    </span>
+    </Tooltip>
   );
 }

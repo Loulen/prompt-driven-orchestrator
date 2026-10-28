@@ -1,4 +1,4 @@
-import { Bell, Eye, EyeOff, MessageSquare, Send } from "lucide-react";
+import { Bell, Eye, EyeOff, MessageSquare, PencilLine, Send } from "lucide-react";
 import { plural } from "../model/commentStatus";
 import { StateIcon } from "./commentBits";
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
@@ -8,9 +8,6 @@ import type { ReviewEntry } from "../model/entries";
 
 interface Props {
   pairDrafts: ReviewDraft[];
-  send: (keys: string[]) => Promise<void>;
-  sendDisabledReason: string | null;
-  sendingKeys: ReadonlySet<string>;
   sentCount: number;
   unreadComments: ReviewComment[];
   jumpUnread: () => void;
@@ -23,23 +20,20 @@ interface Props {
 
 /**
  * The comment pills of the Review page's top bar (#750, #751): pending drafts
- * → the send-all gesture (also in the footer bar); otherwise the bell of the
+ * → their count (the footer bar holds the send-all gesture); otherwise the bell of the
  * unread replies, the counts per state (icon + count, only when non-zero) and
  * the eye toggle that hides resolved cards.
  */
-export default function ReviewCommentPills({ pairDrafts, send, sendDisabledReason, sendingKeys, sentCount, unreadComments, jumpUnread, jumpComment, cycleEntries, pairStates, toggleShowResolved, showResolved }: Props) {
+export default function ReviewCommentPills({ pairDrafts, sentCount, unreadComments, jumpUnread, jumpComment, cycleEntries, pairStates, toggleShowResolved, showResolved }: Props) {
   return pairDrafts.length > 0 ? (
       <>
-        <button
-          type="button"
-          onClick={() => void send(pairDrafts.map((d) => d.key))}
-          disabled={!!sendDisabledReason || sendingKeys.size > 0}
-          title={sendDisabledReason ?? "Send every draft to the manager as one message"}
-          data-testid="review-send-pill"
-          className="rv-pill rv-pill--primary"
+        <span
+          className="rv-pill rv-pill--draft"
+          title={`${plural(pairDrafts.length, "draft")} not sent yet — the bar at the bottom sends them`}
+          data-testid="review-drafts-pill"
         >
-          <Send size={12} strokeWidth={1.5} aria-hidden /> Send {plural(pairDrafts.length, "draft")} to manager
-        </button>
+          <PencilLine size={12} strokeWidth={1.5} aria-hidden /> {plural(pairDrafts.length, "draft")}
+        </span>
         {sentCount > 0 && (
           <span
             className="rv-pill text-st-running"

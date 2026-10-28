@@ -387,6 +387,21 @@ describe("ReviewPage (#749)", () => {
     for (const c of screen.getAllByTestId("review-file")) expect(c).toHaveAttribute("data-collapsed", "false");
   });
 
+  it("folds a card from its toggle, a button that holds no other control, the file name apart from its folders", async () => {
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));
+    const card = screen.getAllByTestId("review-file")[0];
+    const toggle = within(card).getByTestId("review-file-toggle");
+    expect(toggle.tagName).toBe("BUTTON");
+    expect(toggle.querySelector("button, a, input, [role='button']")).toBeNull();
+    expect(within(card).getByTestId("review-file-header")).not.toHaveAttribute("role");
+    expect(toggle.querySelector(".rv-fc__base")?.textContent).not.toContain("/");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(toggle);
+    expect(card).toHaveAttribute("data-collapsed", "true");
+    expect(within(card).getByTestId("review-file-toggle")).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("marks a file « Viewed »: its card folds, the bar counts it, the tree checks it, and it stays across a reload", async () => {
     const { unmount } = render(<ReviewPage runId={RUN_ID} />);
     await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));
@@ -661,7 +676,7 @@ describe("ReviewPage — review comments (#750)", () => {
     expect(screen.queryByTestId("review-comment-editor")).toBeNull();
     expect(sessionStorage.getItem(`pdo.review.wip.${RUN_ID}|src/main.tsx|new|2|fork|tip`)).toBeNull();
     // Chrome: pill, footer bar with a chip, header + sidebar badges, Comments section.
-    expect(screen.getByTestId("review-send-pill")).toHaveTextContent("Send 1 draft to manager");
+    expect(screen.getByTestId("review-drafts-pill")).toHaveTextContent("1 draft");
     expect(screen.getByTestId("review-send-bar")).toHaveTextContent("1 draft");
     expect(screen.getByTestId("review-send-chip")).toHaveTextContent("main.tsx:R2");
     expect(screen.getAllByTestId("review-file")[0]).toHaveAttribute("data-drafts", "1");
@@ -799,7 +814,6 @@ describe("ReviewPage — review comments (#750)", () => {
     await screen.findByTestId("review-comment");
     expect(screen.getByTestId("review-comment-send")).toBeDisabled();
     expect(screen.getByTestId("review-send-all")).toBeDisabled();
-    expect(screen.getByTestId("review-send-pill")).toBeDisabled();
     expect(screen.getByTestId("review-send-bar-note")).toHaveTextContent("no longer exists");
     expect(mockedSend).not.toHaveBeenCalled();
   });

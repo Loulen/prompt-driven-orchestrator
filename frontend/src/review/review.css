@@ -108,15 +108,11 @@
   opacity: 0.5;
   cursor: default;
 }
-.rv-pill--primary {
-  border-color: var(--primary);
-  background: var(--primary);
-  color: var(--primary-ink);
+.rv-pill--draft {
+  border-color: color-mix(in oklch, var(--color-st-await) 45%, transparent);
+  color: var(--color-st-await);
   font-family: var(--font-ui);
-}
-.rv-pill--primary:hover:not(:disabled) {
-  background: var(--primary-hi);
-  color: var(--primary-ink);
+  cursor: default;
 }
 .rv-pill--unread {
   border-color: var(--color-st-running);
@@ -442,10 +438,25 @@ span.rv-pill {
   user-select: none;
   min-width: 0;
 }
-.rv-fc__head[aria-expanded="true"] {
+.rv-fc__head[data-expanded="true"] {
   border-bottom: 1px solid var(--line);
 }
-.rv-fc__head:focus-visible {
+.rv-fc__toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--g-3);
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rv-fc__toggle:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
 }
@@ -465,14 +476,27 @@ span.rv-pill {
   color: var(--text-3);
 }
 .rv-fc__path {
+  display: flex;
   min-width: 0;
   flex: 0 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-code);
   font-size: var(--fs-md);
   color: var(--text);
+}
+/* The folders give way first; the file name only once they are gone. */
+.rv-fc__dir {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rv-fc__base {
+  min-width: 0;
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .rv-fc__acts {
   display: inline-flex;
@@ -523,7 +547,7 @@ span.rv-pill {
 
 /* ------------------------------------------------------------ comment threads */
 .rv-ct {
-  max-width: 720px;
+  max-width: min(720px, calc(100% - 2 * var(--g-4)));
   margin: var(--g-3) var(--g-4);
   border: 1px solid var(--line);
   background: var(--surface-0);
@@ -684,6 +708,26 @@ span.rv-pill {
 .pdo-review .diff-tailwindcss-wrapper .diff-style-root,
 .rv-diff .diff-tailwindcss-wrapper .diff-style-root {
   font-family: var(--font-code);
+}
+/* A comment row (a card, or the editor the « + » opens) is pinned to the
+ * visible width of its scroller. The library
+ * sizes it from `getBoundingClientRect`, which already carries the UI scale,
+ * and the zoom then applies a second time: the card overflowed the pane by the
+ * scale factor. The scroller is the query container, so `100cqw` is its width
+ * in local pixels. */
+.pdo-review .diff-table-scroll-container {
+  container-type: inline-size;
+}
+.pdo-review .diff-table-scroll-container .diff-line-extend-wrapper,
+.pdo-review .diff-table-scroll-container .diff-line-widget-wrapper {
+  width: 100cqw !important;
+}
+/* The « + » that opens a comment straddles the gutter's right edge: the
+ * number keeps clear of it. */
+.pdo-review td.diff-line-num,
+.pdo-review td.diff-line-old-num,
+.pdo-review td.diff-line-new-num {
+  padding-right: 18px;
 }
 /* The hunk-separator expanders: the accent on hover. */
 .pdo-review .diff-line-hunk-action button:hover {

@@ -159,6 +159,11 @@ function StatsSurface({
     (tab === "cost" && costReloadKey !== reloadKey) ||
     (tab === "performance" && performanceReloadKey !== reloadKey);
 
+  // The failure of the tab on screen: its page says so, the header stops
+  // announcing a computation that will not come.
+  const tabError =
+    tab === "cost" ? costError : tab === "performance" ? performanceError : tab ? error : null;
+
   const refresh = () => {
     setReloadKey((value) => value + 1);
   };
@@ -266,7 +271,9 @@ function StatsSurface({
           >
             {computedAt
               ? `Computed ${computedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-              : "Computing…"}
+              : tabError
+                ? null
+                : "Computing…"}
           </span>
           {/* #819 — the period is the only global setting left in the bar: every
               other filter belongs to the tab it changes, in that tab's band. */}
@@ -334,11 +341,6 @@ function StatsSurface({
           : null
       }
     >
-      {tab && error && (
-        <div className="sx-err sx-err--page" role="alert" data-testid="stats-error">
-          {error}
-        </div>
-      )}
       {extensionTab && (
         // Keyed per tab: one tab's error boundary must not carry over to the next.
         <div className="sx-page">
@@ -356,6 +358,7 @@ function StatsSurface({
         <StatsCharts
           tab={tab}
           overview={overview}
+          overviewError={error}
           cost={cost}
           costError={costError}
           performance={performance}

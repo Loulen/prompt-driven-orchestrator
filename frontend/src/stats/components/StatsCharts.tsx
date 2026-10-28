@@ -27,6 +27,9 @@ export interface TabFrame {
 export interface StatsChartsProps {
   tab: StatsTab;
   overview: StatsOverview | null;
+  /** The overview request failed: Overview, Sessions and Triggers say so in
+   *  their page instead of loading forever. */
+  overviewError?: string | null;
   cost: StatsCost | null;
   costError: string | null;
   performance?: StatsPerformance | null;
@@ -62,6 +65,7 @@ const TAB_BAND_LABEL: Record<Exclude<StatsTab, "performance">, string> = {
 export default function StatsCharts({
   tab,
   overview,
+  overviewError = null,
   cost,
   costError,
   performance = null,
@@ -157,7 +161,13 @@ export default function StatsCharts({
       <div className="sx-page">
         {frame.cohort}
         {!overview ? (
-          <EmptyNote>Loading…</EmptyNote>
+          overviewError ? (
+            <div className="sx-err" role="alert" data-testid="stats-error">
+              {overviewError}
+            </div>
+          ) : (
+            <EmptyNote>Loading…</EmptyNote>
+          )
         ) : tab === "runs" ? (
           <RunsTab overview={overview} completedOnly={completedOnly} />
         ) : (

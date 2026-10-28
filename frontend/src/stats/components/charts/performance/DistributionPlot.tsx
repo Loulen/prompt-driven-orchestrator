@@ -136,7 +136,7 @@ export function DistributionPlot({
         <button
           type="button"
           aria-label={detail}
-          className="w-fit text-left font-mono text-text-3 underline decoration-dotted underline-offset-2 text-2xs"
+          className="max-w-full truncate text-left font-mono text-text-3 underline decoration-dotted underline-offset-2 text-2xs"
         >
           {formatPerformanceValue(stats.median, metric)} median · n=
           {value.measured}

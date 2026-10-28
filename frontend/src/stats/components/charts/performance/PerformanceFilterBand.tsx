@@ -73,7 +73,6 @@ export function PerformanceFilterBand({
         <UncombinedChip checked={uncombined} onChange={onUncombinedChange} />
       )}
       <BandDivider />
-      <span className="sx-filt__label">Duration</span>
       <DurationModeSegments value={mode} onChange={onDurationModeChange} />
       {mode !== "total" && (
         <WaitCoverage

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { X } from "lucide-react";
 import { IconButton } from "./kit";
 
@@ -135,16 +135,26 @@ export default function FullWindowShell({
   }, [onEscape, onClose]);
 
   const top = railPlacement === "top";
+  const navRef = useRef<HTMLElement>(null);
+  const fade = useScrollFade(navRef, top, rail?.map((item) => `${item.label}${item.dirty ? "•" : ""}`).join("\n") ?? "");
+  // A strip narrower than its tabs scrolls: the active one is kept in view.
+  useEffect(() => {
+    if (!top) return;
+    navRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [top, activeRail]);
   // The keys that move along the rail: ↑↓ in a column, ←→ in a strip of tabs.
   const [prevKey, nextKey] = top ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
   const railNav = rail ? (
     <nav
+      ref={navRef}
       className={
         top
-          ? "flex min-w-0 items-stretch overflow-x-auto"
+          ? "flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none]"
           : "flex shrink-0 flex-col gap-px border-r border-line bg-surface-1 p-2"
       }
-      style={top ? undefined : { width: railWidth }}
+      style={top ? fade : { width: railWidth }}
       role="tablist"
       aria-label={railAriaLabel}
       onKeyDown={(event) => {
@@ -182,7 +192,13 @@ export default function FullWindowShell({
             }
           >
             {top && item.icon}
-            <span>{item.label}</span>
+            {top ? (
+              <span className="max-w-48 truncate" title={item.label}>
+                {item.label}
+              </span>
+            ) : (
+              <span>{item.label}</span>
+            )}
             {item.dirty && (
               <span
                 aria-label={item.dirtyLabel ?? "Unsaved changes"}
@@ -219,7 +235,7 @@ export default function FullWindowShell({
           <div className="flex h-(--h-bar) shrink-0 items-stretch gap-3 border-b border-line bg-surface-1 pr-3 pl-1">
             {railNav}
             <span className="flex-1" />
-            {railAside && <div className="flex min-w-0 items-center">{railAside}</div>}
+            {railAside && <div className="flex shrink-0 items-center">{railAside}</div>}
           </div>
         )}
         <div className="flex min-h-0 flex-1">
@@ -235,6 +251,39 @@ export default function FullWindowShell({
       </div>
     </div>
   );
+}
+
+/** The hint that a strip of tabs scrolls: its edge fades on each side that
+ *  hides a tab. */
+function useScrollFade(
+  ref: RefObject<HTMLElement | null>,
+  enabled: boolean,
+  /** What the tabs show: a change can widen the strip without resizing it. */
+  tabsKey: string,
+): CSSProperties | undefined {
+  const [edges, setEdges] = useState({ start: false, end: false });
+  useEffect(() => {
+    const el = ref.current;
+    if (!enabled || !el) return;
+    const measure = () => {
+      const start = el.scrollLeft > 1;
+      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setEdges((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      observer?.disconnect();
+    };
+  }, [ref, enabled, tabsKey]);
+  if (!edges.start && !edges.end) return undefined;
+  const mask = `linear-gradient(to right, ${edges.start ? "transparent" : "black"}, black 24px, black calc(100% - 24px), ${
+    edges.end ? "transparent" : "black"
+  })`;
+  return { maskImage: mask, WebkitMaskImage: mask };
 }
 
 /** The frame of the secondary panel: under the header, title + actions + Escape hint + ✕. */

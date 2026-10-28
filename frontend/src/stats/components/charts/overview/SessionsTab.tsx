@@ -154,7 +154,8 @@ export function SessionTable({
   );
   const order = sorted.map((row) => row.id);
   const max = Math.max(0, ...rows.map((row) => row.executions));
-  const top = sorted[0]?.executions === max ? sorted[0]?.id : undefined;
+  // The largest share is marked whatever the sort, as on Cost.
+  const top = rows.find((row) => row.executions === max && max > 0)?.id;
   return (
     <table className="sx-table">
       <thead>

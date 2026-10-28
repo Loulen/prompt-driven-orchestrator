@@ -75,32 +75,22 @@ export default function ReviewFileHeader({
       : null;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-expanded={!collapsed}
-      onClick={onToggle}
-      onKeyDown={(e) => {
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onToggle();
-        }
-      }}
-      data-testid="review-file-header"
-      className="rv-fc__head"
-    >
-      <span className="rv-fc__chev">
-        {collapsed ? <ChevronRight size={13} strokeWidth={1.5} /> : <ChevronDown size={13} strokeWidth={1.5} />}
-      </span>
-      <span className="rv-fst" data-st={letter} title={STATUS_WORD[letter]}>
-        {letter}
-      </span>
-      <span className="rv-fc__path" title={file.status === "renamed" && file.old_path ? `${file.old_path} → ${path}` : path}>
-        {file.status === "renamed" && file.old_path && <span className="text-text-3">{file.old_path} → </span>}
-        {path}
-      </span>
-      <span className="rv-grow" />
+    // The bar folds the card on a click anywhere outside its actions; the
+    // focusable control is the toggle alone, so no button sits inside another.
+    <div onClick={onToggle} data-expanded={!collapsed} data-testid="review-file-header" className="rv-fc__head">
+      <button type="button" aria-expanded={!collapsed} className="rv-fc__toggle" data-testid="review-file-toggle">
+        <span className="rv-fc__chev">
+          {collapsed ? <ChevronRight size={13} strokeWidth={1.5} /> : <ChevronDown size={13} strokeWidth={1.5} />}
+        </span>
+        <span className="rv-fst" data-st={letter} title={STATUS_WORD[letter]}>
+          {letter}
+        </span>
+        <FilePath
+          title={file.status === "renamed" && file.old_path ? `${file.old_path} → ${path}` : path}
+          prefix={file.status === "renamed" && file.old_path ? `${file.old_path} → ` : ""}
+          path={path}
+        />
+      </button>
       <span className="rv-fc__acts" onClick={(e) => e.stopPropagation()}>
         <ExtensionDecorations<ReviewFileContext> location="review/file" extra={extensionExtra} />
         {nDrafts > 0 && <Badge kind="draft">✎ {plural(nDrafts, "draft")}</Badge>}
@@ -176,5 +166,19 @@ export default function ReviewFileHeader({
         )}
       </span>
     </div>
+  );
+}
+
+/** A long path is cut in its folders: the file name stays readable. */
+function FilePath({ path, prefix, title }: { path: string; prefix: string; title: string }) {
+  const cut = path.lastIndexOf("/") + 1;
+  return (
+    <span className="rv-fc__path" title={title}>
+      <span className="rv-fc__dir">
+        {prefix && <span className="text-text-3">{prefix}</span>}
+        {path.slice(0, cut)}
+      </span>
+      <span className="rv-fc__base">{path.slice(cut)}</span>
+    </span>
   );
 }

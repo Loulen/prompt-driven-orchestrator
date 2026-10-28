@@ -114,7 +114,6 @@ export function NodeKindChips({
     );
   return (
     <>
-      <span className="sx-filt__label">Node kind</span>
       {ALL_NODE_KINDS.map((kind) => {
         const on = nodeKinds.includes(kind);
         return (

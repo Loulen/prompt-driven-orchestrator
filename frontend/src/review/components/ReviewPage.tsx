@@ -232,9 +232,6 @@ export default function ReviewPage({ runId }: Props) {
         collapseAll={collapseAll}
         filesCount={files.length}
         pairDrafts={pairDrafts}
-        send={g.send}
-        sendDisabledReason={sendDisabledReason}
-        sendingKeys={c.sendingKeys}
         sentCount={sentCount}
         unreadComments={entries.unreadComments}
         jumpUnread={g.jumpUnread}

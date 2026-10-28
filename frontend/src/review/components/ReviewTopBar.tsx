@@ -46,9 +46,6 @@ interface Props {
   collapseAll: () => void;
   filesCount: number;
   pairDrafts: ReviewDraft[];
-  send: (keys: string[]) => Promise<void>;
-  sendDisabledReason: string | null;
-  sendingKeys: ReadonlySet<string>;
   sentCount: number;
   unreadComments: ReviewComment[];
   jumpUnread: () => void;
@@ -92,9 +89,6 @@ export default function ReviewTopBar({
   collapseAll,
   filesCount,
   pairDrafts,
-  send,
-  sendDisabledReason,
-  sendingKeys,
   sentCount,
   unreadComments,
   jumpUnread,
@@ -160,9 +154,6 @@ export default function ReviewTopBar({
         <span className="rv-grow" />
         <ReviewCommentPills
           pairDrafts={pairDrafts}
-          send={send}
-          sendDisabledReason={sendDisabledReason}
-          sendingKeys={sendingKeys}
           sentCount={sentCount}
           unreadComments={unreadComments}
           jumpUnread={jumpUnread}

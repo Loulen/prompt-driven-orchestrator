@@ -2653,6 +2653,17 @@ describe("StatsCharts — the breakdown tables (`overlays.statsBreakdown`)", () 
     expect(names()).toEqual(["Alpha", "Beta with a name long enough to be cut by the column"]);
   });
 
+  it("marks the largest share in the accent whatever the sort", async () => {
+    const user = userEvent.setup();
+    render(<StatsCharts tab="sessions" overview={twoPipelines} cost={null} costError={null} />);
+    const topRow = () =>
+      screen.getAllByTestId("stats-session-row").find((row) => row.querySelector(".sx-inbar[data-top]"));
+    expect(topRow()).toHaveTextContent(/^Beta/);
+    await user.click(within(screen.getByRole("columnheader", { name: /Name/ })).getByRole("button"));
+    expect(names()[0]).toBe("Alpha");
+    expect(topRow()).toHaveTextContent(/^Beta/);
+  });
+
   it("put the figures of a tab on one line, the headline first", () => {
     render(<StatsCharts tab="runs" overview={OVERVIEW} cost={null} costError={null} />);
     const cells = document.querySelectorAll(".sx-kpi__cell");

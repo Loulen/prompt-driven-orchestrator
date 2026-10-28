@@ -590,6 +590,25 @@ describe("StatsModal — per-tab filters, ephemeral (#819)", () => {
   });
 });
 
+describe("StatsModal — a refused or failed request", () => {
+  it("shows the error in the tab's page alone, never under a « Loading… », and stops announcing a computation", async () => {
+    realCharts = true;
+    fetchStatsOverviewMock.mockRejectedValue(new Error("403 Forbidden"));
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+
+    const alert = await screen.findByTestId("stats-error", {}, CHARTS_CHUNK);
+    expect(alert).toHaveTextContent("403 Forbidden");
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    expect(screen.getByTestId("stats-computed-at")).not.toHaveTextContent("Computing…");
+
+    // Cost reads its own endpoint: the overview's refusal does not follow it.
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    await screen.findByTestId("stats-chart-cost");
+    expect(screen.queryByTestId("stats-error")).not.toBeInTheDocument();
+  });
+});
+
 describe("StatsModal — absorptions (#890)", () => {
   it("refetches the tab on screen after a Combine, without forcing Performance past its memo", async () => {
     const user = userEvent.setup();

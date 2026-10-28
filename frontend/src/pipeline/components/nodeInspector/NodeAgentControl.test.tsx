@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import NodeAgentControl from "./NodeAgentControl";
 import type { AgentProfile } from "../../../shared/generated/AgentProfile";
 import type { HarnessCatalog } from "../../../harness/model/catalog";
@@ -7,6 +7,21 @@ import type { HarnessCatalog } from "../../../harness/model/catalog";
 const CATALOG: HarnessCatalog = {
   builtin: [
     { name: "claude", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: true, version: null },
+  ],
+  descriptors: [],
+};
+const OFFERING: HarnessCatalog = {
+  builtin: [
+    {
+      name: "claude",
+      installed: true,
+      models: ["sonnet", "opus"],
+      modelContexts: {},
+      efforts: ["low", "medium", "high"],
+      modelEfforts: {},
+      hasEffort: true,
+      version: null,
+    },
   ],
   descriptors: [],
 };
@@ -48,12 +63,25 @@ describe("NodeAgentControl (inspector.agentControl)", () => {
     expect(onChange).toHaveBeenLastCalledWith({ mode: "custom", harness: "claude", model: null, effort: null });
   });
 
-  it("names the pickers of a custom combination", () => {
+  it("puts harness, model and effort on one line", () => {
+    renderControl({ choice: { mode: "custom", harness: "claude", model: "opus", effort: "high" }, catalog: OFFERING });
+    const custom = screen.getByTestId("node-agent-control-custom");
+    expect(within(custom).getByRole("button", { name: "Harness" })).toHaveTextContent("claude");
+    expect(within(custom).getByRole("button", { name: "Model" })).toHaveTextContent("opus");
+    expect(within(custom).getByRole("button", { name: "Effort" })).toHaveTextContent("high");
+  });
+
+  it("types the model when the harness lists none, and shows no effort it does not offer", () => {
     renderControl({ choice: { mode: "custom", harness: "claude", model: null, effort: null } });
     const custom = screen.getByTestId("node-agent-control-custom");
-    expect(custom).toHaveTextContent("Harness");
-    expect(custom).toHaveTextContent("Model");
-    expect(custom).toHaveTextContent("Effort");
+    expect(within(custom).getByRole("textbox", { name: "Model" })).toBeInTheDocument();
+    expect(within(custom).queryByRole("button", { name: "Effort" })).toBeNull();
+  });
+
+  it("starts Custom from the harness's first model and its medium effort", () => {
+    const onChange = renderControl({ catalog: OFFERING });
+    fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
+    expect(onChange).toHaveBeenLastCalledWith({ mode: "custom", harness: "claude", model: "sonnet", effort: "medium" });
   });
 
   it("only shows on a read-only node: no picker, the modes disabled", () => {

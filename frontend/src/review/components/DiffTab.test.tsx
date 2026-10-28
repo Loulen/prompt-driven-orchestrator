@@ -349,7 +349,7 @@ describe("DiffTab", () => {
     await waitFor(() => {
       expect(screen.getByTestId("diff-large-banner")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("diff-large-banner")).toHaveTextContent("Large diff — files collapsed");
+    expect(screen.getByTestId("diff-large-banner")).toHaveAttribute("title", "Large diff: files collapsed");
     await waitFor(() => {
       expect(screen.queryAllByTestId("diff-file-body")).toHaveLength(0);
     });

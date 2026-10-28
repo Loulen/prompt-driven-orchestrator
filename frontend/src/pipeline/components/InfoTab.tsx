@@ -4,7 +4,7 @@
  */
 
 import { useMemo } from "react";
-import { Box, Clock, Coins, FileCode, GitCompare, Layers } from "lucide-react";
+import { Clock, Coins, FileCode, GitCompare, Layers } from "lucide-react";
 import type { RunState } from "../../shared/generated/RunState";
 import { isLiveRun } from "../../run/model/runStatus";
 import { formatDuration, useRunDuration } from "../../run/model/runDuration";
@@ -19,6 +19,7 @@ import { PipelineConfigSections } from "./ExtensionInspectorSections";
 import { inspectorSection } from "./inspectorSection";
 import { useEditStore } from "../store/editStore";
 import { InfoVersionLine, NewerVersionPill } from "./InfoVersion";
+import { shortSavedAgo } from "../model/versions";
 import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { RunInfoContext } from "../../shared/extensions/contract";
 import "./inspect.css";
@@ -126,6 +127,12 @@ function RunStats({ run, onOpenDiff }: { run: RunState; onOpenDiff: () => void }
   );
 }
 
+/** `4m ago`, `3h ago`, `2d ago`: when the Run started. */
+function startedAgo(iso: string): string {
+  const ago = shortSavedAgo(iso);
+  return ago === "now" || ago === "" ? ago || "—" : `${ago} ago`;
+}
+
 export function InfoTab({
   run,
   pipeline,
@@ -169,15 +176,6 @@ export function InfoTab({
           <Chip>template</Chip>
         )}
         <NewerVersionPill run={run} />
-        {/* Sandbox badge (#410): shown for any sandboxed Run (full/minimal). An
-            `off`/host Run renders nothing — the field is absent on those. */}
-        {run?.sandbox && run.sandbox !== "off" && (
-          <span data-testid="sandbox-badge">
-            <Chip icon={Box} mono title={`Docker sandbox (${run.sandbox})`}>
-              sandbox: {run.sandbox}
-            </Chip>
-          </span>
-        )}
         {/* #315: a Run's settings are read-only; canvas edits apply to it only. */}
         {run && (
           <span data-testid="run-info-note">
@@ -249,10 +247,40 @@ export function InfoTab({
         <Section title="Run">
           <KeyValue
             rows={[
+              {
+                k: "Status",
+                v: (
+                  <span className="ei-line" data-testid="run-status">
+                    <StatusIcon kind="run" status={run.status} size="sm" />
+                    {run.status.replace(/_/g, " ")}
+                  </span>
+                ),
+                tip: run.status,
+              },
               ...(run.harness
                 ? [{ k: "Harness", v: <span data-testid="run-harness">{run.harness}</span>, mono: true, tip: run.harness }]
                 : []),
               ...(run.target_repo ? [{ k: "Repo", v: run.target_repo, mono: true }] : []),
+              // Sandbox (#410): any sandboxed Run (full/minimal); an `off`/host Run has no row.
+              ...(run.sandbox && run.sandbox !== "off"
+                ? [
+                    {
+                      k: "Sandbox",
+                      v: <span data-testid="sandbox-badge">{run.sandbox}</span>,
+                      mono: true,
+                      tip: `Docker sandbox (${run.sandbox})`,
+                    },
+                  ]
+                : []),
+              ...(run.started_at
+                ? [
+                    {
+                      k: "Started",
+                      v: <span data-testid="run-started">{startedAgo(run.started_at)}</span>,
+                      tip: new Date(run.started_at).toLocaleString(),
+                    },
+                  ]
+                : []),
               ...(run.triggered_by ? [{ k: "Trigger", v: run.triggered_by, mono: true }] : []),
             ]}
           />
@@ -273,12 +301,15 @@ export function InfoTab({
           archived) and on a version. */}
       {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null || viewingVersion} />}
 
-      {pipeline && (
+      {/* On a Run and a version the node and edge counts are rows of the
+          Pipeline section; a template keeps them in a section of their own. */}
+      {pipeline && run == null && !viewingVersion && (
         <div data-testid="info-stats">
           <Section title="Graph">
             <KeyValue
               rows={[
-                { k: "Nodes", v: <span data-testid="pipeline-graph-stats">{pipeline.nodes.length} nodes · {pipeline.edges.length} edges</span> },
+                { k: "Nodes", v: <span data-testid="pipeline-graph-nodes">{pipeline.nodes.length}</span>, mono: true },
+                { k: "Edges", v: <span data-testid="pipeline-graph-edges">{pipeline.edges.length}</span>, mono: true },
               ]}
             />
           </Section>

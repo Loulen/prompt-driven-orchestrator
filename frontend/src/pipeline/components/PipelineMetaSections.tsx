@@ -78,7 +78,8 @@ export default function PipelineMetaSections({
     <div data-testid="pipeline-meta" data-readonly={readOnly ? "true" : "false"}>
       {/* Identity */}
       <div data-testid="pipeline-meta-identity">
-        <Section title="Identity">
+        {/* Read only (a Run, a version): one Pipeline section, as the Run's. */}
+        <Section title={readOnly ? "Pipeline" : "Identity"}>
           {readOnly ? (
             <KeyValue
               rows={[
@@ -93,6 +94,12 @@ export default function PipelineMetaSections({
                   v: <span data-testid="pipeline-meta-wait-for-started-nodes">{waitForStartedNodes ? "Yes" : "No"}</span>,
                   tip: "Wait for started nodes",
                 },
+                {
+                  k: "Wiring grid",
+                  v: <span data-testid="pipeline-meta-grid-size">{ownGridSize ?? `Global (${globalGridSize})`}</span>,
+                },
+                { k: "Nodes", v: <span data-testid="pipeline-graph-nodes">{pipeline.nodes.length}</span>, mono: true },
+                { k: "Edges", v: <span data-testid="pipeline-graph-edges">{pipeline.edges.length}</span>, mono: true },
               ]}
             />
           ) : (
@@ -156,15 +163,20 @@ export default function PipelineMetaSections({
               None
             </EmptyState>
           )}
+          {readOnly && variables.length > 0 && (
+            <div className="ei-pad">
+              <KeyValue
+                rows={variables.map(([name, def]) => ({
+                  k: name,
+                  v: <span data-testid="pipeline-variable-row">{`${def.type} = ${formatVariableValue(def.default)}`}</span>,
+                  mono: true,
+                  tip: `${def.type} = ${formatVariableValue(def.default)}`,
+                }))}
+              />
+            </div>
+          )}
           {variables.map(([name, def], index) =>
-            readOnly ? (
-              <div key={name} className="ei-row" data-testid="pipeline-variable-row">
-                <span className="ei-row__name d-mono">{name}</span>
-                <span className="ei-row__meta d-mono" title={`${def.type} = ${formatVariableValue(def.default)}`}>
-                  {def.type} = {formatVariableValue(def.default)}
-                </span>
-              </div>
-            ) : (
+            readOnly ? null : (
               <VariableRow
                 key={index}
                 name={name}
@@ -181,18 +193,9 @@ export default function PipelineMetaSections({
       {/* Canvas (#877 / ADR-0076): the pipeline's own wiring-grid size. Saved
           in the file — a shared pipeline then draws on the same grid for
           everyone; « Global » stores nothing and follows the reader's default. */}
-      <div data-testid="pipeline-meta-canvas">
-        <Section title="Canvas">
-          {readOnly ? (
-            <KeyValue
-              rows={[
-                {
-                  k: "Wiring grid",
-                  v: <span data-testid="pipeline-meta-grid-size">{ownGridSize ?? `Global (${globalGridSize})`}</span>,
-                },
-              ]}
-            />
-          ) : (
+      {!readOnly && (
+        <div data-testid="pipeline-meta-canvas">
+          <Section title="Canvas">
             <Field label="Wiring grid" help="Existing routes keep their points">
               <span className="ei-line">
                 <GridSizePicker
@@ -207,9 +210,9 @@ export default function PipelineMetaSections({
                 </span>
               </span>
             </Field>
-          )}
-        </Section>
-      </div>
+          </Section>
+        </div>
+      )}
     </div>
   );
 }

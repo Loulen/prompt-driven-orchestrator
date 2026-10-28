@@ -49,11 +49,6 @@ export function OutputsSection({
           No output declared
         </EmptyState>
       )}
-      {carried.length === 1 && rows.length > 0 && (
-        <div className="ei-row ei-meta" data-testid="outputs-last-hint">
-          At least one output is carried
-        </div>
-      )}
       {carried.length >= 2 && (
         <div
           className="ei-row ei-meta"

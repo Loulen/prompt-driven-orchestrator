@@ -1,4 +1,4 @@
-import { OPERATORS, type Operator } from "./whenClause";
+import { OPERATORS, isPortlessField, type ConditionRow, type Operator } from "./whenClause";
 import { primaryPort } from "./edgePorts";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
@@ -90,4 +90,27 @@ export function clampOperator(
 ): Operator {
   const allowed = operatorsForField(fields, name);
   return allowed.includes(op) ? op : "eq";
+}
+
+/**
+ * The field and operator a new condition row of `port` starts on: the first
+ * pair no row already holds. A `when:` clause is a map per field and per
+ * operator, so a new row on a held pair would overwrite that row's value
+ * instead of adding one. `null` when every pair is held.
+ */
+export function nextFreeCondition(
+  rows: ConditionRow[],
+  port: string,
+  fields: EdgeConditionField[],
+): { field: string; op: Operator } | null {
+  // `iter` and `$variables` are spelled without their output: any row holds them.
+  const held = (field: string, op: Operator) =>
+    rows.some((r) => r.field === field && r.op === op && (r.port === port || isPortlessField(field)));
+  const names = fields.length > 0 ? fields.map((f) => f.name) : ["iter"];
+  for (const op of OPERATORS) {
+    for (const field of names) {
+      if (operatorsForField(fields, field).includes(op) && !held(field, op)) return { field, op };
+    }
+  }
+  return null;
 }

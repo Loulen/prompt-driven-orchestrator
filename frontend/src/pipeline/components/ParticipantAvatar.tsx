@@ -35,6 +35,17 @@ export function ParticipantAvatar({ participant, size = "md" }: { participant: D
   );
 }
 
+/** One avatar per person: someone in two sessions is still one participant. */
+function onePerPerson(participants: DraftParticipant[]): DraftParticipant[] {
+  const seen = new Set<string>();
+  return participants.filter((p) => {
+    const key = p.assistant ? `connection:${p.connection}` : JSON.stringify(p.actor);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** The participants side by side, overlapping a little; past `max`, a count. */
 export function ParticipantStack({
   participants,
@@ -45,9 +56,10 @@ export function ParticipantStack({
   size?: "sm" | "md";
   max?: number;
 }) {
-  if (participants.length === 0) return null;
-  const shown = participants.slice(0, max);
-  const rest = participants.slice(max);
+  const people = onePerPerson(participants);
+  if (people.length === 0) return null;
+  const shown = people.slice(0, max);
+  const rest = people.slice(max);
   return (
     <span className="pi-stack" data-testid="draft-participants">
       {shown.map((p) => (

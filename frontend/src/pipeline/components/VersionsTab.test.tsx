@@ -107,6 +107,8 @@ describe("VersionsTab — states", () => {
     expect(screen.getByText("Loading versions")).toBeInTheDocument();
     expect(await screen.findByTestId("versions-error")).toHaveTextContent("Versions unavailable");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.queryByTestId("versions-error")).toBeNull();
+    expect(screen.getByText("Loading versions")).toBeInTheDocument();
     expect(await screen.findByTestId("version-row-3")).toBeInTheDocument();
   });
 });

@@ -95,7 +95,14 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
             icon={CircleAlert}
             layout="row"
             action={
-              <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>
+              <Button
+                size="sm"
+                onClick={() => {
+                  // Back to the loading line while the list is read again.
+                  setError(null);
+                  setAttempt((n) => n + 1);
+                }}
+              >
                 Retry
               </Button>
             }

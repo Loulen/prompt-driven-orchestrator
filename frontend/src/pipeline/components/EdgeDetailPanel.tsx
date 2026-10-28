@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { ArrowRight, Infinity as Always, Plus } from "lucide-react";
+import { ArrowRight, Infinity as Always, LayoutTemplate, Plus } from "lucide-react";
 import { EmptyState, IconButton, KeyValue, Section } from "../../shared/ui/kit";
 import "./inspect.css";
 import { useEditStore } from "../store/editStore";
@@ -17,6 +17,7 @@ import {
   edgeConditionFields,
   isBoolField,
   clampOperator,
+  nextFreeCondition,
   type EdgeConditionField,
 } from "../../lib/edgeFields";
 import { resolveOutputLabels } from "../../lib/edgeLabels";
@@ -110,16 +111,19 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
     });
   };
 
+  // The pair a new row starts on is one no row holds yet: on a held one the
+  // clause, a map per field and operator, would lose that row's value.
+  const addPort = defaultConditionPort(ports);
+  const addFields = fieldsFor(addPort);
+  const free = nextFreeCondition(rows, addPort, addFields);
   const handleAddCondition = () => {
-    const port = defaultConditionPort(ports);
-    const fields = fieldsFor(port);
-    const defaultField = fields[0]?.name ?? "iter";
+    if (!free) return;
     commitRows(
       [
         ...rows,
         withTypeHint(
-          { port, field: defaultField, op: "eq", value: defaultValueFor(defaultField, fields) },
-          fields,
+          { port: addPort, field: free.field, op: free.op, value: defaultValueFor(free.field, addFields) },
+          addFields,
         ),
       ],
       ports,
@@ -213,7 +217,7 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
         flush
         aside={
           isElse ? undefined : (
-            <IconButton icon={Plus} size="sm" label="Add condition" onClick={handleAddCondition} data-testid="add-condition" />
+            <IconButton icon={Plus} size="sm" label="Add condition" disabled={!free} onClick={handleAddCondition} data-testid="add-condition" />
           )
         }
       >
@@ -286,7 +290,20 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
           outputs are named on the canvas, and whether it passes over or
           under the node cards. Both are layout: they travel in the file but
           never move the library star. */}
-      <Section title="Display">
+      <Section
+        title="Display"
+        aside={
+          <span
+            className="ei-ic"
+            role="img"
+            aria-label="Layout only"
+            title="Layout only: saved in the file, ignored by the semantic diff"
+            data-testid="display-layout-note"
+          >
+            <LayoutTemplate size={12} strokeWidth={1.5} aria-hidden />
+          </span>
+        }
+      >
         <div data-testid="display-section">
           <Switch
             label="Labels"
@@ -316,9 +333,6 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
             testId="toggle-under-nodes"
             title="Draw under nodes: edges draw above nodes by default"
           />
-          <div className="ei-meta" title="Saved in the file, ignored by the semantic diff" data-testid="display-layout-note">
-            Layout only
-          </div>
         </div>
       </Section>
 

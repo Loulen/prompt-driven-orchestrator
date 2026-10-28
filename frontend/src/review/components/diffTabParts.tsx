@@ -50,6 +50,23 @@ export function StatusLetter({ status }: { status: DiffFile["status"] }) {
 }
 
 /** The file name in clear, its folder dimmed after it; `old → new` for a rename/copy. */
+/** The characters a long file name keeps at its end when it is cut. */
+const NAME_TAIL = 10;
+
+/**
+ * A file name cut in its middle: long names often differ only at their end
+ * (`a_very_long_new_file_3.ts`), so the end and the extension stay visible.
+ */
+function FileName({ name }: { name: string }) {
+  const cut = name.length > NAME_TAIL * 2 ? name.length - NAME_TAIL : name.length;
+  return (
+    <span className="pi-dfile__name" title={name}>
+      <span className="pi-dfile__head">{name.slice(0, cut)}</span>
+      {cut < name.length && <span className="pi-dfile__tail">{name.slice(cut)}</span>}
+    </span>
+  );
+}
+
 export function FilePath({ file }: { file: DiffFile }) {
   const isMove = file.status === "renamed" || file.status === "copied";
   const key = fileKey(file);
@@ -58,7 +75,7 @@ export function FilePath({ file }: { file: DiffFile }) {
   const name = i < 0 ? key : key.slice(i + 1);
   return (
     <>
-      <span className="pi-dfile__name">{name || "(unknown path)"}</span>
+      <FileName name={name || "(unknown path)"} />
       <span className="pi-dfile__dir d-mono">
         {isMove && file.old_path ? `${file.old_path} → ${dir}` : dir}
       </span>

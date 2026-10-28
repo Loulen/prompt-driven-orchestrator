@@ -55,8 +55,9 @@ export function SourceBlock({ run }: { run: RunState }) {
                 )}
               </>
             ) : (
-              <span className="ei-meta ei-trunc" data-testid="run-source-unavailable">
-                {drift.reason}
+              // The reason is a sentence: in the tooltip, the row stays one dash.
+              <span className="ei-meta" title={drift.reason} data-testid="run-source-unavailable">
+                —
               </span>
             ),
           },

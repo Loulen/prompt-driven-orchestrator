@@ -148,8 +148,8 @@ describe("Pipeline info — Info tab on a template (#948)", () => {
     }
     expect(within(panel).queryByText("Description")).not.toBeInTheDocument();
     expect(within(panel).queryByText(/Pipeline: My Pipeline/)).not.toBeInTheDocument();
-    expect(screen.getByTestId("pipeline-graph-stats")).toHaveTextContent("2 nodes");
-    expect(screen.getByTestId("pipeline-graph-stats")).toHaveTextContent("1 edges");
+    expect(screen.getByTestId("pipeline-graph-nodes")).toHaveTextContent("2");
+    expect(screen.getByTestId("pipeline-graph-edges")).toHaveTextContent("1");
     expect(screen.queryByText("Pipeline Inspector")).not.toBeInTheDocument();
   });
 
@@ -401,7 +401,7 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
   it("keeps the Run stats alongside the graph stats", () => {
     render(<StorePanel run={makeRun()} />);
     expect(screen.getByTestId("run-stats")).toBeInTheDocument();
-    expect(screen.getByTestId("pipeline-graph-stats")).toHaveTextContent("2 nodes");
+    expect(screen.getByTestId("pipeline-graph-nodes")).toHaveTextContent("2");
   });
 });
 

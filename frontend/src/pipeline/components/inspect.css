@@ -380,9 +380,28 @@
     gap: var(--g-2);
     min-width: 0;
   }
-  .ei-agent__pick > * {
+  .ei-agent__pick > *,
+  .ei-agent__slot > .d-sel {
     flex: 1 1 0;
     min-width: 0;
+  }
+  .ei-agent__slot {
+    display: flex;
+  }
+  /* the three modes share the row's width, whatever it is */
+  .ei-agent > .d-seg {
+    display: flex;
+    width: 100%;
+  }
+  .ei-agent > .d-seg > .d-seg__btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-width: 0;
+    padding: 0 var(--g-2);
+  }
+  .ei-agent > .d-seg > .d-seg__btn > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .ei-agent__line {
     min-width: 0;
@@ -488,7 +507,8 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding: 2px 0 0 18px;
+    /* under the name: past the fold button and its gap */
+    padding: 2px 0 0 calc(var(--h-control-sm) + var(--g-2));
     min-width: 0;
   }
   .ei-port__notices:empty {
@@ -606,23 +626,33 @@
   }
 
   /* ---------------------------------------------------------------- edge */
+  /* one condition: output, field, operator, value. Each keeps a readable
+     width and the row wraps in a narrow pane rather than squeezing them. */
   .ei-cond {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--g-2);
     min-width: 0;
     padding: 2px var(--pad-x);
   }
   .ei-cond > .ei-select {
-    flex: 0 1 auto;
-    max-width: 96px;
+    flex: 1 1 72px;
+    max-width: 120px;
   }
   .ei-cond > .ei-cond__field {
-    flex: 1 1 auto;
+    flex: 2 1 96px;
     max-width: none;
   }
-  .ei-cond > .d-input {
-    flex: 1 1 60px;
+  .ei-cond > .ei-cond__op {
+    flex: 0 0 auto;
+    min-width: 44px;
+  }
+  .ei-cond > .d-input,
+  .ei-cond > .ei-cond__value {
+    flex: 1 1 72px;
+    max-width: none;
+    min-width: 0;
   }
   .ei-cond .d-seg {
     flex: none;
@@ -1196,12 +1226,19 @@
     flex: none;
   }
   .pi-dfile__name {
+    display: inline-flex;
     flex: 0 0 auto;
     max-width: 60%;
     min-width: 0;
+    white-space: nowrap;
+  }
+  .pi-dfile__head {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+  }
+  .pi-dfile__tail {
+    flex: none;
   }
   .pi-dfile__dir {
     flex: 1 1 auto;

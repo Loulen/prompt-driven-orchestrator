@@ -4,11 +4,8 @@ import type { AgentProfile } from "../../../shared/generated/AgentProfile";
 import type { AgentCombination } from "../../../settings/model/settings";
 import { combinationLabel, resolveAgentChoice } from "../../../settings/model/agentProfiles";
 import type { HarnessCatalog } from "../../../harness/model/catalog";
-import { effortOffer, findHarnessOption } from "../../../harness/model/catalog";
-import HarnessSelect from "../../../harness/components/HarnessSelect";
-import ModelPicker from "../../../harness/components/ModelPicker";
-import EffortPicker from "../../../harness/components/EffortPicker";
-import { Segmented, Select } from "../../../shared/ui/kit";
+import { customDefaults, effortOffer, findHarnessOption } from "../../../harness/model/catalog";
+import { Segmented, Select, TextInput } from "../../../shared/ui/kit";
 
 type Mode = AgentChoice["mode"];
 
@@ -17,6 +14,9 @@ const MODES: { value: Mode; label: string; title: string }[] = [
   { value: "profile", label: "Profile", title: "An agent profile" },
   { value: "custom", label: "Custom", title: "A combination for this node only" },
 ];
+
+/** The value of a picker that stands for "the harness's default". */
+const DEFAULT = "";
 
 /**
  * The agent of a node (`inspector.agentControl`): Inherit, Profile or Custom
@@ -54,7 +54,7 @@ export default function NodeAgentControl({
     else if (next === "profile") {
       const first = profiles[0];
       if (first) onChange({ mode: "profile", profile_id: first.id });
-    } else onChange({ mode: "custom", ...inherited });
+    } else onChange({ mode: "custom", ...customDefaults(catalog, inherited) });
   };
 
   return (
@@ -87,37 +87,65 @@ export default function NodeAgentControl({
       {/* A read-only node shows the combination on the line below, no picker. */}
       {choice?.mode === "custom" && !readOnly && (
         <div className="ei-agent__pick" data-testid={`${testId}-custom`}>
-          <label title="Harness">
-            <span className="d-sr">Harness</span>
-            <HarnessSelect
-              value={custom.harness}
-              onChange={(harness) => onChange({ mode: "custom", harness: harness || "claude", model: null, effort: null })}
-              catalog={catalog}
-              inheritLabel="Choose a harness"
+          <Select<string>
+            label="Harness"
+            mono
+            value={custom.harness}
+            onChange={(harness) =>
+              onChange({ mode: "custom", ...customDefaults(catalog, { harness, model: null, effort: custom.effort ?? null }) })
+            }
+            options={[...catalog.builtin, ...catalog.descriptors].map((h) => ({
+              value: h.name,
+              label: h.name,
+              disabled: !h.installed,
+              hint: h.installed ? undefined : "not installed",
+            }))}
+          />
+          {harnessOption && harnessOption.models.length > 0 ? (
+            <span className="ei-agent__slot" data-testid={`${testId}-custom-model`}>
+              <Select<string>
+                label="Model"
+                mono
+                value={custom.model ?? DEFAULT}
+                onChange={(model) => onChange({ mode: "custom", ...custom, model: model === DEFAULT ? null : model })}
+                options={[
+                  { value: DEFAULT, label: "default" },
+                  // A model the catalogue no longer lists stays shown, as it is stored.
+                  ...(custom.model && !harnessOption.models.includes(custom.model)
+                    ? [{ value: custom.model, label: custom.model }]
+                    : []),
+                  ...harnessOption.models.map((m) => ({ value: m, label: m, hint: harnessOption.modelContexts[m] })),
+                ]}
+              />
+            </span>
+          ) : (
+            <TextInput
+              mono
+              aria-label="Model"
+              title="Model"
+              placeholder="model"
+              value={custom.model ?? ""}
+              onChange={(e) => onChange({ mode: "custom", ...custom, model: e.target.value.trim() || null })}
+              data-testid={`${testId}-custom-model`}
             />
-          </label>
-          <label title="Model">
-            <span className="d-sr">Model</span>
-            <ModelPicker
-              value={custom.model ?? null}
-              onChange={(model) => onChange({ mode: "custom", ...custom, model })}
-              models={harnessOption?.models ?? []}
-              contexts={harnessOption?.modelContexts}
-              testid={`${testId}-custom-model`}
-              subject={testId}
-            />
-          </label>
-          <label title="Effort">
-            <span className="d-sr">Effort</span>
-            <EffortPicker
-              value={custom.effort ?? null}
-              onChange={(next) => onChange({ mode: "custom", ...custom, effort: next })}
-              efforts={effort.levels}
-              strict={effort.authoritative}
-              testid={`${testId}-custom-effort`}
-              disabled={!(harnessOption?.hasEffort ?? true)}
-            />
-          </label>
+          )}
+          {(harnessOption?.hasEffort ?? true) && (effort.levels.length > 0 || custom.effort) && (
+            <span className="ei-agent__slot" data-testid={`${testId}-custom-effort`}>
+              <Select<string>
+                label="Effort"
+                mono
+                value={custom.effort ?? DEFAULT}
+                onChange={(next) => onChange({ mode: "custom", ...custom, effort: next === DEFAULT ? null : next })}
+                options={[
+                  { value: DEFAULT, label: "default" },
+                  ...(custom.effort && !effort.levels.includes(custom.effort)
+                    ? [{ value: custom.effort, label: custom.effort, hint: "unsupported" }]
+                    : []),
+                  ...effort.levels.map((l) => ({ value: l, label: l })),
+                ]}
+              />
+            </span>
+          )}
         </div>
       )}
       <span

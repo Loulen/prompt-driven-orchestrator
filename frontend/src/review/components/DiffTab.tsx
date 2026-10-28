@@ -210,6 +210,11 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           </span>
         )}
         <span className="pi-diffhead__end">
+          {isLarge && (
+            <span title="Large diff: files collapsed" data-testid="diff-large-banner">
+              <Chip>collapsed</Chip>
+            </span>
+          )}
           {reloading && (
             <span data-testid="diff-updating">
               <Chip tone="running">updating</Chip>
@@ -256,11 +261,6 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
         </span>
       </div>
 
-      {isLarge && (
-        <div className="pi-docnote ei-dim" data-testid="diff-large-banner">
-          Large diff — files collapsed
-        </div>
-      )}
 
       {/* Ledger: one SCM row per file */}
       <div ref={ledgerRef} className="pi-dfiles" data-testid="diff-ledger">

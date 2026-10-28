@@ -132,12 +132,12 @@ describe("PipelineInfoPanel — sandbox surface (#410)", () => {
   it("shows the sandbox badge for a sandboxed run (minimal)", () => {
     renderPanel(makeRun({ sandbox: "minimal" }));
     const badge = screen.getByTestId("sandbox-badge");
-    expect(badge).toHaveTextContent(/sandbox:\s*minimal/i);
+    expect(badge).toHaveTextContent("minimal");
   });
 
   it("shows the sandbox badge for a full run", () => {
     renderPanel(makeRun({ sandbox: "full" }));
-    expect(screen.getByTestId("sandbox-badge")).toHaveTextContent(/sandbox:\s*full/i);
+    expect(screen.getByTestId("sandbox-badge")).toHaveTextContent("full");
   });
 
   it("omits the badge for an off/host run", () => {
@@ -956,7 +956,7 @@ describe("PipelineInfoPanel — the Source block (#803)", () => {
 
     await screen.findByTestId("run-source-block");
     expect(screen.getByTestId("source-drift-chip")).toHaveTextContent("unavailable");
-    expect(screen.getByTestId("run-source-unavailable")).toHaveTextContent("branch deleted");
+    expect(screen.getByTestId("run-source-unavailable")).toHaveAttribute("title", expect.stringContaining("branch deleted"));
     expect(screen.queryByTestId("run-source-fetch")).not.toBeInTheDocument();
   });
 

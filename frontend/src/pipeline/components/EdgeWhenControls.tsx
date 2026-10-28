@@ -148,7 +148,7 @@ export function ConditionRowEditor({
       <select
         value={row.op}
         onChange={(e) => onUpdate({ op: e.target.value as Operator })}
-        className="ei-select ei-select--mono"
+        className="ei-select ei-select--mono ei-cond__op"
         aria-label="Operator"
         data-testid="op-dropdown"
       >
@@ -187,7 +187,7 @@ export function ConditionRowEditor({
         <select
           value={row.value}
           onChange={(e) => onUpdate({ value: e.target.value })}
-          className="ei-select ei-select--mono"
+          className="ei-select ei-select--mono ei-cond__value"
           aria-label="Value"
           data-testid="value-dropdown"
         >

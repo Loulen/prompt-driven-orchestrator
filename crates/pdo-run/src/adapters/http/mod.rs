@@ -46,6 +46,8 @@ pub fn router(runs: Arc<Runs>) -> Router {
         .route("/runs/reapable", get(runs::reapable))
         // API 0.12: who has which Run open. Static too, before `/runs/{run_id}`.
         .route("/runs/presences", get(presence::list))
+        // The cost of the Runs a list shows (ADR-0052). Static, before `/runs/{run_id}`.
+        .route("/runs/costs", get(runs::costs))
         .route("/runs/{run_id}", delete(runs::forget))
         .route("/runs/{run_id}/children", get(runs::children))
         .route("/runs/{run_id}/file", get(runs::file))

@@ -1,9 +1,11 @@
 //! The reads of the Runs as a list: every Run as the list shows it
 //! (`GET /runs`), the terminal ones whose disk can be reclaimed ([`reapable`]),
-//! and a Run's children ([`children`]). The list and the children read the
-//! Résumés de Run (ADR-0084), never a Run's log.
+//! a Run's children ([`children`]) and the cost of the Runs a list shows
+//! ([`costs`]). The list and the children read the Résumés de Run (ADR-0084),
+//! never a Run's log.
 
 pub mod children;
+pub mod costs;
 pub mod reapable;
 
 use axum::extract::Json;
@@ -17,6 +19,7 @@ use ts_rs::TS;
 use crate::application::paths::effective_repo_of;
 use crate::domain::child_awaiting;
 use crate::domain::run_activity::ActivitySpan;
+use crate::domain::run_summary::NodeProgress;
 use crate::domain::state::RunStatus;
 use crate::Runs;
 
@@ -32,6 +35,11 @@ pub struct RunListEntry {
     /// into the Résumé.
     pub stalled: bool,
     pub started_at: Option<String>,
+    /// When it reached its terminal status: with `started_at`, the duration
+    /// the row shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub completed_at: Option<String>,
     /// Why the Run ended non-green. Carried on the *list* entry so the red dot has
     /// something to say.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,6 +97,11 @@ pub struct RunListEntry {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<ActivitySpan>>", optional)]
     pub activity: Vec<ActivitySpan>,
+    /// Its working nodes, in the pipeline's order, with their status: the
+    /// progress the row draws.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<NodeProgress>>", optional)]
+    pub nodes: Vec<NodeProgress>,
     /// The entity attributes the extensions stamped on it (CONTEXT.md §
     /// *Extensions*); absent when none.
     #[serde(skip_serializing_if = "Attributes::is_empty")]
@@ -126,6 +139,7 @@ impl Runs {
                     status: summary.status,
                     stalled: summary.stalled,
                     started_at: summary.started_at,
+                    completed_at: summary.completed_at,
                     failure_reason: summary.failure_reason,
                     awaiting_reason: summary.awaiting_reason,
                     awaiting_reason_code: summary.awaiting_reason_code,
@@ -139,6 +153,7 @@ impl Runs {
                     project_id: summary.project_id,
                     last_activity_at: summary.last_activity_at,
                     activity: summary.activity,
+                    nodes: summary.nodes,
                     attributes,
                 }
             })

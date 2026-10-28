@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { Power, Trash2 } from "lucide-react";
+import { Power, PowerOff, Trash2 } from "lucide-react";
 import type { Trigger } from "../../../shared/generated/Trigger";
 import { type BulkItem, type BulkOutcome } from "../../../lib/bulk";
 import { useSelectionStore } from "../../../stores/selectionStore";
@@ -54,21 +54,21 @@ export default function TriggersBulk({
             {
               key: "enable",
               label: "Enable",
-              icon: <Power size={13} />,
+              icon: <Power size={14} strokeWidth={1.5} aria-hidden />,
               disabled: enableItems.length === 0,
               onClick: () => setPending("enable"),
             },
             {
               key: "disable",
               label: "Disable",
-              icon: <Power size={13} />,
+              icon: <PowerOff size={14} strokeWidth={1.5} aria-hidden />,
               disabled: disableItems.length === 0,
               onClick: () => setPending("disable"),
             },
             {
               key: "delete",
               label: "Delete",
-              icon: <Trash2 size={13} />,
+              icon: <Trash2 size={14} strokeWidth={1.5} aria-hidden />,
               destructive: true,
               onClick: () => setPending("delete"),
             },

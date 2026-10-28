@@ -215,7 +215,7 @@ test("an archived Run says the diff is not preserved", async ({ page, baseURL })
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   // Archived runs live in a collapsed "Archived" section — expand it if the
   // run row isn't already on screen.
-  const archivedToggle = page.getByTestId("run-archived-toggle");
+  const archivedToggle = page.getByTestId("run-archived-chevron");
   await expect(archivedToggle).toBeVisible({ timeout: 8_000 });
   const archivedRow = page.getByText(run_id.slice(0, 20)).first();
   if (!(await archivedRow.isVisible().catch(() => false))) {

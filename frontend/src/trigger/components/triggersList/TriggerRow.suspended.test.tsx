@@ -26,7 +26,6 @@ function renderRow(t: Trigger, onToggle = vi.fn()) {
       trigger={t}
       isSelected={false}
       rowSelected={false}
-      allRepos={["/repos/foo"]}
       onSelect={() => {}}
       onSelectControl={() => {}}
       onDelete={() => {}}
@@ -65,22 +64,18 @@ describe("TriggerRow — suspended by an extension (API 0.8)", () => {
     expect(onToggle).toHaveBeenCalledOnce();
   });
 
-  it("lets the pill wrap under the name instead of truncating it in a narrow panel", () => {
+  it("puts the pill after the name, on the name's line, both ending in an ellipsis", () => {
     renderRow(trigger({ suspension }));
-    const line = screen.getByTestId("trigger-name-line");
-    expect(line).toHaveClass("flex-wrap");
-    expect(line).toContainElement(screen.getByTestId("trigger-suspended"));
-    expect(screen.getByText("Weekly dependency bump")).toHaveClass("max-w-full", "truncate");
+    const name = screen.getByTestId("trigger-name");
+    expect(name).toHaveClass("lp-name");
+    expect(name.parentElement).toContainElement(screen.getByTestId("trigger-suspended"));
+    expect(screen.getByTestId("trigger-suspended")).toHaveClass("lp-suspended");
   });
 
-  it("lets the pill shrink with its column instead of spilling under the hover actions", () => {
-    renderRow(trigger({ suspension }));
-    const pill = screen.getByTestId("trigger-suspended");
-    // Once the hover actions take their room, the column gets narrower than
-    // the pill: the pill truncates its label inside the column, never past it.
-    expect(pill).toHaveClass("min-w-0", "max-w-full", "overflow-hidden");
-    expect(pill).not.toHaveClass("shrink-0");
-    expect(screen.getByText("suspended")).toHaveClass("truncate");
+  it("says the next fire is off while suspended", () => {
+    renderRow(trigger({ suspension, next_fire_at: "2099-01-01T00:00:00Z" }));
+    expect(screen.getByTestId("trigger-schedule")).toHaveTextContent("—");
+    expect(screen.getByTestId("trigger-schedule").getAttribute("title")).toContain("alice is on leave");
   });
 
   it("is a plain enabled row without a suspension", () => {

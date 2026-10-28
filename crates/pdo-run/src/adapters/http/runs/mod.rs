@@ -22,6 +22,7 @@ use crate::application::artifact::{ArtifactQuery, ArtifactZipQuery};
 use crate::application::create_run::{
     reject_unknown_create_run_fields, CreateRunRequest, PatchRunReposRequest,
 };
+use crate::application::list::costs::RunCostsQuery;
 use crate::application::list::reapable::ReapableQuery;
 use crate::application::refs::FileAtRefQuery;
 use crate::application::run_pipeline::SaveRunPipelineRequest;
@@ -125,6 +126,14 @@ pub(super) async fn reapable(
     Query(query): Query<ReapableQuery>,
 ) -> Response {
     runs.list_reapable(&actor, query).await
+}
+
+pub(super) async fn costs(
+    State(runs): State<Arc<Runs>>,
+    Extension(actor): Extension<Actor>,
+    Query(query): Query<RunCostsQuery>,
+) -> Response {
+    runs.run_costs(&actor, query).await
 }
 
 pub(super) async fn forget(

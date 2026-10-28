@@ -55,14 +55,20 @@ export function useEdgeRoute(
   // from the flow store so a node move re-renders the edge with fresh bounds.
   const obstacles = useStore(
     useCallback(
-      (s): Rect[] => {
-        const rects: Rect[] = [];
+      (s): (Rect & { region: boolean })[] => {
+        const rects: (Rect & { region: boolean })[] = [];
         for (const [, node] of s.nodeLookup) {
           if (node.id === source || node.id === target) continue;
           const w = node.measured?.width ?? node.width ?? 0;
           const h = node.measured?.height ?? node.height ?? 0;
           if (w === 0 || h === 0) continue;
-          rects.push({ x: node.internals.positionAbsolute.x, y: node.internals.positionAbsolute.y, width: w, height: h });
+          rects.push({
+            x: node.internals.positionAbsolute.x,
+            y: node.internals.positionAbsolute.y,
+            width: w,
+            height: h,
+            region: node.type === "loopRegion",
+          });
         }
         return rects;
       },
@@ -200,8 +206,10 @@ export function useEdgeRoute(
     [points],
   );
 
+  // The cards a label must not cover: every node but the loop regions, drawn
+  // behind the cards and holding the edges themselves.
   const cards = useMemo(
-    () => [...obstacles, ...(srcRect ? [srcRect] : []), ...(tgtRect ? [tgtRect] : [])],
+    () => [...obstacles.filter((r) => !r.region), ...(srcRect ? [srcRect] : []), ...(tgtRect ? [tgtRect] : [])],
     [obstacles, srcRect, tgtRect],
   );
 

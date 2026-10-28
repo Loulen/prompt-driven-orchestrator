@@ -100,13 +100,13 @@ export function CombineModal<T extends AbsorbableRow>({
   return (
     <ModalFrame testid="stats-combine-modal" onDismiss={onCancel}>
       <h3
-        className="flex items-center gap-2 font-medium text-fg"
+        className="flex items-center gap-2 font-medium text-text"
         style={{ fontSize: "13px" }}
       >
-        <Combine size={14} className="shrink-0 text-acc" aria-hidden="true" />
+        <Combine size={14} className="shrink-0 text-primary" aria-hidden="true" />
         Combine {rows.length} {NOUN[dimension]}s
       </h3>
-      <p className="mt-1.5 text-fg-3" style={{ fontSize: "11.5px" }}>
+      <p className="mt-1.5 text-text-3" style={{ fontSize: "11.5px" }}>
         {combineSubtitle(dimension, scopeName)}
       </p>
       <div
@@ -130,28 +130,28 @@ export function CombineModal<T extends AbsorbableRow>({
               data-testid="stats-combine-option"
               onClick={() => setChosenId(row.id)}
               className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-left transition-colors ${
-                checked ? "border-acc bg-acc-bg" : "border-line hover:bg-bg-3"
+                checked ? "border-primary bg-selected" : "border-line hover:bg-hover"
               }`}
             >
               {checked ? (
-                <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-acc text-on-acc">
+                <span className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-primary text-primary-ink">
                   <Check size={11} strokeWidth={3} />
                 </span>
               ) : (
                 <span
-                  className="h-4 w-4 shrink-0 rounded-full border-2 border-fg-4"
+                  className="h-4 w-4 shrink-0 rounded-full border-2 border-text-3"
                   aria-hidden="true"
                 />
               )}
               <span className="min-w-0">
                 <span
-                  className={`block truncate text-fg ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+                  className={`block truncate text-text ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
                   style={{ fontSize: "12px" }}
                 >
                   {row.name}
                 </span>
                 <span
-                  className="block text-fg-4"
+                  className="block text-text-3"
                   style={{ fontSize: "10.5px" }}
                 >
                   {notes.join(" · ")}
@@ -162,14 +162,14 @@ export function CombineModal<T extends AbsorbableRow>({
         })}
       </div>
       <p
-        className="mt-3 text-fg-3"
+        className="mt-3 text-text-3"
         style={{ fontSize: "11px" }}
         data-testid="stats-combine-consequence"
       >
         {/* No count here (#906): the absorbent's own count is not the combined
             one, and Runs overlap across members, so no sum would be honest. */}
         {otherLabel} will be counted under{" "}
-        <span className="text-fg">{chosen.name}</span>
+        <span className="text-text">{chosen.name}</span>
         {alreadyCombined > 0
           ? `, together with the ${plural(alreadyCombined, NOUN[dimension])} already combined into it`
           : ""}
@@ -178,7 +178,7 @@ export function CombineModal<T extends AbsorbableRow>({
       </p>
       {error && (
         <div
-          className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+          className="mt-3 rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
           data-testid="stats-absorption-error"
         >
           {error}
@@ -189,7 +189,7 @@ export function CombineModal<T extends AbsorbableRow>({
           type="button"
           onClick={onCancel}
           data-testid="stats-combine-cancel"
-          className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+          className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
           style={{ fontSize: "11.5px" }}
         >
           Cancel
@@ -199,7 +199,7 @@ export function CombineModal<T extends AbsorbableRow>({
           disabled={busy}
           onClick={() => onCombine(chosen)}
           data-testid="stats-combine-confirm"
-          className="cursor-pointer rounded-md bg-acc px-3 py-1.5 text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-60"
+          className="cursor-pointer rounded-md bg-primary px-3 py-1.5 text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-60"
           style={{ fontSize: "11.5px" }}
         >
           Combine

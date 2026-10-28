@@ -139,19 +139,19 @@ export default function SecondaryRepoRow({
     return (
       <div className="flex flex-col gap-1.5" data-testid={`project-repo-row-${index}`}>
         <div
-          className={`flex items-center gap-2 rounded-md border bg-bg-3 px-2.5 py-1.5 ${
+          className={`flex items-center gap-2 rounded-md border bg-surface-2 px-2.5 py-1.5 ${
             repo.valid === false ? "border-st-failed" : "border-line-strong"
           }`}
         >
           <input
             type="checkbox"
-            className="accent-acc"
+            className="accent-primary"
             checked
             onChange={() => onRemove(index)}
             aria-label={`Use ${path} as a secondary repository`}
             data-testid={`project-repo-check-${index}`}
           />
-          <span className="min-w-0 flex-1 truncate font-mono text-fg" style={{ fontSize: "12px" }} title={path}>
+          <span className="min-w-0 flex-1 truncate font-mono text-text" style={{ fontSize: "12px" }} title={path}>
             {tildify(path, home)}
           </span>
           <div
@@ -173,7 +173,7 @@ export default function SecondaryRepoRow({
                 aria-checked={repo.readOnly === readOnly}
                 onClick={() => onChange(index, { readOnly })}
                 className={`rounded-sm px-1.5 py-px transition-colors ${
-                  repo.readOnly === readOnly ? "bg-bg-5 text-fg" : "text-fg-4 hover:text-fg-2"
+                  repo.readOnly === readOnly ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"
                 }`}
                 data-testid={`project-repo-${readOnly ? "readonly" : "writable"}-${index}`}
               >
@@ -184,7 +184,7 @@ export default function SecondaryRepoRow({
           <button
             type="button"
             onClick={() => setBranchOpen((o) => !o)}
-            className="flex shrink-0 items-center gap-1 font-mono text-fg-4 transition-colors hover:text-fg-2"
+            className="flex shrink-0 items-center gap-1 font-mono text-text-3 transition-colors hover:text-text-2"
             style={{ fontSize: "10.5px" }}
             title="Base branch"
             data-testid={`project-repo-branch-${index}`}
@@ -218,8 +218,8 @@ export default function SecondaryRepoRow({
     );
   }
 
-  let borderClass = "border-line-strong focus-within:border-acc";
-  if (repo.valid === true) borderClass = "border-acc focus-within:border-acc";
+  let borderClass = "border-line-strong focus-within:border-primary";
+  if (repo.valid === true) borderClass = "border-primary focus-within:border-primary";
   else if (repo.valid === false)
     borderClass = "border-st-failed focus-within:border-st-failed";
 
@@ -241,7 +241,7 @@ export default function SecondaryRepoRow({
         <button
           type="button"
           onClick={() => onRemove(index)}
-          className="rounded-md border border-line-strong bg-bg-3 p-1.5 text-fg-3 transition-colors hover:border-st-failed hover:text-st-failed"
+          className="rounded-md border border-line-strong bg-surface-2 p-1.5 text-text-3 transition-colors hover:border-st-failed hover:text-st-failed"
           aria-label="Remove secondary repository"
           data-testid={`remove-secondary-repo-${index}`}
         >
@@ -268,12 +268,12 @@ export default function SecondaryRepoRow({
       )}
       {repo.valid && (
         <label
-          className="flex items-center gap-1.5 text-fg-3"
+          className="flex items-center gap-1.5 text-text-3"
           style={{ fontSize: "10.5px" }}
         >
           <input
             type="checkbox"
-            className="accent-acc"
+            className="accent-primary"
             checked={repo.readOnly}
             onChange={(e) => onChange(index, { readOnly: e.target.checked })}
             data-testid={`secondary-readonly-${index}`}
@@ -289,10 +289,10 @@ export default function SecondaryRepoRow({
 export function SecondaryRepoLabel() {
   return (
     <span
-      className="font-medium text-fg-2 flex items-center gap-1.5"
+      className="font-medium text-text-2 flex items-center gap-1.5"
       style={{ fontSize: "11.5px" }}
     >
-      <GitBranch size={12} className="text-fg-3" />
+      <GitBranch size={12} className="text-text-3" />
       Secondary repositories
     </span>
   );

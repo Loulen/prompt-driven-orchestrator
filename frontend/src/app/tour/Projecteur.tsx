@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from "re
 import type { TourRect } from "../../hooks/tour/tourView";
 import { relayWheel } from "../../lib/tourScroll";
 import { blockerRects } from "../../lib/tourPlacement";
+import { cssViewport } from "../../shared/ui/zoom";
 
 /**
  * The **Projecteur** (#823, CONTEXT.md § « Tours guidés ») — the overlay that dims
@@ -66,11 +67,12 @@ function blockerStyle(rect: TourRect | null, side: "top" | "bottom" | "left" | "
 
 const NO_LIT: TourRect[] = [];
 
-/** The window's size, kept current: the multi-opening cut is laid out in pixels. */
+/** The window's size, kept current: the multi-opening cut is laid out in the
+ *  app's CSS pixels, like the rects it is given. */
 function useViewport() {
-  const [size, setSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  const [size, setSize] = useState(cssViewport);
   useEffect(() => {
-    const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight });
+    const onResize = () => setSize(cssViewport());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -80,7 +82,7 @@ function useViewport() {
 export default function Projecteur({ hole, zone, wide, lit = NO_LIT, children }: Props) {
   // The cut-out the blockers leave open. A soft step opens the whole menu.
   const opening = zone ?? hole;
-  const dim = wide ? "bg-tour-dim-soft" : "bg-tour-dim";
+  const dim = wide ? "bg-dim-soft" : "bg-dim";
   const rootRef = useRef<HTMLDivElement>(null);
   const viewport = useViewport();
   const absorb = {
@@ -151,7 +153,7 @@ export default function Projecteur({ hole, zone, wide, lit = NO_LIT, children }:
         <div
           key={`lit:${rect.left}:${rect.top}`}
           data-testid="projecteur-lit"
-          className="pointer-events-none absolute rounded-md border border-dashed border-acc-border"
+          className="pointer-events-none absolute rounded-md border border-dashed border-primary/30"
           style={{ top: rect.top, left: rect.left, width: rect.width, height: rect.height }}
         />
       ))}
@@ -160,7 +162,7 @@ export default function Projecteur({ hole, zone, wide, lit = NO_LIT, children }:
       {zone && (
         <div
           data-testid="projecteur-zone"
-          className="pointer-events-none absolute rounded-md border border-dashed border-acc-border"
+          className="pointer-events-none absolute rounded-md border border-dashed border-primary/30"
           style={{ top: zone.top, left: zone.left, width: zone.width, height: zone.height }}
         />
       )}
@@ -170,7 +172,7 @@ export default function Projecteur({ hole, zone, wide, lit = NO_LIT, children }:
       {hole && !wide && (
         <div
           data-testid="projecteur-hole"
-          className="pointer-events-none absolute rounded-md ring-2 ring-acc"
+          className="pointer-events-none absolute rounded-md ring-2 ring-primary"
           style={{ top: hole.top, left: hole.left, width: hole.width, height: hole.height }}
         />
       )}

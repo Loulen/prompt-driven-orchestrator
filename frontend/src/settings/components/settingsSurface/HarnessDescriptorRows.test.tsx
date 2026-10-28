@@ -43,7 +43,7 @@ describe("HarnessDescriptorRows — refresh models", () => {
     expect(claude).toHaveTextContent("2.4.1");
     expect(claude).toHaveTextContent("4 models");
     expect(screen.getByTestId("setting-harness-probed-claude")).toHaveTextContent("probed just now");
-    expect(screen.getByTestId("setting-harness-probed-claude")).toHaveClass("text-acc");
+    expect(screen.getByTestId("setting-harness-probed-claude")).toHaveClass("text-primary");
     expect(screen.getByTestId("setting-harness-probed-opencode")).toHaveTextContent("probed 3 days ago");
     expect(screen.getByTestId("setting-harness-failed-copilot")).toHaveClass("text-st-failed");
     expect(screen.getByTestId("setting-harness-row-pi")).toHaveTextContent("not installed");

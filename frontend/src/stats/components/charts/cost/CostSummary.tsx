@@ -20,7 +20,7 @@ export function CostSummary({
 }) {
   return (
     <>
-      <div className="mt-4 text-fg" data-testid="stats-selection-headline">
+      <div className="mt-4 text-text" data-testid="stats-selection-headline">
         {formatCostAmount(
           aggregate.usd,
           aggregate.partial,

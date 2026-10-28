@@ -2,7 +2,8 @@
 
 How an extension adds to PDO's interface (ADR-0081, amendments #29, #30, #31 and #32): a
 catalogue of **named locations**, a few **kinds of contribution**, **commands**, **`when`
-clauses**, and the locations an extension **hosts** in its own interface. The locations,
+clauses**, the locations an extension **hosts** in its own interface, and the **design
+system** it draws with (ADR-0091). The locations,
 what each accepts and the context each hands over are part of the semver of
 `pdo-extension-api`.
 
@@ -813,6 +814,7 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `useCurrentActor()`, `useActorDisplay(actor)` | The Actors' names, since 0.8 ([The Actors' names](#the-actors-names)) |
 | `openProbedSocket(path, options?)` | A WebSocket to the daemon, opened through the probe, since 0.10; its delay of silence since 0.11 ([WebSockets](#websockets)) |
 | `copyToClipboard(text)` | Put `text` on the clipboard from a user gesture, as every Copy button of the core does: the Clipboard API, or outside a secure context (an instance served over plain http) `execCommand("copy")` on a hidden textarea. Resolves to whether the text was written, never rejects. Since 0.11 |
+| `Button`, `IconButton`, `Select`, `Menu`, `Modal`, `toast`… | The primitives of the design system, since 0.17 ([The design system](#the-design-system)) |
 | `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
 
 - **Context**: an element receives the host's `context`, merged over the context every location
@@ -825,6 +827,110 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 - **Version**: a bundle that imports the module declares it (`importing_ui_module()`, on the wire
   `ui.ui_module_major`). A bundle built against another major than the front's is never loaded,
   and a banner says so, as for React. The module's version is `pdo-extension-api`'s.
+
+## The design system
+
+Since 0.17 the core serves its design system to the extensions' interfaces (ADR-0091): its tokens
+and the primitives it draws its own controls with. An extension's interface draws with them and
+ships no copy of either: a change of style of the core reaches it without a rebuild. They are
+part of the semver of `@pdo/extension-ui`: removing or breaking a primitive, or a token, is a
+new major.
+
+### Tokens
+
+The tokens are custom properties, defined by `/shared/tokens.css`, a stylesheet at a stable
+address served by the binary. The interface loads it; a page an extension serves outside the
+interface (a sign-in page) links it:
+
+```html
+<html data-theme="dark">
+  <head><link rel="stylesheet" href="/shared/tokens.css" /></head>
+  <body style="margin: 0; background: var(--surface-0); color: var(--text); font-family: var(--font-ui)">
+```
+
+| Tokens | What they are |
+| --- | --- |
+| `--surface-0`, `--surface-1`, `--surface-2` | The editor and dialogs, the side bars and panels, the top bar and the popovers |
+| `--hover`, `--active`, `--selected` | Translucent fills of a hovered, pressed and selected row or control |
+| `--text`, `--text-2`, `--text-3` | Primary, secondary and muted ink; every one holds 4.5:1 on every surface |
+| `--line`, `--line-soft`, `--line-strong` | Hairlines |
+| `--primary`, `--primary-hi`, `--primary-ink` | The ruby of the one primary action of a view and of the selection, its hover, the ink on it |
+| `--selected-edge`, `--focus-ring`, `--scrim`, `--shadow`, `--dim`, `--dim-soft` | The selection's edge, the focus ring, a dialog's backdrop, a floating layer's shadow, a tour's dim |
+| `--color-st-running`, `-await`, `-done`, `-blocked`, `-failed`, `-skipped` | The six status colours (a status is shown as colour and icon) |
+| `--fs-2xs` … `--fs-xl`, `--lh-ui`, `--w-regular`, `--w-medium`, `--w-strong` | The type scale, 10 to 16 px, 13 px for the body text; line height; weights |
+| `--h-row`, `--h-row-2`, `--h-control`, `--h-control-sm`, `--h-bar`, `--h-topbar`, `--h-statusbar` | Heights: rows 24 and 40 px, controls 24 and 20 px, bars 32 px, top bar 36 px, status bar 22 px |
+| `--g-1` … `--g-7`, `--pad-x`, `--gap` | Spacing, on a 4 px grid |
+| `--radius-ui`, `--radius-pop` | 2 px corners; 6 px for the floating toolbar of a row only |
+| `--font-ui`, `--font-code` | Archivo and Geist Mono, served by the binary under `/shared/fonts/` with their licence (SIL OFL 1.1) |
+
+Dark is the default, `data-theme="light"` switches to the light theme. The attribute applies to
+any element: a container carrying the other theme repaints what is under it. The interface sets
+it on `<html>`; an extension reads nothing, its interface follows a switch at once.
+
+The interface is drawn at the **UI scale** (Settings › Interface, 100, 110 or 120 %, 120 by
+default), a CSS `zoom` on its root. A length in pixels needs nothing. A position computed from
+the screen (`getBoundingClientRect`, `clientX`, `innerWidth`) is divided by the zoom before it is
+written to a style: the element's `currentCSSZoom`. The primitives place their floating layers
+so.
+
+The classes of the design system are there for an extension's own markup: `d-mono` (code), `d-meta`
+(11 px muted), `d-caps` (a caps header), `d-row` (a 24 px row with its hover and selection),
+`d-bar` (a 32 px bar).
+
+Version 0.17 renamed every token, with no alias. An extension built against an earlier version
+migrates its styles:
+
+| Before 0.17 | Since 0.17 |
+| --- | --- |
+| `--color-bg-0`, `--color-bg-1` | `--surface-0` |
+| `--color-bg-2` | `--surface-1` |
+| `--color-bg-3` | `--surface-2` (a fill under a pointer: `--hover`) |
+| `--color-bg-4`, `--color-bg-5` | `--hover`, `--active` |
+| `--color-fg`, `--color-fg-2` | `--text`, `--text-2` |
+| `--color-fg-3`, `--color-fg-4`, `--color-fg-5` | `--text-3` |
+| `--color-line`, `--color-line-strong`, `--color-line-soft` | `--line`, `--line-strong`, `--line-soft` |
+| `--color-acc`, `--color-acc-hi`, `--color-acc-dim` | `--primary`, `--primary-hi` |
+| `--color-acc-bg` | `--selected` |
+| `--color-on-acc` | `--primary-ink` |
+| `--color-st-<status>-bg` | `color-mix(in oklab, var(--color-st-<status>) 14%, transparent)` |
+| `--color-st-stopped`, `-archived`, `-stale`, `-pending` | `--color-st-skipped` |
+| `--color-st-interrupted`, `--color-st-paused` | `--color-st-await`, `--color-st-blocked` |
+| `--color-edge-selected` | `--selected-edge` |
+| `--font-sans`, `--font-mono` | `--font-ui`, `--font-code` |
+
+### Primitives
+
+Dense (24 px controls, 13 px text), in both themes, keyboard and screen reader included. Their
+props are in `pdo-extension-ui.d.ts`; an `icon` prop takes a `lucide-react` icon or any component
+taking `size`, `strokeWidth` and `className`.
+
+| Export | What it draws |
+| --- | --- |
+| `Button` | A text button, hairline: `tone` `primary` (ruby, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon` |
+| `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count |
+| `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most |
+| `Kbd` | A key or a chord |
+| `TextInput`, `TextArea` | Inputs; `invalid`, `mono`, `small` |
+| `Field` | A form row: the label in a 96 px column (`help` in its tooltip), the control, the `error` at the row end |
+| `Select` | A single value out of `options` (icons, hints, groups, a search box past 8) |
+| `Segmented` | Two to four exclusive choices, arrow keys |
+| `Switch`, `Checkbox` | On/off, ruby when on; a box with its text, `mixed` |
+| `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
+| `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger` |
+| `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit` |
+| `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms |
+| `toast(text, kind?, options?)` | A toast in the core's stack: `info`, `success`, `warning`, `error`, a `title`, one action |
+| `Tabs` | A tab strip, the live tab underlined in ruby, a count |
+| `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
+| `KeyValue` | A read-only property grid |
+| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions |
+| `EmptyState` | An icon, two to four words, one action; loading and error alike |
+| `Chip` | A neutral chip, a status `tone` as its icon; removable |
+| `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name |
+| `Avatar` | A neutral square with the initials; a robot for an agent, a bolt for a trigger |
+
+The test extension `kit` (`crates/pdo/tests/test_extension/kit.js`) is a page drawn with nothing
+else.
 
 ## The Actors' names
 

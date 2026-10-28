@@ -25,10 +25,10 @@ export default function ExtensionSettingsPanels({ active }: { active: boolean })
               data-testid={`extension-settings-${key}`}
             >
               <div className="flex flex-col gap-1">
-                <h3 className="flex items-center gap-2 font-semibold text-fg" style={{ fontSize: "13px" }}>
+                <h3 className="flex items-center gap-2 font-semibold text-text" style={{ fontSize: "13px" }}>
                   {contribution.label}
                 </h3>
-                <p className="text-fg-4" style={{ fontSize: "10.5px" }}>
+                <p className="text-text-3" style={{ fontSize: "10.5px" }}>
                   Added by the extension {extension.name} {extension.version}.
                 </p>
               </div>

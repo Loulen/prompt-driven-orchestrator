@@ -1,10 +1,9 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import InspectorPortRow from "./InspectorPortRow";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
-  return <TooltipProvider>{children}</TooltipProvider>;
+  return <>{children}</>;
 }
 
 describe("InspectorPortRow — I1 hairline layout", () => {
@@ -20,7 +19,7 @@ describe("InspectorPortRow — I1 hairline layout", () => {
     expect(row.className).toContain("border-b");
     expect(row.className).toContain("border-line-soft");
     expect(row.className).not.toContain("rounded");
-    expect(row.className).not.toContain("bg-bg-3");
+    expect(row.className).not.toContain("bg-surface-2");
   });
 
   it("last row omits the bottom border", () => {
@@ -139,7 +138,7 @@ describe("InspectorPortRow — I1 hairline layout", () => {
   it("applies highlight styling when highlighted", () => {
     render(<InspectorPortRow {...baseProps} highlighted />, { wrapper: Wrapper });
     const row = screen.getByTestId("inspector-port-in");
-    expect(row.className).toContain("bg-acc-bg");
+    expect(row.className).toContain("bg-selected");
   });
 
   it("has port-row CSS class for design compatibility", () => {

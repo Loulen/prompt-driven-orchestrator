@@ -26,7 +26,7 @@ export interface ShellDrawer {
   escHint: string;
   /** Panel header content, before the hint (Stats' « Sync costs »). */
   actions?: ReactNode;
-  /** Width class of the panel, a literal Tailwind class (`w-[min(420px,90vw)]`). */
+  /** Width class of the panel, a literal Tailwind class (`w-[min(420px,calc(90vw/var(--app-zoom,1)))]`). */
   widthClassName: string;
   /** `data-testid` of the panel; its ✕ is `${testId}-close` unless `closeTestId` says otherwise. */
   testId: string;
@@ -121,10 +121,10 @@ export default function FullWindowShell({
   }, [onEscape, onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-bg-2">
-      <div className="relative flex h-screen w-screen flex-col bg-bg-4" data-testid={testId}>
+    <div className="fixed inset-0 z-50 bg-surface-1">
+      <div className="relative flex h-[calc(100dvh/var(--app-zoom,1))] w-[calc(100vw/var(--app-zoom,1))] flex-col bg-surface-2" data-testid={testId}>
         <header className="flex min-h-14 items-center gap-4 border-b border-line px-4">
-          <h2 className="flex items-center gap-2 font-semibold text-fg">
+          <h2 className="flex items-center gap-2 font-semibold text-text">
             {titleIcon}
             {title}
           </h2>
@@ -134,7 +134,7 @@ export default function FullWindowShell({
             type="button"
             onClick={onClose}
             aria-label={closeLabel}
-            className="grid h-7 w-7 place-items-center rounded text-fg-3 hover:bg-bg-5"
+            className="grid h-7 w-7 place-items-center rounded text-text-3 hover:bg-active"
           >
             <X size={15} />
           </button>
@@ -143,7 +143,7 @@ export default function FullWindowShell({
         <div className="flex min-h-0 flex-1">
           {rail && (
             <nav
-              className="flex shrink-0 flex-col gap-1 border-r border-line bg-bg-3 p-3"
+              className="flex shrink-0 flex-col gap-1 border-r border-line bg-surface-2 p-3"
               style={{ width: railWidth }}
               role="tablist"
               aria-label={railAriaLabel}
@@ -170,7 +170,7 @@ export default function FullWindowShell({
                   data-dirty={item.dirty ? "true" : undefined}
                   onClick={() => onRailChange?.(item.id)}
                   className={`flex items-center justify-between gap-2 rounded px-3 py-2 text-left ${
-                    activeRail === item.id ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-4"
+                    activeRail === item.id ? "bg-surface-2 text-text" : "text-text-3 hover:bg-hover"
                   }`}
                 >
                   <span>{item.label}</span>
@@ -221,18 +221,18 @@ function SecondaryPanel({ drawer }: { drawer: ShellDrawer }) {
   return (
     <aside
       ref={panelRef}
-      className={`absolute bottom-0 right-0 top-14 z-20 flex flex-col border-l border-line bg-bg-4 shadow-2xl ${drawer.widthClassName}`}
+      className={`absolute bottom-0 right-0 top-14 z-20 flex flex-col border-l border-line bg-surface-2 shadow-2xl ${drawer.widthClassName}`}
       aria-label={drawer.title}
       data-testid={drawer.testId}
       {...drawer.dataAttributes}
     >
       <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-        <h3 className="font-semibold text-fg" style={{ fontSize: "13px" }}>
+        <h3 className="font-semibold text-text" style={{ fontSize: "13px" }}>
           {drawer.title}
         </h3>
         <div className="ml-auto flex items-center gap-3">
           {drawer.actions}
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="text-text-3" style={{ fontSize: "10.5px" }}>
             {drawer.escHint}
           </span>
         </div>
@@ -241,7 +241,7 @@ function SecondaryPanel({ drawer }: { drawer: ShellDrawer }) {
           onClick={drawer.onClose}
           aria-label="Close panel"
           data-testid={drawer.closeTestId ?? `${drawer.testId}-close`}
-          className="grid h-6 w-6 shrink-0 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
+          className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-3 transition-colors hover:bg-active hover:text-text"
         >
           <X size={14} />
         </button>

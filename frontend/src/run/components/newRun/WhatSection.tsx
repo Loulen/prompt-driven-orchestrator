@@ -42,7 +42,7 @@ export default function WhatSection({ form }: { form: NewRunForm }) {
   const added = promptAddedSkills.filter((a) => skills.some((s) => s.id === a.id));
   return (
     <div className="flex flex-col gap-3 py-4">
-      <span className="text-fg-4 uppercase tracking-wider font-medium" style={{ fontSize: "10px" }}>
+      <span className="text-text-3 uppercase tracking-wider font-medium" style={{ fontSize: "10px" }}>
         {mode === "trigger" ? "When" : "What"}
       </span>
 
@@ -53,7 +53,7 @@ export default function WhatSection({ form }: { form: NewRunForm }) {
 
       <div className="flex flex-col gap-1.5">
         <label
-          className="font-medium text-fg-2"
+          className="font-medium text-text-2"
           style={{ fontSize: "11.5px" }}
         >
           {mode === "trigger"
@@ -61,7 +61,7 @@ export default function WhatSection({ form }: { form: NewRunForm }) {
             : `Prompt${promptOptional ? " (optional)" : ""}`}
         </label>
         <textarea
-          className="w-full resize-y rounded-md border border-line-strong bg-bg-3 px-2.5 py-2 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+          className="w-full resize-y rounded-md border border-line-strong bg-surface-2 px-2.5 py-2 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
           style={{ fontSize: "12px" }}
           rows={5}
           placeholder="Free-text prompt, a GitHub issue link, or a mix."
@@ -69,7 +69,7 @@ export default function WhatSection({ form }: { form: NewRunForm }) {
           data-testid="input-textarea"
         />
         <SkillCompletionList completion={completion} textarea={fieldProps.ref} onPick={pick} scope="run" />
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           {mode === "trigger"
             ? "Passed as the Run's input each time the trigger fires. Required unless the pipeline is prompt-not-required."
             : promptOptional

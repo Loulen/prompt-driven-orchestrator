@@ -12,7 +12,7 @@ export default function SkillPromptHint({
   testId: string;
 }) {
   return (
-    <p className="flex items-center gap-1 text-fg-4" style={{ fontSize: "10px" }} data-testid={testId}>
+    <p className="flex items-center gap-1 text-text-3" style={{ fontSize: "10px" }} data-testid={testId}>
       <Sparkles size={10} className="shrink-0 text-st-await" />
       {lastAdded
         ? `/${lastAdded} was added to this ${scope}'s skills.`

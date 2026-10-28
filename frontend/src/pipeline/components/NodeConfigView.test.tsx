@@ -2,7 +2,6 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import NodeConfigView from "./NodeConfigView";
 import { useEditStore } from "../store/editStore";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 vi.mock("../../skill/api/bank", () => ({
   fetchSkillBank: vi.fn().mockResolvedValue({ skills: [], folders: [], root_path: "" }),
@@ -54,9 +53,9 @@ function seedRunWithSkilledReviewer(type: "agent" | "script" = "agent", prompt =
 
 function renderView(archived = false) {
   return render(
-    <TooltipProvider>
+    <>
       <NodeConfigView archived={archived} />
-    </TooltipProvider>,
+    </>,
   );
 }
 

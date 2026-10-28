@@ -15,18 +15,18 @@ export function SourceBlock({ run }: { run: RunState }) {
 
   return (
     <div
-      className="mt-2 rounded border border-line-strong bg-bg-3 px-2 py-1.5"
+      className="mt-2 rounded border border-line-strong bg-surface-2 px-2 py-1.5"
       style={{ fontSize: "10.5px" }}
       data-testid="run-source-block"
     >
       <div className="flex items-center gap-2">
-        <span className="shrink-0 text-fg-4">Source</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-fg-2">
+        <span className="shrink-0 text-text-3">Source</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-text-2">
           {available ? drift.source_branch : (run.source_branch ?? "—")}
         </span>
         <SourceDriftChip drift={drift} runId={run.run_id} fetchError={fetchError} />
       </div>
-      <div className="mt-1 flex items-center gap-2 text-fg-4" style={{ fontSize: "10px" }}>
+      <div className="mt-1 flex items-center gap-2 text-text-3" style={{ fontSize: "10px" }}>
         <span className="shrink-0">fork</span>
         <span className="min-w-0 flex-1 truncate font-mono">
           {available ? drift.fork : "—"}
@@ -43,7 +43,7 @@ export function SourceBlock({ run }: { run: RunState }) {
                 type="button"
                 onClick={() => void refresh()}
                 disabled={fetching}
-                className="shrink-0 rounded p-0.5 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2 disabled:opacity-40"
+                className="shrink-0 rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 disabled:opacity-40"
                 // Icon only: there is no decision to take here, only a refresh —
                 // the popover of the launch form exists because THERE a choice
                 // follows. Without the button, "fetched 2 h ago" is information

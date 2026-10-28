@@ -66,7 +66,7 @@ export function CostTab({
 
   if (error) {
     return (
-      <div className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed">
+      <div className="rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed">
         {error}
       </div>
     );
@@ -298,7 +298,7 @@ export function CostTab({
         data-testid="stats-drilldown-navigation"
       >
         <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="text-text-3" style={{ fontSize: "10.5px" }}>
             Ranked by cost
           </span>
           <select
@@ -309,7 +309,7 @@ export function CostTab({
               toTotal();
               absorption.clear();
             }}
-            className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+            className="rounded border border-line bg-surface-2 px-2 py-1 text-text-2"
           >
             <option value="pipeline">By pipeline</option>
             <option value="project">By project</option>
@@ -336,7 +336,7 @@ export function CostTab({
           }}
         />
         {axis === "model" && (
-          <div className="mt-3 text-fg-4" style={{ fontSize: "10.5px" }}>
+          <div className="mt-3 text-text-3" style={{ fontSize: "10.5px" }}>
             Model ids verbatim, one row per id — the same id run through two
             harnesses is one row, one column per harness. Hover a model or an
             effort for where the value was read and its provider.

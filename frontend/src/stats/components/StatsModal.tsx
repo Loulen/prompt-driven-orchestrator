@@ -253,8 +253,8 @@ function StatsSurface({
                 onClick={() => setPreset(item.id)}
                 className={`rounded-md border px-2.5 py-1 ${
                   preset === item.id
-                    ? "border-acc bg-acc/15 text-fg"
-                    : "border-line-strong bg-bg-3 text-fg-2"
+                    ? "border-primary bg-primary/15 text-text"
+                    : "border-line-strong bg-surface-2 text-text-2"
                 }`}
                 style={{ fontSize: "11px" }}
               >
@@ -267,7 +267,7 @@ function StatsSurface({
       headerActions={
         <>
           <div
-            className="text-fg-4"
+            className="text-text-3"
             style={{ fontSize: "10.5px" }}
             data-testid="stats-computed-at"
           >
@@ -280,7 +280,7 @@ function StatsSurface({
             onClick={refresh}
             disabled={refreshing}
             data-testid="stats-refresh"
-            className="flex items-center gap-1.5 rounded border border-line bg-bg-3 px-2 py-1 text-fg-2 disabled:opacity-60"
+            className="flex items-center gap-1.5 rounded border border-line bg-surface-2 px-2 py-1 text-text-2 disabled:opacity-60"
           >
             <RotateCw size={12} className={refreshing ? "animate-spin" : ""} />
             Refresh
@@ -294,7 +294,7 @@ function StatsSurface({
               aria-expanded={pricingOpen}
               data-testid="stats-pricing-trigger"
               className={`rounded border px-2 py-1 ${
-                pricingOpen ? "border-acc bg-acc/15 text-fg" : "border-line bg-bg-3 text-fg-2"
+                pricingOpen ? "border-primary bg-primary/15 text-text" : "border-line bg-surface-2 text-text-2"
               }`}
             >
               Pricing details
@@ -310,7 +310,7 @@ function StatsSurface({
           ? {
               title: "Pricing details",
               escHint: "Esc returns to Stats",
-              widthClassName: "w-[min(420px,90vw)]",
+              widthClassName: "w-[min(420px,calc(90vw/var(--app-zoom,1)))]",
               testId: "stats-pricing-details",
               bodyClassName: "min-h-0 flex-1 overflow-y-auto p-4",
               onClose: () => setPricingOpen(false),
@@ -320,7 +320,7 @@ function StatsSurface({
                   onClick={onSyncPrices}
                   disabled={syncing}
                   data-testid="stats-sync-prices"
-                  className="rounded-md border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 disabled:opacity-40"
+                  className="rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-text-2 disabled:opacity-40"
                 >
                   {syncing ? "Syncing…" : "Sync costs"}
                 </button>
@@ -334,7 +334,7 @@ function StatsSurface({
     >
       {tab && error && (
         <div
-          className="mb-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+          className="mb-3 rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
           data-testid="stats-error"
         >
           {error}
@@ -348,7 +348,7 @@ function StatsSurface({
       <Suspense
         fallback={
           <div
-            className="min-h-[220px] px-1 py-8 text-center text-fg-4"
+            className="min-h-[220px] px-1 py-8 text-center text-text-3"
             data-testid="stats-charts-loading"
           >
             Loading charts…

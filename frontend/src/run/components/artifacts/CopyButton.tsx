@@ -1,6 +1,6 @@
 import type { MouseEvent } from "react";
 import { Check, Copy, X } from "lucide-react";
-import { Tooltip, TooltipProvider } from "../../../shared/ui/tooltip";
+import { Tooltip } from "../../../shared/ui/tooltip";
 import type { CopyStatus } from "../../store/useCopyToClipboard";
 
 export const COPY_RAW_FILE = "Copy raw file";
@@ -31,11 +31,11 @@ export default function CopyButton({
       ? "text-st-done"
       : status === "failed"
         ? "text-st-failed"
-        : "text-fg-3 hover:text-fg";
+        : "text-text-3 hover:text-text";
   return (
     // Own provider: the button is mounted by surfaces that may sit outside the
     // app-level one (a modal rendered on its own, a test harness).
-    <TooltipProvider>
+    <>
       <Tooltip content={status === "failed" && error ? error : COPY_RAW_FILE}>
         <button
           type="button"
@@ -44,7 +44,7 @@ export default function CopyButton({
           aria-label={COPY_RAW_FILE}
           data-testid={testId}
           data-status={status}
-          className={`flex items-center gap-1 rounded p-1 hover:bg-bg-3 disabled:pointer-events-none disabled:text-fg-5 ${tone} ${className}`}
+          className={`flex items-center gap-1 rounded p-1 hover:bg-hover disabled:pointer-events-none disabled:text-text-3 ${tone} ${className}`}
           style={{ fontSize: "11px" }}
         >
           {status === "copied" ? (
@@ -62,6 +62,6 @@ export default function CopyButton({
           )}
         </button>
       </Tooltip>
-    </TooltipProvider>
+    </>
   );
 }

@@ -181,25 +181,25 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
     // width as a FLOOR with a horizontal scroll behind it, because crushing a
     // condition row (output · property · operator · value · delete) is how a
     // control ends up showing one thing and sending another.
-    <div className="h-full overflow-x-auto bg-bg-2">
+    <div className="h-full overflow-x-auto bg-surface-1">
       <aside
-        className="flex h-full flex-col bg-bg-2 overflow-y-auto"
+        className="flex h-full flex-col bg-surface-1 overflow-y-auto"
         style={{ minWidth: PANEL_MIN_WIDTH }}
         data-testid="edge-detail-panel"
       >
         {/* Header — route. The route line names every carried output. */}
         <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-          <ArrowRight size={14} className="shrink-0 text-acc" />
+          <ArrowRight size={14} className="shrink-0 text-primary" />
           <div className="min-w-0">
-            <div className="flex items-center gap-1 font-medium text-fg" style={{ fontSize: "12.5px" }}>
+            <div className="flex items-center gap-1 font-medium text-text" style={{ fontSize: "12.5px" }}>
               <span className="truncate">{fromName}</span>
-              <span className="font-mono text-fg-4" style={{ fontSize: "10.5px" }} data-testid="edge-route-ports">
+              <span className="font-mono text-text-3" style={{ fontSize: "10.5px" }} data-testid="edge-route-ports">
                 .{ports.join("+")}
               </span>
-              <ArrowRight size={11} className="shrink-0 text-fg-4" />
+              <ArrowRight size={11} className="shrink-0 text-text-3" />
               <span className="truncate">{toName}</span>
             </div>
-            <div className="mt-0.5 text-fg-4" style={{ fontSize: "10px" }}>
+            <div className="mt-0.5 text-text-3" style={{ fontSize: "10px" }}>
               edge · {ports.length > 1 ? `${ports.length} outputs carried` : "conditional route"}
             </div>
           </div>
@@ -227,11 +227,11 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
 
           {isElse ? (
             <div
-              className="text-fg-4"
+              className="text-text-3"
               style={{ fontSize: "10px", lineHeight: 1.6 }}
               data-testid="else-active-note"
             >
-              Default branch — fires only when <span className="text-fg-3">no sibling edge</span>{" "}
+              Default branch — fires only when <span className="text-text-3">no sibling edge</span>{" "}
               (same source output port) matched. A default edge carries no
               condition; turn this off to author a <span className="font-mono">when:</span> predicate.
             </div>
@@ -249,7 +249,7 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
               ))}
               <button
                 onClick={handleAddCondition}
-                className="flex items-center gap-1 self-start rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 hover:border-acc hover:text-acc"
+                className="flex items-center gap-1 self-start rounded border border-line-strong bg-surface-2 px-2 py-1 text-text-3 hover:border-primary hover:text-primary"
                 style={{ fontSize: "10.5px" }}
                 data-testid="add-condition"
               >
@@ -257,7 +257,7 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
                 Add condition
               </button>
               {rows.length === 0 && (
-                <div className="text-fg-4" style={{ fontSize: "10px" }}>
+                <div className="text-text-3" style={{ fontSize: "10px" }}>
                   No condition — this edge always fires.
                 </div>
               )}
@@ -268,17 +268,17 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
           {!isElse && (
             <>
               <SectionHead title="Available fields" />
-              <div className="text-fg-4" style={{ fontSize: "10px", lineHeight: 1.6 }}>
+              <div className="text-text-3" style={{ fontSize: "10px", lineHeight: 1.6 }}>
                 Output schema of{" "}
                 {ports.map((p, i) => (
                   <span key={p}>
                     {i > 0 && ", "}
-                    <span className="font-mono text-fg-3">
+                    <span className="font-mono text-text-3">
                       {fromName}.{p}
                     </span>
                   </span>
                 ))}
-                , plus <span className="font-mono text-acc">iter</span> — the counter of
+                , plus <span className="font-mono text-primary">iter</span> — the counter of
                 the enclosing region. Each condition row reads the output named on its
                 left.
               </div>
@@ -333,7 +333,7 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
               testId="toggle-under-nodes"
               title="Edges draw above nodes by default; this one goes below"
             />
-            <div className="text-fg-4" style={{ fontSize: "10px", lineHeight: 1.5 }} data-testid="display-layout-note">
+            <div className="text-text-3" style={{ fontSize: "10px", lineHeight: 1.5 }} data-testid="display-layout-note">
               Layout only — saved in the file, ignored by the semantic diff.
             </div>
           </div>

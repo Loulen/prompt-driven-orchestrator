@@ -15,14 +15,14 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
     <div className="flex flex-col gap-1.5" data-testid="attachments-field">
       <div className="flex items-baseline justify-between gap-2">
         <label
-          className="font-medium text-fg-2"
+          className="font-medium text-text-2"
           style={{ fontSize: "11.5px" }}
         >
           Attachments
         </label>
         {attachments.length > 0 && (
           <span
-            className={attachmentsOverLimit ? "text-st-failed" : "text-fg-4"}
+            className={attachmentsOverLimit ? "text-st-failed" : "text-text-3"}
             style={{ fontSize: "10.5px" }}
             data-testid="attachments-counter"
           >
@@ -49,12 +49,12 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
         }}
       />
       <div
-        className={`flex min-h-[60px] flex-wrap items-center gap-2 rounded-md border bg-bg-3 px-2.5 py-2 transition-colors ${
+        className={`flex min-h-[60px] flex-wrap items-center gap-2 rounded-md border bg-surface-2 px-2.5 py-2 transition-colors ${
           attachmentDragOver
-            ? "border-solid border-acc bg-acc/10"
+            ? "border-solid border-primary bg-primary/10"
             : attachmentsOverLimit
               ? "border-dashed border-st-failed"
-              : "border-dashed border-line-strong hover:border-fg-4"
+              : "border-dashed border-line-strong hover:border-text-3"
         } ${attachmentShake ? "pdo-attach-shake border-st-failed" : ""}`}
         data-testid="image-drop-zone"
         data-drag-over={attachmentDragOver ? "true" : undefined}
@@ -65,7 +65,7 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
         {attachments.length === 0 && (
           <button
             type="button"
-            className="flex w-full items-center justify-center gap-1.5 py-1 text-fg-4 transition-colors hover:text-fg-3"
+            className="flex w-full items-center justify-center gap-1.5 py-1 text-text-3 transition-colors hover:text-text-3"
             style={{ fontSize: "11px" }}
             onClick={() => fileInputRef.current?.click()}
             data-testid="image-upload-button"
@@ -87,7 +87,7 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
             return (
               <div
                 key={`${file.name}-${idx}`}
-                className={`group relative h-12 w-12 flex-shrink-0 overflow-hidden rounded border focus:outline-none focus:ring-1 focus:ring-acc ${
+                className={`group relative h-12 w-12 flex-shrink-0 overflow-hidden rounded border focus:outline-none focus:ring-1 focus:ring-primary ${
                   over ? "border-st-failed" : "border-line"
                 }`}
                 data-testid="image-thumbnail"
@@ -103,7 +103,7 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
                 />
                 <button
                   type="button"
-                  className="absolute -right-0.5 -top-0.5 grid h-4 w-4 place-items-center rounded-full bg-bg-4 text-fg-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                  className="absolute -right-0.5 -top-0.5 grid h-4 w-4 place-items-center rounded-full bg-surface-2 text-text-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                   onClick={remove}
                   data-testid="image-remove-button"
                   aria-label={`Remove ${file.name}`}
@@ -116,7 +116,7 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
           return (
             <div
               key={`${file.name}-${idx}`}
-              className={`group relative flex h-12 max-w-[220px] flex-shrink-0 items-center gap-2 rounded border bg-bg-2 px-2 focus:outline-none focus:ring-1 focus:ring-acc ${
+              className={`group relative flex h-12 max-w-[220px] flex-shrink-0 items-center gap-2 rounded border bg-surface-1 px-2 focus:outline-none focus:ring-1 focus:ring-primary ${
                 over ? "border-st-failed" : "border-line"
               }`}
               data-testid="file-chip"
@@ -126,18 +126,18 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
               title={file.name}
             >
               <span
-                className="grid h-8 w-8 flex-shrink-0 place-items-center rounded border border-line bg-bg-3 font-mono font-medium text-fg-3"
+                className="grid h-8 w-8 flex-shrink-0 place-items-center rounded border border-line bg-surface-2 font-mono font-medium text-text-3"
                 style={{ fontSize: "8.5px", letterSpacing: "0.02em" }}
                 aria-hidden="true"
               >
                 {attachmentBadge(file.name)}
               </span>
               <span className="flex min-w-0 flex-col leading-tight">
-                <span className="truncate text-fg" style={{ fontSize: "11.5px" }}>
+                <span className="truncate text-text" style={{ fontSize: "11.5px" }}>
                   {file.name}
                 </span>
                 <span
-                  className={over ? "text-st-failed" : "text-fg-4"}
+                  className={over ? "text-st-failed" : "text-text-3"}
                   style={{ fontSize: "10px" }}
                 >
                   {formatAttachmentSize(file.size)}
@@ -146,7 +146,7 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
               </span>
               <button
                 type="button"
-                className="absolute -right-0.5 -top-0.5 grid h-4 w-4 place-items-center rounded-full bg-bg-4 text-fg-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                className="absolute -right-0.5 -top-0.5 grid h-4 w-4 place-items-center rounded-full bg-surface-2 text-text-3 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                 onClick={remove}
                 data-testid="file-remove-button"
                 aria-label={`Remove ${file.name}`}
@@ -159,7 +159,7 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
         {attachments.length > 0 && (
           <button
             type="button"
-            className="grid h-12 w-12 flex-shrink-0 place-items-center rounded border border-dashed border-line-strong text-fg-4 transition-colors hover:border-fg-3 hover:text-fg-3"
+            className="grid h-12 w-12 flex-shrink-0 place-items-center rounded border border-dashed border-line-strong text-text-3 transition-colors hover:border-text-3 hover:text-text-3"
             onClick={() => fileInputRef.current?.click()}
             data-testid="image-add-more-button"
             aria-label="Add more attachments"
@@ -170,13 +170,13 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
       </div>
       {attachments.length > 0 && (
         <div
-          className="h-[3px] w-full overflow-hidden rounded-full bg-bg-4"
+          className="h-[3px] w-full overflow-hidden rounded-full bg-surface-2"
           data-testid="attachments-meter"
           aria-hidden="true"
         >
           <div
             className={`h-full rounded-full transition-[width] ${
-              attachmentsOverLimit ? "bg-st-failed" : "bg-acc"
+              attachmentsOverLimit ? "bg-st-failed" : "bg-primary"
             }`}
             style={{
               width: `${Math.min(100, (attachmentsTotal / maxAttachmentBytes) * 100)}%`,
@@ -202,7 +202,7 @@ export default function AttachmentsField({ form }: { form: NewRunForm }) {
           {formatAttachmentSize(attachmentsTotal - maxAttachmentBytes)} to continue.
         </span>
       ) : (
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           {attachmentHint ? `${attachmentHint} ` : ""}
           {attachments.length > 0 ? (
             <>

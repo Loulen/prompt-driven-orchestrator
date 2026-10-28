@@ -17,10 +17,10 @@ import Section from "./Section";
 import { Identity, PrometheusMetrics, Switch } from "./TelemetryMetricsIdentity";
 
 const INPUT =
-  "rounded-md border bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:outline-none";
+  "rounded-md border bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:outline-none";
 
 function border(dirty: boolean) {
-  return dirty ? "border-st-await focus:border-st-await" : "border-line-strong focus:border-acc";
+  return dirty ? "border-st-await focus:border-st-await" : "border-line-strong focus:border-primary";
 }
 
 export default function TelemetrySections({
@@ -74,12 +74,12 @@ function OtlpExport({
           testId="setting-telemetry-otlp"
           onToggle={() => setField("telemetryOtlp", !on)}
         />
-        <div className="pl-[34px] text-fg-4" style={{ fontSize: "10.5px" }}>
+        <div className="pl-[34px] text-text-3" style={{ fontSize: "10.5px" }}>
           Off by default. Logs are never exported.
         </div>
         {settings.telemetry_otlp && (
           <div
-            className="pl-[34px] text-fg-3"
+            className="pl-[34px] text-text-3"
             style={{ fontSize: "10.5px" }}
             data-testid="setting-source-telemetry-otlp"
           >
@@ -160,7 +160,7 @@ function OtlpExport({
                 aria-label={`Remove header ${header.name}`}
                 data-testid={`telemetry-header-remove-${index}`}
                 onClick={() => setHeaders(headers.filter((_, i) => i !== index))}
-                className="rounded p-1 text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+                className="rounded p-1 text-text-3 hover:bg-hover hover:text-text-2"
               >
                 <X size={12} />
               </button>
@@ -170,7 +170,7 @@ function OtlpExport({
             type="button"
             data-testid="telemetry-header-add"
             onClick={() => setHeaders([...headers, { name: "", value: null }])}
-            className="self-start px-2.5 py-0.5 text-fg-3 hover:text-fg"
+            className="self-start px-2.5 py-0.5 text-text-3 hover:text-text"
             style={{ fontSize: "11px" }}
           >
             + Add header
@@ -199,22 +199,22 @@ function ExportStatusBar({
   const last = status?.last_export ?? null;
   const exporting = status?.exporting ?? false;
   const [dot, text] = !exporting
-    ? ["bg-fg-5", "Export off: nothing leaves this instance."]
+    ? ["bg-text-3", "Export off: nothing leaves this instance."]
     : last
       ? [last.ok ? "bg-st-done" : "bg-st-failed", `Last export ${ago(last.at, now)} · ${last.detail}`]
-      : ["bg-fg-5", "No export yet."];
+      : ["bg-text-3", "No export yet."];
   return (
     <div className="flex flex-col gap-1">
       <div
-        className="flex items-center gap-2.5 rounded-md border border-line bg-bg-2 px-3 py-2"
+        className="flex items-center gap-2.5 rounded-md border border-line bg-surface-1 px-3 py-2"
         data-testid="telemetry-export-status"
       >
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-        <span className="min-w-0 flex-1 truncate text-fg-2" style={{ fontSize: "11px" }}>
+        <span className="min-w-0 flex-1 truncate text-text-2" style={{ fontSize: "11px" }}>
           {text}
         </span>
         {status && (
-          <span className="shrink-0 text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="shrink-0 text-text-3" style={{ fontSize: "10.5px" }}>
             every {status.interval_secs} s
           </span>
         )}
@@ -224,7 +224,7 @@ function ExportStatusBar({
           disabled={!exporting || testing}
           title={exporting ? undefined : "Turn the export on and save to send a test export."}
           onClick={() => void onTest()}
-          className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 hover:border-acc disabled:opacity-40"
+          className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-1 text-text-2 hover:border-primary disabled:opacity-40"
           style={{ fontSize: "10.5px" }}
         >
           <Play size={9} />
@@ -243,7 +243,7 @@ function ExportStatusBar({
 function WhatIsSent({ status }: { status: TelemetryStatus | null }) {
   if (!status) {
     return (
-      <div className="text-fg-4" style={{ fontSize: "11px" }}>
+      <div className="text-text-3" style={{ fontSize: "11px" }}>
         Loading…
       </div>
     );
@@ -261,14 +261,14 @@ function WhatIsSent({ status }: { status: TelemetryStatus | null }) {
     <div className="flex flex-col gap-3" style={{ maxWidth: 640 }} data-testid="telemetry-what-is-sent">
       {groups.map(([label, items]) => (
         <div key={label} className="flex flex-col gap-1">
-          <div className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+          <div className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
             {label}
           </div>
           <div className="flex flex-wrap gap-1">
             {items.map((item) => (
               <span
                 key={item}
-                className="rounded bg-bg-3 px-1.5 py-0.5 font-mono text-fg-3"
+                className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-text-3"
                 style={{ fontSize: "10.5px" }}
               >
                 {item}
@@ -277,7 +277,7 @@ function WhatIsSent({ status }: { status: TelemetryStatus | null }) {
           </div>
         </div>
       ))}
-      <ul className="flex list-disc flex-col gap-1 pl-4 text-fg-3" style={{ fontSize: "10.5px" }}>
+      <ul className="flex list-disc flex-col gap-1 pl-4 text-text-3" style={{ fontSize: "10.5px" }}>
         <li>The repository is named by its remote URL, without credentials, or by its folder name. Never by a local path.</li>
         <li>The Run and node ids go on the traces only, never on the metrics.</li>
         <li>

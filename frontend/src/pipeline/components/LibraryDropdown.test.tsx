@@ -3,13 +3,12 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import LibraryDropdown from "./LibraryDropdown";
 import type { LibraryEntry } from "../model/library";
 import { useEditStore } from "../store/editStore";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 function renderDropdown(props: Parameters<typeof LibraryDropdown>[0]) {
   return render(
-    <TooltipProvider>
+    <>
       <LibraryDropdown {...props} />
-    </TooltipProvider>,
+    </>,
   );
 }
 

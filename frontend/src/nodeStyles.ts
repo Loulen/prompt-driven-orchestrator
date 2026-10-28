@@ -9,51 +9,51 @@ export const STATUS_BORDER: Record<NodeStatus, string> = {
   completed: "border-st-done",
   skipped: "border-st-skipped",
   failed: "border-st-failed",
-  stopped: "border-st-stopped",
-  stale: "border-st-stale",
-  interrupted: "border-st-interrupted",
+  stopped: "border-st-skipped",
+  stale: "border-st-skipped",
+  interrupted: "border-st-await",
 };
 
 export const STATUS_BG: Record<NodeStatus, string> = {
-  pending: "bg-bg-3",
-  waiting: "bg-bg-3",
-  running: "bg-st-running-bg",
-  awaiting_user: "bg-st-await-bg",
-  completed: "bg-st-done-bg",
-  skipped: "bg-st-skipped-bg",
-  failed: "bg-st-failed-bg",
-  stopped: "bg-st-stopped-bg",
-  stale: "bg-st-stale-bg",
-  interrupted: "bg-st-interrupted-bg",
+  pending: "bg-surface-2",
+  waiting: "bg-surface-2",
+  running: "bg-st-running/14",
+  awaiting_user: "bg-st-await/14",
+  completed: "bg-st-done/14",
+  skipped: "bg-st-skipped/14",
+  failed: "bg-st-failed/14",
+  stopped: "bg-st-skipped/14",
+  stale: "bg-st-skipped/14",
+  interrupted: "bg-st-await/14",
 };
 
 /** Status-tinted text, for a badge that carries the status colour (#44). */
 export const STATUS_TEXT: Record<NodeStatus, string> = {
-  pending: "text-fg-3",
-  waiting: "text-fg-3",
+  pending: "text-text-3",
+  waiting: "text-text-3",
   running: "text-st-running",
   awaiting_user: "text-st-await",
   completed: "text-st-done",
   skipped: "text-st-skipped",
   failed: "text-st-failed",
-  stopped: "text-st-stopped",
-  stale: "text-st-stale",
-  interrupted: "text-st-interrupted",
+  stopped: "text-st-skipped",
+  stale: "text-st-skipped",
+  interrupted: "text-st-await",
 };
 
 export const STATUS_DOT: Record<NodeStatus, string> = {
-  pending: "bg-st-pending",
-  waiting: "bg-st-pending",
+  pending: "bg-st-skipped",
+  waiting: "bg-st-skipped",
   running: "bg-st-running",
   awaiting_user: "bg-st-await",
   completed: "bg-st-done",
   skipped: "bg-st-skipped",
   failed: "bg-st-failed",
-  stopped: "bg-st-stopped",
-  stale: "bg-st-stale",
-  interrupted: "bg-st-interrupted",
+  stopped: "bg-st-skipped",
+  stale: "bg-st-skipped",
+  interrupted: "bg-st-await",
 };
 
 export const SELECTION_RING_STYLE = {
-  boxShadow: "0 0 0 2px var(--color-bg-1), 0 0 0 3.5px var(--color-acc)",
+  boxShadow: "0 0 0 2px var(--surface-0), 0 0 0 3.5px var(--primary)",
 };

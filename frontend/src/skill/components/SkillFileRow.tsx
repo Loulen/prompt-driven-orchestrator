@@ -30,7 +30,7 @@ export default function FileRow({
   return (
     <div
       className={`flex items-center gap-2 rounded-md border px-3 py-1.5 ${
-        confirming ? "border-st-failed/60 bg-st-failed-bg" : active ? "border-acc/60 bg-bg-3" : badge ? "border-acc/40 bg-bg-3" : "border-line bg-bg-3"
+        confirming ? "border-st-failed/60 bg-st-failed/14" : active ? "border-primary/60 bg-surface-2" : badge ? "border-primary/40 bg-surface-2" : "border-line bg-surface-2"
       }`}
       style={{ fontSize: "11.5px" }}
       data-testid="skill-file-row"
@@ -43,15 +43,15 @@ export default function FileRow({
         aria-label={`Edit ${path}`}
         data-testid="skill-file-open"
       >
-        <FileText size={12} className="shrink-0 text-fg-3" />
-        <span className="truncate font-mono text-fg">{path}</span>
+        <FileText size={12} className="shrink-0 text-text-3" />
+        <span className="truncate font-mono text-text">{path}</span>
         {badge && (
           <>
-            <span className="shrink-0 rounded border border-acc/50 px-1.5 text-acc" style={{ fontSize: "9.5px" }}>
+            <span className="shrink-0 rounded border border-primary/50 px-1.5 text-primary" style={{ fontSize: "9.5px" }}>
               {badge.text}
             </span>
             {badge.detail && !compact && (
-              <span className="truncate text-fg-4" style={{ fontSize: "10.5px" }}>
+              <span className="truncate text-text-3" style={{ fontSize: "10.5px" }}>
                 {badge.detail}
               </span>
             )}
@@ -60,13 +60,13 @@ export default function FileRow({
       </button>
       {confirming ? (
         <span className="flex items-center gap-1.5" data-testid="skill-file-delete-confirm">
-          <span className="text-fg-2" style={{ fontSize: "11px" }}>
+          <span className="text-text-2" style={{ fontSize: "11px" }}>
             Delete this file?
           </span>
           <button
             type="button"
             onClick={onKeep}
-            className="rounded-md border border-line-strong bg-bg-4 px-2 py-0.5 text-fg-2 hover:border-acc"
+            className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary"
             style={{ fontSize: "10.5px" }}
           >
             Keep
@@ -75,7 +75,7 @@ export default function FileRow({
             type="button"
             onClick={onDelete}
             data-testid="skill-file-delete-yes"
-            className="rounded-md bg-st-failed px-2 py-0.5 font-medium text-white hover:opacity-90"
+            className="rounded-md bg-st-failed px-2 py-0.5 font-medium text-primary-ink hover:opacity-90"
             style={{ fontSize: "10.5px" }}
           >
             Delete
@@ -84,7 +84,7 @@ export default function FileRow({
       ) : (
         <>
           {size !== null && (
-            <span className="shrink-0 font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+            <span className="shrink-0 font-mono text-text-3" style={{ fontSize: "10.5px" }}>
               {formatBytes(size)}
             </span>
           )}
@@ -92,7 +92,7 @@ export default function FileRow({
             type="button"
             onClick={onOpen}
             aria-label={`Edit ${path} as plain text`}
-            className="grid h-5 w-5 shrink-0 place-items-center rounded text-fg-4 hover:bg-bg-4 hover:text-fg"
+            className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-3 hover:bg-hover hover:text-text"
           >
             <Pencil size={11} />
           </button>
@@ -102,7 +102,7 @@ export default function FileRow({
               onClick={onAskDelete}
               aria-label={`Delete ${path}`}
               data-testid="skill-file-delete"
-              className="grid h-5 w-5 shrink-0 place-items-center rounded text-fg-4 hover:bg-bg-4 hover:text-st-failed"
+              className="grid h-5 w-5 shrink-0 place-items-center rounded text-text-3 hover:bg-hover hover:text-st-failed"
             >
               <Trash2 size={11} />
             </button>

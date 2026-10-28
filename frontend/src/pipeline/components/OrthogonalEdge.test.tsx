@@ -43,7 +43,7 @@ function edgeProps(edgeIndex: number, data?: Partial<OrthogonalEdgeData>) {
       isConditional: false,
       isElse: false,
       // Derivation now hands every edge the grey default; selection recolors it.
-      strokeColor: "var(--color-fg-4)",
+      strokeColor: "var(--text-3)",
       dashed: false,
       ...data,
     },
@@ -60,8 +60,8 @@ function edgeStroke(container: HTMLElement): string {
 describe("OrthogonalEdge selection color (#177)", () => {
   it("renders grey when no edge is selected", () => {
     const { container } = render(<OrthogonalEdge {...edgeProps(0)} />, { wrapper: Wrapper });
-    expect(edgeStroke(container)).toContain("--color-fg-4");
-    expect(edgeStroke(container)).not.toContain("--color-edge-selected");
+    expect(edgeStroke(container)).toContain("--text-3");
+    expect(edgeStroke(container)).not.toContain("--selected-edge");
   });
 
   it("turns pastel orange when this edge is the selected one", () => {
@@ -69,7 +69,7 @@ describe("OrthogonalEdge selection color (#177)", () => {
     act(() => {
       useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 0 });
     });
-    expect(edgeStroke(container)).toContain("--color-edge-selected");
+    expect(edgeStroke(container)).toContain("--selected-edge");
   });
 
   it("restores grey when the edge is deselected", () => {
@@ -77,12 +77,12 @@ describe("OrthogonalEdge selection color (#177)", () => {
     act(() => {
       useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 0 });
     });
-    expect(edgeStroke(container)).toContain("--color-edge-selected");
+    expect(edgeStroke(container)).toContain("--selected-edge");
     act(() => {
       useEditStore.getState().setSelection({ kind: "none", id: null });
     });
-    expect(edgeStroke(container)).toContain("--color-fg-4");
-    expect(edgeStroke(container)).not.toContain("--color-edge-selected");
+    expect(edgeStroke(container)).toContain("--text-3");
+    expect(edgeStroke(container)).not.toContain("--selected-edge");
   });
 
   it("only the selected edge is orange — a different selected index leaves this one grey", () => {
@@ -91,8 +91,8 @@ describe("OrthogonalEdge selection color (#177)", () => {
     act(() => {
       useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 3 });
     });
-    expect(edgeStroke(container)).toContain("--color-fg-4");
-    expect(edgeStroke(container)).not.toContain("--color-edge-selected");
+    expect(edgeStroke(container)).toContain("--text-3");
+    expect(edgeStroke(container)).not.toContain("--selected-edge");
   });
 
   it("a selected conditional/end edge is orange too — selection overrides any base color", () => {
@@ -103,7 +103,7 @@ describe("OrthogonalEdge selection color (#177)", () => {
     act(() => {
       useEditStore.getState().setSelection({ kind: "edge", id: null, edgeIndex: 0 });
     });
-    expect(edgeStroke(container)).toContain("--color-edge-selected");
+    expect(edgeStroke(container)).toContain("--selected-edge");
   });
 });
 

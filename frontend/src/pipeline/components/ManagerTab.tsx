@@ -69,13 +69,13 @@ export function ManagerTab({
         data-testid="manager-live"
       >
         <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-          <Terminal size={14} className="shrink-0 text-fg-3" />
+          <Terminal size={14} className="shrink-0 text-text-3" />
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className="text-fg-2" style={{ fontSize: "11px" }}>
+            <span className="text-text-2" style={{ fontSize: "11px" }}>
               Pipeline Manager
             </span>
             <span
-              className="truncate font-mono text-fg-4"
+              className="truncate font-mono text-text-3"
               style={{ fontSize: "10px" }}
             >
               {session}
@@ -83,13 +83,13 @@ export function ManagerTab({
           </div>
           {confirmingStop ? (
             <span className="flex shrink-0 items-center gap-1.5">
-              <span className="text-fg-3" style={{ fontSize: "10.5px" }}>
+              <span className="text-text-3" style={{ fontSize: "10.5px" }}>
                 Stop the manager?
               </span>
               <button
                 onClick={() => void stop()}
                 disabled={stopping}
-                className="rounded border border-st-failed/40 bg-st-failed-bg px-2 py-0.5 text-st-failed transition-colors hover:border-st-failed disabled:opacity-40"
+                className="rounded border border-st-failed/40 bg-st-failed/14 px-2 py-0.5 text-st-failed transition-colors hover:border-st-failed disabled:opacity-40"
                 style={{ fontSize: "10.5px" }}
                 data-testid="manager-stop-confirm"
               >
@@ -97,7 +97,7 @@ export function ManagerTab({
               </button>
               <button
                 onClick={() => setConfirmingStop(false)}
-                className="rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 transition-colors hover:text-fg-2"
+                className="rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2"
                 style={{ fontSize: "10.5px" }}
                 data-testid="manager-stop-cancel"
               >
@@ -107,7 +107,7 @@ export function ManagerTab({
           ) : (
             mayStop && <button
               onClick={() => setConfirmingStop(true)}
-              className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-3 transition-colors hover:border-st-failed hover:text-st-failed"
+              className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-1 text-text-3 transition-colors hover:border-st-failed hover:text-st-failed"
               style={{ fontSize: "10.5px" }}
               data-testid="manager-stop"
               title="Stop the manager session (survives until cleanup otherwise)"
@@ -119,7 +119,7 @@ export function ManagerTab({
         </div>
         {error && (
           <div
-            className="border-b border-st-failed/30 bg-st-failed-bg px-3 py-1.5 text-st-failed"
+            className="border-b border-st-failed/30 bg-st-failed/14 px-3 py-1.5 text-st-failed"
             style={{ fontSize: "10.5px" }}
             role="alert"
             data-testid="manager-error"
@@ -135,11 +135,11 @@ export function ManagerTab({
   if (starting) {
     return (
       <div
-        className="flex flex-1 flex-col items-center justify-center gap-3 text-fg-4"
+        className="flex flex-1 flex-col items-center justify-center gap-3 text-text-3"
         style={{ fontSize: "11.5px" }}
         data-testid="manager-starting"
       >
-        <Loader size={18} className="animate-spin text-acc" />
+        <Loader size={18} className="animate-spin text-primary" />
         Starting the manager…
       </div>
     );
@@ -157,7 +157,7 @@ export function ManagerTab({
         </div>
         <button
           onClick={() => void start()}
-          className="rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+          className="rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
           style={{ fontSize: "11.5px" }}
           data-testid="manager-retry"
         >
@@ -173,14 +173,14 @@ export function ManagerTab({
       style={{ fontSize: "11.5px" }}
       data-testid="manager-empty-state"
     >
-      <div className="grid h-11 w-11 place-items-center rounded-lg bg-bg-3 text-fg-3">
+      <div className="grid h-11 w-11 place-items-center rounded-lg bg-surface-2 text-text-3">
         <Terminal size={18} />
       </div>
-      <div className="font-medium text-fg" style={{ fontSize: "13px" }}>
+      <div className="font-medium text-text" style={{ fontSize: "13px" }}>
         No manager on this run
       </div>
       <p
-        className="max-w-[260px] text-fg-3"
+        className="max-w-[260px] text-text-3"
         style={{ fontSize: "11.5px", lineHeight: 1.55 }}
       >
         The manager is a conversational agent that can drive this run — retry
@@ -189,18 +189,18 @@ export function ManagerTab({
       </p>
       {mayStart && <button
         onClick={() => void start()}
-        className="mt-1 flex items-center gap-1.5 rounded-md bg-acc px-3.5 py-2 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+        className="mt-1 flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
         style={{ fontSize: "12px" }}
         data-testid="manager-start"
       >
         <Play size={12} />
         Start manager
       </button>}
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="text-text-3" style={{ fontSize: "10.5px" }}>
         or{" "}
         <button
           onClick={() => onOpenSettings?.()}
-          className="cursor-pointer text-fg-3 underline decoration-fg-5 underline-offset-2 transition-colors hover:text-fg"
+          className="cursor-pointer text-text-3 underline decoration-text-3 underline-offset-2 transition-colors hover:text-text"
           data-testid="manager-enable-settings"
         >
           enable it for every run in Settings

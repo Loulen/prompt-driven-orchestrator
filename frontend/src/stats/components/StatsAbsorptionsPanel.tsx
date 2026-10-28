@@ -90,7 +90,7 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
   if (loadError && !absorptions) {
     return (
       <div
-        className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+        className="rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
         style={{ fontSize: "11px" }}
         data-testid="stats-absorptions-error"
       >
@@ -100,7 +100,7 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
   }
   if (!absorptions) {
     return (
-      <div className="text-fg-4" style={{ fontSize: "11px" }}>
+      <div className="text-text-3" style={{ fontSize: "11px" }}>
         Loading…
       </div>
     );
@@ -108,7 +108,7 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
   if (absorptions.length === 0) {
     return (
       <div
-        className="rounded-md border border-dashed border-line px-3 py-3 text-fg-4"
+        className="rounded-md border border-dashed border-line px-3 py-3 text-text-3"
         style={{ fontSize: "11px" }}
         data-testid="stats-absorptions-empty"
       >
@@ -137,7 +137,7 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
             data-testid={`stats-absorptions-${id}`}
           >
             <div
-              className="uppercase tracking-wide text-fg-4"
+              className="uppercase tracking-wide text-text-3"
               style={{ fontSize: "9.5px" }}
             >
               {label}
@@ -152,11 +152,11 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
                   <span className="flex min-w-0 items-center gap-2">
                     <Combine
                       size={12}
-                      className="shrink-0 text-acc"
+                      className="shrink-0 text-primary"
                       aria-hidden="true"
                     />
                     <span
-                      className={`truncate text-fg ${MONO_DIMENSIONS.has(id) ? "font-mono" : ""}`}
+                      className={`truncate text-text ${MONO_DIMENSIONS.has(id) ? "font-mono" : ""}`}
                       data-testid="stats-absorption-absorbent"
                     >
                       {absorption.absorbent.name}
@@ -165,7 +165,7 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
                       // A scoped absorption lives in one Pipeline, model or
                       // Node: say which.
                       <span
-                        className="truncate text-fg-4"
+                        className="truncate text-text-3"
                         style={{ fontSize: "10.5px" }}
                         data-testid="stats-absorption-scope"
                       >
@@ -174,7 +174,7 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
                     )}
                   </span>
                   <span
-                    className="shrink-0 text-fg-4"
+                    className="shrink-0 text-text-3"
                     style={{ fontSize: "10.5px" }}
                   >
                     keeps its name
@@ -188,12 +188,12 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
                   >
                     <span className="min-w-0">
                       <span
-                        className={`block truncate text-fg ${MONO_DIMENSIONS.has(id) ? "font-mono" : ""}`}
+                        className={`block truncate text-text ${MONO_DIMENSIONS.has(id) ? "font-mono" : ""}`}
                       >
                         {member.name}
                       </span>
                       <span
-                        className="block text-fg-4"
+                        className="block text-text-3"
                         style={{ fontSize: "10.5px" }}
                         data-testid="stats-absorption-origin"
                       >
@@ -214,14 +214,14 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
       })}
       {error && (
         <div
-          className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+          className="rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
           style={{ fontSize: "11px" }}
           data-testid="stats-absorptions-error"
         >
           {error}
         </div>
       )}
-      <p className="text-fg-4" style={{ fontSize: "10.5px" }}>
+      <p className="text-text-3" style={{ fontSize: "10.5px" }}>
         Uncombining a name brings its own row back in Stats. Nothing is
         rewritten: Stats only reads the rows differently.
       </p>

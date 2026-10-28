@@ -200,8 +200,8 @@ describe("DiffTab", () => {
     const dels = screen.getAllByTestId("diff-line-del");
     expect(adds).toHaveLength(3);
     expect(dels).toHaveLength(1);
-    expect(adds[0].className).toContain("bg-st-done-bg");
-    expect(dels[0].className).toContain("bg-st-failed-bg");
+    expect(adds[0].className).toContain("bg-st-done/14");
+    expect(dels[0].className).toContain("bg-st-failed/14");
     expect(dels[0]).toHaveTextContent("let a = 1;");
     expect(adds[0]).toHaveTextContent("const a = 2;");
     // Hunk header rendered as a thin separator.

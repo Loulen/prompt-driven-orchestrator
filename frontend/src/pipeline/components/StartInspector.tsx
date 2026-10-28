@@ -56,21 +56,21 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
   ];
 
   return (
-    <aside className="start-inspector flex h-full flex-col bg-bg-2" data-testid="start-inspector">
+    <aside className="start-inspector flex h-full flex-col bg-surface-1" data-testid="start-inspector">
       <div className="border-b border-line px-3 py-2">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-fg" style={{ fontSize: "12.5px" }}>
+          <span className="font-medium text-text" style={{ fontSize: "12.5px" }}>
             Run start
           </span>
           <span
-            className="runtime-badge rounded border border-acc/40 bg-acc/10 px-1.5 py-0.5 text-acc"
+            className="runtime-badge rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-primary"
             style={{ fontSize: "10px", fontWeight: 500 }}
           >
             runtime
           </span>
         </div>
         <div
-          className="mt-0.5 font-mono text-fg-4"
+          className="mt-0.5 font-mono text-text-3"
           style={{ fontSize: "10px" }}
         >
           {nodeId}
@@ -79,25 +79,25 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
 
       <div className="flex-1 overflow-auto p-3">
         <div
-          className="mb-2 text-fg-3"
+          className="mb-2 text-text-3"
           style={{ fontSize: "11px", fontWeight: 500 }}
         >
           Input
         </div>
         <pre
           data-testid="start-input-text"
-          className="start-input-text overflow-auto rounded border border-line bg-bg-0 p-2 font-mono text-fg-2"
+          className="start-input-text overflow-auto rounded border border-line bg-surface-0 p-2 font-mono text-text-2"
           style={{ fontSize: "10.5px", lineHeight: "1.5", whiteSpace: "pre-wrap" }}
         >
           {inputText ?? (
-            <span className="text-fg-4">Loading input...</span>
+            <span className="text-text-3">Loading input...</span>
           )}
         </pre>
 
         {inputImages.length > 0 && (
           <div className="mt-3" data-testid="start-inspector-images">
             <div
-              className="mb-2 text-fg-3"
+              className="mb-2 text-text-3"
               style={{ fontSize: "11px", fontWeight: 500 }}
             >
               Input images
@@ -118,7 +118,7 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
                       })
                     }
                     title={name}
-                    className="overflow-hidden rounded border border-line bg-bg-0 transition-opacity hover:opacity-80"
+                    className="overflow-hidden rounded border border-line bg-surface-0 transition-opacity hover:opacity-80"
                   >
                     <img
                       src={src}
@@ -136,7 +136,7 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
         {inputFiles.length > 0 && (
           <div className="mt-3" data-testid="start-inspector-files">
             <div
-              className="mb-2 text-fg-3"
+              className="mb-2 text-text-3"
               style={{ fontSize: "11px", fontWeight: 500 }}
             >
               Input files
@@ -149,17 +149,17 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
                   target="_blank"
                   rel="noreferrer"
                   title={name}
-                  className="flex h-9 max-w-[220px] items-center gap-1.5 rounded border border-line bg-bg-0 px-1.5 transition-colors hover:border-fg-4"
+                  className="flex h-9 max-w-[220px] items-center gap-1.5 rounded border border-line bg-surface-0 px-1.5 transition-colors hover:border-text-3"
                   data-testid="start-input-file"
                 >
                   <span
-                    className="grid h-6 w-6 flex-shrink-0 place-items-center rounded border border-line bg-bg-3 font-mono font-medium text-fg-3"
+                    className="grid h-6 w-6 flex-shrink-0 place-items-center rounded border border-line bg-surface-2 font-mono font-medium text-text-3"
                     style={{ fontSize: "7.5px" }}
                     aria-hidden="true"
                   >
                     {startFileBadge(name)}
                   </span>
-                  <span className="truncate text-fg-2" style={{ fontSize: "10.5px" }}>
+                  <span className="truncate text-text-2" style={{ fontSize: "10.5px" }}>
                     {name}
                   </span>
                 </a>
@@ -172,7 +172,7 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
       <div className="border-t border-line px-3 py-2">
         <button
           onClick={() => setModalOpen(true)}
-          className="view-markdown-link text-fg-3 transition-colors hover:text-acc"
+          className="view-markdown-link text-text-3 transition-colors hover:text-primary"
           style={{ fontSize: "11px" }}
         >
           View as markdown &#x2197;

@@ -61,12 +61,12 @@ export default function NodeDetailHeader({
   return (
     <div className="border-b border-line px-3 py-2">
       <div className="flex items-center gap-2">
-        <span className="font-medium text-fg" style={{ fontSize: "12.5px" }}>
+        <span className="font-medium text-text" style={{ fontSize: "12.5px" }}>
           {nodeName ?? node.node_id}
         </span>
         <span
           data-testid="node-status-badge"
-          className="rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3"
+          className="rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 text-text-3"
           style={{ fontSize: "10px", fontWeight: 500 }}
         >
           {statusLabel ?? STATUS_LABELS[node.status] ?? node.status}
@@ -79,7 +79,7 @@ export default function NodeDetailHeader({
           <span
             data-testid="node-frozen-harness"
             title="Harness frozen at spawn"
-            className="rounded border border-acc/40 bg-acc/5 px-1.5 py-0.5 font-mono text-acc"
+            className="rounded border border-primary/40 bg-primary/5 px-1.5 py-0.5 font-mono text-primary"
             style={{ fontSize: "10px" }}
           >
             {node.harness}
@@ -91,11 +91,11 @@ export default function NodeDetailHeader({
           className="ml-auto flex items-center gap-0.5"
         />
       </div>
-      <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "9px" }}>
+      <div className="mt-0.5 font-mono text-text-3" style={{ fontSize: "9px" }}>
         {node.node_id}
       </div>
       <div
-        className="mt-0.5 flex flex-wrap items-center gap-x-1 whitespace-nowrap font-mono text-fg-4"
+        className="mt-0.5 flex flex-wrap items-center gap-x-1 whitespace-nowrap font-mono text-text-3"
         style={{ fontSize: "10px" }}
       >
         {hasMultipleIters ? (

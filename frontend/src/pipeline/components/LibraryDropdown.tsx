@@ -88,7 +88,7 @@ export default function LibraryDropdown({
         <button
           data-testid="toolbar-library"
           onClick={() => setOpen(!open)}
-          className="grid h-7 w-7 place-items-center rounded-md border border-transparent bg-transparent text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
+          className="grid h-7 w-7 place-items-center rounded-md border border-transparent bg-transparent text-text-3 transition-colors hover:bg-hover hover:text-text"
         >
           <BookOpen size={14} />
         </button>
@@ -96,14 +96,14 @@ export default function LibraryDropdown({
 
       {open && (
         <div
-          className="absolute left-0 top-full z-50 mt-1 flex w-[280px] flex-col overflow-hidden rounded-lg border border-line bg-bg-4 shadow-lg"
-          style={{ maxHeight: "60vh" }}
+          className="absolute left-0 top-full z-50 mt-1 flex w-[280px] flex-col overflow-hidden rounded-lg border border-line bg-surface-2 shadow-lg"
+          style={{ maxHeight: "calc(60vh / var(--app-zoom, 1))" }}
         >
           <div className="flex items-center justify-between border-b border-line px-3 py-2">
-            <span className="font-medium text-fg" style={{ fontSize: "12px" }}>
+            <span className="font-medium text-text" style={{ fontSize: "12px" }}>
               Library
             </span>
-            <span className="text-fg-4" style={{ fontSize: "10px" }}>
+            <span className="text-text-3" style={{ fontSize: "10px" }}>
               {entries.length} {entries.length === 1 ? "entry" : "entries"}
             </span>
           </div>
@@ -113,7 +113,7 @@ export default function LibraryDropdown({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search nodes..."
-              className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
+              className="w-full rounded border border-line-strong bg-surface-2 px-2 py-1 text-text outline-none focus:border-primary"
               style={{ fontSize: "11px" }}
               autoFocus
             />
@@ -128,22 +128,22 @@ export default function LibraryDropdown({
                 setOpen(false);
                 onAddNodeFromYaml();
               }}
-              className="flex w-full cursor-pointer items-center gap-2 border-b border-line px-3 py-1.5 text-left text-fg-2 transition-colors hover:bg-bg-3 hover:text-fg"
+              className="flex w-full cursor-pointer items-center gap-2 border-b border-line px-3 py-1.5 text-left text-text-2 transition-colors hover:bg-hover hover:text-text"
               style={{ fontSize: "11px" }}
             >
-              <FilePlus size={12} className="shrink-0 text-fg-4" />
+              <FilePlus size={12} className="shrink-0 text-text-3" />
               <span>Add node from YAML…</span>
             </button>
           )}
 
           <div className="flex-1 overflow-y-auto">
             {filtered.length === 0 && entries.length === 0 && (
-              <div className="px-3 py-6 text-center text-fg-4" style={{ fontSize: "11px" }}>
+              <div className="px-3 py-6 text-center text-text-3" style={{ fontSize: "11px" }}>
                 No saved nodes yet. Star a node in the inspector to add it here.
               </div>
             )}
             {filtered.length === 0 && entries.length > 0 && (
-              <div className="px-3 py-4 text-center text-fg-4" style={{ fontSize: "11px" }}>
+              <div className="px-3 py-4 text-center text-text-3" style={{ fontSize: "11px" }}>
                 No matches.
               </div>
             )}
@@ -180,32 +180,32 @@ function LibraryRow({
 
   return (
     <div
-      className="group flex items-center gap-2 px-3 py-1.5 transition-colors hover:bg-bg-3"
+      className="group flex items-center gap-2 px-3 py-1.5 transition-colors hover:bg-hover"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       {/* #655: the same glyph the canvas and the inspector use for the type.
           The two-letter badge it replaces only knew `agent`, so a starred
           `script` — or any other type — read `??` in its own library. */}
-      <span className="shrink-0 text-fg-4">
+      <span className="shrink-0 text-text-3">
         <NodeTypeIcon type={entry.type as NodeType} size={12} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5">
-          <span className="truncate font-medium text-fg" style={{ fontSize: "11px" }}>
+          <span className="truncate font-medium text-text" style={{ fontSize: "11px" }}>
             {entry.name}
           </span>
           {isolation !== null && (
             <span
               data-testid={`library-workspace-${isolation ? "isolated" : "shared"}`}
-              className="shrink-0 text-fg-4"
+              className="shrink-0 text-text-3"
               style={{ fontSize: "9px" }}
             >
               {workspaceLabel(isolation)}
             </span>
           )}
         </div>
-        <div className="truncate text-fg-4" style={{ fontSize: "10px" }}>
+        <div className="truncate text-text-3" style={{ fontSize: "10px" }}>
           {preview || "No prompt"}
         </div>
       </div>
@@ -216,7 +216,7 @@ function LibraryRow({
               e.stopPropagation();
               onAdd();
             }}
-            className="rounded p-0.5 text-acc hover:bg-acc/10"
+            className="rounded p-0.5 text-primary hover:bg-primary/10"
             title="Add to canvas"
           >
             <Plus size={12} />
@@ -226,7 +226,7 @@ function LibraryRow({
               e.stopPropagation();
               onDelete();
             }}
-            className="rounded p-0.5 text-fg-4 hover:text-st-failed"
+            className="rounded p-0.5 text-text-3 hover:text-st-failed"
             title="Remove from library"
           >
             <Trash2 size={12} />

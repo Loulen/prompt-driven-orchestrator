@@ -48,11 +48,11 @@ export function PageTabButtons() {
             data-active={isActive || undefined}
             title={`/pages/${tab.name}/`}
             className={`group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1 transition-colors ${
-              isActive ? "border-line bg-bg-1 text-fg" : "border-transparent bg-bg-2 text-fg-3 hover:text-fg-2"
+              isActive ? "border-line bg-surface-0 text-text" : "border-transparent bg-surface-1 text-text-3 hover:text-text-2"
             }`}
             style={{ fontSize: "11px", maxWidth: 180 }}
           >
-            <BookOpen size={11} className="shrink-0 text-acc" />
+            <BookOpen size={11} className="shrink-0 text-primary" />
             <span className="truncate">{tab.name}</span>
             <span
               role="button"
@@ -62,7 +62,7 @@ export function PageTabButtons() {
                 e.stopPropagation();
                 closePage(tab.name);
               }}
-              className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 hover:bg-bg-3 hover:text-fg group-hover:inline-flex"
+              className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 hover:bg-hover hover:text-text group-hover:inline-flex"
             >
               <X size={10} />
             </span>
@@ -74,7 +74,7 @@ export function PageTabButtons() {
 }
 
 const ACTION =
-  "flex cursor-pointer items-center gap-1 rounded-md border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg";
+  "flex cursor-pointer items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 transition-colors hover:bg-hover hover:text-text";
 
 /**
  * What the tab bar offers for the page shown: copy the link of PDO's view of it (under

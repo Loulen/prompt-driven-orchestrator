@@ -37,20 +37,20 @@ export function TourIntroCard({
           <TriangleAlert size={12} />
           {tour.title} · could not prepare
         </div>
-        <h2 className="mt-1.5 font-semibold text-fg" style={{ fontSize: "14px" }}>
+        <h2 className="mt-1.5 font-semibold text-text" style={{ fontSize: "14px" }}>
           {prep.failure.title}
         </h2>
-        <p className="mt-1.5 text-fg-3" style={{ fontSize: "11px" }}>
+        <p className="mt-1.5 text-text-3" style={{ fontSize: "11px" }}>
           The daemon answered:
         </p>
         <pre
           data-testid="tour-intro-reason"
-          className="mt-1 whitespace-pre-wrap break-words rounded border border-line bg-bg-3 p-2 font-mono text-fg-2"
+          className="mt-1 whitespace-pre-wrap break-words rounded border border-line bg-surface-2 p-2 font-mono text-text-2"
           style={{ fontSize: "10.5px", lineHeight: 1.5 }}
         >
           {prep.failure.reason}
         </pre>
-        <p className="mt-2 text-fg-2" style={{ fontSize: "11px", lineHeight: 1.55 }}>
+        <p className="mt-2 text-text-2" style={{ fontSize: "11px", lineHeight: 1.55 }}>
           Fix that, then retry. The tour did not start.
         </p>
         <div className="mt-4 flex justify-end gap-2">
@@ -58,7 +58,7 @@ export function TourIntroCard({
             type="button"
             onClick={onClose}
             data-testid="tour-intro-close"
-            className="cursor-pointer rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
+            className="cursor-pointer rounded border border-line-strong bg-surface-2 px-3 py-1 text-text-3 transition-colors hover:text-text"
             style={{ fontSize: "11.5px" }}
           >
             Close
@@ -67,7 +67,7 @@ export function TourIntroCard({
             type="button"
             onClick={onRetry}
             data-testid="tour-intro-retry"
-            className="cursor-pointer rounded bg-acc px-3 py-1 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+            className="cursor-pointer rounded bg-primary px-3 py-1 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
             style={{ fontSize: "11.5px" }}
           >
             Retry
@@ -80,15 +80,15 @@ export function TourIntroCard({
   return (
     <CardShell testId="tour-intro-card">
       <div
-        className="font-semibold uppercase tracking-wide text-acc"
+        className="font-semibold uppercase tracking-wide text-primary"
         style={{ fontSize: "9.5px", letterSpacing: "0.08em" }}
       >
         {tour.title} · ~{tour.minutes} min · {tour.steps.length} steps
       </div>
-      <h2 className="mt-1.5 font-semibold text-fg" style={{ fontSize: "14px" }}>
+      <h2 className="mt-1.5 font-semibold text-text" style={{ fontSize: "14px" }}>
         {intro.title}
       </h2>
-      <p className="mt-2 text-fg-2" style={{ fontSize: "11.5px", lineHeight: 1.55 }}>
+      <p className="mt-2 text-text-2" style={{ fontSize: "11.5px", lineHeight: 1.55 }}>
         {withCode(intro.body)}
       </p>
 
@@ -98,11 +98,11 @@ export function TourIntroCard({
             key={item.id}
             data-testid={`tour-intro-prep-${item.id}`}
             data-done={item.done ? "true" : "false"}
-            className={`flex items-center gap-1.5 ${item.done ? "text-fg-2" : "text-fg-4"}`}
+            className={`flex items-center gap-1.5 ${item.done ? "text-text-2" : "text-text-3"}`}
             style={{ fontSize: "11px" }}
           >
             {item.done ? (
-              <CircleCheck size={12} className="shrink-0 text-acc" />
+              <CircleCheck size={12} className="shrink-0 text-primary" />
             ) : (
               <Loader size={12} className="shrink-0 animate-spin" />
             )}
@@ -111,7 +111,7 @@ export function TourIntroCard({
         ))}
       </ul>
 
-      <p className="mt-3 text-fg-4" style={{ fontSize: "10.5px", lineHeight: 1.55 }}>
+      <p className="mt-3 text-text-3" style={{ fontSize: "10.5px", lineHeight: 1.55 }}>
         {intro.footnote}
       </p>
 
@@ -120,7 +120,7 @@ export function TourIntroCard({
           type="button"
           onClick={onClose}
           data-testid="tour-intro-later"
-          className="cursor-pointer rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
+          className="cursor-pointer rounded border border-line-strong bg-surface-2 px-3 py-1 text-text-3 transition-colors hover:text-text"
           style={{ fontSize: "11.5px" }}
         >
           Later
@@ -130,7 +130,7 @@ export function TourIntroCard({
           onClick={onStart}
           disabled={!prep.ready}
           data-testid="tour-intro-start"
-          className="rounded bg-acc px-3 py-1 font-medium text-on-acc transition-colors enabled:cursor-pointer enabled:hover:bg-acc-dim disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded bg-primary px-3 py-1 font-medium text-primary-ink transition-colors enabled:cursor-pointer enabled:hover:bg-primary-hi disabled:cursor-not-allowed disabled:opacity-40"
           style={{ fontSize: "11.5px" }}
         >
           Start

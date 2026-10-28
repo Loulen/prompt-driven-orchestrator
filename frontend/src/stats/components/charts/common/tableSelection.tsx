@@ -18,7 +18,7 @@ export function tableSelection(
   const selectable = selection?.isSelectable(id) ?? false;
   const checked = selectable && (selection?.selected.has(id) ?? false);
   return {
-    className: `${checked ? "bg-acc-bg" : ""} ${selection?.flashId === id ? "ring-1 ring-acc" : ""}`,
+    className: `${checked ? "bg-selected" : ""} ${selection?.flashId === id ? "ring-1 ring-primary" : ""}`,
     rowProps: selectable
       ? {
           "data-checked": checked,

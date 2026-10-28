@@ -79,7 +79,7 @@ export default function OutputPortCard({
               value={portType}
               onChange={(e) => onUpdate({ port_type: e.target.value as PortType })}
               aria-label="Output type"
-              className="shrink-0 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-mono text-fg outline-none focus:border-acc"
+              className="shrink-0 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 font-mono text-text outline-none focus:border-primary"
               style={{ fontSize: "10px" }}
               data-testid="port-type-select"
             >

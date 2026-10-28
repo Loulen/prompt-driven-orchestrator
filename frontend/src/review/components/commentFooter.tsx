@@ -26,14 +26,14 @@ export function FooterStatusView({ status }: { status: ReturnType<typeof footerS
       return (
         <span className="inline-flex items-center gap-1 text-st-await" title={`Resolution proposed by ${authorLabel(status.author, name)}`}>
           <Hourglass size={10} />
-          <AuthorGlyph kind={authorKind(status.author)} size={10} /> <span className="text-fg-4">{relativeTime(status.at)}</span>
+          <AuthorGlyph kind={authorKind(status.author)} size={10} /> <span className="text-text-3">{relativeTime(status.at)}</span>
         </span>
       );
     case "resolved":
       return (
         <span className="inline-flex items-center gap-1 text-st-done" title={`Resolved by ${authorLabel(status.by, name)}`}>
           <CheckCircle2 size={10} />
-          <AuthorGlyph kind={authorKind(status.by)} size={10} /> <span className="text-fg-4">{relativeTime(status.at)}</span>
+          <AuthorGlyph kind={authorKind(status.by)} size={10} /> <span className="text-text-3">{relativeTime(status.at)}</span>
         </span>
       );
     case "reopened":
@@ -71,10 +71,10 @@ export function DecisionButton({
   ghost?: boolean;
 }) {
   const look = primary
-    ? "border-acc bg-acc font-semibold text-on-acc hover:bg-acc-hi"
+    ? "border-primary bg-primary font-semibold text-primary-ink hover:bg-primary-hi"
     : ghost
-      ? "border-transparent bg-transparent text-fg-4 hover:bg-bg-4 hover:text-fg-2"
-      : "border-line-strong bg-bg-3 text-fg-2 hover:bg-bg-4 hover:text-fg";
+      ? "border-transparent bg-transparent text-text-3 hover:bg-hover hover:text-text-2"
+      : "border-line-strong bg-surface-2 text-text-2 hover:bg-hover hover:text-text";
   return (
     <button
       type="button"

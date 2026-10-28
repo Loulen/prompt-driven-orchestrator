@@ -29,7 +29,7 @@ export function NoteNode({ data, id, selected }: NodeProps<Node<NoteNodeData>>) 
     <div
       data-testid="note-card"
       data-note-id={data.noteId}
-      className="rounded-md border border-dashed border-line-strong bg-st-await-bg px-3 py-2 text-fg-2"
+      className="rounded-md border border-dashed border-line-strong bg-st-await/14 px-3 py-2 text-text-2"
       style={{
         width: 200,
         fontSize: "12px",
@@ -38,14 +38,14 @@ export function NoteNode({ data, id, selected }: NodeProps<Node<NoteNodeData>>) 
         ...(isSelected ? SELECTION_RING_STYLE : undefined),
       }}
     >
-      <div className="mb-1 flex items-center gap-1.5 text-fg-4" style={{ fontSize: "10px" }}>
+      <div className="mb-1 flex items-center gap-1.5 text-text-3" style={{ fontSize: "10px" }}>
         <StickyNote size={12} className="shrink-0" />
         <span style={{ textTransform: "uppercase", letterSpacing: "0.05em" }}>Note</span>
       </div>
       {data.content ? (
         data.content
       ) : (
-        <span className="text-fg-5 italic">Empty note — click to edit</span>
+        <span className="text-text-3 italic">Empty note — click to edit</span>
       )}
     </div>
   );

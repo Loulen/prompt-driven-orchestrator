@@ -32,7 +32,7 @@ export default function PortDownloads({
         href={portZipUrl(runId, folder)}
         download
         onClick={(e) => e.stopPropagation()}
-        className="relative flex items-center gap-1 rounded border border-line-strong bg-bg-2 px-1.5 py-0.5 text-fg-2 transition-colors hover:border-fg-4 hover:text-fg"
+        className="relative flex items-center gap-1 rounded border border-line-strong bg-surface-1 px-1.5 py-0.5 text-text-2 transition-colors hover:border-text-3 hover:text-text"
         style={{ fontSize: "10px" }}
         data-testid="port-download-all"
       >

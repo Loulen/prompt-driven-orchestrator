@@ -101,11 +101,11 @@ export default function EffortPicker({
             } ${
               selected
                 ? o.id == null
-                  ? "border-fg-4 bg-bg-3 text-fg"
+                  ? "border-text-3 bg-surface-2 text-text"
                   : unsupported
                     ? "border-st-blocked bg-st-blocked/10 text-st-blocked"
-                    : "border-acc bg-acc-bg text-acc"
-                : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
+                    : "border-primary bg-selected text-primary"
+                : "border-line-strong bg-surface-2 text-text-3 hover:text-text-3"
             }`}
             style={{ fontSize: "10px" }}
             {...(unsupported && o.slug === "passthrough" ? { "data-unsupported": "true" } : {})}

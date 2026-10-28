@@ -26,12 +26,12 @@ export default function ProfileEntries({
         credentials. These are guarantees, satisfied by a host copy OR by a
         fallback synthesis — never selectable, and refused as extras too. */}
     <div className="flex flex-col gap-1" data-testid="staging-profile-floor">
-      <span className="text-fg-3" style={{ fontSize: "10.5px" }}>
+      <span className="text-text-3" style={{ fontSize: "10.5px" }}>
         Floor (always applied, not editable)
       </span>
       <ul className="flex flex-col gap-0.5">
         {profile.floor.map((g) => (
-          <li key={g.id} className="flex items-baseline gap-2 text-fg-4" style={{ fontSize: "10.5px" }}>
+          <li key={g.id} className="flex items-baseline gap-2 text-text-3" style={{ fontSize: "10.5px" }}>
             <span>· {g.label}</span>
             {g.path && <span className="truncate font-mono">{g.path}</span>}
           </li>
@@ -42,12 +42,12 @@ export default function ProfileEntries({
     {/* From the default: checkable. `minimal` legitimately has none — say so
         explicitly, or the empty area reads as a loading failure. */}
     <div className="flex flex-col gap-1.5">
-      <span className="text-fg-3" style={{ fontSize: "10.5px" }}>
+      <span className="text-text-3" style={{ fontSize: "10.5px" }}>
         From the default
       </span>
       {profile.entries.filter((e) => e.from_default).length === 0 ? (
         <span
-          className="text-fg-4"
+          className="text-text-3"
           style={{ fontSize: "10.5px" }}
           data-testid="staging-profile-no-default-entries"
         >
@@ -68,24 +68,24 @@ export default function ProfileEntries({
                 checked={e.enabled}
                 disabled={busy}
                 onChange={() => onToggleDefault(e)}
-                className="mt-0.5 shrink-0 accent-acc"
+                className="mt-0.5 shrink-0 accent-primary"
               />
               <span className="flex min-w-0 flex-col">
                 <span className="flex items-baseline gap-2">
-                  <span className="truncate font-mono text-fg" style={{ fontSize: "11.5px" }}>
+                  <span className="truncate font-mono text-text" style={{ fontSize: "11.5px" }}>
                     {e.path}
                   </span>
-                  <span className="shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
+                  <span className="shrink-0 text-text-3" style={{ fontSize: "10px" }}>
                     {e.kind}
                   </span>
                   {e.exists === false && (
-                    <span className="shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
+                    <span className="shrink-0 text-text-3" style={{ fontSize: "10px" }}>
                       not on this host
                     </span>
                   )}
                 </span>
                 {e.note && (
-                  <span className="text-fg-4" style={{ fontSize: "10px" }}>
+                  <span className="text-text-3" style={{ fontSize: "10px" }}>
                     {e.note}
                   </span>
                 )}
@@ -97,7 +97,7 @@ export default function ProfileEntries({
 
     {/* Extras: `$HOME` exceptions, added through the generic explorer. */}
     <div className="flex flex-col gap-1.5">
-      <span className="text-fg-3" style={{ fontSize: "10.5px" }}>
+      <span className="text-text-3" style={{ fontSize: "10.5px" }}>
         Extras
       </span>
       {profile.entries
@@ -108,10 +108,10 @@ export default function ProfileEntries({
             className="flex items-center gap-2"
             data-testid={`staging-extra-${e.path}`}
           >
-            <span className="truncate font-mono text-fg" style={{ fontSize: "11.5px" }}>
+            <span className="truncate font-mono text-text" style={{ fontSize: "11.5px" }}>
               ~/{e.path}
             </span>
-            <span className="shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
+            <span className="shrink-0 text-text-3" style={{ fontSize: "10px" }}>
               {e.kind}
             </span>
             {e.sensitive && (
@@ -124,7 +124,7 @@ export default function ProfileEntries({
               </span>
             )}
             {e.exists === false && (
-              <span className="shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
+              <span className="shrink-0 text-text-3" style={{ fontSize: "10px" }}>
                 missing
               </span>
             )}
@@ -134,7 +134,7 @@ export default function ProfileEntries({
               disabled={busy}
               aria-label={`Remove ${e.path}`}
               data-testid={`staging-extra-remove-${e.path}`}
-              className="ml-auto shrink-0 rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-5 hover:text-fg-2 disabled:opacity-40"
+              className="ml-auto shrink-0 rounded p-0.5 text-text-3 transition-colors hover:bg-active hover:text-text-2 disabled:opacity-40"
             >
               <X size={12} />
             </button>
@@ -150,7 +150,7 @@ export default function ProfileEntries({
           type="button"
           onClick={() => onPick("file")}
           data-testid="staging-extra-add-file"
-          className="rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:border-acc"
+          className="rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 transition-colors hover:border-primary"
           style={{ fontSize: "11px" }}
         >
           <span className="inline-flex items-center gap-1.5">
@@ -161,7 +161,7 @@ export default function ProfileEntries({
           type="button"
           onClick={() => onPick("dir")}
           data-testid="staging-extra-add-folder"
-          className="rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:border-acc"
+          className="rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 transition-colors hover:border-primary"
           style={{ fontSize: "11px" }}
         >
           <span className="inline-flex items-center gap-1.5">
@@ -169,7 +169,7 @@ export default function ProfileEntries({
           </span>
         </button>
       </div>
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="text-text-3" style={{ fontSize: "10.5px" }}>
         An extra is <strong>copied</strong> into the run's staging and mounted
         read-write in the container. The host file is never mutated — and never
         bind-mounted, so nothing the container writes can reach it.

@@ -178,13 +178,13 @@ export default function TriggersListPanel({
 
       {allTriggers.length > 0 && triggers.length === 0 ? (
         <div
-          className="px-3 py-4 text-center text-fg-4"
+          className="px-3 py-4 text-center text-text-3"
           style={{ fontSize: "11px" }}
           data-testid="trigger-filter-empty"
         >
           No triggers match filters
           <button
-            className="mt-1 block w-full cursor-pointer text-acc hover:underline"
+            className="mt-1 block w-full cursor-pointer text-primary hover:underline"
             onClick={() => {
               setAttributeFilter({});
               setProjectFilter({});
@@ -195,17 +195,17 @@ export default function TriggersListPanel({
         </div>
       ) : triggers.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <Zap size={22} className="text-fg-4" />
-          <div className="text-fg-3" style={{ fontSize: "12px" }}>
+          <Zap size={22} className="text-text-3" />
+          <div className="text-text-3" style={{ fontSize: "12px" }}>
             No triggers yet
           </div>
-          <div className="text-fg-4" style={{ fontSize: "10.5px", lineHeight: 1.4 }}>
+          <div className="text-text-3" style={{ fontSize: "10.5px", lineHeight: 1.4 }}>
             Triggers start a Run on a schedule, so recurring work happens without
             you launching it by hand.
           </div>
           <button
             onClick={onNewTrigger}
-            className="mt-1 flex cursor-pointer items-center gap-1 rounded bg-acc px-2 py-1 font-medium text-on-acc transition-colors hover:bg-acc-dim"
+            className="mt-1 flex cursor-pointer items-center gap-1 rounded bg-primary px-2 py-1 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
             style={{ fontSize: "10.5px" }}
           >
             <Plus size={11} />
@@ -238,13 +238,13 @@ export default function TriggersListPanel({
                   data-project={group.kind === "project" ? "true" : "false"}
                 >
                   <div
-                    className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
+                    className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-surface-2/40 px-3 font-medium text-text-3"
                     style={{ fontSize: "10px" }}
                     title={group.title}
                   >
                     {renderGroupSelectAll(group)}
                     <span
-                      className={`truncate ${group.deleted ? "italic text-fg-4" : ""}`}
+                      className={`truncate ${group.deleted ? "italic text-text-3" : ""}`}
                       data-testid="trigger-repo-label"
                     >
                       {group.label}
@@ -253,7 +253,7 @@ export default function TriggersListPanel({
                     {!group.deleted && onOpenProjectSettings && (
                     <button
                       onClick={() => onOpenProjectSettings(projectsEntryOf(group))}
-                      className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/hdr:inline-flex"
+                      className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover/hdr:inline-flex"
                       title={group.kind === "project" ? "Edit project" : "Name project"}
                       aria-label={group.kind === "project" ? "Edit project" : "Name project"}
                       data-testid="trigger-group-pencil"

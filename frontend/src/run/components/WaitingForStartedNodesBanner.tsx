@@ -15,7 +15,7 @@ export default function WaitingForStartedNodesBanner({ run }: { run: RunState | 
   return (
     <div className="absolute left-0 right-0 top-10 z-10">
       <div
-        className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-1.5"
+        className="flex items-center gap-2 border-b border-st-await/30 bg-st-await/14 px-3 py-1.5"
         data-testid="run-waiting-started-nodes"
         role="status"
       >
@@ -23,7 +23,7 @@ export default function WaitingForStartedNodesBanner({ run }: { run: RunState | 
         <span className="text-st-await" style={{ fontSize: "11.5px", fontWeight: 500 }}>
           Reached End, {waitingForStartedNodesLabel(count)}
         </span>
-        <span className="text-fg-3" style={{ fontSize: "11px" }}>
+        <span className="text-text-3" style={{ fontSize: "11px" }}>
           — the run ends when they are done.
         </span>
       </div>
@@ -37,7 +37,7 @@ export function WaitingForStartedNodesReason({ run }: { run: RunState | null }) 
   if (count === 0) return null;
   return (
     <div
-      className="mt-2 rounded border border-st-await/30 bg-st-await-bg px-2 py-1.5 text-fg-2"
+      className="mt-2 rounded border border-st-await/30 bg-st-await/14 px-2 py-1.5 text-text-2"
       style={{ fontSize: "10.5px" }}
       data-testid="run-waiting-started-nodes-reason"
     >

@@ -14,17 +14,17 @@ export const LEVEL_LABELS: Record<ProvisioningScope, string> = {
 export const MODES: Array<{ key: ProvisioningMode; color: string; hint: string }> = [
   {
     key: "copy",
-    color: "bg-emerald-400",
+    color: "bg-st-done",
     hint: "Independent copy. Edits in the worktree never touch the original. Uses disk space. Good for a .env you may tweak.",
   },
   {
     key: "hardlink",
-    color: "bg-blue-400",
+    color: "bg-st-running",
     hint: "Same file on disk, no extra space. In-place edits show up on both sides. Files only, same filesystem as the repository.",
   },
   {
     key: "symlink",
-    color: "bg-violet-400",
+    color: "bg-st-blocked",
     hint: "A link to the original path (a whole folder can be linked). Everything is shared, writes included. Good for large caches like node_modules.",
   },
 ];

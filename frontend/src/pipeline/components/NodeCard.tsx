@@ -26,7 +26,7 @@ export function NodeCard({ status, selected, className, style, children }: NodeC
       {status === "failed" && (
         <span
           data-testid="failed-badge"
-          className="absolute z-[3] rounded-full bg-st-failed border-2 border-bg-1"
+          className="absolute z-[3] rounded-full bg-st-failed border-2 border-surface-0"
           style={{
             top: -7,
             right: -7,

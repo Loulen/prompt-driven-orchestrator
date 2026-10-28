@@ -29,17 +29,17 @@ export function FieldBlock({
 }) {
   return (
     <div className="flex flex-col gap-1.5" data-testid={testId} data-dirty={dirty ? "true" : undefined}>
-      <label htmlFor={htmlFor} className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+      <label htmlFor={htmlFor} className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
         {label}
       </label>
       {children}
       {help && (
-        <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <div className="text-text-3" style={{ fontSize: "10.5px" }}>
           {help}
         </div>
       )}
       {source && (
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }} data-testid={sourceTestId}>
+        <div className="text-text-3" style={{ fontSize: "10.5px" }} data-testid={sourceTestId}>
           {source}
         </div>
       )}
@@ -81,7 +81,7 @@ export function SettingRow({
 }: SettingRowProps) {
   return (
     <div className="flex flex-col gap-1.5" data-dirty={dirty ? "true" : undefined}>
-      <label htmlFor={`setting-${id}`} className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+      <label htmlFor={`setting-${id}`} className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
         {label}
       </label>
       <div className="flex items-center gap-3">
@@ -92,17 +92,17 @@ export function SettingRow({
           min={1}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className={`w-[220px] rounded-md border bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:outline-none ${
-            dirty ? "border-st-await focus:border-st-await" : "border-line-strong focus:border-acc"
+          className={`w-[220px] rounded-md border bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:outline-none ${
+            dirty ? "border-st-await focus:border-st-await" : "border-line-strong focus:border-primary"
           }`}
           style={{ fontSize: "12px" }}
         />
         {inline}
       </div>
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="text-text-3" style={{ fontSize: "10.5px" }}>
         {help}
       </div>
-      <div className="text-fg-3" style={{ fontSize: "10.5px" }} data-testid={`setting-source-${id}`}>
+      <div className="text-text-3" style={{ fontSize: "10.5px" }} data-testid={`setting-source-${id}`}>
         {sourceNote(field, envVar, unit, envIsMs)}
       </div>
       {children}
@@ -136,16 +136,16 @@ export function CheckboxRow({
           type="checkbox"
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
-          className={`mt-0.5 shrink-0 accent-acc ${dirty ? "outline outline-1 outline-st-await" : ""}`}
+          className={`mt-0.5 shrink-0 accent-primary ${dirty ? "outline outline-1 outline-st-await" : ""}`}
         />
-        <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+        <span className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
           {label}
         </span>
       </label>
-      <div className="pl-5 text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="pl-5 text-text-3" style={{ fontSize: "10.5px" }}>
         {help}
       </div>
-      <div className="text-fg-3" style={{ fontSize: "10.5px" }} data-testid={`setting-source-${id}`}>
+      <div className="text-text-3" style={{ fontSize: "10.5px" }} data-testid={`setting-source-${id}`}>
         {source}
       </div>
     </div>

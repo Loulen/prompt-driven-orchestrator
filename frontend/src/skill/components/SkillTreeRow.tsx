@@ -65,12 +65,12 @@ export default function TreeRowView({
       data-drop-target={isDropTarget || undefined}
       className={`group relative flex flex-col rounded-md ${
         isDropTarget
-          ? "bg-acc/15 outline outline-1 outline-acc"
+          ? "bg-primary/15 outline outline-1 outline-primary"
           : selected
-            ? "bg-acc/10 outline outline-1 outline-acc/40"
+            ? "bg-primary/10 outline outline-1 outline-primary/40"
             : marked
-              ? "bg-acc/10 hover:bg-acc/15"
-              : "hover:bg-bg-5"
+              ? "bg-primary/10 hover:bg-primary/15"
+              : "hover:bg-active"
       } ${isDragging ? "opacity-40" : ""}`}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -97,7 +97,7 @@ export default function TreeRowView({
               event.stopPropagation();
               onToggle();
             }}
-            className="grid h-4 w-4 shrink-0 place-items-center rounded text-fg-4 hover:text-fg"
+            className="grid h-4 w-4 shrink-0 place-items-center rounded text-text-3 hover:text-text"
           >
             {row.expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
           </button>
@@ -111,7 +111,7 @@ export default function TreeRowView({
             <Folder size={13} className="shrink-0 text-st-await" />
           )
         ) : (
-          <FileText size={13} className="shrink-0 text-fg-3" />
+          <FileText size={13} className="shrink-0 text-text-3" />
         )}
         {renaming ? (
           <RenameInput
@@ -121,7 +121,7 @@ export default function TreeRowView({
           />
         ) : (
           <span
-            className={`min-w-0 flex-1 truncate ${isFolder ? "font-medium text-fg" : "text-fg-2"}`}
+            className={`min-w-0 flex-1 truncate ${isFolder ? "font-medium text-text" : "text-text-2"}`}
             style={{ fontSize: "12px" }}
           >
             {name}
@@ -131,13 +131,13 @@ export default function TreeRowView({
           <span className="flex shrink-0 items-center gap-1.5 group-hover:hidden">
             {row.folder?.source && (
               <span
-                className="h-2 w-2 rounded-full border-[1.5px] border-acc"
+                className="h-2 w-2 rounded-full border-[1.5px] border-primary"
                 title={`Imported from ${row.folder.source.url}`}
                 aria-label="Source folder"
                 data-testid={`tree-source-${row.ref.id}`}
               />
             )}
-            <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+            <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
               {row.count}
             </span>
           </span>
@@ -153,7 +153,7 @@ export default function TreeRowView({
         )}
       </div>
       {renaming && (
-        <div className="pb-1 text-fg-4" style={{ paddingLeft: indent + 22, fontSize: "10px" }}>
+        <div className="pb-1 text-text-3" style={{ paddingLeft: indent + 22, fontSize: "10px" }}>
           {renameError ? (
             <span className="text-st-failed" data-testid="rename-error">
               {renameError}
@@ -209,7 +209,7 @@ function RenameInput({
         if (trimmed === "" || trimmed === initial) onCancel();
         else void onCommit(trimmed);
       }}
-      className="min-w-0 flex-1 rounded border border-acc bg-bg-1 px-1.5 py-0.5 text-fg outline-none"
+      className="min-w-0 flex-1 rounded border border-primary bg-surface-0 px-1.5 py-0.5 text-text outline-none"
       style={{ fontSize: "12px" }}
     />
   );

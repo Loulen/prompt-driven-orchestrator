@@ -22,12 +22,12 @@ export default function GuardSection({
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1.5 text-fg-3">
+      <div className="flex items-center gap-1.5 text-text-3">
         <Shield size={12} />
         <span>Guard</span>
       </div>
       <pre
-        className="overflow-x-auto rounded border border-line bg-bg-3 px-2 py-1.5 font-mono text-fg-2"
+        className="overflow-x-auto rounded border border-line bg-surface-2 px-2 py-1.5 font-mono text-text-2"
         style={{ fontSize: "10.5px" }}
         data-testid="trigger-detail-guard"
       >
@@ -38,7 +38,7 @@ export default function GuardSection({
         type="button"
         onClick={dryRun.run}
         disabled={dryRun.testing}
-        className="flex w-fit items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2 py-1 font-medium text-fg-2 transition-colors hover:bg-bg-4 disabled:opacity-40"
+        className="flex w-fit items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2 py-1 font-medium text-text-2 transition-colors hover:bg-hover disabled:opacity-40"
         style={{ fontSize: "10.5px" }}
         data-testid="guard-test-button"
       >
@@ -47,7 +47,7 @@ export default function GuardSection({
 
       {dryRun.error && (
         <div
-          className="rounded-md border border-st-failed/30 bg-st-failed-bg px-2.5 py-1.5 text-st-failed"
+          className="rounded-md border border-st-failed/30 bg-st-failed/14 px-2.5 py-1.5 text-st-failed"
           style={{ fontSize: "10px" }}
           data-testid="guard-test-error"
         >

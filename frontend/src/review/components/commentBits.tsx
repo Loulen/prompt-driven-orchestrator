@@ -10,7 +10,7 @@ import { authorKind, authorLabel } from "../model/commentStatus";
 
 /** The state icon — message-square open, hourglass proposed, check-circle resolved. */
 export function StateIcon({ state, title, size = 12 }: { state: CommentState; title?: string; size?: number }) {
-  const cls = state === "proposed" ? "text-st-await" : state === "resolved" ? "text-st-done" : "text-fg-3";
+  const cls = state === "proposed" ? "text-st-await" : state === "resolved" ? "text-st-done" : "text-text-3";
   return (
     <span className={`inline-flex items-center ${cls}`} title={title} data-testid={`review-state-${state}`}>
       {state === "proposed" ? <Hourglass size={size} /> : state === "resolved" ? <CheckCircle2 size={size} /> : <MessageSquare size={size} />}
@@ -28,7 +28,7 @@ export function AuthorIcon({ author, actor, size = 12 }: { author: string; actor
   const display = useActorDisplay(actor);
   if (display && kind === "user") {
     return (
-      <span className="inline-flex min-w-0 items-center gap-1 text-fg-2" title={display.name} data-testid="review-author" data-author-kind={kind}>
+      <span className="inline-flex min-w-0 items-center gap-1 text-text-2" title={display.name} data-testid="review-author" data-author-kind={kind}>
         <ActorAvatar display={display} size={size + 2} />
         <span className="truncate font-medium" data-testid="review-author-name">
           {display.name}
@@ -37,10 +37,10 @@ export function AuthorIcon({ author, actor, size = 12 }: { author: string; actor
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 text-fg-3" title={authorLabel(author, display?.name)} data-testid="review-author" data-author-kind={kind}>
+    <span className="inline-flex items-center gap-1 text-text-3" title={authorLabel(author, display?.name)} data-testid="review-author" data-author-kind={kind}>
       <AuthorGlyph kind={kind} size={size} />
       {kind === "node" && (
-        <span className="font-mono text-fg-2" style={{ fontSize: "10px" }}>
+        <span className="font-mono text-text-2" style={{ fontSize: "10px" }}>
           {author}
         </span>
       )}
@@ -58,7 +58,7 @@ export function Badge({ kind, children, title }: { kind: "draft" | "sent"; child
     <span
       title={title}
       className={`inline-flex h-[14px] items-center gap-[3px] rounded-[7px] px-[5px] font-medium ${
-        kind === "draft" ? "bg-st-await-bg text-st-await" : "bg-st-running-bg text-st-running"
+        kind === "draft" ? "bg-st-await/14 text-st-await" : "bg-st-running/14 text-st-running"
       }`}
       style={{ fontSize: "9.5px" }}
       data-testid={`review-badge-${kind}`}
@@ -72,8 +72,8 @@ export function Spinner({ dim }: { dim?: boolean }) {
   return (
     <span
       aria-hidden
-      className="inline-block h-[9px] w-[9px] animate-spin rounded-full border-[1.5px] border-fg-4"
-      style={{ borderTopColor: dim ? "var(--color-fg-3)" : "var(--color-st-running)" }}
+      className="inline-block h-[9px] w-[9px] animate-spin rounded-full border-[1.5px] border-text-3"
+      style={{ borderTopColor: dim ? "var(--text-3)" : "var(--color-st-running)" }}
     />
   );
 }

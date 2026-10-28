@@ -17,7 +17,7 @@ export default function RunToolbarActions({ run, readOnly }: { run: RunState; re
       // An archived canvas has no editing group: nothing to separate from.
       before={readOnly ? null : <span className="mx-0.5 h-4 w-px bg-line" />}
       className="flex items-center gap-0.5"
-      buttonClassName="grid h-7 w-7 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg active:bg-acc active:text-bg-0"
+      buttonClassName="grid h-7 w-7 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text active:bg-primary active:text-surface-0"
       iconSize={14}
     />
   );

@@ -34,16 +34,16 @@ export function Switch({
         data-testid={testId}
         onClick={onToggle}
         className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-          on ? "bg-acc" : "bg-fg-5"
+          on ? "bg-primary" : "bg-text-3"
         } ${dirty ? "outline outline-1 outline-offset-2 outline-st-await" : ""}`}
       >
         <span
-          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
+          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-surface-0 transition-all ${
             on ? "left-3" : "left-0.5"
           }`}
         />
       </button>
-      <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+      <span className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
         {label}
       </span>
     </div>
@@ -72,14 +72,14 @@ export function PrometheusMetrics({ values, settings, dirty, setField }: Omit<Fo
         testId="setting-telemetry-prometheus"
         onToggle={() => setField("telemetryPrometheus", !on)}
       />
-      <div className="pl-[34px] text-fg-4" style={{ fontSize: "10.5px" }} data-testid="telemetry-metrics-url">
+      <div className="pl-[34px] text-text-3" style={{ fontSize: "10.5px" }} data-testid="telemetry-metrics-url">
         {on ? "On: " : "Off. When on: "}
         <span className="font-mono">{url}</span>, same metrics as OTLP, no traces. Anyone who reaches PDO
         reads it.
       </div>
       {settings.telemetry_prometheus && (
         <div
-          className="pl-[34px] text-fg-3"
+          className="pl-[34px] text-text-3"
           style={{ fontSize: "10.5px" }}
           data-testid="setting-source-telemetry-prometheus"
         >
@@ -126,7 +126,7 @@ function ActorWarning() {
         <div className="font-medium text-st-await" style={{ fontSize: "11px" }}>
           This turns the telemetry into a record of each person's activity.
         </div>
-        <div className="text-fg-2" style={{ fontSize: "10.5px" }}>
+        <div className="text-text-2" style={{ fontSize: "10.5px" }}>
           In France, before you switch it on: the people concerned must be informed beforehand
           (Code du travail, art. L1222-4), the CSE consulted (art. L2312-38), and the processing
           must have a GDPR basis and be in your record of processing. PDO cannot meet these

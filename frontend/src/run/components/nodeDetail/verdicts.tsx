@@ -12,10 +12,10 @@ import { verdictHeadline, verdictTone } from "../../model/nodeStatus";
 export function MarkCompleteVerdict({ verdict }: { verdict: MarkVerdict }) {
   const tone = verdictTone(verdict);
   const toneClass = {
-    done: "border-st-done/30 bg-st-done-bg text-st-done",
-    await: "border-st-await/30 bg-st-await-bg text-st-await",
-    failed: "border-st-failed/30 bg-st-failed-bg text-st-failed",
-    stopped: "border-line-strong bg-bg-3 text-fg-3",
+    done: "border-st-done/30 bg-st-done/14 text-st-done",
+    await: "border-st-await/30 bg-st-await/14 text-st-await",
+    failed: "border-st-failed/30 bg-st-failed/14 text-st-failed",
+    stopped: "border-line-strong bg-surface-2 text-text-3",
   }[tone];
   const refused = verdict.kind === "refused" ? verdict : null;
 
@@ -77,10 +77,10 @@ export function ReleaseCompletionVerdict({
   const failed = verdict.kind === "refused" || verdict.kind === "error";
   const toneClass =
     verdict.kind === "released"
-      ? "border-st-running/30 bg-st-running-bg text-st-running"
+      ? "border-st-running/30 bg-st-running/14 text-st-running"
       : failed
-        ? "border-st-failed/30 bg-st-failed-bg text-st-failed"
-        : "border-line-strong bg-bg-3 text-fg-3";
+        ? "border-st-failed/30 bg-st-failed/14 text-st-failed"
+        : "border-line-strong bg-surface-2 text-text-3";
   const headline =
     verdict.kind === "released"
       ? "Completion released — the agent will complete when ready."

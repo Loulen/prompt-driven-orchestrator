@@ -18,7 +18,7 @@ export default function PromptSection({
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-1.5 text-fg-3 transition-colors hover:text-fg-2"
+        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-1.5 text-text-3 transition-colors hover:text-text-2"
         style={{ fontSize: "11px" }}
         data-testid="prompt-toggle"
       >
@@ -27,11 +27,11 @@ export default function PromptSection({
       </button>
       {expanded && (
         <pre
-          className="prompt-block overflow-auto bg-bg-0 p-2 font-mono text-fg-3"
+          className="prompt-block overflow-auto bg-surface-0 p-2 font-mono text-text-3"
           style={{ fontSize: "10px", lineHeight: "1.5" }}
         >
           {promptText ?? (
-            <span className="text-fg-4">
+            <span className="text-text-3">
               {isArchived
                 ? "Prompt not preserved for archived runs."
                 : status === "pending"

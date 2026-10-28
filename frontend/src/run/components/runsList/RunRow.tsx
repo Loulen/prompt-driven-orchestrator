@@ -72,10 +72,10 @@ export default function RunRow({
   // status — "never a silent stall". `stalled` is derived per read by the
   // daemon (`event_log::is_stalled`) and shipped on every list entry.
   const dot = run.stalled
-    ? "bg-st-stale"
+    ? "bg-st-skipped"
     : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).dot;
   const ring = run.stalled
-    ? "border-st-stale"
+    ? "border-st-skipped"
     : (STATUS_STYLES[run.status] ?? STATUS_STYLES.running).ring;
   const isArchived = run.status === "archived";
   // CORE-42: each gesture also needs the caller's right to make it.
@@ -129,10 +129,10 @@ export default function RunRow({
       style={{ fontSize: "11.5px", paddingLeft: 12 + node.depth * 14 }}
       className={`group flex w-full cursor-pointer items-stretch gap-2 border-b border-l-2 border-line-soft py-2 pr-3 text-left transition-colors ${
         rowSelected
-          ? "border-l-acc bg-acc-bg text-fg"
+          ? "border-l-primary bg-selected text-text"
           : isSelected
-            ? "border-l-transparent bg-bg-3 text-fg"
-            : "border-l-transparent text-fg-2 hover:bg-bg-3/50"
+            ? "border-l-transparent bg-surface-2 text-text"
+            : "border-l-transparent text-text-2 hover:bg-hover/50"
       } ${isArchived ? "opacity-60" : ""}`}
     >
       {/* Left column (16px, shared shape with Library / Triggers rows): the
@@ -172,7 +172,7 @@ export default function RunRow({
           aria-expanded={expanded}
           title={expanded ? "Collapse child runs" : "Expand child runs"}
           data-testid="run-tree-chevron"
-          className="grid h-3.5 w-4 cursor-pointer place-items-center rounded text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2"
+          className="grid h-3.5 w-4 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text-2"
           onClick={(e) => {
             e.stopPropagation();
             setExpanded(run.run_id, !expanded);
@@ -186,7 +186,7 @@ export default function RunRow({
         {isRenaming ? (
           <input
             ref={renameInputRef}
-            className="w-full rounded border border-acc bg-bg-3 px-1 py-0.5 font-medium text-fg outline-none"
+            className="w-full rounded border border-primary bg-surface-2 px-1 py-0.5 font-medium text-text outline-none"
             style={{ fontSize: "11.5px" }}
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
@@ -204,7 +204,7 @@ export default function RunRow({
           </div>
         )}
         <div
-          className="flex items-center gap-1.5 truncate font-mono text-fg-4"
+          className="flex items-center gap-1.5 truncate font-mono text-text-3"
           style={{ fontSize: "10px" }}
         >
           <span className="truncate" data-testid="run-pipeline-name">
@@ -221,7 +221,7 @@ export default function RunRow({
               title={`Created by trigger “${
                 triggers.find((t) => t.id === run.triggered_by)?.name ?? run.triggered_by
               }” — click to open it in the Triggers tab`}
-              className="flex shrink-0 cursor-pointer items-center rounded border border-acc px-1.5 py-[2px] text-acc transition-colors hover:bg-acc-bg"
+              className="flex shrink-0 cursor-pointer items-center rounded border border-primary px-1.5 py-[2px] text-primary transition-colors hover:bg-selected"
               data-testid="run-trigger-badge"
               onClick={(e) => {
                 e.stopPropagation();
@@ -247,7 +247,7 @@ export default function RunRow({
       <div className="flex h-4 items-center">
       {startDate && (
         <span
-          className="shrink-0 font-mono text-fg-4 group-hover:hidden"
+          className="shrink-0 font-mono text-text-3 group-hover:hidden"
           style={{ fontSize: "10px" }}
           title={run.started_at ? `Started ${new Date(run.started_at).toLocaleString()}` : undefined}
           data-testid="run-start-date"
@@ -259,7 +259,7 @@ export default function RunRow({
         <span
           role="button"
           title="Rename run"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
           onClick={(e) => {
             e.stopPropagation();
             startRename(run);
@@ -274,7 +274,7 @@ export default function RunRow({
           role="button"
           title="Pause run"
           data-testid="pause-run-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
           onClick={(e) => {
             e.stopPropagation();
             handlePause(run.run_id);
@@ -288,7 +288,7 @@ export default function RunRow({
           role="button"
           title="Resume run"
           data-testid="resume-run-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
           onClick={(e) => {
             e.stopPropagation();
             handleResume(run.run_id);
@@ -302,7 +302,7 @@ export default function RunRow({
           role="button"
           title="Retry all — archive this run and start a fresh one"
           data-testid="retry-all-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
           onClick={(e) => {
             e.stopPropagation();
             setConfirmRetryAll(run.run_id);
@@ -316,7 +316,7 @@ export default function RunRow({
           role="button"
           title="Open a bash shell in this run's worktree"
           data-testid="open-session-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
           onClick={(e) => {
             e.stopPropagation();
             // Silent on failure, like handleCleanup: nothing actionable in the row.
@@ -336,7 +336,7 @@ export default function RunRow({
           }
           // #911: the Overview tour's archive step points at it.
           data-testid="cleanup-run-button"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover:inline-flex"
+          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex"
           onClick={(e) => {
             e.stopPropagation();
             setConfirmCleanup({ runId: run.run_id, status: run.status });
@@ -349,7 +349,7 @@ export default function RunRow({
         <span
           role="button"
           title="Forget this run permanently (event log + metadata)"
-          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-st-failed group-hover:inline-flex"
+          className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-st-failed group-hover:inline-flex"
           onClick={(e) => {
             e.stopPropagation();
             setConfirmForget(run.run_id);

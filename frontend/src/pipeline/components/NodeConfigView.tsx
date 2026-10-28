@@ -57,31 +57,31 @@ export default function NodeConfigView({
       );
 
   return (
-    <aside className="flex h-full flex-col overflow-y-auto bg-bg-2" data-testid="node-config-view">
+    <aside className="flex h-full flex-col overflow-y-auto bg-surface-1" data-testid="node-config-view">
       <div
-        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-fg-2"
+        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-text-2"
         style={{ fontSize: "11.5px" }}
       >
         <span>Node config</span>
-        <span className="flex items-center gap-1 font-normal text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="flex items-center gap-1 font-normal text-text-3" style={{ fontSize: "10px" }}>
           <Lock size={10} />
           Read-only
         </span>
       </div>
       <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
-        <p className="text-fg-4" style={{ fontSize: "10px" }} data-testid="node-config-hint">
+        <p className="text-text-3" style={{ fontSize: "10px" }} data-testid="node-config-hint">
           {archived
             ? "This run is archived and read-only."
             : "You are following this run. To change this node, use the Edit pencil › Edit for this run in the canvas toolbar."}
         </p>
         <SectionHead title="Identity" />
-        <div className="flex items-center gap-2 text-fg" data-testid="node-config-name">
-          <NodeTypeIcon type={node.type} size={11} className="shrink-0 text-fg-3" />
+        <div className="flex items-center gap-2 text-text" data-testid="node-config-name">
+          <NodeTypeIcon type={node.type} size={11} className="shrink-0 text-text-3" />
           <span className="font-medium">{node.name || node.id}</span>
-          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>{node.id}</span>
+          <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>{node.id}</span>
         </div>
         {node.on_demand && (
-          <p className="text-fg-3" style={{ fontSize: "10.5px" }} data-testid="node-config-on-demand">
+          <p className="text-text-3" style={{ fontSize: "10.5px" }} data-testid="node-config-on-demand">
             On demand — the runtime never launches it; the ▶ on its card does.
           </p>
         )}
@@ -100,12 +100,12 @@ export default function NodeConfigView({
             />
             <ul className="flex flex-wrap gap-1" data-testid="node-config-skill-list">
               {ownSkills.length === 0 ? (
-                <li className="text-fg-4" style={{ fontSize: "10px" }}>No skill of its own.</li>
+                <li className="text-text-3" style={{ fontSize: "10px" }}>No skill of its own.</li>
               ) : (
                 ownSkills.map((skill) => (
                   <li
                     key={skill.id}
-                    className="rounded border border-line bg-bg-3 px-1.5 py-0.5 font-mono text-fg-2"
+                    className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-text-2"
                     style={{ fontSize: "10px" }}
                   >
                     {skill.name || skill.id}
@@ -114,7 +114,7 @@ export default function NodeConfigView({
               )}
             </ul>
             {runNode?.skills && (
-              <p className="text-fg-4" style={{ fontSize: 9.5 }}>
+              <p className="text-text-3" style={{ fontSize: 9.5 }}>
                 Frozen at spawn:{" "}
                 {runNode.skills.length === 0 ? "none" : runNode.skills.map((skill) => skill.name).join(", ")}
               </p>
@@ -125,20 +125,20 @@ export default function NodeConfigView({
         <SectionHead title={isScript ? "Script (bash)" : "Prompt"} />
         <pre
           data-testid="node-config-prompt"
-          className={`min-h-[80px] whitespace-pre-wrap break-words rounded border border-line bg-bg-3 px-2 py-1.5 font-mono text-fg-2 ${
+          className={`min-h-[80px] whitespace-pre-wrap break-words rounded border border-line bg-surface-2 px-2 py-1.5 font-mono text-text-2 ${
             invocations.length > 0 ? "rounded-b-none border-b-0" : ""
           }`}
           style={{ fontSize: "11px", lineHeight: "1.5" }}
         >
-          {prompt || <span className="text-fg-4">No prompt.</span>}
+          {prompt || <span className="text-text-3">No prompt.</span>}
         </pre>
         {invocations.length > 0 && (
-          <div className="-mt-3 rounded-b border border-t-0 border-dashed border-line-strong bg-bg-2 px-2 py-1.5">
-            <div className="mb-1 flex items-center gap-1 text-fg-4" style={{ fontSize: "9.5px" }}>
+          <div className="-mt-3 rounded-b border border-t-0 border-dashed border-line-strong bg-surface-1 px-2 py-1.5">
+            <div className="mb-1 flex items-center gap-1 text-text-3" style={{ fontSize: "9.5px" }}>
               <Lock size={9} />
               Added by PDO at spawn
             </div>
-            <pre className="whitespace-pre-wrap font-mono text-fg-3" style={{ fontSize: "10.5px", lineHeight: 1.5 }}>
+            <pre className="whitespace-pre-wrap font-mono text-text-3" style={{ fontSize: "10.5px", lineHeight: 1.5 }}>
               {invocations.join("\n")}
             </pre>
           </div>

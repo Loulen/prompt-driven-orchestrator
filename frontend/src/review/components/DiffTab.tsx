@@ -169,7 +169,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
         action={
           <button
             onClick={reload}
-            className="rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 transition-colors hover:text-fg-2 cursor-pointer"
+            className="rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2 cursor-pointer"
             style={{ fontSize: "10.5px" }}
           >
             Retry
@@ -203,17 +203,17 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
     >
       {/* Sticky summary */}
       <div
-        className="sticky top-0 z-10 flex h-9 shrink-0 items-center gap-2 border-b border-line bg-bg-2 px-3"
+        className="sticky top-0 z-10 flex h-9 shrink-0 items-center gap-2 border-b border-line bg-surface-1 px-3"
         style={{ fontSize: "11px" }}
         data-testid="diff-summary"
       >
-        <span className="text-fg-2">
+        <span className="text-text-2">
           {diff.files_changed} {diff.files_changed === 1 ? "file" : "files"}
         </span>
         <Counts additions={diff.additions} deletions={diff.deletions} />
         {pastLedger && currentFile ? (
           <span
-            className="min-w-0 truncate font-mono text-fg-4"
+            className="min-w-0 truncate font-mono text-text-3"
             style={{ fontSize: "10.5px" }}
             data-testid="diff-summary-current"
             title={fileKey(currentFile)}
@@ -222,7 +222,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           </span>
         ) : (
           <span
-            className="min-w-0 truncate font-mono text-fg-4"
+            className="min-w-0 truncate font-mono text-text-3"
             style={{ fontSize: "10.5px" }}
             data-testid="diff-summary-refs"
           >
@@ -232,7 +232,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {reloading && (
             <span
-              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running-bg px-1.5 py-px text-st-running"
+              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running/14 px-1.5 py-px text-st-running"
               style={{ fontSize: "10px" }}
               data-testid="diff-updating"
             >
@@ -243,7 +243,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           {!reloading && changedSinceLoad && (
             <button
               onClick={reload}
-              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running-bg px-1.5 py-px text-st-running transition-colors hover:border-st-running cursor-pointer"
+              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running/14 px-1.5 py-px text-st-running transition-colors hover:border-st-running cursor-pointer"
               style={{ fontSize: "10px" }}
               data-testid="diff-changed-reload"
             >
@@ -254,7 +254,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           {pastLedger && (
             <button
               onClick={scrollToLedger}
-              className="flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 transition-colors hover:text-fg-2 cursor-pointer"
+              className="flex items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2 cursor-pointer"
               style={{ fontSize: "10.5px" }}
               data-testid="diff-files-button"
             >
@@ -266,7 +266,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           <a
             href={reviewUrl(run.run_id)}
             title="Open the Review page"
-            className="flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 transition-colors hover:text-fg-2"
+            className="flex items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 transition-colors hover:text-text-2"
             style={{ fontSize: "10.5px" }}
             data-testid="diff-review-button"
           >
@@ -275,7 +275,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
             {pendingCount(run.review_comments) > 0 && (
               // #750: pending review comments (sent, not resolved) — CONTEXT.md « Accès rapide Review ».
               <span
-                className="ml-0.5 inline-flex h-[14px] items-center rounded-[7px] bg-st-running-bg px-[5px] font-medium text-st-running"
+                className="ml-0.5 inline-flex h-[14px] items-center rounded-[7px] bg-st-running/14 px-[5px] font-medium text-st-running"
                 style={{ fontSize: "9.5px" }}
                 title={`${pendingCount(run.review_comments)} review comment(s) pending — sent, not resolved`}
                 data-testid="diff-review-pending"
@@ -289,7 +289,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
 
       {isLarge && (
         <div
-          className="border-b border-line bg-bg-3 px-3 py-1.5 text-fg-3"
+          className="border-b border-line bg-surface-2 px-3 py-1.5 text-text-3"
           style={{ fontSize: "10.5px" }}
           data-testid="diff-large-banner"
         >
@@ -307,25 +307,25 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
               <button
                 key={key}
                 onClick={() => scrollToFile(key)}
-                className={`flex items-center gap-2 rounded px-1 py-px text-left transition-colors hover:bg-bg-3 cursor-pointer ${
-                  isCurrent ? "bg-bg-3" : ""
+                className={`flex items-center gap-2 rounded px-1 py-px text-left transition-colors hover:bg-hover cursor-pointer ${
+                  isCurrent ? "bg-surface-2" : ""
                 }`}
                 style={{ fontSize: "10.5px" }}
                 data-testid="diff-ledger-row"
                 title={key}
               >
                 <StatusLetter status={f.status} />
-                <span className="min-w-0 flex-1 truncate font-mono text-fg-2">{key}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-text-2">{key}</span>
                 <Counts additions={f.additions} deletions={f.deletions} />
                 <MiniBar additions={f.additions} deletions={f.deletions} />
               </button>
             );
           })}
         </div>
-        <div className="mt-1.5 flex items-center gap-1 text-fg-4" style={{ fontSize: "10.5px" }}>
+        <div className="mt-1.5 flex items-center gap-1 text-text-3" style={{ fontSize: "10.5px" }}>
           <button
             onClick={collapseAll}
-            className="hover:text-fg-2 cursor-pointer"
+            className="hover:text-text-2 cursor-pointer"
             data-testid="diff-collapse-all"
           >
             Collapse all
@@ -333,7 +333,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
           <span>·</span>
           <button
             onClick={expandAll}
-            className="hover:text-fg-2 cursor-pointer"
+            className="hover:text-text-2 cursor-pointer"
             data-testid="diff-expand-all"
           >
             Expand all
@@ -355,15 +355,15 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
             >
               <button
                 onClick={() => toggleFile(key)}
-                className="flex w-full items-center gap-1.5 border-b border-line px-3 py-1.5 text-left transition-colors hover:bg-bg-3 cursor-pointer"
+                className="flex w-full items-center gap-1.5 border-b border-line px-3 py-1.5 text-left transition-colors hover:bg-hover cursor-pointer"
                 style={{ fontSize: "10.5px" }}
                 data-testid="diff-file-header"
                 aria-expanded={!isCollapsed}
               >
                 {isCollapsed ? (
-                  <ChevronRight size={11} className="shrink-0 text-fg-4" />
+                  <ChevronRight size={11} className="shrink-0 text-text-3" />
                 ) : (
-                  <ChevronDown size={11} className="shrink-0 text-fg-4" />
+                  <ChevronDown size={11} className="shrink-0 text-text-3" />
                 )}
                 <FilePath file={f} />
                 <Badge file={f} />

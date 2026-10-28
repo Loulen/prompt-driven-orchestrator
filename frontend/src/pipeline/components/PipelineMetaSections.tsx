@@ -98,17 +98,17 @@ export default function PipelineMetaSections({
               <input
                 value={pipeline.name}
                 onChange={(e) => updateMeta({ name: e.target.value })}
-                className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
+                className="w-full rounded border border-line-strong bg-surface-2 px-2 py-1 text-text outline-none focus:border-primary"
                 data-testid="pipeline-name-input"
               />
             </Field>
             {/* ADR-0088: no free « Version » field: a Save numbers the versions. */}
             {/* Prompt-required toggle (#158). Checked by default — unchecking lets a
                 Run launch without a prompt; the entry node sources its own work. */}
-            <label className="flex items-center gap-2 text-fg-2" style={{ fontSize: "11px" }}>
+            <label className="flex items-center gap-2 text-text-2" style={{ fontSize: "11px" }}>
               <input
                 type="checkbox"
-                className="accent-acc"
+                className="accent-primary"
                 checked={promptRequired}
                 onChange={(e) => updateMeta({ prompt_required: e.target.checked })}
                 data-testid="prompt-required-checkbox"
@@ -119,13 +119,13 @@ export default function PipelineMetaSections({
                 at End. On, a Run that reaches End waits until no node it
                 launched is still running, waiting or awaiting you. */}
             <label
-              className="flex items-center gap-2 text-fg-2"
+              className="flex items-center gap-2 text-text-2"
               style={{ fontSize: "11px" }}
               title="A Run that reaches End keeps running until every node it launched is done (none running, waiting or awaiting you). An on-demand node never launched holds nothing."
             >
               <input
                 type="checkbox"
-                className="accent-acc"
+                className="accent-primary"
                 checked={waitForStartedNodes}
                 onChange={(e) => updateMeta({ wait_for_started_nodes: e.target.checked })}
                 data-testid="wait-for-started-nodes-checkbox"
@@ -145,7 +145,7 @@ export default function PipelineMetaSections({
           addTestId="pipeline-variable-add"
         />
         {variables.length === 0 && (
-          <div className="text-fg-4" style={{ fontSize: "10px" }}>
+          <div className="text-text-3" style={{ fontSize: "10px" }}>
             No variables.
           </div>
         )}
@@ -153,13 +153,13 @@ export default function PipelineMetaSections({
           readOnly ? (
             <div
               key={name}
-              className="flex items-center justify-between gap-2 rounded bg-bg-3 px-2 py-1"
+              className="flex items-center justify-between gap-2 rounded bg-surface-2 px-2 py-1"
               style={{ fontSize: "10.5px" }}
               data-testid="pipeline-variable-row"
             >
-              <span className="font-mono text-fg-3">{name}</span>
-              <span className="flex items-center gap-2 font-mono text-fg-4">
-                <span className="text-fg-5">{def.type}</span>
+              <span className="font-mono text-text-3">{name}</span>
+              <span className="flex items-center gap-2 font-mono text-text-3">
+                <span className="text-text-3">{def.type}</span>
                 {formatVariableValue(def.default)}
               </span>
             </div>
@@ -196,7 +196,7 @@ export default function PipelineMetaSections({
                 testId="pipeline-grid-size"
               />
             </Field>
-            <div className="text-fg-4" style={{ fontSize: "10px" }} data-testid="pipeline-grid-size-hint">
+            <div className="text-text-3" style={{ fontSize: "10px" }} data-testid="pipeline-grid-size-hint">
               Draws on {effectiveGridSize} · {gridStep(effectiveGridSize)}px. Existing routes keep
               their points.
             </div>
@@ -218,12 +218,12 @@ function ReadOnlyRow({
 }) {
   return (
     <div
-      className="flex items-center justify-between rounded bg-bg-3 px-2 py-1"
+      className="flex items-center justify-between rounded bg-surface-2 px-2 py-1"
       style={{ fontSize: "10.5px" }}
       data-testid={testid}
     >
-      <span className="text-fg-3">{label}</span>
-      <span className="font-mono text-fg-4">{children}</span>
+      <span className="text-text-3">{label}</span>
+      <span className="font-mono text-text-3">{children}</span>
     </div>
   );
 }
@@ -286,14 +286,14 @@ function VariableRow({
 
   return (
     <div
-      className="flex items-center gap-1 rounded border border-line-soft bg-bg-3 px-2 py-1"
+      className="flex items-center gap-1 rounded border border-line-soft bg-surface-2 px-2 py-1"
       data-testid="pipeline-variable-row"
     >
       <input
         value={draftName}
         onChange={(e) => handleNameChange(e.target.value)}
         onBlur={() => setDraftName(name)}
-        className={`w-20 min-w-0 bg-transparent outline-none ${nameInvalid ? "text-st-failed" : "text-fg"}`}
+        className={`w-20 min-w-0 bg-transparent outline-none ${nameInvalid ? "text-st-failed" : "text-text"}`}
         style={{ fontSize: "11px" }}
         aria-label="Variable name"
         aria-invalid={nameInvalid}
@@ -303,7 +303,7 @@ function VariableRow({
       <select
         value={def.type}
         onChange={(e) => onUpdate(name, { type: e.target.value as VariableType })}
-        className="rounded border border-line-strong bg-bg-4 px-1 py-0.5 text-fg-3 outline-none"
+        className="rounded border border-line-strong bg-surface-2 px-1 py-0.5 text-text-3 outline-none"
         style={{ fontSize: "10px" }}
         aria-label="Variable type"
         data-testid="pipeline-variable-type"
@@ -313,7 +313,7 @@ function VariableRow({
       <input
         value={defaultStr}
         onChange={(e) => handleDefaultChange(e.target.value)}
-        className="min-w-0 flex-1 bg-transparent text-fg outline-none"
+        className="min-w-0 flex-1 bg-transparent text-text outline-none"
         style={{ fontSize: "11px" }}
         placeholder="default"
         aria-label="Variable default"
@@ -321,7 +321,7 @@ function VariableRow({
       />
       <button
         onClick={onDelete}
-        className="cursor-pointer text-fg-4 hover:text-st-failed"
+        className="cursor-pointer text-text-3 hover:text-st-failed"
         aria-label={`Delete variable ${name}`}
         data-testid="pipeline-variable-delete"
       >

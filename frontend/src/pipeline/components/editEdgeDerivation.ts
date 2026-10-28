@@ -202,7 +202,7 @@ export function deriveEditEdges(pipeline: EditorPipelineDef): Edge<EditEdgeData>
     // PRD #143 — the prior conditional-green / end-orange tinting is dropped).
     // The dash pattern still distinguishes the end edge; that's a separate
     // signal carried by `isDashed`, untouched here.
-    const strokeColor = "var(--color-fg-4)";
+    const strokeColor = "var(--text-3)";
 
     const label = isElse
       ? "else"

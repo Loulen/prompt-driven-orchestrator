@@ -79,21 +79,21 @@ export default function SkillFilesTab({ files, pathLabel, leaveRequest, onLeaveS
         {files.refused.map((item) => (
           <div
             key={`refused-${item.name}`}
-            className="flex items-center gap-2 rounded-md border border-st-failed/60 bg-st-failed-bg px-3 py-1.5"
+            className="flex items-center gap-2 rounded-md border border-st-failed/60 bg-st-failed/14 px-3 py-1.5"
             style={{ fontSize: "11px" }}
             data-testid="skill-file-refused"
           >
-            <span className="font-mono text-fg">{item.name}</span>
+            <span className="font-mono text-text">{item.name}</span>
             <span className="rounded border border-st-failed/60 px-1.5 text-st-failed" style={{ fontSize: "9.5px" }}>
               refused
             </span>
-            <span className="truncate text-fg-2">{item.reason}</span>
+            <span className="truncate text-text-2">{item.reason}</span>
             <span className="flex-1" />
             <button
               type="button"
               aria-label={`Dismiss ${item.name}`}
               onClick={() => files.dismissRefused(item)}
-              className="text-fg-4 hover:text-fg"
+              className="text-text-3 hover:text-text"
               style={{ fontSize: "10.5px" }}
             >
               ✕
@@ -112,7 +112,7 @@ export default function SkillFilesTab({ files, pathLabel, leaveRequest, onLeaveS
           )}
         </div>
         {!editorOpen && (
-          <p className="mt-1 text-fg-4" style={{ fontSize: "10.5px" }} data-testid="skill-files-footer">
+          <p className="mt-1 text-text-3" style={{ fontSize: "10.5px" }} data-testid="skill-files-footer">
             Click a file to edit it as plain text · adding, saving and deleting write to disk immediately
             {pathLabel ? (
               <>

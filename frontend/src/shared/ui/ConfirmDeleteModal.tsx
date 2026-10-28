@@ -55,7 +55,7 @@ export default function ConfirmDeleteModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="confirm-delete-backdrop"
       onClick={onClose}
     >
@@ -64,25 +64,25 @@ export default function ConfirmDeleteModal({
         // tour re-aims its last step onto this rectangle so the projecteur's
         // hole lands on Cancel/Delete rather than swallowing them (#825).
         data-testid="confirm-delete-modal"
-        className="w-[360px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+        className="w-[360px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
         style={{ fontSize: "12px" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+        <h3 className="font-medium text-text" style={{ fontSize: "13px" }}>
           Delete this {kind}?
         </h3>
-        <p className="mt-2 text-fg-2">
-          <code className="rounded bg-bg-4 px-1 py-0.5 font-mono text-fg">
+        <p className="mt-2 text-text-2">
+          <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-text">
             {name}
           </code>
         </p>
-        <p className="mt-2 text-fg-3" style={{ fontSize: "11.5px" }}>
+        <p className="mt-2 text-text-3" style={{ fontSize: "11.5px" }}>
           {detail ??
             "This will permanently remove the YAML file and its prompt files from disk. This action cannot be undone."}
         </p>
         {cascadeLabel && (
           <label
-            className="mt-3 flex cursor-pointer items-center gap-2 text-fg-2"
+            className="mt-3 flex cursor-pointer items-center gap-2 text-text-2"
             style={{ fontSize: "11.5px" }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -98,14 +98,14 @@ export default function ConfirmDeleteModal({
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+            className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
             style={{ fontSize: "11.5px" }}
           >
             Cancel
           </button>
           <button
             onClick={() => onConfirm(cascade)}
-            className="rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80"
+            className="rounded-md bg-st-failed px-3 py-1.5 text-primary-ink transition-colors hover:bg-st-failed/80"
             style={{ fontSize: "11.5px" }}
           >
             Delete

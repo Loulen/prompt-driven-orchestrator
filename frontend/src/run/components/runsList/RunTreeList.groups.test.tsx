@@ -10,7 +10,6 @@ import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import type { Project } from "../../../workspace/model/project";
 import ExtensionContextProvider from "../../../shared/extensions/ExtensionContextProvider";
 import { resetExtensions } from "../../../shared/extensions/store";
-import { TooltipProvider } from "../../../shared/ui/tooltip";
 import { useSelectionStore } from "../../../stores/selectionStore";
 import { useGestureRightsStore } from "../../store/gestureRightsStore";
 import { NOTHING_REFUSED } from "../../model/runGestures";
@@ -58,11 +57,11 @@ function List({ selectedRunId = null }: { selectedRunId?: string | null }) {
 
 function tree(selectedRunId: string | null = null) {
   return (
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={null} runs={RUNS} projects={PROJECTS}>
         <List selectedRunId={selectedRunId} />
       </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
 }
 

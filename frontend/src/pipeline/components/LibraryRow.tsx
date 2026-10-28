@@ -118,7 +118,7 @@ export default function LibraryRow({
           {renaming ? (
             <input
               autoFocus
-              className="w-full rounded border border-acc bg-bg-3 px-1 py-0.5 font-medium text-fg outline-none"
+              className="w-full rounded border border-primary bg-surface-2 px-1 py-0.5 font-medium text-text outline-none"
               style={{ fontSize: "11.5px" }}
               value={renameValue}
               onChange={(e) => onRenameValueChange?.(e.target.value)}
@@ -138,7 +138,7 @@ export default function LibraryRow({
             the meta text truncates instead of wrapping, so the row keeps its
             height and the indicator stays put. */}
         <div
-          className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-fg-4"
+          className="mt-0.5 flex items-center gap-1.5 whitespace-nowrap text-text-3"
           style={{ fontSize: "10px" }}
           data-testid="library-row-meta"
         >
@@ -181,7 +181,7 @@ export default function LibraryRow({
           role="button"
           title="Rename pipeline"
         >
-          <Pencil size={14} className="text-fg-4 transition-colors hover:text-acc" />
+          <Pencil size={14} className="text-text-3 transition-colors hover:text-primary" />
         </span>
       )}
       {showDuplicate && (
@@ -195,7 +195,7 @@ export default function LibraryRow({
           role="button"
           title="Duplicate pipeline"
         >
-          <Copy size={14} className="text-fg-4 transition-colors hover:text-acc" />
+          <Copy size={14} className="text-text-3 transition-colors hover:text-primary" />
         </span>
       )}
       <span
@@ -209,7 +209,7 @@ export default function LibraryRow({
       >
         <Trash2
           size={14}
-          className="text-fg-4 transition-colors hover:text-st-failed"
+          className="text-text-3 transition-colors hover:text-st-failed"
         />
       </span>
       {menuEntity && (
@@ -234,10 +234,10 @@ export default function LibraryRow({
         onClick={onOpen}
         className={`group flex w-full cursor-pointer items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left transition-colors ${
           checked
-            ? "border-l-acc bg-acc-bg text-fg"
+            ? "border-l-primary bg-selected text-text"
             : selected
-              ? "border-l-transparent bg-bg-3 text-fg"
-              : "border-l-transparent text-fg-2 hover:bg-bg-3/50"
+              ? "border-l-transparent bg-surface-2 text-text"
+              : "border-l-transparent text-text-2 hover:bg-hover/50"
         }`}
         style={{ fontSize: "11.5px" }}
         data-testid={testId}
@@ -249,8 +249,8 @@ export default function LibraryRow({
 
   return (
     <div
-      className={`group flex w-full items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left text-fg-2 transition-colors ${
-        checked ? "border-l-acc bg-acc-bg" : "border-l-transparent hover:bg-bg-3/50"
+      className={`group flex w-full items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left text-text-2 transition-colors ${
+        checked ? "border-l-primary bg-selected" : "border-l-transparent hover:bg-hover/50"
       }`}
       style={{ fontSize: "11.5px" }}
       data-testid={testId}

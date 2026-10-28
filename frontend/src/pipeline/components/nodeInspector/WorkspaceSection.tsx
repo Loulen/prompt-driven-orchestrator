@@ -60,23 +60,23 @@ export default function WorkspaceSection({
             onClick={() => handleField("isolated_worktree", choice.isolated)}
             className={`flex items-start gap-2 rounded border px-2 py-1.5 text-left transition-colors ${
               isolation === choice.isolated
-                ? "border-acc bg-acc-bg"
-                : "border-line-strong bg-bg-3 hover:border-fg-4"
+                ? "border-primary bg-selected"
+                : "border-line-strong bg-surface-2 hover:border-text-3"
             } ${isolationFrozen ? "cursor-default opacity-70" : "cursor-pointer"}`}
           >
             <span
               className={`mt-[3px] h-2.5 w-2.5 shrink-0 rounded-full border ${
-                isolation === choice.isolated ? "border-acc bg-acc" : "border-fg-4"
+                isolation === choice.isolated ? "border-primary bg-primary" : "border-text-3"
               }`}
             />
             <span className="flex flex-col">
               <span
-                className={`font-medium ${isolation === choice.isolated ? "text-acc" : "text-fg-2"}`}
+                className={`font-medium ${isolation === choice.isolated ? "text-primary" : "text-text-2"}`}
                 style={{ fontSize: "10.5px" }}
               >
                 {choice.label}
               </span>
-              <span className="text-fg-4" style={{ fontSize: "9.5px" }}>
+              <span className="text-text-3" style={{ fontSize: "9.5px" }}>
                 {choice.hint}
               </span>
             </span>
@@ -85,13 +85,13 @@ export default function WorkspaceSection({
       </div>
       <span
         data-testid="workspace-path"
-        className="break-all rounded border border-line bg-bg-3 px-2 py-1 font-mono text-fg-4"
+        className="break-all rounded border border-line bg-surface-2 px-2 py-1 font-mono text-text-3"
         style={{ fontSize: "9.5px" }}
       >
         {worktreePathFor(node.id, isolation)}
       </span>
       {isolationFrozen && (
-        <span data-testid="workspace-frozen" className="text-fg-4" style={{ fontSize: "9.5px" }}>
+        <span data-testid="workspace-frozen" className="text-text-3" style={{ fontSize: "9.5px" }}>
           Frozen at spawn — an edit applies to the next NodeRun.
         </span>
       )}
@@ -114,13 +114,13 @@ export default function WorkspaceSection({
           gitRef={provisioningGitRef}
           leading={
             !provisioningRepository && (
-              <label className="block text-fg-3" style={{ fontSize: 10 }}>
+              <label className="block text-text-3" style={{ fontSize: 10 }}>
                 Resolve against
                 <input
                   value={provisioningPreviewRepository}
                   onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
                   placeholder="/absolute/path/to/repository"
-                  className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+                  className="mt-1 w-full rounded border border-line-strong bg-surface-2 px-2 py-1 font-mono text-text outline-none focus:border-primary"
                 />
               </label>
             )

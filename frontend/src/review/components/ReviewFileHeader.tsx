@@ -26,7 +26,7 @@ const LETTER_CLASS: Record<"A" | "M" | "D" | "R", string> = {
   A: "text-st-done",
   M: "text-st-await",
   D: "text-st-failed",
-  R: "text-edit-tint",
+  R: "text-st-running",
 };
 
 /**
@@ -73,12 +73,12 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
         }
       }}
       data-testid="review-file-header"
-      className={`sticky top-0 z-10 flex cursor-pointer select-none items-center gap-2 bg-bg-2 px-2.5 py-[5px] ${
+      className={`sticky top-0 z-10 flex cursor-pointer select-none items-center gap-2 bg-surface-1 px-2.5 py-[5px] ${
         collapsed ? "" : "border-b border-line"
       }`}
       style={{ fontSize: "11px" }}
     >
-      <span className="text-fg-4">
+      <span className="text-text-3">
         {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
       </span>
       <span className={`w-[14px] text-center font-mono font-semibold ${LETTER_CLASS[letter]}`} style={{ fontSize: "9.5px" }}>
@@ -86,17 +86,17 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
       </span>
       <span className="truncate font-mono" style={{ fontSize: "10.5px" }}>
         {file.status === "renamed" && file.old_path && (
-          <span className="text-fg-4">{file.old_path} → </span>
+          <span className="text-text-3">{file.old_path} → </span>
         )}
-        <span className="text-fg-4">{dir}</span>
-        <span className="font-medium text-fg">{baseName(path)}</span>
+        <span className="text-text-3">{dir}</span>
+        <span className="font-medium text-text">{baseName(path)}</span>
       </span>
       {file.binary ? (
-        <span className="text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="text-text-3" style={{ fontSize: "10px" }}>
           binary
         </span>
       ) : pureRename ? (
-        <span className="text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="text-text-3" style={{ fontSize: "10px" }}>
           renamed
         </span>
       ) : (
@@ -109,7 +109,7 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
         {nDrafts > 0 && <Badge kind="draft">✎ {plural(nDrafts, "draft")}</Badge>}
         {nOutdated > 0 && (
           <span
-            className="inline-flex items-center gap-0.5 text-st-stale"
+            className="inline-flex items-center gap-0.5 text-st-skipped"
             style={{ fontSize: "10px" }}
             title={`${plural(nOutdated, "outdated comment")} — the line changed on this destination`}
             data-testid="review-file-outdated"
@@ -123,7 +123,7 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
           </span>
         )}
         {sentStates.open > 0 && (
-          <span className="inline-flex items-center gap-0.5 text-fg-3" style={{ fontSize: "10px" }} title={`${sentStates.open} open`} data-testid="review-file-open">
+          <span className="inline-flex items-center gap-0.5 text-text-3" style={{ fontSize: "10px" }} title={`${sentStates.open} open`} data-testid="review-file-open">
             <StateIcon state="open" size={10} /> {sentStates.open}
           </span>
         )}
@@ -137,7 +137,7 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
           location="review/file"
           extra={extensionExtra}
           className="flex items-center gap-0.5"
-          buttonClassName="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+          buttonClassName="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-text-3 hover:bg-hover hover:text-text-2"
           iconSize={11}
         />
         <button
@@ -145,7 +145,7 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
           onClick={copyPath}
           title={copied ? "Copied" : "Copy path"}
           data-testid="review-copy-path"
-          className="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+          className="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-text-3 hover:bg-hover hover:text-text-2"
         >
           <Copy size={11} />
         </button>
@@ -156,7 +156,7 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
             rel="noreferrer"
             title="Open file at destination ref"
             data-testid="review-open-file"
-            className="grid h-5 w-[22px] place-items-center rounded text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+            className="grid h-5 w-[22px] place-items-center rounded text-text-3 hover:bg-hover hover:text-text-2"
           >
             <SquareArrowOutUpRight size={11} />
           </a>

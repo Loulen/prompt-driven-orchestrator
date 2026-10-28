@@ -33,7 +33,7 @@ export default function BankDetailPane({
       {error && (
         <div
           role="alert"
-          className="m-4 mb-0 rounded-md border border-st-failed/50 bg-st-failed-bg px-3 py-2 text-fg-2"
+          className="m-4 mb-0 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2"
           style={{ fontSize: "11px" }}
           data-testid="skill-bank-error"
         >
@@ -119,7 +119,7 @@ export default function BankDetailPane({
       ) : emptyBank ? (
         <EmptyBank onPaste={() => panel.setPasteOpen(true)} onImport={() => panel.setImportOpen(true)} />
       ) : (
-        <div className="flex flex-1 items-center justify-center p-8 text-center text-fg-4" style={{ fontSize: "11.5px" }}>
+        <div className="flex flex-1 items-center justify-center p-8 text-center text-text-3" style={{ fontSize: "11.5px" }}>
           Select a skill to read it, or a folder to manage it.
         </div>
       )}
@@ -128,7 +128,7 @@ export default function BankDetailPane({
         <div
           role="status"
           data-testid="skill-toast"
-          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-md border border-line bg-bg-3 px-3 py-2 text-fg-2 shadow-xl"
+          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-md border border-line bg-surface-2 px-3 py-2 text-text-2 shadow-xl"
           style={{ fontSize: "11.5px" }}
         >
           <span>{toast.message}</span>
@@ -142,7 +142,7 @@ export default function BankDetailPane({
                 if (panel.toastTimer.current) window.clearTimeout(panel.toastTimer.current);
                 void undo?.().catch((cause) => panel.failWith(cause, "Undo failed"));
               }}
-              className="font-medium text-acc hover:underline"
+              className="font-medium text-primary hover:underline"
             >
               Undo
             </button>

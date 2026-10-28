@@ -53,9 +53,9 @@ export default function InspectorPortRow({
         data-testid={`inspector-port-${port.name}`}
         className={`port-row flex items-center gap-2 px-1 py-2 transition-colors ${
           isLast ? "" : "border-b border-line-soft"
-        } ${highlighted ? "bg-acc-bg" : ""}`}
+        } ${highlighted ? "bg-selected" : ""}`}
       >
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-fg-4" />
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-text-3" />
         <input
           value={name.value}
           aria-label="Port name"
@@ -79,7 +79,7 @@ export default function InspectorPortRow({
             if (cancelling.current) return;
             if (!name.commit()) name.reset();
           }}
-          className={`min-w-0 flex-1 rounded bg-transparent text-fg outline-none ${
+          className={`min-w-0 flex-1 rounded bg-transparent text-text outline-none ${
             name.refusal ? "ring-1 ring-st-failed" : ""
           }`}
           style={{ fontSize: "11px" }}
@@ -88,7 +88,7 @@ export default function InspectorPortRow({
         <button
           onClick={onRemove}
           aria-label="Delete port"
-          className="cursor-pointer text-fg-4 hover:text-st-failed"
+          className="cursor-pointer text-text-3 hover:text-st-failed"
           style={{ fontSize: "10px" }}
         >
           ×
@@ -120,13 +120,13 @@ export function PortRenameNotices({
   if (!draft.pending || !wiring || wiring.edges === 0) return null;
   return (
     <div
-      className="mx-1 mb-1 rounded border border-line bg-bg-3 px-2 py-1.5 text-fg-3"
+      className="mx-1 mb-1 rounded border border-line bg-surface-2 px-2 py-1.5 text-text-3"
       style={{ fontSize: "10px" }}
       data-testid="port-rename-pending"
     >
-      <div className="text-fg-2">
+      <div className="text-text-2">
         Renommage en attente : <span className="font-mono">{portName}</span> →{" "}
-        <span className="font-mono font-medium text-fg">{draft.pending}</span>
+        <span className="font-mono font-medium text-text">{draft.pending}</span>
       </div>
       <div>{renameConsequence(portName, wiring)}</div>
     </div>

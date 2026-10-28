@@ -2238,7 +2238,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
   it("is a full-window overlay with its categories, in order, General selected", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     const surface = await screen.findByTestId("settings-surface");
-    expect(surface).toHaveClass("h-screen", "w-screen");
+    expect(surface).toHaveClass("h-[calc(100dvh/var(--app-zoom,1))]", "w-[calc(100vw/var(--app-zoom,1))]");
     const rail = screen.getByRole("tablist", { name: "Settings categories" });
     const tabs = within(rail).getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual([
@@ -2571,7 +2571,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
 
     const drawer = screen.getByTestId("settings-drawer");
     expect(drawer).toHaveClass("top-14");
-    expect(drawer).toHaveClass("w-[min(880px,90vw)]");
+    expect(drawer).toHaveClass("w-[min(880px,calc(90vw/var(--app-zoom,1)))]");
     expect(
       within(drawer).getByRole("heading", { name: "Skill bank" }),
     ).toBeInTheDocument();
@@ -3487,9 +3487,9 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
       name: "Uncombine Digest",
     });
     // The same readable foreground and bordered box as Settings' buttons.
-    expect(cross.className).toContain("text-fg-2");
+    expect(cross.className).toContain("text-text-2");
     expect(cross.className).toContain("border-line-strong");
-    expect(cross.className).not.toContain("text-fg-4");
+    expect(cross.className).not.toContain("text-text-3");
   });
 
   it("says so when nothing is combined, and re-reads the list at each open", async () => {

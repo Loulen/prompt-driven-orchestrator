@@ -86,7 +86,7 @@ export default function AgentProfileModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim"
       data-testid="agent-profile-backdrop"
       onClick={(event) => {
         event.stopPropagation();
@@ -94,7 +94,7 @@ export default function AgentProfileModal({
       }}
     >
       <div
-        className="flex max-h-[85vh] w-[440px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-4"
+        className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-2"
         style={{ fontSize: "12px" }}
         role="dialog"
         aria-modal="true"
@@ -104,36 +104,36 @@ export default function AgentProfileModal({
       >
         {/* #940: bounded to the window like New Run — only the fields scroll; the
             borders mark where the scrolling body is cut off. */}
-        <div className="shrink-0 border-b border-line px-4 py-3 font-medium text-fg">
+        <div className="shrink-0 border-b border-line px-4 py-3 font-medium text-text">
           {profile ? "Edit agent profile" : "New agent profile"}
         </div>
         <div className="min-h-0 space-y-2 overflow-y-auto px-4 py-3" data-testid="agent-profile-body">
-        <label className="block text-fg-3" style={{ fontSize: 10 }}>
+        <label className="block text-text-3" style={{ fontSize: 10 }}>
           Name
           <input
             autoFocus
             value={draft.name}
             onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-            className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg"
+            className="mt-1 w-full rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text"
           />
         </label>
-        <label className="block text-fg-3" style={{ fontSize: 10 }}>
-          Harness <span className="text-acc">required</span>
+        <label className="block text-text-3" style={{ fontSize: 10 }}>
+          Harness <span className="text-primary">required</span>
           <HarnessSelect
             value={draft.harness}
             onChange={(harness) => setDraft({ ...draft, harness, model: null, effort: null })}
             catalog={catalog}
             inheritLabel="Choose a harness…"
             data-testid="agent-profile-harness"
-            className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5"
+            className="mt-1 w-full rounded border border-line-strong bg-surface-2 px-2 py-1.5"
           />
         </label>
         {draft.harness && (
           <>
-            <div className="block text-fg-3" style={{ fontSize: 10 }}>
+            <div className="block text-text-3" style={{ fontSize: 10 }}>
               <div className="flex items-center gap-2">
                 <span>
-                  Model <span className="text-fg-4">optional</span>
+                  Model <span className="text-text-3">optional</span>
                 </span>
                 <span className="flex-1" />
                 {failed[draft.harness] ? (
@@ -142,7 +142,7 @@ export default function AgentProfileModal({
                   </span>
                 ) : (
                   harnessOption?.installed && (
-                    <span className="text-fg-4" data-testid="agent-profile-models-probed">
+                    <span className="text-text-3" data-testid="agent-profile-models-probed">
                       {refreshing
                         ? "Probing…"
                         : `${modelCount(harnessOption.models.length)} · ${probedAgo(harnessOption.probedAt)}`}
@@ -155,7 +155,7 @@ export default function AgentProfileModal({
                   disabled={refreshing || !(harnessOption?.installed ?? false)}
                   aria-label="Refresh models"
                   title="Probe the models of this harness again"
-                  className="grid h-4 w-4 place-items-center rounded text-fg-3 hover:text-fg disabled:opacity-40"
+                  className="grid h-4 w-4 place-items-center rounded text-text-3 hover:text-text disabled:opacity-40"
                   data-testid="agent-profile-models-refresh"
                 >
                   <RefreshCw size={11} className={refreshing ? "animate-spin" : undefined} />
@@ -172,8 +172,8 @@ export default function AgentProfileModal({
                 />
               </div>
             </div>
-            <label className="block text-fg-3" style={{ fontSize: 10 }}>
-              Effort <span className="text-fg-4">optional</span>
+            <label className="block text-text-3" style={{ fontSize: 10 }}>
+              Effort <span className="text-text-3">optional</span>
               <EffortPicker
                 value={draft.effort}
                 onChange={(next) => setDraft({ ...draft, effort: next })}
@@ -192,7 +192,7 @@ export default function AgentProfileModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded border border-line px-2 py-1 text-fg-3"
+            className="rounded border border-line px-2 py-1 text-text-3"
             data-testid="agent-profile-cancel"
           >
             Cancel
@@ -201,7 +201,7 @@ export default function AgentProfileModal({
             type="button"
             disabled={!canSave}
             onClick={() => void save()}
-            className="rounded bg-acc px-2 py-1 text-bg-1 disabled:opacity-40"
+            className="rounded bg-primary px-2 py-1 text-surface-0 disabled:opacity-40"
             data-testid="agent-profile-save"
           >
             {profile ? "Save profile" : "Create"}

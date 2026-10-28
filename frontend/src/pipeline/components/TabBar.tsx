@@ -118,7 +118,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
 
   return (
     <>
-    <div className="flex h-[30px] shrink-0 items-end border-b border-line bg-bg-2">
+    <div className="flex h-[30px] shrink-0 items-end border-b border-line bg-surface-1">
       <div
         className="flex min-w-0 flex-1 items-end gap-px overflow-x-auto px-1"
         data-testid="tab-list"
@@ -143,8 +143,8 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
               }}
               className={`group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1 transition-colors ${
                 isActive
-                  ? "border-line bg-bg-1 text-fg"
-                  : "border-transparent bg-bg-2 text-fg-3 hover:text-fg-2"
+                  ? "border-line bg-surface-0 text-text"
+                  : "border-transparent bg-surface-1 text-text-3 hover:text-text-2"
               }`}
               style={{ fontSize: "11px", maxWidth: 180 }}
             >
@@ -158,7 +158,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
                   e.stopPropagation();
                   closeTab(tab.id);
                 }}
-                className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 hover:bg-bg-3 hover:text-fg group-hover:inline-flex"
+                className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 hover:bg-hover hover:text-text group-hover:inline-flex"
               >
                 <X size={10} />
               </span>
@@ -177,7 +177,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
             {/* Unsaved changes make « Saved … ago » stale: the draft line says them. */}
             {savedAgo && !activeTab?.dirty && (
               <span
-                className="whitespace-nowrap font-mono text-fg-4"
+                className="whitespace-nowrap font-mono text-text-3"
                 style={{ fontSize: "10px" }}
                 data-testid="saved-ago"
               >
@@ -193,7 +193,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
                 />
                 <button
                   onClick={() => setValidateOpen(true)}
-                  className="flex cursor-pointer items-center gap-1 rounded-md border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
+                  className="flex cursor-pointer items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 transition-colors hover:bg-hover hover:text-text"
                   style={{ fontSize: "11px" }}
                   data-testid="validate-button"
                   title="Choose the projects this pipeline is offered to"
@@ -209,7 +209,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
               <button
                 onClick={() => { if (activeTabId) requestSave(activeTabId); }}
                 disabled={activeDraft ? !activeTab?.dirty : !anyDirty}
-                className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+                className="flex cursor-pointer items-center gap-1 rounded-md bg-primary px-2 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
                 style={{ fontSize: "11px" }}
                 data-testid="save-button"
               >
@@ -366,7 +366,7 @@ function TabContextMenu({
   );
 }
 
-const ITEM = "cursor-pointer px-2 py-1.5 text-[11.5px] text-fg-2";
+const ITEM = "cursor-pointer px-2 py-1.5 text-sm text-text-2";
 
 function MenuItem({
   testid,

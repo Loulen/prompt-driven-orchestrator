@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import EditToolbar from "./EditToolbar";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 import { useEditStore } from "../store/editStore";
 import type { TabHistory } from "../store/editState";
 import type { EditorPipelineDef } from "../model/pipeline";
@@ -23,7 +22,7 @@ describe("EditToolbar", () => {
 
   function renderToolbar(props: Partial<ComponentProps<typeof EditToolbar>> = {}) {
     return render(
-      <TooltipProvider>
+      <>
         <EditToolbar
           onAddNode={onAddNode}
           onAddNote={onAddNote}
@@ -32,7 +31,7 @@ describe("EditToolbar", () => {
           onLibraryDelete={onLibraryDelete}
           {...props}
         />
-      </TooltipProvider>,
+      </>,
     );
   }
 
@@ -290,8 +289,8 @@ describe("EditToolbar", () => {
       const i = screen.getByTestId("toolbar-info");
       expect(bot).toHaveAttribute("aria-pressed", assistant);
       expect(i).toHaveAttribute("aria-pressed", info);
-      expect(bot.className.includes("bg-acc text-bg-0")).toBe(assistant === "true");
-      expect(i.className.includes("bg-acc text-bg-0")).toBe(info === "true");
+      expect(bot.className.includes("bg-primary text-surface-0")).toBe(assistant === "true");
+      expect(i.className.includes("bg-primary text-surface-0")).toBe(info === "true");
     });
   });
 });
@@ -331,9 +330,9 @@ describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {
 
   function renderToolbar() {
     return render(
-      <TooltipProvider>
+      <>
         <EditToolbar onAddNode={onAddNode} onAddNote={vi.fn()} onAddNodeFromYaml={vi.fn()} libraryEntries={[]} onLibraryDelete={onLibraryDelete} />
-      </TooltipProvider>,
+      </>,
     );
   }
 
@@ -389,7 +388,7 @@ describe("EditToolbar undo/redo buttons (ADR-0014 / #226)", () => {
 describe("EditToolbar finished-run group (#598)", () => {
   function renderToolbar(props: Partial<ComponentProps<typeof EditToolbar>> = {}) {
     return render(
-      <TooltipProvider>
+      <>
         <EditToolbar
           onAddNode={vi.fn()}
           onAddNote={vi.fn()}
@@ -398,7 +397,7 @@ describe("EditToolbar finished-run group (#598)", () => {
           onLibraryDelete={vi.fn()}
           {...props}
         />
-      </TooltipProvider>,
+      </>,
     );
   }
 
@@ -441,7 +440,7 @@ describe("EditToolbar finished-run group (#598)", () => {
 describe("EditToolbar run « pilotage » and the Edit pencil (ADR-0085)", () => {
   function renderToolbar(props: Partial<ComponentProps<typeof EditToolbar>> = {}) {
     return render(
-      <TooltipProvider>
+      <>
         <EditToolbar
           onAddNode={vi.fn()}
           onAddNote={vi.fn()}
@@ -451,7 +450,7 @@ describe("EditToolbar run « pilotage » and the Edit pencil (ADR-0085)", () => 
           onToggleInfo={vi.fn()}
           {...props}
         />
-      </TooltipProvider>,
+      </>,
     );
   }
   function runEdit(editing: boolean) {

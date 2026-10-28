@@ -9,7 +9,7 @@ export function CardShell({ testId, children }: { testId: string; children: Reac
     <div className="pointer-events-auto absolute inset-0 flex items-center justify-center">
       <div
         data-testid={testId}
-        className="w-[420px] rounded-lg border border-line-strong bg-bg-2 p-4 shadow-lg"
+        className="w-[420px] rounded-lg border border-line-strong bg-surface-1 p-4 shadow-lg"
         style={{ fontSize: "12px" }}
       >
         {children}

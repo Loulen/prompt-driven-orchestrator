@@ -32,7 +32,7 @@ export default function RunParentLink({ parent, pane, onSelectRun }: Props) {
       role="button"
       title={`Child of “${label}” (${parent.status === "archived" ? "archived" : "active"}) — click to select it`}
       aria-label={`Go to parent run ${label}`}
-      className="flex min-w-0 shrink cursor-pointer items-center gap-0.5 rounded px-0.5 font-sans text-fg-3 transition-colors hover:bg-bg-4 hover:text-acc"
+      className="flex min-w-0 shrink cursor-pointer items-center gap-0.5 rounded px-0.5 font-sans text-text-3 transition-colors hover:bg-hover hover:text-primary"
       data-testid="run-parent-link"
       tabIndex={0}
       onClick={(e) => {

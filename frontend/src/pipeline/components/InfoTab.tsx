@@ -59,12 +59,12 @@ function StatRow({
 }) {
   return (
     <div
-      className="flex items-center justify-between rounded bg-bg-3 px-2 py-1"
+      className="flex items-center justify-between rounded bg-surface-2 px-2 py-1"
       style={{ fontSize: "10.5px" }}
       data-testid={testid}
     >
-      <span className="text-fg-3">{label}</span>
-      <span className="font-mono text-fg-4">{children}</span>
+      <span className="text-text-3">{label}</span>
+      <span className="font-mono text-text-3">{children}</span>
     </div>
   );
 }
@@ -75,8 +75,8 @@ const STATUS_DOT: Record<string, string> = {
   completed: "bg-st-done",
   failed: "bg-st-failed",
   halted: "bg-st-blocked",
-  archived: "bg-st-archived",
-  pending: "bg-st-pending",
+  archived: "bg-st-skipped",
+  pending: "bg-st-skipped",
 };
 
 export function InfoTab({
@@ -111,11 +111,11 @@ export function InfoTab({
         <div className="flex items-center gap-2">
           <span
             className={`h-2 w-2 shrink-0 rounded-full ${
-              STATUS_DOT[run?.status ?? ""] ?? "bg-st-pending"
+              STATUS_DOT[run?.status ?? ""] ?? "bg-st-skipped"
             }`}
           />
           <div className="min-w-0 flex-1">
-            <div className="font-medium text-fg" data-testid="info-panel-name">
+            <div className="font-medium text-text" data-testid="info-panel-name">
               {pipelineName}
             </div>
             <InfoVersionLine run={run} pipelineId={pipelineId} />
@@ -125,7 +125,7 @@ export function InfoTab({
               `off`/host Run renders nothing — the field is absent on those. */}
           {run?.sandbox && run.sandbox !== "off" && (
             <span
-              className="flex shrink-0 items-center gap-1 rounded bg-bg-3 px-1.5 py-0.5 font-mono text-fg-3"
+              className="flex shrink-0 items-center gap-1 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-text-3"
               style={{ fontSize: "9.5px" }}
               data-testid="sandbox-badge"
               title={`This run is isolated in a Docker sandbox (${run.sandbox})`}
@@ -142,7 +142,7 @@ export function InfoTab({
             this tab, so the failure must be the first thing it says. */}
         {run?.failure_reason && (
           <div
-            className="mt-2 rounded border border-st-failed/30 bg-st-failed-bg px-2 py-1.5 text-fg-2"
+            className="mt-2 rounded border border-st-failed/30 bg-st-failed/14 px-2 py-1.5 text-text-2"
             style={{ fontSize: "10.5px" }}
             data-testid="run-failure-reason"
           >
@@ -154,7 +154,7 @@ export function InfoTab({
         )}
         {run?.awaiting_reason && (
           <div
-            className="mt-2 rounded border border-st-await/30 bg-st-await-bg px-2 py-1.5 text-fg-2"
+            className="mt-2 rounded border border-st-await/30 bg-st-await/14 px-2 py-1.5 text-text-2"
             style={{ fontSize: "10.5px" }}
             data-testid="run-awaiting-reason"
           >
@@ -176,11 +176,11 @@ export function InfoTab({
             other facts about its start. */}
         {run?.source_fetch_error && (
           <div
-            className="mt-2 rounded border border-st-stale/30 bg-st-stale-bg px-2 py-1.5 text-fg-2"
+            className="mt-2 rounded border border-st-skipped/30 bg-st-skipped/14 px-2 py-1.5 text-text-2"
             style={{ fontSize: "10.5px" }}
             data-testid="run-source-fetch-error"
           >
-            <div className="flex items-center gap-1.5 font-medium text-st-stale">
+            <div className="flex items-center gap-1.5 font-medium text-st-skipped">
               <CloudOff size={11} className="shrink-0" />
               Started on local state · fetch failed
             </div>
@@ -199,7 +199,7 @@ export function InfoTab({
                 "no key" at a glance, the whole of it on hover and selectable for
                 a paste into a terminal. */}
             <div
-              className="mt-1 truncate font-mono text-fg-4"
+              className="mt-1 truncate font-mono text-text-3"
               style={{ fontSize: "9.5px" }}
               title={run.source_fetch_error.message}
               data-testid="run-source-fetch-stderr"
@@ -209,15 +209,15 @@ export function InfoTab({
           </div>
         )}
         {run?.harness && (
-          <div className="mt-2 flex items-center gap-1.5 text-fg-3" style={{ fontSize: "10.5px" }} data-testid="run-harness">
-            <span className="text-fg-4">Harness</span>
-            <span className="rounded bg-bg-3 px-1.5 py-0.5 font-mono text-fg-2">{run.harness}</span>
+          <div className="mt-2 flex items-center gap-1.5 text-text-3" style={{ fontSize: "10.5px" }} data-testid="run-harness">
+            <span className="text-text-3">Harness</span>
+            <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-text-2">{run.harness}</span>
           </div>
         )}
         {run && <SourceBlock run={run} />}
         {run && (
           <div
-            className="mt-2 rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg-3"
+            className="mt-2 rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text-3"
             style={{ fontSize: "10.5px" }}
             data-testid="run-info-note"
           >
@@ -233,7 +233,7 @@ export function InfoTab({
           `ready` once the container is about to run, so the Run never looks stuck. */}
       {run?.sandbox_prep === "pending" && (
         <div
-          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2"
+          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await/14 px-3 py-2"
           data-testid="sandbox-prep-banner"
         >
           <Loader size={14} className="shrink-0 animate-spin text-st-await" />
@@ -259,7 +259,7 @@ export function InfoTab({
         >
           <SectionHead title="Stats" />
           {pipeline && (
-            <div className="mt-2 flex gap-4 text-fg-4" style={{ fontSize: "10px" }} data-testid="pipeline-graph-stats">
+            <div className="mt-2 flex gap-4 text-text-3" style={{ fontSize: "10px" }} data-testid="pipeline-graph-stats">
               <span>{pipeline.nodes.length} nodes</span>
               <span>{pipeline.edges.length} edges</span>
             </div>
@@ -287,7 +287,7 @@ export function InfoTab({
                 // tab shows (same endpoint bounds), so the number links to it.
                 <button
                   onClick={onOpenDiff}
-                  className="flex items-center gap-1.5 rounded px-1 -mx-1 transition-colors hover:bg-bg-4 hover:text-fg-2 cursor-pointer"
+                  className="flex items-center gap-1.5 rounded px-1 -mx-1 transition-colors hover:bg-hover hover:text-text-2 cursor-pointer"
                   data-testid="stat-loc-open-diff"
                   title="Open the Diff tab"
                 >
@@ -297,11 +297,11 @@ export function InfoTab({
                   <span className="text-st-failed">
                     −{run.loc.deletions.toLocaleString()}
                   </span>
-                  <span className="text-fg-4">
+                  <span className="text-text-3">
                     · {run.loc.files_changed.toLocaleString()}{" "}
                     {run.loc.files_changed === 1 ? "file" : "files"}
                   </span>
-                  <span className="text-fg-4" aria-hidden>↗</span>
+                  <span className="text-text-3" aria-hidden>↗</span>
                 </button>
               ) : (
                 "—"
@@ -335,7 +335,7 @@ export function InfoTab({
                         {c.dagger && <span className="text-st-await">†</span>}
                       </span>
                       {ventilated && (
-                        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+                        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
                           {slices
                             .map((v) => `${v.text} via ${v.harness}`)
                             .join(" · ")}
@@ -370,7 +370,7 @@ export function InfoTab({
       {!run && (
         <div className="px-3 py-3" style={{ fontSize: "11.5px" }}>
           <div
-            className="flex items-center gap-2 rounded border border-dashed border-line-soft bg-bg-3 px-3 py-2.5 text-fg-4"
+            className="flex items-center gap-2 rounded border border-dashed border-line-soft bg-surface-2 px-3 py-2.5 text-text-3"
             style={{ fontSize: "11.5px" }}
           >
             <Info size={14} className="shrink-0" />

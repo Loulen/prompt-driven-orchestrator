@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.54.0 — Acogni Driver : design system partagé, polices embarquées, échelle d'UI (CORE-107)
+
+- **Cassant pour les extensions** : tous les tokens de style sont renommés, sans alias
+  (ADR-0091). Les couleurs passent par des rôles (`--surface-0/1/2`, `--text`, `--text-2`,
+  `--text-3`, `--line*`, `--primary*`, `--hover`, `--selected`…) et une palette OKLCH des deux
+  thèmes (`--color-paper*`, `--color-ink*`, `--color-st-*`) ; `--color-bg-*`, `--color-fg-*`,
+  `--color-acc*`, les `--color-st-*-bg` et `--font-sans`/`--font-mono` disparaissent. La table de
+  correspondance est dans `docs/reference/extension-ui.md` § *The design system*. Côté core, les
+  utilitaires Tailwind suivent les rôles (`bg-surface-1`, `text-text-3`, `bg-st-failed/14`) et
+  l'échelle typographique remplace celle de Tailwind (`text-2xs` à `text-xl`, 10 à 16 px).
+- **`pdo-extension-api` 0.17.0**, sans rupture de l'API Rust : le module partagé
+  `@pdo/extension-ui` exporte les primitives du design system (`Button`, `IconButton`,
+  `Select`, `Menu`, `Modal`, `ConfirmDialog`, `toast`, `Tabs`, `Section`…), types compris. La
+  feuille de tokens est servie à l'adresse stable `/shared/tokens.css`.
+- Archivo et Geist Mono sont servies par le binaire (`/shared/fonts/`, licences SIL OFL 1.1) :
+  l'interface n'appelle plus aucun CDN.
+- Réglage « UI scale » (Settings › Interface : 100, 110 ou 120 %, 120 par défaut), par
+  navigateur (`pdo.ui.scale`).
+
 ## 2.53.0 — Cloner un dépôt distant depuis Settings › Projects et New Run (CORE-97)
 
 - « Add repository » d'un Projet propose « Clone from a URL… » : le dépôt est cloné en entier

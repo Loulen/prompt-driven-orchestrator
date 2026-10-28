@@ -1,4 +1,4 @@
-import { Tooltip, TooltipProvider } from "../../../shared/ui/tooltip";
+import { Tooltip } from "../../../shared/ui/tooltip";
 import { formatDuration } from "../../model/runDuration";
 import { formatTime } from "../../model/nodeDetailFormat";
 import { useIterationDurations } from "../../model/iterationDuration";
@@ -39,11 +39,11 @@ function IterationDurationTooltip({
   return (
     <div className="whitespace-normal font-mono" style={{ fontSize: "10px" }}>
       <div className="grid grid-cols-[auto_auto] gap-x-6" data-testid="iteration-times">
-        <span className="text-fg-3">Started</span>
+        <span className="text-text-3">Started</span>
         <span className="text-right">
           {timing.started_at ? formatTime(timing.started_at) : "—"}
         </span>
-        <span className="text-fg-3">Ended</span>
+        <span className="text-text-3">Ended</span>
         <span className="text-right">{ended}</span>
       </div>
       <div
@@ -55,7 +55,7 @@ function IterationDurationTooltip({
           return (
             <div
               key={key}
-              className={`col-span-2 grid grid-cols-subgrid ${current ? "text-fg" : "text-fg-3"}`}
+              className={`col-span-2 grid grid-cols-subgrid ${current ? "text-text" : "text-text-3"}`}
               data-testid={`iteration-breakdown-${key}`}
               data-current={current || undefined}
             >
@@ -71,11 +71,11 @@ function IterationDurationTooltip({
         })}
       </div>
       {waitOpen && (
-        <div className="mt-1 text-fg-3" data-testid="iteration-active-paused">
+        <div className="mt-1 text-text-3" data-testid="iteration-active-paused">
           Active paused: waiting for you
         </div>
       )}
-      <div className="mt-1 text-fg-3">Click to show {otherDurationMode(mode)} time</div>
+      <div className="mt-1 text-text-3">Click to show {otherDurationMode(mode)} time</div>
     </div>
   );
 }
@@ -106,7 +106,7 @@ export function IterationDurationLabel({
         : null;
   return (
     // A local provider: the panel also renders outside the App's (tests).
-    <TooltipProvider>
+    <>
       <span> · </span>
       <Tooltip
         content={<IterationDurationTooltip timing={timing} durations={durations} mode={mode} />}
@@ -117,7 +117,7 @@ export function IterationDurationLabel({
           aria-label={`${duration} ${mode}. Click to show ${otherDurationMode(mode)} time`}
           data-testid="iteration-duration"
           data-mode={mode}
-          className="group flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 font-mono text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg-2"
+          className="group flex cursor-pointer items-center gap-1 rounded px-1 py-0.5 font-mono text-text-3 transition-colors hover:bg-hover hover:text-text-2"
           style={{ fontSize: "10px" }}
         >
           {dot && (
@@ -129,14 +129,14 @@ export function IterationDurationLabel({
           )}
           <span>{duration}</span>{" "}
           <span
-            className="text-fg-4 underline decoration-fg-4 decoration-dotted underline-offset-2 group-hover:decoration-fg-3"
+            className="text-text-3 underline decoration-text-3 decoration-dotted underline-offset-2 group-hover:decoration-text-3"
             data-testid="iteration-duration-unit"
           >
             {mode}
           </span>
         </button>
       </Tooltip>
-    </TooltipProvider>
+    </>
   );
 }
 

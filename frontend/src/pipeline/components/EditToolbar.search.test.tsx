@@ -10,12 +10,11 @@ import type { RunState } from "../../shared/generated/RunState";
 vi.mock("./RunToolbarActions", () => ({ default: () => null }));
 
 const { default: EditToolbar } = await import("./EditToolbar");
-const { TooltipProvider } = await import("../../shared/ui/tooltip");
 const { useRunSearchStore } = await import("../../run/store/runSearchStore");
 
 function renderToolbar(run: RunState | null) {
   return render(
-    <TooltipProvider>
+    <>
       <EditToolbar
         onAddNode={vi.fn()}
         onAddNote={vi.fn()}
@@ -27,7 +26,7 @@ function renderToolbar(run: RunState | null) {
         onToggleInfo={vi.fn()}
         run={run}
       />
-    </TooltipProvider>,
+    </>,
   );
 }
 

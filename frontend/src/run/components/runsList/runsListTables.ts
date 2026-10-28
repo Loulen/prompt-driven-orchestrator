@@ -7,8 +7,8 @@ export const STATUS_STYLES: Record<RunStatus, { dot: string; ring: string }> = {
   failed: { dot: "bg-st-failed", ring: "border-st-failed" },
   skipped: { dot: "bg-st-skipped", ring: "border-st-skipped" },
   halted: { dot: "bg-st-blocked", ring: "border-st-blocked" },
-  paused: { dot: "bg-st-paused", ring: "border-st-paused" },
-  archived: { dot: "bg-st-archived", ring: "border-st-archived" },
+  paused: { dot: "bg-st-blocked", ring: "border-st-blocked" },
+  archived: { dot: "bg-st-skipped", ring: "border-st-skipped" },
 };
 
 /** Runs whose bulk-Retry is valid (mirror of the per-row `canRetryAll`). */

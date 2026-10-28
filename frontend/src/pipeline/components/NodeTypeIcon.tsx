@@ -38,7 +38,7 @@ export function IsolationMarker({ isolated }: { isolated: boolean }) {
       title="Isolated worktree — this Node forks a sub-worktree of its own"
       className="ml-auto flex shrink-0 items-center"
     >
-      <GitBranch size={11} className="text-acc" />
+      <GitBranch size={11} className="text-primary" />
     </span>
   );
 }

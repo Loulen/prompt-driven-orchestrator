@@ -30,13 +30,13 @@ export default function BrokenEdgeLabel({ edgeId, ports, at, zIndex, onDelete, o
         display: "flex",
         alignItems: "center",
         gap: 6,
-        fontFamily: "var(--font-mono, monospace)",
+        fontFamily: "var(--font-code, monospace)",
         fontSize: 10,
         color: "var(--color-st-failed)",
         // The red tint is translucent: laid over an opaque fill, or the wire
         // under the label would cut through its text.
         background:
-          "linear-gradient(var(--color-st-failed-bg), var(--color-st-failed-bg)), var(--color-bg-2, #1e1e1e)",
+          "linear-gradient(color-mix(in oklab, var(--color-st-failed) 14%, transparent), color-mix(in oklab, var(--color-st-failed) 14%, transparent)), var(--surface-1)",
         border: "1px solid var(--color-st-failed)",
         borderRadius: 4,
         padding: "2px 6px",

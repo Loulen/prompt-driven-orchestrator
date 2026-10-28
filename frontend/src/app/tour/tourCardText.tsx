@@ -11,7 +11,7 @@ import { Fragment, type ReactNode } from "react";
 export function withCode(text: string): ReactNode {
   return text.split(/(`[^`]+`)/g).map((part, i) =>
     part.startsWith("`") && part.endsWith("`") && part.length > 1 ? (
-      <span key={i} className="rounded bg-bg-4 px-1 font-mono text-fg-2" style={{ fontSize: "10px" }}>
+      <span key={i} className="rounded bg-surface-2 px-1 font-mono text-text-2" style={{ fontSize: "10px" }}>
         {part.slice(1, -1)}
       </span>
     ) : (

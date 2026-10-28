@@ -16,7 +16,7 @@ import type { SkillBankPanelState } from "../store/useSkillBankPanel";
 const stop = (event: SyntheticEvent) => event.stopPropagation();
 
 /** The extensions' entries of the tree's menu. */
-const EXTENSION_ITEM = "cursor-pointer gap-2 px-2 py-1.5 text-[11.5px] text-fg-2";
+const EXTENSION_ITEM = "cursor-pointer gap-2 px-2 py-1.5 text-sm text-text-2";
 
 /**
  * The hover / focus actions at the right of a tree row: the pencil, and the
@@ -58,7 +58,7 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
           type="button"
           aria-label={`Rename ${name}`}
           onClick={() => panel.startRename(ref)}
-          className="grid h-5 w-5 place-items-center rounded text-fg-4 hover:bg-bg-4 hover:text-fg"
+          className="grid h-5 w-5 place-items-center rounded text-text-3 hover:bg-hover hover:text-text"
         >
           <Pencil size={11} />
         </button>
@@ -77,7 +77,7 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
           aria-expanded={isMenuOpen}
           data-testid={`kebab-${ref.kind}-${ref.id}`}
           onClick={stop}
-          className="grid h-5 w-5 place-items-center rounded text-fg-4 hover:bg-bg-4 hover:text-fg"
+          className="grid h-5 w-5 place-items-center rounded text-text-3 hover:bg-hover hover:text-text"
         >
           <MoreVertical size={11} />
         </DropdownMenuTrigger>
@@ -103,7 +103,7 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
               {extensions}
               <DropdownMenuSeparator />
               <div
-                className="flex items-center gap-2 px-2 py-1.5 text-fg-4"
+                className="flex items-center gap-2 px-2 py-1.5 text-text-3"
                 style={{ fontSize: "11px" }}
                 data-testid="tree-menu-locked"
               >
@@ -157,12 +157,12 @@ function TreeMenuItem({
       variant={danger ? "destructive" : "default"}
       data-testid={testid}
       onClick={onClick}
-      className="cursor-pointer gap-2 px-2 py-1.5 text-[11.5px] text-fg-2"
+      className="cursor-pointer gap-2 px-2 py-1.5 text-sm text-text-2"
     >
       <span className="shrink-0">{icon}</span>
       <span className="flex-1 whitespace-nowrap">{label}</span>
       {hint && (
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
           {hint}
         </span>
       )}

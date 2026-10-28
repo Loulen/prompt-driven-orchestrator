@@ -154,7 +154,6 @@ vi.mock("./MarkdownArtifactModal", () => ({
 
 import NodeDetailPanel from "./NodeDetailPanel";
 import { useTerminalOverlayStore } from "../../session/store/terminalOverlayStore";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 import type { NodeState } from "../../shared/generated/NodeState";
 import { useGestureRightsStore, useRunViewGestures } from "../store/gestureRightsStore";
 import { NOTHING_REFUSED } from "../model/runGestures";
@@ -287,12 +286,12 @@ describe("NodeDetailPanel", () => {
       it("restarts the running isolated iteration and surfaces a refusal", async () => {
         restartNodeMock.mockRejectedValueOnce(new Error("restart refused"));
         render(
-          <TooltipProvider>
+          <>
             <NodeDetailPanel
               node={makeNode({ isolated_worktree: true })}
               runId="run-1"
             />
-          </TooltipProvider>,
+          </>,
         );
 
         await act(async () => {
@@ -314,9 +313,9 @@ describe("NodeDetailPanel", () => {
   describe("TmuxTerminal integration", () => {
     it("renders TmuxTerminal when node is running", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const terminal = screen.getByTestId("tmux-terminal");
       expect(terminal).toBeInTheDocument();
@@ -327,9 +326,9 @@ describe("NodeDetailPanel", () => {
 
     it("does not render TmuxTerminal when node is pending", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
       const placeholder = screen.getByTestId("pending-placeholder");
@@ -339,12 +338,12 @@ describe("NodeDetailPanel", () => {
 
     it("passes correct session name with iter", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "running", iter: 3, node_id: "impl" })}
             runId="run-abc"
           />
-        </TooltipProvider>,
+        </>,
       );
       const terminal = screen.getByTestId("tmux-terminal");
       expect(terminal.getAttribute("data-session")).toBe(
@@ -354,9 +353,9 @@ describe("NodeDetailPanel", () => {
 
     it("renders the details pane (Mark complete + sections) by default (collapsed)", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
       expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
@@ -368,9 +367,9 @@ describe("NodeDetailPanel", () => {
     // terminal: it lifts the same terminal into an overlay over the whole app.
     it("opens the terminal in an overlay over the app, the panel staying underneath", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       const terminal = screen.getByTestId("tmux-terminal");
@@ -394,9 +393,9 @@ describe("NodeDetailPanel", () => {
 
     it("gives the keyboard to the terminal when it opens", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("term-expand"));
       expect(document.activeElement).toBe(screen.getByTestId("mock-xterm-input"));
@@ -404,9 +403,9 @@ describe("NodeDetailPanel", () => {
 
     it("collapses back to split with the Minimize button", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       fireEvent.click(screen.getByTestId("term-expand"));
@@ -421,9 +420,9 @@ describe("NodeDetailPanel", () => {
 
     it("collapses on Escape when the focus is outside the terminal", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("term-expand"));
       act(() => {
@@ -439,9 +438,9 @@ describe("NodeDetailPanel", () => {
       const seenByApp = vi.fn();
       window.addEventListener("keydown", seenByApp);
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("term-expand"));
       const input = screen.getByTestId("mock-xterm-input");
@@ -458,9 +457,9 @@ describe("NodeDetailPanel", () => {
       const seenByApp = vi.fn();
       window.addEventListener("keydown", seenByApp);
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("term-expand"));
       act(() => {
@@ -479,9 +478,9 @@ describe("NodeDetailPanel", () => {
 
     it("collapses on a click whose press and release both land on the backdrop", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("term-expand"));
       const backdrop = screen.getByTestId("terminal-overlay-backdrop");
@@ -494,9 +493,9 @@ describe("NodeDetailPanel", () => {
 
     it("stays open when a selection pressed in the terminal is released on the backdrop", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("term-expand"));
 
@@ -511,13 +510,13 @@ describe("NodeDetailPanel", () => {
 
     it("starts in fullsize when initialTerminalExpanded is true", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "running" })}
             runId="run-1"
             initialTerminalExpanded
           />
-        </TooltipProvider>,
+        </>,
       );
 
       const terminal = screen.getByTestId("tmux-terminal");
@@ -527,13 +526,13 @@ describe("NodeDetailPanel", () => {
 
     it("lets the user collapse the terminal even when it started expanded", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "running" })}
             runId="run-1"
             initialTerminalExpanded
           />
-        </TooltipProvider>,
+        </>,
       );
 
       expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
@@ -546,18 +545,18 @@ describe("NodeDetailPanel", () => {
 
     it("comes back to split on remount — the enlarged view is never persisted", () => {
       const { unmount } = render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("term-expand"));
       expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
       unmount();
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
       expect(screen.getByTestId("tmux-terminal").getAttribute("data-expanded")).toBe("false");
@@ -565,16 +564,16 @@ describe("NodeDetailPanel", () => {
 
     it("stays open when the session ends under the user's eyes", () => {
       const { rerender } = render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("term-expand"));
 
       rerender(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       const frame = screen.getByTestId("terminal-fullsize");
@@ -591,9 +590,9 @@ describe("NodeDetailPanel", () => {
     // by a line on every toggle.
     it("does not remount TmuxTerminal when the user toggles fullscreen", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       expect(tmuxMountCount.current).toBe(1);
@@ -620,9 +619,9 @@ describe("NodeDetailPanel", () => {
   describe("IterSelector", () => {
     function renderPanel(overrides?: Partial<NodeState>) {
       return render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode(overrides)} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
     }
 
@@ -668,12 +667,12 @@ describe("NodeDetailPanel", () => {
   describe("FrontmatterRetryBanners", () => {
     it("shows amber retry-pending banner when running with retries > 0", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "running", frontmatter_retries: 1 })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("frontmatter-retry-banner")).toBeInTheDocument();
       expect(screen.getByTestId("frontmatter-retry-banner")).toHaveTextContent(
@@ -683,12 +682,12 @@ describe("NodeDetailPanel", () => {
 
     it("does not show retry banner when running with retries = 0", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "running", frontmatter_retries: 0 })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(
         screen.queryByTestId("frontmatter-retry-banner"),
@@ -697,7 +696,7 @@ describe("NodeDetailPanel", () => {
 
     it("shows the output-validation banner when failed with an output validation reason", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "failed",
@@ -705,7 +704,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(
         screen.getByTestId("output-validation-banner"),
@@ -719,7 +718,7 @@ describe("NodeDetailPanel", () => {
 
     it("titles the banner with the script fail-fast reason, not \"after retry\"", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "failed",
@@ -727,7 +726,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       const banner = screen.getByTestId("output-validation-banner");
       expect(banner).toHaveTextContent("Failed — script output validation failed");
@@ -739,7 +738,7 @@ describe("NodeDetailPanel", () => {
 
     it("lists the missing output ports of a script fail-fast", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "failed",
@@ -748,7 +747,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       // Before #490 this list had no home at all in Rust OR TS, so the red banner
       // showed with nothing in it.
@@ -759,7 +758,7 @@ describe("NodeDetailPanel", () => {
 
     it("shows offending fields in exhausted banner when violations present", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "failed",
@@ -771,7 +770,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       const list = screen.getByTestId("frontmatter-violation-list");
       expect(list).toBeInTheDocument();
@@ -782,7 +781,7 @@ describe("NodeDetailPanel", () => {
 
     it("does not show violation list when no violations present", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "failed",
@@ -790,7 +789,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(
         screen.queryByTestId("frontmatter-violation-list"),
@@ -799,7 +798,7 @@ describe("NodeDetailPanel", () => {
 
     it("shows generic failed banner for other failure reasons", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "failed",
@@ -807,7 +806,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(
         screen.queryByTestId("output-validation-banner"),
@@ -819,7 +818,7 @@ describe("NodeDetailPanel", () => {
   describe("PromptSection", () => {
     it("renders Initial Prompt section collapsed by default", () => {
       render(
-        <TooltipProvider><NodeDetailPanel node={makeNode()} runId="run-1" /></TooltipProvider>,
+        <><NodeDetailPanel node={makeNode()} runId="run-1" /></>,
       );
       const toggle = screen.getByTestId("prompt-toggle");
       expect(toggle).toBeInTheDocument();
@@ -829,7 +828,7 @@ describe("NodeDetailPanel", () => {
 
     it("expands on chevron click and collapses again", async () => {
       render(
-        <TooltipProvider><NodeDetailPanel node={makeNode()} runId="run-1" /></TooltipProvider>,
+        <><NodeDetailPanel node={makeNode()} runId="run-1" /></>,
       );
       const toggle = screen.getByTestId("prompt-toggle");
 
@@ -846,26 +845,26 @@ describe("NodeDetailPanel", () => {
     // stuck "Loading prompt..." — it shows an honest "not preserved" note.
     it("does not fetch the prompt for an archived run", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "completed" })}
             runId="run-1"
             isArchived
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(fetchPromptMock).not.toHaveBeenCalled();
     });
 
     it("shows a not-preserved note (not a spinner) when archived", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "completed" })}
             runId="run-1"
             isArchived
           />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("prompt-toggle"));
       expect(
@@ -878,9 +877,9 @@ describe("NodeDetailPanel", () => {
   describe("polled preview removal", () => {
     it("does not have a terminal-pane pre element", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(document.querySelector(".terminal-pane")).toBeNull();
     });
@@ -890,9 +889,9 @@ describe("NodeDetailPanel", () => {
       // would throw. The pane is read one layer down, by the terminal that will
       // display it (#617), never polled into a preview here.
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       // Just verify it renders without error
       expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
@@ -905,12 +904,12 @@ describe("NodeDetailPanel", () => {
   describe("pane source handed to the terminal", () => {
     it("names the run, the node and the selected iteration", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "completed", node_id: "cop", iter: 2 })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       // A settled node opens minimized (#346) — restore it to mount the terminal.
       fireEvent.click(screen.getByTestId("term-restore"));
@@ -924,7 +923,7 @@ describe("NodeDetailPanel", () => {
       // older session was reaped long ago. Handing the terminal "running" would
       // send it to attach to a name tmux no longer knows.
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "running",
@@ -937,7 +936,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       await act(async () => {});
       expect(
@@ -971,9 +970,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {});
@@ -994,9 +993,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {});
@@ -1035,9 +1034,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {});
@@ -1068,9 +1067,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {});
@@ -1101,9 +1100,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {});
@@ -1131,9 +1130,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {});
@@ -1162,9 +1161,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {});
@@ -1185,9 +1184,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {});
@@ -1205,12 +1204,12 @@ describe("NodeDetailPanel", () => {
   describe("New statuses (issue #112)", () => {
     it("renders Stopped label in header", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "stopped", failure_reason: "user killed it" })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByText("Stopped")).toBeInTheDocument();
       expect(screen.getByText(/user killed it/)).toBeInTheDocument();
@@ -1218,7 +1217,7 @@ describe("NodeDetailPanel", () => {
 
     it("renders Skipped label and greyed banner with the prune reason (#620)", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "skipped",
@@ -1226,7 +1225,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       // The header label distinguishes it from a green "Completed" node…
       expect(screen.getByText("Skipped")).toBeInTheDocument();
@@ -1238,18 +1237,18 @@ describe("NodeDetailPanel", () => {
 
     it("skipped banner falls back to a default reason when none is given", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "skipped" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByText(/Skipped — branch not taken/)).toBeInTheDocument();
     });
 
     it("renders Stale label in header and stale banner", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByText("Stale")).toBeInTheDocument();
       expect(screen.getByText(/agent idle/i)).toBeInTheDocument();
@@ -1257,18 +1256,18 @@ describe("NodeDetailPanel", () => {
 
     it("stale node shows Mark complete button", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByText("Mark complete")).toBeInTheDocument();
     });
 
     it("stopped node does not show Mark complete button", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByText("Mark complete")).not.toBeInTheDocument();
     });
@@ -1277,9 +1276,9 @@ describe("NodeDetailPanel", () => {
       // #346: a settled session (stopped) opens minimized — the terminal inset
       // folds to a thin bar and is not mounted, so Outputs take the height.
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
@@ -1288,9 +1287,9 @@ describe("NodeDetailPanel", () => {
 
     it("renders terminal for stale node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
     });
@@ -1305,9 +1304,9 @@ describe("NodeDetailPanel", () => {
 
     it("renders the Interrupted label and banner", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={interrupted()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByText("Interrupted")).toBeInTheDocument();
       expect(screen.getByTestId("interrupted-banner")).toBeInTheDocument();
@@ -1316,7 +1315,7 @@ describe("NodeDetailPanel", () => {
 
     it("names a merge-back conflict instead of a dead session (ADR-0082)", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "interrupted",
@@ -1324,7 +1323,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       const banner = screen.getByTestId("interrupted-banner");
       expect(banner).toHaveTextContent(/Merge-back conflict — conflict in shared\.txt/);
@@ -1334,18 +1333,18 @@ describe("NodeDetailPanel", () => {
 
     it("offers a Play button in the node controls", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={interrupted()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("play-retry-btn")).toHaveTextContent("Play");
     });
 
     it("Play re-drives the node via retryNode (daemon embeds the reopen)", async () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={interrupted()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await act(async () => {
         fireEvent.click(screen.getByTestId("play-retry-btn"));
@@ -1355,9 +1354,9 @@ describe("NodeDetailPanel", () => {
 
     it("the banner Reopen button also re-drives the node", async () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={interrupted()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await act(async () => {
         fireEvent.click(screen.getByTestId("interrupted-reopen-btn"));
@@ -1367,18 +1366,18 @@ describe("NodeDetailPanel", () => {
 
     it("keeps Mark complete reachable (accept the artifacts as they are)", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={interrupted()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
     });
 
     it("opens minimized — the dead session is never attached", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={interrupted()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
       expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
@@ -1386,9 +1385,9 @@ describe("NodeDetailPanel", () => {
 
     it("hides the recovery affordances for an archived run", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={interrupted()} runId="run-1" isArchived />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
       expect(screen.queryByTestId("interrupted-reopen-btn")).not.toBeInTheDocument();
@@ -1399,9 +1398,9 @@ describe("NodeDetailPanel", () => {
   describe("Terminated-node default layout (#346)", () => {
     it("defaults a completed node to a minimized terminal with Outputs visible", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
@@ -1413,9 +1412,9 @@ describe("NodeDetailPanel", () => {
       "minimizes the terminal for a %s node",
       (status) => {
         render(
-          <TooltipProvider>
+          <>
             <NodeDetailPanel node={makeNode({ status })} runId="run-1" />
-          </TooltipProvider>,
+          </>,
         );
         expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
         expect(screen.getByTestId("details-pane")).toBeInTheDocument();
@@ -1427,13 +1426,13 @@ describe("NodeDetailPanel", () => {
       // D1: `stale` alone stays split, but `isArchived` overrides — the run's
       // worktree + tmux session are gone.
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "stale" })}
             runId="run-1"
             isArchived
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
       expect(screen.queryByTestId("tmux-terminal")).not.toBeInTheDocument();
@@ -1441,9 +1440,9 @@ describe("NodeDetailPanel", () => {
 
     it("keeps the terminal in split for a running node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
@@ -1453,9 +1452,9 @@ describe("NodeDetailPanel", () => {
 
     it("keeps the terminal visible for an awaiting_user node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "awaiting_user" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
@@ -1466,9 +1465,9 @@ describe("NodeDetailPanel", () => {
       // D1 lock: `stale` is NOT terminated (session typically still alive,
       // recovery happens inside the terminal).
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("tmux-terminal")).toBeInTheDocument();
       expect(screen.getByTestId("details-pane")).toBeInTheDocument();
@@ -1477,9 +1476,9 @@ describe("NodeDetailPanel", () => {
 
     it("restores the terminal to split when clicking the minimized bar", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
 
@@ -1500,9 +1499,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("terminal-minimized")).toBeInTheDocument();
 
@@ -1525,9 +1524,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {
@@ -1560,9 +1559,9 @@ describe("NodeDetailPanel", () => {
       );
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       expect(screen.queryByTestId("action-verdict")).not.toBeInTheDocument();
@@ -1582,9 +1581,9 @@ describe("NodeDetailPanel", () => {
   describe("Stale banner with Stop/Retry (issue #123)", () => {
     it("shows stale banner with idle message", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const banner = screen.getByTestId("stale-banner");
       expect(banner).toBeInTheDocument();
@@ -1594,9 +1593,9 @@ describe("NodeDetailPanel", () => {
 
     it("shows Stop and Retry buttons on stale node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("stale-stop-btn")).toBeInTheDocument();
       expect(screen.getByTestId("stale-retry-btn")).toBeInTheDocument();
@@ -1604,9 +1603,9 @@ describe("NodeDetailPanel", () => {
 
     it("calls killNode when Stop is clicked", async () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await act(async () => {
         fireEvent.click(screen.getByTestId("stale-stop-btn"));
@@ -1616,9 +1615,9 @@ describe("NodeDetailPanel", () => {
 
     it("calls restartNode when Retry is clicked", async () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await act(async () => {
         fireEvent.click(screen.getByTestId("stale-retry-btn"));
@@ -1628,9 +1627,9 @@ describe("NodeDetailPanel", () => {
 
     it("hides Stop/Retry buttons when archived", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" isArchived />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("stale-banner")).toBeInTheDocument();
       expect(screen.queryByTestId("stale-stop-btn")).not.toBeInTheDocument();
@@ -1639,15 +1638,15 @@ describe("NodeDetailPanel", () => {
 
     it("stale indicator is distinct from failed", () => {
       const { container: staleContainer } = render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       const { container: failedContainer } = render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "failed", failure_reason: "test" })} runId="run-2" />
-        </TooltipProvider>,
+        </>,
       );
 
       const staleBanner = staleContainer.querySelector('[data-testid="stale-banner"]');
@@ -1655,7 +1654,7 @@ describe("NodeDetailPanel", () => {
         ?? failedContainer.querySelector('.border-st-failed\\/30');
 
       expect(staleBanner).toBeInTheDocument();
-      expect(staleBanner?.className).toContain("st-stale");
+      expect(staleBanner?.className).toContain("st-skipped");
       if (failedBanner) {
         expect(failedBanner.className).toContain("st-failed");
       }
@@ -1665,9 +1664,9 @@ describe("NodeDetailPanel", () => {
   describe("Node control buttons", () => {
     it("shows enabled Stop button when node is running", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const stopBtn = screen.getByTestId("stop-btn");
       expect(stopBtn).toBeInTheDocument();
@@ -1677,9 +1676,9 @@ describe("NodeDetailPanel", () => {
 
     it("shows disabled Stop button when node is completed", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const stopBtn = screen.getByTestId("stop-btn");
       expect(stopBtn).toBeDisabled();
@@ -1687,9 +1686,9 @@ describe("NodeDetailPanel", () => {
 
     it("shows disabled Stop button when node is failed", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const stopBtn = screen.getByTestId("stop-btn");
       expect(stopBtn).toBeDisabled();
@@ -1697,9 +1696,9 @@ describe("NodeDetailPanel", () => {
 
     it("shows disabled Stop button when node is stopped", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const stopBtn = screen.getByTestId("stop-btn");
       expect(stopBtn).toBeDisabled();
@@ -1710,9 +1709,9 @@ describe("NodeDetailPanel", () => {
       // button. The Stop button stays present but disabled (only `running` can
       // be stopped).
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("node-controls")).toBeInTheDocument();
       expect(screen.getByTestId("stop-btn")).toBeDisabled();
@@ -1721,9 +1720,9 @@ describe("NodeDetailPanel", () => {
 
     it("an on-demand node not launched keeps its Start, hidden when refused (ADR-0086)", async () => {
       const { unmount } = render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" isOnDemand />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("start-btn")).toBeInTheDocument();
       // No « Pending »: the node waits for the user's ▶, not for the runtime.
@@ -1739,9 +1738,9 @@ describe("NodeDetailPanel", () => {
         return <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" isOnDemand />;
       }
       render(
-        <TooltipProvider>
+        <>
           <RunView />
-        </TooltipProvider>,
+        </>,
       );
       await waitFor(() => expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument());
       useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });
@@ -1749,9 +1748,9 @@ describe("NodeDetailPanel", () => {
 
     it("a skipped node offers Play, which retries it (ADR-0086)", async () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "skipped" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const playBtn = screen.getByTestId("play-retry-btn");
       expect(playBtn).toHaveTextContent("Play");
@@ -1761,18 +1760,18 @@ describe("NodeDetailPanel", () => {
 
     it("does not show controls for archived runs", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" isArchived />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
     });
 
     it("shows Retry button with Retry label for running node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const retryBtn = screen.getByTestId("retry-btn");
       expect(retryBtn).toHaveTextContent("Retry");
@@ -1780,9 +1779,9 @@ describe("NodeDetailPanel", () => {
 
     it("shows Play label for failed node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const playBtn = screen.getByTestId("play-retry-btn");
       expect(playBtn).toHaveTextContent("Play");
@@ -1790,9 +1789,9 @@ describe("NodeDetailPanel", () => {
 
     it("shows Play label for stopped node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "stopped" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const playBtn = screen.getByTestId("play-retry-btn");
       expect(playBtn).toHaveTextContent("Play");
@@ -1800,9 +1799,9 @@ describe("NodeDetailPanel", () => {
 
     it("shows Retry label for completed node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const playBtn = screen.getByTestId("play-retry-btn");
       expect(playBtn).toHaveTextContent("Retry");
@@ -1810,9 +1809,9 @@ describe("NodeDetailPanel", () => {
 
     it("Stop button calls stopNode API", async () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await act(async () => {
         fireEvent.click(screen.getByTestId("stop-btn"));
@@ -1822,9 +1821,9 @@ describe("NodeDetailPanel", () => {
 
     it("Retry button on running node calls retryNode API", async () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await act(async () => {
         fireEvent.click(screen.getByTestId("retry-btn"));
@@ -1835,9 +1834,9 @@ describe("NodeDetailPanel", () => {
 
     it("Play button on failed node calls retryNode API", async () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await act(async () => {
         fireEvent.click(screen.getByTestId("play-retry-btn"));
@@ -1850,9 +1849,9 @@ describe("NodeDetailPanel", () => {
   describe("Start button (#204)", () => {
     it("shows a Start button on a pending node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       const startBtn = screen.getByTestId("start-btn");
       expect(startBtn).toBeInTheDocument();
@@ -1861,9 +1860,9 @@ describe("NodeDetailPanel", () => {
 
     it("clicking Start force-spawns the node via startNode API", async () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "pending" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await act(async () => {
         fireEvent.click(screen.getByTestId("start-btn"));
@@ -1873,22 +1872,22 @@ describe("NodeDetailPanel", () => {
 
     it("does not show a Start button on a running node", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument();
     });
 
     it("does not show a Start button on a pending node of an archived run", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({ status: "pending" })}
             runId="run-1"
             isArchived
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByTestId("start-btn")).not.toBeInTheDocument();
       expect(screen.queryByTestId("node-controls")).not.toBeInTheDocument();
@@ -1904,9 +1903,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {
@@ -1926,9 +1925,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {
@@ -1946,9 +1945,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {
@@ -1973,9 +1972,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {
@@ -1998,9 +1997,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {
@@ -2019,9 +2018,9 @@ describe("NodeDetailPanel", () => {
       });
 
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
 
       await act(async () => {
@@ -2059,7 +2058,7 @@ describe("NodeDetailPanel", () => {
 
     it("shows the agent's question verbatim with the Enter hint (A1)", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={awaitingNode({
               cause: "declared",
@@ -2068,7 +2067,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       const banner = screen.getByTestId("awaiting-banner");
       expect(banner).toHaveAttribute("data-cause", "declared");
@@ -2087,7 +2086,7 @@ describe("NodeDetailPanel", () => {
     // #870: a spectator's Enter reaches nothing until it takes control.
     it("tells a spectator to take control to reply, and the pilot to reply below", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={awaitingNode({
               cause: "declared",
@@ -2096,7 +2095,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       const hint = () => screen.getByTestId("awaiting-banner-hint");
       expect(hint()).toHaveTextContent(/Reply in the terminal below/);
@@ -2116,7 +2115,7 @@ describe("NodeDetailPanel", () => {
 
     it("tells a spectator to take control on a completion that is not released", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={awaitingNode({
               cause: "completion_not_released",
@@ -2125,7 +2124,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("mock-become-spectator"));
       expect(screen.getByTestId("awaiting-banner-hint")).toHaveTextContent(
@@ -2135,7 +2134,7 @@ describe("NodeDetailPanel", () => {
 
     it("says the agent waits for you when the wait carries no message (A2)", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={awaitingNode({ cause: "declared", since: "2026-09-12T10:00:00Z" }, {
               iterations: [
@@ -2151,7 +2150,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
         "The agent is waiting for you",
@@ -2164,7 +2163,7 @@ describe("NodeDetailPanel", () => {
 
     it("links both exits from the banner and rings « Mark ready » on a refused completion (A3)", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={awaitingNode({
               cause: "completion_not_released",
@@ -2173,7 +2172,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("awaiting-banner")).toHaveAttribute(
         "data-cause",
@@ -2192,7 +2191,7 @@ describe("NodeDetailPanel", () => {
     it("points at the awaiting child and gives no Enter hint on a derived wait (C)", () => {
       const onOpenChildRun = vi.fn();
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={awaitingNode({
               cause: "child_awaiting",
@@ -2204,7 +2203,7 @@ describe("NodeDetailPanel", () => {
             isOrchestratorNode
             onOpenChildRun={onOpenChildRun}
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("awaiting-banner-title")).toHaveTextContent(
         "A child run is waiting for you",
@@ -2223,7 +2222,7 @@ describe("NodeDetailPanel", () => {
       // on the iteration alone.
       const onOpenChildRun = vi.fn();
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "awaiting_user",
@@ -2249,7 +2248,7 @@ describe("NodeDetailPanel", () => {
             isOrchestratorNode
             onOpenChildRun={onOpenChildRun}
           />
-        </TooltipProvider>,
+        </>,
       );
       const banner = screen.getByTestId("awaiting-banner");
       expect(banner).toHaveAttribute("data-cause", "child_awaiting");
@@ -2262,7 +2261,7 @@ describe("NodeDetailPanel", () => {
 
     it("shows no banner at all for a fresh interactive node that is simply running (A0)", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "running",
@@ -2279,7 +2278,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByTestId("awaiting-banner")).toBeNull();
       expect(screen.getByTestId("release-completion-btn")).toBeInTheDocument();
@@ -2298,9 +2297,9 @@ describe("NodeDetailPanel", () => {
 
     it("gives the button a testid so a driver need not match the copy", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={awaitingNode()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
     });
@@ -2316,9 +2315,9 @@ describe("NodeDetailPanel", () => {
         body: {},
       });
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={awaitingNode()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await clickMarkComplete();
       const verdict = screen.getByTestId("mark-complete-verdict");
@@ -2343,9 +2342,9 @@ describe("NodeDetailPanel", () => {
         body: {},
       });
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={awaitingNode()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await clickMarkComplete();
       const verdict = screen.getByTestId("mark-complete-verdict");
@@ -2367,9 +2366,9 @@ describe("NodeDetailPanel", () => {
         body: {},
       });
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "failed", failure_reason: "boom" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await clickMarkComplete();
       // Pre-#490: read as `missing_outputs` with an empty list, gated on
@@ -2390,9 +2389,9 @@ describe("NodeDetailPanel", () => {
         body: {},
       });
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={awaitingNode()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await clickMarkComplete();
       expect(screen.getByTestId("mark-complete-verdict")).toBeInTheDocument();
@@ -2421,9 +2420,9 @@ describe("NodeDetailPanel", () => {
     it("treats a legal duplicate as nothing alarming", async () => {
       markNodeDoneMock.mockResolvedValue({ kind: "noop", reason: "already completed" });
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={awaitingNode()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await clickMarkComplete();
       const verdict = screen.getByTestId("mark-complete-verdict");
@@ -2434,9 +2433,9 @@ describe("NodeDetailPanel", () => {
     it("surfaces a transport breakdown instead of swallowing it into console.error", async () => {
       markNodeDoneMock.mockRejectedValue(new Error("Failed to fetch"));
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={awaitingNode()} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       await clickMarkComplete();
       const verdict = screen.getByTestId("mark-complete-verdict");
@@ -2455,7 +2454,7 @@ describe("NodeDetailPanel", () => {
         body: {},
       });
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "awaiting_user",
@@ -2467,7 +2466,7 @@ describe("NodeDetailPanel", () => {
             })}
             runId="run-1"
           />
-        </TooltipProvider>,
+        </>,
       );
       await clickMarkComplete();
       expect(screen.getByTestId("mark-complete-verdict")).toBeInTheDocument();
@@ -2500,15 +2499,15 @@ describe("NodeDetailPanel", () => {
 
       it("shows both exits only for a live interactive iteration", () => {
         const { rerender } = render(
-          <TooltipProvider>
+          <>
             <NodeDetailPanel node={liveInteractive()} runId="run-1" />
-          </TooltipProvider>,
+          </>,
         );
         expect(screen.getByTestId("release-completion-btn")).toBeInTheDocument();
         expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
 
         rerender(
-          <TooltipProvider>
+          <>
             <NodeDetailPanel
               node={liveInteractive({
                 iterations: [
@@ -2524,26 +2523,26 @@ describe("NodeDetailPanel", () => {
               })}
               runId="run-1"
             />
-          </TooltipProvider>,
+          </>,
         );
         expect(screen.queryByTestId("release-completion-btn")).not.toBeInTheDocument();
 
         rerender(
-          <TooltipProvider>
+          <>
             <NodeDetailPanel
               node={liveInteractive({ status: "completed" })}
               runId="run-1"
             />
-          </TooltipProvider>,
+          </>,
         );
         expect(screen.queryByTestId("release-completion-btn")).not.toBeInTheDocument();
       });
 
       it("calls release and renders the projected released state", async () => {
         const { rerender } = render(
-          <TooltipProvider>
+          <>
             <NodeDetailPanel node={liveInteractive()} runId="run-1" />
-          </TooltipProvider>,
+          </>,
         );
         await act(async () => {
           fireEvent.click(screen.getByTestId("release-completion-btn"));
@@ -2552,7 +2551,7 @@ describe("NodeDetailPanel", () => {
         expect(screen.queryByTestId("release-verdict")).not.toBeInTheDocument();
 
         rerender(
-          <TooltipProvider>
+          <>
             <NodeDetailPanel
               node={liveInteractive({
                 status: "running",
@@ -2569,7 +2568,7 @@ describe("NodeDetailPanel", () => {
               })}
               runId="run-1"
             />
-          </TooltipProvider>,
+          </>,
         );
         expect(screen.getByTestId("release-verdict")).toHaveAttribute(
           "data-verdict",
@@ -2582,7 +2581,7 @@ describe("NodeDetailPanel", () => {
 
       it("renders projected release state after reload and scopes it to the displayed iteration", () => {
         render(
-          <TooltipProvider>
+          <>
             <NodeDetailPanel
               node={liveInteractive({
                 status: "running",
@@ -2608,7 +2607,7 @@ describe("NodeDetailPanel", () => {
               })}
               runId="run-1"
             />
-          </TooltipProvider>,
+          </>,
         );
 
         expect(screen.getByTestId("release-completion-btn")).toHaveTextContent(
@@ -2644,9 +2643,9 @@ describe("NodeDetailPanel", () => {
 
     function renderEnlarged(node: NodeState, props?: { isArchived?: boolean }) {
       const utils = render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={node} runId="run-1" nodeName="design" {...props} />
-        </TooltipProvider>,
+        </>,
       );
       // A settled node opens folded: unfold it first, as the user would.
       const restore = screen.queryByTestId("term-restore");
@@ -2659,9 +2658,9 @@ describe("NodeDetailPanel", () => {
 
     it("shows nothing extra in the split toolbar", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={awaitingNode()} runId="run-1" nodeName="design" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByTestId("term-identity")).not.toBeInTheDocument();
       expect(screen.queryByTestId("term-mark-complete")).not.toBeInTheDocument();
@@ -2680,9 +2679,9 @@ describe("NodeDetailPanel", () => {
 
     it("falls back to the node id when the node has no name", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       fireEvent.click(screen.getByTestId("term-expand"));
       expect(screen.getByTestId("term-identity-name")).toHaveTextContent("test-node");
@@ -2693,9 +2692,9 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("terminal-fullsize").className).toMatch(/\bborder-st-running\b/);
 
       rerender(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={awaitingNode()} runId="run-1" nodeName="design" />
-        </TooltipProvider>,
+        </>,
       );
 
       const frame = screen.getByTestId("terminal-fullsize");
@@ -2715,9 +2714,9 @@ describe("NodeDetailPanel", () => {
       ).toBeInTheDocument();
 
       rerender(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" nodeName="design" />
-        </TooltipProvider>,
+        </>,
       );
       expect(screen.queryByTestId("term-release-completion")).not.toBeInTheDocument();
       expect(screen.queryByTestId("term-mark-complete")).not.toBeInTheDocument();
@@ -2779,7 +2778,7 @@ describe("NodeDetailPanel", () => {
 
       // The daemon's push: the iteration is released and runs again.
       rerender(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel
             node={makeNode({
               status: "running",
@@ -2797,7 +2796,7 @@ describe("NodeDetailPanel", () => {
             runId="run-1"
             nodeName="design"
           />
-        </TooltipProvider>,
+        </>,
       );
       // The release does not close the enlarged view; the frame follows.
       const frame = screen.getByTestId("terminal-fullsize");
@@ -2869,9 +2868,9 @@ describe("NodeDetailPanel", () => {
 
     it("never remounts the terminal across every way in and out", () => {
       render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={awaitingNode()} runId="run-1" nodeName="design" />
-        </TooltipProvider>,
+        </>,
       );
       const first = screen.getByTestId("tmux-terminal");
 
@@ -2894,9 +2893,9 @@ describe("NodeDetailPanel", () => {
 
     it("turns the app's panel resizing off while enlarged", () => {
       const { unmount } = render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
       expect(useTerminalOverlayStore.getState().openCount).toBe(0);
       fireEvent.click(screen.getByTestId("term-expand"));
@@ -2954,9 +2953,9 @@ describe("NodeDetailPanel", () => {
 
     function renderPanel(overrides?: Partial<NodeState>) {
       return render(
-        <TooltipProvider>
+        <>
           <NodeDetailPanel node={makeNode({ status: "completed", ...overrides })} runId="run-1" />
-        </TooltipProvider>,
+        </>,
       );
     }
 

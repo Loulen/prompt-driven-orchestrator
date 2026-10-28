@@ -60,7 +60,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
 
   const accent = data.exhausted
     ? "var(--color-st-blocked)"
-    : "var(--color-acc)";
+    : "var(--primary)";
   // `⇉` (fan-out) for a collection region, `↻` (loop) for a bounded one.
   const glyph = data.kind === "collection" ? "⇉" : "↻";
 
@@ -83,8 +83,8 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
           // Faint translucent fill so the box reads as a grouping layer behind
           // the member cards without obscuring them.
           background: data.exhausted
-            ? "var(--color-st-blocked-bg)"
-            : "var(--color-acc-bg)",
+            ? "color-mix(in oklab, var(--color-st-blocked) 14%, transparent)"
+            : "var(--selected)",
         }}
       />
     );
@@ -103,7 +103,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
       <div
         data-testid="loop-region-header"
         onClick={openInspector}
-        className="pointer-events-auto absolute flex cursor-pointer items-center gap-1.5 rounded bg-bg-1 px-2 font-mono"
+        className="pointer-events-auto absolute flex cursor-pointer items-center gap-1.5 rounded bg-surface-0 px-2 font-mono"
         style={{
           top: -13,
           left: 14,
@@ -127,7 +127,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
       {data.exhausted && (
         <div
           data-testid="loop-region-block"
-          className="pointer-events-auto absolute flex items-center gap-1.5 rounded bg-bg-1 px-2 font-mono whitespace-nowrap"
+          className="pointer-events-auto absolute flex items-center gap-1.5 rounded bg-surface-0 px-2 font-mono whitespace-nowrap"
           style={{
             bottom: -14,
             left: "50%",
@@ -146,7 +146,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
             <button
               type="button"
               data-testid="loop-region-route-from-manager"
-              className="ml-1.5 rounded border px-1 leading-none hover:bg-st-blocked-bg"
+              className="ml-1.5 rounded border px-1 leading-none hover:bg-st-blocked/14"
               style={{
                 borderColor: "var(--color-st-blocked)",
                 color: "var(--color-st-blocked)",

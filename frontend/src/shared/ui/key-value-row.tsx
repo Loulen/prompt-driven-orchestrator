@@ -15,13 +15,13 @@ export function KeyValueRow({
   return (
     <div
       className={`flex items-center justify-between gap-4 rounded px-2.5 py-1.5 ${
-        tone === "failed" ? "bg-st-failed-bg text-st-failed" : "bg-bg-3 text-fg-3"
+        tone === "failed" ? "bg-st-failed/14 text-st-failed" : "bg-surface-2 text-text-3"
       }`}
       style={{ fontSize: "10.5px" }}
       data-testid={testId}
     >
       <span className="shrink-0">{label}</span>
-      <span className={`min-w-0 truncate text-right ${tone === "failed" ? "" : "text-fg-2"}`}>
+      <span className={`min-w-0 truncate text-right ${tone === "failed" ? "" : "text-text-2"}`}>
         {children}
       </span>
     </div>

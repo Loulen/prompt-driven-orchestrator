@@ -44,11 +44,11 @@ export default function NewRepositoryForm({
 
   return (
     <div
-      className="flex flex-col gap-2 rounded-md border border-acc-border bg-bg-2 px-3 py-2.5"
+      className="flex flex-col gap-2 rounded-md border border-primary/30 bg-surface-1 px-3 py-2.5"
       data-testid="project-new-repo"
     >
-      <div className="flex items-center gap-1.5 font-medium text-fg" style={{ fontSize: "11.5px" }}>
-        <FolderPlus size={12} className="text-acc" />
+      <div className="flex items-center gap-1.5 font-medium text-text" style={{ fontSize: "11.5px" }}>
+        <FolderPlus size={12} className="text-primary" />
         New empty repository
       </div>
       <div className="flex gap-1.5">
@@ -69,7 +69,7 @@ export default function NewRepositoryForm({
           aria-label="Folder of the new repository"
           placeholder="~/code/new-repository"
           data-testid="project-new-repo-path"
-          className="min-w-0 flex-1 rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg outline-none focus:border-acc"
+          className="min-w-0 flex-1 rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text outline-none focus:border-primary"
           style={{ fontSize: "12px" }}
         />
         {canBrowse && (
@@ -79,18 +79,18 @@ export default function NewRepositoryForm({
             title="Choose the parent folder"
             aria-label="Choose the parent folder"
             data-testid="project-new-repo-browse"
-            className="shrink-0 rounded border border-line-strong bg-bg-3 px-2 text-fg-3 hover:border-acc hover:text-fg"
+            className="shrink-0 rounded border border-line-strong bg-surface-2 px-2 text-text-3 hover:border-primary hover:text-text"
           >
             <FolderOpen size={13} />
           </button>
         )}
       </div>
-      <div className="flex items-center justify-between gap-2 text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="flex items-center justify-between gap-2 text-text-3" style={{ fontSize: "10.5px" }}>
         <span className="truncate">
           {target ? (
             <>
-              Into <span className="font-mono text-fg-3">{tildify(target.parent, home)}</span> ·{" "}
-              <span className="font-mono text-fg-3">{target.name}</span>, created or empty
+              Into <span className="font-mono text-text-3">{tildify(target.parent, home)}</span> ·{" "}
+              <span className="font-mono text-text-3">{target.name}</span>, created or empty
             </>
           ) : (
             "An absolute path, ending with the folder name"
@@ -107,7 +107,7 @@ export default function NewRepositoryForm({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded px-2.5 py-1 text-fg-3 hover:bg-bg-4"
+          className="rounded px-2.5 py-1 text-text-3 hover:bg-hover"
           style={{ fontSize: "11px" }}
         >
           Cancel
@@ -117,7 +117,7 @@ export default function NewRepositoryForm({
           onClick={() => void create()}
           disabled={!target || busy}
           data-testid="project-new-repo-create"
-          className="rounded bg-acc px-2.5 py-1 font-medium text-on-acc hover:bg-acc-dim disabled:opacity-50"
+          className="rounded bg-primary px-2.5 py-1 font-medium text-primary-ink hover:bg-primary-hi disabled:opacity-50"
           style={{ fontSize: "11px" }}
         >
           {busy ? "Creating…" : "Create and add"}

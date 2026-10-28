@@ -94,11 +94,11 @@ export function MasterList<T extends AbsorbableRow>({
             }}
             className={`group flex items-center justify-between gap-3 rounded px-2 py-2 text-left ${
               checked
-                ? "bg-acc-bg text-fg"
+                ? "bg-selected text-text"
                 : isSelected
-                  ? "bg-bg-5 text-fg"
-                  : "text-fg-3 hover:bg-bg-3"
-            } ${selection?.flashId === row.id ? "ring-1 ring-acc" : ""}`}
+                  ? "bg-surface-2 text-text"
+                  : "text-text-3 hover:bg-hover"
+            } ${selection?.flashId === row.id ? "ring-1 ring-primary" : ""}`}
             style={{ fontSize: "11.5px" }}
           >
             <span className="flex min-w-0 items-center gap-2">
@@ -127,7 +127,7 @@ export function MasterList<T extends AbsorbableRow>({
                 />
               )}
             </span>
-            <span className="shrink-0 font-mono text-fg-2">
+            <span className="shrink-0 font-mono text-text-2">
               {isTotal ? "" : valueLabel(row)}
             </span>
           </button>

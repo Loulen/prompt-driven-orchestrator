@@ -68,26 +68,26 @@ export default function PersistedProvisioningEditor({
       projectId={scope === "project" ? (projectId ?? null) : null}
       defaultExpanded={defaultExpanded}
       leading={
-        <label className="block text-fg-3" style={{ fontSize: 10 }}>
+        <label className="block text-text-3" style={{ fontSize: 10 }}>
           Resolve against
           <input
             value={repository}
             onChange={(event) => setRepository(event.target.value)}
             placeholder="/absolute/path/to/repository"
-            className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+            className="mt-1 w-full rounded border border-line-strong bg-surface-2 px-2 py-1 font-mono text-text outline-none focus:border-primary"
           />
         </label>
       }
       trailing={
         <div className="flex items-center justify-between">
-          <span className={message?.includes("Failed") ? "text-st-failed" : "text-fg-4"}>
+          <span className={message?.includes("Failed") ? "text-st-failed" : "text-text-3"}>
             {message}
           </span>
           <button
             type="button"
             onClick={save}
             disabled={!valid || saving || (scope === "project" && !projectId)}
-            className="rounded bg-acc px-2.5 py-1 font-medium text-on-acc disabled:opacity-40"
+            className="rounded bg-primary px-2.5 py-1 font-medium text-primary-ink disabled:opacity-40"
           >
             {saving ? "Saving…" : "Save provisioning"}
           </button>

@@ -57,12 +57,12 @@ export default function ProfileEnvEditor({
 
   return (
     <div className="flex flex-col gap-1.5" data-testid="staging-profile-env">
-      <span className="text-fg-3" style={{ fontSize: "10.5px" }}>
+      <span className="text-text-3" style={{ fontSize: "10.5px" }}>
         Environment
       </span>
       {Object.entries(profile.env).length === 0 ? (
         <span
-          className="text-fg-4"
+          className="text-text-3"
           style={{ fontSize: "10.5px" }}
           data-testid="staging-profile-no-env"
         >
@@ -75,21 +75,21 @@ export default function ProfileEnvEditor({
             className="flex items-center gap-2"
             data-testid={`staging-env-${key}`}
           >
-            <span className="shrink-0 font-mono text-fg" style={{ fontSize: "11.5px" }}>
+            <span className="shrink-0 font-mono text-text" style={{ fontSize: "11.5px" }}>
               {key}
             </span>
-            <span className="text-fg-4" style={{ fontSize: "11.5px" }}>
+            <span className="text-text-3" style={{ fontSize: "11.5px" }}>
               =
             </span>
             {/* Shown in clear, deliberately: the value is already in clear in the
                 database, in the Run's event file and in `docker inspect`. Masking it
                 would suggest PDO is protecting it. */}
             <span
-              className="min-w-0 flex-1 truncate font-mono text-fg-2"
+              className="min-w-0 flex-1 truncate font-mono text-text-2"
               style={{ fontSize: "11.5px" }}
               title={value}
             >
-              {value === "" ? <em className="text-fg-4">(empty)</em> : value}
+              {value === "" ? <em className="text-text-3">(empty)</em> : value}
             </span>
             <button
               type="button"
@@ -97,7 +97,7 @@ export default function ProfileEnvEditor({
               disabled={busy}
               aria-label={`Remove ${key}`}
               data-testid={`staging-env-remove-${key}`}
-              className="shrink-0 rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-5 hover:text-fg-2 disabled:opacity-40"
+              className="shrink-0 rounded p-0.5 text-text-3 transition-colors hover:bg-active hover:text-text-2 disabled:opacity-40"
             >
               <X size={12} />
             </button>
@@ -114,7 +114,7 @@ export default function ProfileEnvEditor({
           placeholder="PUPPETEER_EXECUTABLE_PATH"
           aria-label="Environment variable name"
           data-testid="staging-env-new-key"
-          className="min-w-0 flex-1 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+          className="min-w-0 flex-1 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
           style={{ fontSize: "11px" }}
         />
         <input
@@ -126,7 +126,7 @@ export default function ProfileEnvEditor({
           placeholder="/usr/bin/chromium"
           aria-label="Environment variable value"
           data-testid="staging-env-new-value"
-          className="min-w-0 flex-1 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
+          className="min-w-0 flex-1 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none"
           style={{ fontSize: "11px" }}
         />
         <button
@@ -134,13 +134,13 @@ export default function ProfileEnvEditor({
           onClick={addEnv}
           disabled={busy || envKey.trim().length === 0}
           data-testid="staging-env-add"
-          className="shrink-0 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:border-acc disabled:opacity-40"
+          className="shrink-0 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 transition-colors hover:border-primary disabled:opacity-40"
           style={{ fontSize: "11px" }}
         >
           Set
         </button>
       </div>
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="text-text-3" style={{ fontSize: "10.5px" }}>
         Posed at container creation, for every session of the Run. Often the only way
         to configure an MCP server whose <span className="font-mono">.mcp.json</span>{" "}
         comes from a plugin. <span className="font-mono">{profile.reserved_env_keys.join(", ")}</span>{" "}

@@ -64,33 +64,33 @@ export default function ReviewDiffBody({
       {isArchived ? (
         <EmptyState
           testId="review-archived"
-          icon={<Archive size={22} className="text-fg-5" />}
+          icon={<Archive size={22} className="text-text-3" />}
           title="Diff not preserved for archived runs"
           hint="The run branch was deleted at cleanup."
         />
       ) : sameRef ? (
         <EmptyState
           testId="review-empty"
-          icon={<span className="text-fg-5" style={{ fontSize: "24px" }}>≡</span>}
+          icon={<span className="text-text-3" style={{ fontSize: "24px" }}>≡</span>}
           title="Nothing to compare"
           hint="Source and destination are the same ref. Pick another destination."
         />
       ) : current.kind === "none" ? (
-        <div className="px-4 py-10 text-center text-fg-4" style={{ fontSize: "11px" }} data-testid="review-loading">
+        <div className="px-4 py-10 text-center text-text-3" style={{ fontSize: "11px" }} data-testid="review-loading">
           Loading diff…
         </div>
       ) : current.kind === "error" ? (
         <div className="flex flex-col items-center gap-2 px-4 py-14 text-center" data-testid="review-error">
-          <div className="text-fg-3" style={{ fontSize: "12px" }}>
+          <div className="text-text-3" style={{ fontSize: "12px" }}>
             {current.status === 404 ? "Run branch not found" : "Could not load the diff"}
           </div>
-          <div className="text-fg-4" style={{ fontSize: "11px" }}>
+          <div className="text-text-3" style={{ fontSize: "11px" }}>
             {current.message}
           </div>
           <button
             type="button"
             onClick={reload}
-            className="mt-1 cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 hover:text-fg"
+            className="mt-1 cursor-pointer rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:text-text"
             style={{ fontSize: "10.5px" }}
           >
             Retry
@@ -99,14 +99,14 @@ export default function ReviewDiffBody({
       ) : files.length === 0 ? (
         <EmptyState
           testId="review-empty"
-          icon={<span className="text-fg-5" style={{ fontSize: "24px" }}>≡</span>}
+          icon={<span className="text-text-3" style={{ fontSize: "24px" }}>≡</span>}
           title="No changes"
           hint="The two refs have identical trees."
         />
       ) : (
         <>
           {files.length > 40 && (
-            <div className="mx-3 mt-2.5 rounded border border-line bg-bg-3 px-2.5 py-1 text-fg-3" style={{ fontSize: "10.5px" }}>
+            <div className="mx-3 mt-2.5 rounded border border-line bg-surface-2 px-2.5 py-1 text-text-3" style={{ fontSize: "10.5px" }}>
               Large diff — files collapsed
             </div>
           )}
@@ -136,7 +136,7 @@ export default function ReviewDiffBody({
             onJump={(d) => jumpTo(d)}
             onSendAll={() => void send(pairDrafts.map((d) => d.key))}
           />
-          <div className="h-[40vh]" />
+          <div className="h-[calc(40vh/var(--app-zoom,1))]" />
         </>
       )}
     </>
@@ -157,10 +157,10 @@ function EmptyState({
   return (
     <div className="flex flex-col items-center gap-1 px-4 pt-20 text-center" data-testid={testId}>
       <div className="mb-1">{icon}</div>
-      <div className="text-fg-3" style={{ fontSize: "12px" }}>
+      <div className="text-text-3" style={{ fontSize: "12px" }}>
         {title}
       </div>
-      <div className="text-fg-4" style={{ fontSize: "11px" }}>
+      <div className="text-text-3" style={{ fontSize: "11px" }}>
         {hint}
       </div>
     </div>

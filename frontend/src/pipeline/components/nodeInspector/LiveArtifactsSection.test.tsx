@@ -1,20 +1,19 @@
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
-import { TooltipProvider } from "../../../shared/ui/tooltip";
 import type { LiveArtifact } from "../../../shared/generated/LiveArtifact";
 import LiveArtifactsSection from "./LiveArtifactsSection";
 
 function renderSection(live: LiveArtifact[], free = true, allowInstructions = true) {
   const onChange = vi.fn();
   render(
-    <TooltipProvider>
+    <>
       <LiveArtifactsSection
         live={live}
         free={free}
         allowInstructions={allowInstructions}
         onChange={onChange}
       />
-    </TooltipProvider>,
+    </>,
   );
   return onChange;
 }

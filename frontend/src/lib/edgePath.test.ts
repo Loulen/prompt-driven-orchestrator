@@ -142,7 +142,7 @@ describe("segHandleStyle", () => {
     const style = segHandleStyle(50, 0, "horizontal", "#f59e0b");
     expect(style.background).toBe("#f59e0b");
     // The old chunky green default must be gone.
-    expect(style.background).not.toBe("var(--color-acc, #10b981)");
+    expect(style.background).not.toBe("var(--primary)");
     expect(style.background).not.toBe("#10b981");
   });
 

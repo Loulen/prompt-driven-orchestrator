@@ -1,11 +1,15 @@
 import { useState } from "react";
 import GridSizePicker from "../../../pipeline/components/GridSizePicker";
 import ThemeSelect from "../../../shared/ui/ThemeSelect";
+import { Segmented } from "../../../shared/ui/kit";
+import { setUiScale, UI_SCALES, useUiScale, type UiScale } from "../../../lib/uiScale";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../../../lib/uiPrefs";
 import { useEditStore } from "../../../pipeline/store/editStore";
 import { useWiringStore } from "../../../stores/wiringStore";
 import type { SettingsSection } from "../../model/settingsCategories";
 import Section from "./Section";
+
+const SCALE_ITEMS = UI_SCALES.map((scale) => ({ value: String(scale), label: `${scale}%` }));
 
 /**
  * Per-client UI preferences (#342, #759). Both controls persist to localStorage AT
@@ -28,24 +32,24 @@ export default function InterfaceSection({ section }: { section: SettingsSection
   const setGridFeedback = useWiringStore((s) => s.setGridFeedback);
   const defaultGridSize = useWiringStore((s) => s.defaultGridSize);
   const setDefaultGridSize = useWiringStore((s) => s.setDefaultGridSize);
+  const uiScale = useUiScale();
 
   return (
     <Section section={section}>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+          <span className="font-medium text-text-2 text-sm">
             Theme
           </span>
           <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
+            className="rounded-full border border-primary/30 bg-selected px-2 py-0.5 text-primary text-2xs"
             data-testid="setting-theme-badge"
           >
             Device-local · saved immediately
           </span>
         </div>
         <ThemeSelect />
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+        <div className="text-text-3 text-xs">
           With nothing chosen, PDO paints dark — the look it has always had.
           System follows your operating system's light/dark setting and keeps
           following it. Light and dark pin PDO, whatever the system does.
@@ -53,12 +57,32 @@ export default function InterfaceSection({ section }: { section: SettingsSection
       </div>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+          <span className="font-medium text-text-2 text-sm">
+            UI scale
+          </span>
+          <span
+            className="rounded-full border border-primary/30 bg-selected px-2 py-0.5 text-primary text-2xs"
+            data-testid="setting-ui-scale-badge"
+          >
+            Device-local · saved immediately
+          </span>
+        </div>
+        <div data-testid="setting-ui-scale">
+          <Segmented
+            label="UI scale"
+            value={String(uiScale)}
+            onChange={(v) => setUiScale(Number(v) as UiScale)}
+            items={SCALE_ITEMS}
+          />
+        </div>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-text-2 text-sm">
             Single-tab mode
           </span>
           <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
+            className="rounded-full border border-primary/30 bg-selected px-2 py-0.5 text-primary text-2xs"
             data-testid="setting-tabs-disabled-badge"
           >
             Device-local · saved immediately
@@ -73,32 +97,31 @@ export default function InterfaceSection({ section }: { section: SettingsSection
             data-testid="setting-tabs-disabled"
             onClick={() => setSingleTabMode(!singleTabMode)}
             className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-              singleTabMode ? "bg-acc" : "bg-fg-5"
+              singleTabMode ? "bg-primary" : "bg-text-3"
             }`}
           >
             <span
-              className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
+              className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-surface-0 transition-all ${
                 singleTabMode ? "left-3" : "left-0.5"
               }`}
             />
           </button>
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="text-text-3 text-xs">
             Opening a pipeline or run replaces the current tab instead of stacking a new one.
             Enabling it closes the other open tabs.
           </span>
         </div>
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+        <div className="text-text-3 text-xs">
           Stored in this browser's localStorage. Not shared with other browsers or the daemon.
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+          <span className="font-medium text-text-2 text-sm">
             Child runs
           </span>
           <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
+            className="rounded-full border border-primary/30 bg-selected px-2 py-0.5 text-primary text-2xs"
             data-testid="setting-child-runs-badge"
           >
             Device-local · saved immediately
@@ -134,29 +157,27 @@ export default function InterfaceSection({ section }: { section: SettingsSection
                 }}
                 className={`flex flex-1 cursor-pointer items-center justify-center rounded border px-2 py-1.5 font-medium transition-colors ${
                   selected
-                    ? "border-acc bg-acc-bg text-acc"
-                    : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
-                }`}
-                style={{ fontSize: "10px" }}
+                    ? "border-primary bg-selected text-primary"
+                    : "border-line-strong bg-surface-2 text-text-3 hover:text-text-3"
+                } text-2xs`}
               >
                 {label}
               </button>
             );
           })}
         </div>
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+        <div className="text-text-3 text-xs">
           Applied when the run list loads. Toggling a row or the expand/collapse-all button only
           affects the current session.
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+          <span className="font-medium text-text-2 text-sm">
             Wiring grid
           </span>
           <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
+            className="rounded-full border border-primary/30 bg-selected px-2 py-0.5 text-primary text-2xs"
             data-testid="setting-wiring-grid-badge"
           >
             Device-local · saved immediately
@@ -197,28 +218,26 @@ export default function InterfaceSection({ section }: { section: SettingsSection
                 }}
                 className={`flex flex-1 cursor-pointer items-center justify-center rounded border px-2 py-1.5 font-medium transition-colors ${
                   selected
-                    ? "border-acc bg-acc-bg text-acc"
-                    : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
-                }`}
-                style={{ fontSize: "10px" }}
+                    ? "border-primary bg-selected text-primary"
+                    : "border-line-strong bg-surface-2 text-text-3 hover:text-text-3"
+                } text-2xs`}
               >
                 {label}
               </button>
             );
           })}
         </div>
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+        <div className="text-text-3 text-xs">
           How the wiring grid shows itself while you draw an edge on the canvas.
         </div>
       </div>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
+          <span className="font-medium text-text-2 text-sm">
             Wiring grid size
           </span>
           <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
+            className="rounded-full border border-primary/30 bg-selected px-2 py-0.5 text-primary text-2xs"
             data-testid="setting-wiring-grid-size-badge"
           >
             Device-local · saved immediately
@@ -230,7 +249,7 @@ export default function InterfaceSection({ section }: { section: SettingsSection
           ariaLabel="Wiring grid size"
           testId="setting-wiring-grid-size"
         />
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
+        <div className="text-text-3 text-xs">
           The step edges snap to on the canvas, for every pipeline that has no size of its own. A
           pipeline can pick its own size in its Pipeline info; that choice is saved in the
           pipeline file and wins over this one. Existing routes are never re-snapped.

@@ -21,7 +21,7 @@ describe("ChildCountPills (#783)", () => {
     expect(screen.getByTestId("child-count-pills-stale")).toHaveTextContent("1");
     expect(screen.queryByTestId("child-count-pills-running")).not.toBeInTheDocument();
     // Stale wears the same amber as the list's stalled dot.
-    expect(screen.getByTestId("child-count-pills-stale").querySelector(".bg-st-stale")).not.toBeNull();
+    expect(screen.getByTestId("child-count-pills-stale").querySelector(".bg-st-skipped")).not.toBeNull();
     expect(screen.getByTestId("child-count-pills")).toHaveAttribute(
       "aria-label",
       "2 finished, 1 failed, 1 stale, 0 running child runs",

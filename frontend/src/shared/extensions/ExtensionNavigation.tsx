@@ -21,7 +21,7 @@ export default function ExtensionNavigation() {
             openPage({ key: entry.key, extension: entry.extension.id, location: "topbar/start", path: "" })
           }
           data-testid={`extension-nav-${entry.key}`}
-          className="rounded px-2 py-0.5 text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
+          className="rounded px-2 py-0.5 text-text-3 transition-colors hover:bg-active hover:text-text"
         >
           {entry.contribution.label}
         </button>

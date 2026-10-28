@@ -38,7 +38,7 @@ export function StatsFilterBand({
             type="button"
             data-testid="stats-reset-filters"
             onClick={onReset}
-            className="ml-auto text-fg-4 underline decoration-dotted underline-offset-2 hover:text-fg-2"
+            className="ml-auto text-text-3 underline decoration-dotted underline-offset-2 hover:text-text-2"
           >
             reset filters
           </button>
@@ -66,8 +66,8 @@ export function CohortChip({
       onClick={() => onChange(!checked)}
       className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
         checked
-          ? "border-st-done bg-st-done/15 text-fg"
-          : "border-line-strong bg-bg-3 text-fg-2"
+          ? "border-st-done bg-st-done/15 text-text"
+          : "border-line-strong bg-surface-2 text-text-2"
       }`}
     >
       {checked && <Check size={10} strokeWidth={3} aria-hidden="true" />}
@@ -97,8 +97,8 @@ export function UncombinedChip({
       onClick={() => onChange(!checked)}
       className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
         checked
-          ? "border-st-done bg-st-done/15 text-fg"
-          : "border-line-strong bg-bg-3 text-fg-2"
+          ? "border-st-done bg-st-done/15 text-text"
+          : "border-line-strong bg-surface-2 text-text-2"
       }`}
     >
       {checked ? (
@@ -136,7 +136,7 @@ export function CohortOnlyBand({
   return (
     <StatsFilterBand label={label} testid="stats-filter-band">
       <CohortChip checked={completedOnly} onChange={onCompletedOnlyChange} />
-      <span className="text-fg-4">default: all runs</span>
+      <span className="text-text-3">default: all runs</span>
       {uncombined && (
         <UncombinedChip
           checked={uncombined.checked}

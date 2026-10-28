@@ -12,7 +12,7 @@ import {
  *  duration mode picked (#819), Steering says where it comes from (#792). */
 export function PerformanceTableHead({ mode }: { mode: DurationMode }) {
   return (
-    <thead className="text-fg-4">
+    <thead className="text-text-3">
       <tr>
         <th className="w-48 pb-2 font-medium">Name</th>
         <th className="pb-2 font-medium">Context (peak tokens)</th>
@@ -29,7 +29,7 @@ export function PerformanceTableHead({ mode }: { mode: DurationMode }) {
                 <span
                   role="img"
                   aria-label={DECLARED_WAIT_COPY}
-                  className="inline-flex text-fg-4"
+                  className="inline-flex text-text-3"
                 >
                   <Info size={11} />
                 </span>
@@ -44,7 +44,7 @@ export function PerformanceTableHead({ mode }: { mode: DurationMode }) {
               <span
                 role="img"
                 aria-label={STEERING_PROVENANCE_COPY}
-                className="inline-flex text-fg-4"
+                className="inline-flex text-text-3"
               >
                 <Info size={11} />
               </span>

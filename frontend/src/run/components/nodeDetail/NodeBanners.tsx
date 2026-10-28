@@ -68,7 +68,7 @@ export default function NodeBanners({
   return (
     <>
       {completionReleased && selectedIterStatus === "running" && (
-        <div className="flex items-center gap-2 border-b border-st-running/30 bg-st-running-bg px-3 py-2">
+        <div className="flex items-center gap-2 border-b border-st-running/30 bg-st-running/14 px-3 py-2">
           <CheckCircle size={14} className="shrink-0 text-st-running" />
           <span
             className="text-st-running"
@@ -112,12 +112,12 @@ export default function NodeBanners({
           consequence (ADR-0032 § "Ce qu'on ne fait pas": no catch-up). */}
       {node.status === "stale" && (
         <div
-          className="flex items-center gap-2 border-b border-st-stale/30 bg-st-stale-bg px-3 py-2"
+          className="flex items-center gap-2 border-b border-st-skipped/30 bg-st-skipped/14 px-3 py-2"
           data-testid="stale-banner"
         >
-          <AlertCircle size={14} className="shrink-0 text-st-stale" />
+          <AlertCircle size={14} className="shrink-0 text-st-skipped" />
           <span
-            className="flex-1 text-st-stale"
+            className="flex-1 text-st-skipped"
             style={{ fontSize: "11.5px", fontWeight: 500 }}
           >
             Agent idle for &gt;2 min — outputs incomplete
@@ -128,7 +128,7 @@ export default function NodeBanners({
               <button
                 data-testid="stale-stop-btn"
                 onClick={killStale}
-                className="flex cursor-pointer items-center gap-1 rounded border border-st-stale/40 bg-st-stale/10 px-1.5 py-0.5 text-st-stale transition-colors hover:bg-st-stale/20"
+                className="flex cursor-pointer items-center gap-1 rounded border border-st-skipped/40 bg-st-skipped/10 px-1.5 py-0.5 text-st-skipped transition-colors hover:bg-st-skipped/20"
                 style={{ fontSize: "10.5px", fontWeight: 500 }}
               >
                 <Square size={10} />
@@ -139,7 +139,7 @@ export default function NodeBanners({
               <button
                 data-testid="stale-retry-btn"
                 onClick={restartIteration}
-                className="flex cursor-pointer items-center gap-1 rounded border border-st-stale/40 bg-st-stale/10 px-1.5 py-0.5 text-st-stale transition-colors hover:bg-st-stale/20"
+                className="flex cursor-pointer items-center gap-1 rounded border border-st-skipped/40 bg-st-skipped/10 px-1.5 py-0.5 text-st-skipped transition-colors hover:bg-st-skipped/20"
                 style={{ fontSize: "10.5px", fontWeight: 500 }}
               >
                 <RotateCcw size={10} />
@@ -153,10 +153,10 @@ export default function NodeBanners({
 
       {/* Stopped banner */}
       {node.status === "stopped" && (
-        <div className="flex items-center gap-2 border-b border-st-stopped/30 bg-st-stopped-bg px-3 py-2">
-          <AlertCircle size={14} className="shrink-0 text-st-stopped" />
+        <div className="flex items-center gap-2 border-b border-st-skipped/30 bg-st-skipped/14 px-3 py-2">
+          <AlertCircle size={14} className="shrink-0 text-st-skipped" />
           <span
-            className="text-st-stopped"
+            className="text-st-skipped"
             style={{ fontSize: "11.5px", fontWeight: 500 }}
           >
             Stopped{node.failure_reason ? ` — ${node.failure_reason}` : ""}
@@ -175,12 +175,12 @@ export default function NodeBanners({
           flips the terminal back to split). */}
       {node.status === "interrupted" && (
         <div
-          className="flex items-center gap-2 border-b border-st-interrupted/30 bg-st-interrupted-bg px-3 py-2"
+          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await/14 px-3 py-2"
           data-testid="interrupted-banner"
         >
-          <AlertCircle size={14} className="shrink-0 text-st-interrupted" />
+          <AlertCircle size={14} className="shrink-0 text-st-await" />
           <span
-            className="flex-1 text-st-interrupted"
+            className="flex-1 text-st-await"
             style={{ fontSize: "11.5px", fontWeight: 500 }}
           >
             {interruptedBannerText(node.failure_reason)}
@@ -189,7 +189,7 @@ export default function NodeBanners({
             <button
               data-testid="interrupted-reopen-btn"
               onClick={retry}
-              className="flex cursor-pointer items-center gap-1 rounded border border-st-interrupted/40 bg-st-interrupted/10 px-1.5 py-0.5 text-st-interrupted transition-colors hover:bg-st-interrupted/20"
+              className="flex cursor-pointer items-center gap-1 rounded border border-st-await/40 bg-st-await/10 px-1.5 py-0.5 text-st-await transition-colors hover:bg-st-await/20"
               style={{ fontSize: "10.5px", fontWeight: 500 }}
             >
               <RotateCcw size={10} />
@@ -203,7 +203,7 @@ export default function NodeBanners({
           sweep pruned. Slate, not green: it never ran, its branch was not taken.
           The reason reads at node level (skip_reason), lifted from the skip event. */}
       {node.status === "skipped" && (
-        <div className="flex items-center gap-2 border-b border-st-skipped/30 bg-st-skipped-bg px-3 py-2">
+        <div className="flex items-center gap-2 border-b border-st-skipped/30 bg-st-skipped/14 px-3 py-2">
           <AlertCircle size={14} className="shrink-0 text-st-skipped" />
           <span
             className="text-st-skipped"
@@ -217,7 +217,7 @@ export default function NodeBanners({
       {/* Frontmatter retry pending banner (amber) */}
       {node.status === "running" && (node.frontmatter_retries ?? 0) > 0 && (
         <div
-          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2"
+          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await/14 px-3 py-2"
           data-testid="frontmatter-retry-banner"
         >
           <AlertCircle size={14} className="shrink-0 text-st-await" />
@@ -233,7 +233,7 @@ export default function NodeBanners({
       {/* Failed banner — output-validation variant (#490) */}
       {node.status === "failed" && isOutputValidationFailure(node) && (
         <div
-          className="flex flex-col gap-1 border-b border-st-failed/30 bg-st-failed-bg px-3 py-2"
+          className="flex flex-col gap-1 border-b border-st-failed/30 bg-st-failed/14 px-3 py-2"
           data-testid="output-validation-banner"
         >
           <div className="flex items-center gap-2">
@@ -283,7 +283,7 @@ export default function NodeBanners({
       {/* Failed banner — generic. Same predicate, inverted: two different tests here
           would let both banners fire (or neither). */}
       {node.status === "failed" && !isOutputValidationFailure(node) && (
-        <div className="flex items-center gap-2 border-b border-st-failed/30 bg-st-failed-bg px-3 py-2">
+        <div className="flex items-center gap-2 border-b border-st-failed/30 bg-st-failed/14 px-3 py-2">
           <AlertCircle size={14} className="shrink-0 text-st-failed" />
           <span
             className="text-st-failed"

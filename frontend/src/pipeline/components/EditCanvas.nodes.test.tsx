@@ -1,7 +1,6 @@
 import { render, screen, within, fireEvent } from "@testing-library/react";
 import { describe, it, expect, afterEach } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 import { EditNode } from "./EditNode";
 import { useEditStore } from "../store/editStore";
 import { deriveEditEdges } from "./editEdgeDerivation";
@@ -25,9 +24,9 @@ afterEach(() => {
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <TooltipProvider>
+    <>
       <ReactFlowProvider>{children}</ReactFlowProvider>
-    </TooltipProvider>
+    </>
   );
 }
 
@@ -77,16 +76,16 @@ describe("EditNode start/end markers — green-on-complete (issue #105, inline r
     const card = screen.getByTestId("node-card");
     // Non-completed baseline in the inline view is the neutral "pending" cadre.
     expect(card.className).toContain("border-line-strong");
-    expect(card.className).toContain("bg-bg-3");
+    expect(card.className).toContain("bg-surface-2");
     expect(card.className).not.toContain("border-st-done");
-    expect(screen.getByTestId("node-icon-start").getAttribute("class")).toContain("text-acc");
+    expect(screen.getByTestId("node-icon-start").getAttribute("class")).toContain("text-primary");
   });
 
   it("Start: borrows the green completed cadre once the run reaches its end", () => {
     render(<EditNode {...markerProps({ nodeType: "start", reached: true })} />, { wrapper: Wrapper });
     const card = screen.getByTestId("node-card");
     expect(card.className).toContain("border-st-done");
-    expect(card.className).toContain("bg-st-done-bg");
+    expect(card.className).toContain("bg-st-done/14");
     expect(screen.getByTestId("node-icon-start").getAttribute("class")).toContain("text-st-done");
   });
 
@@ -104,7 +103,7 @@ describe("EditNode start/end markers — green-on-complete (issue #105, inline r
     render(<EditNode {...markerProps({ nodeType: "end", reached: true })} />, { wrapper: Wrapper });
     const card = screen.getByTestId("node-card");
     expect(card.className).toContain("border-st-done");
-    expect(card.className).toContain("bg-st-done-bg");
+    expect(card.className).toContain("bg-st-done/14");
     const icon = screen.getByTestId("node-icon-end").getAttribute("class");
     expect(icon).toContain("text-st-done");
     expect(icon).not.toContain("text-st-blocked");
@@ -553,11 +552,11 @@ describe("End marker accepts an incoming edge on any of its four borders (#840)"
       },
     } as unknown as Parameters<typeof EditNode>[0];
     const { container } = render(
-      <TooltipProvider>
+      <>
         <ReactFlowProvider>
           <EditNode {...props} />
         </ReactFlowProvider>
-      </TooltipProvider>,
+      </>,
     );
     const handles = Array.from(container.querySelectorAll(".react-flow__handle"));
     for (const side of SIDES) {

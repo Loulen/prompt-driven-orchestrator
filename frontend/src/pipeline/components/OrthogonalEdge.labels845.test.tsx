@@ -96,7 +96,7 @@ function edgeProps(data?: Partial<OrthogonalEdgeData>) {
       waypoints: null,
       isConditional: false,
       isElse: false,
-      strokeColor: "var(--color-fg-4)",
+      strokeColor: "var(--text-3)",
       dashed: false,
       ports: ["out", "spec"],
       showOutputLabels: true,
@@ -270,8 +270,8 @@ describe("condition label (#845)", () => {
     expect(pill.style.borderRadius).not.toBe(tag.style.borderRadius);
     expect(pill.style.background).not.toBe(tag.style.background);
     // The pill is outlined in the edge's own colour; the tag is a hairline.
-    expect(pill.style.border).toContain("--color-fg-4");
-    expect(tag.style.border).toContain("--color-line");
+    expect(pill.style.border).toContain("--text-3");
+    expect(tag.style.border).toContain("--line");
   });
 
   it("writes its dragged position", () => {

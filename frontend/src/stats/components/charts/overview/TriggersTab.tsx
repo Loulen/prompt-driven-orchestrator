@@ -16,18 +16,18 @@ export function TriggersTab({ overview }: { overview: StatsOverview }) {
     <div data-testid="stats-chart-triggers" className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2" style={{ fontSize: "11px" }}>
         <span
-          className="rounded bg-bg-3 px-2 py-1 text-fg-2"
+          className="rounded bg-surface-2 px-2 py-1 text-text-2"
           data-testid="stats-kpi-created-runs"
         >
           Fires that created a run:{" "}
-          <span className="font-mono text-fg">{kpi.fired}</span>
+          <span className="font-mono text-text">{kpi.fired}</span>
         </span>
         <span
-          className="rounded bg-bg-3 px-2 py-1 text-fg-2"
+          className="rounded bg-surface-2 px-2 py-1 text-text-2"
           data-testid="stats-kpi-distinct"
         >
-          <span className="font-mono text-fg">{kpi.distinct_triggers}</span> of{" "}
-          <span className="font-mono text-fg">{kpi.enabled_triggers}</span>{" "}
+          <span className="font-mono text-text">{kpi.distinct_triggers}</span> of{" "}
+          <span className="font-mono text-text">{kpi.enabled_triggers}</span>{" "}
           enabled triggers fired
         </span>
       </div>

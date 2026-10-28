@@ -108,9 +108,9 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   const cardStatus: NodeStatus = reached ? "completed" : data.status;
   const iconColor =
     reached ? "text-st-done"
-    : data.nodeType === "start" ? "text-acc"
+    : data.nodeType === "start" ? "text-primary"
     : data.nodeType === "end" ? "text-st-blocked"
-    : "text-fg-3";
+    : "text-text-3";
   // Images uploaded with the run's input ride along on the Start marker only
   // (issue #145). The canvas shows a compact, filename-tagged strip; the full
   // thumbnails live in the StartInspector.
@@ -137,7 +137,7 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         // The dashes take a light, thicker stroke: the card's dimming would
         // otherwise fade them into the canvas.
         ...(awaitingPlay
-          ? { opacity: 0.6, borderStyle: "dashed", borderWidth: 2, borderColor: "var(--color-fg-2)" }
+          ? { opacity: 0.6, borderStyle: "dashed", borderWidth: 2, borderColor: "var(--text-2)" }
           : null),
         // Amber is the wiring colour throughout (#844): the same family the
         // selected edge uses. Green is the app's accent and already means
@@ -145,10 +145,10 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         // the solid one says « releasing here lands the wire », and wins when
         // both apply.
         ...(rimHover
-          ? { boxShadow: `0 0 0 1px var(--color-bg-1), 0 0 0 2.5px ${WIRE_SOFT}` }
+          ? { boxShadow: `0 0 0 1px var(--surface-0), 0 0 0 2.5px ${WIRE_SOFT}` }
           : null),
         ...(isWireTarget
-          ? { boxShadow: `0 0 0 1px var(--color-bg-1), 0 0 0 2.5px ${WIRE}` }
+          ? { boxShadow: `0 0 0 1px var(--surface-0), 0 0 0 2.5px ${WIRE}` }
           : null),
         ...(selectedByColor && !isSelected
           ? { borderColor: selectedByColor, boxShadow: `0 0 0 1px ${selectedByColor}` }
@@ -215,26 +215,26 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         <span className="relative shrink-0">
           <NodeTypeIcon type={data.nodeType} size={14} className={iconColor} />
           {data.agentMode === "profile" && (
-            <Bookmark data-testid="agent-mode-profile" size={8} className="absolute -bottom-1 -right-1 text-fg-2" />
+            <Bookmark data-testid="agent-mode-profile" size={8} className="absolute -bottom-1 -right-1 text-text-2" />
           )}
           {data.agentMode === "custom" && (
-            <SlidersHorizontal data-testid="agent-mode-custom" size={8} className="absolute -bottom-1 -right-1 text-fg-2" />
+            <SlidersHorizontal data-testid="agent-mode-custom" size={8} className="absolute -bottom-1 -right-1 text-text-2" />
           )}
           {data.agentMode === "broken" && (
             <TriangleAlert data-testid="agent-mode-broken" size={8} className="absolute -bottom-1 -right-1 text-st-blocked" />
           )}
         </span>
-        <span className="font-medium text-fg">{data.label}</span>
+        <span className="font-medium text-text">{data.label}</span>
         <IsolationMarker isolated={data.isolated === true} />
         {data.onDemand && !data.inRun && (
           <span title="On demand — launched by your ▶ in a run" data-testid="on-demand-marker">
-            <Play size={10} className="shrink-0 text-fg-4" />
+            <Play size={10} className="shrink-0 text-text-3" />
           </span>
         )}
         {data.loopBadge && (
           <span
             data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
-            className="ml-auto shrink-0 rounded border border-acc px-1.5 font-mono text-acc"
+            className="ml-auto shrink-0 rounded border border-primary px-1.5 font-mono text-primary"
             style={{ fontSize: 10, lineHeight: "16px" }}
             title={
               data.loopBadge.kind === "collection"
@@ -269,7 +269,7 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
               key={name}
               data-testid="start-node-image-chip"
               title={name}
-              className="relative h-[34px] w-[46px] overflow-hidden rounded border border-line-strong bg-bg-1"
+              className="relative h-[34px] w-[46px] overflow-hidden rounded border border-line-strong bg-surface-0"
             >
               <div
                 className="absolute inset-0"
@@ -279,7 +279,7 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
                 }}
               />
               <div
-                className="absolute inset-x-0 bottom-0 truncate bg-bg-0/70 px-1 font-mono text-fg-4"
+                className="absolute inset-x-0 bottom-0 truncate bg-surface-0/70 px-1 font-mono text-text-3"
                 style={{ fontSize: "7.5px" }}
               >
                 {name}
@@ -312,7 +312,7 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           e.stopPropagation();
           data.onPlay?.();
         }}
-        className="nodrag nopan absolute z-[4] flex cursor-pointer items-center justify-center rounded-full border border-acc bg-bg-1 text-acc shadow transition-colors hover:bg-acc hover:text-bg-1"
+        className="nodrag nopan absolute z-[4] flex cursor-pointer items-center justify-center rounded-full border border-primary bg-surface-0 text-primary shadow transition-colors hover:bg-primary hover:text-surface-0"
         style={{ top: -9, right: -9, width: 20, height: 20 }}
       >
         <Play size={10} />

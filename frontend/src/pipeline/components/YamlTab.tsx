@@ -86,7 +86,7 @@ export function YamlTab({
 
   if (!pipeline) {
     return (
-      <div className="flex flex-1 items-center justify-center text-fg-4" style={{ fontSize: "12px" }}>
+      <div className="flex flex-1 items-center justify-center text-text-3" style={{ fontSize: "12px" }}>
         No pipeline loaded.
       </div>
     );
@@ -130,14 +130,14 @@ export function YamlTab({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-      <div className="border-b border-line bg-bg-3 px-3 py-2" data-testid="portable-document-bar">
+      <div className="border-b border-line bg-surface-2 px-3 py-2" data-testid="portable-document-bar">
         <div className="flex items-center gap-2">
-          <span className="h-1.5 w-1.5 rounded-full bg-acc" />
-          <span className="font-medium text-fg-2" style={{ fontSize: "11px" }}>
+          <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+          <span className="font-medium text-text-2" style={{ fontSize: "11px" }}>
             Portable document · v1
           </span>
           <button
-            className="ml-auto flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+            className="ml-auto flex items-center gap-1 rounded px-1.5 py-1 text-text-3 hover:bg-hover hover:text-text"
             onClick={copyDocument}
             disabled={yaml == null}
           >
@@ -145,7 +145,7 @@ export function YamlTab({
             {copied ? "✓ Copied" : "Copy"}
           </button>
           <button
-            className="flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-text-3 hover:bg-hover hover:text-text"
             onClick={downloadDocument}
             disabled={yaml == null}
           >
@@ -154,7 +154,7 @@ export function YamlTab({
           </button>
           {skillCount > 0 && (
             <button
-              className="flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+              className="flex items-center gap-1 rounded px-1.5 py-1 text-text-3 hover:bg-hover hover:text-text"
               onClick={() => void downloadSkillsSidecar()}
               title={`The ${skillCount} skill${skillCount === 1 ? "" : "s"} this pipeline selects, as ${pipelineName}.skills/<id>/… to unpack next to the YAML`}
               data-testid="download-skills-sidecar"
@@ -175,7 +175,7 @@ export function YamlTab({
           </div>
         )}
         {skillCount > 0 && (
-          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }} data-testid="skills-sidecar-note">
+          <p className="mt-1 text-text-3" style={{ fontSize: "10px" }} data-testid="skills-sidecar-note">
             {skillCount} skill{skillCount === 1 ? "" : "s"} referenced by id. Their content travels in
             the sidecar <code>{pipelineName}.skills/</code>; import both so the bank recreates them.
           </p>
@@ -186,12 +186,12 @@ export function YamlTab({
           </p>
         )}
         {runId && (
-          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
+          <p className="mt-1 text-text-3" style={{ fontSize: "10px" }}>
             This is the pipeline that ran, not the Run. Runtime values are not included.
           </p>
         )}
         <button
-          className="mt-1.5 flex items-center gap-1 text-fg-4 hover:text-fg-2"
+          className="mt-1.5 flex items-center gap-1 text-text-3 hover:text-text-2"
           style={{ fontSize: "10.5px" }}
           onClick={() => setShowExcluded((value) => !value)}
         >
@@ -199,7 +199,7 @@ export function YamlTab({
           Not included
         </button>
         {showExcluded && (
-          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
+          <p className="mt-1 text-text-3" style={{ fontSize: "10px" }}>
             Secrets, environment, runtime values, and instance configuration. Named agent
             profiles become Inherit; shared nodes become ordinary nodes. Skills are content,
             not configuration: they travel in the separate skills sidecar.
@@ -208,7 +208,7 @@ export function YamlTab({
       </div>
       <pre
         ref={preRef}
-        className="flex-1 overflow-auto p-3 font-mono text-fg-3 select-text"
+        className="flex-1 overflow-auto p-3 font-mono text-text-3 select-text"
         style={{ fontSize: "11px", lineHeight: "1.6", tabSize: 2 }}
         data-testid="info-yaml-content"
       >

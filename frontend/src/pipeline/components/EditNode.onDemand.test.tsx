@@ -1,7 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 import { EditNode } from "./EditNode";
 import { deriveEditNodes } from "./editNodeDerivation";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
@@ -10,9 +9,9 @@ import type { EditorPipelineDef } from "../model/pipeline";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <TooltipProvider>
+    <>
       <ReactFlowProvider>{children}</ReactFlowProvider>
-    </TooltipProvider>
+    </>
   );
 }
 
@@ -61,7 +60,7 @@ describe("the card of an on-demand node (ADR-0086)", () => {
     const node = screen.getByTestId("node-card");
     expect(node.style.opacity).toBe("0.6");
     expect(node.style.borderStyle).toBe("dashed");
-    expect(node.style.borderColor).toBe("var(--color-fg-2)");
+    expect(node.style.borderColor).toBe("var(--text-2)");
     const play = screen.getByTestId("node-play-btn");
     expect(play.dataset.play).toBe("start");
     fireEvent.click(play);

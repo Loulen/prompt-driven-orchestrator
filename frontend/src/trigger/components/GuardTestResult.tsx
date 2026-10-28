@@ -6,9 +6,9 @@ import GuardOutput from "./GuardOutput";
  * `GuardResult` variants: pass → would fire (green), skip → would skip (amber),
  * error → guard error (red). */
 const GUARD_VERDICT: Record<TestGuardResponse["outcome"], { label: string; cls: string }> = {
-  pass: { label: "Would fire", cls: "border-st-done/30 bg-st-done-bg text-st-done" },
-  skip: { label: "Would skip", cls: "border-st-paused/30 bg-st-paused-bg text-st-paused" },
-  error: { label: "Guard error", cls: "border-st-failed/30 bg-st-failed-bg text-st-failed" },
+  pass: { label: "Would fire", cls: "border-st-done/30 bg-st-done/14 text-st-done" },
+  skip: { label: "Would skip", cls: "border-st-blocked/30 bg-st-blocked/14 text-st-blocked" },
+  error: { label: "Guard error", cls: "border-st-failed/30 bg-st-failed/14 text-st-failed" },
 };
 
 interface GuardTestResultProps {

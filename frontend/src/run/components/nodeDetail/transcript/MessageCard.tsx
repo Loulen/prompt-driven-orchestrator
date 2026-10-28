@@ -42,22 +42,22 @@ export default function MessageCard({
       data-focused={focused || undefined}
       className={`rounded-md border px-2.5 py-2 ${
         focused
-          ? "border-st-await bg-st-await-bg"
+          ? "border-st-await bg-st-await/14"
           : speaker === "prompt"
-            ? "border-line-strong bg-bg-3"
-            : "border-line bg-bg-2"
+            ? "border-line-strong bg-surface-2"
+            : "border-line bg-surface-1"
       }`}
     >
-      <div className="mb-1 flex items-center gap-1.5 text-fg-3" style={{ fontSize: "10.5px" }}>
-        <Icon size={11} className="text-fg-4" />
+      <div className="mb-1 flex items-center gap-1.5 text-text-3" style={{ fontSize: "10.5px" }}>
+        <Icon size={11} className="text-text-3" />
         {speaker === "prompt" ? "Prompt" : "Agent"}
         {at && (
-          <span className="ml-auto font-mono text-fg-4" style={{ fontSize: "10px" }}>
+          <span className="ml-auto font-mono text-text-3" style={{ fontSize: "10px" }}>
             {formatTime(at)}
           </span>
         )}
       </div>
-      <div className="artifact-markdown break-words text-fg-2" style={{ fontSize: "11.5px", lineHeight: 1.5 }}>
+      <div className="artifact-markdown break-words text-text-2" style={{ fontSize: "11.5px", lineHeight: 1.5 }}>
         <Markdown
           remarkPlugins={REMARK_PLUGINS}
           rehypePlugins={highlight ? [[rehypeMarkQuery, { query: highlight }]] : undefined}
@@ -71,7 +71,7 @@ export default function MessageCard({
           type="button"
           data-testid="transcript-message-more"
           onClick={() => setOpen((o) => !o)}
-          className="mt-1 cursor-pointer text-fg-4 hover:text-fg-2"
+          className="mt-1 cursor-pointer text-text-3 hover:text-text-2"
           style={{ fontSize: "10.5px" }}
         >
           {open ? "Show less" : "Show more"}

@@ -46,12 +46,12 @@ export default function PublicUrlSection({ section, values, settings, dirty, set
           value={values.publicUrl}
           onChange={(e) => setField("publicUrl", e.target.value)}
           aria-invalid={invalid || undefined}
-          className={`w-full max-w-[640px] rounded-md border bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:outline-none ${
+          className={`w-full max-w-[640px] rounded-md border bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:outline-none ${
             invalid
               ? "border-st-failed"
               : isDirty
                 ? "border-st-await focus:border-st-await"
-                : "border-line-strong focus:border-acc"
+                : "border-line-strong focus:border-primary"
           }`}
           style={{ fontSize: "12px" }}
         />
@@ -63,18 +63,18 @@ export default function PublicUrlSection({ section, values, settings, dirty, set
       </FieldBlock>
       {base && (
         <div
-          className="max-w-[640px] rounded-md border border-line bg-bg-2 px-3 py-2.5 font-mono"
+          className="max-w-[640px] rounded-md border border-line bg-surface-1 px-3 py-2.5 font-mono"
           style={{ fontSize: "11px" }}
           data-testid="setting-public-url-preview"
         >
-          <div className="mb-1.5 font-sans text-fg-4" style={{ fontSize: "10.5px" }}>
+          <div className="mb-1.5 font-sans text-text-3" style={{ fontSize: "10.5px" }}>
             What an agent prints after <span className="font-mono">pdo page mount</span>
           </div>
-          <div className="text-fg-2">Mounted {EXAMPLE_PAGE}.</div>
-          <div className="text-fg-2">
-            With its guide: <span className="text-acc">{guidedPageUrl(base, EXAMPLE_PAGE)}</span>
+          <div className="text-text-2">Mounted {EXAMPLE_PAGE}.</div>
+          <div className="text-text-2">
+            With its guide: <span className="text-primary">{guidedPageUrl(base, EXAMPLE_PAGE)}</span>
           </div>
-          <div className="text-fg-4">Page alone: {pageUrl(base, EXAMPLE_PAGE)}</div>
+          <div className="text-text-3">Page alone: {pageUrl(base, EXAMPLE_PAGE)}</div>
         </div>
       )}
     </Section>

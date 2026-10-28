@@ -87,21 +87,21 @@ export default function ReviewTopBar({
   const pairIsDefault = isDefaultPair(pair, defaults);
   const defaultLabel = `${defaults.from} → ${defaults.to}`;
   return (
-    <div className="relative z-20 flex min-w-0 items-center gap-2 whitespace-nowrap border-b border-line bg-bg-2 px-2.5" style={{ fontSize: "11px" }}>
+    <div className="relative z-20 flex min-w-0 items-center gap-2 whitespace-nowrap border-b border-line bg-surface-1 px-2.5" style={{ fontSize: "11px" }}>
       <button
         type="button"
         onClick={goBack}
         data-testid="review-back"
         title="Back to the Run (canvas stays where you left it)"
-        className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-[3px] text-fg-2 hover:bg-bg-3 hover:text-fg"
+        className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-[3px] text-text-2 hover:bg-hover hover:text-text"
       >
         <ArrowLeft size={12} className="shrink-0" />
-        <span className="truncate text-fg-4">
-          <span className="font-medium text-fg-2">{run?.pipeline_name ?? "…"}</span> · {runId}
+        <span className="truncate text-text-3">
+          <span className="font-medium text-text-2">{run?.pipeline_name ?? "…"}</span> · {runId}
         </span>
       </button>
       <span className="h-4 w-px bg-line-strong" />
-      <span className="text-fg-3">Review</span>
+      <span className="text-text-3">Review</span>
       <span className="h-4 w-px bg-line-strong" />
 
       <div className="flex items-center gap-1" data-testid="review-refpair">
@@ -114,7 +114,7 @@ export default function ReviewTopBar({
           onPick={(id) => setPair({ from: id, to: pair.to })}
           onPickPair={setPair}
         />
-        <span className="px-0.5 text-fg-4">→</span>
+        <span className="px-0.5 text-text-3">→</span>
         <RefPicker
           side="to"
           value={pair.to}
@@ -130,7 +130,7 @@ export default function ReviewTopBar({
           disabled={isArchived}
           title="Swap source and destination"
           data-testid="review-swap"
-          className="cursor-pointer rounded p-[3px] text-fg-4 hover:bg-bg-3 hover:text-fg-2 disabled:cursor-not-allowed disabled:opacity-40"
+          className="cursor-pointer rounded p-[3px] text-text-3 hover:bg-hover hover:text-text-2 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <ArrowLeftRight size={11} />
         </button>
@@ -140,7 +140,7 @@ export default function ReviewTopBar({
             onClick={() => setPair(defaults)}
             title="Back to the default pair"
             data-testid="review-reset"
-            className="cursor-pointer rounded px-1.5 py-0.5 text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+            className="cursor-pointer rounded px-1.5 py-0.5 text-text-3 hover:bg-hover hover:text-text-2"
             style={{ fontSize: "10px" }}
           >
             {defaultLabel}
@@ -148,7 +148,7 @@ export default function ReviewTopBar({
         )}
       </div>
       {remapNote && (
-        <span className="min-w-0 truncate text-fg-3" style={{ fontSize: "10.5px" }} title={remapNote} data-testid="review-remap-note" role="status">
+        <span className="min-w-0 truncate text-text-3" style={{ fontSize: "10.5px" }} title={remapNote} data-testid="review-remap-note" role="status">
           {remapNote}
         </span>
       )}
@@ -163,15 +163,15 @@ export default function ReviewTopBar({
           title={showOutdated ? "Hide outdated comments (they stay counted)" : "Show outdated comments"}
           data-testid="review-toggle-outdated"
           className={`flex cursor-pointer items-center gap-1 rounded border border-line-strong px-2 py-0.5 ${
-            showOutdated ? "bg-bg-3 text-fg-3 hover:text-fg-2" : "bg-bg-4 text-fg"
+            showOutdated ? "bg-surface-2 text-text-3 hover:text-text-2" : "bg-surface-2 text-text"
           }`}
           style={{ fontSize: "10.5px" }}
         >
-          <History size={11} className="text-st-stale" /> Show outdated
+          <History size={11} className="text-st-skipped" /> Show outdated
         </button>
       )}
       {stats && (
-        <span className="flex items-center gap-1.5 text-fg-2" data-testid="review-stats">
+        <span className="flex items-center gap-1.5 text-text-2" data-testid="review-stats">
           <span>
             {stats.files_changed} file{stats.files_changed === 1 ? "" : "s"}
           </span>
@@ -193,7 +193,7 @@ export default function ReviewTopBar({
           aria-pressed={effectiveView === "split"}
           data-testid="review-view-split"
           className={`flex cursor-pointer items-center gap-1 px-2 py-0.5 ${
-            effectiveView === "split" ? "bg-bg-4 text-fg" : "text-fg-3 hover:text-fg-2"
+            effectiveView === "split" ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"
           }`}
           style={{ fontSize: "10.5px" }}
         >
@@ -205,7 +205,7 @@ export default function ReviewTopBar({
           aria-pressed={effectiveView === "unified"}
           data-testid="review-view-unified"
           className={`flex cursor-pointer items-center gap-1 border-l border-line-strong px-2 py-0.5 ${
-            effectiveView === "unified" ? "bg-bg-4 text-fg" : "text-fg-3 hover:text-fg-2"
+            effectiveView === "unified" ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"
           }`}
           style={{ fontSize: "10.5px" }}
         >
@@ -218,7 +218,7 @@ export default function ReviewTopBar({
         disabled={filesCount === 0}
         title="Collapse all / expand all"
         data-testid="review-collapse-all"
-        className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 hover:text-fg-2 disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-3 hover:text-text-2 disabled:cursor-not-allowed disabled:opacity-50"
         style={{ fontSize: "10.5px" }}
       >
         <ListMinus size={11} /> Collapse all
@@ -242,7 +242,7 @@ export default function ReviewTopBar({
         location="review/toolbar"
         extra={extensionExtra}
         className="flex shrink-0 items-center gap-1"
-        buttonClassName="grid h-5 w-[22px] cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 hover:text-fg-2"
+        buttonClassName="grid h-5 w-[22px] cursor-pointer place-items-center rounded border border-line-strong bg-surface-2 text-text-3 hover:text-text-2"
         iconSize={11}
       />
       <a
@@ -251,7 +251,7 @@ export default function ReviewTopBar({
         rel="noreferrer"
         title="Open in a new tab — the URL carries the pair"
         data-testid="review-open-new-tab"
-        className="grid h-5 w-[22px] place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 hover:text-fg-2"
+        className="grid h-5 w-[22px] place-items-center rounded border border-line-strong bg-surface-2 text-text-3 hover:text-text-2"
       >
         <SquareArrowOutUpRight size={11} />
       </a>

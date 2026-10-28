@@ -22,7 +22,6 @@ import ReviewTopBar from "./ReviewTopBar";
 import { useProjects, useRuns } from "../../app/useAppData";
 import ExtensionContextProvider from "../../shared/extensions/ExtensionContextProvider";
 import Toaster from "../../shared/ui/Toaster";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 /**
  * The **Review page** (#749, ADR-0067; CONTEXT.md § "Relecture de diff"): a
@@ -187,12 +186,12 @@ export default function ReviewPage({ runId }: Props) {
 
   if (r.runError) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-2 bg-bg-1 text-fg-3" data-testid="review-page">
+      <div className="flex h-[calc(100dvh/var(--app-zoom,1))] flex-col items-center justify-center gap-2 bg-surface-0 text-text-3" data-testid="review-page">
         <div style={{ fontSize: "12px" }}>Run not found</div>
-        <div className="text-fg-4" style={{ fontSize: "11px" }}>
+        <div className="text-text-3" style={{ fontSize: "11px" }}>
           {r.runError}
         </div>
-        <a href="/" className="mt-2 text-acc" style={{ fontSize: "11px" }}>
+        <a href="/" className="mt-2 text-primary" style={{ fontSize: "11px" }}>
           Back to the app
         </a>
       </div>
@@ -203,7 +202,7 @@ export default function ReviewPage({ runId }: Props) {
   const { pairDrafts, sentCount } = entries;
   return (
     <ReviewExtensions run={run}>
-    <div className="pdo-review grid h-screen grid-rows-[36px_1fr] bg-bg-1 text-fg" data-testid="review-page">
+    <div className="pdo-review grid h-[calc(100dvh/var(--app-zoom,1))] grid-rows-[36px_1fr] bg-surface-0 text-text" data-testid="review-page">
       <ReviewTopBar
         runId={runId}
         run={run}
@@ -273,7 +272,7 @@ export default function ReviewPage({ runId }: Props) {
               onClick={toggleList}
               title="Show file list  ( [ )"
               data-testid="review-list-open"
-              className="absolute left-2 top-2 z-20 grid h-6 w-6 cursor-pointer place-items-center rounded border border-line-strong bg-bg-2 text-fg-4 hover:text-fg-2"
+              className="absolute left-2 top-2 z-20 grid h-6 w-6 cursor-pointer place-items-center rounded border border-line-strong bg-surface-1 text-text-3 hover:text-text-2"
             >
               <PanelLeftOpen size={12} />
             </button>
@@ -322,10 +321,10 @@ export default function ReviewPage({ runId }: Props) {
           role="status"
           data-testid="review-toast"
           data-error={toast.error ? "true" : undefined}
-          className={`fixed right-3.5 z-[60] max-w-[420px] rounded-md border border-line-strong bg-bg-3 px-2.5 py-[7px] text-fg-2 shadow-[0_8px_30px_rgba(0,0,0,.5)] ${
+          className={`fixed right-3.5 z-[60] max-w-[420px] rounded-md border border-line-strong bg-surface-2 px-2.5 py-[7px] text-text-2 shadow-[0_8px_30px_rgba(0,0,0,.5)] ${
             pairDrafts.length > 0 ? "bottom-[52px]" : "bottom-3.5"
           } ${
-            toast.error ? "border-l-[3px] border-l-st-failed" : "border-l-[3px] border-l-acc"
+            toast.error ? "border-l-[3px] border-l-st-failed" : "border-l-[3px] border-l-primary"
           }`}
           style={{ fontSize: "11px" }}
         >
@@ -351,11 +350,11 @@ function ReviewExtensions({ run, children }: { run: RunState | null; children: R
     void refreshProjects();
   }, [refreshRuns, refreshProjects]);
   return (
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={run} runs={runs} projects={projects}>
         {children}
         <Toaster />
       </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
 }

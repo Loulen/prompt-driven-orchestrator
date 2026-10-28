@@ -43,7 +43,7 @@ export function ExtensionActionButtons<L extends ActionLocation>({
   location,
   extra,
   className = "flex items-center gap-0.5",
-  buttonClassName = "grid h-5 w-5 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg",
+  buttonClassName = "grid h-5 w-5 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text",
   iconSize = 12,
   before = null,
 }: {
@@ -118,7 +118,7 @@ export function ExtensionMenuGroups<L extends ActionLocation>({
           <Fragment key={extension.id}>
             {(index > 0 || leading) && <DropdownMenuSeparator />}
             <DropdownMenuGroup data-testid={`extension-menu-${location}-${extension.id}`}>
-              <DropdownMenuLabel className="text-fg-4" style={{ fontSize: "10.5px" }}>
+              <DropdownMenuLabel className="text-text-3" style={{ fontSize: "10.5px" }}>
                 {extension.name}
               </DropdownMenuLabel>
               {group.map((element) => (

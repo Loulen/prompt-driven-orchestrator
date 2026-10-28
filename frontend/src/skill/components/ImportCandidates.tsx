@@ -36,28 +36,28 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
   return (
     <>
       {(step === "results" || step === "importing") && candidates.length > 0 && (
-        <div className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-bg-1">
+        <div className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-surface-0">
           <div className="flex items-center gap-2 border-b border-line px-3 py-2" style={{ fontSize: "11px" }}>
-            <span className="grid h-3.5 w-3.5 place-items-center rounded-sm bg-acc text-bg-1">
+            <span className="grid h-3.5 w-3.5 place-items-center rounded-sm bg-primary text-surface-0">
               <Check size={9} strokeWidth={3} />
             </span>
-            <span className="font-medium text-fg" data-testid="import-found-count">
+            <span className="font-medium text-text" data-testid="import-found-count">
               {candidates.length} skill{candidates.length === 1 ? "" : "s"} found
             </span>
-            <span className="text-fg-4">
+            <span className="text-text-3">
               · {validCount} valid · {summary.invalid} invalid
               {inBankCount > 0 ? ` · ${inBankCount} already in bank` : ""}
             </span>
             <span className="flex-1" />
-            <label className="flex items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2 py-1">
-              <Search size={11} className="text-fg-4" />
+            <label className="flex items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2 py-1">
+              <Search size={11} className="text-text-3" />
               <input
                 value={filter}
                 onChange={(event) => setFilter(event.target.value)}
                 placeholder="Filter…"
                 aria-label="Filter found skills"
                 data-testid="import-filter"
-                className="w-[120px] bg-transparent text-fg outline-none placeholder:text-fg-4"
+                className="w-[120px] bg-transparent text-text outline-none placeholder:text-text-3"
                 style={{ fontSize: "11px" }}
               />
             </label>
@@ -65,16 +65,16 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
               type="button"
               onClick={selectAllValid}
               data-testid="import-select-all"
-              className="text-acc hover:underline"
+              className="text-primary hover:underline"
             >
               Select all valid
             </button>
-            <span className="text-fg-5">·</span>
+            <span className="text-text-3">·</span>
             <button
               type="button"
               onClick={deselectAll}
               data-testid="import-deselect-all"
-              className="text-acc hover:underline"
+              className="text-primary hover:underline"
             >
               Deselect all
             </button>
@@ -89,7 +89,7 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
               return (
                 <li
                   key={candidate.path}
-                  className={`border-b border-line px-3 py-2 last:border-b-0 ${failure ? "bg-st-failed-bg" : ""}`}
+                  className={`border-b border-line px-3 py-2 last:border-b-0 ${failure ? "bg-st-failed/14" : ""}`}
                   data-testid={`import-candidate-${candidate.name}`}
                   data-status={candidate.status}
                   data-checked={row.checked || undefined}
@@ -101,17 +101,17 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
                       disabled={disabled}
                       onChange={(event) => setRow(candidate.path, { checked: event.target.checked })}
                       aria-label={`Import ${candidate.name}`}
-                      className={`mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--color-acc)] ${
+                      className={`mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--primary)] ${
                         !candidate.valid ? "opacity-40 [border-style:dashed]" : ""
                       }`}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className={`font-semibold ${dim ? "text-fg-3" : "text-fg"}`} style={{ fontSize: "12.5px" }}>
+                        <span className={`font-semibold ${dim ? "text-text-3" : "text-text"}`} style={{ fontSize: "12.5px" }}>
                           {candidate.name}
                         </span>
                         {done && (
-                          <span className="flex items-center gap-1 text-acc" style={{ fontSize: "10.5px" }}>
+                          <span className="flex items-center gap-1 text-primary" style={{ fontSize: "10.5px" }}>
                             <Check size={10} strokeWidth={3} /> imported
                           </span>
                         )}
@@ -119,7 +119,7 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
                         <StatusBadge candidate={candidate} />
                       </div>
                       {candidate.valid ? (
-                        <div className={`mt-0.5 ${dim ? "text-fg-4" : "text-fg-3"}`} style={{ fontSize: "11px" }}>
+                        <div className={`mt-0.5 ${dim ? "text-text-3" : "text-text-3"}`} style={{ fontSize: "11px" }}>
                           {candidate.description}
                         </div>
                       ) : (
@@ -127,7 +127,7 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
                           Invalid frontmatter: {candidate.reason}
                         </div>
                       )}
-                      <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "10px" }}>
+                      <div className="mt-0.5 font-mono text-text-3" style={{ fontSize: "10px" }}>
                         {candidate.path}/SKILL.md
                         {candidate.file_count > 0 && (
                           <>
@@ -159,7 +159,7 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
                                   })
                                 }
                                 className={`px-2.5 py-1 capitalize ${
-                                  row.resolution === option ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-3"
+                                  row.resolution === option ? "bg-surface-2 text-text" : "text-text-3 hover:bg-hover"
                                 }`}
                                 style={{ fontSize: "11px" }}
                               >
@@ -169,7 +169,7 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
                           </div>
                           {row.resolution === "rename" && (
                             <>
-                              <span className="text-fg-4" style={{ fontSize: "11px" }}>
+                              <span className="text-text-3" style={{ fontSize: "11px" }}>
                                 as
                               </span>
                               <input
@@ -178,11 +178,11 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
                                 aria-label={`New name for ${candidate.name}`}
                                 data-testid={`import-rename-${candidate.name}`}
                                 spellCheck={false}
-                                className="w-60 rounded-md border border-line-strong bg-bg-1 px-2 py-0.5 font-mono text-fg outline-none focus:border-acc"
+                                className="w-60 rounded-md border border-line-strong bg-surface-0 px-2 py-0.5 font-mono text-text outline-none focus:border-primary"
                                 style={{ fontSize: "11px" }}
                               />
                               {renameIsFree(candidate.path, row.renameTo) ? (
-                                <span className="flex items-center gap-1 text-acc" style={{ fontSize: "10.5px" }}>
+                                <span className="flex items-center gap-1 text-primary" style={{ fontSize: "10.5px" }}>
                                   <Check size={10} strokeWidth={3} /> free
                                 </span>
                               ) : (
@@ -200,7 +200,7 @@ export default function ImportCandidates({ imp }: { imp: ImportSkillsState }) {
               );
             })}
             {visible.length === 0 && (
-              <li className="px-3 py-6 text-center text-fg-4" style={{ fontSize: "11px" }}>
+              <li className="px-3 py-6 text-center text-text-3" style={{ fontSize: "11px" }}>
                 No skill matches “{filter.trim()}”.
               </li>
             )}

@@ -13,9 +13,9 @@ export interface RenderedSection {
 export function modalSection({ key, label, extension, body }: RenderedSection) {
   return (
     <section className="mb-3 border-t border-line pt-3" data-testid={`extension-section-${key}`}>
-      <div className="mb-2 flex items-center gap-1.5 font-medium text-fg" style={{ fontSize: "12px" }}>
+      <div className="mb-2 flex items-center gap-1.5 font-medium text-text" style={{ fontSize: "12px" }}>
         {label}
-        <span className="font-normal text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="font-normal text-text-3" style={{ fontSize: "10.5px" }}>
           · {extension.name}
         </span>
       </div>

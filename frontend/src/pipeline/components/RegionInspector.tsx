@@ -37,20 +37,20 @@ export default function RegionInspector() {
 
   return (
     <aside
-      className="flex h-full flex-col bg-bg-2 overflow-y-auto"
+      className="flex h-full flex-col bg-surface-1 overflow-y-auto"
       data-testid="region-inspector"
     >
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <RefreshCw size={14} className="shrink-0 text-acc" />
+        <RefreshCw size={14} className="shrink-0 text-primary" />
         <div className="min-w-0">
           <div
-            className="truncate font-medium text-fg"
+            className="truncate font-medium text-text"
             style={{ fontSize: "12.5px" }}
             data-testid="region-id"
           >
             {region.id}
           </div>
-          <div className="mt-0.5 text-fg-4" style={{ fontSize: "10px" }}>
+          <div className="mt-0.5 text-text-3" style={{ fontSize: "10px" }}>
             {isBounded ? "bounded loop region" : "collection region"}
           </div>
         </div>
@@ -65,7 +65,7 @@ export default function RegionInspector() {
                 type="text"
                 value={String(maxIterValue)}
                 onChange={(e) => updateRegion(region.id, { max_iter: e.target.value })}
-                className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+                className="w-full rounded border border-line-strong bg-surface-2 px-2 py-1 font-mono text-text outline-none focus:border-primary"
                 data-testid="region-max-iter"
               />
             ) : (
@@ -79,21 +79,21 @@ export default function RegionInspector() {
                     max_iter: Number.isNaN(n) ? null : n,
                   });
                 }}
-                className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc"
+                className="w-full rounded border border-line-strong bg-surface-2 px-2 py-1 font-mono text-text outline-none focus:border-primary"
                 data-testid="region-max-iter"
               />
             )}
           </Field>
         ) : (
           <Field label="over">
-            <span className="font-mono text-fg-3" data-testid="region-over">
+            <span className="font-mono text-text-3" data-testid="region-over">
               {region.over ?? "—"}
             </span>
           </Field>
         )}
         {isBounded && (
-          <div className="text-fg-4" style={{ fontSize: "10px", lineHeight: 1.6 }}>
-            Editing the bound applies <span className="text-acc">live</span> to a
+          <div className="text-text-3" style={{ fontSize: "10px", lineHeight: 1.6 }}>
+            Editing the bound applies <span className="text-primary">live</span> to a
             running region — equivalent to extending the loop. It cannot be
             lowered below the lap the region is already on.
           </div>
@@ -104,7 +104,7 @@ export default function RegionInspector() {
           {memberNames.map((name, i) => (
             <li
               key={`${region.members[i]}`}
-              className="rounded border border-line bg-bg-3 px-2 py-1 font-mono text-fg-3"
+              className="rounded border border-line bg-surface-2 px-2 py-1 font-mono text-text-3"
             >
               {name}
             </li>

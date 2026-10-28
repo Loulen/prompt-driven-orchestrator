@@ -75,7 +75,7 @@ export default function PromptSection({
           title={isScript ? "Script (bash)" : "Prompt"}
           aside={
             typing.length > 0 && (
-              <span className="flex items-center gap-1 text-fg-4" style={{ fontSize: "10px" }} data-testid="prompt-typing">
+              <span className="flex items-center gap-1 text-text-3" style={{ fontSize: "10px" }} data-testid="prompt-typing">
                 <ParticipantAvatar participant={typing[0]} size={11} />
                 <span style={{ color: presenceColor(typing[0]) }}>
                   {typing.map(firstName).join(", ")} {typing.length > 1 ? "are" : "is"} typing
@@ -87,7 +87,7 @@ export default function PromptSection({
         {isScript && (
           <p
             data-testid="script-help"
-            className="rounded border border-acc/30 bg-acc/5 px-2 py-1.5 text-fg-3"
+            className="rounded border border-primary/30 bg-primary/5 px-2 py-1.5 text-text-3"
             style={{ fontSize: "10.5px", lineHeight: "1.5" }}
           >
             Author-written bash, run deterministically (no LLM). Inputs/outputs
@@ -109,7 +109,7 @@ export default function PromptSection({
           {...(isScript
             ? { value: promptContent, onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => updatePrompt(nodeId, e.target.value) }
             : fieldProps)}
-          className={`min-h-[120px] w-full resize-y rounded border border-line-strong bg-bg-3 px-2 py-1.5 font-mono text-fg outline-none focus:border-acc ${
+          className={`min-h-[120px] w-full resize-y rounded border border-line-strong bg-surface-2 px-2 py-1.5 font-mono text-text outline-none focus:border-primary ${
             !isScript && (isOrchestrator || isInteractive) ? "rounded-b-none border-b-0 border-dashed" : ""
           }`}
           style={{ fontSize: "11px", lineHeight: "1.5" }}
@@ -128,14 +128,14 @@ export default function PromptSection({
         {!isScript && (isInteractive || isOrchestrator) && (
           <div
             data-testid="node-toggle-prompt-amendment"
-            className="rounded-b border border-t-0 border-dashed border-line-strong bg-bg-2 px-2 py-1.5"
+            className="rounded-b border border-t-0 border-dashed border-line-strong bg-surface-1 px-2 py-1.5"
           >
-            <div className="mb-1 flex items-center gap-1 text-fg-4" style={{ fontSize: "9.5px" }}>
+            <div className="mb-1 flex items-center gap-1 text-text-3" style={{ fontSize: "9.5px" }}>
               <Lock size={9} />
               Added by PDO at spawn (
               {[isInteractive && "Interactive", isOrchestrator && "Orchestrator"].filter(Boolean).join(", ")})
             </div>
-            <pre className="whitespace-pre-wrap font-mono text-fg-3" style={{ fontSize: "10.5px", lineHeight: 1.5 }}>
+            <pre className="whitespace-pre-wrap font-mono text-text-3" style={{ fontSize: "10.5px", lineHeight: 1.5 }}>
               {[isInteractive && "/pdo-interactive", isOrchestrator && "/pdo-orchestrate"].filter(Boolean).join("\n")}
             </pre>
           </div>

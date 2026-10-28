@@ -22,7 +22,7 @@ export default function ImageBody({
 
   if (filesLoading) {
     return (
-      <span className="text-fg-4" style={{ fontSize: "11px" }}>
+      <span className="text-text-3" style={{ fontSize: "11px" }}>
         Loading...
       </span>
     );
@@ -30,7 +30,7 @@ export default function ImageBody({
 
   if (existingFiles.length === 0) {
     return (
-      <span className="text-fg-4" style={{ fontSize: "11px" }}>
+      <span className="text-text-3" style={{ fontSize: "11px" }}>
         No image files yet.
       </span>
     );
@@ -44,7 +44,7 @@ export default function ImageBody({
             <img
               src={artifactUrl(runId, f.path)}
               alt={f.path.split("/").pop() ?? ""}
-              className="max-h-[60vh] w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
+              className="max-h-[calc(60vh/var(--app-zoom,1))] w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
               onClick={() =>
                 onZoom(
                   existingFiles.map((ef) => artifactUrl(runId, ef.path)),
@@ -54,7 +54,7 @@ export default function ImageBody({
               data-testid={`gallery-image-${i}`}
             />
             <span
-              className="font-mono text-fg-4"
+              className="font-mono text-text-3"
               style={{ fontSize: "10px" }}
             >
               {f.path.split("/").pop()}
@@ -74,7 +74,7 @@ export default function ImageBody({
       <img
         src={artifactUrl(runId, current.path)}
         alt={current.path.split("/").pop() ?? ""}
-        className="max-h-[60vh] max-w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
+        className="max-h-[calc(60vh/var(--app-zoom,1))] max-w-full cursor-zoom-in rounded border border-line object-contain transition-opacity hover:opacity-90"
         onClick={() =>
           onZoom(
             existingFiles.map((f) => artifactUrl(runId, f.path)),
@@ -83,7 +83,7 @@ export default function ImageBody({
         }
         data-testid="image-viewer-img"
       />
-      <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+      <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
         {current.path.split("/").pop()}
       </span>
     </div>

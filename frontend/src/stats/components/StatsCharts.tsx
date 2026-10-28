@@ -2,7 +2,6 @@ import { useTheme } from "../../hooks/useTheme";
 import type { StatsCost } from "../../shared/generated/StatsCost";
 import type { StatsOverview } from "../../shared/generated/StatsOverview";
 import type { StatsPerformance } from "../../shared/generated/StatsPerformance";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 import {
   DEFAULT_PERFORMANCE_BAND,
   type PerformanceBand,
@@ -118,7 +117,7 @@ export default function StatsCharts({
     return <TriggersTab overview={overview} />;
   };
   return (
-    <TooltipProvider>
+    <>
       <div className="flex min-h-full flex-col gap-3">
         <CohortOnlyBand
           label={TAB_BAND_LABEL[tab]}
@@ -143,6 +142,6 @@ export default function StatsCharts({
         />
         <div className="min-h-0 flex-1">{body()}</div>
       </div>
-    </TooltipProvider>
+    </>
   );
 }

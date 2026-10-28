@@ -32,14 +32,14 @@ export default function GuidePanel({ page, navigation }: { page: PageMount; navi
   };
 
   return (
-    <aside className="flex h-full flex-col bg-bg-2" data-testid="guide-panel">
+    <aside className="flex h-full flex-col bg-surface-1" data-testid="guide-panel">
       <div className="flex h-[36px] shrink-0 items-center gap-2 border-b border-line px-3">
-        <BookOpen size={13} className="text-acc" />
-        <span className="font-medium text-fg" style={{ fontSize: "12px" }}>
+        <BookOpen size={13} className="text-primary" />
+        <span className="font-medium text-text" style={{ fontSize: "12px" }}>
           Reading guide
         </span>
         <span
-          className="rounded-full bg-bg-4 px-1.5 font-mono text-fg-3"
+          className="rounded-full bg-surface-2 px-1.5 font-mono text-text-3"
           style={{ fontSize: "10px" }}
           data-testid="guide-count"
         >
@@ -51,12 +51,12 @@ export default function GuidePanel({ page, navigation }: { page: PageMount; navi
           title="Fold the guide"
           aria-label="Fold the guide"
           data-testid="guide-fold"
-          className="ml-auto cursor-pointer rounded p-1 text-fg-4 transition-colors hover:bg-bg-3 hover:text-fg"
+          className="ml-auto cursor-pointer rounded p-1 text-text-3 transition-colors hover:bg-hover hover:text-text"
         >
           <PanelRightClose size={13} />
         </button>
       </div>
-      <div className="px-3 pt-2.5 pb-1 text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="px-3 pt-2.5 pb-1 text-text-3" style={{ fontSize: "10.5px" }}>
         {page.run_id ? (
           <>
             Written by the agent that mounted the page
@@ -101,24 +101,24 @@ function GuideRow({
   const label = guideLinkLabel(target, navigation.runName);
   return (
     <li
-      className={`mt-1 flex gap-2.5 rounded-md px-2 py-2 ${current ? "bg-acc-bg" : ""}`}
+      className={`mt-1 flex gap-2.5 rounded-md px-2 py-2 ${current ? "bg-selected" : ""}`}
       data-testid={`guide-entry-${index}`}
       data-current={current || undefined}
     >
       <span
         className={`mt-px flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-full font-mono ${
-          current ? "bg-acc text-on-acc" : "bg-bg-4 text-fg-3"
+          current ? "bg-primary text-primary-ink" : "bg-surface-2 text-text-3"
         }`}
         style={{ fontSize: "9.5px" }}
       >
         {index + 1}
       </span>
       <div className="flex min-w-0 flex-col gap-1">
-        <span className="font-medium text-fg" style={{ fontSize: "11.5px" }}>
+        <span className="font-medium text-text" style={{ fontSize: "11.5px" }}>
           {entry.title}
         </span>
         {entry.text && (
-          <span className="whitespace-pre-line text-fg-3" style={{ fontSize: "11px" }}>
+          <span className="whitespace-pre-line text-text-3" style={{ fontSize: "11px" }}>
             {entry.text}
           </span>
         )}
@@ -129,11 +129,11 @@ function GuideRow({
           data-kind={pdo ? "pdo" : "page"}
           title={pdo ? `Open in PDO: ${entry.link}` : `Show in the page: ${entry.link}`}
           className={`flex w-fit max-w-full cursor-pointer items-center gap-1.5 truncate font-mono hover:underline ${
-            pdo ? "text-st-running" : "text-fg-2"
+            pdo ? "text-st-running" : "text-text-2"
           }`}
           style={{ fontSize: "10.5px" }}
         >
-          {pdo ? <ExternalLink size={10} className="shrink-0" /> : <Hash size={10} className="shrink-0 text-fg-4" />}
+          {pdo ? <ExternalLink size={10} className="shrink-0" /> : <Hash size={10} className="shrink-0 text-text-3" />}
           <span className="truncate">{pdo ? `${label.kind} · ${label.where}` : label.where}</span>
         </button>
       </div>

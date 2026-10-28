@@ -49,7 +49,7 @@ export default function SandboxSections({
           data-testid="setting-default-sandbox"
           value={values.defaultSandbox}
           onChange={(e) => setField("defaultSandbox", e.target.value)}
-          className={`w-full rounded-md border bg-bg-3 px-2.5 py-1.5 font-mono text-fg transition-colors focus:border-acc focus:outline-none ${
+          className={`w-full rounded-md border bg-surface-2 px-2.5 py-1.5 font-mono text-text transition-colors focus:border-primary focus:outline-none ${
             dirty.has("default-sandbox") ? "border-st-await" : "border-line-strong"
           }`}
           style={{ fontSize: "12px" }}
@@ -86,7 +86,7 @@ export default function SandboxSections({
     </Section>
     <Section section={sections[1]}>
       {/* Inline (#691), natural height: the page scrolls, not the panel. */}
-      <div className="rounded-md border border-line bg-bg-3/40">
+      <div className="rounded-md border border-line bg-surface-2/40">
         <StagingProfilesPanel
           home={settings.home ?? null}
           // Refetch `GET /settings` so the Default-sandbox `<select>` above sees the

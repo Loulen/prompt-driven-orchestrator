@@ -29,7 +29,7 @@ export interface CanvasMenu {
   fanoutFields?: string[];
 }
 
-const ITEM = "cursor-pointer px-2 py-1.5 text-[11.5px] text-fg-2";
+const ITEM = "cursor-pointer px-2 py-1.5 text-sm text-text-2";
 
 export function ContextMenu({
   x,

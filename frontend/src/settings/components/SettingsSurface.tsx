@@ -227,7 +227,7 @@ export default function SettingsSurface({
   });
 
   const loading = (
-    <div className="px-1 py-4 text-fg-4" style={{ fontSize: "12px" }} data-testid="settings-loading">
+    <div className="px-1 py-4 text-text-3" style={{ fontSize: "12px" }} data-testid="settings-loading">
       Loading…
     </div>
   );
@@ -248,7 +248,7 @@ export default function SettingsSurface({
         railTestIdPrefix="settings-category"
         headerExtras={extensionPages.headerExtras}
         headerActions={extensionPages.headerActions(
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="text-text-3" style={{ fontSize: "10.5px" }}>
             Esc closes · ↑↓ on the rail switch category
           </span>,
         )}

@@ -14,16 +14,16 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
     <>
       {step === "results" || step === "importing" ? (
         <div
-          className="flex items-center gap-2 rounded-md border border-acc/50 bg-bg-1 px-3 py-2"
+          className="flex items-center gap-2 rounded-md border border-primary/50 bg-surface-0 px-3 py-2"
           data-testid="import-source-line"
         >
-          <GitBranch size={12} className="shrink-0 text-fg-4" />
-          <span className="min-w-0 flex-1 truncate text-fg" style={{ fontSize: "11.5px" }}>
+          <GitBranch size={12} className="shrink-0 text-text-3" />
+          <span className="min-w-0 flex-1 truncate text-text" style={{ fontSize: "11.5px" }}>
             {text.trim()}
           </span>
           {scan?.commit && (
             <span
-              className="rounded border border-line bg-bg-3 px-1.5 py-0.5 font-mono text-fg-3"
+              className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-text-3"
               style={{ fontSize: "10px" }}
               data-testid="import-commit"
             >
@@ -35,7 +35,7 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
             onClick={changeSource}
             disabled={step === "importing"}
             data-testid="import-change-source"
-            className="rounded-md border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 hover:border-acc disabled:opacity-40"
+            className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary disabled:opacity-40"
             style={{ fontSize: "11px" }}
           >
             Change
@@ -43,15 +43,15 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
         </div>
       ) : (
         <section>
-          <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+          <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
             Source
           </h4>
           <div
-            className={`flex items-center gap-2 rounded-md border bg-bg-1 px-3 py-2 transition-colors ${
-              scanError ? "border-st-failed" : parsed ? "border-acc/60" : "border-line-strong focus-within:border-acc"
+            className={`flex items-center gap-2 rounded-md border bg-surface-0 px-3 py-2 transition-colors ${
+              scanError ? "border-st-failed" : parsed ? "border-primary/60" : "border-line-strong focus-within:border-primary"
             }`}
           >
-            <GitBranch size={12} className="shrink-0 text-fg-4" />
+            <GitBranch size={12} className="shrink-0 text-text-3" />
             <input
               ref={inputRef}
               value={text}
@@ -71,7 +71,7 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
               aria-invalid={!!scanError || undefined}
               data-testid="import-source-input"
               spellCheck={false}
-              className="min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-4 disabled:opacity-60"
+              className="min-w-0 flex-1 bg-transparent text-text outline-none placeholder:text-text-3 disabled:opacity-60"
               style={{ fontSize: "12px" }}
             />
             <button
@@ -79,7 +79,7 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
               onClick={() => setBrowsing(true)}
               disabled={step === "scanning"}
               data-testid="import-browse-local"
-              className="flex shrink-0 items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 hover:border-acc disabled:opacity-40"
+              className="flex shrink-0 items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 hover:border-primary disabled:opacity-40"
               style={{ fontSize: "11px" }}
             >
               <HardDrive size={11} />
@@ -99,11 +99,11 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
           {scanError && (
             <div
               role="alert"
-              className="mt-2 rounded-md border border-st-failed/50 bg-st-failed-bg px-3 py-2 text-fg-2"
+              className="mt-2 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2"
               style={{ fontSize: "11px" }}
               data-testid="import-scan-error"
             >
-              <strong className="text-fg">
+              <strong className="text-text">
                 {scanError.code === "clone_failed" || scanError.code === "clone_timeout"
                   ? "Clone refused."
                   : scanError.code === "local_not_found"
@@ -129,7 +129,7 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
                 type="button"
                 onClick={startScan}
                 data-testid="import-retry"
-                className="font-medium text-acc hover:underline"
+                className="font-medium text-primary hover:underline"
               >
                 Retry
               </button>
@@ -138,7 +138,7 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
 
           {step === "source" && !scanError && (
             <p
-              className="mt-2 rounded-md border border-dashed border-line px-3 py-2 text-fg-4"
+              className="mt-2 rounded-md border border-dashed border-line px-3 py-2 text-text-3"
               style={{ fontSize: "10.5px" }}
             >
               Accepted: a GitHub repo URL (root, branch, or{" "}

@@ -63,8 +63,8 @@ export default function GridSizePicker({
             }}
             className={`flex flex-1 cursor-pointer flex-col items-center justify-center rounded border px-2 py-1.5 font-medium transition-colors ${
               selected
-                ? "border-acc bg-acc-bg text-acc"
-                : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
+                ? "border-primary bg-selected text-primary"
+                : "border-line-strong bg-surface-2 text-text-3 hover:text-text-3"
             }`}
             style={{ fontSize: "10px" }}
           >

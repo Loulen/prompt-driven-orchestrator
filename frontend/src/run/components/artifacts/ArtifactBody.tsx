@@ -53,11 +53,11 @@ export default function ArtifactBody({
     <div className="flex-1 overflow-auto p-4">
       {filePreview && filePreview !== "text" ? (
         filesLoading ? (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="text-text-3" style={{ fontSize: "11px" }}>
             Loading...
           </span>
         ) : !file?.exists ? (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="text-text-3" style={{ fontSize: "11px" }}>
             No file yet.
           </span>
         ) : filePreview === "image" ? (
@@ -70,13 +70,13 @@ export default function ArtifactBody({
           />
         ) : (
           <div className="flex flex-col items-start gap-2" data-testid="files-no-preview">
-            <span className="text-fg-3" style={{ fontSize: "11px" }}>
+            <span className="text-text-3" style={{ fontSize: "11px" }}>
               No preview for this format.
             </span>
             <a
               href={artifactDownloadUrl(runId, file.path)}
               download
-              className="rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 hover:border-fg-4 hover:text-fg"
+              className="rounded border border-line-strong bg-surface-2 px-2 py-1 text-text-2 hover:border-text-3 hover:text-text"
               style={{ fontSize: "11px" }}
             >
               Download {file.path.split("/").pop()}
@@ -85,12 +85,12 @@ export default function ArtifactBody({
         )
       ) : filePreview === "text" && !/\.(md|markdown)$/i.test(file?.path ?? "") ? (
         filesLoading || loading ? (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="text-text-3" style={{ fontSize: "11px" }}>
             Loading...
           </span>
         ) : (
           <pre
-            className="whitespace-pre-wrap break-words font-mono text-fg-2"
+            className="whitespace-pre-wrap break-words font-mono text-text-2"
             style={{ fontSize: "11px" }}
             data-testid="files-text"
           >
@@ -117,11 +117,13 @@ export default function ArtifactBody({
          *  - The HTML is passed via the `srcDoc` PROP, never
          *    `dangerouslySetInnerHTML` and never concatenated into the
          *    parent DOM.
+         *  - The page is white whatever the theme, as a browser shows a
+         *    document that sets no background.
          *  - Uses raw `content` (fetched text), not `bodyContent` (which
          *    strips a leading `---` frontmatter fence html doesn't have).
          */
         filesLoading || loading ? (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="text-text-3" style={{ fontSize: "11px" }}>
             Loading...
           </span>
         ) : file?.exists ? (
@@ -130,10 +132,10 @@ export default function ArtifactBody({
             sandbox=""
             srcDoc={content ?? ""}
             title={portName}
-            className="h-[70vh] w-full rounded border border-line bg-white"
+            className="h-[calc(70vh/var(--app-zoom,1))] w-full rounded border border-line bg-[white]"
           />
         ) : (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="text-text-3" style={{ fontSize: "11px" }}>
             File does not exist yet.
           </span>
         )
@@ -143,7 +145,7 @@ export default function ArtifactBody({
           {/* Frontmatter card */}
           {frontmatter && Object.keys(frontmatter).length > 0 && (
             <div
-              className="mb-3 grid rounded border border-line bg-bg-0 p-2 font-mono"
+              className="mb-3 grid rounded border border-line bg-surface-0 p-2 font-mono"
               style={{
                 fontSize: "10.5px",
                 gridTemplateColumns: "auto 1fr",
@@ -158,7 +160,7 @@ export default function ArtifactBody({
 
           {/* Markdown body */}
           {filesLoading || loading ? (
-            <span className="text-fg-4" style={{ fontSize: "11px" }}>
+            <span className="text-text-3" style={{ fontSize: "11px" }}>
               Loading...
             </span>
           ) : bodyContent ? (
@@ -171,7 +173,7 @@ export default function ArtifactBody({
               </Markdown>
             </div>
           ) : isInline ? null : (
-            <span className="text-fg-4" style={{ fontSize: "11px" }}>
+            <span className="text-text-3" style={{ fontSize: "11px" }}>
               {file?.exists ? "Could not load content." : "File does not exist yet."}
             </span>
           )}

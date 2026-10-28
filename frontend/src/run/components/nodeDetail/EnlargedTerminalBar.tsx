@@ -51,13 +51,13 @@ export function EnlargedTerminalIdentity({
         }`}
       />
       <span
-        className="text-fg"
+        className="text-text"
         style={{ fontSize: "12px", fontWeight: 500 }}
         data-testid="term-identity-name"
       >
         {nodeName ?? node.node_id}
       </span>
-      <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+      <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
         iter {iter}
       </span>
       <span
@@ -92,7 +92,7 @@ export function EnlargedCompletionGestures({
             }}
             disabled={completion.isReleasing}
             aria-label={releaseLabel}
-            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-await transition-colors hover:bg-st-await-bg disabled:cursor-wait"
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-await transition-colors hover:bg-st-await/14 disabled:cursor-wait"
             data-testid="term-release-completion"
           >
             {completion.isReleasing ? (
@@ -113,7 +113,7 @@ export function EnlargedCompletionGestures({
               completion.markComplete();
             }}
             aria-label={MARK_COMPLETE_LABEL}
-            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-done transition-colors hover:bg-st-done-bg"
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-done transition-colors hover:bg-st-done/14"
             data-testid="term-mark-complete"
           >
             <CheckCircle size={12} />
@@ -153,7 +153,7 @@ export function GestureVerdictPopover({
   return (
     <div
       ref={popoverRef}
-      className="absolute right-2 top-9 z-10 w-[330px] rounded-lg border border-line-strong bg-bg-2 p-1.5 shadow-lg"
+      className="absolute right-2 top-9 z-10 w-[330px] rounded-lg border border-line-strong bg-surface-1 p-1.5 shadow-lg"
       data-testid="term-gesture-popover"
     >
       {verdict}

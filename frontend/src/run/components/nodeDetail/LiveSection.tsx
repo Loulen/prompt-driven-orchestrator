@@ -28,16 +28,16 @@ export default function LiveSection({
   return (
     <div className="border-t border-line" data-testid="live-section">
       <div
-        className="flex items-center gap-1.5 px-3 py-1.5 text-fg-3"
+        className="flex items-center gap-1.5 px-3 py-1.5 text-text-3"
         style={{ fontSize: "11px" }}
       >
         Live artifacts
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
           {live.length}
         </span>
         {newest && (
           <span
-            className="ml-auto text-fg-4"
+            className="ml-auto text-text-3"
             style={{ fontSize: "10px" }}
             title={newest}
             data-testid="live-updated"
@@ -104,17 +104,17 @@ function LiveRow({
         data-testid="live-row"
         data-live={artifact.name}
         data-produced="false"
-        className="grid items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 opacity-60"
+        className="grid items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-2 opacity-60"
         style={gridStyle}
         title={liveDisplayPath(artifact.path)}
       >
-        <div className="h-2 w-2 rounded-full bg-fg-5" />
+        <div className="h-2 w-2 rounded-full bg-text-3" />
         <div className="min-w-0">
-          <span className="font-mono text-fg-2" style={{ fontSize: "11.5px" }}>
+          <span className="font-mono text-text-2" style={{ fontSize: "11.5px" }}>
             {artifact.name}
           </span>
           <div
-            className="mt-0.5 font-mono text-fg-4"
+            className="mt-0.5 font-mono text-text-3"
             style={{ fontSize: "10.5px" }}
             data-testid="live-not-produced"
           >
@@ -132,7 +132,7 @@ function LiveRow({
         data-testid="live-row"
         data-live={artifact.name}
         data-produced="true"
-        className="port-row group relative grid w-full items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 transition-colors hover:bg-bg-4"
+        className="port-row group relative grid w-full items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-2 transition-colors hover:bg-hover"
         style={gridStyle}
       >
         <button
@@ -140,17 +140,17 @@ function LiveRow({
           onClick={onOpen}
           aria-label={`Open ${artifact.name}`}
           data-testid="live-row-open"
-          className="absolute inset-0 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-acc"
+          className="absolute inset-0 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
         />
         <div className="h-2 w-2 rounded-full bg-st-running" />
         <div className="min-w-0 text-left">
           <div className="flex items-center gap-1.5">
-            <span className="font-mono text-fg" style={{ fontSize: "11.5px" }}>
+            <span className="font-mono text-text" style={{ fontSize: "11.5px" }}>
               {artifact.name}
             </span>
             {!artifact.declared && (
               <span
-                className="rounded border border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-4"
+                className="rounded border border-line-strong bg-surface-2 px-1 py-px font-mono text-text-3"
                 style={{ fontSize: "9px" }}
                 title="Published by the node without being declared"
                 data-testid="live-free-badge"
@@ -159,13 +159,13 @@ function LiveRow({
               </span>
             )}
           </div>
-          <div className="mt-0.5 truncate font-mono text-fg-3" style={{ fontSize: "10.5px" }}>
+          <div className="mt-0.5 truncate font-mono text-text-3" style={{ fontSize: "10.5px" }}>
             {subline}
           </div>
         </div>
         <div className="flex items-center gap-2">
           {totalSize > 0 && (
-            <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+            <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
               {formatSize(totalSize)}
             </span>
           )}
@@ -174,7 +174,7 @@ function LiveRow({
               href={downloadHref}
               download
               onClick={(e) => e.stopPropagation()}
-              className="relative text-fg-4 hover:text-fg"
+              className="relative text-text-3 hover:text-text"
               aria-label={`Download ${artifact.name}`}
               title="Download"
               data-testid="live-download"
@@ -182,7 +182,7 @@ function LiveRow({
               <Download size={11} />
             </a>
           )}
-          <span className="font-mono text-fg-3" style={{ fontSize: "10.5px" }} aria-hidden="true">
+          <span className="font-mono text-text-3" style={{ fontSize: "10.5px" }} aria-hidden="true">
             ↗
           </span>
         </div>
@@ -205,7 +205,7 @@ function LiveRow({
             ))}
             {images.length > 4 && (
               <span
-                className="flex h-12 w-12 items-center justify-center rounded border border-line bg-bg-0 font-mono text-fg-4"
+                className="flex h-12 w-12 items-center justify-center rounded border border-line bg-surface-0 font-mono text-text-3"
                 style={{ fontSize: "10px" }}
               >
                 +{images.length - 4}
@@ -245,13 +245,13 @@ function FrontmatterTags({
             title={reason ? `Schema: ${reason}` : undefined}
             className={`inline-flex items-center gap-1 rounded border px-1.5 py-px font-mono ${
               reason
-                ? "border-st-await-border bg-st-await-bg text-st-await"
-                : "border-line bg-bg-0 text-fg-2"
+                ? "border-st-await/30 bg-st-await/14 text-st-await"
+                : "border-line bg-surface-0 text-text-2"
             }`}
             style={{ fontSize: "10px" }}
           >
             {reason ? <TriangleAlert size={9} aria-label="Schema not respected" /> : (
-              <span className="text-fg-4">{field}</span>
+              <span className="text-text-3">{field}</span>
             )}
             {reason ? `${field} ${display(value)}` : display(value)}
           </span>
@@ -262,7 +262,7 @@ function FrontmatterTags({
           key={`absent:${w.field}`}
           data-testid="live-tag-warning"
           title={`Schema: ${w.reason}`}
-          className="inline-flex items-center gap-1 rounded border border-st-await-border bg-st-await-bg px-1.5 py-px font-mono text-st-await"
+          className="inline-flex items-center gap-1 rounded border border-st-await/30 bg-st-await/14 px-1.5 py-px font-mono text-st-await"
           style={{ fontSize: "10px" }}
         >
           <TriangleAlert size={9} aria-label="Schema not respected" />

@@ -4,6 +4,7 @@ import { defaultCollapsed, filePath, readListOpen, readView, writeListOpen, writ
 import type { ViewMode } from "../../run/model/runRefs";
 import type { Anchor } from "../model/drafts";
 import { allDirs, ancestorDirs, buildFileTree, visibleRows } from "../model/fileTree";
+import { toCss } from "../../shared/ui/zoom";
 
 const NARROW_QUERY = "(max-width: 900px)";
 /** What the reader does that ends a landing's pinning. */
@@ -202,7 +203,8 @@ export function useReviewLayout(files: DiffFile[]) {
       dir === 1
         ? rows.find((r) => r.getBoundingClientRect().top > base + 4)
         : [...rows].reverse().find((r) => r.getBoundingClientRect().top < base - 4);
-    if (target) el.scrollBy?.({ top: target.getBoundingClientRect().top - base, behavior: "smooth" });
+    // The rects are screen pixels; the scroll is in the page's CSS pixels (UI scale).
+    if (target) el.scrollBy?.({ top: toCss(target.getBoundingClientRect().top - base, el), behavior: "smooth" });
   }, []);
 
   /** Scroll the anchored line of an entry into view, expanding its file first. */

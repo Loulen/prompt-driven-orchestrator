@@ -74,13 +74,13 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
 
   return (
     <div className="flex flex-col" style={{ fontSize: "11.5px" }} data-testid="versions-tab">
-      <p className="px-3 py-2 text-fg-4" style={{ fontSize: "10.5px" }}>
+      <p className="px-3 py-2 text-text-3" style={{ fontSize: "10.5px" }}>
         New Run and Triggers launch the last version. The draft is never launched.
       </p>
-      <div className="flex items-center gap-2 bg-bg-3/60 px-3 py-2" data-testid="versions-draft">
-        <CircleDashed size={11} className="shrink-0 text-fg-4" />
-        <span className="font-medium text-fg">Draft</span>
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+      <div className="flex items-center gap-2 bg-surface-2/60 px-3 py-2" data-testid="versions-draft">
+        <CircleDashed size={11} className="shrink-0 text-text-3" />
+        <span className="font-medium text-text">Draft</span>
+        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
           {changes > 0 ? `${changesLabel(changes)} since v${last.number}` : `same as v${last.number}`}
         </span>
         <span className="ml-auto">
@@ -97,16 +97,16 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
         return (
           <div
             key={version.number}
-            className="group flex items-center gap-3 border-b border-line px-3 py-2 hover:bg-bg-3"
+            className="group flex items-center gap-3 border-b border-line px-3 py-2 hover:bg-hover"
             data-testid={`version-row-${version.number}`}
           >
-            <span className="w-6 shrink-0 font-mono text-fg-3">v{version.number}</span>
+            <span className="w-6 shrink-0 font-mono text-text-3">v{version.number}</span>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
-                <span className={`truncate ${version.external ? "italic text-fg-2" : "text-fg"}`}>{version.title}</span>
+                <span className={`truncate ${version.external ? "italic text-text-2" : "text-text"}`}>{version.title}</span>
                 {index === 0 && (
                   <span
-                    className="rounded bg-st-await-bg px-1 font-mono text-st-await"
+                    className="rounded bg-st-await/14 px-1 font-mono text-st-await"
                     style={{ fontSize: "9px" }}
                     data-testid="version-last"
                   >
@@ -114,7 +114,7 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
                   </span>
                 )}
               </div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-fg-4" style={{ fontSize: "10px" }}>
+              <div className="mt-0.5 flex items-center gap-1.5 text-text-3" style={{ fontSize: "10px" }}>
                 <Author actor={version.author} />
                 <span>{savedAgo(version.saved_at)}</span>
                 {runs && <span>· {runs}</span>}
@@ -123,7 +123,7 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
             <div className="hidden shrink-0 items-center gap-1 group-hover:flex group-focus-within:flex">
               <button
                 onClick={() => void openPipelineVersion(pipelineId, version.number)}
-                className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-2 px-1.5 py-0.5 text-fg-2 hover:bg-bg-4 hover:text-fg"
+                className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-1 px-1.5 py-0.5 text-text-2 hover:bg-hover hover:text-text"
                 style={{ fontSize: "10.5px" }}
                 data-testid={`version-view-${version.number}`}
               >
@@ -132,7 +132,7 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
               </button>
               <button
                 onClick={() => void restore(version.number)}
-                className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-2 px-1.5 py-0.5 text-fg-2 hover:bg-bg-4 hover:text-fg"
+                className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-1 px-1.5 py-0.5 text-text-2 hover:bg-hover hover:text-text"
                 style={{ fontSize: "10.5px" }}
                 data-testid={`version-restore-${version.number}`}
               >

@@ -32,32 +32,32 @@ export default function DestroyLoopModal({ open, loopIds, onClose, onConfirm }: 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="destroy-loop-backdrop"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[85vh] w-[380px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+        className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[380px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
         style={{ fontSize: "12px" }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* #940: bounded to the window like New Run — a long list scrolls, the
             actions stay visible. */}
-        <h3 className="shrink-0 font-medium text-fg" style={{ fontSize: "13px" }}>
+        <h3 className="shrink-0 font-medium text-text" style={{ fontSize: "13px" }}>
           {plural ? "Destroy these loops?" : "Destroy this loop?"}
         </h3>
         <div className="min-h-0 overflow-y-auto" data-testid="destroy-loop-body">
-        <p className="mt-2 text-fg-2">
+        <p className="mt-2 text-text-2">
           Deleting this edge will destroy {plural ? "loops" : "loop"}{" "}
           {loopIds.map((id, i) => (
             <span key={id}>
               {i > 0 && ", "}
-              <code className="rounded bg-bg-4 px-1 py-0.5 font-mono text-fg">{id}</code>
+              <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-text">{id}</code>
             </span>
           ))}
           .
         </p>
-        <p className="mt-2 text-fg-3" style={{ fontSize: "11.5px" }}>
+        <p className="mt-2 text-text-3" style={{ fontSize: "11.5px" }}>
           It is the {plural ? "regions'" : "region's"} last cycle: the{" "}
           <code className="font-mono">loops:</code> entry, its bound, and its
           iteration state are removed with the edge.
@@ -67,7 +67,7 @@ export default function DestroyLoopModal({ open, loopIds, onClose, onConfirm }: 
           <button
             onClick={onClose}
             data-testid="destroy-loop-cancel"
-            className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+            className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
             style={{ fontSize: "11.5px" }}
           >
             Cancel
@@ -75,7 +75,7 @@ export default function DestroyLoopModal({ open, loopIds, onClose, onConfirm }: 
           <button
             onClick={onConfirm}
             data-testid="destroy-loop-confirm"
-            className="rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80"
+            className="rounded-md bg-st-failed px-3 py-1.5 text-primary-ink transition-colors hover:bg-st-failed/80"
             style={{ fontSize: "11.5px" }}
           >
             Delete edge &amp; destroy {plural ? "loops" : "loop"}

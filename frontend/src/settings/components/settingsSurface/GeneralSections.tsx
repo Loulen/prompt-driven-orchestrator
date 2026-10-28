@@ -52,7 +52,7 @@ export function SessionsSection({
         unit=""
         inline={
           <span
-            className="flex items-center gap-1.5 text-fg-4"
+            className="flex items-center gap-1.5 text-text-3"
             style={{ fontSize: "10.5px" }}
           >
             live <SessionCounter live={liveSessions} cap={capForPreview} />

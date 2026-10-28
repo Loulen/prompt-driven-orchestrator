@@ -9,13 +9,13 @@ export default function NewRunHeader({ form }: { form: NewRunForm }) {
   return (
     <div className="flex items-center justify-between border-b border-line px-4 py-3">
       <div className="flex items-center gap-3">
-        <h2 className="font-semibold text-fg" style={{ fontSize: "13.5px" }}>
+        <h2 className="font-semibold text-text" style={{ fontSize: "13.5px" }}>
           {mode === "run" ? "New Run" : editingTriggerId ? "Edit Trigger" : "New Trigger"}
         </h2>
         {/* [Run now | Trigger] toggle (#160) */}
         <div
           role="tablist"
-          className="flex rounded-md border border-line-strong bg-bg-3 p-0.5"
+          className="flex rounded-md border border-line-strong bg-surface-2 p-0.5"
           style={{ fontSize: "11px" }}
         >
           <button
@@ -28,7 +28,7 @@ export default function NewRunHeader({ form }: { form: NewRunForm }) {
               setGuardTestError(null);
             }}
             className={`rounded px-2 py-0.5 font-medium transition-colors ${
-              mode === "run" ? "bg-acc text-on-acc" : "text-fg-3 hover:text-fg"
+              mode === "run" ? "bg-primary text-primary-ink" : "text-text-3 hover:text-text"
             }`}
             data-testid="mode-run"
           >
@@ -43,7 +43,7 @@ export default function NewRunHeader({ form }: { form: NewRunForm }) {
               setGuardTestError(null);
             }}
             className={`rounded px-2 py-0.5 font-medium transition-colors ${
-              mode === "trigger" ? "bg-acc text-on-acc" : "text-fg-3 hover:text-fg"
+              mode === "trigger" ? "bg-primary text-primary-ink" : "text-text-3 hover:text-text"
             }`}
             data-testid="mode-trigger"
           >
@@ -53,7 +53,7 @@ export default function NewRunHeader({ form }: { form: NewRunForm }) {
       </div>
       <button
         onClick={requestClose}
-        className="grid h-6 w-6 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
+        className="grid h-6 w-6 place-items-center rounded text-text-3 transition-colors hover:bg-active hover:text-text"
         aria-label="Close"
       >
         <X size={14} />

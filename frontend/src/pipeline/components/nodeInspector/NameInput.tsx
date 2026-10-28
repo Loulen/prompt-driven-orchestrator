@@ -58,7 +58,7 @@ export default function NameInput({
           (e.target as HTMLInputElement).blur();
         }
       }}
-      className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
+      className="w-full rounded border border-line-strong bg-surface-2 px-2 py-1 text-text outline-none focus:border-primary"
       placeholder={placeholder}
       data-testid="node-name-input"
     />

@@ -32,15 +32,15 @@ export default function BulkActionBar({ count, note, actions, onClear }: Props) 
       role="toolbar"
       aria-label="Bulk actions"
       data-testid="bulk-action-bar"
-      className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-4 rounded-xl border border-line-strong bg-bg-4/95 px-4 py-2.5 shadow-lg backdrop-blur"
+      className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-4 rounded-xl border border-line-strong bg-surface-2/95 px-4 py-2.5 shadow-lg backdrop-blur"
     >
       <div className="flex items-baseline gap-2">
-        <span className="font-medium text-fg" style={{ fontSize: "13px" }} data-testid="bulk-count">
+        <span className="font-medium text-text" style={{ fontSize: "13px" }} data-testid="bulk-count">
           {count} selected
         </span>
         {note && (
           <span
-            className="leading-tight text-fg-4"
+            className="leading-tight text-text-3"
             style={{ fontSize: "10.5px", maxWidth: "88px" }}
             data-testid="bulk-note"
           >
@@ -62,7 +62,7 @@ export default function BulkActionBar({ count, note, actions, onClear }: Props) 
             className={`flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
               a.destructive
                 ? "text-st-failed hover:bg-st-failed/10"
-                : "text-fg-2 hover:bg-bg-5 hover:text-fg"
+                : "text-text-2 hover:bg-active hover:text-text"
             }`}
             style={{ fontSize: "12px" }}
           >
@@ -78,7 +78,7 @@ export default function BulkActionBar({ count, note, actions, onClear }: Props) 
         type="button"
         onClick={onClear}
         data-testid="bulk-clear"
-        className="cursor-pointer text-fg-3 transition-colors hover:text-fg"
+        className="cursor-pointer text-text-3 transition-colors hover:text-text"
         style={{ fontSize: "12px" }}
       >
         Clear

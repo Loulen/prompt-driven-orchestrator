@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { Clock, Save, Sparkles } from "lucide-react";
-import { Tooltip, TooltipProvider } from "../../../shared/ui/tooltip";
+import { Tooltip } from "../../../shared/ui/tooltip";
 import type { NewRunForm } from "../../store/newRun/useNewRunForm";
 
 /** The footer: the close warning, Cancel, and Launch / Create / Save trigger. */
@@ -25,7 +25,7 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
       )}
       {mode === "run" && attachmentsOverLimit && (
         <span
-          className="text-fg-4"
+          className="text-text-3"
           style={{ fontSize: "10.5px" }}
           data-testid="attachments-fix-hint"
         >
@@ -33,7 +33,7 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
         </span>
       )}
       {remoteUrl && !closeWarning && (
-        <span className="mr-auto text-fg-4" style={{ fontSize: "10.5px" }} data-testid="clone-launch-note">
+        <span className="mr-auto text-text-3" style={{ fontSize: "10.5px" }} data-testid="clone-launch-note">
           {cloneReused
             ? mode === "run"
               ? "Launch starts the Run on the existing clone."
@@ -46,7 +46,7 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
       <button
         onClick={requestClose}
         data-testid="new-run-cancel"
-        className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
+        className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
         style={{ fontSize: "11.5px" }}
       >
         Cancel
@@ -55,7 +55,7 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
         <button
           onClick={() => void clone(mode === "run")}
           disabled={submitting || cloning}
-          className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
           style={{ fontSize: "11.5px" }}
           data-testid="clone-launch-button"
         >
@@ -72,7 +72,7 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
       ) : mode === "run" ? (
         // A disabled button takes no focus nor hover: the reason hangs on a
         // wrapper, focusable only while provisioning blocks the launch.
-        <TooltipProvider>
+        <>
           <Tooltip content={launchBlockReason ?? ""} side="top" disabled={!launchBlockReason}>
             <span
               tabIndex={launchBlockReason ? 0 : undefined}
@@ -83,7 +83,7 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
                 onClick={() => void handleLaunch()}
                 disabled={submitting || !canLaunch}
                 aria-describedby={launchBlockReason ? launchReasonId : undefined}
-                className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+                className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
                 style={{ fontSize: "11.5px" }}
                 data-testid="launch-button"
               >
@@ -97,12 +97,12 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
               )}
             </span>
           </Tooltip>
-        </TooltipProvider>
+        </>
       ) : (
         <button
           onClick={handleCreateTrigger}
           disabled={submitting || !canCreateTrigger}
-          className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
+          className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
           style={{ fontSize: "11.5px" }}
           data-testid={editingTriggerId ? "save-trigger-button" : "create-trigger-button"}
         >

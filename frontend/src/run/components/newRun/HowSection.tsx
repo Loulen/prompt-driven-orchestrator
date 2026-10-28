@@ -15,13 +15,13 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
   } = form;
   return (
     <div className="flex flex-col gap-3 py-4 border-b border-line">
-      <span className="text-fg-4 uppercase tracking-wider font-medium" style={{ fontSize: "10px" }}>
+      <span className="text-text-3 uppercase tracking-wider font-medium" style={{ fontSize: "10px" }}>
         How
       </span>
       <div className="flex flex-col gap-1.5">
         <label
           htmlFor="pipeline-select"
-          className="font-medium text-fg-2"
+          className="font-medium text-text-2"
           style={{ fontSize: "11.5px" }}
         >
           Pipeline
@@ -51,7 +51,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
         </div>
         {/* Under the Pipeline chosen, not under a menu that offers none. */}
         {repoValid && selectedPipeline?.scope === "instance" && (
-          <span className="inline-flex items-center gap-1 text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="inline-flex items-center gap-1 text-text-3" style={{ fontSize: "10.5px" }}>
             {selectedPipeline.path}
           </span>
         )}
@@ -88,7 +88,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
             inheritHint={mode === "run" ? (instanceDefaultHarness ?? undefined) : undefined}
           />
         </div>
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           {mode === "trigger"
             ? "Every fired Run launches on this harness. Nodes that pin their own harness ignore it."
             : "The harness every free node runs on for this Run. Nodes that pin their own harness ignore it."}
@@ -109,7 +109,7 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
           testId="run-skill-selector"
           added={promptAddedSkills}
         />
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
           {mode === "trigger"
             ? "Every fired Run adds these skills to every node, on top of the instance and project tiers."
             : "Added to every node of this Run, on top of the instance and project tiers. Nodes add their own."}

@@ -92,7 +92,7 @@ export default function AgentControl({
 
   return (
     <div ref={rootRef} className="relative" data-testid={`${testId}-root`}>
-      <span className="mb-1 block uppercase tracking-wider text-fg-4" style={{ fontSize: 9 }}>{label}</span>
+      <span className="mb-1 block uppercase tracking-wider text-text-3" style={{ fontSize: 9 }}>{label}</span>
       <button
         type="button"
         data-testid={testId}
@@ -107,18 +107,18 @@ export default function AgentControl({
         }
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className={`flex w-full items-center gap-2 rounded border bg-bg-3 px-2 py-1.5 text-left ${
-          broken ? "border-st-blocked text-st-blocked" : "border-line-strong text-fg-2"
+        className={`flex w-full items-center gap-2 rounded border bg-surface-2 px-2 py-1.5 text-left ${
+          broken ? "border-st-blocked text-st-blocked" : "border-line-strong text-text-2"
         }`}
       >
         <Icon size={11} className="shrink-0" />
         <span className="min-w-0 flex-1">
           <span className="block truncate font-medium" style={{ fontSize: 10.5 }}>{modeLabel}</span>
-          <span className="block truncate font-mono text-fg-4" style={{ fontSize: 9.5 }}>
+          <span className="block truncate font-mono text-text-3" style={{ fontSize: 9.5 }}>
             {broken ? `missing · ${combinationLabel(resolved.combination)}` : combinationLabel(resolved.combination)}
           </span>
         </span>
-        <ChevronDown size={11} className="shrink-0 text-fg-4" />
+        <ChevronDown size={11} className="shrink-0 text-text-3" />
       </button>
       {broken && (
         <p className="mt-1 text-st-blocked" style={{ fontSize: 9.5 }}>
@@ -130,30 +130,30 @@ export default function AgentControl({
         <div
           role="dialog"
           data-testid={`${testId}-popover`}
-          className="absolute left-0 z-40 mt-1 w-full min-w-[280px] rounded border border-line-strong bg-bg-4 p-1.5 shadow-xl"
+          className="absolute left-0 z-40 mt-1 w-full min-w-[280px] rounded border border-line-strong bg-surface-2 p-1.5 shadow-xl"
         >
           {customPane ? (
             <>
               <button
                 type="button"
                 onClick={() => setCustomPane(false)}
-                className="mb-2 flex w-full items-center gap-1 border-b border-line px-1 pb-2 text-fg-2"
+                className="mb-2 flex w-full items-center gap-1 border-b border-line px-1 pb-2 text-text-2"
               >
                 <ChevronLeft size={12} /> Custom combination
               </button>
               <div className="space-y-2 px-1 pb-1">
-                <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                  Harness <span className="text-acc">required</span>
+                <label className="block text-text-3" style={{ fontSize: 10 }}>
+                  Harness <span className="text-primary">required</span>
                   <HarnessSelect
                     value={custom.harness}
                     onChange={(harness) => setCustom({ harness: harness || "claude", model: null, effort: null })}
                     catalog={catalog}
                     inheritLabel="Choose a harness"
-                    className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5"
+                    className="mt-1 w-full rounded border border-line-strong bg-surface-2 px-2 py-1.5"
                   />
                 </label>
-                <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                  Model <span className="text-fg-4">optional</span>
+                <label className="block text-text-3" style={{ fontSize: 10 }}>
+                  Model <span className="text-text-3">optional</span>
                   <ModelPicker
                     value={custom.model ?? null}
                     onChange={(model) => setCustom({ ...custom, model })}
@@ -163,8 +163,8 @@ export default function AgentControl({
                     subject={testId}
                   />
                 </label>
-                <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                  Effort <span className="text-fg-4">optional</span>
+                <label className="block text-text-3" style={{ fontSize: 10 }}>
+                  Effort <span className="text-text-3">optional</span>
                   <EffortPicker
                     value={custom.effort ?? null}
                     onChange={(next) => setCustom({ ...custom, effort: next })}
@@ -176,7 +176,7 @@ export default function AgentControl({
                 </label>
                 <button
                   type="button"
-                  className="ml-auto block rounded bg-acc px-2 py-1 text-bg-1"
+                  className="ml-auto block rounded bg-primary px-2 py-1 text-surface-0"
                   onClick={() => {
                     onChange({ mode: "custom", ...custom });
                     close();
@@ -200,7 +200,7 @@ export default function AgentControl({
                   }}
                 />
               )}
-              <div className="px-1 py-1 uppercase tracking-wider text-fg-4" style={{ fontSize: 9 }}>Profiles</div>
+              <div className="px-1 py-1 uppercase tracking-wider text-text-3" style={{ fontSize: 9 }}>Profiles</div>
               {profiles.map((profile) => (
                 <ChoiceRow
                   key={profile.id}
@@ -229,7 +229,7 @@ export default function AgentControl({
                   }}
                 />
               </div>
-              <p className="border-t border-line px-1 pt-1 text-fg-4" style={{ fontSize: 9 }}>
+              <p className="border-t border-line px-1 pt-1 text-text-3" style={{ fontSize: 9 }}>
                 — = not set on the profile, so the harness default applies.
               </p>
             </>
@@ -254,10 +254,10 @@ function ChoiceRow({
   testId?: string;
 }) {
   return (
-    <button type="button" data-testid={testId} onClick={onClick} className="relative block w-full rounded px-1.5 py-1 text-left hover:bg-bg-3">
-      <span className={`block font-medium ${selected ? "text-acc" : "text-fg"}`} style={{ fontSize: 10.5 }}>{name}</span>
-      <span className="block font-mono text-fg-4" style={{ fontSize: 9 }}>{summary}</span>
-      {selected && <Check size={12} className="absolute right-1.5 top-2 text-acc" />}
+    <button type="button" data-testid={testId} onClick={onClick} className="relative block w-full rounded px-1.5 py-1 text-left hover:bg-hover">
+      <span className={`block font-medium ${selected ? "text-primary" : "text-text"}`} style={{ fontSize: 10.5 }}>{name}</span>
+      <span className="block font-mono text-text-3" style={{ fontSize: 9 }}>{summary}</span>
+      {selected && <Check size={12} className="absolute right-1.5 top-2 text-primary" />}
     </button>
   );
 }

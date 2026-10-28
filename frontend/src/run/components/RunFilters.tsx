@@ -63,10 +63,10 @@ function FilterDropdown({
       <DropdownMenuTrigger
         data-testid={`run-filter-${axis}`}
         title={placeholder}
-        className={`flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-1 rounded border px-1.5 py-0.5 text-left outline-none transition-colors hover:bg-bg-4 data-[popup-open]:border-acc ${
+        className={`flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-1 rounded border px-1.5 py-0.5 text-left outline-none transition-colors hover:bg-hover data-[popup-open]:border-primary ${
           selected !== null
-            ? "border-acc bg-bg-3 text-acc"
-            : "border-line-strong bg-bg-3 text-fg-4"
+            ? "border-primary bg-surface-2 text-primary"
+            : "border-line-strong bg-surface-2 text-text-3"
         }`}
         style={{ fontSize: "10px" }}
       >
@@ -74,14 +74,14 @@ function FilterDropdown({
         <ChevronDown size={9} className="shrink-0" />
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        className="min-w-[160px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg"
+        className="min-w-[160px] rounded-md border border-line-strong bg-surface-2 p-1 shadow-lg"
         side="bottom"
         align="start"
       >
         <DropdownMenuItem
           data-testid={`run-filter-option-all`}
-          className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4 ${
-            selected === null ? "bg-bg-4" : ""
+          className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover ${
+            selected === null ? "bg-surface-2" : ""
           }`}
           style={{ fontSize: "11px" }}
           onClick={() => onSelect(null)}
@@ -92,8 +92,8 @@ function FilterDropdown({
           <DropdownMenuItem
             key={o.value}
             data-testid={`run-filter-option-${o.value}`}
-            className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4 ${
-              selected === o.value ? "bg-bg-4" : ""
+            className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover ${
+              selected === o.value ? "bg-surface-2" : ""
             }`}
             style={{ fontSize: "11px" }}
             title={o.value}
@@ -206,7 +206,7 @@ export default function RunFilters({
             data-state={treeToggle.allExpanded ? "expanded" : "collapsed"}
             title={treeToggle.allExpanded ? "Collapse all child runs" : "Expand all child runs"}
             aria-label={treeToggle.allExpanded ? "Collapse all child runs" : "Expand all child runs"}
-            className="flex shrink-0 cursor-pointer items-center rounded border border-line-strong bg-bg-3 px-2 py-[3px] text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2"
+            className="flex shrink-0 cursor-pointer items-center rounded border border-line-strong bg-surface-2 px-2 py-[3px] text-text-3 transition-colors hover:bg-hover hover:text-text-2"
             onClick={treeToggle.onToggle}
           >
             {treeToggle.allExpanded ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
@@ -216,7 +216,7 @@ export default function RunFilters({
           <button
             data-testid="run-filter-clear"
             title="Clear filters"
-            className="grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg"
+            className="grid h-4 w-4 shrink-0 cursor-pointer place-items-center rounded text-text-3 transition-colors hover:bg-hover hover:text-text"
             onClick={() => onChange(EMPTY_RUN_FILTER)}
           >
             <X size={10} />

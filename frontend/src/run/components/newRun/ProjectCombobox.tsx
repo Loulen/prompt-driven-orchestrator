@@ -53,32 +53,32 @@ export default function ProjectCombobox({ value, onChange, projects, allowNone, 
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className={`flex w-full items-center gap-2 rounded-md border bg-bg-3 px-2.5 py-1.5 text-left transition-colors focus:outline-none ${
-          open ? "border-acc" : "border-line-strong hover:border-line-strong focus:border-acc"
+        className={`flex w-full items-center gap-2 rounded-md border bg-surface-2 px-2.5 py-1.5 text-left transition-colors focus:outline-none ${
+          open ? "border-primary" : "border-line-strong hover:border-line-strong focus:border-primary"
         }`}
         style={{ fontSize: "12px" }}
         data-testid="project-combobox"
       >
-        <span className={`min-w-0 flex-1 truncate ${selected ? "text-fg" : "text-fg-3"}`}>
+        <span className={`min-w-0 flex-1 truncate ${selected ? "text-text" : "text-text-3"}`}>
           {selected ? selected.name : "No project"}
         </span>
         {selected && (
-          <span className="shrink-0 font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="shrink-0 font-mono text-text-3" style={{ fontSize: "10.5px" }}>
             {repoCount(selected)}
           </span>
         )}
-        <ChevronDown size={13} className="shrink-0 text-fg-4" />
+        <ChevronDown size={13} className="shrink-0 text-text-3" />
       </button>
       {open && (
         <div
           role="listbox"
           aria-label="Projects"
-          className="absolute left-0 right-0 z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-line bg-bg-4 py-1 shadow-lg"
+          className="absolute left-0 right-0 z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-line bg-surface-2 py-1 shadow-lg"
           data-testid="project-combobox-menu"
         >
           {projects.length > 0 && (
             <div
-              className="px-2.5 pb-0.5 pt-1 font-medium uppercase tracking-wider text-fg-4"
+              className="px-2.5 pb-0.5 pt-1 font-medium uppercase tracking-wider text-text-3"
               style={{ fontSize: "9.5px" }}
             >
               Your projects
@@ -96,22 +96,22 @@ export default function ProjectCombobox({ value, onChange, projects, allowNone, 
                   e.preventDefault();
                   choose(project.id);
                 }}
-                className={`flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left transition-colors hover:bg-bg-5 ${
-                  active ? "bg-bg-5" : ""
+                className={`flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left transition-colors hover:bg-active ${
+                  active ? "bg-surface-2" : ""
                 }`}
                 data-testid="project-option"
                 data-project-id={project.id}
               >
-                <Briefcase size={12} className="shrink-0 text-fg-4" />
+                <Briefcase size={12} className="shrink-0 text-text-3" />
                 <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate font-semibold text-fg" style={{ fontSize: "12px" }}>
+                  <span className="truncate font-semibold text-text" style={{ fontSize: "12px" }}>
                     {project.name}
                   </span>
-                  <span className="truncate font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+                  <span className="truncate font-mono text-text-3" style={{ fontSize: "10.5px" }}>
                     {project.members.length > 0 ? memberNames(project) : "no repository yet"}
                   </span>
                 </span>
-                {active && <Check size={14} className="shrink-0 text-acc" />}
+                {active && <Check size={14} className="shrink-0 text-primary" />}
               </button>
             );
           })}
@@ -124,20 +124,20 @@ export default function ProjectCombobox({ value, onChange, projects, allowNone, 
                 e.preventDefault();
                 choose(null);
               }}
-              className={`flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left text-fg-3 transition-colors hover:bg-bg-5 ${
+              className={`flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left text-text-3 transition-colors hover:bg-active ${
                 projects.length > 0 ? "mt-1 border-t border-line" : ""
-              } ${value === null ? "bg-bg-5" : ""}`}
+              } ${value === null ? "bg-surface-2" : ""}`}
               style={{ fontSize: "12px" }}
               data-testid="project-option-none"
             >
               <span className="w-3 shrink-0" />
               <span className="flex-1">No project</span>
-              {value === null && <Check size={14} className="shrink-0 text-acc" />}
+              {value === null && <Check size={14} className="shrink-0 text-primary" />}
             </button>
           )}
           {note && (
             <div
-              className="mt-1 border-t border-line px-2.5 pb-0.5 pt-1.5 text-fg-4"
+              className="mt-1 border-t border-line px-2.5 pb-0.5 pt-1.5 text-text-3"
               style={{ fontSize: "10.5px" }}
               data-testid="project-combobox-note"
             >

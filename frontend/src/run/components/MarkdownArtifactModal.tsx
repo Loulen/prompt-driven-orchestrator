@@ -263,7 +263,7 @@ export default function MarkdownArtifactModal({
       }}
     >
       <div
-        className={`flex max-h-[80vh] ${widthClass} max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-lg border border-line-strong bg-bg-2`}
+        className={`flex max-h-[calc(80vh/var(--app-zoom,1))] ${widthClass} max-w-[calc(calc(100vw/var(--app-zoom,1))-32px)] flex-col overflow-hidden rounded-lg border border-line-strong bg-surface-1`}
         style={{ boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }}
         data-testid={testId}
         data-port={portName}
@@ -334,7 +334,7 @@ export default function MarkdownArtifactModal({
         />
 
         {footer && (
-          <div className="shrink-0 border-t border-line bg-bg-1 px-4 py-3">{footer}</div>
+          <div className="shrink-0 border-t border-line bg-surface-0 px-4 py-3">{footer}</div>
         )}
       </div>
 

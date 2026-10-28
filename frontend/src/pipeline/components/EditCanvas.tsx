@@ -41,7 +41,8 @@ import { useCanvasContextMenu } from "../store/useCanvasContextMenu";
 import { useCanvasLint } from "../store/useCanvasLint";
 import { useCanvasPlacement } from "../store/useCanvasPlacement";
 import { useCanvasReveal } from "../store/useCanvasReveal";
-import { CANVAS_FIT_VIEW_OPTIONS, CANVAS_MIN_ZOOM, usePaneToggleReframe } from "../store/usePaneToggleReframe";
+import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM, usePaneToggleReframe } from "../store/usePaneToggleReframe";
+import { useCanvasScale } from "../store/useCanvasScale";
 import { useCanvasRunActions } from "../store/useCanvasRunActions";
 import { useCanvasWiring } from "../store/useCanvasWiring";
 import { useCanvasNodeDragStop } from "../store/useCanvasNodeDragStop";
@@ -91,6 +92,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const [addFromYamlOpen, setAddFromYamlOpen] = useState(false);
   const reactFlowRef = useRef<HTMLDivElement>(null);
   const reactFlow = useReactFlow();
+  const { zoom, fitViewOptions } = useCanvasScale(reactFlow);
 
   // #844: the wiring grid shows only while a wire is being drawn, on the lattice
   // the gesture is currently originated on, in the feedback the reader chose.
@@ -211,7 +213,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
 
   if (!tab || !pipeline) {
     return (
-      <div className="flex flex-1 items-center justify-center text-fg-4">
+      <div className="flex flex-1 items-center justify-center text-text-3">
         Select a pipeline to edit
       </div>
     );
@@ -316,12 +318,14 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           connectionLineComponent={DragConnectionLine}
           deleteKeyCode={null}
           fitView
-          // CORE-88: down to 25 %, where the rim and the snap still hold.
-          minZoom={CANVAS_MIN_ZOOM}
-          // #825: never magnify (see CANVAS_FIT_VIEW_OPTIONS).
-          fitViewOptions={CANVAS_FIT_VIEW_OPTIONS}
+          // CORE-88: down to 25 %, where the rim and the snap still hold; the
+          // bounds carry the UI scale (useCanvasScale).
+          minZoom={CANVAS_MIN_ZOOM * zoom}
+          maxZoom={CANVAS_MAX_ZOOM * zoom}
+          // #825: never magnify (see canvasFitViewOptions).
+          fitViewOptions={fitViewOptions}
           proOptions={{ hideAttribution: true }}
-          className="bg-bg-1"
+          className="pdo-unzoom bg-surface-0"
           // #315: drag + connect are off on a read-only canvas; click-to-select stays on.
           // #936: edges are born from a DRAG only; a click on a rim selects the node.
           nodesDraggable={!readOnly}
@@ -330,7 +334,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         >
           {/* Decorative background — pure chrome, but drawn at the wiring grid's
               pitch (#877) so a 30px step does not fall out of phase with it. */}
-          <Background color="var(--color-line-soft)" gap={gridStep} size={1} />
+          <Background color="var(--line-soft)" gap={gridStep} size={1} />
           <CanvasZoomBadge />
           {/* #844: the wiring grid lives in FLOW space. Drawn inside the viewport
               portal, it shares the path's coordinate system exactly, so a dot is

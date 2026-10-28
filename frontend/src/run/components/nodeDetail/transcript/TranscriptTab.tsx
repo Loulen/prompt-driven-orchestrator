@@ -90,7 +90,7 @@ export default function TranscriptTab({
       <div className="p-3" data-testid="transcript-tab">
         <div
           data-testid="transcript-unavailable"
-          className="flex items-start gap-2 rounded-md border border-dashed border-line-strong bg-bg-3 px-3 py-2.5 text-fg-4"
+          className="flex items-start gap-2 rounded-md border border-dashed border-line-strong bg-surface-2 px-3 py-2.5 text-text-3"
           style={{ fontSize: "11px", lineHeight: 1.5 }}
         >
           <Info size={13} className="mt-px shrink-0" />
@@ -111,24 +111,24 @@ export default function TranscriptTab({
         style={{ fontSize: "10.5px" }}
       >
         {iterations.length > 1 ? (
-          <span className="shrink-0 rounded border border-line-strong bg-bg-3">
+          <span className="shrink-0 rounded border border-line-strong bg-surface-2">
             <IterSelector iterations={iterations} selectedIter={iter} onSelect={onSelectIter} />
           </span>
         ) : (
           <span
-            className="shrink-0 whitespace-nowrap rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-mono text-fg-3"
+            className="shrink-0 whitespace-nowrap rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 font-mono text-text-3"
             style={{ fontSize: "10px" }}
           >
             iter {iter}
           </span>
         )}
-        <span className="min-w-0 truncate text-fg-4" data-testid="transcript-counts" title={counts}>
+        <span className="min-w-0 truncate text-text-3" data-testid="transcript-counts" title={counts}>
           {counts}
           <span className="@max-[400px]:hidden"> folded</span>
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
           {live && (
-            <span className="flex items-center gap-1 text-fg-4" data-testid="transcript-live">
+            <span className="flex items-center gap-1 text-text-3" data-testid="transcript-live">
               <span className="h-1.5 w-1.5 rounded-full bg-st-running" />
               live
             </span>
@@ -138,11 +138,11 @@ export default function TranscriptTab({
             data-testid="transcript-search-run"
             onClick={() => openRunSearch(runId)}
             title="Search the transcripts of the whole Run (⌘⇧F)"
-            className="flex cursor-pointer items-center gap-1 rounded border border-line-strong px-1.5 py-0.5 text-fg-3 hover:bg-bg-4 hover:text-fg-2"
+            className="flex cursor-pointer items-center gap-1 rounded border border-line-strong px-1.5 py-0.5 text-text-3 hover:bg-hover hover:text-text-2"
           >
             <Search size={10} />
             Search run
-            <span className="font-mono text-fg-4 @max-[400px]:hidden">⌘⇧F</span>
+            <span className="font-mono text-text-3 @max-[400px]:hidden">⌘⇧F</span>
           </button>
         </span>
       </div>
@@ -158,7 +158,7 @@ export default function TranscriptTab({
           </div>
         )}
         {loaded && !error && view.total === 0 && (
-          <div className="py-2 text-fg-4" style={{ fontSize: "11px" }} data-testid="transcript-empty">
+          <div className="py-2 text-text-3" style={{ fontSize: "11px" }} data-testid="transcript-empty">
             {live ? "Waiting for the session's first message…" : "No message in this iteration."}
           </div>
         )}
@@ -194,7 +194,7 @@ export default function TranscriptTab({
             type="button"
             data-testid="transcript-more"
             onClick={loadMore}
-            className="flex cursor-pointer items-center gap-1 py-1 text-fg-4 hover:text-fg-2"
+            className="flex cursor-pointer items-center gap-1 py-1 text-text-3 hover:text-text-2"
             style={{ fontSize: "10.5px" }}
           >
             <ChevronDown size={11} />

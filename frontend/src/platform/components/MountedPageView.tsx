@@ -32,7 +32,7 @@ export default function MountedPageView({ page }: { page: PageMount }) {
           src={pageUrl("", page.name)}
           title={page.name}
           data-testid="mounted-page-frame"
-          className="h-full w-full rounded-md border border-line bg-bg-1"
+          className="h-full w-full rounded-md border border-line bg-surface-0"
         />
       </div>
       {entries > 0 && !guideOpen && (
@@ -41,9 +41,9 @@ export default function MountedPageView({ page }: { page: PageMount }) {
           onClick={() => setGuideOpen(true)}
           data-testid="guide-rail"
           title="Show the reading guide"
-          className="flex w-[34px] shrink-0 cursor-pointer flex-col items-center gap-2 border-l border-line bg-bg-2 pt-3 text-fg-3 transition-colors hover:text-fg"
+          className="flex w-[34px] shrink-0 cursor-pointer flex-col items-center gap-2 border-l border-line bg-surface-1 pt-3 text-text-3 transition-colors hover:text-text"
         >
-          <BookOpen size={14} className="text-acc" />
+          <BookOpen size={14} className="text-primary" />
           <span className="font-mono [writing-mode:vertical-rl]" style={{ fontSize: "10px" }}>
             Guide · {entries}
           </span>

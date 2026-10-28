@@ -38,7 +38,7 @@ export default function TreeRowCheck({
         panel.toggleCheck(row.ref, event.shiftKey);
       }}
       onDoubleClick={(event) => event.stopPropagation()}
-      className="h-3 w-3 shrink-0 cursor-pointer accent-acc disabled:cursor-default disabled:opacity-40"
+      className="h-3 w-3 shrink-0 cursor-pointer accent-primary disabled:cursor-default disabled:opacity-40"
     />
   );
 }

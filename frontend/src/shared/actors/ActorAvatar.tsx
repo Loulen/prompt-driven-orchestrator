@@ -14,7 +14,7 @@ export function ActorAvatar({ display, size = 16 }: { display: ActorDisplay; siz
     />
   ) : (
     <span
-      className="grid shrink-0 place-items-center rounded-full bg-acc font-semibold text-white"
+      className="grid shrink-0 place-items-center rounded-full bg-primary font-semibold text-primary-ink"
       style={style}
       data-testid="actor-avatar"
     >

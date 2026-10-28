@@ -3,12 +3,12 @@
 export function RunTabPlaceholder({ nodeId }: { nodeId: string | null }) {
   return (
     <aside
-      className="flex h-full flex-col items-center justify-center bg-bg-2 text-fg-4"
+      className="flex h-full flex-col items-center justify-center bg-surface-1 text-text-3"
       style={{ fontSize: "12px" }}
       data-testid="pending-placeholder"
     >
       <div className="px-6 text-center">
-        <div className="font-medium text-fg-3">
+        <div className="font-medium text-text-3">
           <em>en attente d&apos;activation</em>
         </div>
         {nodeId && (
@@ -16,7 +16,7 @@ export function RunTabPlaceholder({ nodeId }: { nodeId: string | null }) {
             {nodeId}
           </div>
         )}
-        <div className="mt-2 text-fg-4" style={{ fontSize: "11px" }}>
+        <div className="mt-2 text-text-3" style={{ fontSize: "11px" }}>
           This node is waiting for upstream dependencies to complete.
         </div>
       </div>

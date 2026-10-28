@@ -2,7 +2,7 @@ import { Info } from "lucide-react";
 import type { StatsDistribution } from "../../../../shared/generated/StatsDistribution";
 import type { StatsPerformanceAggregate } from "../../../../shared/generated/StatsPerformanceAggregate";
 import { harnessColor } from "../../../../harness/model/color";
-import { Tooltip, TooltipProvider } from "../../../../shared/ui/tooltip";
+import { Tooltip } from "../../../../shared/ui/tooltip";
 import type { DurationMode } from "../../../model/statsFilters";
 import {
   DECLARED_WAIT_COPY,
@@ -38,20 +38,20 @@ export function PerformanceCards({
       {aggregate.harnesses.map((item) => (
         <div
           key={item.harness}
-          className="rounded-md border border-line bg-bg-3 p-3"
+          className="rounded-md border border-line bg-surface-2 p-3"
           data-testid={`stats-performance-card-${item.harness}`}
         >
-          <div className="mb-2 flex items-center gap-1.5 text-fg-3">
+          <div className="mb-2 flex items-center gap-1.5 text-text-3">
             <span
               className="h-2 w-2 rounded-full"
               style={{ backgroundColor: harnessColor(item.harness) }}
             />
             {item.harness}
           </div>
-          <div className="font-mono text-fg">
+          <div className="font-mono text-text">
             {central(item.context, "context")} median context
           </div>
-          <div className="flex items-center gap-1 font-mono text-fg-3">
+          <div className="flex items-center gap-1 font-mono text-text-3">
             <span>
               {central(item[durationField], "duration")} median{" "}
               {durationWord(mode)}
@@ -61,14 +61,14 @@ export function PerformanceCards({
                 <span
                   role="img"
                   aria-label={DECLARED_WAIT_COPY}
-                  className="inline-flex text-fg-4"
+                  className="inline-flex text-text-3"
                 >
                   <Info size={11} />
                 </span>
               </Tooltip>
             )}
           </div>
-          <div className="font-mono text-fg-3">
+          <div className="font-mono text-text-3">
             {central(item.steering, "steering")} median steering
           </div>
         </div>
@@ -91,22 +91,22 @@ export function SteeredCard({
 }) {
   return (
     <div
-      className="rounded-md border border-line bg-bg-3 p-3 sm:col-span-2"
+      className="rounded-md border border-line bg-surface-2 p-3 sm:col-span-2"
       data-testid="stats-steered-card"
     >
-      <div className="mb-2 flex items-center justify-between gap-2 text-fg-3">
+      <div className="mb-2 flex items-center justify-between gap-2 text-text-3">
         <span>Steered executions</span>
-        <TooltipProvider>
+        <>
           <Tooltip content={STEERING_PROVENANCE_COPY} side="top">
             <span
               role="img"
               aria-label={STEERING_PROVENANCE_COPY}
-              className="inline-flex text-fg-4"
+              className="inline-flex text-text-3"
             >
               <Info size={12} />
             </span>
           </Tooltip>
-        </TooltipProvider>
+        </>
       </div>
       <div className="grid gap-1.5">
         {aggregate.harnesses.map((item) => {
@@ -127,14 +127,14 @@ export function SteeredCard({
                 className="h-2 w-2 shrink-0 rounded-full"
                 style={{ backgroundColor: harnessColor(item.harness) }}
               />
-              <span className="w-16 shrink-0 text-fg-2">{item.harness}</span>
+              <span className="w-16 shrink-0 text-text-2">{item.harness}</span>
               {percent ? (
                 <>
-                  <span className="w-12 shrink-0 text-fg">{percent}</span>
-                  <span className="shrink-0 text-fg-4">
+                  <span className="w-12 shrink-0 text-text">{percent}</span>
+                  <span className="shrink-0 text-text-3">
                     · {item.steered.steered}/{item.steered.readable}
                   </span>
-                  <span className="relative h-1 min-w-10 flex-1 rounded bg-bg-2">
+                  <span className="relative h-1 min-w-10 flex-1 rounded bg-surface-1">
                     <span
                       className="absolute inset-y-0 left-0 rounded"
                       style={{
@@ -147,7 +147,7 @@ export function SteeredCard({
               ) : partialByKind ? (
                 <FilteredValue />
               ) : (
-                <span className="text-fg-4">
+                <span className="text-text-3">
                   —{" "}
                   {item.steering.missing_reasons[0] ?? "no readable execution"}
                 </span>
@@ -156,7 +156,7 @@ export function SteeredCard({
           );
         })}
       </div>
-      <div className="mt-2 text-fg-4" style={{ fontSize: "10px" }}>
+      <div className="mt-2 text-text-3" style={{ fontSize: "10px" }}>
         share of successful executions with ≥ 1 steering message · steered /
         readable
       </div>

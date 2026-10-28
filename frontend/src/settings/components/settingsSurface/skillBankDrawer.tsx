@@ -27,7 +27,7 @@ export function skillBankDrawer({
   return {
     title: "Skill bank",
     escHint: "saves as you go · Esc returns to Settings",
-    widthClassName: "w-[min(880px,90vw)]",
+    widthClassName: "w-[min(880px,calc(90vw/var(--app-zoom,1)))]",
     testId: "settings-drawer",
     dataAttributes: { "data-drawer": "skills" },
     onClose,

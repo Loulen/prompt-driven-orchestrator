@@ -32,16 +32,16 @@ export default function TutorialsSection({ onStartTour, onStartFullTour }: Props
 
   return (
     <div className="flex flex-col gap-3" data-testid="settings-tutorials">
-      <div className="flex items-center gap-2 rounded-md border border-acc-border bg-acc-bg px-3 py-2.5">
+      <div className="flex items-center gap-2 rounded-md border border-primary/30 bg-selected px-3 py-2.5">
         <span className="min-w-0 flex-1">
-          <span className="block font-semibold text-fg" style={{ fontSize: "12px" }}>
+          <span className="block font-semibold text-text" style={{ fontSize: "12px" }}>
             Full tour
           </span>
-          <span className="block text-fg-3" style={{ fontSize: "10.5px" }}>
+          <span className="block text-text-3" style={{ fontSize: "10.5px" }}>
             Every tour PDO has, back to back.
           </span>
         </span>
-        <span className="shrink-0 font-mono text-fg-3" style={{ fontSize: "10px" }}>
+        <span className="shrink-0 font-mono text-text-3" style={{ fontSize: "10px" }}>
           ~{full} min
         </span>
         <button
@@ -49,7 +49,7 @@ export default function TutorialsSection({ onStartTour, onStartFullTour }: Props
           onClick={onStartFullTour}
           disabled={!hasStartableTour}
           data-testid="tutorials-start-full"
-          className="flex shrink-0 items-center gap-1 rounded bg-acc px-2.5 py-1 font-medium text-on-acc transition-colors enabled:cursor-pointer enabled:hover:bg-acc-dim disabled:opacity-40"
+          className="flex shrink-0 items-center gap-1 rounded bg-primary px-2.5 py-1 font-medium text-primary-ink transition-colors enabled:cursor-pointer enabled:hover:bg-primary-hi disabled:opacity-40"
           style={{ fontSize: "11px" }}
         >
           <Play size={11} />
@@ -69,28 +69,28 @@ export default function TutorialsSection({ onStartTour, onStartFullTour }: Props
             {finishedAt ? (
               <CircleCheck
                 size={15}
-                className="shrink-0 text-acc"
+                className="shrink-0 text-primary"
                 aria-label={`${entry.title} completed`}
                 data-testid={`tutorials-done-${entry.id}`}
               />
             ) : (
-              <Circle size={15} className="shrink-0 text-fg-5" aria-hidden="true" />
+              <Circle size={15} className="shrink-0 text-text-3" aria-hidden="true" />
             )}
             <span className="min-w-0 flex-1">
-              <span className="block font-medium text-fg" style={{ fontSize: "11.5px" }}>
+              <span className="block font-medium text-text" style={{ fontSize: "11.5px" }}>
                 {entry.title}
               </span>
-              <span className="block text-fg-3" style={{ fontSize: "10.5px" }}>
+              <span className="block text-text-3" style={{ fontSize: "10.5px" }}>
                 {entry.blurb}
                 {entry.def ? ` ${entry.def.steps.length} steps.` : ""}
               </span>
             </span>
             {finishedAt && (
-              <span className="shrink-0 font-mono text-acc" style={{ fontSize: "9.5px" }}>
+              <span className="shrink-0 font-mono text-primary" style={{ fontSize: "9.5px" }}>
                 done · {shortDate(finishedAt)}
               </span>
             )}
-            <span className="shrink-0 font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
+            <span className="shrink-0 font-mono text-text-3" style={{ fontSize: "9.5px" }}>
               {entry.def ? `~${entry.minutes} min` : "soon"}
             </span>
             <button
@@ -98,7 +98,7 @@ export default function TutorialsSection({ onStartTour, onStartFullTour }: Props
               disabled={entry.def == null}
               onClick={() => onStartTour(entry.id)}
               data-testid={`tutorials-start-${entry.id}`}
-              className="shrink-0 rounded border border-line-strong bg-bg-3 px-2 py-0.5 font-medium text-fg-2 transition-colors enabled:cursor-pointer enabled:hover:border-acc enabled:hover:text-fg disabled:opacity-40"
+              className="shrink-0 rounded border border-line-strong bg-surface-2 px-2 py-0.5 font-medium text-text-2 transition-colors enabled:cursor-pointer enabled:hover:border-primary enabled:hover:text-text disabled:opacity-40"
               style={{ fontSize: "10.5px" }}
             >
               {finishedAt ? "Replay" : "Start"}
@@ -107,7 +107,7 @@ export default function TutorialsSection({ onStartTour, onStartFullTour }: Props
         );
       })}
 
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="text-text-3" style={{ fontSize: "10.5px" }}>
         Checkmarks and the welcome prompt are stored in this browser.{" "}
         <button
           type="button"
@@ -116,7 +116,7 @@ export default function TutorialsSection({ onStartTour, onStartFullTour }: Props
             resetTourMemory();
             setDone({});
           }}
-          className="cursor-pointer text-fg-3 underline underline-offset-2 transition-colors hover:text-fg"
+          className="cursor-pointer text-text-3 underline underline-offset-2 transition-colors hover:text-text"
         >
           Reset tutorial memory
         </button>

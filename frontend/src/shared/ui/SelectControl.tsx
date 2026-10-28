@@ -46,7 +46,7 @@ interface Props {
 export default function SelectControl({
   selected,
   dotClass,
-  ringClass = "border-fg-3",
+  ringClass = "border-text-3",
   pulse = false,
   dotTitle,
   label,
@@ -69,7 +69,7 @@ export default function SelectControl({
     >
       {selected ? (
         <span
-          className="grid h-4 w-4 place-items-center rounded-full bg-acc text-on-acc"
+          className="grid h-4 w-4 place-items-center rounded-full bg-primary text-primary-ink"
           data-testid="select-check"
         >
           <Check size={11} strokeWidth={3} />

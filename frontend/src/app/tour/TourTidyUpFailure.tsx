@@ -14,7 +14,7 @@ export default function TourTidyUpFailure({
   return (
     <div
       data-testid="tour-tidyup-failure"
-      className="mt-3 rounded border border-st-await/40 bg-st-await/10 p-2 text-fg-2"
+      className="mt-3 rounded border border-st-await/40 bg-st-await/10 p-2 text-text-2"
       style={{ fontSize: "11px", lineHeight: 1.5 }}
     >
       <div className="flex items-center gap-1.5 font-medium text-st-await">
@@ -22,7 +22,7 @@ export default function TourTidyUpFailure({
         {failure.title}
       </div>
       <pre
-        className="mt-1 whitespace-pre-wrap break-words font-mono text-fg-3"
+        className="mt-1 whitespace-pre-wrap break-words font-mono text-text-3"
         style={{ fontSize: "10.5px" }}
         data-testid="tour-tidyup-reason"
       >

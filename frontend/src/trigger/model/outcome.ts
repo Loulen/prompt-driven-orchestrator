@@ -1,4 +1,22 @@
 import type { Trigger } from "../../shared/generated/Trigger";
+import type { StatusTone } from "../../shared/ui/kit";
+
+/** A fire outcome as a status tone; `null` before the first fire. */
+export function outcomeTone(outcome: string | null | undefined): StatusTone | null {
+  switch (outcome) {
+    case "fired":
+      return "done";
+    case "error":
+      return "failed";
+    case "skipped-overlap":
+    case "skipped-suspended":
+    case "guard-exit-nonzero":
+    case "guard-error":
+      return "blocked";
+    default:
+      return null;
+  }
+}
 
 /**
  * Map a fire outcome (a Trigger's `last_outcome`, or one history row's) to a
@@ -19,25 +37,6 @@ export function outcomeDot(outcome: string | null | undefined): string {
       return "bg-st-blocked";
     default:
       return "bg-st-skipped";
-  }
-}
-
-/** The `border-*` sibling of {@link outcomeDot} — the dot "goes hollow" in its
- *  own colour on hover (#577). */
-export function outcomeRing(outcome: string | null | undefined): string {
-  switch (outcome) {
-    case "fired":
-      return "border-st-done";
-    case "error":
-      return "border-st-failed";
-    case "skipped-overlap":
-    case "skipped-suspended":
-    case "guard-exit-nonzero":
-      return "border-st-blocked";
-    case "guard-error":
-      return "border-st-blocked";
-    default:
-      return "border-st-skipped";
   }
 }
 

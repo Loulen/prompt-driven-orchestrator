@@ -277,6 +277,7 @@
   /* ---------------------------------------------------------------- left panel header, 32 px */
   .sh-left-head {
     gap: var(--g-2);
+    padding-right: var(--g-4);
     padding-left: var(--g-2);
     background: var(--surface-1);
   }

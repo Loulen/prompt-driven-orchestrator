@@ -283,12 +283,14 @@ export function useStatsAbsorption({
       )}
       {selection.length >= 2 && !modalOpen && (
         <BulkActionBar
+          placement="viewport"
+          labelled
           count={selection.length}
           actions={[
             {
               key: "combine",
               label: `Combine (${selection.length})…`,
-              icon: <Combine size={13} aria-hidden="true" />,
+              icon: <Combine size={14} strokeWidth={1.5} aria-hidden="true" />,
               onClick: () => {
                 setError(null);
                 setCombining(true);

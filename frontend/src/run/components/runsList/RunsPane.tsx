@@ -30,7 +30,7 @@ export default function RunsPane({
   onShowTriggers,
 }: Props) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
+    <div className="lp-pane" role="tabpanel">
       <RunsPaneHeader pane={pane} runs={runs} triggers={triggers} onNewRun={onNewRun} />
       <RunTreeList
         pane={pane}
@@ -40,6 +40,7 @@ export default function RunsPane({
         onSelectRun={onSelectRun}
         onSelectTrigger={onSelectTrigger}
         onShowTriggers={onShowTriggers}
+        onNewRun={onNewRun}
       />
       <RunsBulkActions pane={pane} />
     </div>

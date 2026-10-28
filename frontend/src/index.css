@@ -10,6 +10,8 @@
 @import "./shared/ui/kit/kit.css";
 /* The shell: top bar, status bar, left panel header, document tabs, palette. */
 @import "./app/shell.css";
+/* The lists of the left panel: rows, group headers, hover and bulk bars. */
+@import "./app/leftList.css";
 
 @custom-variant dark (&:is(.dark *));
 

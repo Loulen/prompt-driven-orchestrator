@@ -42,7 +42,7 @@ export function useExtensionBulkActions<L extends ActionLocation>(
       actions.map((element) => ({
         key: element.key,
         label: element.contribution.label,
-        icon: <ExtensionIcon url={iconOf(element)} label={element.contribution.label} size={13} />,
+        icon: <ExtensionIcon url={iconOf(element)} label={element.contribution.label} size={14} />,
         onClick: () => void runCommand(element, context),
       })),
     [actions, context],

@@ -322,7 +322,8 @@ unchanged.
 A decoration location renders the marks the extensions put on one item, side by side, each behind
 its own error boundary (a failing one becomes a small « ! » whose tooltip names the extension).
 **Without a contribution nothing is rendered at all**: the item keeps its layout. Several wrap
-rather than push the item's own text out. The component receives `entity` and `context`:
+rather than push the item's own text out, except on the rows of the left panel's lists, which
+keep one line and end in an ellipsis. The component receives `entity` and `context`:
 `DecorationContext` = `LocationContext` + `entity` (`EntityContext`, `null` on the status bar).
 Its `when` clause sees the entity: `When::has("entity.attributes.test/note")` marks only the items
 that carry the attribute.
@@ -333,16 +334,17 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 ### `run/item`
 
 - **Accepts**: decoration.
-- **Renders**: a row of the Runs list, in its right-hand column, on line 2 (the line of the child
-  counts, before them), so a badge never truncates the pipeline's name.
+- **Renders**: a row of the Runs list (two lines of 46 px), at the end of line 2, after the
+  pipeline's name and before the duration and the cost, on one line: the pipeline's name gives way
+  first, then the marks end in an ellipsis. Keep a mark 14 px high (a mono reference chip, an icon).
 - **Context**: `DecorationContext`, `entity` = `{ kind: "run", id, name?, attributes }`.
 
 ### `run/item/people`
 
 - **Accepts**: decoration.
-- **Renders**: a row of the Runs list, in its left-hand column, on line 2 after the pipeline's
-  name (and its trigger badge): the people of the Run. **The core draws no person there**:
-  nothing without a contribution, neither the creator nor anyone else.
+- **Renders**: a row of the Runs list, at the end of line 2, after the `run/item` marks and
+  before the duration and the cost: the people of the Run (16 px avatars fit the row). **The core
+  draws no person there**: nothing without a contribution, neither the creator nor anyone else.
 - **Context**: `RunPeopleContext` = `DecorationContext` + `presences`, `entity` = `{ kind: "run",
   id, name?, attributes, created_by }`:
 
@@ -361,8 +363,8 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 ### `trigger/item`
 
 - **Accepts**: decoration.
-- **Renders**: a row of the Triggers list, on a third line of its own under the pipeline and the
-  schedule, so a badge never truncates the pipeline's name; several wrap.
+- **Renders**: a row of the Triggers list (two lines of 46 px), at the end of line 1, after the
+  name and before the mode icons, on one line: the name gives way first.
 - **Context**: `DecorationContext`, `entity` = a `TriggerEntity` (`{ kind: "trigger", id, name,
   pipeline, enabled, attributes, last_editor, suspension }`): its last editor and, when an
   extension suspends it, `{ extension, reason }` (API 0.8).
@@ -370,8 +372,8 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 ### `pipeline/item`
 
 - **Accepts**: decoration.
-- **Renders**: a row of the Pipelines list, at the end of its second line (after the node count
-  and the date).
+- **Renders**: a row of the Pipelines list (two lines of 46 px), at the end of its second line,
+  after the node count and the version, before the edit date, on one line.
 - **Context**: `DecorationContext`, `entity` = `{ kind: "pipeline", id, name, attributes }`.
 
 ### `canvas/node`

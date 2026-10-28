@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { cleanupRuns, openPipelineForEdit, runMultipart } from "./helpers";
 
 // Layer 3b — the right pane collapses when it has nothing to show (Notion #6 /
@@ -18,10 +18,9 @@ import { cleanupRuns, openPipelineForEdit, runMultipart } from "./helpers";
 //    pane (FP iteration 1), and a graph the user panned to the left is not
 //    pushed out past the canvas's left edge (FP iteration 2).
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-right-pane-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance pipelines the daemon watches.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
@@ -107,7 +106,7 @@ async function storedRightPct(page: Page): Promise<number | undefined> {
 
 async function gotoConnected(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 }
 
 test.beforeAll(async () => {
@@ -182,7 +181,7 @@ test("collapses when empty and reopens at the last chosen width, across a reload
   await clickEmptyCanvas(page);
   await expectCollapsed(page);
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   await expect(page.getByTestId("tab-list")).toBeVisible({ timeout: 10_000 });
   await clickEmptyCanvas(page);

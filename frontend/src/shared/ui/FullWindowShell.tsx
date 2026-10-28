@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
+import { IconButton } from "./kit";
 
 export interface RailItem {
   id: string;
@@ -123,27 +124,24 @@ export default function FullWindowShell({
   return (
     <div className="fixed inset-0 z-50 bg-surface-1">
       <div className="relative flex h-[calc(100dvh/var(--app-zoom,1))] w-[calc(100vw/var(--app-zoom,1))] flex-col bg-surface-2" data-testid={testId}>
-        <header className="flex min-h-14 items-center gap-4 border-b border-line px-4">
-          <h2 className="flex items-center gap-2 font-semibold text-text">
+        <header
+          className="flex h-(--h-topbar) shrink-0 items-center gap-3 border-b border-line bg-surface-1 pr-2 pl-3"
+          data-testid={`${testId}-header`}
+        >
+          <h2 className="flex min-w-0 shrink-0 items-center gap-2 text-lg leading-none font-semibold whitespace-nowrap text-text">
             {titleIcon}
             {title}
           </h2>
-          {headerExtras}
-          <div className="ml-auto flex items-center gap-2">{headerActions}</div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={closeLabel}
-            className="grid h-7 w-7 place-items-center rounded text-text-3 hover:bg-active"
-          >
-            <X size={15} />
-          </button>
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">{headerExtras}</div>
+          <div className="flex shrink-0 items-center gap-2">{headerActions}</div>
+          <span className="h-4 w-px shrink-0 bg-line" aria-hidden />
+          <IconButton icon={X} label={closeLabel} kbd="Esc" onClick={onClose} />
         </header>
 
         <div className="flex min-h-0 flex-1">
           {rail && (
             <nav
-              className="flex shrink-0 flex-col gap-1 border-r border-line bg-surface-2 p-3"
+              className="flex shrink-0 flex-col gap-px border-r border-line bg-surface-1 p-2"
               style={{ width: railWidth }}
               role="tablist"
               aria-label={railAriaLabel}
@@ -169,8 +167,8 @@ export default function FullWindowShell({
                   data-testid={`${railTestIdPrefix}-${item.id}`}
                   data-dirty={item.dirty ? "true" : undefined}
                   onClick={() => onRailChange?.(item.id)}
-                  className={`flex items-center justify-between gap-2 rounded px-3 py-2 text-left ${
-                    activeRail === item.id ? "bg-surface-2 text-text" : "text-text-3 hover:bg-hover"
+                  className={`flex h-(--h-row) items-center justify-between gap-2 rounded px-2 text-left text-md ${
+                    activeRail === item.id ? "bg-selected text-text" : "text-text-2 hover:bg-hover hover:text-text"
                   }`}
                 >
                   <span>{item.label}</span>
@@ -221,30 +219,24 @@ function SecondaryPanel({ drawer }: { drawer: ShellDrawer }) {
   return (
     <aside
       ref={panelRef}
-      className={`absolute bottom-0 right-0 top-14 z-20 flex flex-col border-l border-line bg-surface-2 shadow-2xl ${drawer.widthClassName}`}
+      className={`absolute bottom-0 right-0 top-(--h-topbar) z-20 flex flex-col border-l border-line bg-surface-2 shadow-2xl ${drawer.widthClassName}`}
       aria-label={drawer.title}
       data-testid={drawer.testId}
       {...drawer.dataAttributes}
     >
-      <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-        <h3 className="font-semibold text-text" style={{ fontSize: "13px" }}>
-          {drawer.title}
-        </h3>
-        <div className="ml-auto flex items-center gap-3">
+      <div className="flex h-(--h-bar) shrink-0 items-center gap-3 border-b border-line pr-2 pl-3">
+        <h3 className="truncate text-md font-semibold text-text">{drawer.title}</h3>
+        <div className="ml-auto flex shrink-0 items-center gap-3">
           {drawer.actions}
-          <span className="text-text-3" style={{ fontSize: "10.5px" }}>
-            {drawer.escHint}
-          </span>
+          <span className="text-xs text-text-3">{drawer.escHint}</span>
         </div>
-        <button
-          type="button"
+        <IconButton
+          icon={X}
+          label="Close panel"
+          kbd="Esc"
           onClick={drawer.onClose}
-          aria-label="Close panel"
           data-testid={drawer.closeTestId ?? `${drawer.testId}-close`}
-          className="grid h-6 w-6 shrink-0 place-items-center rounded text-text-3 transition-colors hover:bg-active hover:text-text"
-        >
-          <X size={14} />
-        </button>
+        />
       </div>
       <div className={drawer.bodyClassName ?? "flex min-h-0 flex-1 flex-col overflow-y-auto"}>
         {drawer.content}

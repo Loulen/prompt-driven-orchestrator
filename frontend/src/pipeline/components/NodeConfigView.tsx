@@ -59,7 +59,7 @@ export default function NodeConfigView({
   return (
     <aside className="flex h-full flex-col overflow-y-auto bg-surface-1" data-testid="node-config-view">
       <div
-        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-text-2"
+        className="flex h-8 shrink-0 items-center justify-between border-b border-line px-3 font-medium text-text-2"
         style={{ fontSize: "11.5px" }}
       >
         <span>Node config</span>

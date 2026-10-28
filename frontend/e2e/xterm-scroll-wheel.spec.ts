@@ -103,7 +103,7 @@ test("wheel inside alt-screen xterm does not leak arrow-key bytes to the PTY", a
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

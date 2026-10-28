@@ -29,8 +29,7 @@ export default class ExtensionBoundary extends Component<Props, { failed: boolea
     if (this.state.failed && this.props.compact) {
       return (
         <span
-          className="inline-grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full border border-line-strong text-text-3"
-          style={{ fontSize: "9px", lineHeight: 1 }}
+          className="inline-grid h-3.5 w-3.5 shrink-0 place-items-center rounded-full border border-line-strong text-2xs leading-none text-text-3"
           title={`This element of the extension ${this.props.extensionId} failed.`}
           data-testid={`extension-failed-${this.props.extensionId}`}
         >
@@ -41,8 +40,7 @@ export default class ExtensionBoundary extends Component<Props, { failed: boolea
     if (this.state.failed) {
       return (
         <span
-          className="text-text-3"
-          style={{ fontSize: "10.5px" }}
+          className="text-xs text-text-3"
           data-testid={`extension-failed-${this.props.extensionId}`}
         >
           This element of the extension {this.props.extensionId} failed.

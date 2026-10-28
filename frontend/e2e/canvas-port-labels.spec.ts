@@ -132,7 +132,7 @@ test("no output dot and no input pill is rendered (#844, ADR-0082)", async ({
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -158,7 +158,7 @@ test("no output dot and no input pill is rendered (#844, ADR-0082)", async ({
 
 test("the whole card border is the drag-source (#844)", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -184,7 +184,7 @@ test("dragging from the rim draws the grid-snapped preview, with no label (#844)
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

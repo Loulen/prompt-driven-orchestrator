@@ -57,7 +57,7 @@ test.afterEach(async ({ page, baseURL }) => {
 
 async function openProjectsSettings(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("open-settings").click();
   await page.getByTestId("settings-category-projects").click();
   await expect(page.getByTestId("projects-panel")).toBeVisible();
@@ -137,7 +137,7 @@ test("create a Projet, add a local and a new empty repository, choose the defaul
   const projects = (await (await page.request.get("/projects")).json()) as Array<{ id: string; name: string }>;
   const id = projects.find((p) => p.name === PROJECT_NAME)!.id;
   await page.getByRole("tab", { name: "Runs" }).click();
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await page.getByTestId("project-combobox").click();
   await page.locator(`[data-testid="project-option"][data-project-id="${id}"]`).click();
   await expect(page.getByTestId("target-repo-input")).toHaveValue(FRESH);
@@ -158,7 +158,7 @@ test("rename and delete a Projet", async ({ page, baseURL }) => {
   await expect(page.getByTestId("project-detail-name")).toHaveText(`${PROJECT_NAME}-b`);
 
   await page.getByTestId("project-delete").click();
-  await expect(page.getByTestId("confirm-delete-modal")).toContainText("Its Runs keep it, shown as deleted.");
+  await expect(page.getByTestId("confirm-delete-modal")).toContainText("Repositories and Runs stay");
   await page.getByTestId("confirm-delete-modal").getByRole("button", { name: "Delete" }).click();
   await expect(page.getByTestId("projects-list-item").filter({ hasText: `${PROJECT_NAME}-b` })).toHaveCount(0);
   // Settings stays open: the confirmation's Escape and click are its own.

@@ -197,7 +197,7 @@ describe("TriggersListPanel global pause (#348)", () => {
     renderPanel([trigger()]);
     const sw = screen.getByTestId("triggers-pause-switch");
     expect(sw).toHaveAttribute("aria-checked", "false");
-    expect(sw).toHaveTextContent(/pause all/i);
+    expect(sw).toHaveAccessibleName(/pause all/i);
     // No suppression banner when not paused.
     expect(screen.queryByTestId("triggers-paused-banner")).not.toBeInTheDocument();
   });
@@ -206,7 +206,7 @@ describe("TriggersListPanel global pause (#348)", () => {
     renderPanel([trigger()], { paused: true });
     const sw = screen.getByTestId("triggers-pause-switch");
     expect(sw).toHaveAttribute("aria-checked", "true");
-    expect(sw).toHaveTextContent(/paused/i);
+    expect(sw).toHaveAccessibleName(/resume all/i);
     const banner = screen.getByTestId("triggers-paused-banner");
     expect(banner).toBeInTheDocument();
     expect(banner).toHaveTextContent(/all triggers paused/i);

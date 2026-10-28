@@ -1,3 +1,4 @@
+import { LoaderCircle, Plug, Unplug, type LucideIcon } from "lucide-react";
 import type { ConnectionStatus } from "../run/store/useDaemonSocket";
 import type { DaemonStatus } from "../platform/model/daemon";
 import type { UpdateStatus } from "../platform/model/update";
@@ -7,17 +8,21 @@ import ServiceHealthIndicator from "../platform/components/ServiceHealthIndicato
 import VersionBadge from "../platform/components/VersionBadge";
 import ExtensionDecorations from "../shared/extensions/ExtensionDecorations";
 import type { DecorationContext } from "../shared/extensions/contract";
+import { Tooltip } from "../shared/ui/kit";
 
 /** The status bar marks nothing in particular: its decorations get no entity. */
 const STATUSBAR_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { entity: null };
 
-const STATUS_CONFIG: Record<ConnectionStatus, { dot: string; label: string }> = {
-  connected: { dot: "bg-st-done", label: "Daemon: connected" },
-  reconnecting: { dot: "bg-st-await", label: "Daemon: reconnecting…" },
-  disconnected: { dot: "bg-st-failed", label: "Daemon: disconnected" },
+const DAEMON: Record<ConnectionStatus, { icon: LucideIcon; label: string }> = {
+  connected: { icon: Plug, label: "Daemon: connected" },
+  reconnecting: { icon: LoaderCircle, label: "Daemon: reconnecting…" },
+  disconnected: { icon: Unplug, label: "Daemon: disconnected" },
 };
-/** The status bar: the daemon connection, its service health, the live
- *  session count and the installed version. */
+
+/** The status bar, 22 px, icons and numbers only (their names in the tooltips):
+ *  the daemon connection and the live sessions on the left; the extensions'
+ *  `statusbar` decorations, the service health and the installed version on
+ *  the right. */
 export default function StatusBar({
   status,
   sessions,
@@ -29,7 +34,7 @@ export default function StatusBar({
   update: UpdateStatus | null;
   onOpenVersion: () => void;
 }) {
-  const { dot: dotClass, label } = STATUS_CONFIG[status];
+  const { icon: Icon, label } = DAEMON[status];
   // The version string comes from `/sessions` (refreshed on reconnect, #139) with the
   // update payload as fallback — both are the daemon's own `CARGO_PKG_VERSION`. A
   // distribution (#24) is named by its release channel instead: its own name and
@@ -41,23 +46,28 @@ export default function StatusBar({
   const versionLabel = distribution ? installedVersionLabel(distribution) : undefined;
 
   return (
-    <footer
-      className="flex h-[22px] shrink-0 items-center gap-3.5 border-t border-line bg-surface-1 px-3 font-mono text-text-3"
-      style={{ fontSize: "11px" }}
-    >
-      <span className="flex items-center gap-1.5">
-        <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
-        {label}
-      </span>
-      <span className="flex-1" />
+    <footer className="sh-sb" data-testid="statusbar">
+      <Tooltip label={label} side="top">
+        <span
+          className="sh-sb__item"
+          role="status"
+          aria-label={label}
+          data-st={status}
+          data-testid="daemon-status"
+          tabIndex={0}
+        >
+          <Icon size={13} strokeWidth={1.5} aria-hidden className={status === "reconnecting" ? "d-spin" : undefined} />
+        </span>
+      </Tooltip>
+      <SessionCounter live={sessions.live} cap={sessions.cap} />
+      <span className="d-grow" />
       {/* ADR-0081 (#31): the `statusbar` decorations, before the service health. */}
       <ExtensionDecorations<DecorationContext>
         location="statusbar"
         extra={STATUSBAR_ITEM}
-        className="flex-nowrap"
+        className="sh-sb__ext flex-nowrap"
       />
       <ServiceHealthIndicator service={sessions.service} />
-      <SessionCounter live={sessions.live} cap={sessions.cap} />
       {version && (
         <VersionBadge version={version} label={versionLabel} update={update} onClick={onOpenVersion} />
       )}

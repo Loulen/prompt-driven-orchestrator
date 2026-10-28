@@ -12,7 +12,7 @@ export default function ExtensionNavigation() {
   const entries = useContributions("topbar/start", context);
   if (entries.length === 0) return null;
   return (
-    <nav className="flex items-center gap-1" aria-label="Extensions" data-testid="extension-nav">
+    <nav className="sh-tb__nav" aria-label="Extensions" data-testid="extension-nav">
       {entries.map((entry) => (
         <button
           key={entry.key}
@@ -21,7 +21,8 @@ export default function ExtensionNavigation() {
             openPage({ key: entry.key, extension: entry.extension.id, location: "topbar/start", path: "" })
           }
           data-testid={`extension-nav-${entry.key}`}
-          className="rounded px-2 py-0.5 text-text-3 transition-colors hover:bg-active hover:text-text"
+          title={entry.contribution.label}
+          className="sh-tb__navitem"
         >
           {entry.contribution.label}
         </button>

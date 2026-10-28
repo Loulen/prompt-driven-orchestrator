@@ -21,6 +21,8 @@ const STATUS: Record<ToastKind, string> = {
 export default function Toaster() {
   const toasts = useToasts((s) => s.toasts);
   const dismiss = useToasts((s) => s.dismiss);
+  const hold = useToasts((s) => s.hold);
+  const release = useToasts((s) => s.release);
   return (
     <div className="d-toasts" aria-live="polite">
       {toasts.map((t) => {
@@ -32,6 +34,8 @@ export default function Toaster() {
             data-testid={`toast-${t.kind}`}
             data-st={STATUS[t.kind]}
             className="d-toast"
+            onPointerEnter={() => hold(t.id)}
+            onPointerLeave={() => release(t.id)}
           >
             <Icon className="d-toast__icon" size={14} strokeWidth={1.5} aria-hidden />
             <span className="d-toast__text" title={typeof t.message === "string" ? (t.title ? `${t.title}: ${t.message}` : t.message) : t.title}>

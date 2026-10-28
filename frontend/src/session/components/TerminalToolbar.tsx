@@ -77,11 +77,11 @@ export default function TerminalToolbar({
       ) : (
         <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
       )}
-      <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+      <span className="min-w-0 truncate font-mono text-text-3" style={{ fontSize: "10px" }} title={session}>
         {session}
       </span>
       <span
-        className={`rounded border px-1 py-px font-mono ${
+        className={`shrink-0 whitespace-nowrap rounded border px-1 py-px font-mono ${
           connected
             ? "border-st-done/30 text-st-done"
             : "border-line-strong text-text-3"

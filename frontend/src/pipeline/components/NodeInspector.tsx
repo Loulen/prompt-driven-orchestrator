@@ -194,7 +194,7 @@ export default function NodeInspector({
   return (
     <aside ref={asideRef} className="flex h-full flex-col bg-surface-1 overflow-y-auto">
       <div
-        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-text-2"
+        className="flex h-8 shrink-0 items-center justify-between border-b border-line px-3 font-medium text-text-2"
         style={{ fontSize: "11.5px" }}
       >
         <span>Node Inspector</span>

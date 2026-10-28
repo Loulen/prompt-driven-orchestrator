@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { BadgeCheck, Save, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { BadgeCheck, Save } from "lucide-react";
 import { useEditStore } from "../store/editStore";
 import { hasUnsavedWork, isTabLocked } from "../store/editState";
 import type { OpenPipeline } from "../store/editState";
@@ -12,11 +12,17 @@ import SaveVersionModal from "./SaveVersionModal";
 import { validationOf } from "../model/pipelineValidation";
 import { lastVersionOf } from "../model/versions";
 import type { Project } from "../../workspace/model/project";
-import { ExtensionMenuGroups } from "../../shared/extensions/ExtensionActions";
-import type { PipelineEntity } from "../../shared/extensions/contract";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "../../shared/ui/dropdown-menu";
 import { PageTabActions, PageTabButtons } from "../../platform/components/PageTabs";
 import { useMountedPages } from "../../platform/store/mountedPages";
+import type { RunListEntry } from "../../shared/generated/RunListEntry";
+import { Button, Tooltip } from "../../shared/ui/kit";
+import { useOverflowing } from "../../hooks/useOverflowing";
+import { useActiveTabInView } from "../../hooks/useActiveTabInView";
+import TabContextMenu from "./TabContextMenu";
+import { OpenTabsMenu, TabKind, TabLabel } from "./TabParts";
+import { tabTitle } from "./tabTitle";
+import { DocTab } from "../../shared/ui/DocTab";
+import { useTabDrag } from "../../shared/ui/useTabDrag";
 
 function useRelativeTime(ts: number | undefined): string | null {
   const [now, setNow] = useState(() => Date.now());
@@ -37,18 +43,37 @@ function useRelativeTime(ts: number | undefined): string | null {
   return `Saved ${hrs}h ago`;
 }
 
-export default function TabBar({ projects = [] }: { projects?: Project[] } = {}) {
+/**
+ * The tab bar of the centre, editor style: one tab per open Run, pipeline and
+ * mounted page (the active one on the canvas colour, a ruby line on top),
+ * scrolled sideways when they overflow, with a menu of them all; drag a tab to
+ * reorder it. On the right, what the active tab offers: Validate and Save.
+ */
+export default function TabBar({
+  projects = [],
+  runs = [],
+}: {
+  /** The Projets the validation indicator names. */
+  projects?: Project[];
+  /** The Runs, for the name and the status of a Run's tab. */
+  runs?: RunListEntry[];
+} = {}) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setActiveTab = useEditStore((s) => s.setActiveTab);
   const closeTab = useEditStore((s) => s.closeTab);
   const closeTabs = useEditStore((s) => s.closeTabs);
+  const moveTab = useEditStore((s) => s.moveTab);
+  const movePage = useMountedPages((s) => s.movePage);
+  const drag = useTabDrag((group, id, index) => (group === "page" ? movePage(id, index) : moveTab(id, index)));
+  const listRef = useRef<HTMLDivElement>(null);
+  const overflowing = useOverflowing(listRef);
   const save = useEditStore((s) => s.save);
   const requestSave = useEditStore((s) => s.requestSave);
   const saveVersionFor = useEditStore((s) => s.saveVersionFor);
   const closeSaveVersion = useEditStore((s) => s.closeSaveVersion);
   const lastSavedAt = useEditStore((s) => s.lastSavedAt);
-  const tabRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
+
   const pipelines = useEditStore((s) => s.pipelines);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
   // A mounted page's tab shown in the center: no pipeline tab is the active one.
@@ -98,77 +123,60 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
   const activeLastSaved = activeTabId ? lastSavedAt[activeTabId] : undefined;
   const savedAgo = useRelativeTime(activeLastSaved);
 
-  const setTabRef = useCallback((id: string, el: HTMLButtonElement | null) => {
-    if (el) {
-      tabRefs.current.set(id, el);
-    } else {
-      tabRefs.current.delete(id);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!activeTabId) return;
-    const el = tabRefs.current.get(activeTabId);
-    if (el) {
-      el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
-    }
-  }, [activeTabId]);
+  // The active tab stays in view: a Run, a pipeline or a mounted page.
+  useActiveTabInView(listRef, activePage != null ? `page:${activePage}` : activeTabId);
 
   if (openTabs.length === 0 && pageTabCount === 0) return null;
 
+  const runsById = new Map(runs.map((r) => [r.run_id, r]));
+
   return (
     <>
-    <div className="flex h-[30px] shrink-0 items-end border-b border-line bg-surface-1">
+    <div className="sh-tabs" data-testid="tab-bar">
       <div
-        className="flex min-w-0 flex-1 items-end gap-px overflow-x-auto px-1"
+        ref={listRef}
+        className="sh-tabs__list"
+        role="tablist"
+        aria-label="Open documents"
         data-testid="tab-list"
-        style={{ scrollbarWidth: "thin" }}
+        onWheel={(e) => {
+          // A wheel over the strip scrolls it sideways.
+          if (listRef.current && e.deltaY) listRef.current.scrollLeft += e.deltaY;
+        }}
       >
-        {openTabs.map((tab) => {
+        {openTabs.map((tab, index) => {
           const isActive = tab.id === activeTabId && activePage == null;
-          // ADR-0088: a version shown read only is named after its pipeline.
-          const file = tab.version ? `${tab.version.pipelineId}.yaml @ v${tab.version.number}` : `${tab.id}.yaml`;
-          const label = tab.dirty ? `• ${file}` : file;
+          const run = tab.runId != null ? runsById.get(tab.runId) : undefined;
           return (
-            <button
+            <DocTab
               key={tab.id}
-              ref={(el) => setTabRef(tab.id, el)}
-              onClick={() => {
+              active={isActive}
+              dirty={tab.dirty}
+              external={tab.externalDirty}
+              title={tabTitle(tab, run)}
+              closeLabel={`Close ${tabTitle(tab, run)}`}
+              kind={<TabKind tab={tab} run={run} />}
+              label={<TabLabel tab={tab} run={run} />}
+              labelTestId={`tab-title-${tab.id}`}
+              drag={drag.props("doc", tab.id, index)}
+              onActivate={() => {
                 showPage(null);
                 setActiveTab(tab.id);
               }}
+              onClose={() => closeTab(tab.id)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setMenu({ x: e.clientX, y: e.clientY, tabId: tab.id });
               }}
-              className={`group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1 transition-colors ${
-                isActive
-                  ? "border-line bg-surface-0 text-text"
-                  : "border-transparent bg-surface-1 text-text-3 hover:text-text-2"
-              }`}
-              style={{ fontSize: "11px", maxWidth: 180 }}
-            >
-              <span className="truncate" data-testid={`tab-title-${tab.id}`}>{label}</span>
-              {tab.externalDirty && (
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-blocked" />
-              )}
-              <span
-                role="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeTab(tab.id);
-                }}
-                className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 hover:bg-hover hover:text-text group-hover:inline-flex"
-              >
-                <X size={10} />
-              </span>
-            </button>
+            />
           );
         })}
-        <PageTabButtons />
+        <PageTabButtons drag={drag} />
       </div>
+      {overflowing && <OpenTabsMenu tabs={openTabs} runsById={runsById} />}
+      <span className="sh-tabs__fill" />
 
-      <div className="flex shrink-0 items-center gap-2 px-1.5 pb-0.5">
+      <div className="sh-tabs__actions">
         {activePage != null ? (
           <PageTabActions name={activePage} />
         ) : (
@@ -176,11 +184,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
             <DraftPresence />
             {/* Unsaved changes make « Saved … ago » stale: the draft line says them. */}
             {savedAgo && !activeTab?.dirty && (
-              <span
-                className="whitespace-nowrap font-mono text-text-3"
-                style={{ fontSize: "10px" }}
-                data-testid="saved-ago"
-              >
+              <span className="sh-tabs__saved" data-testid="saved-ago">
                 {savedAgo}
               </span>
             )}
@@ -191,31 +195,33 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
                   projects={projects}
                   testId="toolbar-validation-indicator"
                 />
-                <button
-                  onClick={() => setValidateOpen(true)}
-                  className="flex cursor-pointer items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 transition-colors hover:bg-hover hover:text-text"
-                  style={{ fontSize: "11px" }}
-                  data-testid="validate-button"
-                  title="Choose the projects this pipeline is offered to"
-                >
-                  <BadgeCheck size={11} />
-                  Validate
-                </button>
+                <Tooltip label="Validate" description="Projects this pipeline is offered to">
+                  <Button
+                    size="sm"
+                    icon={BadgeCheck}
+                    onClick={() => setValidateOpen(true)}
+                    data-testid="validate-button"
+                  >
+                    Validate
+                  </Button>
+                </Tooltip>
               </>
             )}
             {activeTab?.runId != null && !activeLocked ? (
               <RunSaveGroup tab={{ ...activeTab, runId: activeTab.runId }} />
             ) : activeLocked ? null : (
-              <button
-                onClick={() => { if (activeTabId) requestSave(activeTabId); }}
-                disabled={activeDraft ? !activeTab?.dirty : !anyDirty}
-                className="flex cursor-pointer items-center gap-1 rounded-md bg-primary px-2 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
-                style={{ fontSize: "11px" }}
-                data-testid="save-button"
-              >
-                <Save size={11} />
-                {activeDraft ? "Save…" : "Save"}
-              </button>
+              <Tooltip label={activeDraft ? "Save…" : "Save"} kbd="Ctrl+S">
+                <Button
+                  size="sm"
+                  tone="primary"
+                  icon={Save}
+                  onClick={() => { if (activeTabId) requestSave(activeTabId); }}
+                  disabled={activeDraft ? !activeTab?.dirty : !anyDirty}
+                  data-testid="save-button"
+                >
+                  {activeDraft ? "Save…" : "Save"}
+                </Button>
+              </Tooltip>
             )}
           </>
         )}
@@ -275,115 +281,5 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
         }}
       />
     </>
-  );
-}
-
-/**
- * Right-click menu for a tab (#342), on the shared `DropdownMenu` (#30),
- * anchored where the pointer was — viewport coords, so it survives a scroll of
- * the tab strip. Dismisses on a backdrop click OR Escape. After the four close
- * entries, the extensions' `tab/menu` groups, called with the tab's pipeline.
- */
-function TabContextMenu({
-  x,
-  y,
-  tabId,
-  openTabs,
-  onSelect,
-  onDismiss,
-}: {
-  x: number;
-  y: number;
-  tabId: string;
-  openTabs: OpenPipeline[];
-  onSelect: (ids: string[]) => void;
-  onDismiss: () => void;
-}) {
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onDismiss();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [onDismiss]);
-
-  const anchor = useMemo(
-    () => ({ getBoundingClientRect: () => DOMRect.fromRect({ x, y, width: 0, height: 0 }) }),
-    [x, y],
-  );
-  const index = openTabs.findIndex((t) => t.id === tabId);
-  const tab = index >= 0 ? openTabs[index] : undefined;
-  const single = openTabs.length <= 1;
-  const isLast = index >= 0 && index === openTabs.length - 1;
-  const otherIds = openTabs.filter((t) => t.id !== tabId).map((t) => t.id);
-  const rightIds = index < 0 ? [] : openTabs.slice(index + 1).map((t) => t.id);
-  const allIds = openTabs.map((t) => t.id);
-  const extra = useMemo(() => {
-    const entity: PipelineEntity = {
-      kind: "pipeline",
-      id: tabId,
-      name: tab?.pipeline.name ?? tabId,
-      attributes: {},
-    };
-    return { entity };
-  }, [tabId, tab?.pipeline.name]);
-
-  return (
-    <>
-      <div className="fixed inset-0 z-40" onClick={onDismiss} />
-      <DropdownMenu
-        open
-        // The backdrop above holds the outside clicks, as it always did.
-        modal={false}
-        onOpenChange={(open) => {
-          if (!open) onDismiss();
-        }}
-      >
-        <DropdownMenuContent
-          anchor={anchor}
-          side="bottom"
-          align="start"
-          sideOffset={0}
-          className="w-auto min-w-[150px]"
-          data-testid="tab-context-menu"
-        >
-          <MenuItem testid="tab-ctx-close" onClick={() => onSelect([tabId])}>
-            Close
-          </MenuItem>
-          <MenuItem testid="tab-ctx-close-others" disabled={single} onClick={() => onSelect(otherIds)}>
-            Close others
-          </MenuItem>
-          <MenuItem testid="tab-ctx-close-right" disabled={isLast} onClick={() => onSelect(rightIds)}>
-            Close to the right
-          </MenuItem>
-          <MenuItem testid="tab-ctx-close-all" disabled={single} onClick={() => onSelect(allIds)}>
-            Close all
-          </MenuItem>
-          <ExtensionMenuGroups location="tab/menu" extra={extra} itemClassName={ITEM} />
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </>
-  );
-}
-
-const ITEM = "cursor-pointer px-2 py-1.5 text-sm text-text-2";
-
-function MenuItem({
-  testid,
-  disabled,
-  onClick,
-  children,
-}: {
-  testid: string;
-  disabled?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  // A disabled entry stays focusable for the arrow keys, `aria-disabled` (the
-  // menu pattern of WAI-ARIA), and does nothing when clicked.
-  return (
-    <DropdownMenuItem data-testid={testid} disabled={disabled} onClick={onClick} className={ITEM}>
-      {children}
-    </DropdownMenuItem>
   );
 }

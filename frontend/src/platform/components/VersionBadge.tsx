@@ -32,14 +32,13 @@ export default function VersionBadge({
       type="button"
       onClick={onClick}
       title={title}
-      className="-mx-1 flex items-center gap-1.5 rounded px-1 hover:bg-hover hover:text-text-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+      className="sh-sb__item sh-sb__num"
       data-testid="statusbar-version"
     >
       {label ?? `v${version}`}
       {newer && (
         <span
-          className="rounded-full border border-st-await/40 bg-st-await/14 px-1.5 leading-[14px] text-st-await"
-          style={{ fontSize: "9.5px" }}
+          className="sh-sb__pill"
           data-testid="statusbar-version-badge"
         >
           → {update!.latest_version}

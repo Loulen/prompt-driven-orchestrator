@@ -51,7 +51,7 @@ describe("FullWindowShell — secondary panel frame (#944)", () => {
       }),
     );
     const aside = screen.getByTestId("surface-panel");
-    expect(aside).toHaveClass("top-14", "bottom-0", "right-0");
+    expect(aside).toHaveClass("top-(--h-topbar)", "bottom-0", "right-0");
     expect(aside).toHaveClass("w-[min(420px,90vw)]");
     expect(aside).toHaveAttribute("data-drawer", "x");
     expect(within(aside).getByRole("heading", { name: "Panel" })).toBeInTheDocument();

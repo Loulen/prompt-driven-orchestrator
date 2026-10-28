@@ -17,6 +17,18 @@ describe("the mounted pages' tabs", () => {
     useMountedPages.getState().reset();
   });
 
+  it("move along the tab bar, the one shown staying shown", () => {
+    const { openPage, movePage } = useMountedPages.getState();
+    openPage(mount("a"));
+    openPage(mount("b"));
+    openPage(mount("c"));
+    movePage("c", 0);
+    expect(useMountedPages.getState().tabs.map((t) => t.name)).toEqual(["c", "a", "b"]);
+    movePage("nope", 1);
+    expect(useMountedPages.getState().tabs.map((t) => t.name)).toEqual(["c", "a", "b"]);
+    expect(useMountedPages.getState().active).toBe("c");
+  });
+
   it("open once each, show the last opened, and give the canvas back when closed", () => {
     const { openPage, showPage, closePage } = useMountedPages.getState();
     openPage(mount("a"));

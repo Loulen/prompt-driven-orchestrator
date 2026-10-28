@@ -69,7 +69,7 @@ test.afterAll(async ({ request, baseURL }) => {
 /** New Run launched in the Projet `projectId` (ADR-0087), on its `repo`. */
 async function openNewRunOn(page: Page, projectId: string, repo: string) {
   await page.getByRole("tab", { name: "Runs" }).click();
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await page.getByTestId("project-combobox").click();
   await page.locator(`[data-testid="project-option"][data-project-id="${projectId}"]`).click();
   await page.getByTestId("target-repo-input").fill(repo);
@@ -100,7 +100,7 @@ test("a pipeline validated for all heads the menu of the Projets it is listed fi
   const [listedId, otherId] = projectIds;
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // 1. Validate: « All projects », then tick the listed Projet under it.
   await openPipelineForEdit(page, PIPELINE_NAME);

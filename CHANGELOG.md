@@ -10,6 +10,16 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.55.0 — Shell Workbench (CORE-109)
+
+- Les emplacements d'extension du shell changent de place, sans changer d'API :
+  `topbar/end` passe avant les icônes du core (New run, Stats, Settings, le thème),
+  `topbar/account` après le thème, `statusbar` tient sur une ligne de 22 px (icône et nombre,
+  le nom en tooltip). Détails dans `docs/reference/extension-ui.md`.
+- Le panneau gauche s'ouvre à 260 px et l'inspecteur à 400 px, quelle que soit la fenêtre. Une
+  disposition déjà enregistrée (`pdo.layout.run`) garde ses pourcentages.
+- L'erreur de « Run now » devient un toast, qui disparaît comme les autres.
+
 ## 2.54.0 — Acogni Driver : design system partagé, polices embarquées, échelle d'UI (CORE-107)
 
 - **Cassant pour les extensions** : tous les tokens de style sont renommés, sans alias

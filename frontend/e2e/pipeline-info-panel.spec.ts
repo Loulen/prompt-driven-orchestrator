@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { confirmSaveVersion, openPipelineForEdit, runMultipart, E2E_TARGET_REPO } from "./helpers";
 import type { Page } from "@playwright/test";
 
@@ -32,10 +32,9 @@ async function dismissConflictIfPresent(page: Page): Promise<void> {
 //    through `i`, reflected in the YAML tab, written by Save; read-only on a Run;
 //    an empty canvas selection shows no pipeline settings on the right.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-info-panel-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance pipelines the daemon watches.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Post-refonte the parser requires exactly one start node (zero inputs, one
@@ -94,7 +93,7 @@ test("clicking toolbar info opens pipeline info panel with metadata", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -180,7 +179,7 @@ test("clicking a node closes the pipeline info panel (#69)", async ({
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -206,7 +205,7 @@ test("YAML tab shows serialized pipeline and updates on mutation (#69)", async (
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -264,7 +263,7 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -303,7 +302,7 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   await page.getByTestId("pipeline-grid-size-S").click();
 
   // Every edit marks the tab dirty…
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
 
   // …and shows in the YAML tab.
   await page.getByTestId("info-tab-yaml").click();
@@ -316,6 +315,7 @@ test("template metadata is edited through Pipeline info, shown in YAML and saved
   await page.getByTestId("save-button").click();
   await confirmSaveVersion(page);
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`, { timeout: 3_000 });
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).not.toHaveAttribute("data-dirty", "true", { timeout: 3_000 });
   await expect
     .poll(async () => fs.readFile(PIPELINE_PATH, "utf8"), { timeout: 3_000 })
     .toContain("prompt_required: false");
@@ -332,7 +332,7 @@ test("library tab after a run: panel shows template, not the previous run", asyn
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -407,7 +407,7 @@ test("selecting a different run closes the pipeline info panel (#385)", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -460,7 +460,7 @@ test("selecting a Trigger surfaces its detail from behind the open info panel (#
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -491,7 +491,7 @@ test("selecting a Trigger surfaces its detail from behind the open info panel (#
 
   // Reload so the mount refresh picks up the seeded trigger + run.
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

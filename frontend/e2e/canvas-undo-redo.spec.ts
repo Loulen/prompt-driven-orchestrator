@@ -75,7 +75,7 @@ test.afterAll(async () => {
 
 test("delete edge → Ctrl+Z restores → Ctrl+Y re-deletes; toolbar reflects the stack", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await openPipelineForEdit(page, PIPELINE_NAME);
 
@@ -93,6 +93,7 @@ test("delete edge → Ctrl+Z restores → Ctrl+Y re-deletes; toolbar reflects th
   await expect(undoBtn).toBeDisabled();
   await expect(redoBtn).toBeDisabled();
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).not.toHaveAttribute("data-dirty", "true");
 
   // The daemon's file watcher emits one delayed `pipeline_changed` for the seed
   // file we created in beforeAll. If it lands AFTER the destructive edit (while
@@ -114,7 +115,7 @@ test("delete edge → Ctrl+Z restores → Ctrl+Y re-deletes; toolbar reflects th
 
   // Edge gone, tab dirty, undo now possible, redo still not.
   await expect(edges).toHaveCount(2);
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
   await expect(undoBtn).toBeEnabled();
   await expect(redoBtn).toBeDisabled();
 

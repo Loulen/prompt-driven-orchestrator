@@ -102,9 +102,9 @@ test("offers remote branches grouped, defaults local, launches one verbatim", as
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await expect(page.getByTestId("target-repo-input")).toBeVisible();
   await page.getByTestId("target-repo-input").fill(WORK);
 

@@ -77,7 +77,7 @@ test("when-editor shows typed field and value dropdowns from upstream schema", a
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Open the pipeline into the edit canvas via the Library tab (post-refonte:
   // no edit toggle).

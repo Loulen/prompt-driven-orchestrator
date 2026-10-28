@@ -132,7 +132,7 @@ describe("the topbar/end location", () => {
     serve([extension("demo", [page("home", "Demo", "ContextPage")])]);
     const { select } = renderShell();
     const button = await screen.findByTestId("extension-topbar-end-demo:home");
-    const group = button.closest("div.ml-auto") as HTMLElement;
+    const group = button.closest("div.sh-tb__end") as HTMLElement;
     const buttons = within(group).getAllByRole("button");
     expect(buttons.indexOf(button)).toBeLessThan(buttons.indexOf(screen.getByTestId("open-stats")));
     // No icon given: the label's first letter, boxed.

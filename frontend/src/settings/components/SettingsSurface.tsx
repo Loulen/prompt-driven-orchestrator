@@ -247,11 +247,7 @@ export default function SettingsSurface({
         railAriaLabel="Settings categories"
         railTestIdPrefix="settings-category"
         headerExtras={extensionPages.headerExtras}
-        headerActions={extensionPages.headerActions(
-          <span className="text-text-3" style={{ fontSize: "10.5px" }}>
-            Esc closes · ↑↓ on the rail switch category
-          </span>,
-        )}
+        headerActions={extensionPages.headerActions(null)}
         // An extension's page owns its writes: Save would read as saving it.
         footer={!extensionPages.active && (
           <SettingsFooter form={form} saveButtonRef={saveButtonRef} loaded={!!settings} onCancel={requestClose} />

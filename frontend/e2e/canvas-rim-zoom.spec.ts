@@ -78,7 +78,7 @@ test.afterAll(async () => {
 
 async function open(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   await expect(page.locator('.react-flow__node[data-id="designer"]')).toBeVisible({ timeout: 5_000 });
 }
@@ -242,7 +242,7 @@ test("a broken edge is deleted from the canvas, and its lint goes with the save"
   }
   try {
     await page.goto("/");
-    await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
     await openPipelineForEdit(page, name);
     const lint = page.getByTestId("lint-banner").getByText(/port 'draft'/);
     await expect(lint).toHaveCount(1);

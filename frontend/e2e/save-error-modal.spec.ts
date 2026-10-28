@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 
 // Layer 3b — Save error modal (#74, refs #1).
@@ -10,10 +10,9 @@ import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 // 2. Modal shows the error message.
 // 3. Clicking "Voir le YAML" opens the info panel on the YAML tab.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-save-err-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance pipelines the daemon watches.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -65,7 +64,7 @@ test.afterAll(async () => {
 
 test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Open pipeline in the edit canvas
   await openPipelineForEdit(page, PIPELINE_NAME);
@@ -79,7 +78,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
   await expect(promptArea).toBeVisible();
   await promptArea.fill("DIRTY_SAVE_ERROR");
 
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
 
   // Intercept the PUT endpoint to return a structured error
   await page.route("**/pipelines/**", (route) => {
@@ -134,7 +133,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
 
 test("save error modal dismiss closes modal without opening info panel", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await openPipelineForEdit(page, PIPELINE_NAME);
 

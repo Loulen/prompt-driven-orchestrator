@@ -2570,7 +2570,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     fireEvent.click(screen.getByTestId("setting-open-skill-bank"));
 
     const drawer = screen.getByTestId("settings-drawer");
-    expect(drawer).toHaveClass("top-14");
+    expect(drawer).toHaveClass("top-(--h-topbar)");
     expect(drawer).toHaveClass("w-[min(880px,calc(90vw/var(--app-zoom,1)))]");
     expect(
       within(drawer).getByRole("heading", { name: "Skill bank" }),

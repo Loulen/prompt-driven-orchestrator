@@ -89,7 +89,7 @@ async function second(browser: Browser): Promise<Page> {
 
 async function open(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toBeVisible();
 }

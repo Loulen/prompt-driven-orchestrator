@@ -120,7 +120,7 @@ test("clicking anywhere on port card opens modal with markdown + frontmatter", a
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");
@@ -152,7 +152,7 @@ test("clicking anywhere on port card opens modal with markdown + frontmatter", a
 
 test("modal closes on Escape key", async ({ page, baseURL }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");
@@ -170,7 +170,7 @@ test("modal closes on Escape key", async ({ page, baseURL }) => {
 
 test("modal closes on backdrop click", async ({ page, baseURL }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");
@@ -192,7 +192,7 @@ test("port card with no files renders as non-interactive div", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");
@@ -212,7 +212,7 @@ test("port card opens modal via keyboard (Enter key)", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");

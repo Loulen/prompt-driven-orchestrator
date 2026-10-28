@@ -1526,7 +1526,7 @@ describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes re
     await renderStarredRow([]);
     fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
 
-    expect(screen.getByTestId("confirm-delete-backdrop")).toBeInTheDocument();
+    expect(screen.getByTestId("confirm-delete-modal")).toBeInTheDocument();
     expect(screen.queryByTestId("delete-cascade-checkbox")).not.toBeInTheDocument();
   });
 
@@ -1604,7 +1604,7 @@ describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes re
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
 
-    expect(screen.getByTestId("confirm-delete-backdrop")).toBeInTheDocument();
+    expect(screen.getByTestId("confirm-delete-modal")).toBeInTheDocument();
     expect(screen.queryByTestId("delete-cascade-checkbox")).not.toBeInTheDocument();
   });
 
@@ -1630,7 +1630,7 @@ describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes re
     await waitFor(() =>
       expect(mockDeleteLibraryPipeline).toHaveBeenCalledWith("fixture-lib-slug"),
     );
-    expect(screen.queryByTestId("confirm-delete-backdrop")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("confirm-delete-modal")).not.toBeInTheDocument();
     expect(mockDeletePipeline).not.toHaveBeenCalled();
   });
 });
@@ -2523,13 +2523,13 @@ describe("UnifiedLeftPanel run multi-select (#577)", () => {
     expect(screen.getByTestId("bulk-count")).toHaveTextContent("1 selected");
   });
 
-  it("leaves a count badge on the Runs tab after switching away", () => {
+  it("leaves a dot naming the count on the Runs tab after switching away", () => {
     renderPanel({ runs: twoRuns, triggers: [] });
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
     // active tab shows no badge (the floating bar carries the count instead)
     expect(screen.queryByTestId("tab-badge-runs")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
-    expect(screen.getByTestId("tab-badge-runs")).toHaveTextContent("1");
+    expect(screen.getByTestId("tab-badge-runs")).toHaveAccessibleName("1 selected");
   });
 
   it("Ctrl-A selects every visible run and Escape clears", () => {

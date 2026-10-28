@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openPipelineForEdit } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -188,6 +188,16 @@ test("dezoomed, a wire starts at the first try from the pixel pressed", async ({
 
 test("zooming in and out does not move a drawn route", async ({ page }) => {
   await open(page);
+  // The routes settle once every card is measured: read them when two reads agree.
+  let previous = "";
+  await expect
+    .poll(async () => {
+      const now = `${await edgePath(page, 0)}|${await edgePath(page, 1)}`;
+      const stable = now === previous;
+      previous = now;
+      return stable;
+    })
+    .toBe(true);
   const before = [await edgePath(page, 0), await edgePath(page, 1)];
   await zoomTo(page, 0.25);
   expect([await edgePath(page, 0), await edgePath(page, 1)]).toEqual(before);
@@ -251,6 +261,7 @@ test("a broken edge is deleted from the canvas, and its lint goes with the save"
     await page.getByTestId("edge-broken-delete-e-3").click();
     await expect(page.getByTestId("edge-broken-label-e-3")).toHaveCount(0);
     await page.getByTestId("save-button").click();
+    await confirmSaveVersion(page);
 
     await expect(lint).toHaveCount(0);
     expect(await fs.readFile(file, "utf8")).not.toContain("draft");

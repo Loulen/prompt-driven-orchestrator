@@ -2,53 +2,23 @@ import { describe, it, expect } from "vitest";
 import { terminalTheme, TERMINAL_INK } from "./terminalTheme";
 import { contrastRatio, AA_TEXT } from "../../lib/contrast";
 
-describe("terminalTheme (#759)", () => {
-  it("returns the dark terminal byte for byte as it shipped", () => {
-    // #759 adds a light terminal; it must not restyle the dark one. Any change
-    // to these values is a deliberate decision, not a side effect.
-    // #772 is one such decision: the selection colour moved from an invisible
-    // grey to the accent at ~35% alpha so a drag-selection can be seen.
-    expect(terminalTheme("dark")).toEqual({
-      background: "#0f1115",
-      foreground: "#e6e8eb",
-      cursor: "#10b981",
-      selectionBackground: "#3b82f659",
-      selectionInactiveBackground: "#3b82f633",
-      black: "#0f1115",
-      red: "#ef4444",
-      green: "#10b981",
-      yellow: "#f59e0b",
-      blue: "#3b82f6",
-      magenta: "#8b5cf6",
-      cyan: "#06b6d4",
-      white: "#e6e8eb",
-      brightBlack: "#5a6270",
-      brightRed: "#f87171",
-      brightGreen: "#34d399",
-      brightYellow: "#fbbf24",
-      brightBlue: "#60a5fa",
-      brightMagenta: "#a78bfa",
-      brightCyan: "#22d3ee",
-      brightWhite: "#f8fafc",
-    });
+describe("terminalTheme (#759, an always-dark screen)", () => {
+  it("is one dark palette, whatever the theme of the interface", () => {
+    const theme = terminalTheme();
+    expect(theme.background).toBe("#0b0b0d");
+    expect(theme.black).toBe(theme.background);
+    // #772: a selection the user can see.
+    expect(theme.selectionBackground).toMatch(/^#3b82f6/);
   });
 
-  it("paints dark ink on a light ground for the light theme", () => {
-    const light = terminalTheme("light");
-    expect(contrastRatio(light.background, "#ffffff")).toBeLessThan(1.3);
-    expect(contrastRatio(light.foreground, light.background)).toBeGreaterThanOrEqual(AA_TEXT);
+  it("reads its text, in the secondary ink, at AA on the dark ground", () => {
+    const theme = terminalTheme();
+    expect(contrastRatio(theme.foreground, theme.background)).toBeGreaterThanOrEqual(AA_TEXT);
+    expect(contrastRatio(theme.white, theme.background)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 
-  it("keeps every ink colour at AA on the light ground", () => {
-    const light = terminalTheme("light");
-    const unreadable = TERMINAL_INK.filter(
-      (slot) => contrastRatio(light[slot], light.background) < AA_TEXT,
-    );
-    expect(unreadable).toEqual([]);
-  });
-
-  it("fills every slot in both themes, so xterm never falls back to its own palette", () => {
-    const slots = Object.keys(terminalTheme("dark"));
-    expect(Object.keys(terminalTheme("light")).sort()).toEqual(slots.sort());
+  it("fills every ink slot, so xterm never falls back to its own palette", () => {
+    const theme = terminalTheme();
+    expect(TERMINAL_INK.filter((slot) => !theme[slot])).toEqual([]);
   });
 });

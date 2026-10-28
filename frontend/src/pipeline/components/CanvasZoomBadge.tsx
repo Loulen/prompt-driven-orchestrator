@@ -13,9 +13,10 @@ export default function CanvasZoomBadge() {
       <span
         data-testid="canvas-zoom"
         data-zoom={zoom}
-        className="pdo-rezoom block rounded border border-line bg-surface-1 px-2 py-1 font-mono text-2xs text-text-3"
+        title="Canvas zoom"
+        className="pdo-rezoom block rounded border border-line bg-surface-1 px-1 font-mono text-2xs text-text-3"
       >
-        zoom {Math.round((zoom / scale) * 100)} %
+        {Math.round((zoom / scale) * 100)}%
       </span>
     </Panel>
   );

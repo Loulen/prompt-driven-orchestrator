@@ -4,6 +4,7 @@
  * edge, the extensions' `canvas/node/menu` or `canvas/edge/menu` groups.
  */
 
+import { Copy, FileDown, Split, Trash2 } from "lucide-react";
 import DestroyLoopModal from "./DestroyLoopModal";
 import { regionsDestroyedByEdgeRemoval } from "../../lib/loopRegions";
 import type { EditorPipelineDef } from "../model/pipeline";
@@ -29,7 +30,7 @@ export interface CanvasMenu {
   fanoutFields?: string[];
 }
 
-const ITEM = "cursor-pointer px-2 py-1.5 text-sm text-text-2";
+const ITEM = "cv-menu__item";
 
 export function ContextMenu({
   x,
@@ -108,12 +109,13 @@ export function ContextMenu({
           side="bottom"
           align="start"
           sideOffset={0}
-          className="w-auto min-w-[140px]"
+          className="cv-menu w-auto"
           data-testid="canvas-context-menu"
         >
           {type === "node" ? (
             <>
               <DropdownMenuItem className={ITEM} onClick={onDuplicateNode}>
+                <Copy size={14} strokeWidth={1.5} aria-hidden />
                 Duplicate
               </DropdownMenuItem>
               {/* "Fan out over a collection" (#151 / #269): one entry per
@@ -127,17 +129,20 @@ export function ContextMenu({
                   className={ITEM}
                   onClick={() => onFanOut(field)}
                 >
+                  <Split size={14} strokeWidth={1.5} aria-hidden />
                   Fan out over "{field}"
                 </DropdownMenuItem>
               ))}
               {/* #345: front-only export of this node to YAML (no daemon). */}
               <DropdownMenuItem data-testid="ctx-export-node" className={ITEM} onClick={onExportNode}>
+                <FileDown size={14} strokeWidth={1.5} aria-hidden />
                 Export as YAML…
               </DropdownMenuItem>
               {extensions?.location === "canvas/node/menu" && (
                 <ExtensionMenuGroups location="canvas/node/menu" extra={extensions.extra} itemClassName={ITEM} trailing />
               )}
               <DropdownMenuItem variant="destructive" data-testid="ctx-delete-node" className={ITEM} onClick={onDeleteNode}>
+                <Trash2 size={14} strokeWidth={1.5} aria-hidden />
                 Delete
               </DropdownMenuItem>
             </>
@@ -150,6 +155,7 @@ export function ContextMenu({
               className={ITEM}
               onClick={onDeleteNote}
             >
+              <Trash2 size={14} strokeWidth={1.5} aria-hidden />
               Delete note
             </DropdownMenuItem>
           ) : (
@@ -164,6 +170,7 @@ export function ContextMenu({
                 />
               )}
               <DropdownMenuItem variant="destructive" data-testid="ctx-delete-edge" className={ITEM} onClick={onDeleteEdge}>
+                <Trash2 size={14} strokeWidth={1.5} aria-hidden />
                 Delete edge
               </DropdownMenuItem>
             </>

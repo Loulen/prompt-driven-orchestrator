@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import * as os from "node:os";
 
 // Layer 3b — Typed `when:` clauses E2E (refs #64).
 //
@@ -14,16 +14,14 @@ import { fileURLToPath } from "node:url";
 // dropdown is populated from the upstream output schema and the value dropdown
 // from the selected enum field's allowed values.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-switch-typed-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
-// Nodes share one x so the conditional reviewer→end edge is a straight vertical
-// segment — its (transparent, wide) hit path is then reliably centred for the
-// click that selects it. The `when:` lives on the edge (edges[1]) → its
-// EditCanvas id is `e-1`, exposed as `orthogonal-edge-hit-e-1`.
+// The `when:` lives on the edge (edges[1]) → its EditCanvas id is `e-1`, its
+// condition chip `edge-condition-label-e-1`.
 const SEED_YAML = `name: ${PIPELINE_NAME}
 version: "1.0"
 nodes:
@@ -88,10 +86,11 @@ test("when-editor shows typed field and value dropdowns from upstream schema", a
     timeout: 5_000,
   });
 
-  // Select the conditional reviewer→end edge (edges[1]). Its hit path is a
-  // transparent SVG stroke (no fill), which Playwright treats as not "visible",
-  // so force the click — react-flow's onEdgeClick fires on the bubbled event.
-  await page.getByTestId("orthogonal-edge-hit-e-1").click({ force: true, timeout: 5_000 });
+  // Select the conditional reviewer→end edge (edges[1]) through its condition
+  // chip: a click on the chip selects its edge (#845). The Start and End
+  // markers are narrower than a card, so the route bends and the centre of
+  // its hit path's box is not on the stroke.
+  await page.getByTestId("edge-condition-label-e-1").click({ timeout: 5_000 });
 
   // The edge detail panel opens with the when-editor (the edge already carries
   // a `verdict: PASS` predicate, so one condition row is present).

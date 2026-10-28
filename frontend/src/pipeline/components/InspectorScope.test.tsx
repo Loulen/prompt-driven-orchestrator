@@ -9,46 +9,22 @@ import InspectorTabs from "./InspectorTabs";
 const here = dirname(fileURLToPath(import.meta.url));
 const indexCss = readFileSync(resolve(here, "../../index.css"), "utf-8");
 
-describe("Inspector amber accent scope", () => {
-  describe("CSS custom property overrides", () => {
-    it("defines .panel-r with --primary bound to amber (--color-st-await)", () => {
-      expect(indexCss).toContain(".panel-r");
-      expect(indexCss).toContain("--primary: var(--color-st-await)");
-    });
-
-    // The scope re-tints the roles, so every utility inside follows: the
-    // selection fill and edge turn amber with the accent.
-    it("binds .panel-r's selection fill and edge to the amber status colour", () => {
-      expect(indexCss).toMatch(
-        /\.panel-r[\s\S]*?--selected:\s*color-mix\(in oklab, var\(--color-st-await\) 14%, transparent\)/,
-      );
-      expect(indexCss).toMatch(/\.panel-r[\s\S]*?--selected-edge:\s*var\(--color-st-await\)/);
-    });
-
-    it("defines .panel-r with --primary-ink for legible text on amber", () => {
-      expect(indexCss).toMatch(/\.panel-r[\s\S]*--primary-ink/);
-    });
+describe("Inspector accent", () => {
+  // The design system has one accent, ruby, for the selection and the one
+  // primary action of a view: the right pane re-tints nothing.
+  it("draws the right pane with the app's ruby, no amber scope", () => {
+    expect(indexCss).not.toContain(".panel-r");
   });
 
   describe("inspector components use accent tokens", () => {
-    it("InspectorTabs active tab border uses accent color token", () => {
+    it("marks the active tab, and only it, for the ruby underline", () => {
       render(
         <InspectorTabs activeTab="run" onTabChange={() => {}}>
           <div>content</div>
         </InspectorTabs>,
       );
-      const activeTab = screen.getByTestId("inspector-tab-run");
-      expect(activeTab.className).toContain("border-primary");
-    });
-
-    it("InspectorTabs inactive tab does not use accent border", () => {
-      render(
-        <InspectorTabs activeTab="run" onTabChange={() => {}}>
-          <div>content</div>
-        </InspectorTabs>,
-      );
-      const inactiveTab = screen.getByTestId("inspector-tab-edit");
-      expect(inactiveTab.className).not.toContain("border-primary");
+      expect(screen.getByTestId("inspector-tab-run")).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByTestId("inspector-tab-edit")).toHaveAttribute("aria-selected", "false");
     });
 
     it("styles expected-content boxes with the inspector accent and bounded editor", () => {

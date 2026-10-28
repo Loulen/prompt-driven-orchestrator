@@ -4,24 +4,19 @@
  * the way the core does.
  */
 import {
-  Archive,
   Circle,
   CircleArrowRight,
   CircleCheck,
   CircleHelp,
-  CirclePause,
-  CircleSlash,
-  CircleStop,
   CircleX,
-  Clock,
-  Hourglass,
   LoaderCircle,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
+import { TONE_VAR, toneColor, type StatusTone, type Tone } from "./tones";
 import type { NodeStatus } from "../../generated/NodeStatus";
 import type { RunStatus } from "../../generated/RunStatus";
-import { TONE_VAR, toneColor, type StatusTone, type Tone } from "./tones";
+import { NODE_STATUS, RUN_STATUS, statusMeta } from "./statusMeta";
 
 const TONE_ICON: Record<Tone, LucideIcon> = {
   neutral: Circle,
@@ -48,40 +43,6 @@ export function ToneIcon({ tone, size = 12 }: { tone: Tone; size?: number }) {
   );
 }
 
-interface StatusMeta {
-  label: string;
-  tone: StatusTone;
-  icon: LucideIcon;
-}
-
-const meta = (label: string, tone: StatusTone, icon: LucideIcon): StatusMeta => ({ label, tone, icon });
-
-const RUN_STATUS: Record<RunStatus | "stalled", StatusMeta> = {
-  running: meta("Running", "running", LoaderCircle),
-  awaiting_user: meta("Awaiting you", "awaiting", CircleHelp),
-  completed: meta("Completed", "done", CircleCheck),
-  failed: meta("Failed", "failed", CircleX),
-  skipped: meta("Skipped", "skipped", CircleArrowRight),
-  halted: meta("Halted", "blocked", CircleStop),
-  paused: meta("Paused", "blocked", CirclePause),
-  archived: meta("Archived", "skipped", Archive),
-  stalled: meta("Stalled", "skipped", Hourglass),
-};
-
-const NODE_STATUS: Record<NodeStatus, StatusMeta> = {
-  pending: meta("Pending", "skipped", Circle),
-  waiting: meta("Waiting", "skipped", Hourglass),
-  running: meta("Running", "running", LoaderCircle),
-  awaiting_user: meta("Awaiting you", "awaiting", CircleHelp),
-  completed: meta("Completed", "done", CircleCheck),
-  skipped: meta("Skipped", "skipped", CircleArrowRight),
-  failed: meta("Failed", "failed", CircleX),
-  stopped: meta("Stopped", "skipped", CircleStop),
-  stale: meta("Stale", "skipped", Clock),
-  // A person has to act: the awaiting colour.
-  interrupted: meta("Interrupted", "awaiting", CircleSlash),
-};
-
 export type StatusIconProps = {
   /** 12 (`sm`, in dense rows and chips), 14 (`md`), or px. */
   size?: "sm" | "md" | number;
@@ -101,7 +62,7 @@ export function StatusIcon(props: StatusIconProps) {
       ? RUN_STATUS[props.status]
       : props.kind === "node"
         ? NODE_STATUS[props.status]
-        : meta(props.label, props.status, TONE_ICON[props.status]);
+        : statusMeta(props.label, props.status, TONE_ICON[props.status]);
   const Icon = m.icon;
   const label = props.title ?? m.label;
   return (

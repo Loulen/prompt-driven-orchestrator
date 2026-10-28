@@ -70,43 +70,36 @@ function markerProps({ nodeType, reached = false, status = "pending", inputImage
   } as unknown as Parameters<typeof EditNode>[0];
 }
 
-describe("EditNode start/end markers — green-on-complete (issue #105, inline run view)", () => {
-  it("Start: neutral card cadre with a green play icon before the run completes", () => {
+describe("EditNode start/end markers — reached (issue #105, inline run view)", () => {
+  it("Start: a neutral marker with its play glyph before the run completes", () => {
     render(<EditNode {...markerProps({ nodeType: "start", reached: false })} />, { wrapper: Wrapper });
     const card = screen.getByTestId("node-card");
-    // Non-completed baseline in the inline view is the neutral "pending" cadre.
-    expect(card.className).toContain("border-line-strong");
-    expect(card.className).toContain("bg-surface-2");
-    expect(card.className).not.toContain("border-st-done");
-    expect(screen.getByTestId("node-icon-start").getAttribute("class")).toContain("text-primary");
+    expect(card).toHaveAttribute("data-kind", "start");
+    expect(card.hasAttribute("data-reached")).toBe(false);
+    expect(screen.getByTestId("node-icon-start")).toBeInTheDocument();
+    expect(card).toHaveTextContent("start");
   });
 
-  it("Start: borrows the green completed cadre once the run reaches its end", () => {
+  it("Start: wears the reached mark once the run reaches its end", () => {
     render(<EditNode {...markerProps({ nodeType: "start", reached: true })} />, { wrapper: Wrapper });
-    const card = screen.getByTestId("node-card");
-    expect(card.className).toContain("border-st-done");
-    expect(card.className).toContain("bg-st-done/14");
-    expect(screen.getByTestId("node-icon-start").getAttribute("class")).toContain("text-st-done");
+    expect(screen.getByTestId("node-card")).toHaveAttribute("data-reached", "true");
+    // The check is End's: Start says it was reached by its border only.
+    expect(screen.queryByLabelText("Reached")).toBeNull();
   });
 
-  it("End: neutral card cadre with an orange square icon before the run completes", () => {
+  it("End: a neutral marker, no check, before the run completes", () => {
     render(<EditNode {...markerProps({ nodeType: "end", reached: false })} />, { wrapper: Wrapper });
     const card = screen.getByTestId("node-card");
-    expect(card.className).toContain("border-line-strong");
-    expect(card.className).not.toContain("border-st-done");
-    // Bug-report correction: in the inline view the non-completed End card border
-    // is neutral grey, not orange — only the icon is orange.
-    expect(screen.getByTestId("node-icon-end").getAttribute("class")).toContain("text-st-blocked");
+    expect(card).toHaveAttribute("data-kind", "end");
+    expect(card.hasAttribute("data-reached")).toBe(false);
+    expect(screen.getByTestId("node-icon-end")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Reached")).toBeNull();
   });
 
-  it("End: turns green (border + faint green fill + green icon) once the run reaches its end", () => {
+  it("End: reached and checked once the run reaches its end", () => {
     render(<EditNode {...markerProps({ nodeType: "end", reached: true })} />, { wrapper: Wrapper });
-    const card = screen.getByTestId("node-card");
-    expect(card.className).toContain("border-st-done");
-    expect(card.className).toContain("bg-st-done/14");
-    const icon = screen.getByTestId("node-icon-end").getAttribute("class");
-    expect(icon).toContain("text-st-done");
-    expect(icon).not.toContain("text-st-blocked");
+    expect(screen.getByTestId("node-card")).toHaveAttribute("data-reached", "true");
+    expect(screen.getByLabelText("Reached")).toBeInTheDocument();
   });
 });
 
@@ -382,11 +375,11 @@ describe("EditNode rim drag-source (#844)", () => {
       wrapper: Wrapper,
     });
     const card = container.firstElementChild as HTMLElement;
-    expect(card.style.boxShadow).toBe("");
+    expect(card.hasAttribute("data-rim")).toBe(false);
     fireEvent.pointerEnter(screen.getByTestId("rim-source-bottom"));
-    expect(card.style.boxShadow).toContain("--color-st-await");
+    expect(card).toHaveAttribute("data-rim", "true");
     fireEvent.pointerLeave(screen.getByTestId("rim-source-bottom"));
-    expect(card.style.boxShadow).toBe("");
+    expect(card.hasAttribute("data-rim")).toBe(false);
   });
 });
 

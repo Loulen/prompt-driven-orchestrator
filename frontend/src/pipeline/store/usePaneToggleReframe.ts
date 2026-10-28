@@ -17,8 +17,20 @@ import { uiZoom } from "../../lib/uiScale";
  * The canvas leaves the UI scale's CSS zoom and carries the scale in its own
  * viewport zoom (`lib/uiScale.ts`): "the size they were drawn" is the scale.
  */
-export function canvasFitViewOptions(): { maxZoom: number } {
-  return { maxZoom: uiZoom() };
+export function canvasFitViewOptions(): CanvasFitViewOptions {
+  return { maxZoom: uiZoom(), padding: CANVAS_FIT_PADDING };
+}
+
+/**
+ * The room a fitted graph leaves around itself: at the top, the floating
+ * toolbar's (8 px from the edge, 28 px tall) and the corner chrome's, so no
+ * card lands under them; 24 px on the other sides.
+ */
+export const CANVAS_FIT_PADDING = { top: "48px", right: "24px", bottom: "24px", left: "24px" } as const;
+
+export interface CanvasFitViewOptions {
+  maxZoom: number;
+  padding: typeof CANVAS_FIT_PADDING;
 }
 
 /** The farthest the canvas dezooms (CORE-88): 25 %. xyflow's own floor is 50 %. */

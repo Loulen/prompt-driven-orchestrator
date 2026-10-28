@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
-import { ChevronDown, Info, Search } from "lucide-react";
+import { Bot, LoaderCircle, MessageSquare, Search, TriangleAlert, Wrench } from "lucide-react";
+import { Button, EmptyState } from "../../../../shared/ui/kit";
 import type { IterationInfo } from "../../../../shared/generated/IterationInfo";
 import { usePinToBottom } from "../../../../hooks/usePinToBottom";
 import { openRunSearch } from "../../../model/runSearch";
@@ -87,118 +88,94 @@ export default function TranscriptTab({
 
   if (loaded && !view.available) {
     return (
-      <div className="p-3" data-testid="transcript-tab">
-        <div
-          data-testid="transcript-unavailable"
-          className="flex items-start gap-2 rounded-md border border-dashed border-line-strong bg-surface-2 px-3 py-2.5 text-text-3"
-          style={{ fontSize: "11px", lineHeight: 1.5 }}
-        >
-          <Info size={13} className="mt-px shrink-0" />
-          {view.harness
-            ? `Transcript unavailable for this harness (${view.harness}). The terminal above still shows the session.`
-            : "Transcript unavailable for this node: it runs no agent."}
+      <div className="ri-tx" data-testid="transcript-tab">
+        <div data-testid="transcript-unavailable">
+          <EmptyState icon={view.harness ? MessageSquare : Bot} layout="row">
+            {view.harness ? `Unavailable for ${view.harness}` : "No agent on this node"}
+          </EmptyState>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="transcript-tab">
-      {/* One line down to a narrow pane: under 400px the shortcut and the
-          « folded » word give way, the counts truncate last. */}
-      <div
-        className="@container flex shrink-0 items-center gap-2 px-3 py-1.5"
-        style={{ fontSize: "10.5px" }}
-      >
+    <div className="ri-tx" data-testid="transcript-tab">
+      <div className="ri-tx__bar">
         {iterations.length > 1 ? (
-          <span className="shrink-0 rounded border border-line-strong bg-surface-2">
-            <IterSelector iterations={iterations} selectedIter={iter} onSelect={onSelectIter} />
-          </span>
+          <IterSelector iterations={iterations} selectedIter={iter} onSelect={onSelectIter} />
         ) : (
-          <span
-            className="shrink-0 whitespace-nowrap rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 font-mono text-text-3"
-            style={{ fontSize: "10px" }}
-          >
-            iter {iter}
+          <span className="font-mono text-text-2">iter {iter}</span>
+        )}
+        <span className="ri-tx__counts" data-testid="transcript-counts" title={`${counts} folded`} aria-label={counts}>
+          <MessageSquare size={11} strokeWidth={1.5} aria-hidden />
+          <span>{view.messages}</span>
+          <Wrench size={11} strokeWidth={1.5} aria-hidden />
+          <span>{view.toolCalls}</span>
+        </span>
+        {live && (
+          <span className="ri-tx__live" data-testid="transcript-live" title="The iteration is live">
+            <span className="ri-dot" data-live aria-hidden />
+            live
           </span>
         )}
-        <span className="min-w-0 truncate text-text-3" data-testid="transcript-counts" title={counts}>
-          {counts}
-          <span className="@max-[400px]:hidden"> folded</span>
-        </span>
-        <span className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap">
-          {live && (
-            <span className="flex items-center gap-1 text-text-3" data-testid="transcript-live">
-              <span className="h-1.5 w-1.5 rounded-full bg-st-running" />
-              live
-            </span>
-          )}
-          <button
-            type="button"
-            data-testid="transcript-search-run"
-            onClick={() => openRunSearch(runId)}
-            title="Search the transcripts of the whole Run (⌘⇧F)"
-            className="flex cursor-pointer items-center gap-1 rounded border border-line-strong px-1.5 py-0.5 text-text-3 hover:bg-hover hover:text-text-2"
-          >
-            <Search size={10} />
-            Search run
-            <span className="font-mono text-text-3 @max-[400px]:hidden">⌘⇧F</span>
-          </button>
-        </span>
+        <span className="ri-tx__fill" />
+        <Button
+          tone="ghost"
+          size="sm"
+          icon={Search}
+          data-testid="transcript-search-run"
+          title="Search the transcripts of the whole Run (⌘⇧F)"
+          onClick={() => openRunSearch(runId)}
+        >
+          Search run
+        </Button>
       </div>
-      <div
-        ref={scrollRef}
-        onScroll={onScroll}
-        data-testid="transcript-scroll"
-        className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-auto px-3 pb-3"
-      >
+      <div ref={scrollRef} onScroll={onScroll} data-testid="transcript-scroll" className="ri-tx__scroll">
         {error && (
-          <div className="text-st-failed" style={{ fontSize: "11px" }} data-testid="transcript-error">
-            {error}
+          <div className="ri-tx__err" role="alert" data-testid="transcript-error" title={error}>
+            <TriangleAlert size={14} strokeWidth={1.5} aria-hidden />
+            <span className="min-w-0 truncate">{error}</span>
           </div>
         )}
         {loaded && !error && view.total === 0 && (
-          <div className="py-2 text-text-3" style={{ fontSize: "11px" }} data-testid="transcript-empty">
-            {live ? "Waiting for the session's first message…" : "No message in this iteration."}
+          <div data-testid="transcript-empty">
+            <EmptyState icon={live ? LoaderCircle : MessageSquare} layout="row" spin={live}>
+              {live ? "Waiting for the first message" : "No message"}
+            </EmptyState>
           </div>
         )}
-        {view.entries.map((entry) =>
-          entry.kind === "message" ? (
-            <MessageCard
-              key={entry.index}
-              index={entry.index}
-              speaker={entry.speaker}
-              text={entry.text}
-              at={entry.at}
-              highlight={highlight}
-              focusNonce={focus?.index === entry.index ? focus.nonce : undefined}
-            />
-          ) : (
-            <ToolCallRow
-              key={entry.index}
-              runId={runId}
-              nodeId={nodeId}
-              iter={iter}
-              index={entry.index}
-              name={entry.name}
-              summary={entry.summary}
-              status={entry.status}
-              outputBytes={entry.output_bytes}
-              diff={entry.diff}
-              focusNonce={focus?.index === entry.index ? focus.nonce : undefined}
-            />
-          ),
-        )}
+        <div className="ri-tx__list">
+          {view.entries.map((entry) =>
+            entry.kind === "message" ? (
+              <MessageCard
+                key={entry.index}
+                index={entry.index}
+                speaker={entry.speaker}
+                text={entry.text}
+                at={entry.at}
+                highlight={highlight}
+                focusNonce={focus?.index === entry.index ? focus.nonce : undefined}
+              />
+            ) : (
+              <ToolCallRow
+                key={entry.index}
+                runId={runId}
+                nodeId={nodeId}
+                iter={iter}
+                index={entry.index}
+                name={entry.name}
+                summary={entry.summary}
+                status={entry.status}
+                outputBytes={entry.output_bytes}
+                diff={entry.diff}
+                focusNonce={focus?.index === entry.index ? focus.nonce : undefined}
+              />
+            ),
+          )}
+        </div>
         {more > 0 && (
-          <button
-            type="button"
-            data-testid="transcript-more"
-            onClick={loadMore}
-            className="flex cursor-pointer items-center gap-1 py-1 text-text-3 hover:text-text-2"
-            style={{ fontSize: "10.5px" }}
-          >
-            <ChevronDown size={11} />
-            {more} more {more === 1 ? "entry" : "entries"} · loaded as you scroll
+          <button type="button" data-testid="transcript-more" onClick={loadMore} className="ri-tx__rest ri-tx__more">
+            +{more} {more === 1 ? "entry" : "entries"} · loaded as you scroll
           </button>
         )}
       </div>

@@ -44,7 +44,6 @@ const node: NodeState = {
 function Pane({ tab, onSelectTab }: { tab: string; onSelectTab: (t: string) => void }) {
   return (
     <DetailsPane
-      actions={null}
       node={node}
       runId="r1"
       isOrchestratorNode={false}

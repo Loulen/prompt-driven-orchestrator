@@ -32,7 +32,7 @@ describe("DraftNoticeBanner", () => {
     render(<DraftNoticeBanner notices={[external]} me={null} onSeeVersion={onSeeVersion} onDismiss={onDismiss} />);
     const notice = screen.getByTestId("draft-notice");
     expect(notice).toHaveTextContent(
-      "feature-with-review.yaml was changed outside PDO. Kept as v8 · external edit and merged into the draft: prompt of reviewer and edge reviewer → fixer.",
+      "feature-with-review.yaml changed outside · kept as v8 · external edit · merged: prompt of reviewer and edge reviewer → fixer",
     );
     fireEvent.click(screen.getByTestId("draft-notice-see-version"));
     expect(onSeeVersion).toHaveBeenCalledWith(8);
@@ -44,7 +44,7 @@ describe("DraftNoticeBanner", () => {
     render(
       <DraftNoticeBanner notices={[assistant]} me={{ kind: "local_operator" }} onSeeVersion={vi.fn()} onDismiss={vi.fn()} />,
     );
-    expect(screen.getByTestId("draft-notice")).toHaveTextContent("Your library assistant changed the draft: name of fixer.");
+    expect(screen.getByTestId("draft-notice")).toHaveTextContent("Your library assistant · name of fixer");
     expect(screen.queryByTestId("draft-notice-see-version")).toBeNull();
   });
 });

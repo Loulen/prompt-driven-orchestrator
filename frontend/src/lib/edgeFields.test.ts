@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { edgeConditionFields, operatorsForField, clampOperator } from "./edgeFields";
-import { OPERATORS } from "./whenClause";
+import { edgeConditionFields, operatorsForField, clampOperator, nextFreeCondition } from "./edgeFields";
+import { OPERATORS, type Operator } from "./whenClause";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EditorPipelineDef } from "../pipeline/model/pipeline";
 
@@ -125,5 +125,36 @@ describe("clampOperator", () => {
     const fields = edgeConditionFields(pipeline(), guardedEdge);
     expect(clampOperator(fields, "is_blocking", "neq")).toBe("neq");
     expect(clampOperator(fields, "iter", "gte")).toBe("gte");
+  });
+});
+
+describe("nextFreeCondition", () => {
+  const fields = [
+    { name: "verdict", decl: { type: "enum", allowed: ["pass", "fail"] } },
+    { name: "approved", decl: { type: "bool" } },
+    { name: "iter", decl: null, isIter: true },
+  ] as Parameters<typeof nextFreeCondition>[2];
+  const row = (field: string, op: Operator = "eq") => ({ port: "out", field, op, value: "x" });
+
+  it("takes the first field when no row reads it", () => {
+    expect(nextFreeCondition([], "out", fields)).toEqual({ field: "verdict", op: "eq" });
+  });
+
+  it("skips a field a row already reads with that operator", () => {
+    expect(nextFreeCondition([row("verdict")], "out", fields)).toEqual({ field: "approved", op: "eq" });
+  });
+
+  it("takes another operator once every field is read", () => {
+    const rows = [row("verdict"), row("approved"), row("iter")];
+    expect(nextFreeCondition(rows, "out", fields)).toEqual({ field: "verdict", op: "neq" });
+  });
+
+  it("reads the rows of its own output only", () => {
+    expect(nextFreeCondition([{ ...row("verdict"), port: "design" }], "out", fields)).toEqual({ field: "verdict", op: "eq" });
+  });
+
+  it("says when nothing is left", () => {
+    const rows = fields.flatMap((f) => operatorsForField(fields, f.name).map((op) => row(f.name, op)));
+    expect(nextFreeCondition(rows, "out", fields)).toBeNull();
   });
 });

@@ -1,42 +1,51 @@
 import { useEffect, useState } from "react";
-import { CircleDashed, Eye, RotateCcw } from "lucide-react";
+import { CircleAlert, CircleDashed, Eye, Loader, Play, RotateCcw } from "lucide-react";
 import type { PipelineVersionEntry } from "../../shared/generated/PipelineVersionEntry";
 import type { Actor } from "../../shared/generated/Actor";
 import { actorLabel } from "../../shared/lib/actor";
-import { ActorAvatar } from "../../shared/actors/ActorAvatar";
 import { useActorDisplay } from "../../shared/actors/store";
-import { toast } from "../../shared/ui/toast";
+import { Avatar, Button, Chip, EmptyState, IconButton } from "../../shared/ui/kit";
 import { fetchPipelineVersions } from "../api/versions";
-import { changesLabel, lastVersionOf, savedAgo } from "../model/versions";
+import { changesLabel, lastVersionOf, shortSavedAgo, versionLabel } from "../model/versions";
 import { useEditStore } from "../store/editStore";
 import { ParticipantStack } from "./ParticipantAvatar";
+import { restoreIntoDraft } from "../store/restoreIntoDraft";
+import "./inspect.css";
 
-/** Who saved a version: its avatar, or « file » when nobody in PDO did. */
-function Author({ actor }: { actor: Actor | null }) {
+/** Who saved a version: its avatar, or « file » when nobody in the app did. */
+function Author({ actor, external }: { actor: Actor | null; external: boolean }) {
   const display = useActorDisplay(actor);
-  if (!actor) return <span className="font-mono">file</span>;
+  if (!actor) {
+    return (
+      <span className="pi-vrow__by d-mono" title={external ? "Written outside" : "The file the versions started from"}>
+        file
+      </span>
+    );
+  }
   const name = display?.name ?? actorLabel(actor);
   return (
-    <span title={name} className="inline-flex items-center">
-      <ActorAvatar display={display ?? { name, avatar_url: null }} size={12} />
+    <span className="pi-vrow__by" title={name}>
+      <Avatar name={name} src={display?.avatar_url} size={16} />
     </span>
   );
 }
 
-function runsLabel(runs: number): string | null {
-  if (runs === 0) return null;
-  return runs === 1 ? "1 run" : `${runs} runs`;
-}
+const fullDate = (iso: string) =>
+  new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
 /**
  * The « Versions » tab of a pipeline (ADR-0088): its draft first, then every
- * version a Save froze, newest first. « View » opens a version read only;
- * « Restore » makes it the content of the draft, for every participant, as
- * one change Undo takes back. Neither creates a version.
+ * version a Save froze, newest first, one row each (number, title, author,
+ * age, Runs). « View » opens a version read only; « Restore » makes it the
+ * content of the draft, for every participant, as one change Undo takes
+ * back. Neither creates a version.
  */
 export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
   const pipelines = useEditStore((s) => s.pipelines);
   const tabDraft = useEditStore((s) => s.openTabs.find((t) => t.id === pipelineId)?.draft);
+  const viewing = useEditStore((s) => s.openTabs.find((t) => t.id === s.activeTabId)?.version);
+  // A Replace keeps the number and the title: the save's time says it moved.
+  const savedAt = useEditStore((s) => s.lastSavedAt[pipelineId]);
   const openPipelineVersion = useEditStore((s) => s.openPipelineVersion);
   const restoreVersion = useEditStore((s) => s.restoreVersion);
   const last = lastVersionOf(pipelines, pipelineId);
@@ -45,6 +54,7 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
   const participants = listed?.draft?.participants ?? tabDraft?.participants ?? [];
   const [versions, setVersions] = useState<PipelineVersionEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   // Read again when the last version moves (a Save, here or elsewhere).
   useEffect(() => {
@@ -61,88 +71,99 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
     return () => {
       live = false;
     };
-  }, [pipelineId, last.number, last.title]);
-
-  const restore = async (number: number) => {
-    try {
-      await restoreVersion(pipelineId, number);
-      toast(`v${number} restored into the draft. Undo takes it back.`);
-    } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "error");
-    }
-  };
+  }, [pipelineId, last.number, last.title, savedAt, listed?.modified, attempt]);
 
   return (
-    <div className="flex flex-col" style={{ fontSize: "11.5px" }} data-testid="versions-tab">
-      <p className="px-3 py-2 text-text-3" style={{ fontSize: "10.5px" }}>
-        New Run and Triggers launch the last version. The draft is never launched.
-      </p>
-      <div className="flex items-center gap-2 bg-surface-2/60 px-3 py-2" data-testid="versions-draft">
-        <CircleDashed size={11} className="shrink-0 text-text-3" />
-        <span className="font-medium text-text">Draft</span>
-        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+    <div className="pi-vers" data-testid="versions-tab">
+      <div
+        className="pi-draft"
+        title="New Run and Triggers launch the last version"
+        data-testid="versions-draft"
+      >
+        <CircleDashed size={14} strokeWidth={1.5} aria-hidden className="ei-ic" />
+        <span className="pi-draft__name">Draft</span>
+        <span className="d-mono ei-dim ei-trunc">
           {changes > 0 ? `${changesLabel(changes)} since v${last.number}` : `same as v${last.number}`}
         </span>
-        <span className="ml-auto">
-          <ParticipantStack participants={participants} size={14} />
+        <span className="pi-draft__people">
+          <ParticipantStack participants={participants} size="sm" />
         </span>
       </div>
-      {error && (
-        <p className="px-3 py-2 text-st-failed" data-testid="versions-error">
-          {error}
-        </p>
-      )}
-      {versions?.map((version, index) => {
-        const runs = runsLabel(version.runs);
-        return (
-          <div
-            key={version.number}
-            className="group flex items-center gap-3 border-b border-line px-3 py-2 hover:bg-hover"
-            data-testid={`version-row-${version.number}`}
+      {error ? (
+        <div data-testid="versions-error">
+          <EmptyState
+            icon={CircleAlert}
+            layout="row"
+            action={
+              <Button
+                size="sm"
+                onClick={() => {
+                  // Back to the loading line while the list is read again.
+                  setError(null);
+                  setAttempt((n) => n + 1);
+                }}
+              >
+                Retry
+              </Button>
+            }
           >
-            <span className="w-6 shrink-0 font-mono text-text-3">v{version.number}</span>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className={`truncate ${version.external ? "italic text-text-2" : "text-text"}`}>{version.title}</span>
-                {index === 0 && (
-                  <span
-                    className="rounded bg-st-await/14 px-1 font-mono text-st-await"
-                    style={{ fontSize: "9px" }}
-                    data-testid="version-last"
-                  >
-                    last
-                  </span>
-                )}
-              </div>
-              <div className="mt-0.5 flex items-center gap-1.5 text-text-3" style={{ fontSize: "10px" }}>
-                <Author actor={version.author} />
-                <span>{savedAgo(version.saved_at)}</span>
-                {runs && <span>· {runs}</span>}
-              </div>
-            </div>
-            <div className="hidden shrink-0 items-center gap-1 group-hover:flex group-focus-within:flex">
-              <button
-                onClick={() => void openPipelineVersion(pipelineId, version.number)}
-                className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-1 px-1.5 py-0.5 text-text-2 hover:bg-hover hover:text-text"
-                style={{ fontSize: "10.5px" }}
-                data-testid={`version-view-${version.number}`}
-              >
-                <Eye size={10} />
-                View
-              </button>
-              <button
-                onClick={() => void restore(version.number)}
-                className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-1 px-1.5 py-0.5 text-text-2 hover:bg-hover hover:text-text"
-                style={{ fontSize: "10.5px" }}
-                data-testid={`version-restore-${version.number}`}
-              >
-                <RotateCcw size={10} />
-                Restore
-              </button>
-            </div>
-          </div>
-        );
-      })}
+            <span title={error}>Versions unavailable</span>
+          </EmptyState>
+        </div>
+      ) : versions == null ? (
+        <EmptyState icon={Loader} layout="row" spin>
+          Loading versions
+        </EmptyState>
+      ) : null}
+      {versions?.map((version, index) => (
+        <div
+          key={version.number}
+          className="pi-vrow"
+          aria-current={viewing?.pipelineId === pipelineId && viewing.number === version.number ? true : undefined}
+          title={`${versionLabel(version)} · ${fullDate(version.saved_at)}`}
+          data-testid={`version-row-${version.number}`}
+        >
+          <span className="pi-vrow__n d-mono">v{version.number}</span>
+          <span className="pi-vrow__title" data-ext={version.external || undefined}>
+            {version.title}
+          </span>
+          {index === 0 && (
+            <span className="pi-vrow__last" data-testid="version-last">
+              <Chip mono>last</Chip>
+            </span>
+          )}
+          <Author actor={version.author} external={version.external} />
+          <span className="pi-vrow__ago d-mono">{shortSavedAgo(version.saved_at)}</span>
+          <span
+            className="pi-vrow__runs d-mono"
+            title={version.runs === 0 ? "Never launched" : version.runs === 1 ? "1 run" : `${version.runs} runs`}
+            data-testid={`version-runs-${version.number}`}
+          >
+            {version.runs > 0 && (
+              <>
+                <Play size={10} strokeWidth={1.5} aria-hidden />
+                {version.runs}
+              </>
+            )}
+          </span>
+          <span className="pi-vrow__acts">
+            <IconButton
+              icon={Eye}
+              size="sm"
+              label={`View v${version.number}`}
+              onClick={() => void openPipelineVersion(pipelineId, version.number)}
+              data-testid={`version-view-${version.number}`}
+            />
+            <IconButton
+              icon={RotateCcw}
+              size="sm"
+              label={`Restore v${version.number} into the draft`}
+              onClick={() => void restoreIntoDraft(restoreVersion, pipelineId, version.number)}
+              data-testid={`version-restore-${version.number}`}
+            />
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

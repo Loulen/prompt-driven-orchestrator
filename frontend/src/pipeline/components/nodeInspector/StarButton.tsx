@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
 import { Star } from "lucide-react";
+import { Menu } from "../../../shared/ui/kit";
 import type { NodeType } from "../../../shared/generated/NodeType";
 import { nodeIsolation } from "../../../lib/nodeIsolation";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../../api/library";
@@ -28,20 +28,6 @@ export default function StarButton({
   updateNodeFn: (updates: Partial<EditorNodeDef>) => void;
   updatePromptFn: (content: string) => void;
 }) {
-  const [popoverOpen, setPopoverOpen] = useState(false);
-  const popoverRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!popoverOpen) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        setPopoverOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [popoverOpen]);
-
   function librarySpec() {
     return {
       name: node.name ?? "",
@@ -88,8 +74,6 @@ export default function StarButton({
       } catch {
         // ignore
       }
-    } else {
-      setPopoverOpen(!popoverOpen);
     }
   }
 
@@ -97,7 +81,6 @@ export default function StarButton({
     try {
       await saveToLibrary(librarySpec());
       onLibraryChanged();
-      setPopoverOpen(false);
     } catch {
       // ignore
     }
@@ -124,7 +107,6 @@ export default function StarButton({
         free_live_artifacts: result.spec.free_live_artifacts ?? false,
       });
       updatePromptFn(result.prompt);
-      setPopoverOpen(false);
     } catch {
       // ignore
     }
@@ -134,7 +116,6 @@ export default function StarButton({
     try {
       await deleteFromLibrary(node.name ?? "");
       onLibraryChanged();
-      setPopoverOpen(false);
     } catch {
       // ignore
     }
@@ -142,66 +123,37 @@ export default function StarButton({
 
   const isFilled = syncState !== "outline";
   const tooltip = STAR_TOOLTIPS[syncState];
+  const star = (onClick: () => void, open = false) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className="d-icon"
+      title={tooltip}
+      aria-label={tooltip}
+      aria-expanded={syncState === "outline" ? undefined : open}
+      data-state={syncState}
+    >
+      <Star size={14} strokeWidth={1.5} aria-hidden className={isFilled ? "ei-star is-on" : "ei-star"} />
+      {syncState === "diverged" && <span className="ei-star__dot" aria-hidden />}
+    </button>
+  );
 
+  if (syncState === "outline") return star(() => void handleStarClick());
   return (
-    <div className="relative" ref={popoverRef}>
-      <button
-        onClick={handleStarClick}
-        className="grid h-6 w-6 place-items-center rounded transition-colors hover:bg-hover"
-        title={tooltip}
-      >
-        <span className="relative">
-          <Star
-            size={14}
-            className={
-              isFilled ? "fill-primary text-primary" : "fill-none text-text-3"
-            }
-          />
-          {syncState === "diverged" && (
-            <span
-              className="absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full bg-st-blocked"
-            />
-          )}
-        </span>
-      </button>
-
-      {popoverOpen && (
-        <div
-          className="absolute right-0 top-full z-50 mt-1 w-[200px] rounded-lg border border-line bg-surface-2 py-1 shadow-lg"
-          style={{ fontSize: "11px" }}
-        >
-          {syncState === "synced" && (
-            <button
-              onClick={handleRemoveFromLibrary}
-              className="w-full px-3 py-1.5 text-left text-text-3 transition-colors hover:bg-hover hover:text-text"
-            >
-              Remove from library
-            </button>
-          )}
-          {syncState === "diverged" && (
-            <>
-              <button
-                onClick={handleUpdateLibrary}
-                className="w-full px-3 py-1.5 text-left text-text-3 transition-colors hover:bg-hover hover:text-text"
-              >
-                Update library entry
-              </button>
-              <button
-                onClick={handleResetFromLibrary}
-                className="w-full px-3 py-1.5 text-left text-text-3 transition-colors hover:bg-hover hover:text-text"
-              >
-                Reset from library
-              </button>
-              <button
-                onClick={handleRemoveFromLibrary}
-                className="w-full px-3 py-1.5 text-left text-text-3 transition-colors hover:bg-hover hover:text-text"
-              >
-                Remove from library
-              </button>
-            </>
-          )}
-        </div>
-      )}
-    </div>
+    <Menu
+      label="Library"
+      align="end"
+      trigger={({ open, toggle }) => star(toggle, open)}
+      entries={
+        syncState === "synced"
+          ? [{ label: "Remove from library", onSelect: () => void handleRemoveFromLibrary() }]
+          : [
+              { label: "Update library entry", onSelect: () => void handleUpdateLibrary() },
+              { label: "Reset from library", onSelect: () => void handleResetFromLibrary() },
+              { kind: "separator" as const },
+              { label: "Remove from library", danger: true, onSelect: () => void handleRemoveFromLibrary() },
+            ]
+      }
+    />
   );
 }

@@ -85,3 +85,14 @@ export function savedOn(iso: string): string {
   if (Number.isNaN(t)) return "";
   return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
+
+/** The dense age of a version in the history: « now », « 12m », « 2h », « 4d ». */
+export function shortSavedAgo(iso: string, now = new Date()): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, Math.round((now.getTime() - t) / 1000));
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86_400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86_400)}d`;
+}

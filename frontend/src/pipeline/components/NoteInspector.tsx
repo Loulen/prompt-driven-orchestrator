@@ -1,6 +1,6 @@
 import { StickyNote } from "lucide-react";
 import { useEditStore } from "../store/editStore";
-import { SectionHead } from "./InspectorPrimitives";
+import "./inspect.css";
 
 /**
  * Inspector for an inert canvas note (#307 / ADR-0018). Opened by clicking a
@@ -23,38 +23,23 @@ export default function NoteInspector() {
   if (!note) return null;
 
   return (
-    <aside
-      className="flex h-full flex-col bg-surface-1 overflow-y-auto"
-      data-testid="note-inspector"
-    >
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <StickyNote size={14} className="shrink-0 text-primary" />
-        <div className="min-w-0">
-          <div className="truncate font-medium text-text" style={{ fontSize: "12.5px" }}>
-            Note
-          </div>
-          <div className="mt-0.5 text-text-3" style={{ fontSize: "10px" }}>
-            canvas note — documentation only
-          </div>
-        </div>
+    <aside className="ei" data-testid="note-inspector">
+      <div className="ei-bar">
+        <span className="ei-bar__title" title="Canvas note: never runs, no port, not in the diff">
+          <StickyNote size={14} strokeWidth={1.5} aria-hidden />
+          <span>Note</span>
+          <span className="ei-bar__sub">{note.id}</span>
+        </span>
       </div>
-
-      <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
-        <SectionHead title="Content" />
-        <textarea
-          value={note.content}
-          onChange={(e) => updateNote(note.id, { content: e.target.value })}
-          data-testid="note-content"
-          rows={8}
-          placeholder="Write a note…"
-          className="w-full resize-y rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text outline-none focus:border-primary"
-          style={{ fontSize: "11.5px", lineHeight: 1.5 }}
-        />
-        <div className="text-text-3" style={{ fontSize: "10px", lineHeight: 1.6 }}>
-          A note is inert: it never runs, has no ports, and does not affect the
-          pipeline diff (the synced/diverged star stays put).
-        </div>
-      </div>
+      <textarea
+        value={note.content}
+        onChange={(e) => updateNote(note.id, { content: e.target.value })}
+        data-testid="note-content"
+        aria-label="Note"
+        rows={8}
+        placeholder="Note"
+        className="d-input d-area ei-note-area"
+      />
     </aside>
   );
 }

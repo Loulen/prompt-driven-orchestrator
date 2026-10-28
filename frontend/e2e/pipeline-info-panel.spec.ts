@@ -353,7 +353,7 @@ test("library tab after a run: panel shows template, not the previous run", asyn
 
   const infoPanel = page.getByTestId("pipeline-info-panel");
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
-  await expect(infoPanel).toContainText(`run ${run_id.slice(-8)}`);
+  await expect(infoPanel).toContainText(run_id.slice(-7));
   await expect(page.getByTestId("info-tab-manager")).toBeVisible();
 
   // Close the panel before switching tabs.
@@ -372,8 +372,8 @@ test("library tab after a run: panel shows template, not the previous run", asyn
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
 
   // Regression checks: no leakage of the previous run into the panel.
-  await expect(infoPanel).toContainText("template ·");
-  await expect(infoPanel).not.toContainText(`run ${run_id.slice(-8)}`);
+  await expect(infoPanel).toContainText("template");
+  await expect(infoPanel).not.toContainText(run_id.slice(-7));
   await expect(page.getByTestId("info-tab-manager")).toHaveCount(0);
 
   // Cleanup tmux sessions

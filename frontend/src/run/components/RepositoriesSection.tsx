@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { CloudOff, FolderGit2, GitBranch, X, Plus } from "lucide-react";
+import { Banner, Button, Chip, EmptyState, IconButton, Section } from "../../shared/ui/kit";
+import "../../pipeline/components/inspect.css";
 import type { RunState } from "../../shared/generated/RunState";
 import { editRunRepos } from "../api/createRun";
 import { useRecentReposStore } from "../../stores/recentReposStore";
@@ -86,176 +88,135 @@ export default function RepositoriesSection({
   }
 
   return (
-    <div
-      className="flex flex-col gap-2 border-b border-line px-3 py-3"
-      data-testid="run-repositories"
-    >
-      <span
-        className="font-medium text-text-2 flex items-center gap-1.5"
-        style={{ fontSize: "11.5px" }}
-      >
-        <FolderGit2 size={12} className="text-text-3" />
-        Repositories
-      </span>
-
+    <div data-testid="run-repositories">
       {/* Primary — locked, read-only. It never has an alias, so it can be neither
           removed nor re-pointed mid-run.
 
-          #803/#804: it gains the second line the secondaries always had (branch · sha)
-          — the cut point the Run itself knows, marked when a Trigger's pre-cut fetch
-          failed (#804) — plus the drift chip (#803). Only the primary has a chip: a
-          secondary is pinned to a SHA at add time, so it does not move and has no
-          « Run branch » to drift from — a chip there would be a zero dressed up as a
-          measurement. */}
-      <div
-        className="flex items-center gap-2 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5"
-        data-testid="primary-repo-row"
-      >
-        <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate font-mono text-text" title={run.target_repo ?? ""}>
+          #803/#804: its second line is the cut point the Run itself knows,
+          marked when a Trigger's pre-cut fetch failed (#804), and the drift chip
+          (#803). Only the primary has a chip: a secondary is pinned to a SHA at
+          add time, so it has no « Run branch » to drift from. */}
+      <Section title="Primary">
+        <div className="pi-repo" data-testid="primary-repo-row">
+          <FolderGit2 size={14} strokeWidth={1.5} aria-hidden className="ei-ic" />
+          <span className="d-mono ei-trunc pi-repo__path" title={run.target_repo ?? ""}>
             {run.target_repo}
           </span>
-          <span
-            className="flex items-center gap-1 font-mono text-text-3"
-            style={{ fontSize: "10px" }}
-            data-testid="primary-repo-cut"
-          >
-            <GitBranch size={10} className="shrink-0 text-text-3" />
-            {run.source_branch ?? "HEAD"}
-            {run.fork_sha && ` · ${run.fork_sha.slice(0, 8)}`}
-            {/* Icon only, reason on hover: the Info tab already says it in full
-                (that is where someone lands from the status dot). Here it is a
-                marker on the pin, so the branch · sha reads as "and this is why
-                it may look older than you expect". */}
-            {run.source_fetch_error && (
-              <span
-                role="img"
-                className="flex shrink-0 items-center text-st-skipped"
-                title={`Fetch failed before the cut — cut from local state. ${run.source_fetch_error.message}`}
-                aria-label={`Fetch failed before the cut — cut from local state. ${run.source_fetch_error.message}`}
-                data-testid="primary-repo-fetch-failed"
-              >
-                <CloudOff size={10} aria-hidden />
-              </span>
-            )}
+          <SourceDriftChip drift={drift} runId={run.run_id} fetchError={fetchError} testid="primary-repo-drift" />
+          <span data-testid="primary-repo-badge">
+            <Chip mono>PRIMARY</Chip>
           </span>
         </div>
-        <SourceDriftChip
-          drift={drift}
-          runId={run.run_id}
-          fetchError={fetchError}
-          testid="primary-repo-drift"
-        />
-        <span
-          className="rounded bg-surface-2 px-1.5 py-0.5 font-medium text-text-3"
-          style={{ fontSize: "9.5px" }}
-          data-testid="primary-repo-badge"
-        >
-          PRIMARY
-        </span>
-      </div>
+        <div className="pi-repo__cut d-mono" data-testid="primary-repo-cut">
+          <GitBranch size={11} strokeWidth={1.5} aria-hidden className="ei-ic" />
+          {run.source_branch ?? "HEAD"}
+          {run.fork_sha && ` · ${run.fork_sha.slice(0, 8)}`}
+          {/* Icon only, reason on hover: the Info tab says it in full. */}
+          {run.source_fetch_error && (
+            <span
+              role="img"
+              className="ei-line"
+              style={{ color: "var(--color-st-skipped)" }}
+              title={`Fetch failed before the cut — cut from local state. ${run.source_fetch_error.message}`}
+              aria-label={`Fetch failed before the cut — cut from local state. ${run.source_fetch_error.message}`}
+              data-testid="primary-repo-fetch-failed"
+            >
+              <CloudOff size={11} strokeWidth={1.5} aria-hidden />
+            </span>
+          )}
+        </div>
+      </Section>
 
       {/* Existing secondaries — locked display + a remove button, with a badge
           for the writable/read-only mode (ADR-0047). Their SHA is frozen at add,
           so there is nothing to edit here but their presence. */}
-      {secondaries.map((pin) => (
-        <div
-          key={pin.alias}
-          className="flex items-center gap-2 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5"
-          data-testid={`secondary-repo-${pin.alias}`}
-        >
-          <div className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate font-mono text-text" title={pin.repo}>
-              {pin.repo}
-            </span>
-            <span
-              className="flex items-center gap-1 font-mono text-text-3"
-              style={{ fontSize: "10px" }}
-            >
-              <GitBranch size={10} className="text-text-3" />
-              {pin.base_branch ?? "HEAD"} · {pin.sha.slice(0, 8)}
-            </span>
-          </div>
-          {/* ADR-0047: the badge reflects the per-repo opt-in. A writable
-              secondary (the default) gets a discreet WRITABLE badge; only an
-              opted-in read-only pin shows READ-ONLY. */}
-          <span
-            className="rounded bg-surface-2 px-1.5 py-0.5 font-medium text-text-3"
-            style={{ fontSize: "9.5px" }}
-            data-testid={`secondary-repo-mode-${pin.alias}`}
-          >
-            {pin.read_only ? "READ-ONLY" : "WRITABLE"}
-          </span>
-          {editable && (
-            <button
-              type="button"
-              onClick={() => removeSecondary(pin.alias)}
+      <Section
+        title="Secondary"
+        count={secondaries.length}
+        flush
+        aside={
+          editable && draft === null ? (
+            <IconButton
+              icon={Plus}
+              size="sm"
+              label="Add repository"
+              description="Applies to nodes launched after the change"
+              onClick={() => setDraft({ path: "", baseBranch: "", valid: null, readOnly: false })}
               disabled={busy}
-              className="rounded-md border border-line-strong bg-surface-2 p-1.5 text-text-3 transition-colors hover:border-st-failed hover:text-st-failed disabled:opacity-40"
-              aria-label={`Remove secondary repository ${pin.alias}`}
-              data-testid={`remove-secondary-repo-${pin.alias}`}
+              data-testid="add-secondary-repo"
+            />
+          ) : undefined
+        }
+      >
+        {secondaries.length === 0 && draft === null && (
+          <EmptyState icon={FolderGit2} layout="row">
+            None
+          </EmptyState>
+        )}
+        {secondaries.map((pin) => (
+          <div key={pin.alias} className="pi-repo pi-repo--two" data-testid={`secondary-repo-${pin.alias}`}>
+            <FolderGit2 size={14} strokeWidth={1.5} aria-hidden className="ei-ic" />
+            <span className="pi-repo__text">
+              <span className="d-mono ei-trunc" title={pin.repo}>
+                {pin.repo}
+              </span>
+              <span className="pi-repo__cut d-mono">
+                <GitBranch size={11} strokeWidth={1.5} aria-hidden />
+                {pin.base_branch ?? "HEAD"} · {pin.sha.slice(0, 8)}
+              </span>
+            </span>
+            {/* ADR-0047: the badge reflects the per-repo opt-in. */}
+            <span data-testid={`secondary-repo-mode-${pin.alias}`}>
+              <Chip mono>{pin.read_only ? "READ-ONLY" : "WRITABLE"}</Chip>
+            </span>
+            {editable && (
+              <IconButton
+                icon={X}
+                size="sm"
+                label={`Remove secondary repository ${pin.alias}`}
+                onClick={() => removeSecondary(pin.alias)}
+                disabled={busy}
+                data-testid={`remove-secondary-repo-${pin.alias}`}
+              />
+            )}
+          </div>
+        ))}
+
+        {/* The draft row self-validates; confirming fires a per-action
+            `editRunRepos({ add })`. */}
+        {editable && draft !== null && (
+          <div className="pi-repo__draft" data-testid="secondary-repo-draft">
+            <SecondaryRepoRow
+              index={0}
+              repo={draft}
+              recentRepos={recentRepos}
+              onChange={(_, patch) => setDraft((prev) => (prev ? { ...prev, ...patch } : prev))}
+              onRemove={() => setDraft(null)}
+            />
+            <Button
+              size="sm"
+              tone="primary"
+              onClick={addDraft}
+              disabled={busy || draft.valid !== true || !draft.path.trim()}
+              data-testid="confirm-add-secondary-repo"
             >
-              <X size={12} />
-            </button>
-          )}
-        </div>
-      ))}
-
-      {/* Add affordance — a live Run only. The draft row self-validates; confirming
-          fires a per-action `editRunRepos({ add })`. */}
-      {editable && draft !== null && (
-        <div className="flex flex-col gap-2" data-testid="secondary-repo-draft">
-          <SecondaryRepoRow
-            index={0}
-            repo={draft}
-            recentRepos={recentRepos}
-            onChange={(_, patch) => setDraft((prev) => (prev ? { ...prev, ...patch } : prev))}
-            onRemove={() => setDraft(null)}
-          />
-          <button
-            type="button"
-            onClick={addDraft}
-            disabled={busy || draft.valid !== true || !draft.path.trim()}
-            className="self-start rounded-md border border-primary bg-transparent px-2.5 py-1.5 font-medium text-primary transition-colors hover:bg-primary hover:text-primary-ink disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
-            data-testid="confirm-add-secondary-repo"
-          >
-            Add repository
-          </button>
-        </div>
-      )}
-
-      {editable && draft === null && (
-        <button
-          type="button"
-          onClick={() =>
-            setDraft({ path: "", baseBranch: "", valid: null, readOnly: false })
-          }
-          disabled={busy}
-          className="flex items-center gap-1 self-start rounded-md border border-dashed border-line-strong bg-transparent px-2.5 py-1.5 font-medium text-text-3 transition-colors hover:border-primary hover:text-primary disabled:opacity-40"
-          style={{ fontSize: "11.5px" }}
-          data-testid="add-secondary-repo"
-        >
-          <Plus size={12} />
-          Add repository
-        </button>
-      )}
+              Add repository
+            </Button>
+          </div>
+        )}
+      </Section>
 
       {error && (
-        <div
-          className="rounded border border-st-failed/30 bg-st-failed/14 px-2 py-1.5 text-st-failed"
-          style={{ fontSize: "10.5px" }}
-          data-testid="run-repos-error"
-        >
-          {error}
+        <div data-testid="run-repos-error">
+          <Banner tone="failed" title="Not changed" text={error} />
         </div>
       )}
 
       {editable && (
-        <p className="text-text-3" style={{ fontSize: "10px" }} data-testid="spawn-visibility-note">
-          Applies to nodes launched after this change; running nodes keep their
-          current context.
-        </p>
+        // Editing here is spawn-time visible: a change touches nodes launched after it.
+        <span className="d-sr" data-testid="spawn-visibility-note">
+          Applies to nodes launched after this change; running nodes keep their current context.
+        </span>
       )}
     </div>
   );

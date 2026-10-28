@@ -363,7 +363,6 @@ describe("the « ⋯ » menus of the Trigger and Pipeline rows", () => {
           trigger={trigger}
           isSelected={false}
           rowSelected={false}
-          allRepos={[]}
           onSelect={onSelect}
           onSelectControl={vi.fn()}
           onDelete={onDelete}
@@ -415,7 +414,9 @@ describe("the « ⋯ » menus of the Trigger and Pipeline rows", () => {
     expect(onDelete).toHaveBeenCalledTimes(1);
 
     rerender(
-      shell(<LibraryRow name="Lib" nodeCount={1} showDuplicate={false} onDelete={vi.fn()} deleteTitle="Delete" />),
+      shell(
+        <LibraryRow name="Lib" nodeCount={1} showDuplicate={false} onOpen={vi.fn()} onDelete={vi.fn()} deleteTitle="Delete" />,
+      ),
     );
     expect(screen.queryByTestId("pipeline-row-menu")).toBeNull();
   });

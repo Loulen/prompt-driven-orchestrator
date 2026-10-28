@@ -11,6 +11,11 @@ export type PipelineListEntry = { id: string, name: string, scope: "instance", p
  */
 prompt_required: boolean, 
 /**
+ * Why its file does not parse, when it does not: the row marks it
+ * invalid. Absent on a valid pipeline.
+ */
+invalid?: string, 
+/**
  * The entity attributes the extensions stamped on it (CONTEXT.md §
  * *Extensions*); absent when none.
  */

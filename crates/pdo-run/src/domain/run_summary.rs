@@ -5,22 +5,24 @@
 //!
 //! It holds the fields of `GET /runs` and of `GET /runs/{id}/children`, the
 //! parent of a Run, its primary repository and the Projet recorded at its
-//! launch (ADR-0087), which the access checks read, and its activity, which
-//! the date filter of the lists reads.
+//! launch (ADR-0087), which the access checks read, its activity, which
+//! the date filter of the lists reads, and the status of each of its working
+//! nodes, which the row of the list draws as its progress.
 
 use pdo_kernel::Actor;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::domain::child_awaiting::{child_awaiting_reason, AwaitingTree, ChildWait};
 use crate::domain::event::Event;
 use crate::domain::projection::{is_stalled, project};
 use crate::domain::run_activity::{activity_of, ActivitySpan};
-use crate::domain::state::{RunState, RunStatus};
+use crate::domain::state::{NodeStatus, RunState, RunStatus};
 
 /// The shape of [`RunSummary`]: the Résumés written under another version
 /// are rebuilt from the event log at boot. Bump it with any change of the
 /// fields or of how they are derived.
-pub const SUMMARY_VERSION: i64 = 4;
+pub const SUMMARY_VERSION: i64 = 5;
 
 /// One Run, as the lists show it and the access checks read it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,6 +64,39 @@ pub struct RunSummary {
     /// Its spans of activity, oldest first (CONTEXT.md « Activité d'un Run »).
     #[serde(default)]
     pub activity: Vec<ActivitySpan>,
+    /// Its working nodes (agent, script), in the pipeline's order, with their
+    /// status: the progress the row of the list draws.
+    #[serde(default)]
+    pub nodes: Vec<NodeProgress>,
+}
+
+/// One working node of a Run, as the row of the list draws it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct NodeProgress {
+    pub id: String,
+    /// Its name in the pipeline, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    /// `pending` until it has started.
+    pub status: NodeStatus,
+}
+
+/// The working nodes of `run` (agent, script), in its pipeline's order.
+fn nodes_of(run: &RunState) -> Vec<NodeProgress> {
+    run.node_defs
+        .iter()
+        .filter(|def| def.node_type == "agent" || def.node_type == "script")
+        .map(|def| NodeProgress {
+            id: def.id.clone(),
+            name: def.name.clone(),
+            status: run
+                .nodes
+                .get(&def.id)
+                .map_or(NodeStatus::Pending, |node| node.status.clone()),
+        })
+        .collect()
 }
 
 impl RunSummary {
@@ -90,6 +125,7 @@ impl RunSummary {
             project_id: run.project_id.clone(),
             last_activity_at: activity.last().map(|span| span.to.clone()),
             activity,
+            nodes: nodes_of(run),
         }
     }
 }
@@ -189,6 +225,42 @@ mod tests {
         assert_eq!(summary.target_repo.as_deref(), Some("/repo"));
         assert_eq!(summary.project_id, None);
         assert!(!summary.stalled);
+    }
+
+    #[test]
+    fn a_summary_carries_the_working_nodes_in_order_with_their_status() {
+        let mut start = started("r", None);
+        start.payload.as_mut().unwrap()["node_defs"] = serde_json::json!([
+            { "id": "start", "node_type": "start", "view_x": null, "view_y": null, "inputs": [], "outputs": [] },
+            { "id": "impl", "name": "Implement", "node_type": "agent", "view_x": null, "view_y": null, "inputs": [], "outputs": [] },
+            { "id": "check", "node_type": "script", "view_x": null, "view_y": null, "inputs": [], "outputs": [] },
+            { "id": "end", "node_type": "end", "view_x": null, "view_y": null, "inputs": [], "outputs": [] },
+        ]);
+        let summary = summarize(&[
+            start,
+            ev(
+                "r",
+                EventKind::NodeStarted,
+                Some("impl"),
+                serde_json::json!({}),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(
+            summary.nodes,
+            vec![
+                NodeProgress {
+                    id: "impl".into(),
+                    name: Some("Implement".into()),
+                    status: NodeStatus::Running,
+                },
+                NodeProgress {
+                    id: "check".into(),
+                    name: None,
+                    status: NodeStatus::Pending,
+                },
+            ]
+        );
     }
 
     #[test]

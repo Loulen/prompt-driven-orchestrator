@@ -64,31 +64,42 @@ describe("TriggersListPanel", () => {
 
   it("shows an inviting empty state with an entry point when there are no triggers", () => {
     renderPanel([]);
-    expect(screen.getByText(/no triggers yet/i)).toBeInTheDocument();
+    expect(screen.getByText("No triggers")).toBeInTheDocument();
+    // Two words and a button: no sentence of explanation.
+    expect(screen.queryByText(/schedule/i)).toBeNull();
     // Header + empty-state call-to-action both offer "New Trigger".
     expect(screen.getAllByRole("button", { name: /new trigger/i }).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("renders a trigger row with name, pipeline and a human schedule", () => {
-    renderPanel([trigger()]);
+  it("renders a trigger row with name, pipeline, its next fire and its schedule in words", () => {
+    renderPanel([trigger({ next_fire_at: new Date(Date.now() + 5 * 60_000 + 10_000).toISOString() })]);
     expect(screen.getByText("Nightly audit")).toBeInTheDocument();
     expect(screen.getByText("Auditor")).toBeInTheDocument();
-    expect(screen.getByText("daily at 09:00")).toBeInTheDocument();
+    const next = screen.getByTestId("trigger-schedule");
+    expect(next).toHaveTextContent("5m");
+    expect(next.getAttribute("title")).toContain("daily at 09:00");
   });
 
-  it("renders a status dot reflecting the last outcome", () => {
-    renderPanel([trigger({ last_outcome: "fired" })]);
-    expect(document.querySelector(".bg-st-done")).toBeInTheDocument();
-  });
-
-  it("shows an error dot when the last outcome was an error", () => {
+  it("draws the last outcome as its status icon", () => {
+    const { unmount } = renderPanel([trigger({ last_outcome: "fired" })]);
+    expect(screen.getByTestId("trigger-status-dot")).toHaveAttribute("data-outcome", "fired");
+    expect(within(screen.getByTestId("trigger-status-dot")).getByRole("img")).toHaveAttribute(
+      "stroke",
+      "var(--color-st-done)",
+    );
+    unmount();
     renderPanel([trigger({ last_outcome: "error" })]);
-    expect(document.querySelector(".bg-st-failed")).toBeInTheDocument();
+    expect(within(screen.getByTestId("trigger-status-dot")).getByRole("img")).toHaveAttribute(
+      "stroke",
+      "var(--color-st-failed)",
+    );
   });
 
-  it("renders a disabled trigger visibly inactive (greyed)", () => {
-    const { container } = renderPanel([trigger({ enabled: false })]);
-    expect(container.querySelector(".opacity-60")).toBeInTheDocument();
+  it("renders a disabled trigger visibly inactive: switch off, next fire « off »", () => {
+    renderPanel([trigger({ enabled: false })]);
+    expect(screen.getByTestId("trigger-row")).toHaveAttribute("data-off", "true");
+    expect(screen.getByTestId("trigger-toggle")).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("trigger-schedule")).toHaveTextContent("off");
   });
 
   it("toggles a trigger off via the enable/disable toggle without selecting it", () => {
@@ -124,12 +135,14 @@ describe("TriggersListPanel", () => {
     expect(deleteTrigger).toHaveBeenCalledWith("trg-1");
   });
 
-  it("shows a status tooltip with the last run date and result on the dot", () => {
+  it("shows a status tooltip with the last run date and result on the mark", () => {
     renderPanel([
       trigger({ last_outcome: "fired", last_fired_at: "2026-06-06T09:00:00.000Z" }),
     ]);
-    const dot = screen.getByTestId("trigger-status-dot");
-    expect(dot).toHaveAttribute("title", expect.stringContaining("fired"));
+    expect(screen.getByRole("checkbox", { name: "Select Nightly audit" })).toHaveAttribute(
+      "title",
+      expect.stringContaining("fired"),
+    );
   });
 });
 
@@ -159,7 +172,7 @@ describe("TriggersListPanel grouping by repo (#258)", () => {
     expect(labels).toEqual(["alpha", "zebra"]);
   });
 
-  it("groups a null-target trigger under its resolved repo, with no per-row badge", () => {
+  it("groups a null-target trigger under its resolved repo", () => {
     renderPanel([
       trigger({ id: "t1", name: "A", target_repo: "/repos/alpha", effective_repo: "/repos/alpha" }),
       trigger({ id: "tn", name: "N", target_repo: undefined, effective_repo: "/repos/root" }),
@@ -168,24 +181,19 @@ describe("TriggersListPanel grouping by repo (#258)", () => {
       .getAllByTestId("trigger-repo-label")
       .map((el) => el.textContent);
     expect(labels).toEqual(["alpha", "root"]); // resolved repo, not a catch-all bucket
-
-    // The null-target row carries no repo badge (raw target_repo untouched);
-    // the badged row shows the full path on its badge's title.
-    const nRow = screen.getByText("N").closest('[data-testid="trigger-row"]') as HTMLElement;
-    expect(within(nRow).queryByTitle("/repos/root")).not.toBeInTheDocument();
-    const aRow = screen.getByText("A").closest('[data-testid="trigger-row"]') as HTMLElement;
-    expect(within(aRow).getByTitle("/repos/alpha")).toBeInTheDocument();
   });
 
-  it("disambiguates the per-row badge label on a basename collision", () => {
+  it("disambiguates the group label on a basename collision, and folds a group", () => {
     renderPanel([
       trigger({ id: "c1", name: "C1", target_repo: "/x/svc", effective_repo: "/x/svc" }),
       trigger({ id: "c2", name: "C2", target_repo: "/y/svc", effective_repo: "/y/svc" }),
     ]);
-    const c1Row = screen.getByText("C1").closest('[data-testid="trigger-row"]') as HTMLElement;
-    // Badge shows the minimal disambiguating suffix, not bare "svc".
-    expect(within(c1Row).getByText("x/svc")).toBeInTheDocument();
-    expect(within(c1Row).queryByText("svc")).not.toBeInTheDocument();
+    const labels = screen.getAllByTestId("trigger-repo-label").map((el) => el.textContent);
+    expect(labels).toEqual(["x/svc", "y/svc"]);
+    const [first] = screen.getAllByTestId("trigger-repo-group");
+    fireEvent.click(within(first).getByTestId("trigger-group-chevron"));
+    expect(screen.queryByText("C1")).not.toBeInTheDocument();
+    expect(within(first).getByTestId("trigger-group-count")).toHaveTextContent("1");
   });
 });
 

@@ -124,7 +124,7 @@ test("selecting a running node shows initial prompt with ## Inputs", async ({
 
   // The Initial Prompt section is collapsed by default (post-refonte
   // NodeDetailPanel.PromptSection) — expand it to reveal the prompt block.
-  const promptToggle = page.getByTestId("prompt-toggle");
+  const promptToggle = page.getByTestId("prompt-section").getByRole("button", { name: /Prompt/ });
   await expect(promptToggle).toBeVisible({ timeout: 5_000 });
   await promptToggle.click();
 

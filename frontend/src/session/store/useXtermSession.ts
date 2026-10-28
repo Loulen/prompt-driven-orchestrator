@@ -25,7 +25,6 @@ import {
   type FrozenPane,
   type PaneMode,
 } from "../model/terminalPane";
-import { useTheme } from "../../hooks/useTheme";
 import { openProbedSocket, type ProbedSocket } from "../../shared/http/probedSocket";
 import { wirePointerAndKeys } from "./xtermPointer";
 
@@ -65,10 +64,6 @@ export function useXtermSession(
   frozen: FrozenPane | null,
 ): XtermSession {
   const terminalRef = useRef<Terminal | null>(null);
-  // #759: the live theme. Used to build the palette at mount and to repaint an
-  // already-open terminal when the theme switches (xterm paints on a canvas, so
-  // it cannot follow a CSS token on its own).
-  const { resolved } = useTheme();
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<ProbedSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -130,7 +125,8 @@ export function useXtermSession(
       disableStdin: isFrozen,
       fontSize: BASE_FONT_SIZE,
       fontFamily: "'Geist Mono', monospace",
-      theme: terminalTheme(resolved),
+      // An always-dark screen, whatever the theme of the interface.
+      theme: terminalTheme(),
       allowTransparency: false,
       scrollback: 5000,
       // #772: on macOS Option+drag is xterm's "force selection while the pty
@@ -347,18 +343,9 @@ export function useXtermSession(
       fitAddonRef.current = null;
       wsRef.current = null;
     };
-    // `resolved` is deliberately NOT a dependency: recreating the Terminal on a
-    // theme switch would drop the scrollback and the attached socket. The effect
-    // below repaints the live instance instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, mode, frozen]);
 
-  // #759: repaint an already-open terminal when the theme switches.
-  useEffect(() => {
-    const term = terminalRef.current;
-    // `options` is absent when the Terminal is a test double — nothing to repaint.
-    if (term?.options) term.options.theme = terminalTheme(resolved);
-  }, [resolved]);
 
   return {
     connected,

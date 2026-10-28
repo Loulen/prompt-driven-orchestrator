@@ -214,10 +214,10 @@ test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, 
   const banner = page.getByTestId("interrupted-banner");
   await expect(banner).toBeVisible({ timeout: 8_000 });
   await expect(banner).toContainText("Session died");
-  await expect(banner).toContainText("the work is presumed intact");
+  await expect(banner).toContainText("work presumed intact");
   await expect(page.getByTestId("interrupted-reopen-btn")).toBeVisible();
   await expect(page.getByTestId("play-retry-btn")).toBeVisible();
-  await expect(page.getByTestId("play-retry-btn")).toContainText("Play");
+  await expect(page.getByTestId("play-retry-btn")).toHaveAccessibleName("Retry");
   await expect(page.getByTestId("mark-complete-btn")).toBeVisible();
   await expect(page.getByTestId("terminal-minimized")).toBeVisible();
   await expect(page.getByTestId("tmux-terminal")).toHaveCount(0);

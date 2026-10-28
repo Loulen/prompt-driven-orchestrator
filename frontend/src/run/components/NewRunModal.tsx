@@ -142,6 +142,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
               onValidityChange={handleProvisioningValidity}
               gitRef={sourceBranch || "HEAD"}
               projectId={launchProject?.id ?? null}
+              home={form.settings?.home ?? null}
             />
           )}
         </FormSection>

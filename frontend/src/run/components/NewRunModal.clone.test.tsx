@@ -13,6 +13,7 @@ import { legacyScope } from "../../test/legacy";
 import type { CloneJob } from "../../shared/generated/CloneJob";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { Project } from "../../workspace/model/project";
+import { fetchPipelines } from "../../pipeline/api/pipelines";
 
 const PIPELINE: PipelineListEntry = {
   id: "solo",
@@ -171,6 +172,24 @@ describe("New Run on a URL (CORE-97)", () => {
     fireEvent.change(repoField(), { target: { value: URL_ } });
     await screen.findByTestId("remote-repo-hint");
     expect(screen.getByTestId("pipeline-select").getAttribute("title")).not.toContain("solo.yaml");
+  });
+
+  it("hides the Vars of the Pipeline chosen on a repository once the field holds a URL", async () => {
+    vi.mocked(fetchPipelines).mockImplementation(async () => [
+      { ...PIPELINE, variables: { test_command: { var_type: "string", default: "pnpm test" } } },
+    ]);
+    try {
+      renderModal();
+      fireEvent.change(repoField(), { target: { value: CLONE } });
+      await waitFor(() => expect(screen.getByTestId("variable-overrides")).toBeInTheDocument(), {
+        timeout: 3000,
+      });
+      fireEvent.change(repoField(), { target: { value: URL_ } });
+      await screen.findByTestId("remote-repo-hint");
+      expect(screen.queryByTestId("variable-overrides")).toBeNull();
+    } finally {
+      vi.mocked(fetchPipelines).mockImplementation(async () => [PIPELINE]);
+    }
   });
 
   it("clones, shows the progress, then launches the Run on the clone", async () => {

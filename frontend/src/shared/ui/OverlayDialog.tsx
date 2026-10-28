@@ -9,7 +9,7 @@ import { FOCUSABLE } from "./kit/layer";
  * surfaces open over while it stays mounted (Settings from New Run, #691; a
  * guided tour aiming into it), which the top layer of a modal dialog would
  * cover. Mount it to open it. The focus goes to the control marked
- * `data-autofocus`, Tab keeps it inside, and it comes back to the opener; Escape (unless a layer
+ * `data-autofocus` (else the body's first control), Tab keeps it inside, and it comes back to the opener; Escape (unless a layer
  * inside took it) and a click on the backdrop close it; Ctrl+Enter submits.
  */
 export default function OverlayDialog({
@@ -48,7 +48,13 @@ export default function OverlayDialog({
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null;
     const d = ref.current;
-    (d?.querySelector<HTMLElement>("[data-autofocus]") ?? d)?.focus({ preventScroll: true });
+    // A disabled autofocus target (the Run name while auto-named) takes no
+    // focus: the body's first control does, so typing never lands on the opener.
+    const target =
+      d?.querySelector<HTMLElement>("[data-autofocus]:not(:disabled)") ??
+      d?.querySelector<HTMLElement>(`.d-frame__body :is(${FOCUSABLE})`) ??
+      d;
+    target?.focus({ preventScroll: true });
     return () => opener?.focus?.({ preventScroll: true });
   }, []);
   return (

@@ -16,6 +16,8 @@ import {
   SUBTITLE,
 } from "../model/provisioningCopy";
 import InfoHint from "./InfoHint";
+import MidPath from "../../shared/ui/MidPath";
+import { tildify } from "../../lib/homePath";
 import ProvisioningResolvedPlan from "./ProvisioningResolvedPlan";
 
 export default function ProvisioningRulesEditor({
@@ -33,6 +35,7 @@ export default function ProvisioningRulesEditor({
   defaultExpanded = false,
   leading,
   trailing,
+  home = null,
 }: {
   level: ProvisioningScope;
   repository: string;
@@ -55,6 +58,8 @@ export default function ProvisioningRulesEditor({
   leading?: ReactNode;
   /** Rendered at the bottom of the expanded body (e.g. a Save row). */
   trailing?: ReactNode;
+  /** The daemon's home, to read the header's repository as `~/code/…`. */
+  home?: string | null;
 }) {
   const [plan, setPlan] = useState<ProvisioningPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -156,13 +161,12 @@ export default function ProvisioningRulesEditor({
   const blocked = (visiblePlan?.conflicts.length ?? 0) > 0 || !!visibleError;
   const open = expanded || blocked;
 
-  // The header marker; dropped when the expanded body carries its own
-  // "Resolve against" field (`leading`), which would repeat it just below.
-  const marker = frozenAt
-    ? `🔒 frozen at ${frozenAt} · reused on restart`
-    : open && leading
-      ? null
-      : `Resolve against ${repository || "a repository"}`;
+  // The header marker: the repository the rules resolve against, cut in its
+  // middle so a deep path never widens the row. Dropped when the expanded body
+  // carries its own "Resolve against" field (`leading`), which would repeat it
+  // just below, and when no repository is known yet.
+  const frozenMarker = frozenAt ? `🔒 frozen at ${frozenAt} · reused on restart` : null;
+  const resolvedAgainst = !frozenAt && !(open && leading) && repository ? repository : null;
 
   const summary = useMemo(() => {
     let inheritedCount = 0;
@@ -261,9 +265,18 @@ export default function ProvisioningRulesEditor({
           <span className="ln-faint ln-ellipsis ln-prov__sum" data-testid="provisioning-summary">
             {summary}
           </span>
-          {marker && (
-            <span className="ln-faint ln-ellipsis ln-rowend ln-prov__marker" title={marker}>
-              {marker}
+          {frozenMarker && (
+            <span className="ln-faint ln-ellipsis ln-prov__marker" title={frozenMarker}>
+              {frozenMarker}
+            </span>
+          )}
+          {resolvedAgainst && (
+            <span
+              className="ln-prov__marker"
+              title={`Resolve against ${resolvedAgainst}`}
+              data-testid="provisioning-against"
+            >
+              <MidPath path={tildify(resolvedAgainst, home)} title={false} />
             </span>
           )}
         </div>

@@ -121,7 +121,9 @@ export default function TriggerDetailPanel({
       : []),
     ...(trigger.source_branch ? [{ k: "Branch", v: trigger.source_branch, mono: true }] : []),
     { k: "Overlap", v: <span data-testid="trigger-detail-overlap">{overlapLabel(trigger)}</span>, tip: overlapLabel(trigger) },
-    ...(trigger.sandbox ? [{ k: "Sandbox", v: trigger.sandbox, mono: true }] : []),
+    trigger.sandbox
+      ? { k: "Sandbox", v: trigger.sandbox, mono: true }
+      : { k: "Sandbox", v: <span className="ln-faint">Instance default</span>, tip: "Instance default" },
   ];
 
   return (

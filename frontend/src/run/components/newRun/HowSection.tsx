@@ -54,7 +54,9 @@ export default function HowSection({ form, onManageStagingProfiles }: { form: Ne
           showLabel={false}
           testId="run-agent-control"
         />
-        <div className="d-sr" aria-hidden>
+        {/* The bare harness value an edited Trigger round-trips: kept mounted,
+            out of sight, of the tab order and of the accessibility tree. */}
+        <div className="d-sr" aria-hidden inert>
           <HarnessSelect
             id="harness-select"
             data-testid="harness-select"

@@ -506,6 +506,31 @@ describe("ProvisioningRulesEditor", () => {
       expect(screen.getByLabelText("Symlink patterns")).toHaveFocus();
     });
 
+    it("shows the repository it resolves against as a path cut in its middle, under ~", () => {
+      render(
+        <ProvisioningRulesEditor
+          level="run"
+          repository="/home/me/work/clients/acme/platform/services/billing-api"
+          rules={EMPTY}
+          onChange={() => {}}
+          home="/home/me"
+        />,
+      );
+
+      const marker = screen.getByTestId("provisioning-against");
+      expect(marker).toHaveAttribute(
+        "title",
+        "Resolve against /home/me/work/clients/acme/platform/services/billing-api",
+      );
+      expect(marker.querySelector(".ln-path__head")).toHaveTextContent("~/work/clients/acme/platform/services");
+      expect(marker.querySelector(".ln-path__tail")).toHaveTextContent("/billing-api");
+    });
+
+    it("shows no marker while no repository is known", () => {
+      render(<ProvisioningRulesEditor level="run" repository="" rules={EMPTY} onChange={() => {}} />);
+      expect(screen.queryByTestId("provisioning-against")).not.toBeInTheDocument();
+    });
+
     it("drops the header 'Resolve against' marker while the body shows its own field", async () => {
       render(
         <ProvisioningRulesEditor
@@ -517,10 +542,10 @@ describe("ProvisioningRulesEditor", () => {
         />,
       );
 
-      expect(screen.getByText("Resolve against /repo")).toBeInTheDocument();
+      expect(screen.getByTitle("Resolve against /repo")).toBeInTheDocument();
       await userEvent.click(toggle());
       expect(screen.getByText("leading slot")).toBeInTheDocument();
-      expect(screen.queryByText("Resolve against /repo")).not.toBeInTheDocument();
+      expect(screen.queryByTitle("Resolve against /repo")).not.toBeInTheDocument();
     });
 
     it("explains each mode and the level strip in keyboard-reachable tooltips", async () => {

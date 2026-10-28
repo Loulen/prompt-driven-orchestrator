@@ -10,11 +10,14 @@ export default function PersistedProvisioningEditor({
   projectId,
   initialRepository = "",
   defaultExpanded = false,
+  home = null,
 }: {
   scope: "instance" | "project";
   projectId?: string;
   initialRepository?: string;
   defaultExpanded?: boolean;
+  /** The daemon's home, to read the repository as `~/code/…`. */
+  home?: string | null;
 }) {
   const [repository, setRepository] = useState(initialRepository);
   const [rules, setRules] = useState<ProvisioningRules>(EMPTY_PROVISIONING_RULES);
@@ -68,6 +71,7 @@ export default function PersistedProvisioningEditor({
       onValidityChange={setValid}
       projectId={scope === "project" ? (projectId ?? null) : null}
       defaultExpanded={defaultExpanded}
+      home={home}
       leading={
         <label className="ln-line ln-prov__against">
           <span className="ln-faint">Resolve against</span>

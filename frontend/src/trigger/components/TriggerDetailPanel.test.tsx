@@ -160,6 +160,15 @@ describe("TriggerDetailPanel", () => {
     expect(screen.getByTestId("trigger-detail-overlap")).toHaveTextContent(/unlimited/i);
   });
 
+  it("shows the sandbox, or the instance default when the trigger inherits it", () => {
+    const { unmount } = render(<TriggerDetailPanel trigger={trigger({ sandbox: undefined })} onSelectRun={noop} />);
+    expect(screen.getByText("Sandbox")).toBeInTheDocument();
+    expect(screen.getByText("Instance default")).toBeInTheDocument();
+    unmount();
+    render(<TriggerDetailPanel trigger={trigger({ sandbox: "minimal" })} onSelectRun={noop} />);
+    expect(screen.getByText("minimal")).toBeInTheDocument();
+  });
+
   it("shows skip (default) for a skip trigger (#239 regression)", () => {
     render(
       <TriggerDetailPanel

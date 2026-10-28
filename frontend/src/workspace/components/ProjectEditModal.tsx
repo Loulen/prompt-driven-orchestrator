@@ -320,6 +320,7 @@ export default function ProjectEditModal({
               scope="project"
               projectId={initialProject.id}
               initialRepository={initialProject.members[0] ?? ""}
+              home={home}
             />
           )}
         </div>

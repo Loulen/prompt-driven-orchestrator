@@ -539,8 +539,9 @@
     font-weight: var(--w-medium);
   }
   .ln-pp__pop {
+    /* As wide as the field (the menu's anchor width), never under 360 px. */
     min-width: 360px;
-    max-width: min(560px, calc(100vw / var(--app-zoom, 1) - 16px));
+    max-width: calc(100vw / var(--app-zoom, 1) - 16px);
     padding: 2px;
     border-color: var(--line);
     border-radius: var(--radius-ui);
@@ -1095,6 +1096,24 @@
   .ln-prov__marker {
     font-size: var(--fs-xs);
   }
+  .ln-prov__sum {
+    flex: none;
+  }
+  /* Shrinks before anything else on the row: a deep repository is cut in its
+     middle, never pushes the row past the form. */
+  .ln-prov__marker {
+    display: inline-flex;
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-left: auto;
+    color: var(--text-3);
+  }
+  .ln-prov__marker > .ln-path {
+    font-size: var(--fs-xs);
+  }
+  .ln-prov__marker > .ln-path > span {
+    color: var(--text-3);
+  }
   .ln-prov[data-open] > [data-testid="provisioning-body"] {
     margin: 2px 0 var(--g-2);
     border: 1px solid var(--line);
@@ -1251,14 +1270,20 @@
   .tg-fires th:nth-child(3) {
     width: 22px;
   }
+  /* Wide enough for « Oct 28, 10:12 PM », the longest short date and time. */
   .tg-fires th:nth-child(2) {
-    width: 108px;
+    width: 128px;
   }
   .tg-fires th:nth-child(5) {
     width: 72px;
   }
   .tg-fires th:nth-child(6) {
-    width: 36px;
+    width: 48px;
+  }
+  /* The last column keeps off the panel's edge. */
+  .tg-fires th:last-child,
+  .tg-fires td:last-child {
+    padding-right: var(--g-4);
   }
   .tg-fires td {
     height: var(--h-row);

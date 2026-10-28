@@ -191,7 +191,7 @@ export default function PipelineSelect({
         rows.map(renderRow)
       ) : (
         <div data-testid={`pipeline-select-section-${key}-empty`} className="d-pop__empty ln-pp__empty">
-          {query ? `No match for “${query}”` : empty}
+          {query ? "No match" : empty}
         </div>
       )}
     </DropdownMenuGroup>
@@ -267,13 +267,13 @@ export default function PipelineSelect({
                 "project",
                 `Project pipelines · ${project.name}`,
                 shown.project,
-                `No pipeline validated for ${project.name} yet`,
+                "No pipeline",
               )}
             {renderSection(
               "global",
               "Global pipelines",
               shown.global,
-              "No pipeline validated for all projects",
+              "No pipeline",
             )}
           </>
         )}

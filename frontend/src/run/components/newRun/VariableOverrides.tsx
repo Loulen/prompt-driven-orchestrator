@@ -1,10 +1,14 @@
 import FormRow from "../../../shared/ui/FormRow";
 import type { NewRunForm } from "../../store/newRun/useNewRunForm";
 
-/** The Vars row: one line per variable of the pipeline (name, value, type). Nothing without variables. */
+/**
+ * The Vars row: one line per variable of the pipeline (name, value, type).
+ * Nothing without variables, nor while the Pipeline row offers no pipeline
+ * (no valid repository yet, a URL before its clone).
+ */
 export default function VariableOverrides({ form }: { form: NewRunForm }) {
-  const { overrides, variableEntries, handleOverrideChange } = form;
-  if (variableEntries.length === 0) return null;
+  const { overrides, variableEntries, handleOverrideChange, repoValid } = form;
+  if (!repoValid || variableEntries.length === 0) return null;
   return (
     <FormRow label="Vars" top title="Pipeline variables: a value other than the default overrides it">
       <div className="ln-vars" data-testid="variable-overrides">

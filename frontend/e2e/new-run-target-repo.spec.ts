@@ -7,7 +7,8 @@ import { execFileSync } from "node:child_process";
 // Layer 4 (e2e) per ADR 0004 — CORE-108: in New Run, a Projet's default repository
 // with a 150-character path. The path is cut in its middle (its last segment
 // whole), the « default » mark and the loupe sit beside it, never over it. The
-// modal has one width (480px), its narrowest. jsdom computes no layout, so this
+// modal has one width (480px), its narrowest. The collapsed Provisioning row
+// names it the same way, inside the form. jsdom computes no layout, so this
 // can only be pinned here.
 
 const PREFIX = "e2e-target-repo-";
@@ -77,15 +78,20 @@ async function expectSideBySide(page: Page, last: string, badge: boolean) {
       true,
     );
   expect(await tail.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
-  const t = await box(tail);
+  // Retried: the instance settings may land after the modal opened, grow the
+  // form and bring its scrollbar, which narrows the row between two reads.
+  await expect(async () => {
+    const t = await box(tail);
+    const l = await box(loupe);
+    if (badge) {
+      const b = await box(page.getByTestId("project-default-badge"));
+      expect(t.x + t.width).toBeLessThanOrEqual(b.x + 0.5);
+      expect(b.x + b.width).toBeLessThanOrEqual(l.x + 0.5);
+    } else {
+      expect(t.x + t.width).toBeLessThanOrEqual(l.x + 0.5);
+    }
+  }).toPass({ timeout: 5_000 });
   const l = await box(loupe);
-  if (badge) {
-    const b = await box(page.getByTestId("project-default-badge"));
-    expect(t.x + t.width).toBeLessThanOrEqual(b.x + 0.5);
-    expect(b.x + b.width).toBeLessThanOrEqual(l.x + 0.5);
-  } else {
-    expect(t.x + t.width).toBeLessThanOrEqual(l.x + 0.5);
-  }
   // The loupe takes the click: nothing lies over it.
   const hit = await page.evaluate(
     ({ x, y }) =>
@@ -126,6 +132,19 @@ test("a deep default path beside its mark, and another repository without it", a
     "title",
     DEEP,
   );
+
+  // The collapsed Provisioning row names the same repository, cut in its
+  // middle: it never widens the form (no horizontal scroll).
+  const against = page.getByTestId("provisioning-against");
+  await expect(against).toHaveAttribute("title", `Resolve against ${DEEP}`);
+  await expect(against.locator(".ln-path__tail")).toHaveText(`/${LAST}`);
+  const body = page.getByTestId("new-run-modal").locator(".d-frame__body");
+  expect(await body.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+  await expect(async () => {
+    const row = await box(against);
+    const frame = await box(body);
+    expect(row.x + row.width).toBeLessThanOrEqual(frame.x + frame.width + 0.5);
+  }).toPass({ timeout: 5_000 });
 
   // Another repository: no mark, the path takes its room. The list opens on
   // the chevron (a field that holds a listed repository does not on focus).

@@ -465,3 +465,4 @@
 }
 .cv-menu__item > svg { flex: none; color: var(--text-2); }
 .cv-menu__item[data-highlighted] { background: var(--hover); }
+.cv-menu__item[data-variant="destructive"], .cv-menu__item[data-variant="destructive"] > svg { color: var(--color-st-failed); }

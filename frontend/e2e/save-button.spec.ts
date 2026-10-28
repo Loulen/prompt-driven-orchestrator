@@ -82,7 +82,7 @@ test("edit triggers dirty dot, Save clears it and shows relative time", async ({
 
   // Click the node to open inspector, then edit the prompt
   await page.getByText("alpha", { exact: true }).first().click();
-  const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
+  const promptArea = page.getByTestId("node-prompt-input");
   await expect(promptArea).toBeVisible();
   await promptArea.fill("DIRTY_EDIT");
 
@@ -119,7 +119,7 @@ test("Cmd+S saves the active tab", async ({ page }) => {
   await expect(tabTitle).toBeVisible();
 
   await page.getByText("alpha", { exact: true }).first().click();
-  const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
+  const promptArea = page.getByTestId("node-prompt-input");
   await expect(promptArea).toBeVisible();
   await promptArea.fill("DIRTY_VIA_KB");
 

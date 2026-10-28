@@ -1,86 +1,96 @@
 import { Bot } from "lucide-react";
 import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
 import { initials } from "../../shared/actors/initials";
-import { firstName, participantName, presenceColor } from "../model/presence";
+import { firstName, participantName, presenceStyle } from "../model/presence";
+import "./inspect.css";
 
 /**
  * A participant of a shared draft (ADR-0088): the extension's image or the
- * initials of its name, ringed in its color; a robot for a library
- * assistant. Its name (and whether it only reads) on hover.
+ * initials of its name in its color; a robot for a library assistant; hollow
+ * when it only reads. Its name (and whether it only reads) on hover.
  */
-export function ParticipantAvatar({ participant, size = 16 }: { participant: DraftParticipant; size?: number }) {
-  const color = presenceColor(participant);
+export function ParticipantAvatar({ participant, size = "md" }: { participant: DraftParticipant; size?: "sm" | "md" }) {
   const name = participantName(participant);
   const title = participant.can_write ? name : `${name} (read only)`;
-  const style = {
-    width: size,
-    height: size,
-    fontSize: Math.max(7, Math.round(size * 0.42)),
-    boxShadow: `0 0 0 1.5px ${color}`,
-  };
-  if (participant.assistant) {
-    return (
-      <span
-        title={title}
-        aria-label={title}
-        className="grid shrink-0 place-items-center rounded-full text-surface-0"
-        style={{ ...style, background: color }}
-        data-testid="draft-participant"
-        data-assistant="true"
-      >
-        <Bot size={Math.max(8, Math.round(size * 0.62))} />
-      </span>
-    );
-  }
-  return participant.display?.avatar_url ? (
-    <img
-      src={participant.display.avatar_url}
-      alt={name}
-      title={title}
-      className="shrink-0 rounded-full object-cover"
-      style={style}
-      data-testid="draft-participant"
-    />
-  ) : (
+  return (
     <span
       title={title}
       aria-label={title}
-      className="grid shrink-0 place-items-center rounded-full font-semibold text-surface-0"
-      style={{ ...style, background: color }}
+      role="img"
+      className="pi-av"
+      style={presenceStyle(participant)}
+      data-size={size}
+      data-ro={participant.can_write ? undefined : true}
       data-testid="draft-participant"
+      data-assistant={participant.assistant ? "true" : undefined}
     >
-      {initials(name)}
-    </span>
-  );
-}
-
-/** The participants side by side, overlapping a little. */
-export function ParticipantStack({ participants, size = 16 }: { participants: DraftParticipant[]; size?: number }) {
-  if (participants.length === 0) return null;
-  return (
-    <span className="flex items-center" data-testid="draft-participants">
-      {participants.map((p, i) => (
-        <span key={p.connection} style={{ marginLeft: i === 0 ? 0 : -4, zIndex: participants.length - i }}>
-          <ParticipantAvatar participant={p} size={size} />
-        </span>
-      ))}
+      {participant.assistant ? (
+        <Bot size={size === "sm" ? 9 : 11} strokeWidth={2} aria-hidden />
+      ) : participant.display?.avatar_url ? (
+        <img src={participant.display.avatar_url} alt="" />
+      ) : (
+        initials(name)
+      )}
     </span>
   );
 }
 
 /**
- * The first name of the participant who selected a canvas element, above
- * its top-left corner, in its color. No mouse cursor follows anyone: the
- * selection is what the others see.
+ * One avatar per person: someone in two sessions is still one participant,
+ * drawn as the session that writes when one does.
+ */
+function onePerPerson(participants: DraftParticipant[]): DraftParticipant[] {
+  const byPerson = new Map<string, DraftParticipant>();
+  for (const p of participants) {
+    const key = p.assistant ? `connection:${p.connection}` : JSON.stringify(p.actor);
+    const seen = byPerson.get(key);
+    if (!seen || (!seen.can_write && p.can_write)) byPerson.set(key, p);
+  }
+  return [...byPerson.values()];
+}
+
+/** The participants side by side, overlapping a little; past `max`, a count. */
+export function ParticipantStack({
+  participants,
+  size = "md",
+  max = 4,
+}: {
+  participants: DraftParticipant[];
+  size?: "sm" | "md";
+  max?: number;
+}) {
+  const people = onePerPerson(participants);
+  if (people.length === 0) return null;
+  const shown = people.slice(0, max);
+  const rest = people.slice(max);
+  return (
+    <span className="pi-stack" data-testid="draft-participants">
+      {shown.map((p) => (
+        <ParticipantAvatar key={p.connection} participant={p} size={size} />
+      ))}
+      {rest.length > 0 && (
+        <span className="pi-stack__more" title={rest.map(participantName).join(", ")}>
+          +{rest.length}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * The first name of the participant who selected a canvas element, on a tag
+ * above its top-left corner, in its color. No mouse cursor follows anyone:
+ * the selection is what the others see.
  */
 export function SelectedByLabel({ participant }: { participant: DraftParticipant }) {
   return (
     <span
-      className="pointer-events-none absolute z-[5] flex items-center gap-0.5 whitespace-nowrap rounded-t px-1 font-medium text-surface-0"
-      style={{ top: -15, left: -1.5, fontSize: "9.5px", lineHeight: "14px", background: presenceColor(participant) }}
+      className="pi-tag"
+      style={presenceStyle(participant)}
+      title={participantName(participant)}
       data-testid="selected-by"
     >
-      {participant.assistant && <Bot size={9} />}
+      {participant.assistant && <Bot size={10} strokeWidth={2} aria-hidden />}
       {firstName(participant)}
     </span>
   );

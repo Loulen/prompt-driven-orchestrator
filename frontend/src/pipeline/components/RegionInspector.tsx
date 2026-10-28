@@ -1,6 +1,8 @@
-import { RefreshCw } from "lucide-react";
+import { Layers, Repeat } from "lucide-react";
+import { Field, Section, TextInput } from "../../shared/ui/kit";
 import { useEditStore } from "../store/editStore";
-import { SectionHead, Field } from "./InspectorPrimitives";
+import { FormRow } from "./InspectorPrimitives";
+import "./inspect.css";
 
 /**
  * Inspector for a named loop region (ADR-0011 / #150). Opened by clicking a
@@ -18,6 +20,7 @@ export default function RegionInspector() {
   const activeTabId = useEditStore((s) => s.activeTabId);
   const selection = useEditStore((s) => s.selection);
   const updateRegion = useEditStore((s) => s.updateRegion);
+  const setSelection = useEditStore((s) => s.setSelection);
 
   const tab = openTabs.find((t) => t.id === activeTabId);
   if (!tab || selection.kind !== "region" || !selection.regionId) return null;
@@ -36,40 +39,33 @@ export default function RegionInspector() {
   const isVarRef = typeof region.max_iter === "string";
 
   return (
-    <aside
-      className="flex h-full flex-col bg-surface-1 overflow-y-auto"
-      data-testid="region-inspector"
-    >
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <RefreshCw size={14} className="shrink-0 text-primary" />
-        <div className="min-w-0">
-          <div
-            className="truncate font-medium text-text"
-            style={{ fontSize: "12.5px" }}
-            data-testid="region-id"
-          >
+    <aside className="ei" data-testid="region-inspector">
+      <div className="ei-bar">
+        <span className="ei-bar__title">
+          {isBounded ? <Repeat size={14} strokeWidth={1.5} aria-hidden /> : <Layers size={14} strokeWidth={1.5} aria-hidden />}
+          <span className="ei-trunc" title={region.id} data-testid="region-id">
             {region.id}
-          </div>
-          <div className="mt-0.5 text-text-3" style={{ fontSize: "10px" }}>
-            {isBounded ? "bounded loop region" : "collection region"}
-          </div>
-        </div>
+          </span>
+          <span className="ei-bar__sub">{isBounded ? "loop" : "collection"}</span>
+        </span>
+      </div>
+      <div className="ei-idline">
+        {region.id} · {isBounded ? `max ${maxIterValue === "" ? "—" : maxIterValue}` : `over ${region.over ?? "—"}`}
       </div>
 
-      <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
-        <SectionHead title="Bound" />
+      <Section title="Bound">
         {isBounded ? (
-          <Field label="max_iter">
+          <Field label="max_iter" help="Applies live to a running region, never below the lap it is on">
             {isVarRef ? (
-              <input
-                type="text"
+              <TextInput
+                mono
                 value={String(maxIterValue)}
                 onChange={(e) => updateRegion(region.id, { max_iter: e.target.value })}
-                className="w-full rounded border border-line-strong bg-surface-2 px-2 py-1 font-mono text-text outline-none focus:border-primary"
                 data-testid="region-max-iter"
               />
             ) : (
-              <input
+              <TextInput
+                mono
                 type="number"
                 min={1}
                 value={maxIterValue === "" ? "" : Number(maxIterValue)}
@@ -79,38 +75,35 @@ export default function RegionInspector() {
                     max_iter: Number.isNaN(n) ? null : n,
                   });
                 }}
-                className="w-full rounded border border-line-strong bg-surface-2 px-2 py-1 font-mono text-text outline-none focus:border-primary"
                 data-testid="region-max-iter"
               />
             )}
           </Field>
         ) : (
-          <Field label="over">
-            <span className="font-mono text-text-3" data-testid="region-over">
+          <FormRow label="over" help="One lap per item">
+            <span className="d-mono ei-trunc" data-testid="region-over" title={region.over ?? ""}>
               {region.over ?? "—"}
             </span>
-          </Field>
+          </FormRow>
         )}
-        {isBounded && (
-          <div className="text-text-3" style={{ fontSize: "10px", lineHeight: 1.6 }}>
-            Editing the bound applies <span className="text-primary">live</span> to a
-            running region — equivalent to extending the loop. It cannot be
-            lowered below the lap the region is already on.
-          </div>
-        )}
+      </Section>
 
-        <SectionHead title="Members" count={memberNames.length} />
-        <ul className="flex flex-col gap-1" data-testid="region-members">
+      <Section title="Members" count={memberNames.length} flush>
+        <div data-testid="region-members">
           {memberNames.map((name, i) => (
-            <li
+            <button
               key={`${region.members[i]}`}
-              className="rounded border border-line bg-surface-2 px-2 py-1 font-mono text-text-3"
+              type="button"
+              className="ei-row"
+              title={region.members[i]}
+              onClick={() => setSelection({ kind: "node", id: region.members[i] })}
             >
-              {name}
-            </li>
+              <span className="ei-row__name">{name}</span>
+              <span className="ei-row__meta d-mono">{region.members[i]}</span>
+            </button>
           ))}
-        </ul>
-      </div>
+        </div>
+      </Section>
     </aside>
   );
 }

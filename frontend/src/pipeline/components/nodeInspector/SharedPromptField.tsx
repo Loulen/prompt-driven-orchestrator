@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type RefObject, type TextareaHTMLAttributes } from "react";
 import type { DraftParticipant } from "../../../shared/generated/DraftParticipant";
 import { shiftCaret } from "../../model/draftDelta";
-import { firstName, presenceColor } from "../../model/presence";
+import { firstName, presenceStyle } from "../../model/presence";
 import { draftSessionOf } from "../../store/draftSessions";
 import { useEditStore } from "../../store/editStore";
 
@@ -89,7 +89,7 @@ export default function SharedPromptField({
   };
 
   return (
-    <div className="relative">
+    <div className="ei-prompt">
       <textarea
         {...rest}
         ref={(textarea) => {
@@ -119,17 +119,12 @@ export default function SharedPromptField({
       {carets.map(({ participant, top, left }) => (
         <span
           key={participant.connection}
-          className="pointer-events-none absolute"
-          style={{ top, left }}
+          className="ei-caret"
+          style={{ top, left, ...presenceStyle(participant) }}
           data-testid="remote-caret"
         >
-          <span className="absolute block" style={{ width: 1.5, height: 14, background: presenceColor(participant) }} />
-          <span
-            className="absolute whitespace-nowrap rounded-sm px-0.5 font-sans text-surface-0"
-            style={{ top: -11, left: 0, fontSize: "8.5px", lineHeight: "11px", background: presenceColor(participant) }}
-          >
-            {firstName(participant)}
-          </span>
+          <span className="ei-caret__bar" />
+          <span className="ei-caret__name">{firstName(participant)}</span>
         </span>
       ))}
     </div>

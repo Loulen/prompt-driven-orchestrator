@@ -141,8 +141,8 @@ describe("DiffTab", () => {
   it("shows an honest message for archived runs and does not fetch", () => {
     render(<Host run={makeRun({ status: "archived" })} />);
     expect(screen.getByTestId("diff-archived")).toBeInTheDocument();
-    expect(screen.getByText("Diff not preserved for archived runs")).toBeInTheDocument();
-    expect(screen.getByText("The run branch was deleted at cleanup.")).toBeInTheDocument();
+    expect(screen.getByText("Diff not preserved")).toBeInTheDocument();
+    expect(screen.getByTestId("diff-archived")).toHaveAttribute("title", "The run branch was deleted at cleanup");
     // The branch is gone at cleanup — a fetch would be a lie.
     expect(mockedFetch).not.toHaveBeenCalled();
     expect(screen.queryByText("No changes")).toBeNull();
@@ -155,7 +155,7 @@ describe("DiffTab", () => {
       expect(screen.getByTestId("diff-empty")).toBeInTheDocument();
     });
     expect(screen.getByText("No changes")).toBeInTheDocument();
-    expect(screen.getByText("Fork point and run tip are identical.")).toBeInTheDocument();
+    expect(screen.getByTestId("diff-empty")).toHaveAttribute("title", "Fork point and run tip are identical");
     expect(mockedFetch).toHaveBeenCalledWith("test-run-1");
   });
 
@@ -176,10 +176,12 @@ describe("DiffTab", () => {
 
     const rows = screen.getAllByTestId("diff-ledger-row");
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toHaveTextContent("src/a.rs");
+    // An SCM row: the file name, then its folder.
+    expect(rows[0]).toHaveTextContent("a.rssrc/");
+    expect(rows[0]).toHaveAttribute("title", "src/a.rs");
     expect(rows[0]).toHaveTextContent("+1");
     expect(rows[0]).toHaveTextContent("−1");
-    expect(rows[1]).toHaveTextContent("src/b.rs");
+    expect(rows[1]).toHaveTextContent("b.rssrc/");
     expect(rows[1]).toHaveTextContent("+2");
     expect(rows[1]).toHaveTextContent("−0");
 
@@ -200,8 +202,8 @@ describe("DiffTab", () => {
     const dels = screen.getAllByTestId("diff-line-del");
     expect(adds).toHaveLength(3);
     expect(dels).toHaveLength(1);
-    expect(adds[0].className).toContain("bg-st-done/14");
-    expect(dels[0].className).toContain("bg-st-failed/14");
+    expect(adds[0]).toHaveAttribute("data-kind", "add");
+    expect(dels[0]).toHaveAttribute("data-kind", "del");
     expect(dels[0]).toHaveTextContent("let a = 1;");
     expect(adds[0]).toHaveTextContent("const a = 2;");
     // Hunk header rendered as a thin separator.
@@ -320,7 +322,8 @@ describe("DiffTab", () => {
       expect(screen.getAllByTestId("diff-file")).toHaveLength(1);
     });
     const header = screen.getByTestId("diff-file-header");
-    expect(header).toHaveTextContent("src/DiffSection.tsx → src/DiffTab.tsx");
+    expect(header).toHaveAttribute("title", "src/DiffSection.tsx → src/DiffTab.tsx");
+    expect(header).toHaveTextContent("DiffTab.tsxsrc/DiffSection.tsx → src/");
     expect(within(header).getByTestId("diff-file-badge")).toHaveTextContent("renamed");
   });
 
@@ -346,7 +349,7 @@ describe("DiffTab", () => {
     await waitFor(() => {
       expect(screen.getByTestId("diff-large-banner")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("diff-large-banner")).toHaveTextContent("Large diff — files collapsed");
+    expect(screen.getByTestId("diff-large-banner")).toHaveAttribute("title", "Large diff: files collapsed");
     await waitFor(() => {
       expect(screen.queryAllByTestId("diff-file-body")).toHaveLength(0);
     });
@@ -426,7 +429,7 @@ describe("DiffTab", () => {
     expect(screen.getAllByTestId("diff-file")[0]).toHaveAttribute("data-collapsed", "true");
   });
 
-  it("links « Expand and comment » to the Run's Review page, fork → tip (#749)", async () => {
+  it("links the Review page, fork → tip (#749)", async () => {
     mockedFetch.mockResolvedValue(TWO_FILES);
     render(<Host run={makeRun()} />);
     await waitFor(() => {
@@ -434,7 +437,7 @@ describe("DiffTab", () => {
     });
     const link = screen.getByTestId("diff-review-button");
     expect(link.tagName).toBe("A");
-    expect(link).toHaveTextContent("Expand and comment");
+    expect(link).toHaveAccessibleName("Review page");
     // The default pair is the short canonical URL: no query.
     expect(link).toHaveAttribute("href", "/runs/test-run-1/review");
   });
@@ -446,7 +449,8 @@ describe("DiffTab", () => {
     await waitFor(() => {
       expect(screen.getByTestId("diff-error")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("diff-error")).toHaveTextContent("run branch not found");
+    expect(screen.getByTestId("diff-error")).toHaveTextContent("Diff unavailable");
+    expect(screen.getByTitle("run branch not found")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Retry"));
     await waitFor(() => {
       expect(screen.getAllByTestId("diff-file")).toHaveLength(2);

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { Bot, Loader } from "lucide-react";
+import { CircleX, Loader, Sparkles } from "lucide-react";
+import { EmptyState } from "../../shared/ui/kit";
+import "../../pipeline/components/inspect.css";
 import TmuxTerminal from "./TmuxTerminal";
 import { openLibraryAssistant } from "../api/assistant";
 
@@ -37,43 +39,33 @@ export default function AssistantPanel() {
   }, []);
 
   return (
-    <div
-      className="flex min-h-0 flex-1 flex-col"
-      style={{ fontSize: "11.5px" }}
-      data-testid="assistant-tab"
-    >
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <Bot size={14} className="text-text-3" />
-        <span className="text-text-2" style={{ fontSize: "11px" }}>
-          Pipeline Assistant
-        </span>
+    <div className="pi-session" data-testid="assistant-tab">
+      <div className="pi-session__bar">
+        <Sparkles size={14} strokeWidth={1.5} aria-hidden className="ei-ic" />
+        <span>Assistant</span>
         {session && (
-          <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+          <span className="d-mono ei-dim ei-trunc" title={session}>
             {session}
           </span>
         )}
       </div>
       {error ? (
-        <div
-          className="flex flex-1 items-center justify-center px-4 text-center text-st-failed"
-          style={{ fontSize: "11.5px" }}
-          data-testid="assistant-error"
-        >
-          Failed to start the assistant: {error}
+        <div className="pi-center" data-testid="assistant-error">
+          <EmptyState icon={CircleX}>
+            <span role="alert" title={error}>
+              Failed to start the assistant: {error}
+            </span>
+          </EmptyState>
         </div>
       ) : session ? (
         <TmuxTerminal session={session} expanded status="running" />
       ) : (
-        <div
-          className="flex flex-1 items-center justify-center gap-2 text-text-3"
-          style={{ fontSize: "11.5px" }}
-          data-testid="assistant-loading"
-        >
-          <Loader size={14} className="animate-spin" />
-          Starting the assistant…
+        <div className="pi-center" data-testid="assistant-loading">
+          <EmptyState icon={Loader} spin>
+            Starting the assistant
+          </EmptyState>
         </div>
       )}
     </div>
   );
 }
-

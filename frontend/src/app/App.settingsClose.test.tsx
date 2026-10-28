@@ -745,7 +745,7 @@ describe("App — Assistant and Info toolbar buttons are exclusive (#938)", () =
     const panel = screen.queryByTestId("pipeline-info-panel");
     const shown = panel
       ? (["assistant", "info", "yaml"] as const).find((t) =>
-          screen.getByTestId(`info-tab-${t}`).className.includes("border-primary"),
+          screen.getByTestId(`info-tab-${t}`).getAttribute("aria-selected") === "true",
         )
       : null;
     return {

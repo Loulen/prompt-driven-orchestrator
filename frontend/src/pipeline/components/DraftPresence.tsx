@@ -1,42 +1,38 @@
+import { Eye } from "lucide-react";
+import { Chip } from "../../shared/ui/kit";
 import { useActiveDraft, useOthers } from "../store/useDraftPresence";
-import { useEditStore } from "../store/editStore";
-import { lastVersionOf } from "../model/versions";
 import { ParticipantStack } from "./ParticipantAvatar";
 
 /**
- * The shared draft of the active tab, in the tab bar (ADR-0088): who else has
- * it open, and its changes since the last version. A tab that only reads
- * says so.
+ * Who else has the active tab's shared draft open (ADR-0088), at the top
+ * right of the canvas: their avatars, and whether this tab only reads or is
+ * offline. The draft's changes since the last version are on the line under
+ * the tab bar.
  */
 export default function DraftPresence() {
   const draft = useActiveDraft();
   const participants = useOthers();
-  const last = useEditStore((s) => (s.activeTabId ? lastVersionOf(s.pipelines, s.activeTabId).number : 1));
   if (!draft) return null;
-  const changes = draft.changes === 1 ? "1 change" : `${draft.changes} changes`;
+  const readOnly = draft.synced && !draft.canWrite;
+  const offline = draft.status === "offline";
+  if (!readOnly && !offline && participants.length === 0) return null;
   return (
-    <span className="flex items-center gap-2" data-testid="draft-presence">
+    <span className="pi-pres" data-testid="draft-presence">
+      {readOnly && (
+        <span data-testid="draft-read-only">
+          <Chip icon={Eye} mono title="You may read this pipeline, not change it">
+            read only
+          </Chip>
+        </span>
+      )}
+      {offline && (
+        <span data-testid="draft-offline">
+          <Chip tone="awaiting" mono title="Draft offline">
+            offline
+          </Chip>
+        </span>
+      )}
       <ParticipantStack participants={participants} />
-      {draft.synced && !draft.canWrite && (
-        <span
-          className="rounded border border-line-strong px-1 font-mono text-text-3"
-          style={{ fontSize: "10px" }}
-          data-testid="draft-read-only"
-          title="You may read this pipeline, not change it"
-        >
-          read only
-        </span>
-      )}
-      {draft.status === "offline" && (
-        <span className="font-mono text-st-await" style={{ fontSize: "10px" }} data-testid="draft-offline">
-          offline
-        </span>
-      )}
-      {draft.changes > 0 && (
-        <span className="whitespace-nowrap font-mono text-text-3" style={{ fontSize: "10px" }} data-testid="draft-changes">
-          draft · {changes} since v{last}
-        </span>
-      )}
     </span>
   );
 }

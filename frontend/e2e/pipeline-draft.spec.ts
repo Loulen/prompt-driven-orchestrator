@@ -108,7 +108,7 @@ function node(page: Page, name: string) {
 
 async function promptOf(page: Page, name: string) {
   await node(page, name).click();
-  const prompt = page.getByPlaceholder("Enter the node's role prompt...");
+  const prompt = page.getByTestId("node-prompt-input");
   await expect(prompt).toBeVisible();
   return prompt;
 }
@@ -232,8 +232,8 @@ test("a file written outside PDO lands in the draft beside its changes, with no 
   // The notice says it was kept as a version and what merged; « See vN »
   // opens that version, the file as written.
   const notice = page.getByTestId("draft-notice").last();
-  await expect(notice).toContainText(`${PIPELINE_NAME}.yaml was changed outside PDO. Kept as v`);
-  await expect(notice).toContainText("external edit and merged into the draft: new node beta");
+  await expect(notice).toContainText(`${PIPELINE_NAME}.yaml changed outside · kept as v`);
+  await expect(notice).toContainText("external edit · merged: new node beta");
   await notice.getByTestId("draft-notice-see-version").click();
   await expect(page.getByTestId("version-banner")).toContainText("external edit");
   await expect(node(page, "beta")).toBeVisible();
@@ -263,7 +263,7 @@ test("the library assistant saves into the draft, live in two browsers, signed",
     ).toHaveCount(1);
     await expect(node(browserPage, "reviewer").getByTestId("selected-by")).toHaveText("Library");
     await expect(browserPage.getByTestId("draft-notice").last()).toContainText(
-      "library assistant changed the draft: name of gamma and prompt of gamma.",
+      "library assistant · name of gamma and prompt of gamma",
     );
     await expectDirty(browserPage, true);
   }

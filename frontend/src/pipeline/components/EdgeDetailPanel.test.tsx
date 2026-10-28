@@ -179,6 +179,24 @@ describe("EdgeDetailPanel", () => {
     });
   });
 
+  it("adds a second condition without touching the value of the first", () => {
+    seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" } } });
+    render(<EdgeDetailPanel />);
+    fireEvent.click(screen.getByTestId("add-condition"));
+    expect(screen.getAllByTestId("condition-row")).toHaveLength(2);
+    const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
+    expect((edge.when as Record<string, Record<string, unknown>>).verdict).toEqual({ eq: "FAIL" });
+  });
+
+  it("moves a row onto a held field with another operator, keeping both values", () => {
+    seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" }, iter: { gte: 2 } } });
+    render(<EdgeDetailPanel />);
+    fireEvent.change(screen.getAllByTestId("field-dropdown")[1], { target: { value: "verdict" } });
+    const when = useEditStore.getState().openTabs[0].pipeline.edges[0].when as Record<string, Record<string, unknown>>;
+    expect(when.verdict.eq).toBe("FAIL");
+    expect(Object.keys(when.verdict)).toHaveLength(2);
+  });
+
   it("offers iter as a selectable condition field", () => {
     seedEdge(baseEdge);
     render(<EdgeDetailPanel />);

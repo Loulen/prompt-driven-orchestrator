@@ -1,4 +1,7 @@
+import { FileText, Inbox, Lock, Play, Square } from "lucide-react";
+import { Chip, EmptyState, Section } from "../../shared/ui/kit";
 import type { EditorNodeDef } from "../model/pipeline";
+import "./inspect.css";
 
 interface Props {
   node: EditorNodeDef;
@@ -13,54 +16,37 @@ interface Props {
 export default function MarkerInspector({ node }: Props) {
   const isStart = node.type === "start";
   const ports = isStart ? node.outputs : node.inputs;
+  const help = isStart
+    ? "Every run begins here: the prompt enters the pipeline. Structural: it cannot be edited, deleted or duplicated. Open a run to see its input."
+    : "Every run ends here: the result leaves the pipeline. Structural: it cannot be edited, deleted or duplicated. Open a run to see why it ended.";
   return (
-    <aside
-      className="marker-inspector flex h-full flex-col bg-surface-1"
-      data-testid="marker-inspector"
-    >
-      <div className="border-b border-line px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-text" style={{ fontSize: "12.5px" }}>
-            {isStart ? "Pipeline start" : "Pipeline end"}
+    <aside className="ei" data-testid="marker-inspector">
+      <div className="ei-bar">
+        <span className="ei-bar__title" title={help}>
+          {isStart ? <Play size={14} strokeWidth={1.5} aria-hidden /> : <Square size={14} strokeWidth={1.5} aria-hidden />}
+          <span>{isStart ? "Pipeline start" : "Pipeline end"}</span>
+          <span className="ei-bar__sub">{node.id}</span>
+        </span>
+        <span className="ei-bar__actions">
+          <span title="Structural marker: it cannot be edited, deleted or duplicated">
+            <Chip icon={Lock}>marker</Chip>
           </span>
-          <span
-            className="rounded border border-line bg-surface-2 px-1.5 py-0.5 text-text-3"
-            style={{ fontSize: "10px", fontWeight: 500 }}
-          >
-            marker
-          </span>
-        </div>
-        <div className="mt-0.5 font-mono text-text-3" style={{ fontSize: "10px" }}>
-          {node.id}
-        </div>
+        </span>
       </div>
-
-      <div className="flex-1 overflow-auto p-3 text-text-3" style={{ fontSize: "11.5px" }}>
-        <p>
-          {isStart
-            ? "Every run begins here: the user's prompt enters the pipeline through this marker."
-            : "Every run ends here: the pipeline's result leaves through this marker."}
-        </p>
-        <p className="mt-2 text-text-3">
-          Structural marker — it cannot be edited, deleted or duplicated.
-          {isStart ? " Open a run to see its actual input." : " Open a run to see why it ended."}
-        </p>
-
-        {ports.length > 0 && (
-          <>
-            <div className="mb-1 mt-3 font-medium text-text-3" style={{ fontSize: "11px" }}>
-              {isStart ? "Outputs" : "Inputs"}
+      <Section title={isStart ? "Outputs" : "Inputs"} count={ports.length} flush>
+        {ports.length === 0 ? (
+          <EmptyState icon={Inbox} layout="row">
+            None
+          </EmptyState>
+        ) : (
+          ports.map((p) => (
+            <div key={p.name} className="ei-row">
+              <FileText size={14} strokeWidth={1.5} aria-hidden className="ei-ic" />
+              <span className="ei-row__name d-mono">{p.name}</span>
             </div>
-            <ul className="flex flex-col gap-1">
-              {ports.map((p) => (
-                <li key={p.name} className="font-mono text-text-3" style={{ fontSize: "10.5px" }}>
-                  {p.name}
-                </li>
-              ))}
-            </ul>
-          </>
+          ))
         )}
-      </div>
+      </Section>
     </aside>
   );
 }

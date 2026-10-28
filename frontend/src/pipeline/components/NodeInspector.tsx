@@ -1,7 +1,10 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useEditStore } from "../store/editStore";
 import type { NodeState } from "../../shared/generated/NodeState";
-import { SectionHead, Field } from "./InspectorPrimitives";
+import { FormRow } from "./InspectorPrimitives";
+import { Bot, Copy, Inbox, SquareTerminal } from "lucide-react";
+import { Chip, EmptyState, Field, IconButton, Section } from "../../shared/ui/kit";
+import "./inspect.css";
 import OutputsSection from "./nodeInspector/OutputsSection";
 import { NodeTypeIcon } from "./NodeTypeIcon";
 import PooledInputRow from "./PooledInputRow";
@@ -192,35 +195,36 @@ export default function NodeInspector({
   const addPromptSkill = readOnly || runNode?.skills != null ? undefined : promptAdds.add;
 
   return (
-    <aside ref={asideRef} className="flex h-full flex-col bg-surface-1 overflow-y-auto">
-      <div
-        className="flex h-8 shrink-0 items-center justify-between border-b border-line px-3 font-medium text-text-2"
-        style={{ fontSize: "11.5px" }}
-      >
-        <span>Node Inspector</span>
-        <StarButton
-          syncState={syncState}
-          node={node}
-          prompt={promptContent}
-          onLibraryChanged={onLibraryChanged}
-          updateNodeFn={(updates) => updateNode(node.id, updates)}
-          updatePromptFn={(content) => updatePrompt(node.id, content)}
-        />
+    <aside ref={asideRef} className="ei" data-testid="node-inspector">
+      <div className="ei-bar">
+        <span className="ei-bar__title">
+          <NodeTypeIcon type={node.type} size={14} />
+          <span className="ei-trunc" title={node.name || node.id}>
+            {node.name || node.id}
+          </span>
+          <span className="ei-bar__sub">{node.id}</span>
+        </span>
+        <span className="ei-bar__actions">
+          <StarButton
+            syncState={syncState}
+            node={node}
+            prompt={promptContent}
+            onLibraryChanged={onLibraryChanged}
+            updateNodeFn={(updates) => updateNode(node.id, updates)}
+            updatePromptFn={(content) => updatePrompt(node.id, content)}
+          />
+        </span>
       </div>
 
-      <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
-        {/* Identity */}
-        <SectionHead title="Identity" />
-        <Field label="ID">
-          <span
-            className="block w-full cursor-pointer select-all rounded border border-line bg-surface-2 px-2 py-1 font-mono text-text-3"
-            style={{ fontSize: "10px" }}
-            title="Click to copy"
-            onClick={() => void copyToClipboard(node.id)}
-          >
-            {node.id}
+      <Section title="Node">
+        <FormRow label="Id">
+          <span className="ei-line">
+            <span className="d-mono ei-trunc" title={node.id}>
+              {node.id}
+            </span>
+            <IconButton icon={Copy} size="sm" label="Copy id" onClick={() => void copyToClipboard(node.id)} />
           </span>
-        </Field>
+        </FormRow>
         <Field label="Name">
           <NameInput
             key={node.id}
@@ -229,27 +233,18 @@ export default function NodeInspector({
             onCommit={(v) => handleField("name", v || null)}
           />
         </Field>
-
         {/* Type — #653/ADR-0060: there is one agentic type, so this is a static
-            label like `script` already was. The pair of buttons it replaces
-            offered non-isolated/isolated, i.e. a working-directory choice
-            wearing a type's clothes; that choice now lives in Workspace below. */}
-        <SectionHead title="Type" />
-        <div
-          data-testid={isScript ? "script-type-label" : "agent-type-label"}
-          className="flex items-center gap-2 rounded border border-text-3 bg-surface-2 px-2 py-1 font-medium text-text"
-          style={{ fontSize: "10px" }}
-        >
-          <NodeTypeIcon type={node.type} size={11} className="shrink-0 text-text-3" />
-          <span>{isScript ? "script (deterministic bash)" : node.type}</span>
-        </div>
+            label like `script` already was. The working-directory choice lives
+            in Worktree below. */}
+        <FormRow label="Type">
+          <span data-testid={isScript ? "script-type-label" : "agent-type-label"} title={isScript ? "Deterministic bash" : node.type}>
+            <Chip icon={isScript ? SquareTerminal : Bot}>{isScript ? "Script" : node.type === "agent" ? "Agent" : node.type}</Chip>
+          </span>
+        </FormRow>
 
-        {/* Workspace — #653/ADR-0060: where this Node's NodeRun works. A pair of
-            named places, not a switch: the working directory is a choice between
-            two locations, not a feature you turn on. The resolved path underneath
-            is the point — the author reads where the Node will write instead of
-            deducing it. Absent on Start/End, because a greyed control invites you to look for the way to
-            un-grey it. */}
+        {/* Worktree — #653/ADR-0060: where this Node's NodeRun works, a pair of
+            named places, the resolved path under it. Absent on Start/End: a
+            greyed control invites you to look for the way to un-grey it. */}
         {carriesIsolation(node.type) && isolation !== null && (
           <WorkspaceSection
             node={node}
@@ -274,8 +269,10 @@ export default function NodeInspector({
           runNode={runNode}
           handleField={handleField}
         />
+      </Section>
 
-        {!isScript && (
+      {!isScript && (
+        <Section title="Agent">
           <AgentSection
             node={node}
             readOnly={readOnly}
@@ -290,74 +287,75 @@ export default function NodeInspector({
             effort={effort}
             addedSkills={promptAdds.added}
           />
-        )}
+        </Section>
+      )}
 
-        <PromptSection
-          nodeId={node.id}
-          isScript={isScript}
-          isInteractive={isInteractive}
-          isOrchestrator={isOrchestrator}
-          promptContent={promptContent}
-          updatePrompt={updatePrompt}
-          skillBank={skillBank}
-          ownSkills={node.skills ?? []}
-          inheritedSkillTiers={inheritedSkillTiers}
-          onAddSkill={addPromptSkill}
-          lastAddedSkill={promptAdds.added[promptAdds.added.length - 1]?.name ?? null}
+      <PromptSection
+        nodeId={node.id}
+        isScript={isScript}
+        isInteractive={isInteractive}
+        isOrchestrator={isOrchestrator}
+        promptContent={promptContent}
+        updatePrompt={updatePrompt}
+        skillBank={skillBank}
+        ownSkills={node.skills ?? []}
+        inheritedSkillTiers={inheritedSkillTiers}
+        onAddSkill={addPromptSkill}
+        lastAddedSkill={promptAdds.added[promptAdds.added.length - 1]?.name ?? null}
+      />
+
+      {/* Outputs — declared: the node's production contract (CONTEXT.md § Node). */}
+      <OutputsSection
+        node={node}
+        pipeline={tab.pipeline}
+        highlightedPort={highlightedPort}
+        onChange={(outputs) => updateNode(node.id, { outputs })}
+      />
+
+      {/* ADR-0089: the live artifacts, apart from the outputs — never checked,
+          never wired. Only a node that runs something publishes any. */}
+      {carriesIsolation(node.type) && (
+        <LiveArtifactsSection
+          live={node.live_artifacts ?? []}
+          free={node.free_live_artifacts === true}
+          allowInstructions={node.type === "agent"}
+          readOnly={readOnly}
+          onChange={(updates) => updateNode(node.id, updates)}
         />
+      )}
 
-        {/* Inputs — emergent (#149): derived from incoming edges, read-only.
-            Same-named edges pool into one logical list input that spells out
-            every contributing source node (e.g. `review ← sec-reviewer,
-            perf-reviewer`). The node declares no inputs. */}
-        <SectionHead title="Inputs" count={pooledInputs.length} />
+      {/* ADR-0081 (#31): the `node/config` sections of the extensions. */}
+      <NodeConfigSections
+        nodeId={node.id}
+        nodeName={node.name ?? null}
+        pipelineId={tab.id}
+        pipelineName={tab.pipeline.name}
+        readOnly={readOnly === true}
+      />
+
+      {/* Inputs — emergent (#149): derived from incoming edges, read-only.
+          Same-named edges pool into one logical list input that spells out
+          every contributing source node (e.g. `review ← sec-reviewer,
+          perf-reviewer`). The node declares no inputs. */}
+      <Section title="Inputs" count={pooledInputs.length} flush>
         {pooledInputs.length === 0 ? (
-          <p className="px-1 py-1 text-text-3" style={{ fontSize: "10px" }}>
-            No inputs — wire an output into this node to create one.
-          </p>
-        ) : (
-          <div className="flex flex-col">
-            {pooledInputs.map((input, i) => (
-              <PooledInputRow
-                key={input.name}
-                input={input}
-                highlighted={highlightedPort === input.name}
-                isLast={i === pooledInputs.length - 1}
-                onDeleteSource={readOnly ? undefined : handleDeleteSource}
-              />
-            ))}
+          <div title="Wire an output into this node to create one">
+            <EmptyState icon={Inbox} layout="row">
+              Not wired
+            </EmptyState>
           </div>
+        ) : (
+          pooledInputs.map((input, i) => (
+            <PooledInputRow
+              key={input.name}
+              input={input}
+              highlighted={highlightedPort === input.name}
+              isLast={i === pooledInputs.length - 1}
+              onDeleteSource={readOnly ? undefined : handleDeleteSource}
+            />
+          ))
         )}
-
-        {/* Outputs — declared: the node's production contract (CONTEXT.md § Node). */}
-        <OutputsSection
-          node={node}
-          pipeline={tab.pipeline}
-          highlightedPort={highlightedPort}
-          onChange={(outputs) => updateNode(node.id, { outputs })}
-        />
-
-        {/* ADR-0089: the live artifacts, apart from the outputs — never checked,
-            never wired. Only a node that runs something publishes any. */}
-        {carriesIsolation(node.type) && (
-          <LiveArtifactsSection
-            live={node.live_artifacts ?? []}
-            free={node.free_live_artifacts === true}
-            allowInstructions={node.type === "agent"}
-            readOnly={readOnly}
-            onChange={(updates) => updateNode(node.id, updates)}
-          />
-        )}
-
-        {/* ADR-0081 (#31): the `node/config` sections of the extensions. */}
-        <NodeConfigSections
-          nodeId={node.id}
-          nodeName={node.name ?? null}
-          pipelineId={tab.id}
-          pipelineName={tab.pipeline.name}
-          readOnly={readOnly === true}
-        />
-      </div>
+      </Section>
 
       <DestroyLoopModal
         open={pendingDestroy != null}

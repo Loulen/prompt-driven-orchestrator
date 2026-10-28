@@ -1,77 +1,52 @@
+import { Circle, CircleCheck, Square } from "lucide-react";
 import type { EndNodeInfo } from "../../shared/generated/EndNodeInfo";
+import { Chip, EmptyState, Section } from "../../shared/ui/kit";
+import "./inspect.css";
 
 interface Props {
   endNode: EndNodeInfo;
 }
 
+/** The Run's End: each of its ports, received or pending, and the reason it ended. */
 export default function EndInspector({ endNode }: Props) {
   return (
-    <aside className="end-inspector flex h-full flex-col bg-surface-1">
-      <div className="border-b border-line px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-text" style={{ fontSize: "12.5px" }}>
-            Run end
+    <aside className="end-inspector ei" data-testid="end-inspector">
+      <div className="ei-bar">
+        <span className="ei-bar__title">
+          <Square size={14} strokeWidth={1.5} aria-hidden />
+          <span>Run end</span>
+          <span className="ei-bar__sub">{endNode.id}</span>
+        </span>
+        <span className="ei-bar__actions">
+          <span className="runtime-badge" title="Filled in by the runtime">
+            <Chip>runtime</Chip>
           </span>
-          <span
-            className="runtime-badge rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-primary"
-            style={{ fontSize: "10px", fontWeight: 500 }}
-          >
-            runtime
-          </span>
-        </div>
-        <div
-          className="mt-0.5 font-mono text-text-3"
-          style={{ fontSize: "10px" }}
-        >
-          {endNode.id}
-        </div>
+        </span>
       </div>
 
-      <div className="flex-1 overflow-auto p-3">
-        <div
-          className="mb-2 text-text-3"
-          style={{ fontSize: "11px", fontWeight: 500 }}
-        >
-          Termination reasons
-        </div>
-        <div className="flex flex-col gap-2">
-          {endNode.ports.map((port) => (
-            <div
-              key={port.port_name}
-              className="rounded border border-line bg-surface-2 px-2.5 py-2"
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className={`h-2 w-2 shrink-0 rounded-full ${
-                    port.status === "received" ? "bg-st-done" : "bg-text-3"
-                  }`}
-                />
-                <span className="font-mono text-text-2" style={{ fontSize: "11px" }}>
-                  {port.port_name}
-                </span>
-                <span
-                  className={`ml-auto rounded px-1.5 py-0.5 ${
-                    port.status === "received"
-                      ? "bg-st-done/10 text-st-done"
-                      : "bg-surface-2 text-text-3"
-                  }`}
-                  style={{ fontSize: "9px", fontWeight: 500 }}
-                >
-                  {port.status}
-                </span>
-              </div>
-              {port.reason && (
-                <div
-                  className="mt-1.5 rounded border border-line-soft bg-surface-0 px-2 py-1 font-mono text-text-3"
-                  style={{ fontSize: "10.5px", lineHeight: "1.5" }}
-                >
-                  {port.reason}
-                </div>
+      <Section title="Termination reasons" count={endNode.ports.length} flush>
+        {endNode.ports.length === 0 && (
+          <EmptyState icon={Circle} layout="row">
+            None
+          </EmptyState>
+        )}
+        {endNode.ports.map((port) => (
+          <div key={port.port_name} data-testid={`end-port-${port.port_name}`}>
+            <div className="ei-row" title={port.reason ?? port.port_name}>
+              {port.status === "received" ? (
+                <CircleCheck size={12} strokeWidth={2} aria-hidden style={{ color: "var(--color-st-done)", flex: "none" }} />
+              ) : (
+                <Circle size={12} strokeWidth={1.5} aria-hidden className="ei-ic" />
               )}
+              <span className="ei-row__name d-mono">{port.port_name}</span>
+              <span className="ei-row__end">
+                <Chip tone={port.status === "received" ? "done" : "neutral"}>{port.status}</Chip>
+              </span>
             </div>
-          ))}
-        </div>
-      </div>
+            {port.reason && <div className="ei-reason">{port.reason}</div>}
+          </div>
+        ))}
+      </Section>
     </aside>
   );
 }

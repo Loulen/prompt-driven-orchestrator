@@ -11,6 +11,7 @@ import { cleanupRuns, E2E_TARGET_REPO, openPipelineForEdit, pickPipeline } from 
 
 const PIPELINE_NAME = `e2e-versions-${process.pid}-${Date.now()}`;
 let PIPELINE_PATH = "";
+const LONG_TITLE = "Split the reviewer into a code reviewer and a visual reviewer";
 const runIds: string[] = [];
 
 const YAML = `name: ${PIPELINE_NAME}
@@ -80,6 +81,7 @@ test("save versions, view and restore one, launch the last, keep the old as a pi
   const save = page.getByTestId("save-version-modal");
   await expect(save.getByRole("radio", { name: "New version v2" })).toHaveAttribute("aria-checked", "true");
   await expect(save.getByTestId("save-version-title-input")).toHaveValue("v2");
+  await save.getByTestId("save-version-title-input").fill(LONG_TITLE);
   await expect(save.getByTestId("save-version-confirm")).toHaveText(/Save v2/);
   await save.getByTestId("save-version-confirm").click();
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`);
@@ -89,10 +91,21 @@ test("save versions, view and restore one, launch the last, keep the old as a pi
   const history = await versionsTab(page);
   await expect(history.getByTestId("version-row-2")).toContainText("last");
   await expect(history.getByTestId("version-row-1")).toContainText("1.0");
+  // A narrow pane: the columns tighten, « last » gives way, the title keeps the room.
+  await history.evaluate((el) => {
+    el.style.width = "240px";
+  });
+  await expect(history.getByTestId("version-last")).toBeHidden();
+  const title = history.getByTestId("version-row-2").locator(".pi-vrow__title");
+  expect((await title.boundingBox())!.width).toBeGreaterThan(70);
+  await history.evaluate((el) => {
+    el.style.width = "";
+  });
   await history.getByTestId("version-row-1").hover();
   await history.getByTestId("version-view-1").click();
   await expect(page.getByTestId(`tab-title-__version__${PIPELINE_NAME}@1`)).toHaveText(`${PIPELINE_NAME}.yaml @ v1`);
-  await expect(page.getByTestId("version-banner")).toContainText("Viewing v1");
+  await expect(page.getByTestId("version-banner")).toContainText("v1");
+  await expect(page.getByTestId("version-banner")).toContainText("read only");
   await page.getByTestId("version-banner-restore").click();
   await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
   await page.getByTestId("info-tab-info").click();

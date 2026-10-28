@@ -129,7 +129,7 @@ async function createRunAndSeedArtifact(baseURL: string) {
 
 async function openNode(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
   await page

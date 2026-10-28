@@ -97,17 +97,19 @@ selected Run, or when its repository belongs to no Projet.
 ### `topbar/start`
 
 - **Accepts**: page.
-- **Renders**: a text entry per page, after the PDO mark. The page opens full-window, with every
-  page of the location on its rail.
+- **Renders**: a text entry per page, after the Acogni mark, before the command field. The page
+  opens full-window, with every page of the location on its rail. A long label ends in an ellipsis.
 - **Context**: `PageContext` (below).
 - **0.1**: the `Navigation` slot.
 
 ### `topbar/end`
 
 - **Accepts**: page, action.
-- **Renders**: an icon button per element in the top bar's right-hand group, **before Stats**,
-  with the label as tooltip. A page's button opens it full-window **without rail**: the page
-  brings its own navigation. An action's button calls its command.
+- **Renders**: a 24 px icon button per element in the top bar's right-hand group, **before the
+  core's icons** (New run, Stats, Settings, the theme), a hairline after them, the label as
+  tooltip. With many, the group keeps its icons aligned and is clipped before it overlaps the
+  command field. A page's button opens it full-window **without rail**: the page brings its own
+  navigation. An action's button calls its command.
 - **Icon**: a page's `icon`, or an action's command `icon`, is an SVG the extension serves. It is
   drawn as a mask in the colour of the text around it (hover and accent states apply). Without one,
   or while it loads, the button shows the label's first letter, boxed.
@@ -116,7 +118,7 @@ selected Run, or when its repository belongs to no Projet.
 ### `topbar/account`
 
 - **Accepts**: decoration.
-- **Renders**: the component as is, at the far right of the top bar, **after Settings**: an avatar
+- **Renders**: the component as is, at the far right of the top bar, **after the theme**: an avatar
   opening the menu of the signed-in person (Profile, Administration, Sign out), say. The component
   draws its own button and menu (the `DropdownMenu` of its bundle). Nothing without a
   contribution.
@@ -407,7 +409,9 @@ locations.
 ### `statusbar`
 
 - **Accepts**: decoration.
-- **Renders**: the status bar, right-hand group, before the service health.
+- **Renders**: the 22 px status bar, right-hand group, before the service health and the version,
+  on one line (clipped, never wrapped). The bar shows icons and numbers: draw an icon and a short
+  number, the name in a tooltip (`Tooltip` of `@pdo/extension-ui`).
 - **Context**: `DecorationContext`, `entity` = `null`.
 
 ### `runs/empty`

@@ -3,15 +3,16 @@ import { describe, it, expect } from "vitest";
 import ServiceHealthIndicator from "./ServiceHealthIndicator";
 
 describe("ServiceHealthIndicator (#156)", () => {
-  it("shows the amber ephemeral pill only when persistent is false", () => {
+  it("shows the amber ephemeral icon only when persistent is false", () => {
     render(
       <ServiceHealthIndicator service={{ supervisor: "none", persistent: false }} />,
     );
     const pill = screen.getByTestId("service-ephemeral-pill");
-    expect(pill).toHaveTextContent("ephemeral");
-    // Same amber token as reconnecting dot / near-cap counter — never red.
+    // An icon, named with the command that fixes it.
+    expect(pill).toHaveTextContent("");
+    expect(pill).toHaveAccessibleName("Ephemeral daemon: pdo service install");
+    // Same amber token as reconnecting daemon / near-cap counter — never red.
     expect(pill.className).toContain("text-st-await");
-    expect(pill.getAttribute("title")).toContain("pdo service install");
   });
 
   it("renders nothing when the daemon is persistent (silence-when-healthy)", () => {

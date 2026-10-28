@@ -108,7 +108,7 @@ test.afterEach(async ({ page, baseURL }) => {
 
 async function openTriggersTab(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.getByRole("tab", { name: "Triggers" }).click();
   await expect(page.getByText(`${PREFIX}t0`)).toBeVisible();
 }

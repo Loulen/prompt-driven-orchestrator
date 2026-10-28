@@ -64,7 +64,7 @@ test("an extension page made of the primitives only looks native and follows the
   });
   await playKitExtension(page);
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Its entry opens the page.
   await page.getByTestId("extension-nav-kit:deploy").click();
@@ -130,7 +130,7 @@ test("an extension page made of the primitives only looks native and follows the
 test("the theme chosen in Settings repaints the extension's page", async ({ page }) => {
   await playKitExtension(page);
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("extension-nav-kit:deploy").click();
   const dark = await computed(page, "kit-page", "background-color");
   await page.keyboard.press("Escape");

@@ -115,7 +115,7 @@ test("single-member collection region renders the ⇉ badge on the member card",
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -144,7 +144,7 @@ test("toolbar has no ForEach add-button (fan-out is a region, not a node)", asyn
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -173,7 +173,7 @@ test("fan-out gesture on an eligible member creates the collection region", asyn
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

@@ -160,7 +160,7 @@ export default function PipelineInfoPanel({
       data-testid="pipeline-info-panel"
     >
       <div
-        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-text-2"
+        className="flex h-8 shrink-0 items-center justify-between border-b border-line px-3 font-medium text-text-2"
         style={{ fontSize: "11.5px" }}
       >
         <span>Pipeline info</span>

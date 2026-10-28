@@ -87,7 +87,7 @@ test("a terminated node opens minimized with the Outputs on screen, and the bar 
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

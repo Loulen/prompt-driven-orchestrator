@@ -92,7 +92,7 @@ test("cold-start full flow: run → node → modal, no console errors", async ({
 
   // 1. Navigate and wait for daemon connection
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

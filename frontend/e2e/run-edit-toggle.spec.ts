@@ -67,7 +67,7 @@ async function createRun(
 
 test("unified edit mode: selecting a run opens editor canvas automatically", async ({ page, request }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Create a run via the (multipart) API
   const run_id = await createRun(request);
@@ -91,7 +91,7 @@ test("unified edit mode: selecting a run opens editor canvas automatically", asy
 
 test("Edit for this run unlocks the canvas, Finish editing locks it again", async ({ page, request }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await createRun(request);
 

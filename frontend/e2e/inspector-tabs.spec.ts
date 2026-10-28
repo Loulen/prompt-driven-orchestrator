@@ -85,7 +85,7 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -135,7 +135,7 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
 
   // Reload → select run → select running node → Run tab again
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
   // Top-left click: hover reveals row action icons that shift layout mid-click
@@ -180,7 +180,7 @@ test("active run: Run tab default, sticky across nodes, reload resets", async ({
 
 test("idle pipeline: no Run tab, the edition opens directly (CORE-88)", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -204,7 +204,7 @@ test("terminal run: clicking a node defaults to Run tab (#271)", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -276,7 +276,7 @@ test("pending node: Run tab shows placeholder and resolved inputs", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

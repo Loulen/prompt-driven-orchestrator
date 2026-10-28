@@ -75,8 +75,7 @@ export function Breadcrumb({ items }: { items: string[] }) {
   if (items.length === 0) return null;
   return (
     <nav
-      className="flex min-w-0 items-center gap-1 text-text-3"
-      style={{ fontSize: "12px" }}
+      className="flex min-w-0 items-center gap-1 text-sm text-text-3"
       aria-label="Breadcrumb"
       data-testid="extension-page-breadcrumb"
     >

@@ -169,7 +169,7 @@ export default function ProjectsPanel({
         open={confirmDelete !== null}
         kind="project"
         name={confirmDelete?.name ?? ""}
-        detail="Its repositories stay on disk and in the other projects. Its Runs keep it, shown as deleted."
+        detail="Repositories and Runs stay"
         onClose={() => setConfirmDelete(null)}
         onConfirm={() => confirmDelete && void remove(confirmDelete)}
       />

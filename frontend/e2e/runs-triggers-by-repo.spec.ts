@@ -122,7 +122,7 @@ async function createTrigger(
 
 async function openTriggersTab(page: import("@playwright/test").Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.getByRole("tab", { name: "Triggers" }).click();
 }
 
@@ -211,7 +211,7 @@ test("Runs list groups by repo when runs span ≥2 repos", async ({ page, baseUR
   }
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   // Runs is the default tab. Wait for this spec's rows before sampling the
   // group headers: count()/allTextContents() don't auto-wait, and under
   // parallel-suite load the initial /runs fetch can land after first paint.

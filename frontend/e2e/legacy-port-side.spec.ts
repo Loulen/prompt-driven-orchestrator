@@ -61,7 +61,7 @@ test("a legacy pipeline reopens without port side nor rpt, its wire leaving wher
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
 
   const writer = page.locator('.react-flow__node[data-id="writer"]');

@@ -761,7 +761,7 @@ describe("StatsModal — Pricing details in the shell's secondary panel (#944)",
     await waitFor(() => expect(fetchStatsCostMock).toHaveBeenCalledTimes(1));
     const panel = screen.getByTestId("stats-pricing-details");
     // Framed by the shell under the header, not over it.
-    expect(panel).toHaveClass("top-14");
+    expect(panel).toHaveClass("top-(--h-topbar)");
     expect(panel).not.toHaveClass("inset-y-0");
 
     await user.click(screen.getByTestId("stats-refresh"));

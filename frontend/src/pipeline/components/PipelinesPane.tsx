@@ -27,6 +27,8 @@ import ImportWorkflowModal from "./ImportWorkflowModal";
 import NewPipelineModal from "./NewPipelineModal";
 import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
 import ExtensionListFilters from "../../shared/extensions/ExtensionListFilters";
+import LeftPaneBar from "../../shared/ui/LeftPaneBar";
+import { IconButton } from "../../shared/ui/kit";
 import type { DecorationContext } from "../../shared/extensions/contract";
 import {
   isAttributeFilterActive,
@@ -190,36 +192,29 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
   return (
     <>
         <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
-      <div
-        className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-text-2"
-        style={{ fontSize: "11.5px" }}
-      >
-        Pipelines
+      <LeftPaneBar title="Pipelines">
         {/* #30 — `pipelines/header`: the extensions' icon buttons, before the
             core's. */}
-        <span className="ml-auto" />
         <ExtensionActionButtons
           location="pipelines/header"
           extra={NO_EXTRA}
-          className="mr-1.5 flex items-center gap-0.5"
+          className="flex items-center gap-px"
+          buttonClassName="d-icon"
+          iconSize={14}
         />
-        <button
+        <IconButton
+          icon={FileUp}
+          label="Import a workflow"
           onClick={() => setShowImportModal(true)}
-          className="grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-surface-2 text-text-3 transition-colors hover:bg-hover hover:text-text"
-          title="Import a workflow"
           data-testid="import-workflow-button"
-        >
-          <FileUp size={12} />
-        </button>
-        <button
+        />
+        <IconButton
+          icon={Plus}
+          label="New pipeline"
           onClick={() => setShowNewModal(true)}
           data-testid="new-pipeline-button"
-          className="ml-1.5 grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-surface-2 text-text-3 transition-colors hover:bg-hover hover:text-text"
-          title="New pipeline"
-        >
-          <Plus size={12} />
-        </button>
-      </div>
+        />
+      </LeftPaneBar>
 
       <ExtensionListFilters
         location="pipelines/filter"

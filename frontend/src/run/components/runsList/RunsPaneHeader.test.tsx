@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import RunsPaneHeader, { NO_RUN_ANYWHERE } from "./RunsPaneHeader";
+import RunsPaneHeader from "./RunsPaneHeader";
 import { act } from "react";
 import {
   RECHECK_RIGHTS_EVERY_MS,
   useRunCreationRightsStore,
 } from "../../store/runCreationRightsStore";
-import { runCreationRights, UNKNOWN_RIGHTS } from "../../model/runCreationRights";
+import { NO_RUN_ANYWHERE, runCreationRights, UNKNOWN_RIGHTS } from "../../model/runCreationRights";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import type { Project } from "../../../workspace/model/project";
 

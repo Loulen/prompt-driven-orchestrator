@@ -79,7 +79,7 @@ test.afterAll(async () => {
 
 test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.getByText("alpha", { exact: true }).first().click();
@@ -108,7 +108,7 @@ test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) 
 
   // Persistence: the explicit save flushed MARKER_B to disk.
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.getByText("alpha", { exact: true }).first().click();
 

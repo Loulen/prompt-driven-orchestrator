@@ -8,6 +8,7 @@
  */
 
 import { create } from "zustand";
+import { moveItem } from "../../lib/moveItem";
 import type { PageMount } from "../../shared/generated/PageMount";
 
 export const GUIDE_OPEN_KEY = "pdo.pages.guide";
@@ -46,6 +47,8 @@ interface MountedPagesState {
   showPage: (name: string | null) => void;
   /** Close the tab named `name`; the canvas comes back when it was shown. */
   closePage: (name: string) => void;
+  /** Move the tab named `name` to `index` among the page tabs (a drag of the tab). */
+  movePage: (name: string, index: number) => void;
   setGuideOpen: (open: boolean) => void;
   /** Forget every tab (tests). */
   reset: () => void;
@@ -70,6 +73,8 @@ export const useMountedPages = create<MountedPagesState>((set) => ({
       tabs: state.tabs.filter((tab) => tab.name !== name),
       active: state.active === name ? null : state.active,
     })),
+  movePage: (name, index) =>
+    set((state) => ({ tabs: moveItem(state.tabs, state.tabs.findIndex((tab) => tab.name === name), index) })),
   setGuideOpen: (open) => {
     writeGuideOpen(open);
     set({ guideOpen: open });

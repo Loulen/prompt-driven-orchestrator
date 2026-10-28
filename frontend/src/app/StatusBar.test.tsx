@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import StatusBar from "./StatusBar";
 import type { UpdateStatus } from "../platform/model/update";
@@ -77,5 +77,41 @@ describe("StatusBar — the version of the release channel", () => {
     );
     expect(badge).toHaveTextContent("acme-pdo 0.3.0 (core 2.0.0)");
     expect(screen.getByTestId("statusbar-version-badge")).toHaveTextContent("→ 0.4.0");
+  });
+});
+
+// The Workbench's quiet status bar: icons and numbers, their names in the tooltips.
+describe("StatusBar — icons and numbers only", () => {
+  function renderStatus(status: "connected" | "reconnecting" | "disconnected") {
+    render(
+      <StatusBar
+        status={status}
+        sessions={{ live: 3, cap: 20, version: "2.0.0" }}
+        update={null}
+        onOpenVersion={() => {}}
+      />,
+    );
+  }
+
+  it("draws the daemon's connection as an icon named by its state", () => {
+    renderStatus("connected");
+    const daemon = screen.getByTestId("daemon-status");
+    expect(daemon).toHaveAccessibleName("Daemon: connected");
+    expect(daemon).toHaveAttribute("data-st", "connected");
+    expect(daemon).toHaveTextContent("");
+  });
+
+  it("says a lost connection in its own state", () => {
+    renderStatus("disconnected");
+    expect(screen.getByTestId("daemon-status")).toHaveAttribute("data-st", "disconnected");
+    expect(screen.getByLabelText("Daemon: disconnected")).toBeInTheDocument();
+  });
+
+  it("counts the sessions as live/cap, named in its tooltip", async () => {
+    renderStatus("connected");
+    const counter = screen.getByTestId("session-counter");
+    expect(counter).toHaveTextContent(/^3\/20$/);
+    fireEvent.pointerEnter(counter);
+    expect(await screen.findByTestId("tooltip-content")).toHaveTextContent("Sessions");
   });
 });

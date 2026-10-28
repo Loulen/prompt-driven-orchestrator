@@ -231,7 +231,7 @@ test.beforeEach(async ({ page, baseURL }) => {
 test("the four slots show the test extension's contributions", async ({ page }) => {
   const played = await playTestExtension(page);
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Navigation entry → its page lists the OperationApplied and the Run's events.
   const entry = page.getByTestId("extension-nav-test:events");
@@ -273,14 +273,14 @@ test("topbar/end: an icon before Stats, its page with the context, a command, a 
 }) => {
   const played = await playTestExtension(page);
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // The icon sits in the right-hand group, before Stats; the action whose
   // `when` never holds is not there, the one that needs a Run neither (yet).
   const icon = page.getByTestId("extension-topbar-end-test:page");
   await expect(icon).toBeVisible();
   const order = await page
-    .locator("header div.ml-auto button")
+    .locator("header .sh-tb__end button")
     .evaluateAll((buttons) => buttons.map((b) => b.getAttribute("data-testid")));
   expect(order.indexOf("extension-topbar-end-test:page")).toBeLessThan(order.indexOf("open-stats"));
   await expect(page.getByTestId("extension-topbar-end-test:never")).toHaveCount(0);
@@ -314,7 +314,7 @@ test("Action locations: the header, a row's « ⋯ » menu with its when, a fail
 }) => {
   const played = await playTestExtension(page);
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // `runs/header`: its icon button, before « New Run ».
   await page.getByTestId("extension-action-test:at-runs-header").click();
@@ -453,7 +453,7 @@ test("hosted locations: A renders B's contributions through @pdo/extension-ui", 
 
 test("without extension, no element is added", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("extension-nav")).toHaveCount(0);
   await expect(page.getByTestId("extension-banner")).toHaveCount(0);
   await expect(page.getByTestId("extension-filters-run")).toHaveCount(0);

@@ -70,7 +70,7 @@ test("tabbar overflows horizontally, Save stays visible, active tab scrolls into
   // Narrow viewport to force overflow with fewer tabs
   await page.setViewportSize({ width: 900, height: 600 });
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Post-refonte (#146): pipelines open into the edit canvas from the Pipelines
   // tab — there is no pencil "Toggle edit mode" anymore.

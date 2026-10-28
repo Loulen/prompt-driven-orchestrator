@@ -67,6 +67,7 @@ describe("ConfirmCloseTabsModal (#342)", () => {
   it("cancels on a backdrop click", () => {
     const onCancel = vi.fn();
     render(<ConfirmCloseTabsModal open tabs={[tab("a", { dirty: true })]} onCancel={onCancel} onConfirm={() => {}} />);
+    // The backdrop of a modal <dialog> is the dialog itself.
     fireEvent.click(screen.getByTestId("close-tabs-backdrop"));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
@@ -75,9 +76,11 @@ describe("ConfirmCloseTabsModal (#342)", () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();
     render(<ConfirmCloseTabsModal open tabs={[tab("a", { dirty: true })]} onCancel={onCancel} onConfirm={onConfirm} />);
-    fireEvent.keyDown(document, { key: "Enter" });
+    const dialog = screen.getByTestId("close-tabs-backdrop");
+    fireEvent.keyDown(dialog, { key: "Enter" });
+    fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
     expect(onConfirm).not.toHaveBeenCalled();
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
@@ -87,8 +90,9 @@ describe("ConfirmCloseTabsModal — bounded to the window (#940)", () => {
     const tabs = Array.from({ length: 60 }, (_, i) => tab(`tab_${i}`, { dirty: true }));
     render(<ConfirmCloseTabsModal open tabs={tabs} onCancel={() => {}} onConfirm={() => {}} />);
     const body = screen.getByTestId("close-tabs-body");
-    expect(body).toHaveClass("min-h-0", "overflow-y-auto");
-    expect(body.parentElement).toHaveClass("flex", "flex-col", "max-h-[calc(85vh/var(--app-zoom,1))]");
+    // The modal's body scrolls (`d-frame__body`), bounded to the window (`d-frame`).
+    expect(body.parentElement).toHaveClass("d-frame__body");
+    expect(body.parentElement?.parentElement).toHaveClass("d-frame");
     expect(body).toHaveTextContent("tab_59.yaml");
     expect(body).not.toContainElement(screen.getByTestId("close-tabs-confirm"));
   });

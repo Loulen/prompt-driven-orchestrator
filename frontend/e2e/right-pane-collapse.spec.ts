@@ -107,7 +107,7 @@ async function storedRightPct(page: Page): Promise<number | undefined> {
 
 async function gotoConnected(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 }
 
 test.beforeAll(async () => {
@@ -182,7 +182,7 @@ test("collapses when empty and reopens at the last chosen width, across a reload
   await clickEmptyCanvas(page);
   await expectCollapsed(page);
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   await expect(page.getByTestId("tab-list")).toBeVisible({ timeout: 10_000 });
   await clickEmptyCanvas(page);

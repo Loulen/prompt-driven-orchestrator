@@ -124,7 +124,7 @@ test("failed node shows failure banner and Mark complete button", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -154,7 +154,7 @@ test("Mark complete with missing outputs shows 409 sub-banner", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -180,7 +180,7 @@ test("Mark complete succeeds after creating output files", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -222,7 +222,7 @@ test("Mark complete on a failed run reopens it before output validation", async 
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

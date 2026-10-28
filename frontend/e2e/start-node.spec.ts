@@ -100,7 +100,7 @@ test("clicking start node shows StartInspector with header and input text", asyn
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -142,7 +142,7 @@ test("clicking start node shows StartInspector with header and input text", asyn
 
 test("view as markdown link opens modal", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

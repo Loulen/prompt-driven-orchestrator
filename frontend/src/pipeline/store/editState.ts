@@ -236,6 +236,8 @@ export interface EditState {
   // `activeTabId` points at a closing tab flash the center panel and can
   // self-close the Trigger detail.
   closeTabs: (ids: string[]) => void;
+  /** Move the tab `id` to `index` in the tab bar (a drag of the tab). */
+  moveTab: (id: string, index: number) => void;
   // Single-tab pref (#342). Persists to localStorage immediately (at the toggle
   // change, not on a Save button) and, when enabling with several tabs open,
   // collapses to the active tab (parking for confirmation if any other is

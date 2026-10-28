@@ -82,7 +82,7 @@ test("save node to library preserves ports and frontmatter schema", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

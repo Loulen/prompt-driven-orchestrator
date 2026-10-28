@@ -77,7 +77,7 @@ test.afterAll(async ({ request, baseURL }) => {
 
 async function openProjectsSettings(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("open-settings").click();
   await page.getByTestId("settings-category-projects").click();
   await expect(page.getByTestId("projects-panel")).toBeVisible();
@@ -130,7 +130,7 @@ test("clone a URL into the clones folder from Settings, then New Run clones and 
   expect(validated.ok(), await validated.text()).toBeTruthy();
   await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("tab", { name: "Runs" }).click();
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await page.getByTestId("project-combobox").click();
   await page.locator(`[data-testid="project-option"][data-project-id="${projectId}"]`).click();
   await page.getByTestId("target-repo-input").fill(shopWeb);

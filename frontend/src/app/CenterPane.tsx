@@ -1,16 +1,21 @@
-import { ArrowLeft, GitFork } from "lucide-react";
+import { ArrowLeft, GitFork, Play, Workflow } from "lucide-react";
 import EditCanvas from "../pipeline/components/EditCanvas";
 import TabBar from "../pipeline/components/TabBar";
 import MountedPageView from "../platform/components/MountedPageView";
 import { useActivePage, useMountedPages } from "../platform/store/mountedPages";
 import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
+import type { RunListEntry } from "../shared/generated/RunListEntry";
+import { Button, EmptyState } from "../shared/ui/kit";
+import { canCreateSomeRun } from "../run/model/runCreationRights";
+import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import type { Project } from "../workspace/model/project";
 import type { useRunNavigation } from "./useRunNavigation";
 
 /**
  * The center of the shell: the tab bar, the way back to an orchestrator node
- * (#723) and the canvas of the active tab — or the invitation to open one. A
+ * (#723) and the canvas of the active tab — or, with no document open, an
+ * icon, three words and New run. A
  * mounted page's tab, when shown, covers the canvas, which stays mounted
  * underneath so its viewport and sessions survive the switch.
  */
@@ -29,6 +34,8 @@ export default function CenterPane({
   onSelectRun: handleSelectRun,
   rightPaneCollapsed,
   projects,
+  runs = [],
+  onNewRun,
 }: {
   hasEditTab: boolean;
   orchestratorReturn: ReturnType<typeof useRunNavigation>["orchestratorReturn"];
@@ -46,17 +53,34 @@ export default function CenterPane({
   rightPaneCollapsed: boolean;
   /** The Projets the tab bar's validation indicator names. */
   projects: Project[];
+  /** The Runs, for the name and status of their tabs. */
+  runs?: RunListEntry[];
+  /** The empty centre's action; absent, none. */
+  onNewRun?: () => void;
 }) {
   const pageTabCount = useMountedPages((s) => s.tabs.length);
   const activePage = useActivePage();
+  // CORE-5: no New run where no Projet allows creating a Run.
+  const canCreate = useRunCreationRightsStore((s) => canCreateSomeRun(s.rights));
   const placeholder = (
-    <div className="flex h-full items-center justify-center text-text-3" style={{ fontSize: "12px" }}>
-      Select a run or open a pipeline to get started
+    <div className="sh-center-empty" data-testid="center-empty">
+      <EmptyState
+        icon={Workflow}
+        action={
+          onNewRun && canCreate && (
+            <Button icon={Play} onClick={onNewRun} data-testid="center-new-run">
+              New run
+            </Button>
+          )
+        }
+      >
+        No document open
+      </EmptyState>
     </div>
   );
   return hasEditTab || pageTabCount > 0 ? (
     <div className="flex h-full min-w-0 flex-col">
-      <TabBar projects={projects} />
+      <TabBar projects={projects} runs={runs} />
       {activePage && <MountedPageView page={activePage} />}
       {!hasEditTab && !activePage && placeholder}
       {hasEditTab && (
@@ -66,8 +90,7 @@ export default function CenterPane({
               type="button"
               data-testid="orchestrator-back-bar"
               onClick={handleBackToOrchestrator}
-              className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-line bg-surface-1 px-3 py-1 text-text-3 transition-colors hover:text-text"
-              style={{ fontSize: "11px" }}
+              className="flex h-6 shrink-0 cursor-pointer items-center gap-1.5 border-b border-line bg-surface-1 px-3 text-xs text-text-3 transition-colors hover:text-text"
               title="Back to the orchestrator node, on its Orchestration tab"
             >
               <ArrowLeft size={12} />
@@ -75,7 +98,7 @@ export default function CenterPane({
                 Back to <span className="font-medium text-text-2">{orchestratorReturn.nodeName}</span>
                 <span className="text-text-3"> · {orchestratorReturn.parentRunName}</span>
               </span>
-              <span className="ml-auto flex items-center gap-1 text-text-3" style={{ fontSize: "10px" }}>
+              <span className="ml-auto flex items-center gap-1 text-2xs text-text-3">
                 <GitFork size={10} /> child run
               </span>
             </button>

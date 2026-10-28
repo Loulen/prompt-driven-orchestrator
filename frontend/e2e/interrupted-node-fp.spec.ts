@@ -193,7 +193,7 @@ test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, 
 }) => {
   test.setTimeout(150_000);
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 15_000 });
 
   // Two runs: one to exercise the recovery affordances (+ Reopen), one to leave
   // archived-while-interrupted for the archived variant. Kill both sessions,
@@ -257,7 +257,7 @@ test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, 
   // `worker` node lingers on the canvas and `getByText("worker")` can select it
   // before the canvas switches to the archived run — a stale-selection race.
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 15_000 });
   // Archived runs live in a collapsed "Archived" section — expand it if the run
   // row isn't already on screen, then select the archived run's worker node.
   const archivedToggle = page.getByTestId("run-archived-toggle");

@@ -108,11 +108,11 @@ test("a deep default path beside its mark, and another repository without it", a
   const { id } = (await created.json()) as { id: string };
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
   await page.getByRole("tab", { name: "Runs" }).click();
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await page.getByTestId("project-combobox").click();
   await page
     .locator(`[data-testid="project-option"][data-project-id="${id}"]`)

@@ -366,7 +366,7 @@ describe("ProjectsPanel", () => {
     const { onChanged } = renderPanel({ entry: { projectId: "p1" } });
     fireEvent.click(screen.getByTestId("project-delete"));
     const confirm = screen.getByTestId("confirm-delete-modal");
-    expect(confirm).toHaveTextContent("Its Runs keep it, shown as deleted.");
+    expect(confirm).toHaveTextContent("Repositories and Runs stay");
     fireEvent.click(within(confirm).getByText("Delete"));
 
     await waitFor(() => expect(api.deleteProject).toHaveBeenCalledWith("p1"));

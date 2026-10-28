@@ -92,7 +92,7 @@ test("Diff tab lists the Run's changed files with correct counts, collapses and 
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
     multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "diff tab fp" }),
@@ -196,7 +196,7 @@ test("Diff tab lists the Run's changed files with correct counts, collapses and 
 
 test("an archived Run says the diff is not preserved", async ({ page, baseURL }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
     multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "diff tab archived" }),
@@ -212,7 +212,7 @@ test("an archived Run says the diff is not preserved", async ({ page, baseURL })
   });
   expect(archive.ok()).toBe(true);
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   // Archived runs live in a collapsed "Archived" section — expand it if the
   // run row isn't already on screen.
   const archivedToggle = page.getByTestId("run-archived-toggle");

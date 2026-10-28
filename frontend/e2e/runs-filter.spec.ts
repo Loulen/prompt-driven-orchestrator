@@ -152,7 +152,7 @@ test("Runs list filters by project, pipeline and trigger with AND semantics and 
   await seedRun(page, baseURL!, PIPE_A, repoB, `beta-a-${TAG}`, triggerId);
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Filter row present with "All" placeholders (Runs is the default tab). Other
   // specs' residual runs may coexist on the shared e2e daemon, so assertions
@@ -224,7 +224,7 @@ test("the Project filter offers the Projet recorded on each Run, by name", async
   await seedRun(page, baseURL!, PIPE_A, repoA, `in-none-${TAG}`);
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByText(`in-mobile-${TAG}`)).toBeVisible();
 
   await page.getByTestId("run-filter-project").click();

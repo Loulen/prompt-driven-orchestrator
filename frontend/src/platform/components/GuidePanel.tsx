@@ -33,7 +33,7 @@ export default function GuidePanel({ page, navigation }: { page: PageMount; navi
 
   return (
     <aside className="flex h-full flex-col bg-surface-1" data-testid="guide-panel">
-      <div className="flex h-[36px] shrink-0 items-center gap-2 border-b border-line px-3">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b border-line px-3">
         <BookOpen size={13} className="text-primary" />
         <span className="font-medium text-text" style={{ fontSize: "12px" }}>
           Reading guide

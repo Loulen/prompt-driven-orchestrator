@@ -106,7 +106,7 @@ test("each node type renders its structural icon", async ({ page }) => {
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -129,7 +129,7 @@ test("each node type renders its structural icon", async ({ page }) => {
 
 test("no text pills are present on any node", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 
@@ -162,7 +162,7 @@ test("the isolation marker rides only the nodes that fork a worktree (#653)", as
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

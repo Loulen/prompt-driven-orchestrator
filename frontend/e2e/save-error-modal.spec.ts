@@ -65,7 +65,7 @@ test.afterAll(async () => {
 
 test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Open pipeline in the edit canvas
   await openPipelineForEdit(page, PIPELINE_NAME);
@@ -79,7 +79,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
   await expect(promptArea).toBeVisible();
   await promptArea.fill("DIRTY_SAVE_ERROR");
 
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
 
   // Intercept the PUT endpoint to return a structured error
   await page.route("**/pipelines/**", (route) => {
@@ -134,7 +134,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
 
 test("save error modal dismiss closes modal without opening info panel", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await openPipelineForEdit(page, PIPELINE_NAME);
 

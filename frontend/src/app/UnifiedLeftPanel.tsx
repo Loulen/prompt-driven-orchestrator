@@ -121,7 +121,7 @@ export default function UnifiedLeftPanel({
 
       {/* Triggers pane (#160) */}
       {activeTab === "triggers" && (
-        <div className="min-h-0 flex-1" role="tabpanel">
+        <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
           <TriggersListPanel
             triggers={triggers}
             selectedTriggerId={selectedTriggerId}

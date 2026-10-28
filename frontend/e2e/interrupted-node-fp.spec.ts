@@ -263,7 +263,7 @@ test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, 
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 15_000 });
   // Archived runs live in a collapsed "Archived" section — expand it if the run
   // row isn't already on screen, then select the archived run's worker node.
-  const archivedToggle = page.getByTestId("run-archived-toggle");
+  const archivedToggle = page.getByTestId("run-archived-chevron");
   await expect(archivedToggle).toBeVisible({ timeout: 8_000 });
   const archivedRow = page.getByText(archiveRun.slice(0, 20)).first();
   if (!(await archivedRow.isVisible().catch(() => false))) {

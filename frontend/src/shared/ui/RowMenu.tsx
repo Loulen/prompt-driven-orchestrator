@@ -12,11 +12,10 @@ import {
 const stop = (event: SyntheticEvent) => event.stopPropagation();
 
 /**
- * The « ⋯ » menu of a list row (#30): a `MoreHorizontal` trigger after the
- * row's hover icons, revealed with them (and kept while the menu is open), that
- * opens the shared `DropdownMenu`. The row is often a `<button>`, so the trigger
- * is a `span role="button"`. Its entries: the row's verbs, the extensions'
- * groups (`ExtensionMenuGroups`), then the destructive entry.
+ * The « ⋯ » menu of a list row (#30): a `MoreHorizontal` trigger, the last
+ * entry of the row's hover bar (which stays while the menu is open), that
+ * opens the shared `DropdownMenu`. Its entries: the row's verbs, the
+ * extensions' groups (`ExtensionMenuGroups`), then the destructive entry.
  */
 export default function RowMenu({
   label,
@@ -31,16 +30,14 @@ export default function RowMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        nativeButton={false}
-        render={<span />}
         aria-label={label}
         title="More actions"
         data-testid={testId}
         onClick={stop}
         onKeyDown={stop}
-        className="hidden shrink-0 cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover:inline-flex data-[popup-open]:inline-flex"
+        className="d-icon d-icon--sm"
       >
-        <MoreHorizontal size={12} />
+        <MoreHorizontal size={12} strokeWidth={1.5} aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"

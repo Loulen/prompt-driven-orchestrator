@@ -451,18 +451,21 @@ describe("UnifiedLeftPanel run display labels", () => {
     resetActorsForTests();
   });
 
-  it("renders edit icon for renaming", () => {
+  it("offers the rename in the row's menu, after its one hover action", () => {
     const runs: RunListEntry[] = [
       { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, name: "My Run" },
     ];
     renderPanel({ runs });
 
-    expect(screen.getByTestId("rename-button")).toBeInTheDocument();
+    const bar = screen.getByTestId("run-row-actions");
+    expect(within(bar).getByTestId("pause-run-button")).toBeInTheDocument();
+    expect(within(bar).getByTestId("run-row-menu")).toHaveAccessibleName("More actions for My Run");
   });
 
   it("shows empty state when no runs exist", () => {
     renderPanel();
-    expect(screen.getByText("No runs yet")).toBeInTheDocument();
+    expect(screen.getByText("No runs")).toBeInTheDocument();
+    expect(within(screen.getByTestId("runs-empty")).getByRole("button", { name: "New run" })).toBeInTheDocument();
   });
 
   it("shows rename input when edit icon is clicked", () => {
@@ -471,7 +474,7 @@ describe("UnifiedLeftPanel run display labels", () => {
     ];
     renderPanel({ runs });
 
-    fireEvent.click(screen.getByTestId("rename-button"));
+    fireEvent.keyDown(screen.getByTestId("run-display-label").closest("[data-run-row]")!, { key: "F2" });
 
     const input = screen.getByTestId("rename-input") as HTMLInputElement;
     expect(input).toBeInTheDocument();
@@ -484,7 +487,7 @@ describe("UnifiedLeftPanel run display labels", () => {
     ];
     renderPanel({ runs });
 
-    fireEvent.click(screen.getByTestId("rename-button"));
+    fireEvent.keyDown(screen.getByTestId("run-display-label").closest("[data-run-row]")!, { key: "F2" });
     const input = screen.getByTestId("rename-input");
     fireEvent.change(input, { target: { value: "After" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -498,7 +501,7 @@ describe("UnifiedLeftPanel run display labels", () => {
     ];
     renderPanel({ runs });
 
-    fireEvent.click(screen.getByTestId("rename-button"));
+    fireEvent.keyDown(screen.getByTestId("run-display-label").closest("[data-run-row]")!, { key: "F2" });
     fireEvent.keyDown(screen.getByTestId("rename-input"), { key: "Escape" });
 
     expect(mockRenameRun).not.toHaveBeenCalled();
@@ -548,7 +551,7 @@ describe("UnifiedLeftPanel empty Runs list (runs/empty)", () => {
     serveExtension([]);
     renderPanel({ runs: [] });
     await act(async () => {});
-    expect(screen.getByTestId("runs-empty")).toHaveTextContent(/^No runs yet$/);
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent(/^No runsNew run$/);
     expect(screen.queryByTestId("extension-decorations-runs/empty")).toBeNull();
   });
 
@@ -559,7 +562,7 @@ describe("UnifiedLeftPanel empty Runs list (runs/empty)", () => {
     ]);
     const { rerender } = renderPanel({ runs: [] });
     expect(await screen.findByTestId("why-empty")).toHaveTextContent("No Project yet");
-    expect(screen.getByTestId("runs-empty")).toHaveTextContent("No runs yet");
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent("No runs");
     rerender(
       <UnifiedLeftPanel
         runs={[{ stalled: false, effective_repo: "", run_id: "r1", pipeline_name: "p", status: "running", started_at: null }]}
@@ -645,60 +648,49 @@ describe("UnifiedLeftPanel run status dot", () => {
     { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, stalled: false, effective_repo: "", ...over },
   ];
 
-  it("maps every status to its own dot colour", () => {
+  it("draws every status with its own icon", () => {
     // `archived` excluded: its row lives in the folded Archived section (#136),
     // covered there. Every other status renders inline.
     const expected: Partial<Record<RunListEntry["status"], string>> = {
-      running: "bg-st-running",
-      awaiting_user: "bg-st-await",
-      completed: "bg-st-done",
-      failed: "bg-st-failed",
-      skipped: "bg-st-skipped",
-      halted: "bg-st-blocked",
-      paused: "bg-st-blocked",
+      running: "Running",
+      awaiting_user: "Awaiting you",
+      completed: "Completed",
+      failed: "Failed",
+      skipped: "Skipped",
+      halted: "Halted",
+      paused: "Paused",
     };
-    for (const [status, cls] of Object.entries(expected)) {
+    for (const [status, word] of Object.entries(expected)) {
       const { unmount } = renderPanel({
         runs: run({ status: status as RunListEntry["status"] }),
       });
-      expect(screen.getByTestId("run-status-dot").className).toContain(cls);
+      const mark = screen.getByTestId("run-status-dot");
+      expect(mark).toHaveAttribute("data-status", status);
+      expect(within(mark).getByRole("img")).toHaveAccessibleName(word);
       unmount();
     }
   });
 
-  it("renders a skipped (graceful no-op) run with its own slate dot (#245)", () => {
-    renderPanel({ runs: run({ status: "skipped" }) });
-    const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-skipped");
-    // A skipped run is terminal: it must not read as failed/running.
-    expect(dot.className).not.toContain("bg-st-failed");
-    expect(dot.className).not.toContain("bg-st-running");
-  });
-
-  it("renders a stalled run with an amber, steady dot (#180)", () => {
-    // A stalled run keeps status "running" but must surface amber and NOT pulse.
+  it("draws a stalled run with its own steady mark, not the running one (#180)", () => {
+    // A stalled run keeps status "running" but must not read as running.
     // Per ADR-0032 the daemon no longer has a `Stale` producer, so `stalled` only
-    // ever comes back true for a historical Run — which is precisely why the amber
-    // surface stays in place. Do NOT "repair" this dot by rebranching a producer.
+    // ever comes back true for a historical Run — which is precisely why the
+    // surface stays in place. Do NOT "repair" this mark by rebranching a producer.
     renderPanel({ runs: run({ status: "running", stalled: true }) });
-    const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-skipped");
-    expect(dot.className).not.toContain("animate-pulse");
-    // It must not fall through to the active-running blue dot.
-    expect(dot.className).not.toContain("bg-st-running");
+    const mark = screen.getByTestId("run-status-dot");
+    expect(mark).toHaveAttribute("data-status", "stalled");
+    expect(within(mark).getByRole("img")).toHaveAccessibleName("Stalled");
+    expect(mark.querySelector(".d-spin")).toBeNull();
   });
 
-  it("renders a genuinely-running (not stalled) run blue and pulsing", () => {
+  it("spins the mark of a genuinely-running run", () => {
     renderPanel({ runs: run({ status: "running", stalled: false }) });
-    const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-running");
-    expect(dot.className).toContain("animate-pulse");
-    expect(dot.className).not.toContain("bg-st-skipped");
+    expect(screen.getByTestId("run-status-dot").querySelector(".d-spin")).not.toBeNull();
   });
 
-  // #503: the dot was the whole failure signal — a Run that had actually shipped
+  // #503: the mark was the whole failure signal — a Run that had actually shipped
   // read the same as one that had not, with no text anywhere behind it.
-  it("hangs the failure reason off the status dot", () => {
+  it("hangs the failure reason off the status mark", () => {
     renderPanel({
       runs: run({
         pipeline_name: "shipped-but-filed-failed",
@@ -706,29 +698,30 @@ describe("UnifiedLeftPanel run status dot", () => {
         failure_reason: "merge conflict on ship: 20 conflicting file(s)",
       }),
     });
-    expect(screen.getByTestId("run-status-dot")).toHaveAttribute(
-      "title",
+    expect(screen.getByTestId("run-select-control").getAttribute("title")).toContain(
+      "Failed: merge conflict on ship: 20 conflicting file(s)",
+    );
+    expect(within(screen.getByTestId("run-status-dot")).getByRole("img")).toHaveAccessibleName(
       "merge conflict on ship: 20 conflicting file(s)",
     );
   });
 
-  // #588: an amber dot says why — the agent's question, or the awaiting child.
-  it("hangs the awaiting reason off an amber dot", () => {
+  // #588: an awaiting mark says why — the agent's question, or the awaiting child.
+  it("hangs the awaiting reason off the status mark", () => {
     renderPanel({
       runs: run({
         status: "awaiting_user",
         awaiting_reason: "child run grill-588 is awaiting you",
       }),
     });
-    expect(screen.getByTestId("run-status-dot")).toHaveAttribute(
-      "title",
-      "child run grill-588 is awaiting you",
+    expect(screen.getByTestId("run-select-control").getAttribute("title")).toContain(
+      "Awaiting you: child run grill-588 is awaiting you",
     );
   });
 
-  it("leaves the dot untitled when there is nothing to explain", () => {
+  it("names only the status when there is nothing to explain", () => {
     renderPanel({ runs: run({ status: "completed" }) });
-    expect(screen.getByTestId("run-status-dot")).not.toHaveAttribute("title");
+    expect(screen.getByTestId("run-select-control").getAttribute("title")).toMatch(/^Completed\n/);
   });
 });
 
@@ -742,13 +735,17 @@ describe("UnifiedLeftPanel three-tab strip", () => {
 
   it("defaults to the Runs tab", () => {
     renderPanel();
-    expect(screen.getByText("No runs yet")).toBeInTheDocument();
+    expect(screen.getByText("No runs")).toBeInTheDocument();
+    expect(within(screen.getByTestId("runs-empty")).getByRole("button", { name: "New run" })).toBeInTheDocument();
   });
 
   it("switches to the Triggers tab and shows its empty state", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("tab", { name: "Triggers" }));
-    expect(screen.getByText(/no triggers yet/i)).toBeInTheDocument();
+    expect(screen.getByText("No triggers")).toBeInTheDocument();
+    expect(within(screen.getByTestId("triggers-empty")).getByRole("button", { name: "New trigger" })).toBeInTheDocument();
+    // An icon, two words, one button: no sentence of explanation.
+    expect(screen.queryByText(/on a schedule/i)).toBeNull();
   });
 
   it("shows a provenance badge on a triggered run row", () => {
@@ -886,7 +883,7 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
     // The archived run is pulled into the Archived section instead.
     expect(screen.getByTestId("run-archived-section")).toBeInTheDocument();
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
   });
 
   it("groups a null-target run (effective_repo resolved server-side) with no catch-all bucket", () => {
@@ -925,8 +922,8 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
   it("collapses the Archived section by default (toggle shown, body hidden)", () => {
     renderPanel({ runs: [active, archived] });
     // Toggle + count are always visible…
-    expect(screen.getByTestId("run-archived-toggle")).toBeInTheDocument();
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-chevron")).toBeInTheDocument();
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
     // …but the archived row's body stays folded: only the active row renders.
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(1);
     expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
@@ -934,9 +931,9 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
 
   it("expands and re-collapses when the toggle is clicked", () => {
     renderPanel({ runs: [active, archived] });
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     expect(screen.getByText("Archived One")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
   });
 
@@ -974,7 +971,7 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
     expect(screen.getByText("Archived One")).toBeInTheDocument();
     // …then a single click must still collapse it. A naive
     // `open = archivedOpen || some(selected)` gate would pin it open forever.
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
   });
 
@@ -983,9 +980,9 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
     expect(screen.queryByTestId("run-archived-section")).not.toBeInTheDocument();
   });
 
-  it("does not show 'No runs yet' for an archived-only list", () => {
+  it("does not show 'No runs' for an archived-only list", () => {
     renderPanel({ runs: [archived] });
-    expect(screen.queryByText("No runs yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("No runs")).not.toBeInTheDocument();
     expect(screen.getByTestId("run-archived-section")).toBeInTheDocument();
   });
 
@@ -998,7 +995,7 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
     renderPanel({ runs });
     // Two active repos ⇒ two groups; the archived third repo adds no phantom group.
     expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
   });
 });
 
@@ -1702,24 +1699,34 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
     "archived",
   ];
 
+  /** The row's « ⋯ » menu, open: its entries' test ids. */
+  async function menuEntries(): Promise<string[]> {
+    fireEvent.click(screen.getByTestId("run-row-menu"));
+    const menu = await screen.findByTestId("run-row-menu-content");
+    return [...menu.querySelectorAll("[data-testid]")].map((el) => el.getAttribute("data-testid")!);
+  }
+
   it.each(TERMINAL_NON_ARCHIVED)(
-    "renders the open-session button for a %s run",
-    (status) => {
+    "offers the shell in the menu of a %s run",
+    async (status) => {
       const runs: RunListEntry[] = [
         { stalled: false, effective_repo: "", run_id: "run-term-1", pipeline_name: "p", status, started_at: null, name: "R" },
       ];
       renderPanel({ runs });
-      expect(screen.getByTestId("open-session-button")).toBeInTheDocument();
+      expect(await menuEntries()).toContain("run-menu-open-shell");
     },
   );
 
-  it.each(HIDDEN)("hides the open-session button for a %s run", (status) => {
-    const runs: RunListEntry[] = [
-      { stalled: false, effective_repo: "", run_id: "run-x", pipeline_name: "p", status, started_at: null, name: "R" },
-    ];
-    renderPanel({ runs });
-    expect(screen.queryByTestId("open-session-button")).not.toBeInTheDocument();
-  });
+  it.each(HIDDEN.filter((status) => status !== "archived"))(
+    "offers no shell in the menu of a %s run",
+    async (status) => {
+      const runs: RunListEntry[] = [
+        { stalled: false, effective_repo: "", run_id: "run-x", pipeline_name: "p", status, started_at: null, name: "R" },
+      ];
+      renderPanel({ runs });
+      expect(await menuEntries()).not.toContain("run-menu-open-shell");
+    },
+  );
 
   it("clicking open-session calls openRunShell and mounts the shell modal", async () => {
     mockOpenRunShell.mockResolvedValueOnce({ session: "pdo-shell-run-term-1", created: true });
@@ -1729,7 +1736,8 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
     renderPanel({ runs });
 
     expect(screen.queryByTestId("run-shell-modal")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("open-session-button"));
+    await menuEntries();
+    fireEvent.click(screen.getByTestId("run-menu-open-shell"));
 
     await waitFor(() => expect(mockOpenRunShell).toHaveBeenCalledWith("run-term-1"));
     const modal = await screen.findByTestId("run-shell-modal");
@@ -1743,7 +1751,8 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
     ];
     renderPanel({ runs });
 
-    fireEvent.click(screen.getByTestId("open-session-button"));
+    await menuEntries();
+    fireEvent.click(screen.getByTestId("run-menu-open-shell"));
     await waitFor(() => expect(mockOpenRunShell).toHaveBeenCalledWith("run-term-2"));
     expect(screen.queryByTestId("run-shell-modal")).not.toBeInTheDocument();
   });
@@ -1852,8 +1861,8 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
     renderPanel({ runs: [runRow("completed")] });
     fireEvent.click(screen.getByTestId("retry-all-button"));
 
-    expect(screen.getByTestId("retry-all-backdrop")).toBeInTheDocument();
-    expect(screen.getByTestId("retry-all-confirm-button")).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Retry all nodes?" });
+    expect(within(dialog).getByRole("button", { name: "Retry all" })).toBeInTheDocument();
     expect(mockRetryAll).not.toHaveBeenCalled();
   });
 
@@ -1872,13 +1881,15 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
     );
 
     fireEvent.click(screen.getByTestId("retry-all-button"));
-    fireEvent.click(screen.getByTestId("retry-all-confirm-button"));
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Retry all nodes?" })).getByRole("button", { name: "Retry all" }),
+    );
 
     await waitFor(() => expect(mockRetryAll).toHaveBeenCalledWith("run-1"));
     await waitFor(() => expect(onSelectRun).toHaveBeenCalledWith("offspring-1"));
     // The modal closes once the flow resolves.
     await waitFor(() =>
-      expect(screen.queryByTestId("retry-all-backdrop")).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Retry all nodes?" })).not.toBeInTheDocument(),
     );
   });
 
@@ -1888,7 +1899,7 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(mockRetryAll).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("retry-all-backdrop")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Retry all nodes?" })).not.toBeInTheDocument();
   });
 });
 
@@ -2071,7 +2082,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     // r2 (active manual) visible; r4 (archived manual) counted in Archived.
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Alpha deploy"]);
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
   });
 
   it("combines the three axes with AND semantics", async () => {
@@ -2093,7 +2104,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
   it("applies the filter to the Archived section and its count", async () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
 
     // The archived run is a zebra deploy; filter to alpha ⇒ section disappears.
     await pickFilter(user, "project", "alpha");
@@ -2101,7 +2112,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
 
     // Filter to zebra ⇒ the section is back with the filtered count.
     await pickFilter(user, "project", "zebra");
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
   });
 
   it("clears every axis via the clear control", async () => {
@@ -2127,7 +2138,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     await pickFilter(user, "trigger", "Nightly audit");
 
     expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
-    await user.click(screen.getByTestId("run-filter-empty-clear"));
+    await user.click(within(screen.getByTestId("run-filter-empty")).getByRole("button", { name: "Clear filters" }));
     expect(screen.queryByTestId("run-filter-empty")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
   });
@@ -2183,7 +2194,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
   const labels = () => screen.getAllByTestId("run-display-label").map((el) => el.textContent);
   const row = (id: string) => document.querySelector(`[data-run-row="${id}"]`) as HTMLElement;
 
-  it("nests children under their parent, in list order, indented 14px per level (expanded by default)", () => {
+  it("nests children under their parent, in list order, indented one step per level (expanded by default)", () => {
     renderPanel({ runs });
     expect(labels()).toEqual([
       "Refonte auth — orchestrateur",
@@ -2196,8 +2207,8 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     expect(row("epic")).toHaveAttribute("data-depth", "0");
     expect(row("kid")).toHaveAttribute("data-depth", "1");
     expect(row("grandkid")).toHaveAttribute("data-depth", "2");
-    expect(row("kid").style.paddingLeft).toBe("26px");
-    expect(row("grandkid").style.paddingLeft).toBe("40px");
+    expect(row("kid").style.getPropertyValue("--depth")).toBe("1");
+    expect(row("grandkid").style.getPropertyValue("--depth")).toBe("2");
     // An orphan (parent forgotten) is a root.
     expect(row("orphan")).toHaveAttribute("data-depth", "0");
   });
@@ -2228,10 +2239,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
   it("the orchestrated badge is gone; the trigger badge stays", () => {
     renderPanel({ runs, triggers: [trig] });
     expect(screen.queryByTestId("run-orchestrated-badge")).not.toBeInTheDocument();
-    expect(screen.getByTestId("run-trigger-badge")).toHaveAttribute(
-      "title",
-      "Created by trigger “Nightly audit” — click to open it in the Triggers tab",
-    );
+    expect(screen.getByTestId("run-trigger-badge")).toHaveAccessibleName("Trigger: Nightly audit");
   });
 
   it("aggregates the child counts over the whole subtree, zero pills hidden, none on a leaf", () => {
@@ -2257,7 +2265,10 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     const pills = within(row("epic")).getByTestId("run-child-pills");
     expect(within(pills).getByTestId("run-child-pills-stale")).toHaveTextContent("1");
     expect(within(pills).queryByTestId("run-child-pills-running")).not.toBeInTheDocument();
-    expect(within(pills).getByTestId("run-child-pills-stale").querySelector(".bg-st-skipped")).not.toBeNull();
+    expect(within(within(pills).getByTestId("run-child-pills-stale")).getByRole("img")).toHaveAttribute(
+      "stroke",
+      "var(--color-st-skipped)",
+    );
   });
 
   it("the chevron collapses / expands the subtree without selecting the run", () => {
@@ -2283,7 +2294,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     );
     fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
     const pills = within(row("epic")).getByTestId("run-child-pills");
-    expect(within(pills).getByTestId("run-child-pills-failed")).toHaveAttribute("title", "1 failed child run — click to expand");
+    expect(within(pills).getByTestId("run-child-pills-failed")).toHaveAttribute("title", "1 failed child run, click to expand");
     fireEvent.click(pills);
     expect(onSelectRun).not.toHaveBeenCalled();
     expect(labels()).toHaveLength(6);
@@ -2419,8 +2430,8 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     expect(within(row("kid-trig")).getByTestId("run-parent-link")).toBeInTheDocument();
     expect(within(row("grandkid")).queryByTestId("run-parent-link")).toBeNull();
     expect(within(row("orphan")).queryByTestId("run-parent-link")).toBeNull();
-    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(1)");
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("1");
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     // The archived parent holds no active child: no chevron, no pills.
     expect(labels().slice(-1)).toEqual(["Refonte auth — orchestrateur"]);
     expect(within(row("epic")).queryByTestId("run-tree-chevron")).toBeNull();
@@ -2437,8 +2448,8 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     renderPanel({ runs: allArchived });
     expect(labels()).toEqual(["#700 spike", "triage nightly"]);
     // The count is the number of archived runs, not of archived roots.
-    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(4)");
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("4");
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     // Collapsed by default (the preference holds for both sections).
     expect(labels().slice(2)).toEqual(["Refonte auth — orchestrateur"]);
     expect(within(row("epic")).getByTestId("run-tree-chevron")).toHaveAttribute("aria-expanded", "false");
@@ -2466,7 +2477,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     render(
       <UnifiedLeftPanel runs={shelved} selectedRunId={null} onSelectRun={onSelectRun} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
     );
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
     fireEvent.click(within(row("kid-trig")).getByTestId("run-parent-link"));
     expect(onSelectRun).toHaveBeenCalledTimes(1);
@@ -2578,7 +2589,7 @@ describe("UnifiedLeftPanel run multi-select (#577)", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Run Two" }));
     expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
-    expect(screen.getByTestId("bulk-note")).toHaveTextContent("1 running will stop");
+    expect(screen.getByTestId("bulk-note")).toHaveAccessibleName("1 running will stop");
 
     fireEvent.click(screen.getByTestId("bulk-action-cleanup"));
     expect(screen.getByText("Cleanup 2 runs?")).toBeInTheDocument();

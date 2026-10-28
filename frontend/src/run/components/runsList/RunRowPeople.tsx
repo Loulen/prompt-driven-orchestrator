@@ -5,8 +5,9 @@ import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import { useRunPresences } from "../../store/presences";
 
 /**
- * The people of a Run's row (`run/item/people`, API 0.12), after the
- * pipeline's name: what the extensions draw of who has the Run open, live.
+ * The people of a Run's row (`run/item/people`, API 0.12), at the end of
+ * its meta line, after its `run/item` marks: what the extensions draw of who
+ * has the Run open, live.
  * The core draws no person itself: nothing at all without a contribution.
  */
 export default function RunRowPeople({ run }: { run: RunListEntry }) {
@@ -28,7 +29,8 @@ export default function RunRowPeople({ run }: { run: RunListEntry }) {
     <ExtensionDecorations<RunPeopleContext>
       location="run/item/people"
       extra={extra}
-      className="shrink-0 font-sans"
+      className="shrink-0"
+      nowrap
     />
   );
 }

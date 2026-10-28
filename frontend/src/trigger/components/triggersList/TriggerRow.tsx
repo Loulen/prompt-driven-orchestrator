@@ -1,16 +1,19 @@
 import { useMemo } from "react";
-import { Copy, Pencil, Play, Power, Trash2 } from "lucide-react";
+import { CalendarClock, Circle, Copy, Layers, Pencil, Play, Power, ShieldQuestion, SkipForward, Trash2 } from "lucide-react";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import { ExtensionMenuGroups } from "../../../shared/extensions/ExtensionActions";
 import type { DecorationContext, TriggerEntity } from "../../../shared/extensions/contract";
 import { DropdownMenuSeparator } from "../../../shared/ui/dropdown-menu";
 import RowMenu, { ROW_MENU_EXTENSION_ITEM, RowMenuItem } from "../../../shared/ui/RowMenu";
 import { toast } from "../../../shared/ui/toast";
+import { StatusIcon, Tooltip } from "../../../shared/ui/kit";
+import StatusMark from "../../../shared/ui/leftList/StatusMark";
+import HoverBar, { RowAction } from "../../../shared/ui/leftList/HoverBar";
+import { fmtAge, fmtUntil } from "../../../shared/ui/leftList/format";
+import { useListClock } from "../../../shared/ui/leftList/clock";
 import type { Trigger } from "../../../shared/generated/Trigger";
-import { repoGroupLabel } from "../../../lib/groupByRepo";
-import SelectControl from "../../../shared/ui/SelectControl";
 import { humanizeCron } from "../../model/cronPresets";
-import { lastOutcomeTooltip, outcomeDot, outcomeRing } from "../../model/outcome";
+import { lastOutcomeTooltip, outcomeTone, overlapLabel } from "../../model/outcome";
 import SuspendedPill from "./SuspendedPill";
 import { suspensionTooltip } from "../../model/suspension";
 import { copyToClipboard } from "../../../shared/lib/clipboard";
@@ -21,9 +24,10 @@ interface Props {
   isSelected: boolean;
   /** Multi-selected (#577). */
   rowSelected: boolean;
-  /** Every raw target repo of the list, so a colliding basename is
-   *  disambiguated identically in the badge and the group header (#258 G7). */
-  allRepos: string[];
+  /** Some Trigger of the list is multi-selected: every mark shows its box. */
+  selecting?: boolean;
+  /** #348: every scheduled fire is paused. */
+  paused?: boolean;
   onSelect: () => void;
   /** The multi-select control was clicked (shift ⇒ a range). */
   onSelectControl: (shiftKey: boolean) => void;
@@ -33,12 +37,29 @@ interface Props {
   onToggle: () => void;
 }
 
-/** One Trigger row, rendered identically flat or grouped by repo (#258). */
+/** When it fires next: in words, or why it does not. */
+function nextOf(t: Trigger, paused: boolean, now: number): { text: string; title: string; dim: boolean } {
+  const schedule = humanizeCron(t.cron);
+  if (t.suspension) return { text: "—", title: `Suspended: ${suspensionTooltip(t.suspension)}`, dim: true };
+  if (!t.enabled) return { text: "off", title: `Disabled\n${schedule}`, dim: true };
+  if (paused) return { text: "paused", title: `All triggers paused\n${schedule}`, dim: true };
+  if (!t.next_fire_at) return { text: "—", title: `Not scheduled\n${schedule}`, dim: true };
+  const until = fmtUntil(t.next_fire_at, now);
+  return { text: until, title: `Next fire in ${until}\n${schedule}`, dim: false };
+}
+
+/**
+ * One Trigger row, rendered identically flat or grouped by Projet (#258): its
+ * switch first, its name and its modes (guard, overlap); then its pipeline,
+ * its last fire and the next one. Under the switch, its last result, which
+ * doubles as the select control.
+ */
 export default function TriggerRow({
   trigger: t,
   isSelected,
   rowSelected,
-  allRepos,
+  selecting,
+  paused = false,
   onSelect,
   onSelectControl,
   onRunNow,
@@ -46,170 +67,155 @@ export default function TriggerRow({
   onDelete,
   onToggle,
 }: Props) {
-  const dot = outcomeDot(t.last_outcome);
   // ADR-0081 (#31): what the `trigger/item` decorations mark — with its last
   // editor and its suspension (API 0.8), for an extension that answers for it.
   const extra = useMemo(() => ({ entity: triggerEntity(t) }), [t]);
   // API 0.8: a suspended Trigger reads switched off, whatever its stored bit.
   const suspension = t.suspension ?? null;
   const on = t.enabled && !suspension;
+  const now = useListClock();
+  const next = nextOf(t, paused, now);
+  const last = lastOutcomeTooltip(t);
+  const tone = outcomeTone(t.last_outcome);
+  const toggleLabel = suspension
+    ? `Suspended: ${suspensionTooltip(suspension)}`
+    : t.enabled
+      ? "Disable trigger"
+      : "Enable trigger";
+  const Overlap = t.overlap_policy === "allow" ? Layers : SkipForward;
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
+      className="lp-row"
+      data-open={isSelected || undefined}
+      data-checked={rowSelected || undefined}
+      data-off={!t.enabled || undefined}
+      data-suspended={suspension ? true : undefined}
+      aria-current={isSelected || undefined}
       onClick={onSelect}
-      className={`group flex w-full cursor-pointer items-center gap-2 border-b border-l-2 border-line-soft px-3 py-2 text-left transition-colors ${
-        rowSelected
-          ? "border-l-primary bg-selected text-text"
-          : isSelected
-            ? "border-l-transparent bg-surface-2 text-text"
-            : "border-l-transparent text-text-2 hover:bg-hover/50"
-      } ${suspension ? "bg-st-await/5" : ""} ${t.enabled ? "" : "opacity-60"}`}
-      style={{ fontSize: "11.5px" }}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
       data-testid="trigger-row"
       // #911: one row addressable by id, the way `data-run-row` is for Runs.
       data-trigger-row={t.id}
     >
-      <SelectControl
-        selected={rowSelected}
-        dotClass={dot}
-        ringClass={outcomeRing(t.last_outcome)}
-        dotTitle={lastOutcomeTooltip(t)}
-        dotTestId="trigger-status-dot"
-        label={rowSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
-        onSelect={(e) => onSelectControl(e.shiftKey)}
-      />
-      <div className="min-w-0 flex-1">
-        {/* The « suspended » pill wraps under the name rather than eat it in a
-            narrow panel (or once the hover actions take their room). */}
-        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5" data-testid="trigger-name-line">
-          <span className={`max-w-full truncate font-medium ${suspension ? "text-text-3" : ""}`}>{t.name}</span>
-          {suspension && <SuspendedPill suspension={suspension} />}
-        </div>
-        <div
-          className="mt-0.5 flex items-center gap-1.5 truncate text-text-3"
-          style={{ fontSize: "10px" }}
+      <span className="lp-lead lp-lead--trigger">
+        {/* Enable/disable — always there, so a paused state is reversible in one gesture. */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          aria-label={t.enabled ? "Disable trigger" : "Enable trigger"}
+          title={toggleLabel}
+          className="d-switch"
+          data-testid="trigger-toggle"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          onKeyDown={(e) => e.stopPropagation()}
         >
-          <span className="min-w-0 truncate font-mono">{t.pipeline_name}</span>
-          {t.target_repo && (
-            <span
-              className="shrink-0 rounded border border-line-strong px-1 py-px"
-              style={{ fontSize: "9px" }}
-              title={t.target_repo}
-            >
-              {repoGroupLabel(t.target_repo, allRepos)}
+          <span className="d-switch__knob" aria-hidden />
+        </button>
+      </span>
+      <span className="lp-l1">
+        <span className="lp-name" title={t.name} data-testid="trigger-name">
+          {t.name}
+        </span>
+        {suspension && <SuspendedPill suspension={suspension} />}
+        <span className="lp-end">
+          {/* The `trigger/item` decorations (ADR-0081, #31); nothing without one. */}
+          <span className="lp-deco">
+            <ExtensionDecorations<DecorationContext> location="trigger/item" extra={extra} nowrap />
+          </span>
+          <span className="lp-modes">
+            {t.guard_command && (
+              <Tooltip label={`Guard: ${t.guard_command}`}>
+                <span role="img" aria-label="Guard">
+                  <ShieldQuestion size={12} strokeWidth={1.5} aria-hidden />
+                </span>
+              </Tooltip>
+            )}
+            <Tooltip label={`Overlap: ${overlapLabel(t)}`}>
+              <span role="img" aria-label={`Overlap: ${t.overlap_policy}`} data-testid="trigger-overlap">
+                <Overlap size={12} strokeWidth={1.5} aria-hidden />
+              </span>
+            </Tooltip>
+          </span>
+        </span>
+      </span>
+      {/* #577 — the last result doubles as the select control. */}
+      <span className="lp-lead lp-lead--l2">
+        <StatusMark
+          glyph={
+            <span data-testid="trigger-status-dot" data-outcome={t.last_outcome ?? "never"}>
+              {tone ? (
+                <StatusIcon kind="tone" status={tone} label={last} size={12} />
+              ) : (
+                <Circle size={12} strokeWidth={2} className="lp-dim" role="img" aria-label={last} />
+              )}
+            </span>
+          }
+          selected={rowSelected}
+          selecting={selecting}
+          label={rowSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
+          title={`${last}\nClick to select, Shift+click for a range`}
+          onSelect={(e) => onSelectControl(e.shiftKey)}
+        />
+      </span>
+      <span className="lp-l2">
+        <span className="lp-pipe" title={t.pipeline_name}>
+          {t.pipeline_name}
+        </span>
+        <span className="lp-end">
+          {t.last_fired_at && (
+            <span className="lp-num lp-muted lp-hide-narrow" title={last}>
+              {fmtAge(t.last_fired_at, now)}
             </span>
           )}
-          <span className="shrink-0" aria-hidden="true">·</span>
-          {/* The schedule ends in an ellipsis once the hover actions take their room. */}
-          <span className="min-w-0 truncate" title={humanizeCron(t.cron)} data-testid="trigger-schedule">
-            {humanizeCron(t.cron)}
+          <span className="lp-modes" title={next.title} data-testid="trigger-schedule">
+            <CalendarClock size={11} strokeWidth={1.75} aria-hidden />
+            <span className={next.dim ? "lp-num lp-muted" : "lp-num"}>{next.text}</span>
           </span>
-        </div>
-        {/* Line 3: the `trigger/item` decorations (ADR-0081, #31). A line of
-            their own, as on a Run row, so a badge never truncates the
-            pipeline's name and several wrap; nothing at all without one. */}
-        <ExtensionDecorations<DecorationContext>
-          location="trigger/item"
-          extra={extra}
-          block
-          className="mt-0.5"
-        />
-      </div>
-      {!t.enabled && !suspension && (
-        <span
-          className="shrink-0 rounded border border-line-strong px-1 py-px text-text-3"
-          style={{ fontSize: "9px" }}
-        >
-          disabled
-        </span>
-      )}
-      {/* Hover actions: run-now, edit, delete. */}
-      <span className="hidden shrink-0 items-center gap-0.5 group-hover:inline-flex">
-        <span
-          role="button"
-          title="Run now (test this trigger)"
-          className="cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-primary"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRunNow?.();
-          }}
-          data-testid="trigger-run-now"
-        >
-          <Play size={12} />
-        </span>
-        <span
-          role="button"
-          title="Edit trigger"
-          className="cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text"
-          onClick={(e) => {
-            e.stopPropagation();
-            onEdit?.();
-          }}
-          data-testid="trigger-edit"
-        >
-          <Pencil size={12} />
-        </span>
-        <span
-          role="button"
-          title="Delete trigger"
-          className="cursor-pointer rounded p-0.5 text-text-3 transition-colors hover:bg-hover hover:text-st-failed"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          data-testid="trigger-delete"
-        >
-          <Trash2 size={12} />
         </span>
       </span>
-      {/* #30 — the « ⋯ » menu: the row's verbs, the extensions'
-          `trigger/item/menu` groups, then Delete. */}
-      <RowMenu label={`More actions for ${t.name}`} testId="trigger-row-menu">
-        {onRunNow && (
-          <RowMenuItem data-testid="trigger-menu-run-now" onClick={onRunNow}>
-            <Play /> Run now
+      <HoverBar testId="trigger-row-actions">
+        {onRunNow && <RowAction icon={Play} label="Run now" testId="trigger-run-now" onClick={onRunNow} />}
+        {onEdit && <RowAction icon={Pencil} label="Edit trigger" testId="trigger-edit" onClick={onEdit} />}
+        <RowAction icon={Trash2} label="Delete trigger" danger testId="trigger-delete" onClick={onDelete} />
+        {/* #30 — the « ⋯ » menu: the row's verbs, the extensions'
+            `trigger/item/menu` groups, then Delete. */}
+        <RowMenu label={`More actions for ${t.name}`} testId="trigger-row-menu">
+          {onRunNow && (
+            <RowMenuItem data-testid="trigger-menu-run-now" onClick={onRunNow}>
+              <Play /> Run now
+            </RowMenuItem>
+          )}
+          {onEdit && (
+            <RowMenuItem data-testid="trigger-menu-edit" onClick={onEdit}>
+              <Pencil /> Edit
+            </RowMenuItem>
+          )}
+          <RowMenuItem data-testid="trigger-menu-toggle" onClick={onToggle}>
+            <Power /> {t.enabled ? "Disable" : "Enable"}
           </RowMenuItem>
-        )}
-        {onEdit && (
-          <RowMenuItem data-testid="trigger-menu-edit" onClick={onEdit}>
-            <Pencil /> Edit
+          <RowMenuItem data-testid="trigger-menu-copy-id" onClick={() => copyTriggerId(t.id)}>
+            <Copy /> Copy trigger id
           </RowMenuItem>
-        )}
-        <RowMenuItem data-testid="trigger-menu-toggle" onClick={onToggle}>
-          <Power /> {t.enabled ? "Disable" : "Enable"}
-        </RowMenuItem>
-        <RowMenuItem data-testid="trigger-menu-copy-id" onClick={() => copyTriggerId(t.id)}>
-          <Copy /> Copy trigger id
-        </RowMenuItem>
-        <ExtensionMenuGroups location="trigger/item/menu" extra={extra} itemClassName={ROW_MENU_EXTENSION_ITEM} />
-        <DropdownMenuSeparator />
-        <RowMenuItem variant="destructive" data-testid="trigger-menu-delete" onClick={onDelete}>
-          <Trash2 /> Delete
-        </RowMenuItem>
-      </RowMenu>
-      {/* Enable/disable toggle — always visible so paused state is reversible. */}
-      <span
-        role="switch"
-        aria-checked={on}
-        aria-label={t.enabled ? "Disable trigger" : "Enable trigger"}
-        title={
-          suspension
-            ? `Suspended: ${suspensionTooltip(suspension)}`
-            : t.enabled
-              ? "Disable trigger"
-              : "Enable trigger"
-        }
-        className={`shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-hover ${
-          on ? "text-primary" : "text-text-3"
-        }`}
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-        data-testid="trigger-toggle"
-      >
-        <Power size={12} />
-      </span>
-    </button>
+          <ExtensionMenuGroups location="trigger/item/menu" extra={extra} itemClassName={ROW_MENU_EXTENSION_ITEM} />
+          <DropdownMenuSeparator />
+          <RowMenuItem variant="destructive" data-testid="trigger-menu-delete" onClick={onDelete}>
+            <Trash2 /> Delete
+          </RowMenuItem>
+        </RowMenu>
+      </HoverBar>
+    </div>
   );
 }
 

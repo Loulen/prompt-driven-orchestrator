@@ -9,17 +9,26 @@ describe("BulkActionBar", () => {
     render(
       <BulkActionBar
         count={3}
-        note="1 running will stop"
+        live={{ count: 1, note: "1 running will stop" }}
         actions={[{ key: "cleanup", label: "Cleanup", destructive: true, onClick: cleanup }]}
         onClear={onClear}
       />,
     );
     expect(screen.getByTestId("bulk-count")).toHaveTextContent("3 selected");
-    expect(screen.getByTestId("bulk-note")).toHaveTextContent("1 running will stop");
+    expect(screen.getByTestId("bulk-note")).toHaveAccessibleName("1 running will stop");
+    expect(screen.getByTestId("bulk-note")).toHaveTextContent("1");
     fireEvent.click(screen.getByTestId("bulk-action-cleanup"));
     expect(cleanup).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("bulk-clear"));
     expect(onClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("names each action, the icons alone showing", () => {
+    render(
+      <BulkActionBar count={2} actions={[{ key: "retry", label: "Retry", onClick: () => {} }]} onClear={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: "Retry" })).toBe(screen.getByTestId("bulk-action-retry"));
+    expect(screen.getByRole("button", { name: "Clear selection" })).toBe(screen.getByTestId("bulk-clear"));
   });
 
   it("omits the note when none is given", () => {

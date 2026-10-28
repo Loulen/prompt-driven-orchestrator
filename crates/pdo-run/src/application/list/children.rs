@@ -72,9 +72,9 @@ impl Runs {
     /// `GET /runs/{run_id}/children` — the dedicated children read (ADR-0064):
     /// every Run whose mechanical `parent_run_id` is this Run, grouped by parent
     /// node, in the parent's node-definition order (unknown/absent node last),
-    /// children chronological within a group. Cost and duration live HERE, not on
-    /// `GET /runs` — the global list stays cheap (ADR-0052: derived on read, never
-    /// persisted).
+    /// children chronological within a group. The cost lives HERE and on
+    /// `GET /runs/costs`, not on `GET /runs` — the global list stays cheap
+    /// (ADR-0052: derived on read, never persisted).
     ///
     /// Only the children `actor` may read (CORE-5). The children are found
     /// in the Résumés (ADR-0084); only a child's own log is replayed, for its
@@ -148,9 +148,9 @@ impl Runs {
         Json(RunChildrenResponse { run_id, nodes }).into_response()
     }
 
-    /// The cost of the child `run_id`, derived on read from its log
-    /// (ADR-0052): the one log the children read replays, a child's own.
-    async fn cost_of(&self, run_id: &str) -> Option<CostStat> {
+    /// The cost of the Run `run_id`, derived on read from its log
+    /// (ADR-0052): the one log a read of costs replays, the Run's own.
+    pub(crate) async fn cost_of(&self, run_id: &str) -> Option<CostStat> {
         let events = self.store().events(run_id).await.ok()?;
         let child = project(&events)?;
         self.live_facts.cost(&child, &events).await

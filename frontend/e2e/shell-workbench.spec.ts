@@ -105,7 +105,7 @@ test("the top bar is 36 px with its command field, the status bar 22 px", async 
   await page.getByTestId("command-field").click();
   await expect(page.getByTestId("command-palette-input")).toBeFocused();
   await page.keyboard.type("anything");
-  await expect(page.getByTestId("command-palette-empty")).toHaveText("No results");
+  await expect(page.getByTestId("command-palette-empty")).toHaveText("No match");
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("command-palette")).toBeHidden();
   await page.keyboard.press("Control+k");

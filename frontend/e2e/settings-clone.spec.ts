@@ -135,8 +135,8 @@ test("clone a URL into the clones folder from Settings, then New Run clones and 
   await page.locator(`[data-testid="project-option"][data-project-id="${projectId}"]`).click();
   await page.getByTestId("target-repo-input").fill(shopWeb);
   const shopClone = path.join(CLONES, "shop-web");
-  await expect(page.getByTestId("remote-repo-hint")).toContainText(`will be cloned in full to ${shopClone}`);
-  await expect(page.getByTestId("pipeline-select")).toContainText("Available once the clone is done");
+  await expect(page.getByTestId("remote-repo-hint")).toContainText(`Clone into${shopClone}`);
+  await expect(page.getByTestId("pipeline-select")).toContainText("After the clone");
   await expect(page.getByTestId("clone-launch-button")).toHaveText("Clone and launch");
   await page.getByPlaceholder(/free-text prompt/i).fill("e2e clone and launch");
   const created = page.waitForResponse(

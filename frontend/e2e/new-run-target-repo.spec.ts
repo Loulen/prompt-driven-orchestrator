@@ -127,8 +127,9 @@ test("a deep default path beside its mark, and another repository without it", a
     DEEP,
   );
 
-  // Another repository: no mark, the path takes its room.
-  await page.getByTestId("target-repo-input").click();
+  // Another repository: no mark, the path takes its room. The list opens on
+  // the chevron (a field that holds a listed repository does not on focus).
+  await page.getByTestId("repo-groups-trigger").click();
   await page
     .getByTestId("repo-group-item")
     .filter({ hasText: "shop-api" })

@@ -156,14 +156,23 @@ export default function RepoCombobox({
               title={value || undefined}
               value={value}
               onChange={(e) => {
-                onChange(e.target.value);
-                setDropdownOpen(true);
+                const next = e.target.value;
+                onChange(next);
+                // A path typed (or pasted) whole is a pick: the list steps aside.
+                setDropdownOpen(!offered.some((g) => g.repos.includes(next)));
               }}
               onFocus={() => {
                 setFocused(true);
-                setDropdownOpen(true);
+                // A field that already holds one of the offered repositories
+                // opens its list on the chevron or ↓, not on a mere focus.
+                if (narrowing) setDropdownOpen(true);
               }}
-              onBlur={() => setFocused(false)}
+              onBlur={() => {
+                // The rows and the chevron keep the focus here (mousedown is
+                // cancelled on them): a blur is leaving the field.
+                setFocused(false);
+                setDropdownOpen(false);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown" && !dropdownOpen) {
                   e.preventDefault();

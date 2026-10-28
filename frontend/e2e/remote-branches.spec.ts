@@ -3,7 +3,6 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { cleanupRuns, pickPipeline } from "./helpers";
 
 // Layer 3b (real browser ↔ real daemon) for #571. The New Run source-branch
@@ -16,10 +15,9 @@ import { cleanupRuns, pickPipeline } from "./helpers";
 // instance-level, not per-target-repo), the git fixture into os.tmpdir(), and
 // the Run is pointed at that fixture.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-remote-branches-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The daemon reads the instance pipelines from `$HOME/.pdo/pipelines`.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 

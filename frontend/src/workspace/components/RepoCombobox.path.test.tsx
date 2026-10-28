@@ -118,3 +118,23 @@ describe("RepoCombobox — the lists and the field (CORE-116)", () => {
     expect(screen.getByTestId("repo-error")).toHaveTextContent("Not a git repository");
   });
 });
+
+describe("RepoCombobox — when its list opens (CORE-116)", () => {
+  it("does not open on focus when the field holds a listed repository; the chevron opens it", () => {
+    renderCombobox({ groups: [{ label: "Platform", repos: [DEEP, `${HOME}/work/infra`] }] });
+    fireEvent.focus(screen.getByTestId("target-repo-input"));
+    expect(screen.queryByTestId("repo-groups-dropdown")).toBeNull();
+    fireEvent.click(screen.getByTestId("repo-groups-trigger"));
+    expect(screen.getByTestId("repo-groups-dropdown")).toBeInTheDocument();
+  });
+
+  it("steps aside once a listed path is typed whole", () => {
+    const onChange = vi.fn();
+    renderCombobox({ value: "", onChange, recentRepos: [DEEP] });
+    fireEvent.focus(screen.getByTestId("target-repo-input"));
+    expect(screen.getByTestId("recent-repos-dropdown")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("target-repo-input"), { target: { value: DEEP } });
+    expect(onChange).toHaveBeenCalledWith(DEEP);
+    expect(screen.queryByTestId("recent-repos-dropdown")).toBeNull();
+  });
+});

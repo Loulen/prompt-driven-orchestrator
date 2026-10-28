@@ -81,7 +81,7 @@ async function openNewRunOn(page: Page, projectId: string, repo: string) {
 async function closeNewRun(page: Page) {
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("pipeline-select-menu")).toBeHidden();
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByTestId("new-run-modal").getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByTestId("target-repo-input")).toBeHidden();
 }
 
@@ -142,9 +142,9 @@ test("a pipeline validated for all heads the menu of the Projets it is listed fi
   await row.click();
   await page.getByTestId("pipeline-select").click();
   const selected = page.getByTestId(`pipeline-select-option-${PIPELINE_NAME}`);
-  await expect(selected).toHaveText(PIPELINE_NAME);
+  await expect(selected.locator(".ln-pp__name")).toHaveText(PIPELINE_NAME);
   const check = await selected.locator("svg").boundingBox();
-  const name = await selected.locator("span.truncate").boundingBox();
+  const name = await selected.locator(".ln-pp__name").boundingBox();
   expect(check).not.toBeNull();
   expect(name).not.toBeNull();
   expect(Math.round(check!.width)).toBe(13);

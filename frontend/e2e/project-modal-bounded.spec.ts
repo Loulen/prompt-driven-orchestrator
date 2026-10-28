@@ -240,9 +240,11 @@ test("the pencil of a group in no Projet names one for its repository; short con
   const modal = page.getByTestId("project-edit-modal");
   await expect(modal.getByRole("heading", { name: /^Edit project/ })).toBeInViewport();
   await expect(page.getByTestId("project-edit-save")).toBeInViewport();
-  expect(await overflows(page.getByTestId("project-edit-body"))).toBe(false);
+  expect(
+    await overflows(page.getByTestId("project-edit-body").locator("xpath=ancestor::div[contains(@class, 'd-frame__body')]")),
+  ).toBe(false);
 
-  // Backdrop click behaviour is unchanged: it still closes the modal.
-  await page.getByTestId("project-edit-backdrop").click({ position: { x: 5, y: 5 } });
+  // A click on the backdrop still closes the modal.
+  await page.mouse.click(5, 5);
   await expect(modal).toHaveCount(0);
 });

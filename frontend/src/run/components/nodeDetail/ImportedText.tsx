@@ -17,8 +17,7 @@ export default function ImportedText({ paths, text }: { paths: string[]; text: s
   return (
     <div className="relative rounded-md border border-line-strong bg-surface-0 p-3 pr-10">
       <div
-        className="flex flex-col gap-1.5 break-words font-mono text-text"
-        style={{ fontSize: "11px" }}
+        className="flex flex-col gap-1.5 break-words font-mono text-text text-xs"
         data-testid="import-text"
       >
         {paths.map((path) => (

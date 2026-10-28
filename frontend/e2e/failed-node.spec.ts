@@ -141,12 +141,13 @@ test("failed node shows failure banner and Mark complete button", async ({
   await selectWorkerRunPane(page, runId);
 
   // Red failure banner with the reason.
-  await expect(
-    page.getByText("Failed — tool call exited 1: command not found"),
-  ).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("failed-banner")).toContainText(
+    "Failed — tool call exited 1: command not found",
+    { timeout: 5_000 },
+  );
 
   // Mark complete button is offered for a failed node.
-  await expect(page.getByText("Mark complete")).toBeVisible({ timeout: 3_000 });
+  await expect(page.getByTestId("mark-complete-btn")).toBeVisible({ timeout: 3_000 });
 });
 
 test("Mark complete with missing outputs shows 409 sub-banner", async ({
@@ -161,10 +162,10 @@ test("Mark complete with missing outputs shows 409 sub-banner", async ({
   const runId = await createRun(page, baseURL!);
 
   await selectWorkerRunPane(page, runId);
-  await expect(page.getByText("Mark complete")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("mark-complete-btn")).toBeVisible({ timeout: 5_000 });
 
   // Click Mark complete — no output files exist, expect the 409 sub-banner.
-  await page.getByText("Mark complete").click();
+  await page.getByTestId("mark-complete-btn").click();
 
   // The banner is a single span "Missing outputs: summary, report" — assert on
   // it directly so the port-row labels/paths (also "summary"/"report") don't
@@ -204,17 +205,17 @@ test("Mark complete succeeds after creating output files", async ({
   await fs.writeFile(path.join(iterDir, "report", "output.md"), "# Report\nAll good.");
 
   await selectWorkerRunPane(page, runId);
-  await expect(page.getByText("Mark complete")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("mark-complete-btn")).toBeVisible({ timeout: 5_000 });
 
   // Click Mark complete — should succeed now.
-  await page.getByText("Mark complete").click();
+  await page.getByTestId("mark-complete-btn").click();
 
   // The sub-banner should not appear.
   await page.waitForTimeout(1_000);
   await expect(page.getByText("Missing outputs:")).not.toBeVisible();
 
   // Node status transitions to Completed.
-  await expect(page.getByText("Completed")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByTestId("node-status-badge")).toHaveText("Completed", { timeout: 5_000 });
 });
 
 test("Mark complete on a failed run reopens it before output validation", async ({

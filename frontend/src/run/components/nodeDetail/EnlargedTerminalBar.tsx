@@ -1,15 +1,13 @@
 import type { ReactNode, Ref } from "react";
-import { CheckCircle, LoaderCircle, LockOpen } from "lucide-react";
+import { Check, CircleCheck, LockOpen } from "lucide-react";
 import type { NodeState } from "../../../shared/generated/NodeState";
-import { Tooltip } from "../../../shared/ui/tooltip";
-import { STATUS_BG, STATUS_BORDER, STATUS_DOT, STATUS_TEXT } from "../../../nodeStyles";
+import { IconButton, StatusIcon } from "../../../shared/ui/kit";
 import type { MarkVerdict, ReleaseVerdict } from "../../store/useNodeRun";
-import { STATUS_LABELS } from "./labels";
 import { MarkCompleteVerdict, ReleaseCompletionVerdict } from "./verdicts";
 
 const RELEASE_LABEL = "Mark ready for completion";
 const RELEASED_LABEL = "Completion released";
-const MARK_COMPLETE_LABEL = "Mark complete · take the artifacts as they are";
+const MARK_COMPLETE_LABEL = "Approve";
 
 /** Which gesture of the enlarged bar last spoke, so its verdict shows under it. */
 export type GesturePopover = "release" | "mark" | null;
@@ -44,30 +42,14 @@ export function EnlargedTerminalIdentity({
   iter: number;
 }) {
   return (
-    <span className="flex items-center gap-1.5" data-testid="term-identity">
-      <span
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[node.status]}${
-          node.status === "running" ? " animate-pulse" : ""
-        }`}
-      />
-      <span
-        className="text-text"
-        style={{ fontSize: "12px", fontWeight: 500 }}
-        data-testid="term-identity-name"
-      >
+    <span className="flex min-w-0 items-center gap-1.5" data-testid="term-identity">
+      <span data-testid="term-identity-status" data-status={node.status} className="inline-flex">
+        <StatusIcon kind="node" status={node.status} />
+      </span>
+      <span className="truncate text-sm font-medium text-text" data-testid="term-identity-name">
         {nodeName ?? node.node_id}
       </span>
-      <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
-        iter {iter}
-      </span>
-      <span
-        className={`rounded border px-1.5 py-px transition-colors duration-[250ms] ${STATUS_BORDER[node.status]} ${STATUS_BG[node.status]} ${STATUS_TEXT[node.status]}`}
-        style={{ fontSize: "10px", fontWeight: 500 }}
-        data-testid="term-identity-status"
-        data-status={node.status}
-      >
-        {STATUS_LABELS[node.status] ?? node.status}
-      </span>
+      <span className="shrink-0 font-mono text-2xs text-text-3">iter {iter}</span>
     </span>
   );
 }
@@ -80,45 +62,34 @@ export function EnlargedCompletionGestures({
   completion: TerminalCompletion;
   onGesture: (gesture: Exclude<GesturePopover, null>) => void;
 }) {
-  const releaseLabel = completion.released ? RELEASED_LABEL : RELEASE_LABEL;
+  const releaseLabel = completion.isReleasing ? "Releasing…" : completion.released ? RELEASED_LABEL : RELEASE_LABEL;
   return (
     <>
       {completion.canRelease && (
-        <Tooltip content={releaseLabel}>
-          <button
-            onClick={() => {
-              onGesture("release");
-              completion.release();
-            }}
-            disabled={completion.isReleasing}
-            aria-label={releaseLabel}
-            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-await transition-colors hover:bg-st-await/14 disabled:cursor-wait"
-            data-testid="term-release-completion"
-          >
-            {completion.isReleasing ? (
-              <LoaderCircle size={12} className="animate-spin" />
-            ) : completion.released ? (
-              <CheckCircle size={12} />
-            ) : (
-              <LockOpen size={12} />
-            )}
-          </button>
-        </Tooltip>
+        <IconButton
+          icon={completion.released ? CircleCheck : LockOpen}
+          size="sm"
+          label={releaseLabel}
+          pressed={completion.released}
+          disabled={completion.isReleasing}
+          data-testid="term-release-completion"
+          onClick={() => {
+            onGesture("release");
+            completion.release();
+          }}
+        />
       )}
       {completion.canMarkComplete && (
-        <Tooltip content={MARK_COMPLETE_LABEL}>
-          <button
-            onClick={() => {
-              onGesture("mark");
-              completion.markComplete();
-            }}
-            aria-label={MARK_COMPLETE_LABEL}
-            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-st-done transition-colors hover:bg-st-done/14"
-            data-testid="term-mark-complete"
-          >
-            <CheckCircle size={12} />
-          </button>
-        </Tooltip>
+        <IconButton
+          icon={Check}
+          size="sm"
+          label={MARK_COMPLETE_LABEL}
+          data-testid="term-mark-complete"
+          onClick={() => {
+            onGesture("mark");
+            completion.markComplete();
+          }}
+        />
       )}
     </>
   );
@@ -153,7 +124,7 @@ export function GestureVerdictPopover({
   return (
     <div
       ref={popoverRef}
-      className="absolute right-2 top-9 z-10 w-[330px] rounded-lg border border-line-strong bg-surface-1 p-1.5 shadow-lg"
+      className="absolute right-2 top-7 z-10 w-[330px] overflow-hidden rounded border border-line bg-surface-1 shadow-lg"
       data-testid="term-gesture-popover"
     >
       {verdict}

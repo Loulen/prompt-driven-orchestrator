@@ -1,4 +1,7 @@
 import { useMemo, useState } from "react";
+import { ArrowUpRight, FileCode, FileImage, FileText, Files, Images, type LucideIcon } from "lucide-react";
+import { Chip, IconButton } from "../../../shared/ui/kit";
+import type { StatusTone } from "../../../shared/ui/kit/tones";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { PortItemContext } from "../../../shared/extensions/contract";
 import { artifactDownloadUrl, artifactUrl, fetchArtifact } from "../../api/artifacts";
@@ -60,15 +63,6 @@ export default function PortRow({
   const copyTarget = kind === "output" && !isImage && !isFiles ? existing[0] : undefined;
   const { status: copyStatus, error: copyError, copy } = useCopyToClipboard();
 
-  let dotClass = "bg-text-3";
-  if (inheritedOnly) {
-    dotClass = "bg-text-3";
-  } else if (anyExists && port.repeated && port.files.length > 1) {
-    dotClass = "bg-st-running";
-  } else if (anyExists) {
-    dotClass = "bg-st-done";
-  }
-
   let displayPath = firstFile?.path ?? "";
   if (port.files.length > 1 && (port.repeated || isImage)) {
     displayPath = `${port.files.length} files`;
@@ -99,213 +93,10 @@ export default function PortRow({
     !isImage && !isFiles && !port.repeated && port.files.length > 1
       ? port.files.slice(1).filter((f) => f.exists && !isImageFile(f.path))
       : [];
-
-  const gridStyle = {
-    gridTemplateColumns: "8px 1fr auto",
-    fontSize: "11.5px",
-  };
-
-  const children = (
-    <>
-      {/* Status dot */}
-      <div className={`h-2 w-2 rounded-full ${dotClass}`} />
-
-      {/* Name + path */}
-      <div className="min-w-0 text-left">
-        <div className="flex items-center gap-1.5">
-          <span className="font-mono text-text" style={{ fontSize: "11.5px" }}>
-            {port.port}
-          </span>
-          {port.repeated && (
-            <span
-              className="rounded border border-line-strong bg-surface-2 px-1 py-px font-mono text-text-3"
-              style={{ fontSize: "9px" }}
-            >
-              repeated
-            </span>
-          )}
-          {(isImage || isHtml || isFiles) && (
-            <span
-              className="rounded border border-line-strong bg-surface-2 px-1 py-px font-mono text-text-3"
-              style={{ fontSize: "9px" }}
-              data-testid="port-type-badge"
-            >
-              {portType}
-            </span>
-          )}
-          {inheritedOnly && (
-            <span
-              className="relative rounded border border-st-skipped/50 bg-surface-2 px-1 py-px font-mono text-st-skipped"
-              style={{ fontSize: "9px" }}
-              title="Present before this execution started — a previous execution's output, not this one's result"
-              data-testid="inherited-badge"
-            >
-              inherited
-            </span>
-          )}
-          {inheritedSome && (
-            <span
-              className="relative rounded border border-st-skipped/50 bg-surface-2 px-1 py-px font-mono text-st-skipped"
-              style={{ fontSize: "9px" }}
-              title={`${inheritedCount} of ${existing.length} files were present before this execution started — a previous execution's output, not this one's result`}
-              data-testid="inherited-badge"
-            >
-              {inheritedCount} inherited
-            </span>
-          )}
-          {/* #41: lifted above the row's open target, so their own hover/click
-              still reach them (the inherited badges' explanation, an extension mark). */}
-          <ExtensionDecorations<PortItemContext>
-            location="port/item"
-            extra={decorated}
-            className="relative"
-          />
-        </div>
-        <div className="mt-0.5 truncate font-mono text-text-3" style={{ fontSize: "10.5px" }}>
-          {displayPath}
-        </div>
-      </div>
-
-      {/* Meta + copy + arrow icon */}
-      <div className="flex items-center gap-2">
-        {anyExists && totalSize > 0 && (
-          <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
-            {formatSize(totalSize)}
-          </span>
-        )}
-        {copyTarget && (
-          <CopyButton
-            status={copyStatus}
-            error={copyError}
-            testId="port-copy"
-            // Hidden at rest, shown on row hover / keyboard focus, and kept up
-            // for as long as the feedback lasts. `relative` lifts it above the
-            // row's open target, so its click never opens the modal.
-            className={`relative -my-1 ${
-              copyStatus === "idle"
-                ? "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                : ""
-            }`}
-            onClick={(e) => {
-              e.stopPropagation();
-              void copy(() => fetchArtifact(runId, copyTarget.path));
-            }}
-          />
-        )}
-        <PortDownloads
-          runId={runId}
-          existing={existing}
-          isImage={isImage}
-          isFiles={isFiles}
-          repeated={port.repeated}
-        />
-        {anyExists && (
-          <span
-            className="font-mono text-text-3"
-            style={{ fontSize: "10.5px" }}
-            aria-hidden="true"
-          >
-            ↗
-          </span>
-        )}
-      </div>
-
-      {/* Image thumbnails */}
-      {imageFiles.length > 0 && (
-        <div
-          className="col-span-3 mt-1 flex gap-1 overflow-x-auto"
-          data-testid="image-thumbnails"
-        >
-          {imageFiles.slice(0, 4).map((f, i) => (
-            <img
-              key={f.path}
-              src={artifactUrl(runId, f.path)}
-              alt={f.path.split("/").pop() ?? ""}
-              title={f.inherited ? "inherited — present before this execution started" : undefined}
-              data-inherited={f.inherited ? "true" : undefined}
-              className={`relative h-12 w-12 cursor-zoom-in rounded border border-line object-cover transition-opacity hover:opacity-80${
-                f.inherited ? " opacity-40 grayscale" : ""
-              }`}
-              onClick={(e) => {
-                // Open this thumbnail fullscreen instead of bubbling up to the
-                // row (whose open target opens the artifact modal). Snapshot the
-                // FULL imageFiles list (not the .slice(0,4) shown as
-                // thumbnails) so arrows reach images behind the +N chip; `i`
-                // is a valid index into the full array since the slice starts
-                // at 0. A snapshot at click time is immune to poll churn
-                // (NodeDetailPanel re-polls IO ~every 1s).
-                e.stopPropagation();
-                setLightbox({
-                  images: imageFiles.map((im) => artifactUrl(runId, im.path)),
-                  index: i,
-                });
-              }}
-              data-testid={`thumbnail-${i}`}
-            />
-          ))}
-          {imageFiles.length > 4 && (
-            <span
-              className="flex h-12 w-12 items-center justify-center rounded border border-line bg-surface-0 font-mono text-text-3"
-              style={{ fontSize: "10px" }}
-            >
-              +{imageFiles.length - 4}
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* A `files` port: one chip per file, each downloading it */}
-      {isFiles && existing.length > 0 && (
-        <div className="col-span-3 mt-1 flex flex-wrap gap-1.5" data-testid="port-files">
-          {existing.map((f) => (
-            <FileChip
-              key={f.path}
-              file={f}
-              href={artifactDownloadUrl(runId, f.path)}
-              download
-              testId="port-file-chip"
-            />
-          ))}
-        </div>
-      )}
-
-      {/* #779: input files — the chips of the New run dialog, read-only */}
-      {attachmentFiles.length > 0 && (
-        <div className="col-span-3 mt-1 flex flex-col gap-1" data-testid="input-files">
-          <div className="text-text-3" style={{ fontSize: "10px", fontWeight: 500 }}>
-            Input files
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {attachmentFiles.map((f) => (
-              <FileChip
-                key={f.path}
-                file={f}
-                href={artifactUrl(runId, f.path)}
-                testId="input-file-chip"
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Frontmatter card (spans full width below) */}
-      {frontmatter && Object.keys(frontmatter).length > 0 && (
-        <div
-          className="col-span-3 mt-1 grid rounded border border-line bg-surface-0 p-1.5 font-mono"
-          data-testid="frontmatter-card"
-          style={{
-            fontSize: "10px",
-            gridTemplateColumns: "auto 1fr",
-            gap: "2px 8px",
-          }}
-        >
-          {Object.entries(frontmatter).map(([k, v]) => (
-            <FrontmatterKV key={k} field={k} value={v} />
-          ))}
-        </div>
-      )}
-    </>
-  );
+  const Icon = PORT_ICON[portType] ?? FileText;
+  const tip = [port.port, portType, displayPath || (kind === "input" ? "not received" : "not written"), anyExists && totalSize > 0 ? formatSize(totalSize) : null]
+    .filter(Boolean)
+    .join(" · ");
 
   const lightboxEl = lightbox && (
     <ImageLightbox
@@ -315,55 +106,182 @@ export default function PortRow({
     />
   );
 
-  if (anyExists) {
-    // #41: the row holds two SIBLING targets — a button can't nest another.
-    // The open button is stretched over the whole row (under its content), so a
-    // click anywhere opens the artifact as before; the copy button, thumbnails
-    // and file chips are positioned above it and keep their own clicks.
-    return (
-      <>
-        <div
-          data-testid="port-row"
-          data-port={port.port}
-          data-kind={kind}
-          className="port-row group relative grid w-full items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-2 transition-colors hover:bg-hover"
-          style={gridStyle}
-        >
-          <button
-            type="button"
-            onClick={onOpen}
-            data-testid="port-row-open"
-            aria-label={`Open ${port.port}`}
-            className="absolute inset-0 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-          />
-          {children}
-        </div>
-        {lightboxEl}
-      </>
-    );
-  }
-
   return (
     <div
       data-testid="port-row"
       data-port={port.port}
       data-kind={kind}
-      className="port-row grid items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-2 opacity-60"
-      style={gridStyle}
+      data-pending={anyExists ? undefined : true}
+      className="port-row ri-port"
     >
-      {children}
+      {/* A written port opens from anywhere on its line, as before; its tools
+          keep their own clicks. */}
+      <div className="ri-port__line" data-open={anyExists || undefined} onClick={anyExists ? onOpen : undefined}>
+        <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-label={portType} role="img" />
+        {anyExists ? (
+          // The name opens the artifact; the tools at the end keep their own clicks.
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen();
+            }}
+            data-testid="port-row-open"
+            aria-label={`Open ${port.port}`}
+            className="ri-port__name"
+          >
+            {port.port}
+          </button>
+        ) : (
+          <span className="ri-port__name">{port.port}</span>
+        )}
+        {port.repeated && <Chip mono>repeated</Chip>}
+        {(isImage || isHtml || isFiles) && (
+          <span className="d-chip d-chip--mono" data-testid="port-type-badge">
+            {portType}
+          </span>
+        )}
+        {inheritedOnly && (
+          <span
+            className="d-chip d-chip--mono"
+            title="Present before this execution started: a previous execution's output"
+            data-testid="inherited-badge"
+          >
+            inherited
+          </span>
+        )}
+        {inheritedSome && (
+          <span
+            className="d-chip d-chip--mono"
+            title={`${inheritedCount} of ${existing.length} files present before this execution started`}
+            data-testid="inherited-badge"
+          >
+            {inheritedCount} inherited
+          </span>
+        )}
+        {frontmatter && Object.keys(frontmatter).length > 0 && <FrontmatterChips values={frontmatter} />}
+        <span className="contents" onClick={(e) => e.stopPropagation()}>
+          <ExtensionDecorations<PortItemContext> location="port/item" extra={decorated} className="relative" />
+        </span>
+        <span className="ri-port__where" title={tip}>
+          {displayPath}
+        </span>
+        {anyExists && totalSize > 0 && <span className="ri-port__size">{formatSize(totalSize)}</span>}
+        <span className="ri-port__tools" onClick={(e) => e.stopPropagation()}>
+          {copyTarget && (
+            <CopyButton
+              status={copyStatus}
+              error={copyError}
+              testId="port-copy"
+              onClick={(e) => {
+                e.stopPropagation();
+                void copy(() => fetchArtifact(runId, copyTarget.path));
+              }}
+            />
+          )}
+          <PortDownloads runId={runId} existing={existing} isImage={isImage} isFiles={isFiles} repeated={port.repeated} />
+          {anyExists && <IconButton icon={ArrowUpRight} size="sm" label={`Open ${port.port}`} onClick={onOpen} />}
+        </span>
+      </div>
+
+      {/* Image thumbnails */}
+      {imageFiles.length > 0 && (
+        <div className="ri-thumbs" data-testid="image-thumbnails">
+          {imageFiles.slice(0, 4).map((f, i) => (
+            <button
+              key={f.path}
+              type="button"
+              className="ri-thumb"
+              title={f.inherited ? "inherited: present before this execution started" : (f.path.split("/").pop() ?? "")}
+              onClick={(e) => {
+                // Open this thumbnail fullscreen. Snapshot the FULL imageFiles
+                // list (not the four shown) so arrows reach images behind the
+                // +N; a snapshot at click time is immune to poll churn.
+                e.stopPropagation();
+                setLightbox({
+                  images: imageFiles.map((im) => artifactUrl(runId, im.path)),
+                  index: i,
+                });
+              }}
+            >
+              <img
+                src={artifactUrl(runId, f.path)}
+                alt={f.path.split("/").pop() ?? ""}
+                data-inherited={f.inherited ? "true" : undefined}
+                className={f.inherited ? "opacity-40 grayscale" : undefined}
+                data-testid={`thumbnail-${i}`}
+              />
+            </button>
+          ))}
+          {imageFiles.length > 4 && <span className="self-center font-mono text-xs text-text-3">+{imageFiles.length - 4}</span>}
+        </div>
+      )}
+
+      {/* A `files` port: one chip per file, each downloading it */}
+      {isFiles && existing.length > 0 && (
+        <div className="ri-port__sub" data-testid="port-files">
+          {existing.map((f) => (
+            <FileChip key={f.path} file={f} href={artifactDownloadUrl(runId, f.path)} download testId="port-file-chip" />
+          ))}
+        </div>
+      )}
+
+      {/* #779: input files — the chips of the New run dialog, read-only */}
+      {attachmentFiles.length > 0 && (
+        <div className="ri-port__sub" data-testid="input-files">
+          <span className="d-caps">Input files</span>
+          {attachmentFiles.map((f) => (
+            <FileChip key={f.path} file={f} href={artifactUrl(runId, f.path)} testId="input-file-chip" />
+          ))}
+        </div>
+      )}
       {lightboxEl}
     </div>
   );
 }
 
-function FrontmatterKV({ field, value }: { field: string; value: unknown }) {
-  const display =
-    typeof value === "object" ? JSON.stringify(value) : String(value);
+const PORT_ICON: Record<string, LucideIcon> = {
+  markdown: FileText,
+  image: FileImage,
+  image_list: Images,
+  html: FileCode,
+  files: Files,
+};
+
+/** The verdicts a frontmatter value may carry, and their tone. */
+const VERDICT_TONE: Record<string, StatusTone> = {
+  pass: "done",
+  passed: "done",
+  approved: "done",
+  ok: "done",
+  done: "done",
+  true: "done",
+  fail: "failed",
+  failed: "failed",
+  rejected: "failed",
+  needs_work: "awaiting",
+  false: "failed",
+};
+
+const toneOf = (v: unknown) => VERDICT_TONE[display(v).toLowerCase()];
+
+/** A frontmatter on one line: its verdict-like value (else its first key) as
+ *  a tinted chip, a count of the other keys, every key in the tooltip. */
+export function FrontmatterChips({ values }: { values: Record<string, unknown> }) {
+  const entries = Object.entries(values);
+  const [k, v] = entries.find(([, value]) => toneOf(value)) ?? entries[0];
+  const others = entries.length - 1;
   return (
-    <>
-      <span className="text-text-3">{field}</span>
-      <span className="text-text">{display}</span>
-    </>
+    <span className="ri-fm" data-testid="frontmatter-card" title={entries.map(([key, value]) => `${key}: ${display(value)}`).join("\n")}>
+      <span className="ri-fm__chip" data-st={toneOf(v)}>
+        <span className="ri-fm__k">{k}</span>
+        <span>{display(v)}</span>
+      </span>
+      {others > 0 && <span className="ri-fm__chip ri-fm__more">+{others}</span>}
+    </span>
   );
+}
+
+function display(value: unknown): string {
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
 }

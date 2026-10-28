@@ -8,6 +8,8 @@ import {
   segHandleStyle,
   deleteWaypoint,
   connectionPreviewPath,
+  roundedPathToSvg,
+  arrowChevron,
 } from "./edgePath";
 import type { Point } from "./orthogonalRouter";
 
@@ -372,5 +374,52 @@ describe("reanchorWaypoints", () => {
     expectOrthogonal(source, out, target);
     // Interior waypoint unchanged.
     expect(out[1]).toEqual({ x: 50, y: 40 });
+  });
+});
+
+describe("roundedPathToSvg", () => {
+  it("rounds each bend with a quadratic curve of the given radius", () => {
+    const pts: Point[] = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 50 },
+    ];
+    expect(roundedPathToSvg(pts, 8)).toBe("M 0,0 L 92,0 Q 100,0 100,8 L 100,50");
+  });
+
+  it("shrinks the radius to half the shorter neighbouring segment", () => {
+    const pts: Point[] = [
+      { x: 0, y: 0 },
+      { x: 6, y: 0 },
+      { x: 6, y: 50 },
+    ];
+    expect(roundedPathToSvg(pts, 8)).toBe("M 0,0 L 3,0 Q 6,0 6,3 L 6,50");
+  });
+
+  it("draws a straight run as a plain line, and nothing under two points", () => {
+    expect(roundedPathToSvg([{ x: 0, y: 0 }, { x: 40, y: 0 }], 8)).toBe("M 0,0 L 40,0");
+    expect(roundedPathToSvg([{ x: 1, y: 1 }], 8)).toBe("");
+  });
+});
+
+describe("arrowChevron", () => {
+  it("opens back along the last segment, its tip on the target", () => {
+    const pts: Point[] = [
+      { x: 0, y: 0 },
+      { x: 0, y: 100 },
+    ];
+    expect(arrowChevron(pts)).toBe("-3.5,95 0,100 3.5,95");
+  });
+
+  it("points left on a run arriving from the right", () => {
+    const pts: Point[] = [
+      { x: 100, y: 0 },
+      { x: 20, y: 0 },
+    ];
+    expect(arrowChevron(pts)).toBe("25,-3.5 20,0 25,3.5");
+  });
+
+  it("is empty for a degenerate path", () => {
+    expect(arrowChevron([{ x: 1, y: 1 }])).toBe("");
   });
 });

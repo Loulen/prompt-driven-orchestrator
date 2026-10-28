@@ -2,14 +2,9 @@
  * The PTY terminal's palette (#759).
  *
  * xterm paints on a canvas and takes resolved colours, so it cannot read CSS
- * tokens. And ANSI colours are not app chrome: `red` must stay red whatever the
- * theme, only its lightness may move. They therefore live here, as two explicit
- * palettes, rather than in the semantic token layer of `index.css`.
- *
- * The dark palette is the one PDO has always shipped, unchanged. The light one
- * is new, and every ink colour clears AA on its ground (asserted, not assumed).
+ * tokens. And ANSI colours are not app chrome: `red` must stay red. They
+ * therefore live here, as one explicit palette, rather than in the tokens.
  */
-import type { ResolvedTheme } from "../../lib/theme";
 
 export interface TerminalTheme {
   background: string;
@@ -58,23 +53,28 @@ export const TERMINAL_INK = [
   "brightWhite",
 ] as const satisfies readonly (keyof TerminalTheme)[];
 
+/**
+ * The terminal is an always-dark screen, whatever the theme of the interface
+ * (a lit display): its ground is the paper of the dark theme darkened
+ * (`color-mix(in oklab, paper 82%, black)`, `.ri-term-screen`), its text the
+ * secondary ink, its cursor the ink.
+ */
 const DARK: TerminalTheme = {
-  background: "#0f1115",
-  foreground: "#e6e8eb",
-  cursor: "#10b981",
-  // #772: the old "#2a2d35" on a "#0f1115" background was one shade of grey
-  // apart — a selection the user could not see. Accent at ~35% alpha keeps the
-  // glyphs readable and the highlight obvious.
+  background: "#0b0b0d",
+  foreground: "#aeb1b5",
+  cursor: "#d2d4d7",
+  // #772: a selection the user can see — blue at ~35% alpha keeps the glyphs
+  // readable and the highlight obvious.
   selectionBackground: "#3b82f659",
   selectionInactiveBackground: "#3b82f633",
-  black: "#0f1115",
+  black: "#0b0b0d",
   red: "#ef4444",
   green: "#10b981",
   yellow: "#f59e0b",
   blue: "#3b82f6",
   magenta: "#8b5cf6",
   cyan: "#06b6d4",
-  white: "#e6e8eb",
+  white: "#d2d4d7",
   brightBlack: "#5a6270",
   brightRed: "#f87171",
   brightGreen: "#34d399",
@@ -85,31 +85,7 @@ const DARK: TerminalTheme = {
   brightWhite: "#f8fafc",
 };
 
-const LIGHT: TerminalTheme = {
-  background: "#fbfbfc",
-  foreground: "#14181f",
-  cursor: "#03714f",
-  selectionBackground: "#cfe4dc",
-  selectionInactiveBackground: "#e3f0ea",
-  // ANSI `black` is the ground, not ink: on a light terminal that is the page.
-  black: "#fbfbfc",
-  red: "#b91c1c",
-  green: "#03714f",
-  yellow: "#8f4506",
-  blue: "#1d4ed8",
-  magenta: "#6d28d9",
-  cyan: "#0e6f82",
-  white: "#3d4553",
-  brightBlack: "#6b7280",
-  brightRed: "#9f1239",
-  brightGreen: "#065f46",
-  brightYellow: "#7c3d05",
-  brightBlue: "#1e40af",
-  brightMagenta: "#5b21b6",
-  brightCyan: "#0d5c6c",
-  brightWhite: "#14181f",
-};
-
-export function terminalTheme(theme: ResolvedTheme): TerminalTheme {
-  return theme === "light" ? LIGHT : DARK;
+/** The terminal's palette: always the dark screen. */
+export function terminalTheme(): TerminalTheme {
+  return DARK;
 }

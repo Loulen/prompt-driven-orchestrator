@@ -147,7 +147,8 @@ test("each source answers in its own group: at once, late, or failed with Retry"
   await expect(slow.getByTestId("palette-searching")).toBeVisible();
   await expect(down.getByTestId("palette-failed")).toContainText("Search failed");
   await expect(down.getByTestId("palette-failed")).toContainText("index unavailable");
-  await expect(down.getByRole("button", { name: "Retry" })).toBeVisible();
+  // The whole row retries: an option of the list, named for it.
+  await expect(down.getByRole("option", { name: /Down source: search failed, index unavailable\. Retry/ })).toBeVisible();
   // The slow one arrives in its group; the failed one stays where it is.
   await expect(slow.getByTestId("palette-result")).toHaveCount(2, { timeout: 6_000 });
   await expect(down.getByTestId("palette-failed")).toBeVisible();

@@ -172,6 +172,7 @@ function describe(context) {
   const parts = [context.location ?? "?"];
   const entity = context.entity;
   if (entity) parts.push(`${entity.kind} ${entity.id}${entity.status ? ` (${entity.status})` : ""}`);
+  if (context.selected) parts.push(`selected ${context.selected.kind} ${context.selected.id}`);
   if (context.selection) parts.push(`${context.selection.ids.length} selected: ${context.selection.ids.join(", ")}`);
   if (context.pipeline) parts.push(`pipeline ${context.pipeline.id}`);
   if (context.review) parts.push(`review ${context.review.from} → ${context.review.to}`);
@@ -467,4 +468,54 @@ export function TagChip({ text }) {
     },
     text,
   );
+}
+
+// 0.18: the Source de recherche of the command field. Its notes, already
+// filtered as the test extension's rights would; each opens the test page on
+// its path. `query` is the text typed, `context.selected` the item selected.
+const NOTES = [
+  { id: "1", ref: "N-1", title: "Release checklist", meta: "Ops", tone: "done", status: "Done" },
+  { id: "2", ref: "N-2", title: "Search index rebuild", meta: "Platform", tone: "running", status: "In progress" },
+  { id: "3", ref: "N-3", title: "Retry budget for flaky searches", meta: "Platform", tone: "skipped", status: "To do" },
+];
+
+function noteResult(note) {
+  return {
+    id: note.id,
+    ref: note.ref,
+    title: note.title,
+    meta: note.meta,
+    status: { tone: note.tone, label: note.status },
+    link: `#/ext/test/topbar/end/notes/${note.id}`,
+  };
+}
+
+export function searchNotes(query) {
+  const q = query.toLowerCase();
+  return NOTES.filter((note) => note.title.toLowerCase().includes(q) || note.ref.toLowerCase().includes(q)).map(
+    noteResult,
+  );
+}
+
+// The same notes, answered after 3 s: a slow source.
+export function searchSlowly(query) {
+  return new Promise((resolve) => setTimeout(() => resolve(searchNotes(query)), 3000));
+}
+
+// A source that always fails: its error stays in its own group.
+export function searchFailing() {
+  return Promise.reject(new Error("index unavailable"));
+}
+
+// A source that answers 200 results with 200-character titles: the core keeps
+// the first ones.
+export function searchMany(query) {
+  const long = `${query} ${"a-very-long-segment-without-any-space-".repeat(6)}`.slice(0, 200);
+  return Array.from({ length: 200 }, (_, i) => ({
+    id: String(i),
+    ref: `M-${i + 1}`,
+    title: `${i} ${long}`.slice(0, 200),
+    meta: "Many",
+    link: `#/ext/test/topbar/end/many/${i}`,
+  }));
 }

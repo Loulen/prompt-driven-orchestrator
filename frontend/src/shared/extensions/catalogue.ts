@@ -6,8 +6,8 @@
  * A location is a list: every extension's contributions add up there, in
  * registration order, then in each extension's declaration order. An element is
  * left out when its bundle is not ready, when the bundle does not export what it
- * names (the component, its command's function, or a source of completion's
- * `suggest`), or when its `when` clause
+ * names (the component, its command's function, a source of completion's
+ * `suggest` or a Source de recherche's `search`), or when its `when` clause
  * is false on the location's context.
  */
 
@@ -23,6 +23,7 @@ import type {
   EntityContext,
   LocationContext,
   PageProps,
+  SearchFunction,
   SectionProps,
   StatsTabProps,
   TabContext,
@@ -43,6 +44,15 @@ export interface ContributionElement<P = unknown> {
   command: UiCommand | null;
   /** What a source of completion exports (0.14); absent for any other element. */
   completion?: CompletionSource;
+  /** What a Source de recherche exports (0.18); absent for any other element. */
+  search?: SearchSource;
+}
+
+/** A Source de recherche (`search`), as its bundle exports it. */
+export interface SearchSource {
+  search: SearchFunction;
+  /** The icon of its group in the palette; `null` without one. */
+  icon: string | null;
 }
 
 /** A source of completion (`completion`), as its bundle exports it. */
@@ -80,6 +90,12 @@ export function elementsAt<P>(
             : null;
         const completion = { trigger: contribution.trigger, suggest: suggest as CompletionFunction, render };
         return [{ ...base, Component: null, command: null, completion }];
+      }
+      if (contribution.type === "search") {
+        const search = module[contribution.search];
+        if (typeof search !== "function") return [];
+        const source = { search: search as SearchFunction, icon: contribution.icon ?? null };
+        return [{ ...base, Component: null, command: null, search: source }];
       }
       const Component = module[contribution.component];
       if (typeof Component !== "function") return [];

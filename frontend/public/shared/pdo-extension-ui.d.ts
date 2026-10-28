@@ -36,7 +36,7 @@ export interface HostedElement {
   extension: ExtensionRef;
   id: string;
   label: string;
-  type: "page" | "action" | "tab" | "section" | "decoration" | "list_filter" | "completion";
+  type: "page" | "action" | "tab" | "section" | "decoration" | "list_filter" | "completion" | "search";
   context: HostedContext;
 }
 
@@ -110,6 +110,51 @@ export function openProbedSocket(
  *  through `execCommand("copy")`. Resolves to whether the text was written;
  *  never rejects. Since 0.11. */
 export function copyToClipboard(text: string): Promise<boolean>;
+
+// ---------------------------------------------------------------- the command field (since 0.18)
+// What a Source de recherche (`type: "search"` at `palette`) exports and
+// answers. Types only: the core calls the function, groups the results under
+// the extension's name and draws them.
+
+/** The item selected in the interface when the command field opened. */
+export interface PaletteSelection {
+  /** `run`, `node`, `trigger` or `pipeline`. */
+  kind: string;
+  id: string;
+  name?: string | null;
+  attributes: Record<string, string>;
+}
+
+/** What a global Action of `palette` and a Source de recherche receive. */
+export type PaletteContext = HostedContext & { location: "palette"; selected: PaletteSelection | null };
+
+/** One result, already filtered by what the Actor may read. */
+export interface SearchResult {
+  /** Unique within the source's answer. */
+  id: string;
+  title: string;
+  /** A reference before the title, in mono (`N-12`). */
+  ref?: string | null;
+  /** Facts at the right of the row. */
+  meta?: string | null;
+  /** An SVG the extension serves, the row's icon when it has no status. */
+  icon?: string | null;
+  /** Drawn as the core draws its own statuses: the tone's icon, the label as tooltip. */
+  status?: { tone: StatusTone; label: string } | null;
+  /** Where choosing it goes: `#/ext/<extension>/<location>/<path>` or `#/runs/<id>`. */
+  link: string;
+  /** The ranges `[start, end)` of `title` the query matched. */
+  highlights?: [number, number][] | null;
+}
+
+/** A Source de recherche: called 120 ms after the last keystroke, never with
+ *  an empty query; `signal` aborts when the query changes. Given up on after
+ *  5 s; the first 50 results are kept. */
+export type SearchFunction = (
+  query: string,
+  context: PaletteContext,
+  signal: AbortSignal,
+) => SearchResult[] | Promise<SearchResult[]>;
 
 // ---------------------------------------------------------------- design system (since 0.17)
 // The primitives of the shared design system (ADR-0091): the core draws its

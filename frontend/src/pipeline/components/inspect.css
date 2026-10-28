@@ -403,6 +403,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* a narrow pane: the agent takes the row's whole width, under its label */
+  @container (max-width: 360px) {
+    .d-field:has(> .d-field__ctl > .ei-agent) {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
   .ei-agent__line {
     min-width: 0;
     overflow: hidden;

@@ -200,6 +200,9 @@
   .art__body > .art__banner:first-child {
     margin-top: 0;
   }
+  .art__body > .art__banner + * {
+    margin-top: var(--g-5);
+  }
 }
 
 /* Outside the layer: they override `.artifact-markdown` (index.css), which is

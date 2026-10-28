@@ -180,7 +180,7 @@ const STEPS: TourStep[] = [
 export const FIRST_PIPELINE_TOUR: TourDef = {
   id: "first-pipeline",
   title: "First pipeline",
-  blurb: "Two agents in a loop: an implementer and a tester that hands back a verdict.",
+  blurb: "An implementer and a tester in a loop, with a verdict.",
   minutes: 8,
   steps: STEPS,
   recapIntro: `You built ${TUTORIAL_PIPELINE_ID} and saved it to your Library. Here is what it does:`,

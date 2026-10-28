@@ -209,7 +209,7 @@ const STEPS: TourStep[] = [
 export const FIRST_RUN_TOUR: TourDef = {
   id: "first-run",
   title: "First run",
-  blurb: "Fill the New Run form step by step and launch a Run on a throwaway repository.",
+  blurb: "Fill New Run step by step, launch on a throwaway repository.",
   minutes: 4,
   steps: STEPS,
   intro: {

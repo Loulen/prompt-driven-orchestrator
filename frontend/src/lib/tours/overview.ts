@@ -183,7 +183,7 @@ const APP_STEPS: TourStep[] = [
 export const OVERVIEW_TOUR: TourDef = {
   id: "overview",
   title: "Overview",
-  blurb: "A walk around the screen on a real finished Run: canvas, panels, nodes, edges, Triggers. No agent needed.",
+  blurb: "Canvas, panels, nodes, edges, Triggers. No agent needed.",
   minutes: 4,
   steps: [...CANVAS_STEPS, ...APP_STEPS],
   intro: {

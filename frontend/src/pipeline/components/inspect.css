@@ -606,9 +606,6 @@
   }
 
   /* ---------------------------------------------------------------- edge */
-  .ei-edge {
-    min-width: 0;
-  }
   .ei-cond {
     display: flex;
     align-items: center;
@@ -1529,6 +1526,8 @@
   --presence-3: oklch(76% 0.09 185);
   --presence-4: oklch(76% 0.11 130);
   --presence-5: oklch(72% 0.1 350);
+  --presence-6: oklch(74% 0.09 40);
+  --presence-7: oklch(70% 0.06 260);
 }
 [data-theme="light"] {
   --presence-0: oklch(52% 0.15 300);
@@ -1537,4 +1536,6 @@
   --presence-3: oklch(55% 0.1 185);
   --presence-4: oklch(53% 0.12 130);
   --presence-5: oklch(52% 0.13 350);
+  --presence-6: oklch(52% 0.12 40);
+  --presence-7: oklch(50% 0.05 260);
 }

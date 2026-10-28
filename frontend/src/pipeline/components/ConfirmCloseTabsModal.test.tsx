@@ -96,10 +96,10 @@ describe("ConfirmCloseTabsModal — a shared draft keeps its changes (ADR-0088)"
     changes: 1,
   };
 
-  it("does not say a draft's changes are lost", () => {
+  it("says the shared draft keeps what reached it, not that all is lost", () => {
     render(<ConfirmCloseTabsModal open tabs={[tab("flow", { dirty: true, draft })]} onCancel={() => {}} onConfirm={() => {}} />);
     expect(screen.getByRole("dialog")).toHaveTextContent("Close tab?");
-    expect(screen.getByTestId("close-tabs-drafts")).toHaveTextContent("Its draft keeps the changes");
+    expect(screen.getByTestId("close-tabs-drafts")).toHaveTextContent("Its draft keeps the sent changes · unsent edits are lost");
     expect(screen.getByTestId("close-tabs-body")).not.toHaveTextContent("Loses its changes");
     expect(screen.getByTestId("close-tabs-confirm")).toHaveTextContent("Close tab");
   });
@@ -114,7 +114,7 @@ describe("ConfirmCloseTabsModal — a shared draft keeps its changes (ADR-0088)"
       />,
     );
     expect(screen.getByRole("dialog")).toHaveTextContent("Discard unsaved changes?");
-    expect(screen.getByTestId("close-tabs-body")).toHaveTextContent("Loses its changeslocal.yamlIts draft keeps the changesflow.yaml");
+    expect(screen.getByTestId("close-tabs-body")).toHaveTextContent("Loses its changeslocal.yamlIts draft keeps the sent changes · unsent edits are lostflow.yaml");
   });
 });
 

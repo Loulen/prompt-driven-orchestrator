@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { PipelineVersionEntry } from "../../shared/generated/PipelineVersionEntry";
 import VersionsTab from "./VersionsTab";
 import VersionBanner, { VersionLine } from "./VersionBanner";
@@ -87,6 +87,16 @@ describe("VersionBanner (ADR-0088)", () => {
     );
     fireEvent.click(screen.getByTestId("version-banner-restore"));
     await waitFor(() => expect(restoreVersion).toHaveBeenCalledWith("flow", 5));
+  });
+});
+
+describe("VersionsTab — a Replace", () => {
+  it("reads the history again when a Save lands under the same number and title", async () => {
+    render(<VersionsTab pipelineId="flow" />);
+    await screen.findByTestId("version-row-3");
+    const before = vi.mocked(fetchPipelineVersions).mock.calls.length;
+    act(() => useEditStore.setState({ lastSavedAt: { flow: Date.now() } }));
+    await waitFor(() => expect(vi.mocked(fetchPipelineVersions).mock.calls.length).toBe(before + 1));
   });
 });
 

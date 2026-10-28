@@ -8,7 +8,7 @@ import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
 import { actorLabel } from "../../shared/lib/actor";
 
 /** How many colors the participants share (`--presence-0` … in `inspect.css`). */
-export const PRESENCE_COLOR_COUNT = 6;
+export const PRESENCE_COLOR_COUNT = 8;
 
 /** One color per participant, by the index the daemon gave it: a theme token. */
 export function presenceColor(participant: Pick<DraftParticipant, "color">): string {

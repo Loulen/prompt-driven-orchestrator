@@ -26,7 +26,7 @@ const MORE = 28;
  * one keeps its place among the shown ones. A strip with no width (not laid
  * out yet) shows them all.
  */
-function useFit(count: number, active: number) {
+function useFit(count: number, active: number, signature: string) {
   const ref = useRef<HTMLDivElement>(null);
   const widths = useRef<number[]>([]);
   const [fit, setFit] = useState(count);
@@ -60,7 +60,7 @@ function useFit(count: number, active: number) {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [count]);
+  }, [count, signature]);
   // The shown tabs first; a live tab past them takes the last shown slot.
   const order = [...Array(count).keys()];
   const shown = Math.min(fit, count);
@@ -86,7 +86,9 @@ export default function InfoTabs({
   onChange: (key: string) => void;
 }) {
   const activeIndex = items.findIndex((t) => t.key === value);
-  const { ref, visible, hidden } = useFit(items.length, activeIndex);
+  // A tab that grows (a count appears, a label changes) measures again.
+  const signature = items.map((t) => `${t.key}:${t.label}:${t.count ?? ""}:${t.dot ? 1 : 0}`).join("|");
+  const { ref, visible, hidden } = useFit(items.length, activeIndex, signature);
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
     if (!dir || visible.length === 0) return;

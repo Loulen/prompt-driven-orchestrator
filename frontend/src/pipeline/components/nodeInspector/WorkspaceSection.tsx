@@ -66,7 +66,6 @@ export default function WorkspaceSection({
               type="button"
               role="radio"
               aria-checked={isolation === choice.isolated}
-              tabIndex={isolation === choice.isolated ? 0 : -1}
               disabled={isolationFrozen}
               title={`${choice.label}: ${choice.hint}`}
               className="d-seg__btn"

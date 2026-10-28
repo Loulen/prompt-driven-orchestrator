@@ -84,30 +84,40 @@ export default function NodeAgentControl({
           />
         </div>
       )}
-      {choice?.mode === "custom" && (
+      {/* A read-only node shows the combination on the line below, no picker. */}
+      {choice?.mode === "custom" && !readOnly && (
         <div className="ei-agent__pick" data-testid={`${testId}-custom`}>
-          <HarnessSelect
-            value={custom.harness}
-            onChange={(harness) => onChange({ mode: "custom", harness: harness || "claude", model: null, effort: null })}
-            catalog={catalog}
-            inheritLabel="Choose a harness"
-          />
-          <ModelPicker
-            value={custom.model ?? null}
-            onChange={(model) => onChange({ mode: "custom", ...custom, model })}
-            models={harnessOption?.models ?? []}
-            contexts={harnessOption?.modelContexts}
-            testid={`${testId}-custom-model`}
-            subject={testId}
-          />
-          <EffortPicker
-            value={custom.effort ?? null}
-            onChange={(next) => onChange({ mode: "custom", ...custom, effort: next })}
-            efforts={effort.levels}
-            strict={effort.authoritative}
-            testid={`${testId}-custom-effort`}
-            disabled={!(harnessOption?.hasEffort ?? true)}
-          />
+          <label title="Harness">
+            <span className="d-sr">Harness</span>
+            <HarnessSelect
+              value={custom.harness}
+              onChange={(harness) => onChange({ mode: "custom", harness: harness || "claude", model: null, effort: null })}
+              catalog={catalog}
+              inheritLabel="Choose a harness"
+            />
+          </label>
+          <label title="Model">
+            <span className="d-sr">Model</span>
+            <ModelPicker
+              value={custom.model ?? null}
+              onChange={(model) => onChange({ mode: "custom", ...custom, model })}
+              models={harnessOption?.models ?? []}
+              contexts={harnessOption?.modelContexts}
+              testid={`${testId}-custom-model`}
+              subject={testId}
+            />
+          </label>
+          <label title="Effort">
+            <span className="d-sr">Effort</span>
+            <EffortPicker
+              value={custom.effort ?? null}
+              onChange={(next) => onChange({ mode: "custom", ...custom, effort: next })}
+              efforts={effort.levels}
+              strict={effort.authoritative}
+              testid={`${testId}-custom-effort`}
+              disabled={!(harnessOption?.hasEffort ?? true)}
+            />
+          </label>
         </div>
       )}
       <span

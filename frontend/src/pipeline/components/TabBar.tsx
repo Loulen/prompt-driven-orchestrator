@@ -265,8 +265,9 @@ export default function TabBar({
           last={lastVersionOf(pipelines, saveVersionTab.id)}
           onClose={closeSaveVersion}
           onSave={async (saveAs) => {
-            await save(saveVersionTab.id, saveAs);
+            const result = await save(saveVersionTab.id, saveAs);
             closeSaveVersion();
+            return result;
           }}
         />
       )}

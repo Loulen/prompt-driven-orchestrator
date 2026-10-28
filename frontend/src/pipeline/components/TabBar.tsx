@@ -4,7 +4,6 @@ import { useEditStore } from "../store/editStore";
 import { hasUnsavedWork, isTabLocked } from "../store/editState";
 import type { OpenPipeline } from "../store/editState";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
-import DraftPresence from "./DraftPresence";
 import RunSaveGroup from "./RunSaveGroup";
 import ValidationIndicator from "./ValidationIndicator";
 import ValidatePipelineModal from "./ValidatePipelineModal";
@@ -181,8 +180,7 @@ export default function TabBar({
           <PageTabActions name={activePage} />
         ) : (
           <>
-            <DraftPresence />
-            {/* Unsaved changes make « Saved … ago » stale: the draft line says them. */}
+            {/* Unsaved changes make « Saved … ago » stale: the line under the tabs says them. */}
             {savedAgo && !activeTab?.dirty && (
               <span className="sh-tabs__saved" data-testid="saved-ago">
                 {savedAgo}

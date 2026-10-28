@@ -24,8 +24,8 @@ import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
-import CanvasBands from "./CanvasBands";
-import VersionBanner from "./VersionBanner";
+import CanvasLines from "./CanvasLines";
+import DraftPresence from "./DraftPresence";
 import RunSearchHost from "../../run/components/runSearch/RunSearchHost";
 import { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
 import DragConnectionLine from "./DragConnectionLine";
@@ -230,12 +230,10 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
 
   return (
     <div className="cv-pane relative flex min-h-0 flex-1 flex-col">
-      <CanvasBands tab={tab} run={activeRunState} lint={visibleItems} onDismissLint={dismiss} />
+      <CanvasLines tab={tab} run={activeRunState} infoOpen={infoOpen} onToggleInfo={onToggleInfo} lint={visibleItems} onDismissLint={dismiss} />
     <div className="relative min-h-0 flex-1" ref={reactFlowRef}>
-      {/* ADR-0088: a version shown read only has its banner where the toolbar sits. */}
-      {tab.version ? (
-        <VersionBanner version={tab.version} infoOpen={infoOpen} onToggleInfo={onToggleInfo} />
-      ) : (
+      {/* ADR-0088: a version shown read only takes no edit: no toolbar. */}
+      {tab.version ? null : (
         <EditToolbar
           onAddNode={handleAddNode}
           onAddNote={handleAddNote}
@@ -266,10 +264,10 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         />
       )}
       <RunSearchHost run={activeRunState} onCloseInfo={onCloseInfo} />
-      {/* Who else has this Run open: an avatar stack in the corner. */}
-      {activeRunState && (
+      {/* Who else has this Run open, or the shared draft (ADR-0088): an avatar stack in the corner. */}
+      {(activeRunState || (tab.runId == null && tab.version == null)) && (
         <div className="cv-corner">
-          <RunPresenceStack runId={activeRunState.run_id} />
+          {activeRunState ? <RunPresenceStack runId={activeRunState.run_id} /> : <DraftPresence />}
         </div>
       )}
 

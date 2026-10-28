@@ -2,6 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
 import type { OpenPipeline } from "../store/editState";
+import { INITIAL_DRAFT_STATE } from "../store/draftSession";
 
 function tab(id: string, over: Partial<OpenPipeline> = {}): OpenPipeline {
   return {
@@ -82,6 +83,38 @@ describe("ConfirmCloseTabsModal (#342)", () => {
     expect(onConfirm).not.toHaveBeenCalled();
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ConfirmCloseTabsModal — a shared draft keeps its changes (ADR-0088)", () => {
+  const draft = {
+    ...INITIAL_DRAFT_STATE,
+    status: "offline" as const,
+    synced: true,
+    canWrite: true,
+    connection: "1",
+    changes: 1,
+  };
+
+  it("says the shared draft keeps what reached it, not that all is lost", () => {
+    render(<ConfirmCloseTabsModal open tabs={[tab("flow", { dirty: true, draft })]} onCancel={() => {}} onConfirm={() => {}} />);
+    expect(screen.getByRole("dialog")).toHaveTextContent("Close tab?");
+    expect(screen.getByTestId("close-tabs-drafts")).toHaveTextContent("Its draft keeps the sent changes · unsent edits are lost");
+    expect(screen.getByTestId("close-tabs-body")).not.toHaveTextContent("Loses its changes");
+    expect(screen.getByTestId("close-tabs-confirm")).toHaveTextContent("Close tab");
+  });
+
+  it("names the tabs that lose their changes apart from the drafts", () => {
+    render(
+      <ConfirmCloseTabsModal
+        open
+        tabs={[tab("flow", { dirty: true, draft }), tab("local", { dirty: true })]}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent("Discard unsaved changes?");
+    expect(screen.getByTestId("close-tabs-body")).toHaveTextContent("Loses its changeslocal.yamlIts draft keeps the sent changes · unsent edits are lostflow.yaml");
   });
 });
 

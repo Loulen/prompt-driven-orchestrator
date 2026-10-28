@@ -8,6 +8,7 @@ import InspectorTabs from "./InspectorTabs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const indexCss = readFileSync(resolve(here, "../../index.css"), "utf-8");
+const inspectCss = readFileSync(resolve(here, "inspect.css"), "utf-8");
 
 describe("Inspector accent", () => {
   // The design system has one accent, ruby, for the selection and the one
@@ -27,12 +28,9 @@ describe("Inspector accent", () => {
       expect(screen.getByTestId("inspector-tab-edit")).toHaveAttribute("aria-selected", "false");
     });
 
-    it("styles expected-content boxes with the inspector accent and bounded editor", () => {
-      expect(indexCss).toMatch(
-        /\.exp\.expanded[\s\S]*border-color:\s*color-mix\(in oklab, var\(--primary\) 30%, transparent\)/,
-      );
-      expect(indexCss).toMatch(/\.exp textarea[\s\S]*max-height:\s*150px/);
-      expect(indexCss).toMatch(/\.exp-trigger:focus-visible[\s\S]*var\(--primary\)/);
+    it("bounds the expected-content editor and rings its trigger with the focus token", () => {
+      expect(inspectCss).toMatch(/\.ei-exp \.d-area[\s\S]*max-height:\s*150px/);
+      expect(inspectCss).toMatch(/\.ei-exp__trigger:focus-visible[\s\S]*var\(--focus-ring\)/);
     });
   });
 });

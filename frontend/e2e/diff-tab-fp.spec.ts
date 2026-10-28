@@ -13,7 +13,7 @@ import { cleanupRuns, runMultipart, E2E_TARGET_REPO } from "./helpers";
 //     (compared against `git diff --numstat` on the run branch).
 //  3. Collapse a file → only its header remains; expand it → its added and
 //     deleted lines are visible and coloured.
-//  4. Open an archived Run → "Diff not preserved for archived runs".
+//  4. Open an archived Run → "Diff not preserved".
 //
 // Real daemon (webServer), real run branch and worktree. The stub node session
 // (`sleep`) never delivers, so the spec commits the two files on the Run's
@@ -171,8 +171,12 @@ test("Diff tab lists the Run's changed files with correct counts, collapses and 
   await expect(alpha.getByTestId("diff-line-del")).toHaveCount(readmeStat.del);
   await expect(alpha.getByTestId("diff-line-add")).toHaveCount(readmeStat.add);
   await expect(alpha.getByTestId("diff-line-add").first()).toContainText("e2e diff tab — edited title");
-  await expect(alpha.getByTestId("diff-line-add").first()).toHaveClass(/bg-st-done\/14/);
-  await expect(alpha.getByTestId("diff-line-del").first()).toHaveClass(/bg-st-failed\/14/);
+  // Coloured: an added and a deleted row are painted, each its own tint.
+  const tint = (kind: "add" | "del") =>
+    alpha.getByTestId(`diff-line-${kind}`).first().evaluate((row) => getComputedStyle(row).backgroundColor);
+  const [addTint, delTint] = [await tint("add"), await tint("del")];
+  for (const c of [addTint, delTint]) expect(c).not.toMatch(/^rgba\(0, 0, 0, 0\)$|^transparent$/);
+  expect(addTint).not.toBe(delTint);
 
   // Step 3 — collapse: header only; expand: lines back.
   await alpha.getByTestId("diff-file-header").click();
@@ -225,9 +229,53 @@ test("an archived Run says the diff is not preserved", async ({ page, baseURL })
   await openInfoPanel(page, run_id);
   await page.getByTestId("info-tab-diff").click();
   await expect(page.getByTestId("diff-archived")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText("Diff not preserved for archived runs")).toBeVisible();
+  await expect(page.getByTestId("diff-archived")).toHaveText("Diff not preserved");
+  await expect(page.getByTestId("diff-archived")).toHaveAttribute("title", "The run branch was deleted at cleanup");
   await expect(page.getByText("No changes")).toHaveCount(0);
   await page.getByTestId("pipeline-info-panel").screenshot({
     path: path.join(SHOTS, "748-diff-tab-archived.png"),
   });
+});
+
+test("in a narrow pane, an added file's header stays inside it", async ({ page, baseURL }) => {
+  await page.goto("/");
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+
+  const resp = await page.request.post(`${baseURL}/runs`, {
+    multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "diff tab narrow" }),
+  });
+  expect(resp.status()).toBe(201);
+  const { run_id } = await resp.json();
+  createdRuns.push(run_id);
+  const wt = path.join(E2E_TARGET_REPO, ".pdo", "runs", run_id, "worktree");
+  await expect
+    .poll(async () => fs.stat(wt).then(() => true, () => false), { timeout: 10_000 })
+    .toBe(true);
+
+  // A new file with a long name: the header carries the « new » chip on top of its counts.
+  const name = "a_very_long_new_file_name_that_does_not_fit_a_narrow_pane_3.ts";
+  await fs.mkdir(path.join(wt, "src", "deeply", "nested"), { recursive: true });
+  await fs.writeFile(path.join(wt, "src", "deeply", "nested", name), "export const a = 1;\n");
+  git(wt, ["add", "src"]);
+  git(wt, ["-c", "user.email=e2e@test", "-c", "user.name=e2e", "commit", "-q", "-m", "fp: add"]);
+
+  await openInfoPanel(page, run_id);
+  await page.getByTestId("info-tab-diff").click();
+  const tab = page.getByTestId("diff-tab");
+  await expect(page.getByTestId("diff-file-header")).toHaveCount(1, { timeout: 10_000 });
+  await expect(page.getByTestId("diff-file-badge")).toHaveText("new");
+
+  // The pane at its narrowest drawn width.
+  await tab.evaluate((el) => {
+    el.style.width = "240px";
+  });
+  for (const testId of ["diff-file-header", "diff-ledger-row"]) {
+    const overflow = await page.getByTestId(testId).evaluate((row) => {
+      const right = row.getBoundingClientRect().right;
+      return [...row.children].map((c) => c.getBoundingClientRect().right - right).filter((d) => d > 0.5);
+    });
+    expect(overflow, testId).toEqual([]);
+  }
+  // The name keeps its end in clear.
+  await expect(page.getByTestId("diff-file-header")).toContainText("_pane_3.ts");
 });

@@ -156,8 +156,9 @@ describe("Outputs section (#843)", () => {
     fireEvent.click(within(screen.getByTestId("output-checkbox-out")).getByRole("checkbox"));
 
     expect(currentEdge().source).toEqual({ node: "design", port: "out" });
-    expect(screen.getByTestId("outputs-last-hint")).toHaveTextContent(
-      /at least one output/i,
+    expect(screen.getByTestId("output-checkbox-out")).toHaveAttribute(
+      "title",
+      "An edge always carries at least one output",
     );
   });
 

@@ -8,19 +8,10 @@
  */
 
 import { useMemo } from "react";
-import ExtensionSections, { type RenderedSection } from "../../shared/extensions/ExtensionSections";
+import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { NodeConfigContext, PipelineConfigContext } from "../../shared/extensions/contract";
 import type { Attributes } from "../../shared/extensions/attributes";
-import { SectionHead } from "./InspectorPrimitives";
-
-function inspectorSection({ key, label, body }: RenderedSection) {
-  return (
-    <div className="flex flex-col gap-2" data-testid={`extension-section-${key}`}>
-      <SectionHead title={label} />
-      {body}
-    </div>
-  );
-}
+import { inspectorSection } from "./inspectorSection";
 
 export function NodeConfigSections({
   nodeId,

@@ -1,4 +1,4 @@
-import { OPERATORS, type Operator } from "./whenClause";
+import { OPERATORS, isPortlessField, type ConditionRow, type Operator } from "./whenClause";
 import { primaryPort } from "./edgePorts";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { FrontmatterFieldDecl } from "../shared/generated/FrontmatterFieldDecl";
@@ -90,4 +90,42 @@ export function clampOperator(
 ): Operator {
   const allowed = operatorsForField(fields, name);
   return allowed.includes(op) ? op : "eq";
+}
+
+/**
+ * Whether a row of `rows` already holds the pair `field`/`op` of `port`: the
+ * clause keeps one value per pair. `iter` and `$variables` are spelled without
+ * their output, so any row holds them.
+ */
+export function isConditionHeld(
+  rows: ConditionRow[],
+  cond: { port: string; field: string; op: Operator },
+): boolean {
+  return rows.some(
+    (r) =>
+      r.field === cond.field &&
+      r.op === cond.op &&
+      (r.port === cond.port || isPortlessField(cond.field)),
+  );
+}
+
+/**
+ * The field and operator a new condition row of `port` starts on: the first
+ * pair no row already holds. A `when:` clause is a map per field and per
+ * operator, so a new row on a held pair would overwrite that row's value
+ * instead of adding one. `null` when every pair is held.
+ */
+export function nextFreeCondition(
+  rows: ConditionRow[],
+  port: string,
+  fields: EdgeConditionField[],
+): { field: string; op: Operator } | null {
+  const held = (field: string, op: Operator) => isConditionHeld(rows, { port, field, op });
+  const names = fields.length > 0 ? fields.map((f) => f.name) : ["iter"];
+  for (const op of OPERATORS) {
+    for (const field of names) {
+      if (operatorsForField(fields, field).includes(op) && !held(field, op)) return { field, op };
+    }
+  }
+  return null;
 }

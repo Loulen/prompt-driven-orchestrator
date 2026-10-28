@@ -115,63 +115,59 @@ describe("OutputSchemaEditor", () => {
     expect(onChange).toHaveBeenCalledWith(undefined);
   });
 
-  it("each field renders as a .fld row", () => {
+  it("each field renders as a schema-field row", () => {
     const schema = {
       verdict: { type: "enum", allowed: ["PASS"] },
       score: { type: "int" },
     };
     render(<OutputSchemaEditor schema={schema} onChange={vi.fn()} />);
     const editor = screen.getByTestId("output-schema-editor");
-    const fldRows = editor.querySelectorAll(".fld");
+    const fldRows = editor.querySelectorAll("[data-testid='schema-field']");
     expect(fldRows).toHaveLength(2);
   });
 
-  it(".fld row contains .fld-name input, .fld-type select, .fld-del button", () => {
+  it("a field row holds its name input, its type select and its delete button", () => {
     const schema = { score: { type: "int" } };
     render(<OutputSchemaEditor schema={schema} onChange={vi.fn()} />);
-    const fld = screen.getByTestId("output-schema-editor").querySelector(".fld")!;
-    expect(fld.querySelector(".fld-name")).toBeTruthy();
-    expect(fld.querySelector(".fld-type")).toBeTruthy();
-    expect(fld.querySelector(".fld-del")).toBeTruthy();
+    const fld = screen.getByTestId("schema-field");
+    expect(fld.querySelector("input[aria-label='Field name']")).toBeTruthy();
+    expect(fld.querySelector("select[aria-label='Field type']")).toBeTruthy();
+    expect(fld.querySelector("button[aria-label='Delete field']")).toBeTruthy();
   });
 
-  it("type=enum reveals .fld-enum sub-form; other types do not", () => {
+  it("type=enum reveals the allowed values; other types do not", () => {
     const schema = {
       verdict: { type: "enum", allowed: ["PASS"] },
       score: { type: "int" },
     };
     render(<OutputSchemaEditor schema={schema} onChange={vi.fn()} />);
-    const fldRows = screen.getByTestId("output-schema-editor").querySelectorAll(".fld");
-    expect(fldRows[0].querySelector(".fld-enum")).toBeTruthy();
-    expect(fldRows[1].querySelector(".fld-enum")).toBeNull();
+    const fldRows = screen.getAllByTestId("schema-field");
+    expect(fldRows[0].querySelector("[data-testid='allowed-values']")).toBeTruthy();
+    expect(fldRows[1].querySelector("[data-testid='allowed-values']")).toBeNull();
   });
 
-  it("switching type away from enum hides .fld-enum", () => {
+  it("switching type away from enum drops the allowed values", () => {
     const schema = { verdict: { type: "enum", allowed: ["PASS"] } };
     const onChange = vi.fn();
     render(<OutputSchemaEditor schema={schema} onChange={onChange} />);
-    expect(screen.getByTestId("output-schema-editor").querySelector(".fld-enum")).toBeTruthy();
+    expect(screen.getByTestId("allowed-values")).toBeTruthy();
     fireEvent.change(screen.getByTestId("schema-field-type"), { target: { value: "string" } });
     expect(onChange).toHaveBeenCalledWith({ verdict: { type: "string" } });
   });
 
-  it("enum sub-form has chips in .fld-chips container", () => {
+  it("the allowed values show as chips", () => {
     const schema = { verdict: { type: "enum", allowed: ["PASS", "FAIL"] } };
     render(<OutputSchemaEditor schema={schema} onChange={vi.fn()} />);
-    const fldEnum = screen.getByTestId("output-schema-editor").querySelector(".fld-enum")!;
-    const chipsContainer = fldEnum.querySelector(".fld-chips")!;
-    expect(chipsContainer).toBeTruthy();
-    const chips = chipsContainer.querySelectorAll(".fld-chip");
+    const chips = screen.getByTestId("allowed-values").querySelectorAll("[data-testid='allowed-chip']");
     expect(chips).toHaveLength(2);
   });
 
-  it("enum sub-form has .fld-add-row with input and explicit Add button", () => {
+  it("the allowed values end with an input and an explicit Add button", () => {
     const schema = { verdict: { type: "enum", allowed: [] } };
     render(<OutputSchemaEditor schema={schema} onChange={vi.fn()} />);
-    const addRow = screen.getByTestId("output-schema-editor").querySelector(".fld-add-row")!;
-    expect(addRow).toBeTruthy();
-    expect(addRow.querySelector("input")).toBeTruthy();
-    expect(addRow.querySelector(".fld-add-btn")).toBeTruthy();
+    const values = screen.getByTestId("allowed-values");
+    expect(values.querySelector("[data-testid='allowed-input']")).toBeTruthy();
+    expect(values.querySelector("[data-testid='add-allowed-btn']")).toBeTruthy();
   });
 
   it("Add button adds an enum value", async () => {
@@ -186,19 +182,18 @@ describe("OutputSchemaEditor", () => {
     });
   });
 
-  it("chip delete button is hidden by default and visible on hover via .fld-chip-del", () => {
+  it("each chip carries its remove button", () => {
     const schema = { verdict: { type: "enum", allowed: ["PASS"] } };
     render(<OutputSchemaEditor schema={schema} onChange={vi.fn()} />);
-    const chip = screen.getByTestId("output-schema-editor").querySelector(".fld-chip")!;
-    const del = chip.querySelector(".fld-chip-del")!;
-    expect(del).toBeTruthy();
+    const chip = screen.getByTestId("allowed-chip");
+    expect(chip.querySelector("[data-testid='remove-allowed-chip']")).toHaveAccessibleName("Remove PASS");
   });
 
-  it("+ field is a real button element with .fld-add-field class", () => {
+  it("+ field is a real button element", () => {
     render(<OutputSchemaEditor schema={null} onChange={vi.fn()} />);
     const btn = screen.getByTestId("add-schema-field");
     expect(btn.tagName).toBe("BUTTON");
-    expect(btn.classList.contains("fld-add-field")).toBe(true);
+    expect(btn).toHaveTextContent("field");
   });
 
   it("generates unique field names when adding multiple fields", async () => {

@@ -5,6 +5,7 @@ import { Button, Kbd, Modal, Segmented, TextInput, toast } from "../../shared/ui
 import type { SaveResult } from "../api/pipelines";
 import type { SaveAs } from "../api/versions";
 import { defaultTitle } from "../model/versions";
+import "./inspect.css";
 
 /** The three outcomes of a Save; they exclude each other. */
 type SaveKind = "version" | "keep" | "replace";
@@ -31,7 +32,8 @@ function saveAsOf(kind: SaveKind, title: string): SaveAs {
 function savedMessage(pipelineName: string, saveAs: SaveAs, saved: PipelineVersionRef, kept: boolean): string {
   const name = `${pipelineName} ${defaultTitle(saved.number)}`;
   if (!saveAs.new_version) return `Replaced ${name}`;
-  return kept ? `Saved ${name} · kept ${keptName(pipelineName, saved.number - 1)}` : `Saved ${name}`;
+  // Kept: the pipeline's name once, so a long one leaves the kept name in view.
+  return kept ? `Saved ${defaultTitle(saved.number)} · kept ${keptName(pipelineName, saved.number - 1)}` : `Saved ${name}`;
 }
 
 /**
@@ -148,6 +150,9 @@ export default function SaveVersionModal({
             spellCheck={false}
             value={replace ? (lastTitle ?? lastName) : title}
             disabled={replace}
+            // A Replace keeps the version's title: the field only shows it.
+            className={replace ? "ei-ro" : undefined}
+            title={replace ? `Replace keeps the title of ${lastName}` : undefined}
             onChange={(e) => setTitle(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {

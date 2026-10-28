@@ -168,7 +168,7 @@ export default function LibraryRow({
           </Tooltip>
         )}
         <span className="lp-end">
-          {draft && <ParticipantStack participants={draft.participants} size={14} />}
+          {draft && <ParticipantStack participants={draft.participants} size="sm" />}
           {indicator}
         </span>
       </span>

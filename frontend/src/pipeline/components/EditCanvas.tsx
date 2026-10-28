@@ -23,9 +23,7 @@ import OrthogonalEdge from "./OrthogonalEdge";
 import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
-import LintBanner from "./LintBanner";
-import { DraftNotices } from "./DraftNoticeBanner";
-import { VersionLine } from "./VersionBanner";
+import CanvasLines from "./CanvasLines";
 import DraftPresence from "./DraftPresence";
 import RunSearchHost from "../../run/components/runSearch/RunSearchHost";
 import WaitingForStartedNodesBanner, { NodePlayRetryConfirm } from "../../run/components/WaitingForStartedNodesBanner";
@@ -228,20 +226,14 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {/* The lines under the tab bar, full width, above the canvas (ADR-0088):
-          the version shown read only, an older version a Run launched, or the
-          draft's changes; then what changed the shared draft from outside the
-          canvas (a file written outside, the library assistant), then the
-          lint. #225: lint is an edit-mode affordance — suppressed on run tabs. */}
-      <div className="shrink-0">
-        <VersionLine tab={tab} run={activeRunState} infoOpen={infoOpen} onToggleInfo={onToggleInfo} />
-        {tab.runId == null && tab.version == null && (
-          <>
-            <DraftNotices tab={tab} />
-            {visibleItems.length > 0 && <LintBanner items={visibleItems} onDismiss={dismiss} />}
-          </>
-        )}
-      </div>
+      <CanvasLines
+        tab={tab}
+        run={activeRunState}
+        infoOpen={infoOpen}
+        onToggleInfo={onToggleInfo}
+        lint={visibleItems}
+        onDismissLint={dismiss}
+      />
     <div className="relative min-h-0 flex-1" ref={reactFlowRef}>
       {/* ADR-0088: a version shown read only takes no edit: no toolbar. */}
       {tab.version ? null : (

@@ -75,6 +75,7 @@ exclusive.
 | Decoration (`decoration`) | `UiContribution::decoration(…)` | the exported component, a small mark on an item (a row, a card, the status bar) |
 | List filter (`list_filter`) | `UiContribution::list_filter(…)` | the exported component, above a list |
 | Source of completion (`completion`, 0.14) | `UiContribution::completion(location, id, label, trigger, suggest)`, `.rendering(pattern, component)` | the core: a list of the exported function's suggestions, opened by `trigger` in a text field; the exported component draws each match of `pattern` in the rendered text |
+| Source de recherche (`search`, 0.18) | `UiContribution::search(location, id, label, search)`, `.with_icon(url)` | the core: the exported function's results for the query of the command field, in the extension's group ([Sources de recherche](#sources-de-recherche)) |
 
 Every contribution may carry a `when` clause (`.when(When::…)`): the core renders it only while
 the clause holds.
@@ -467,7 +468,8 @@ carries every attribute of the filter, as `?attr.<id>/<key>=<value>` does on the
 ### The Action locations
 
 Every location below accepts **actions only** (amendment #30), except `review/file`, which
-also takes decorations (amendment #31). The core renders each action and
+also takes decorations (amendment #31), and `palette`, which also takes Sources de recherche
+(0.18). The core renders each action and
 calls its command with the location's context; the `when` clause reads that same context.
 
 - **In a bar**: an icon button per action, before the core's buttons: the command's `icon`, or the
@@ -479,6 +481,9 @@ calls its command with the location's context; the `when` clause reads that same
   separator.
 - **A command that fails** (a throw, a rejection) shows an error toast; the bar or the menu keeps
   working. Every element sits in its own error boundary.
+- **A refused action is absent** (0.18): when its command declares the Operation it makes
+  ([Commands](#commands)), the core asks the question of authorization before rendering the
+  action, and leaves it out if refused. Never greyed out.
 
 The contexts they hand over, on top of `LocationContext`:
 
@@ -615,6 +620,75 @@ interface ReviewFileContext extends ReviewContext { entity: FileEntity; file: { 
   extensions' groups, then its delete (or « Managed by PDO » on a locked skill).
 - **Context**: `ItemContext<SkillEntity>`.
 
+### `palette`
+
+- **Accepts**: action, Source de recherche. Since 0.18.
+- **Renders**: the command field of the top bar (Ctrl+K, or a click on the field). An action of
+  `palette` is a **global Action**: a row in a group per extension, titled with the extension's
+  name in caps after the core's groups, its icon the command's. Under `>` (the commands only),
+  the extensions' Actions join the core's commands. A Source de recherche's results join the
+  same group ([Sources de recherche](#sources-de-recherche)).
+- **The selection's Actions**: for the item selected when the palette opens, the core also lists,
+  in its « Selection » group, the actions of the location that acts on it, with that location's
+  context: a Run, `run/item/menu`; a node of the Run on screen, `node/toolbar`; a Trigger,
+  `trigger/item/menu`; the Pipeline of the editor tab, `pipeline/item/menu`. Their rows show the
+  item they act on.
+- **Context**: `PaletteContext`.
+
+```ts
+interface PaletteContext extends LocationContext {
+  selected: EntityContext | null; // a RunEntity, NodeEntity, TriggerEntity or PipelineEntity
+}
+```
+
+## Sources de recherche
+
+A Source de recherche (0.18) answers the query typed in the command field with the extension's
+own entities (its notes, say). The extension filters by the Actor's rights:
+the core shows what it answers.
+
+```rust
+use pdo_extension_api::{UiContribution, UiContributions, UiLocation};
+
+UiContributions::bundle("/ext/test/ui.js", 19).contribute(
+    UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes")
+        .with_icon("/ext/test/icon.svg"),
+)
+```
+
+```ts
+interface SearchResult {
+  id: string;                    // unique within the answer
+  title: string;                 // the row's main text
+  ref?: string | null;           // before the title, in mono (N-12)
+  meta?: string | null;          // facts at the right of the row
+  icon?: string | null;          // an SVG the extension serves, when there is no status
+  status?: { tone: StatusTone; label: string } | null; // the tone's icon, the label as tooltip
+  link: string;                  // #/ext/<extension>/<location>/<path> or #/runs/<id>
+  highlights?: [number, number][] | null; // ranges of title the query matched
+}
+type SearchFunction = (query: string, context: PaletteContext, signal: AbortSignal)
+  => SearchResult[] | Promise<SearchResult[]>;
+```
+
+- **`search`**: the function the bundle exports under that name. The core calls it 120 ms after
+  the last keystroke, never with an empty query nor under `>`. `signal` aborts when the query
+  changes or the palette closes.
+- **Group**: the results join the extension's group, after its Actions; its header shows the
+  icon of the extension's first source (`.with_icon`), else its name's first letter. Several
+  sources of one extension share the group.
+- **Cap**: the core keeps the first **50** results of a source; the group shows 5 of them, then
+  « Show all n ».
+- **Delay**: the core never waits for a source. Its results join the group when they arrive; a
+  source late by 300 ms shows « Searching » in its group; after **5 s** it is given up on.
+- **Errors**: a source that throws, rejects or is given up on shows « Search failed », its
+  message and Retry in its own group; the other groups are untouched. An answer to an older
+  query is dropped.
+- **Choosing a result** follows its `link`. The core remembers it among the recent picks shown
+  on an empty query.
+- **Without `highlights`**, the core highlights each occurrence of the query in the title.
+- A source whose bundle does not export `search` is left out.
+
 ## Sources of completion
 
 A source of completion (0.14) lets an extension complete what a person types in a text field
@@ -726,6 +800,19 @@ type CommandFunction = (context: CommandContext, host: CommandHost) => unknown;
 core calls it with the context of the location of the action that was clicked (`contribution` is
 that action's id). It may return a promise. A throw or a rejection reaches the operator in an
 error toast. An action whose command the bundle does not export is not rendered.
+
+`.guarded_by(resource, verb)` (0.18) declares the Operation the command makes. Before rendering
+an action that calls it, wherever it sits, the core asks `POST /authorize` about that Operation,
+aimed at the `entity` of the action's location when it hands one over (placed in its Projets as
+the daemon places its own), and leaves the action out when it is refused, or until it is
+answered. A command without one always shows; the extension's route still refuses what it must.
+
+```rust
+let archive = UiCommand::new("test.archive", "Archive", "archive")
+    .guarded_by(ResourceKind::extension("test", "note"), Verb::Action("archive".into()));
+```
+
+On the wire: `"operation": { "resource": "test/note", "verb": { "action": "archive" } }`.
 
 ## `when` clauses
 

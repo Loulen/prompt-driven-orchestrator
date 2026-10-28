@@ -70,7 +70,6 @@ export const UNMIGRATED: readonly string[] = [
   "pipeline/components/RunEditControl.tsx",
   "pipeline/components/RunSaveGroup.tsx",
   "pipeline/components/SaveErrorModal.tsx",
-  "pipeline/components/SaveVersionModal.tsx",
   "pipeline/components/SourceBlock.tsx",
   "pipeline/components/StartInspector.tsx",
   "pipeline/components/ValidatePipelineModal.tsx",

@@ -212,6 +212,13 @@
     line-height: 14px;
     white-space: nowrap;
   }
+  /* In a button, the key takes the button's colour: readable on the ruby. */
+  .d-btn .d-kbd {
+    margin-left: 4px;
+    border-color: color-mix(in oklch, currentColor 45%, transparent);
+    color: inherit;
+    opacity: 0.7;
+  }
 
   /* ---------------------------------------------------------------- tooltip */
   .d-tiplayer {

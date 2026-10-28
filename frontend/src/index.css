@@ -8,10 +8,12 @@
 /* The primitives of the shared module `@pdo/extension-ui` and their dense
    classes, used by the core and by the extensions' UI. */
 @import "./shared/ui/kit/kit.css";
-/* The shell: top bar, status bar, left panel header, document tabs, palette. */
+/* The shell: top bar, status bar, left panel header, document tabs. */
 @import "./app/shell.css";
 /* The lists of the left panel: rows, group headers, hover and bulk bars. */
 @import "./app/leftList.css";
+/* The command field's palette. */
+@import "./app/palette/palette.css";
 
 @custom-variant dark (&:is(.dark *));
 

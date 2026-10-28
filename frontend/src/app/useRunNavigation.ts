@@ -1,7 +1,8 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { RunState } from "../shared/generated/RunState";
 import { useEditStore } from "../pipeline/store/editStore";
 import { useMountedPages } from "../platform/store/mountedPages";
+import { childLandingNode } from "../run/model/orchestration";
 
 /** What a navigation to a Run clears of the shell's other selections. */
 export interface RunNavigationTargets {
@@ -40,6 +41,9 @@ export function useRunNavigation({
   // One-shot landing: set by the back gesture, consumed by the remount of the
   // orchestrator's NodeDetailPanel (I/O stays the default everywhere else).
   const [landOnOrchestration, setLandOnOrchestration] = useState<string | null>(null);
+  // One-shot landing the other way: the child run just opened, whose node to
+  // select once its state has arrived.
+  const [landOnChild, setLandOnChild] = useState<string | null>(null);
 
   const handleSelectRun = useCallback(
     async (runId: string) => {
@@ -49,6 +53,7 @@ export function useRunNavigation({
       // while the child run is the selected one.)
       setOrchestratorReturn(null);
       setLandOnOrchestration(null);
+      setLandOnChild(null);
       // A Run takes the center back from a mounted page's tab (which stays open).
       useMountedPages.getState().showPage(null);
       setSelectedTriggerId(null);
@@ -84,9 +89,18 @@ export function useRunNavigation({
       };
       await handleSelectRun(childRunId);
       setOrchestratorReturn(entry);
+      setLandOnChild(childRunId);
     },
     [selectedRun, selection, handleSelectRun, setOrchestratorReturn],
   );
+  // The child run opens on the node that needs a look (its banner at once),
+  // as soon as its state is the selected one; a selection made meanwhile wins.
+  useEffect(() => {
+    if (!landOnChild || selectedRun?.run_id !== landOnChild) return;
+    setLandOnChild(null);
+    const nodeId = childLandingNode(selectedRun);
+    if (nodeId && selection.kind === "none") setSelection({ kind: "node", id: nodeId });
+  }, [landOnChild, selectedRun, selection.kind, setSelection]);
   const handleBackToOrchestrator = useCallback(async () => {
     if (!orchestratorReturn) return;
     const { parentRunId, nodeId } = orchestratorReturn;

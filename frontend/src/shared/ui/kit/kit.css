@@ -326,7 +326,7 @@
     min-width: 0;
     min-height: var(--h-control);
   }
-  .d-field__ctl > :not(.d-err) {
+  .d-field__ctl > :is(.d-input, .d-sel) {
     flex: 1 1 auto;
     min-width: 0;
   }

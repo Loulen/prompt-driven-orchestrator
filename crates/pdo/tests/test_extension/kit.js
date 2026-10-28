@@ -192,7 +192,7 @@ function Settings({ env, onSave }) {
       h(
         Field,
         { label: "Replicas", help: "1 to 20", error: bad ? "Must be 1 to 20" : null },
-        h(TextInput, { mono: true, inputMode: "numeric", value: replicas, onChange: (e) => setReplicas(e.target.value) }),
+        h(TextInput, { mono: true, inputMode: "numeric", value: replicas, onChange: (e) => setReplicas(e.target.value), style: { maxWidth: 80 } }),
       ),
       h(Field, { label: "Auto-deploy" }, h(Switch, { label: "Auto-deploy", checked: draft.auto, onChange: (v) => setDraft({ ...draft, auto: v }) })),
       h(Field, { label: "Notify" }, h(Checkbox, { label: "On failure", checked: notify, onChange: setNotify }, "On failure")),

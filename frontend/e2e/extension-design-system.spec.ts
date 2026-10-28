@@ -100,6 +100,12 @@ test("an extension page made of the primitives only looks native and follows the
   await replicas.fill("40");
   await expect(kit.getByRole("alert")).toHaveText("Must be 1 to 20");
   await expect(replicas).toHaveAttribute("aria-invalid", "true");
+  // A field stretches its text input, never its switch nor its segmented control.
+  const fieldWidth = (await kit.locator(".d-field__ctl").first().boundingBox())!.width;
+  const autoDeploy = (await kit.getByRole("switch", { name: "Auto-deploy" }).boundingBox())!;
+  expect(autoDeploy.width).toBeLessThan(40);
+  const strategy = (await kit.getByRole("radiogroup", { name: "Strategy" }).boundingBox())!;
+  expect(strategy.width).toBeLessThan(fieldWidth / 2);
 
   // In the core's tokens: the page and its primary button paint with the roles.
   expect(await computed(page, "kit-page", "background-color")).toBe(await role(page, "--surface-0"));

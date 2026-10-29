@@ -1,6 +1,7 @@
 import { FolderGit2, X } from "lucide-react";
 import { tildify } from "../../../lib/homePath";
 import { Button, IconButton } from "../../../shared/ui/kit";
+import MidPath from "../../../shared/ui/MidPath";
 
 /**
  * A repository of the Projet shown in Settings › Projects (CORE-96): its path,
@@ -30,7 +31,7 @@ export default function ProjectRepositoryRow({
   return (
     <div className="set-rrow" data-testid="project-repo-row" data-path={path} title={path}>
       <FolderGit2 size={13} strokeWidth={1.5} aria-hidden />
-      <span className="set-mono set-ellipsis set-rrow__path">{tildify(path, home)}</span>
+      <MidPath path={tildify(path, home)} title={false} className="set-rrow__path" testId="project-repo-path" />
       {primary && (
         <span className="d-chip" title="Preselected as the target in New Run" data-testid="project-repo-primary">
           default

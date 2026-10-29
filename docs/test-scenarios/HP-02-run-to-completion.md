@@ -69,8 +69,8 @@ Features validated while crossing the run screens (grafted from retired per-issu
 ## Journey
 
 1. Open the **New Run** modal → **pick a repo** (use the explorer loupe to browse and select a git
-   repo; the field validates with a green border + branch loading).
-2. Choose a pipeline, **enter a prompt** (optionally attach an input image) → **Launch**; capture the
+   repo; the field validates with a check at its end + branch loading).
+2. Choose a pipeline, **enter a prompt** (optionally attach an input image) → **Run**; capture the
    resulting run. A pipeline created for the journey is born a **test pipeline** (CONTEXT.md
    « Pipeline validé »): unfold « Show test pipelines » in the menu, or Validate it first.
 3. The canvas shows the **Start node** (▶) and **End node** (◯) with the dataflow between them; within
@@ -87,9 +87,9 @@ Features validated while crossing the run screens (grafted from retired per-issu
    changed / LOC, and an **estimated cost** ("Est. cost", labelled as an estimate — "—" when uncomputable).
 9. Find the run in the **Runs list** (grouped by repo when ≥ 2 repos exist).
 10. **Sandboxed twin.** Seed (or reuse) a **one-node pipeline** whose node asks for a single line of
-    output and then completes. Open **New Run** on it → the sandbox field sits on **Use instance
-    default**, and offers `off`, `minimal`, `full` and any named **staging profile**; pick **`full`**
-    → **Launch**.
+    output and then completes. Open **New Run** on it → the sandbox field sits on **Default**,
+    and offers `off`, `minimal`, `full` and any named **staging profile**; pick **`full`**
+    → **Run**.
 11. **Stay on the Run** and watch the **preparation** phase: the Run announces that its sandbox is
     being prepared and **no node starts while it lasts** (tens of seconds on a real `~/.claude`).
     When preparation clears, the node starts, its terminal preview shows a live `claude` session

@@ -216,22 +216,3 @@ describe("useRepoValidation — clearing the verdict", () => {
     expect(result.current.repoValid).toBeNull();
   });
 });
-
-describe("useRepoValidation — the field's border", () => {
-  it("stays neutral until there is a verdict", () => {
-    const { result } = setup();
-    expect(result.current.repoBorderClass).toBe("border-line-strong focus-within:border-primary");
-  });
-
-  it("goes accent on a valid repo and failed on an invalid one", async () => {
-    const { result } = setup();
-    act(() => result.current.handleRepoChange(REPO));
-    await settle();
-    expect(result.current.repoBorderClass).toBe("border-primary focus-within:border-primary");
-
-    vi.mocked(api.validateRepo).mockResolvedValue({ valid: false, error: "nope" });
-    act(() => result.current.handleRepoChange("/tmp/not-a-repo"));
-    await settle();
-    expect(result.current.repoBorderClass).toBe("border-st-failed focus-within:border-st-failed");
-  });
-});

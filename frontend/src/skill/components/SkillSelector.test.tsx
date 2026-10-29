@@ -255,7 +255,7 @@ describe("SkillSelector — unfolded", () => {
     render(<SkillSelector tier="instance" own={[]} bank={{ skills: [], folders: [], root_path: "" }} onChange={vi.fn()} testId="sel" />);
     expect(screen.getByTestId("sel-count")).toHaveTextContent("No skill");
     fireEvent.click(screen.getByTestId("sel"));
-    expect(screen.getByTestId("sel-empty")).toHaveTextContent("Empty bank");
+    expect(screen.getByTestId("sel-empty")).toHaveTextContent("No skill in the bank");
   });
 });
 
@@ -276,7 +276,7 @@ describe("SkillSelector — skills the bank lost", () => {
     const row = screen.getByTestId("sel-missing-gone");
     expect(head).toContainElement(row);
     expect(row).toHaveTextContent("deleted-skill");
-    expect(row.querySelector(".line-through")).not.toBeNull();
+    expect(row.querySelector(".ln-skills__name--gone")).not.toBeNull();
     // At the head: before the bank's tree, which is where the eye lands first.
     expect(head.compareDocumentPosition(screen.getByTestId("sel-tree")))
       .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
@@ -342,7 +342,7 @@ describe("SkillSelector — read-only", () => {
     fireEvent.click(screen.getByTestId("sel-folder-check-f-method"));
     expect(onChange).not.toHaveBeenCalled();
     // …and it says why the boxes do not answer.
-    expect(screen.getByTestId("sel-tree")).toHaveAttribute("title", expect.stringContaining("read-only"));
+    expect(screen.getByTestId("sel-popover")).toHaveTextContent("read-only");
   });
 
   it("still reads what is selected", () => {
@@ -377,7 +377,7 @@ describe("SkillSelector — dismissal", () => {
     render(<SkillSelector tier="node" own={[]} bank={bank} onChange={vi.fn()} testId="sel" />);
     fireEvent.click(screen.getByTestId("sel"));
     expect(screen.getByTestId("sel-popover")).toBeInTheDocument();
-    fireEvent.mouseDown(document.body);
+    fireEvent.pointerDown(document.body);
     expect(screen.queryByTestId("sel-popover")).toBeNull();
     expect(screen.getByTestId("sel")).toHaveAttribute("aria-expanded", "false");
   });
@@ -385,7 +385,7 @@ describe("SkillSelector — dismissal", () => {
   it("stays open on a mousedown inside the picker (#686)", () => {
     render(<SkillSelector tier="node" own={[]} bank={bank} onChange={vi.fn()} testId="sel" />);
     fireEvent.click(screen.getByTestId("sel"));
-    fireEvent.mouseDown(screen.getByTestId("sel-option-c"));
+    fireEvent.pointerDown(screen.getByTestId("sel-option-c"));
     expect(screen.getByTestId("sel-popover")).toBeInTheDocument();
   });
 

@@ -10,3 +10,15 @@ export function tildify(path: string, home: string | null | undefined): string {
   if (root && path.startsWith(`${root}/`)) return `~${path.slice(root.length)}`;
   return path;
 }
+
+/** The reverse of `tildify`, for a path typed as `~/code/…`: under the daemon's
+ *  home. Any other path, or no known home, is returned as is. */
+export function untildify(path: string, home: string | null | undefined): string {
+  if (!home || (path !== "~" && !path.startsWith("~/"))) return path;
+  return home.replace(/\/+$/, "") + path.slice(1);
+}
+
+/** The last segment of a path or a URL: `shop-api` for `/work/shop-api/`. */
+export function baseName(path: string): string {
+  return path.replace(/\/+$/, "").split("/").pop() || path;
+}

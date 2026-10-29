@@ -40,6 +40,7 @@ import { useAssistantTarget } from "./useAssistantTarget";
 import CenterPane from "./CenterPane";
 import { useShellLayout } from "./useShellLayout";
 import RightPane from "./RightPane";
+import PausedFireConfirm from "./PausedFireConfirm";
 import AppSurfaces from "./AppSurfaces";
 import StatusBar from "./StatusBar";
 import UpdateModals from "./UpdateModals";
@@ -313,6 +314,9 @@ export default function App() {
               selectedTrigger={selectedTrigger}
               triggerPromptRequired={triggerPromptRequired}
               firesRefreshKey={firesRefreshKey}
+              onRunNowTrigger={(t) => void launch.handleRunNowTrigger(t)}
+              onEditTrigger={(t) => openNewRunModal({ kind: "edit-trigger", trigger: t })}
+              projects={projects}
               runNode={runNode}
               editTab={editTab}
               selectedRun={selectedRun}
@@ -374,6 +378,7 @@ export default function App() {
       />
       {/* After the full-window surfaces, which it must paint over. */}
       <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
+      <PausedFireConfirm launch={launch} />
       <EditorModals
         saveErrorTab={saveErrorTab}
         onViewYaml={info.handleViewYaml}

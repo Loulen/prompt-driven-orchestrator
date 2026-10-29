@@ -164,23 +164,24 @@ test("Edit project with provisioning open stays in the window; the body scrolls 
 
   const modal = page.getByTestId("project-edit-modal");
   await expect(modal).toBeVisible();
-  await expect(modal.getByText("Edit project", { exact: true })).toBeInViewport();
+  await expect(modal.getByRole("heading", { name: /^Edit project/ })).toBeInViewport();
   await expect(page.getByTestId("project-edit-save")).toBeInViewport();
 
   // The provisioning block renders collapsed; its header opens it.
   await modal.getByTestId("provisioning-toggle").click();
   await expect(modal.getByTestId("provisioning-body")).toBeVisible();
 
-  // The panel never leaves the window: bounded to 85vh (510px at 600px).
+  // The panel never leaves the window: the kit's modal, bounded to the window
+  // less 64px (536px at 600px).
   const box = (await modal.boundingBox())!;
   expect(box.y).toBeGreaterThanOrEqual(0);
   expect(box.y + box.height).toBeLessThanOrEqual(600);
-  expect(box.height).toBeLessThanOrEqual(0.85 * 600 + 1);
+  expect(box.height).toBeLessThanOrEqual(600 - 64 + 1);
 
-  // Only the body scrolls; title and Save stay put.
-  const body = page.getByTestId("project-edit-body");
+  // Only the frame's body scrolls; title and Save stay put.
+  const body = page.getByTestId("project-edit-body").locator("xpath=ancestor::div[contains(@class, 'd-frame__body')]");
   expect(await overflows(body)).toBe(true);
-  await expect(modal.getByText("Edit project", { exact: true })).toBeInViewport();
+  await expect(modal.getByRole("heading", { name: /^Edit project/ })).toBeInViewport();
   await expect(page.getByTestId("project-edit-save")).toBeInViewport();
 
   // The member list keeps its own bounded height, nested in the scrolling body.
@@ -237,11 +238,13 @@ test("the pencil of a group in no Projet names one for its repository; short con
 
   await page.getByTestId("project-more-settings").click();
   const modal = page.getByTestId("project-edit-modal");
-  await expect(modal.getByText("Edit project", { exact: true })).toBeInViewport();
+  await expect(modal.getByRole("heading", { name: /^Edit project/ })).toBeInViewport();
   await expect(page.getByTestId("project-edit-save")).toBeInViewport();
-  expect(await overflows(page.getByTestId("project-edit-body"))).toBe(false);
+  expect(
+    await overflows(page.getByTestId("project-edit-body").locator("xpath=ancestor::div[contains(@class, 'd-frame__body')]")),
+  ).toBe(false);
 
-  // Backdrop click behaviour is unchanged: it still closes the modal.
-  await page.getByTestId("project-edit-backdrop").click({ position: { x: 5, y: 5 } });
+  // A click on the backdrop still closes the modal.
+  await page.mouse.click(5, 5);
   await expect(modal).toHaveCount(0);
 });

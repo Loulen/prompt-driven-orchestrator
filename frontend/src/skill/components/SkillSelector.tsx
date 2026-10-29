@@ -1,6 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Sparkles, TriangleAlert } from "lucide-react";
 import type { SkillBank } from "../model/skill";
+import { AnchoredPanel } from "../../shared/ui/kit/layer";
 import type { SkillRef } from "../../shared/generated/SkillRef";
 import type { SkillTier } from "../../shared/generated/SkillTier";
 import { buildRows } from "../model/skillTree";
@@ -43,6 +44,7 @@ export default function SkillSelector({
   inherited = [],
   bank = EMPTY_BANK,
   label = "Skills",
+  showLabel = true,
   testId = "skill-selector",
   readOnly = false,
   added = [],
@@ -53,6 +55,8 @@ export default function SkillSelector({
   inherited?: InheritedTier[];
   bank?: SkillBank;
   label?: string;
+  /** The label inside the button; off in a label-left form row, where it reads « Skills ». */
+  showLabel?: boolean;
   testId?: string;
   readOnly?: boolean;
   /** Skills a prompt's `/` completion just added to `own`: a chip each under
@@ -61,29 +65,8 @@ export default function SkillSelector({
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  const treeHelpId = useId();
-  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
-  // Dismiss on outside click and Escape (#686, same pattern as AgentControl):
-  // the picker is an absolute overlay that hides the fields below it, so it
-  // must close on any gesture that is not aimed at it.
-  useEffect(() => {
-    if (!open) return;
-    const onMouseDown = (event: MouseEvent) => {
-      if (rootRef.current?.contains(event.target as Node)) return;
-      setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", onMouseDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onMouseDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
   // Folders start expanded (every skill visible at a glance); `null` = untouched.
   const [collapsedOverride, setCollapsedOverride] = useState<Set<string> | null>(null);
   const expanded = useMemo(() => {
@@ -145,51 +128,44 @@ export default function SkillSelector({
   };
 
   return (
-    <div ref={rootRef} className="relative" data-testid={`${testId}-root`}>
-      {/* One row, label included: the caption above the button was a third line
-          for a control that says two things (#849). */}
+    <div className="ln-skills" data-testid={`${testId}-root`}>
+      {/* One row, label included (#849): the label, the count at the end. */}
       <button
+        ref={triggerRef}
         type="button"
         data-testid={testId}
         aria-expanded={open}
+        aria-label={showLabel ? undefined : label}
+        aria-invalid={hasMissing || undefined}
         onClick={() => setOpen((value) => !value)}
-        className={`flex w-full items-center gap-2 rounded border bg-surface-2 px-2 py-1.5 text-left ${
-          hasMissing ? "border-st-blocked" : "border-line-strong"
-        } text-text-2 ${readOnly ? "opacity-80" : ""}`}
+        className="d-sel ln-skills__field"
+        data-readonly={readOnly || undefined}
       >
-        <Sparkles size={11} className="shrink-0" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium text-xs">{label}</span>
-          <span className="block truncate text-text-3 text-2xs" data-testid={`${testId}-count`}>
-            {activeCountLabel(resolved.activeCount)}
-          </span>
+        <Sparkles className="d-sel__lead" size={13} strokeWidth={1.5} aria-hidden />
+        <span className="d-sel__val">{showLabel ? label : "Skills"}</span>
+        <span className="ln-sel__count" data-testid={`${testId}-count`}>
+          {activeCountLabel(resolved.activeCount)}
         </span>
         {hasMissing && (
           // The sentence is one hover away instead of a red paragraph under the
-          // button — the same words, none of the height (#849).
+          // button (#849); `role="img"` makes it a name a reader gets.
           <span
             data-testid={`${testId}-alert`}
             title={missingMessage}
-            // `role="img"` so the sentence is a NAME, not an inert attribute on a
-            // bare span: a reader who never hovers still gets the warning.
             role="img"
             aria-label={missingMessage}
-            className="shrink-0 text-st-blocked"
+            className="ln-skills__alert"
           >
-            <TriangleAlert size={11} />
+            <TriangleAlert size={12} strokeWidth={1.5} aria-hidden />
           </span>
         )}
-        <ChevronDown size={11} className="shrink-0 text-text-3" />
+        <ChevronDown className="d-sel__chev" size={12} strokeWidth={1.5} aria-hidden />
       </button>
 
       {addedChips.length > 0 && (
-        <ul className="mt-1 flex flex-wrap gap-1" data-testid={`${testId}-added`}>
+        <ul className="ln-chips" data-testid={`${testId}-added`}>
           {addedChips.map((skill) => (
-            <li
-              key={skill.id}
-              data-testid={`${testId}-added-${skill.id}`}
-              className="rounded border border-st-await/35 bg-st-await/14 px-1.5 py-0.5 font-mono text-st-await text-2xs"
-            >
+            <li key={skill.id} data-testid={`${testId}-added-${skill.id}`} className="d-chip d-chip--mono ln-skills__added">
               {bank.skills.find((known) => known.id === skill.id)?.name ?? skill.name} · added
             </li>
           ))}
@@ -197,16 +173,16 @@ export default function SkillSelector({
       )}
 
       {/* Read-only (a node whose spawn froze its skills, a Trigger's detail) opens
-          the popover all the same: the reading is the point, and refusing to open
-          left a count nobody could expand (#849). Only the gestures are frozen. */}
-      {open && (
+          the panel all the same: the reading is the point (#849). Only the
+          gestures are frozen. */}
+      <AnchoredPanel anchor={triggerRef} open={open} onClose={() => setOpen(false)} className="d-pop--panel ln-skills__pop">
         <div
           role="dialog"
+          aria-label={label}
           data-testid={`${testId}-popover`}
-          className="absolute left-0 z-40 mt-1 w-full min-w-[280px] rounded border border-line-strong bg-surface-2 p-1.5 shadow-xl"
         >
           {hasMissing && (
-            <ul className="mb-1 flex flex-col gap-0.5 border-b border-line pb-1" data-testid={`${testId}-missing`}>
+            <ul className="ln-skills__missing" data-testid={`${testId}-missing`}>
               {resolved.missing.map((row) => {
                 // `own` = this tier is one of the tiers that selected it, so the
                 // uncheck below has something of ours to remove.
@@ -216,7 +192,7 @@ export default function SkillSelector({
                     key={`m-${row.id}`}
                     data-testid={`${testId}-missing-${row.id}`}
                     data-own={isOwn}
-                    className="flex items-center gap-1.5 rounded px-1 py-0.5 text-st-blocked text-xs"
+                    className="ln-skills__row ln-skills__row--missing"
                   >
                     <input
                       type="checkbox"
@@ -230,19 +206,14 @@ export default function SkillSelector({
                         if (readOnly) return;
                         onChange(removeRef(own, row.id));
                       }}
-                      className="accent-primary"
                     />
-                    <TriangleAlert size={10} className="shrink-0" />
-                    <span className={`min-w-0 flex-1 truncate font-mono line-through ${isOwn ? "" : "text-text-3"}`}>
+                    <TriangleAlert size={12} strokeWidth={1.5} aria-hidden />
+                    <span className="ln-skills__name ln-skills__name--gone" data-own={isOwn}>
                       {row.name}
                     </span>
                     {!isOwn &&
                       row.tiers.map((t) => (
-                        <span
-                          key={t}
-                          data-tier={t}
-                          className="rounded border border-line px-1 uppercase tracking-wider text-text-3 text-2xs"
-                        >
+                        <span key={t} data-tier={t} className="d-chip ln-skills__tier">
                           {SKILL_TIER_LABEL[t]}
                         </span>
                       ))}
@@ -251,29 +222,24 @@ export default function SkillSelector({
               })}
             </ul>
           )}
-          <input
-            type="search"
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder="Filter skills…"
-            data-testid={`${testId}-filter`}
-            className="d-input d-input--sm mb-1"
-          />
-          <span id={treeHelpId} className="d-sr">
-            {treeHelp(readOnly)}
-          </span>
+          <label className="d-pop__search">
+            <input
+              type="search"
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              placeholder="Filter skills"
+              aria-label="Filter skills"
+              spellCheck={false}
+              autoFocus
+              data-testid={`${testId}-filter`}
+            />
+          </label>
           {bank.skills.length === 0 ? (
-            <p className="px-1 py-2 text-text-3 text-xs" title="Add skills in Settings › Agents › Skills" data-testid={`${testId}-empty`}>
-              Empty bank
+            <p className="d-pop__empty" data-testid={`${testId}-empty`}>
+              No skill in the bank
             </p>
           ) : (
-            // How the tree reads goes in its tooltip, not under it.
-            <ul
-              className="max-h-64 overflow-y-auto"
-              title={treeHelp(readOnly)}
-              aria-describedby={treeHelpId}
-              data-testid={`${testId}-tree`}
-            >
+            <ul className="d-pop__list" data-testid={`${testId}-tree`}>
               {rows.map((row) => {
                 if (row.ref.kind === "folder" && row.folder) {
                   const skills = skillsInFolder(row.folder.id, bank);
@@ -282,7 +248,7 @@ export default function SkillSelector({
                   return (
                     <li
                       key={`f-${row.folder.id}`}
-                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-hover text-xs"
+                      className="ln-skills__row"
                       style={{ paddingLeft: 4 + row.depth * 12 }}
                       data-testid={`${testId}-folder-${row.folder.id}`}
                     >
@@ -296,20 +262,20 @@ export default function SkillSelector({
                         }}
                         disabled={readOnly || skills.length === 0}
                         onChange={() => toggleFolder(row.folder!.id)}
-                        className="accent-primary"
+                        title="Checks its skills now"
                       />
                       {/* The chevron stays live in read-only: folding a folder
                           reads the tree, it changes no selection. */}
                       <button
                         type="button"
                         onClick={() => toggleExpanded(row.folder!.id)}
-                        className="flex min-w-0 flex-1 items-center gap-1 text-left text-text-2"
+                        className="ln-skills__folder"
                         aria-expanded={row.expanded}
                       >
-                        {row.expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-                        {row.expanded ? <FolderOpen size={11} className="text-text-3" /> : <Folder size={11} className="text-text-3" />}
-                        <span className="truncate">{row.folder.name}</span>
-                        <span className="text-text-3 text-2xs">{row.count}</span>
+                        {row.expanded ? <ChevronDown size={12} strokeWidth={1.5} /> : <ChevronRight size={12} strokeWidth={1.5} />}
+                        {row.expanded ? <FolderOpen size={12} strokeWidth={1.5} /> : <Folder size={12} strokeWidth={1.5} />}
+                        <span className="ln-ellipsis">{row.folder.name}</span>
+                        <span className="ln-faint ln-num">{row.count}</span>
                       </button>
                     </li>
                   );
@@ -319,10 +285,11 @@ export default function SkillSelector({
                   const isOwn = ownIds.has(skill.id);
                   const from = inheritedById.get(skill.id);
                   const locked = readOnly || (!isOwn && !!from);
+                  const inheritedTitle = from && !isOwn ? `Inherited from the ${from.map((t) => SKILL_TIER_LABEL[t].toLowerCase()).join(", ")} tier` : undefined;
                   return (
                     <li
                       key={`s-${skill.id}`}
-                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-hover text-xs"
+                      className="ln-skills__row"
                       style={{ paddingLeft: 4 + row.depth * 12 }}
                       data-testid={`${testId}-option-${skill.id}`}
                     >
@@ -333,8 +300,7 @@ export default function SkillSelector({
                         checked={isOwn || !!from}
                         disabled={locked}
                         onChange={() => toggleSkill(skill.id, skill.name)}
-                        className="accent-primary"
-                        title={from && !isOwn ? `Inherited from the ${from.map((t) => SKILL_TIER_LABEL[t].toLowerCase()).join(", ")} tier` : undefined}
+                        title={inheritedTitle}
                       />
                       {/* The name is the target everyone aims at — a picker whose
                           rows only answer on the 14-pixel checkbox reads as broken
@@ -345,12 +311,13 @@ export default function SkillSelector({
                         disabled={locked}
                         onClick={() => toggleSkill(skill.id, skill.name)}
                         data-testid={`${testId}-label-${skill.id}`}
-                        className={`min-w-0 flex-1 truncate text-left font-mono disabled:cursor-default ${from && !isOwn ? "text-text-3" : "text-text"}`}
+                        className="ln-skills__name"
+                        data-inherited={(from && !isOwn) || undefined}
                       >
                         {skill.name}
                       </button>
                       {from && !isOwn && (
-                        <span className="rounded border border-line px-1 uppercase tracking-wider text-text-3 text-2xs">
+                        <span className="d-chip ln-skills__tier" title={inheritedTitle}>
                           {from.map((t) => SKILL_TIER_LABEL[t]).join(" · ")}
                         </span>
                       )}
@@ -361,8 +328,9 @@ export default function SkillSelector({
               })}
             </ul>
           )}
+          {readOnly && <div className="d-pop__empty">Frozen: read-only here</div>}
         </div>
-      )}
+      </AnchoredPanel>
     </div>
   );
 }
@@ -373,11 +341,4 @@ function missingSentence(missing: ActiveRow[]): string {
     return `Skill ${missing[0].name} no longer exists in the bank. It is skipped; runs still start.`;
   }
   return `${missing.length} selected skills no longer exist in the bank. They are skipped; runs still start.`;
-}
-
-/** How the tree reads: its tooltip, and its description for assistive technologies. */
-function treeHelp(readOnly: boolean): string {
-  return readOnly
-    ? "Frozen: this selection is read-only here"
-    : "Inherited skills are greyed and cannot be removed here (additive union); checking a folder checks its skills now";
 }

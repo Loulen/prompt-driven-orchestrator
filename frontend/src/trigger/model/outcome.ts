@@ -69,3 +69,23 @@ export function overlapLabel(t: Pick<Trigger, "overlap_policy" | "max_concurrent
       : "allow (unlimited concurrent fires)"
     : "skip (default)";
 }
+
+/** A fire outcome, as a word: `guard-exit-nonzero` → « Guard skip ». */
+export function outcomeWord(outcome: string): string {
+  switch (outcome) {
+    case "fired":
+      return "Fired";
+    case "skipped-overlap":
+      return "Skipped, overlap";
+    case "skipped-suspended":
+      return "Skipped, suspended";
+    case "guard-exit-nonzero":
+      return "Guard skip";
+    case "guard-error":
+      return "Guard error";
+    case "error":
+      return "Error";
+    default:
+      return outcome;
+  }
+}

@@ -160,9 +160,12 @@ export function AnchoredPanel({
 
   React.useEffect(() => {
     if (!open) return;
-    // A pointer-down in another open panel is one nested in this one.
+    // A pointer-down in another open panel, or in a menu, is one nested in this one.
     const inside = (t: EventTarget | null) =>
-      t instanceof Element && (!!ref.current?.contains(t) || !!anchor.current?.contains(t) || !!t.closest(".d-pop"));
+      t instanceof Element &&
+      (!!ref.current?.contains(t) ||
+        !!anchor.current?.contains(t) ||
+        !!t.closest('.d-pop, [data-slot="dropdown-menu-content"]'));
     const topmost = () => {
       const all = document.querySelectorAll(".d-pop");
       return all[all.length - 1] === ref.current;

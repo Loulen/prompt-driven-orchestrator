@@ -2,21 +2,28 @@ import { useEffect, useState } from "react";
 import { fetchInstanceProvisioning, fetchProjectProvisioning, saveInstanceProvisioning, saveProjectProvisioning } from "../api/provisioning";
 import { EMPTY_PROVISIONING_RULES } from "../model/provisioning";
 import type { ProvisioningRules } from "../../shared/generated/ProvisioningRules";
-import { Button, Field, TextInput } from "../../shared/ui/kit";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
+import { Button } from "../../shared/ui/kit";
+import { tildify, untildify } from "../../lib/homePath";
 
 export default function PersistedProvisioningEditor({
   scope,
   projectId,
   initialRepository = "",
   defaultExpanded = false,
+  home = null,
 }: {
   scope: "instance" | "project";
   projectId?: string;
   initialRepository?: string;
   defaultExpanded?: boolean;
+  /** The daemon's home, to read and type the repository as `~/code/…`. */
+  home?: string | null;
 }) {
-  const [repository, setRepository] = useState(initialRepository);
+  // The field as typed; `null` until it is, so a home read after the opening
+  // still shortens the initial repository.
+  const [typed, setTyped] = useState<string | null>(null);
+  const repository = typed === null ? initialRepository : untildify(typed, home);
   const [rules, setRules] = useState<ProvisioningRules>(EMPTY_PROVISIONING_RULES);
   const [valid, setValid] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -68,22 +75,24 @@ export default function PersistedProvisioningEditor({
       onValidityChange={setValid}
       projectId={scope === "project" ? (projectId ?? null) : null}
       defaultExpanded={defaultExpanded}
+      home={home}
       leading={
-        <Field label="Resolve against" help="A repository to preview the rules on">
-          <TextInput
-            mono
-            value={repository}
-            onChange={(event) => setRepository(event.target.value)}
+        <label className="ln-line ln-prov__against">
+          <span className="ln-faint">Resolve against</span>
+          <input
+            value={typed ?? tildify(initialRepository, home)}
+            onChange={(event) => setTyped(event.target.value)}
+            title={repository || undefined}
             placeholder="/absolute/path/to/repository"
+            spellCheck={false}
+            className="d-input d-input--sm d-input--mono ln-grow"
           />
-        </Field>
+        </label>
       }
       trailing={
-        <div className="set-line">
-          <span className={`set-ellipsis text-xs ${message?.includes("Failed") ? "set-bad" : "set-faint"}`}>
-            {message}
-          </span>
-          <span className="d-grow" />
+        <div className="ln-line">
+          <span className={message?.includes("Failed") ? "ln-err" : "ln-faint"}>{message}</span>
+          <span className="ln-grow" />
           <Button
             size="sm"
             tone="primary"

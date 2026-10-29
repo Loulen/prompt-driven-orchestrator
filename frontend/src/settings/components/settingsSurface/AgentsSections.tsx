@@ -73,7 +73,7 @@ export default function AgentsSections({
               inherited={{ harness: "claude", model: null, effort: null }}
               allowInherit={false}
               label="Agent — Instance settings"
-              bare
+              showLabel={false}
               testId="instance-agent-control"
             />
           </span>

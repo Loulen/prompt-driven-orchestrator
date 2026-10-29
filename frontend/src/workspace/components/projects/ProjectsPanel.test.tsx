@@ -145,7 +145,9 @@ describe("ProjectsPanel", () => {
     expect(screen.getByTestId("project-detail-name")).toHaveTextContent("Checkout");
     expect(screen.getByTestId("project-detail-runs")).toHaveTextContent("2 runs");
 
-    expect(within(row("/home/me/code/shop-web")).getByText("~/code/shop-web")).toBeInTheDocument();
+    // Cut in its middle: the repository's name (the last segment) stays whole.
+    expect(within(row("/home/me/code/shop-web")).getByTestId("project-repo-path")).toHaveTextContent("~/code/shop-web");
+    expect(within(row("/home/me/code/shop-web")).getByTestId("project-repo-path-tail")).toHaveTextContent(/^\/shop-web$/);
     expect(within(row("/home/me/code/shop-web")).getByTestId("project-repo-primary")).toBeInTheDocument();
     await waitFor(() =>
       expect(within(row("/home/me/code/shop-web")).getByTestId("project-repo-remote")).toHaveTextContent(
@@ -247,10 +249,7 @@ describe("ProjectsPanel", () => {
     await waitFor(() =>
       expect(screen.getByTestId("project-clone-into")).toHaveTextContent("~/pdo/repos/analytics"),
     );
-    expect(screen.getByTestId("project-clone-url")).toHaveAttribute(
-      "title",
-      "A full clone, with the daemon's git credentials",
-    );
+    expect(screen.getByTestId("project-clone")).toHaveTextContent("full clone");
     fireEvent.click(screen.getByTestId("project-clone-start"));
 
     await waitFor(() =>
@@ -263,9 +262,8 @@ describe("ProjectsPanel", () => {
     expect(within(job).getByTestId("project-clone-progress")).toHaveTextContent(
       "Receiving objects · 64 % · 38.20 MiB",
     );
-    expect(within(job).getByTitle("The repository joins Checkout when the clone is done")).toHaveTextContent(
-      "~/pdo/repos/analytics",
-    );
+    // Settings may close: the repository joins the Projet once cloned (in the tooltip).
+    expect(within(job).getByTitle("Joins Checkout when the clone is done")).toBeInTheDocument();
 
     api.fetchClones.mockResolvedValue([cloneJob({ state: "done", progress: null })]);
     await waitFor(() => expect(onChanged).toHaveBeenCalled(), { timeout: 2000 });

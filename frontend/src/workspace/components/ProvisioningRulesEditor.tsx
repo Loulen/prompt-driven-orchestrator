@@ -8,6 +8,7 @@ import type { ProvisioningRules } from "../../shared/generated/ProvisioningRules
 import type { ProvisioningScope } from "../../shared/generated/ProvisioningScope";
 import type { ScopedProvisioningRules } from "../../shared/generated/ScopedProvisioningRules";
 import { ruleLines as lines, SCOPES, scopePrecedes } from "../model/provisioning";
+import { conflictingPatternsOf, levelRuleCounts, patternPathCounts, provisioningSummary } from "../model/provisioningPlan";
 import {
   LEVEL_LABELS,
   LEVELS_HINT,
@@ -123,34 +124,9 @@ export default function ProvisioningRulesEditor({
     frozenPlan,
   ]);
 
-  const counts = useMemo(() => {
-    const result: Record<ProvisioningMode, Map<string, number>> = {
-      copy: new Map(),
-      hardlink: new Map(),
-      symlink: new Map(),
-    };
-    for (const rule of visiblePlan?.rules ?? []) {
-      result[rule.mode].set(
-        rule.pattern,
-        rule.paths.length + rule.excluded_paths.length,
-      );
-    }
-    return result;
-  }, [visiblePlan]);
+  const counts = useMemo(() => patternPathCounts(visiblePlan), [visiblePlan]);
 
-  const ruleCounts = useMemo(() => {
-    const result = new Map<ProvisioningScope, number>();
-    for (const scope of SCOPES) {
-      result.set(
-        scope,
-        (visiblePlan?.rules ?? []).filter((rule) => rule.scope === scope).length,
-      );
-    }
-    if (!visiblePlan) {
-      result.set(level, rules.copy.length + rules.hardlink.length + rules.symlink.length);
-    }
-    return result;
-  }, [level, visiblePlan, rules]);
+  const ruleCounts = useMemo(() => levelRuleCounts(visiblePlan, level, rules), [level, visiblePlan, rules]);
 
   // The preview keeps running while collapsed, so a conflict or a failed
   // preview is known without opening the block — and holds it open: a launch
@@ -168,47 +144,12 @@ export default function ProvisioningRulesEditor({
   const frozenMarker = frozenAt ? `🔒 frozen at ${frozenAt} · reused on restart` : null;
   const resolvedAgainst = !frozenAt && !(open && leading) && repository ? repository : null;
 
-  const summary = useMemo(() => {
-    let inheritedCount = 0;
-    if (visiblePlan) {
-      for (const scope of SCOPES) {
-        if (scopePrecedes(scope, level)) inheritedCount += ruleCounts.get(scope) ?? 0;
-      }
-    } else if (level !== "instance") {
-      for (const { scope, rules: scoped } of inherited ?? []) {
-        if (scopePrecedes(scope, level)) {
-          inheritedCount += scoped.copy.length + scoped.hardlink.length + scoped.symlink.length;
-        }
-      }
-    }
-    const ownCount = ruleCounts.get(level) ?? 0;
-    // A failed preview cannot vouch for "none": inherited rules may apply,
-    // they just could not be resolved.
-    if (visibleError) return `${ownCount} at this level · inherited unknown`;
-    if (inheritedCount === 0 && ownCount === 0) return "none";
-    return `${inheritedCount} inherited · ${ownCount} at this level`;
-  }, [visiblePlan, visibleError, level, ruleCounts, inherited]);
+  const summary = useMemo(
+    () => provisioningSummary(visiblePlan, !!visibleError, level, ruleCounts, inherited),
+    [visiblePlan, visibleError, level, ruleCounts, inherited],
+  );
 
-  const conflictingPatterns = useMemo(() => {
-    const result: Record<ProvisioningMode, Set<string>> = {
-      copy: new Set(),
-      hardlink: new Set(),
-      symlink: new Set(),
-    };
-    for (const conflict of visiblePlan?.conflicts ?? []) {
-      if (conflict.scope !== level) continue;
-      for (const rule of visiblePlan?.rules ?? []) {
-        if (
-          rule.scope === level &&
-          conflict.modes.includes(rule.mode) &&
-          rule.paths.includes(conflict.relative_path)
-        ) {
-          result[rule.mode].add(rule.pattern);
-        }
-      }
-    }
-    return result;
-  }, [level, visiblePlan]);
+  const conflictingPatterns = useMemo(() => conflictingPatternsOf(visiblePlan, level), [level, visiblePlan]);
 
   function update(mode: ProvisioningMode, text: string) {
     onChange({ ...rules, [mode]: lines(text) });

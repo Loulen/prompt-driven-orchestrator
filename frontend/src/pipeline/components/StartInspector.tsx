@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { ExternalLink, Play } from "lucide-react";
+import { Chip, IconButton, Section } from "../../shared/ui/kit";
+import "./inspect.css";
 import type { StartNodeInfo } from "../../shared/generated/StartNodeInfo";
 import { fetchArtifact, artifactUrl } from "../../run/api/artifacts";
 import type { FileInfo } from "../../run/api/nodes";
@@ -56,53 +59,36 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
   ];
 
   return (
-    <aside className="start-inspector flex h-full flex-col bg-surface-1" data-testid="start-inspector">
-      <div className="border-b border-line px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-text" style={{ fontSize: "12.5px" }}>
-            Run start
+    <aside className="start-inspector ei" data-testid="start-inspector">
+      <div className="ei-bar">
+        <span className="ei-bar__title">
+          <Play size={14} strokeWidth={1.5} aria-hidden />
+          <span>Run start</span>
+          <span className="ei-bar__sub">{nodeId}</span>
+        </span>
+        <span className="ei-bar__actions">
+          <span className="runtime-badge" title="Filled in by the runtime">
+            <Chip>runtime</Chip>
           </span>
-          <span
-            className="runtime-badge rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-primary"
-            style={{ fontSize: "10px", fontWeight: 500 }}
-          >
-            runtime
-          </span>
-        </div>
-        <div
-          className="mt-0.5 font-mono text-text-3"
-          style={{ fontSize: "10px" }}
-        >
-          {nodeId}
-        </div>
+          <IconButton
+            icon={ExternalLink}
+            label="View as markdown"
+            className="view-markdown-link"
+            onClick={() => setModalOpen(true)}
+          />
+        </span>
       </div>
 
-      <div className="flex-1 overflow-auto p-3">
-        <div
-          className="mb-2 text-text-3"
-          style={{ fontSize: "11px", fontWeight: 500 }}
-        >
-          Input
-        </div>
-        <pre
-          data-testid="start-input-text"
-          className="start-input-text overflow-auto rounded border border-line bg-surface-0 p-2 font-mono text-text-2"
-          style={{ fontSize: "10.5px", lineHeight: "1.5", whiteSpace: "pre-wrap" }}
-        >
-          {inputText ?? (
-            <span className="text-text-3">Loading input...</span>
-          )}
+      <Section title="Input" flush>
+        <pre data-testid="start-input-text" className="start-input-text ei-quote">
+          {inputText ?? <span className="ei-dim">Loading input…</span>}
         </pre>
+      </Section>
 
-        {inputImages.length > 0 && (
-          <div className="mt-3" data-testid="start-inspector-images">
-            <div
-              className="mb-2 text-text-3"
-              style={{ fontSize: "11px", fontWeight: 500 }}
-            >
-              Input images
-            </div>
-            <div className="flex flex-wrap gap-2">
+      {inputImages.length > 0 && (
+        <div data-testid="start-inspector-images">
+          <Section title="Images" count={inputImages.length} flush>
+            <div className="ei-thumbs">
               {inputImages.map((name, i) => {
                 const src = artifactUrl(runId, `_input/${name}`);
                 return (
@@ -111,73 +97,44 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
                     type="button"
                     onClick={() =>
                       setLightbox({
-                        images: inputImages.map((n) =>
-                          artifactUrl(runId, `_input/${n}`),
-                        ),
+                        images: inputImages.map((n) => artifactUrl(runId, `_input/${n}`)),
                         index: i,
                       })
                     }
                     title={name}
-                    className="overflow-hidden rounded border border-line bg-surface-0 transition-opacity hover:opacity-80"
+                    className="ei-thumb"
                   >
-                    <img
-                      src={src}
-                      alt={name}
-                      data-testid="start-input-thumbnail"
-                      className="h-16 w-16 cursor-zoom-in object-cover"
-                    />
+                    <img src={src} alt={name} data-testid="start-input-thumbnail" />
                   </button>
                 );
               })}
             </div>
-          </div>
-        )}
+          </Section>
+        </div>
+      )}
 
-        {inputFiles.length > 0 && (
-          <div className="mt-3" data-testid="start-inspector-files">
-            <div
-              className="mb-2 text-text-3"
-              style={{ fontSize: "11px", fontWeight: 500 }}
-            >
-              Input files
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {inputFiles.map((name) => (
-                <a
-                  key={name}
-                  href={artifactUrl(runId, `_input/${name}`)}
-                  target="_blank"
-                  rel="noreferrer"
-                  title={name}
-                  className="flex h-9 max-w-[220px] items-center gap-1.5 rounded border border-line bg-surface-0 px-1.5 transition-colors hover:border-text-3"
-                  data-testid="start-input-file"
-                >
-                  <span
-                    className="grid h-6 w-6 flex-shrink-0 place-items-center rounded border border-line bg-surface-2 font-mono font-medium text-text-3"
-                    style={{ fontSize: "7.5px" }}
-                    aria-hidden="true"
-                  >
-                    {startFileBadge(name)}
-                  </span>
-                  <span className="truncate text-text-2" style={{ fontSize: "10.5px" }}>
-                    {name}
-                  </span>
-                </a>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="border-t border-line px-3 py-2">
-        <button
-          onClick={() => setModalOpen(true)}
-          className="view-markdown-link text-text-3 transition-colors hover:text-primary"
-          style={{ fontSize: "11px" }}
-        >
-          View as markdown &#x2197;
-        </button>
-      </div>
+      {inputFiles.length > 0 && (
+        <div data-testid="start-inspector-files">
+          <Section title="Files" count={inputFiles.length} flush>
+            {inputFiles.map((name) => (
+              <a
+                key={name}
+                href={artifactUrl(runId, `_input/${name}`)}
+                target="_blank"
+                rel="noreferrer"
+                title={name}
+                className="ei-row"
+                data-testid="start-input-file"
+              >
+                <span className="ei-ext" aria-hidden="true">
+                  {startFileBadge(name)}
+                </span>
+                <span className="ei-row__name">{name}</span>
+              </a>
+            ))}
+          </Section>
+        </div>
+      )}
 
       {modalOpen && (
         <MarkdownArtifactModal

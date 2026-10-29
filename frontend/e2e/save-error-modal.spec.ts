@@ -8,7 +8,7 @@ import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 // Verifies:
 // 1. Stubbing the daemon PUT endpoint to return an error → modal appears.
 // 2. Modal shows the error message.
-// 3. Clicking "Voir le YAML" opens the info panel on the YAML tab.
+// 3. Clicking "View YAML" opens the info panel on the YAML tab.
 
 const PIPELINE_NAME = `e2e-save-err-${process.pid}-${Date.now()}`;
 // The instance pipelines the daemon watches.
@@ -62,7 +62,7 @@ test.afterAll(async () => {
   await fs.rm(PROMPTS_DIR, { recursive: true, force: true });
 });
 
-test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => {
+test("save error shows modal, View YAML opens YAML tab", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
@@ -74,7 +74,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
 
   // Make a change to dirty the tab
   await page.getByText("alpha", { exact: true }).first().click();
-  const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
+  const promptArea = page.getByTestId("node-prompt-input");
   await expect(promptArea).toBeVisible();
   await promptArea.fill("DIRTY_SAVE_ERROR");
 
@@ -110,9 +110,9 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
   await expect(errorMsg).toContainText("missing field");
 
   // Assert the modal title
-  await expect(modal).toContainText("Impossible de sauvegarder");
+  await expect(modal).toContainText("Save failed");
 
-  // Click "Voir le YAML"
+  // Click "View YAML"
   const viewYamlBtn = page.getByTestId("save-error-view-yaml");
   await viewYamlBtn.click();
 
@@ -124,7 +124,7 @@ test("save error shows modal, Voir le YAML opens YAML tab", async ({ page }) => 
   await expect(infoPanel).toBeVisible({ timeout: 3_000 });
 
   const yamlTab = page.getByTestId("info-tab-yaml");
-  await expect(yamlTab).toHaveClass(/border-primary/);
+  await expect(yamlTab).toHaveAttribute("aria-selected", "true");
 
   // YAML content should be visible
   const yamlContent = page.getByTestId("info-yaml-content");
@@ -141,7 +141,7 @@ test("save error modal dismiss closes modal without opening info panel", async (
   await expect(tabTitle).toBeVisible();
 
   await page.getByText("alpha", { exact: true }).first().click();
-  const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
+  const promptArea = page.getByTestId("node-prompt-input");
   await expect(promptArea).toBeVisible();
   await promptArea.fill("DIRTY_DISMISS_TEST");
 

@@ -1,4 +1,5 @@
-import { SectionHead } from "../InspectorPrimitives";
+import { FormRow, FrozenMark } from "../InspectorPrimitives";
+import { Field, TextInput } from "../../../shared/ui/kit";
 import ProvisioningRulesEditor from "../../../workspace/components/ProvisioningRulesEditor";
 import { EMPTY_PROVISIONING_RULES } from "../../../workspace/model/provisioning";
 import { WORKSPACE_CHOICES, worktreePathFor } from "../../../lib/nodeIsolation";
@@ -46,86 +47,73 @@ export default function WorkspaceSection({
   provisioningGitRef: string;
   handleField: (field: keyof EditorNodeDef, value: unknown) => void;
 }) {
+  const path = worktreePathFor(node.id, isolation);
   return (
     <>
-      <SectionHead title="Workspace" />
-      <div data-testid="workspace-choice" className="flex flex-col gap-1">
-        {WORKSPACE_CHOICES.map((choice) => (
-          <button
-            key={String(choice.isolated)}
-            data-testid={`workspace-${choice.isolated ? "isolated" : "shared"}`}
-            aria-checked={isolation === choice.isolated}
-            role="radio"
-            disabled={isolationFrozen}
-            onClick={() => handleField("isolated_worktree", choice.isolated)}
-            className={`flex items-start gap-2 rounded border px-2 py-1.5 text-left transition-colors ${
-              isolation === choice.isolated
-                ? "border-primary bg-selected"
-                : "border-line-strong bg-surface-2 hover:border-text-3"
-            } ${isolationFrozen ? "cursor-default opacity-70" : "cursor-pointer"}`}
-          >
-            <span
-              className={`mt-[3px] h-2.5 w-2.5 shrink-0 rounded-full border ${
-                isolation === choice.isolated ? "border-primary bg-primary" : "border-text-3"
-              }`}
-            />
-            <span className="flex flex-col">
-              <span
-                className={`font-medium ${isolation === choice.isolated ? "text-primary" : "text-text-2"}`}
-                style={{ fontSize: "10.5px" }}
-              >
-                {choice.label}
-              </span>
-              <span className="text-text-3" style={{ fontSize: "9.5px" }}>
-                {choice.hint}
-              </span>
-            </span>
-          </button>
-        ))}
-      </div>
-      <span
-        data-testid="workspace-path"
-        className="break-all rounded border border-line bg-surface-2 px-2 py-1 font-mono text-text-3"
-        style={{ fontSize: "9.5px" }}
+      <FormRow
+        label="Worktree"
+        help="Where this node's NodeRun works"
+        aside={
+          isolationFrozen ? (
+            <FrozenMark title="Frozen at spawn: an edit applies to the next NodeRun" testid="workspace-frozen" />
+          ) : undefined
+        }
       >
-        {worktreePathFor(node.id, isolation)}
-      </span>
-      {isolationFrozen && (
-        <span data-testid="workspace-frozen" className="text-text-3" style={{ fontSize: "9.5px" }}>
-          Frozen at spawn — an edit applies to the next NodeRun.
+        <div className="d-seg" role="radiogroup" aria-label="Worktree" data-testid="workspace-choice">
+          {WORKSPACE_CHOICES.map((choice) => (
+            <button
+              key={String(choice.isolated)}
+              type="button"
+              role="radio"
+              aria-checked={isolation === choice.isolated}
+              disabled={isolationFrozen}
+              title={`${choice.label}: ${choice.hint}`}
+              className="d-seg__btn"
+              onClick={() => handleField("isolated_worktree", choice.isolated)}
+              data-testid={`workspace-${choice.isolated ? "isolated" : "shared"}`}
+            >
+              {choice.isolated ? "Isolated" : "Shared"}
+            </button>
+          ))}
+        </div>
+      </FormRow>
+      <FormRow label="Path" help="The node's working directory">
+        <span className="d-mono ei-meta ei-trunc" title={path} data-testid="workspace-path">
+          {path}
         </span>
-      )}
+      </FormRow>
       {isolation && (
-        <ProvisioningRulesEditor
-          // Notion #7: a fresh, collapsed block for every node selected.
-          key={node.id}
-          level="isolated_node"
-          repository={provisioningRepository || provisioningPreviewRepository}
-          rules={
-            (provisioningFrozenAt ? runNode?.provisioning : undefined) ??
-            node.provisioning ??
-            EMPTY_PROVISIONING_RULES
-          }
-          onChange={(rules) => handleField("provisioning", rules)}
-          readOnly={readOnly || !!provisioningFrozenAt}
-          frozenAt={provisioningFrozenAt}
-          frozenPlan={provisioningFrozenAt ? runNode?.provisioning_plan : undefined}
-          inherited={inheritedProvisioning}
-          gitRef={provisioningGitRef}
-          leading={
-            !provisioningRepository && (
-              <label className="block text-text-3" style={{ fontSize: 10 }}>
-                Resolve against
-                <input
-                  value={provisioningPreviewRepository}
-                  onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
-                  placeholder="/absolute/path/to/repository"
-                  className="mt-1 w-full rounded border border-line-strong bg-surface-2 px-2 py-1 font-mono text-text outline-none focus:border-primary"
-                />
-              </label>
-            )
-          }
-        />
+        <div className="ei-provisioning">
+          <ProvisioningRulesEditor
+            // Notion #7: a fresh, collapsed block for every node selected.
+            key={node.id}
+            level="isolated_node"
+            repository={provisioningRepository || provisioningPreviewRepository}
+            rules={
+              (provisioningFrozenAt ? runNode?.provisioning : undefined) ??
+              node.provisioning ??
+              EMPTY_PROVISIONING_RULES
+            }
+            onChange={(rules) => handleField("provisioning", rules)}
+            readOnly={readOnly || !!provisioningFrozenAt}
+            frozenAt={provisioningFrozenAt}
+            frozenPlan={provisioningFrozenAt ? runNode?.provisioning_plan : undefined}
+            inherited={inheritedProvisioning}
+            gitRef={provisioningGitRef}
+            leading={
+              !provisioningRepository && (
+                <Field label="Resolve against">
+                  <TextInput
+                    mono
+                    value={provisioningPreviewRepository}
+                    onChange={(event) => setProvisioningPreviewRepository(event.target.value)}
+                    placeholder="/absolute/path/to/repository"
+                  />
+                </Field>
+              )
+            }
+          />
+        </div>
       )}
     </>
   );

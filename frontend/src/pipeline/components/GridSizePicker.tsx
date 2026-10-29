@@ -38,7 +38,7 @@ export default function GridSizePicker({
     ...GRID_SIZES.map((s) => ({ v: s, label: s, title: `${s} — ${gridStep(s)}px`, id: s })),
   ];
   return (
-    <div role="radiogroup" aria-label={ariaLabel} className="flex gap-1" data-testid={testId}>
+    <div role="radiogroup" aria-label={ariaLabel} className="d-seg" data-testid={testId}>
       {options.map(({ v, label, title, id }, i, all) => {
         const selected = value === v;
         return (
@@ -61,19 +61,10 @@ export default function GridSizePicker({
                 onChange(all[(i + 1) % all.length].v);
               }
             }}
-            className={`flex flex-1 cursor-pointer flex-col items-center justify-center rounded border px-2 py-1.5 font-medium transition-colors ${
-              selected
-                ? "border-primary bg-selected text-primary"
-                : "border-line-strong bg-surface-2 text-text-3 hover:text-text-3"
-            }`}
-            style={{ fontSize: "10px" }}
+            className="d-seg__btn"
           >
             <span>{label}</span>
-            {v && (
-              <span className="font-normal opacity-70" style={{ fontSize: "9px" }}>
-                {gridStep(v)}px
-              </span>
-            )}
+            {v && <span className="d-meta d-mono">{gridStep(v)}px</span>}
           </button>
         );
       })}

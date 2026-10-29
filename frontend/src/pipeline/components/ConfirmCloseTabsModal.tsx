@@ -28,12 +28,19 @@ export default function ConfirmCloseTabsModal({ open, tabs, onCancel, onConfirm 
   if (!open) return null;
 
   const unsaved = tabs.filter(hasUnsavedWork);
+  // ADR-0088: a shared draft holds on the daemon every change that reached it:
+  // closing its tab loses those of none; only the edits made while its socket
+  // was down (still local) and a failed save are lost.
+  const keptByDraft = (t: OpenPipeline) => t.draft != null && t.saveError == null;
+  const lost = unsaved.filter((t) => !keptByDraft(t));
+  const drafts = unsaved.filter(keptByDraft);
   const plural = unsaved.length > 1;
+  const onlyDrafts = lost.length === 0;
 
   return (
     <Modal
       size="s"
-      title="Discard unsaved changes?"
+      title={onlyDrafts ? `Close ${plural ? `${unsaved.length} tabs` : "tab"}?` : "Discard unsaved changes?"}
       onClose={onCancel}
       data-testid="close-tabs-backdrop"
       actions={
@@ -42,16 +49,28 @@ export default function ConfirmCloseTabsModal({ open, tabs, onCancel, onConfirm 
             Cancel
           </Button>
           <Button tone="danger" onClick={onConfirm} data-testid="close-tabs-confirm">
-            Close {plural ? "tabs" : "tab"} anyway
+            {onlyDrafts ? `Close ${plural ? "tabs" : "tab"}` : `Close ${plural ? "tabs" : "tab"} anyway`}
           </Button>
         </>
       }
     >
       <div className="d-confirm" data-testid="close-tabs-body">
-        <p className="d-confirm__line">
-          {plural ? `${unsaved.length} tabs lose their changes` : "Loses its changes"}
-        </p>
-        {unsaved.map((tab) => (
+        {lost.length > 0 && (
+          <p className="d-confirm__line">
+            {lost.length > 1 ? `${lost.length} tabs lose their changes` : "Loses its changes"}
+          </p>
+        )}
+        {lost.map((tab) => (
+          <code key={tab.id} className="d-code d-confirm__target" title={`${tab.id}.yaml`}>
+            {tab.id}.yaml
+          </code>
+        ))}
+        {drafts.length > 0 && (
+          <p className="d-confirm__line" data-testid="close-tabs-drafts">
+            {drafts.length > 1 ? "Their drafts keep the sent changes" : "Its draft keeps the sent changes"} · unsent edits are lost
+          </p>
+        )}
+        {drafts.map((tab) => (
           <code key={tab.id} className="d-code d-confirm__target" title={`${tab.id}.yaml`}>
             {tab.id}.yaml
           </code>

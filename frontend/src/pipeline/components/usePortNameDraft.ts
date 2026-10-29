@@ -47,11 +47,11 @@ export function usePortNameDraft(
         return true;
       }
       if (trimmed === "") {
-        setRefusal("Un output doit avoir un nom : l'ancien nom reste.");
+        setRefusal("A name is required");
         return false;
       }
       if (takenNames.includes(trimmed)) {
-        setRefusal(`« ${trimmed} » existe déjà sur ce nœud : nom refusé, l'ancien nom reste.`);
+        setRefusal(`"${trimmed}" is taken on this node`);
         return false;
       }
       setDraft(null);

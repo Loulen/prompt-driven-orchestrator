@@ -39,7 +39,7 @@ function highlightLine(line: string): ReactNode {
     return (
       <>
         {indent}
-        <span className="text-primary">{key}</span>
+        <span className="text-st-running">{key}</span>
         <span className="text-text-3">:</span>
         {highlightValue(rest)}
       </>

@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { IconButton } from "../../shared/ui/kit";
+import "./inspect.css";
 import type { PortDef } from "../../shared/generated/PortDef";
 import type { RenameImpact } from "../../lib/edgePorts";
 import type { PortType } from "../../shared/generated/PortType";
@@ -54,16 +56,18 @@ export default function OutputPortCard({
       <div
         data-testid={`output-port-card-${port.name}`}
         data-output-index={index}
-        className={`op-tab${collapsed ? " collapsed" : ""}`}
+        data-collapsed={collapsed || undefined}
+        data-hl={highlighted || undefined}
+        className="ei-port"
       >
-        <div className="op-head">
-          <button
-            className="op-chev"
-            aria-label="Toggle output body"
+        <div className="ei-port__head">
+          <IconButton
+            icon={collapsed ? ChevronRight : ChevronDown}
+            size="sm"
+            label="Toggle output body"
+            aria-expanded={!collapsed}
             onClick={() => setCollapsed((c) => !c)}
-          >
-            <ChevronDown size={14} />
-          </button>
+          />
           <InspectorPortRow
             port={port}
             highlighted={highlighted}
@@ -79,8 +83,7 @@ export default function OutputPortCard({
               value={portType}
               onChange={(e) => onUpdate({ port_type: e.target.value as PortType })}
               aria-label="Output type"
-              className="shrink-0 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 font-mono text-text outline-none focus:border-primary"
-              style={{ fontSize: "10px" }}
+              className="ei-select ei-select--sm ei-select--mono"
               data-testid="port-type-select"
             >
               {PORT_TYPE_OPTIONS.map((opt) => (
@@ -92,7 +95,7 @@ export default function OutputPortCard({
           </InspectorPortRow>
         </div>
         {!collapsed && (
-          <div className="op-body">
+          <div className="ei-port__body">
             {allowInstructions && (
               <ExpectedContentField
                 value={port.instructions}
@@ -105,7 +108,7 @@ export default function OutputPortCard({
           </div>
         )}
       </div>
-      <div className="-mt-1 mb-3 empty:hidden" data-testid={`output-port-notices-${port.name}`}>
+      <div className="ei-port__notices" data-testid={`output-port-notices-${port.name}`}>
         <PortRenameNotices portName={port.name} draft={nameDraft} wiring={wiring} />
       </div>
     </>

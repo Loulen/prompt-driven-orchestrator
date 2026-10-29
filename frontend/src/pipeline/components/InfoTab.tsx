@@ -3,32 +3,26 @@
  * Run), a Run's status, source and stats.
  */
 
-import { Info, Box, Loader, CloudOff } from "lucide-react";
-import { WaitingForStartedNodesReason } from "../../run/components/WaitingForStartedNodesBanner";
-import { SectionHead } from "./InspectorPrimitives";
+import { useMemo } from "react";
+import { Archive, Clock, Coins, FileCode, GitCompare, Layers, Lock } from "lucide-react";
 import type { RunState } from "../../shared/generated/RunState";
 import { isLiveRun } from "../../run/model/runStatus";
 import { formatDuration, useRunDuration } from "../../run/model/runDuration";
 import { formatEstCost } from "../../run/model/costLabel";
+import { waitingForStartedNodesLabel } from "../../run/model/nodePlay";
+import { Banner, Chip, KeyValue, Section, StatusIcon } from "../../shared/ui/kit";
 import type { EditorPipelineDef } from "../model/pipeline";
 
 import { SourceBlock } from "./SourceBlock";
 import PipelineMetaSections from "./PipelineMetaSections";
 import { PipelineConfigSections } from "./ExtensionInspectorSections";
+import { inspectorSection } from "./inspectorSection";
 import { useEditStore } from "../store/editStore";
-import { InfoVersionLine, NewerVersionPill } from "./InfoVersion";
-import { useMemo } from "react";
-import ExtensionSections, { type RenderedSection } from "../../shared/extensions/ExtensionSections";
+import { InfoVersionLine } from "./InfoVersion";
+import { shortSavedAgo, versionLabel } from "../model/versions";
+import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { RunInfoContext } from "../../shared/extensions/contract";
-
-function infoSection({ key, label, body }: RenderedSection) {
-  return (
-    <div className="border-b border-line px-3 py-3" style={{ fontSize: "11.5px" }} data-testid={`extension-section-${key}`}>
-      <SectionHead title={label} />
-      <div className="mt-2">{body}</div>
-    </div>
-  );
-}
+import "./inspect.css";
 
 /** The `run/info` sections of the extensions (ADR-0081, #31), after the Run's stats. */
 function RunInfoSections({ run }: { run: RunState }) {
@@ -45,46 +39,105 @@ function RunInfoSections({ run }: { run: RunState }) {
     }),
     [run.run_id, run.attributes, run.name, run.created_by, run.trigger_editor],
   );
-  return <ExtensionSections<RunInfoContext> location="run/info" extra={extra} wrap={infoSection} />;
+  return <ExtensionSections<RunInfoContext> location="run/info" extra={extra} wrap={inspectorSection} />;
 }
 
-function StatRow({
+/** One cell of the stats strip: an icon, the value in mono, its name for the tooltip and the screen reader. */
+function Stat({
+  icon: Icon,
   label,
-  children,
+  title,
+  live,
   testid,
+  children,
 }: {
+  icon: typeof Clock;
   label: string;
+  title?: string;
+  live?: boolean;
+  testid: string;
   children: React.ReactNode;
-  testid?: string;
 }) {
   return (
-    <div
-      className="flex items-center justify-between rounded bg-surface-2 px-2 py-1"
-      style={{ fontSize: "10.5px" }}
-      data-testid={testid}
-    >
-      <span className="text-text-3">{label}</span>
-      <span className="font-mono text-text-3">{children}</span>
+    <span className="pi-stats__cell" title={title ?? label} data-live={live || undefined} data-testid={testid}>
+      <Icon size={13} strokeWidth={1.5} aria-hidden />
+      <span className="d-sr">{label}</span>
+      {children}
+    </span>
+  );
+}
+
+function RunStats({ run, onOpenDiff }: { run: RunState; onOpenDiff: () => void }) {
+  const durationMs = useRunDuration(run.started_at, run.completed_at, run.status);
+  const durationLabel = formatDuration(durationMs);
+  const ticking = run.completed_at == null && isLiveRun(run.status);
+  // Shared honesty helper (#272/#377): same vocabulary as the aggregated Stats
+  // charts. #553: « — » and a reason when a node ran on a harness with no cost
+  // source, never a misleading $0; #615: a mixed Run's total by harness.
+  const cost = run.cost
+    ? formatEstCost(
+        run.cost.usd,
+        run.cost.partial,
+        run.cost.unpriced_models,
+        run.cost.uncosted_harnesses ?? [],
+        run.cost.by_harness ?? [],
+      )
+    : null;
+  // The per-harness breakdown only when it says more than the total does: a
+  // genuinely mixed Run (≥ 2 slices), or any slice when the total is withheld.
+  const slices = cost?.ventilation ?? [];
+  const ventilated = cost != null && slices.length > (cost.text === "—" ? 0 : 1);
+  const files = run.loc ? `${run.loc.files_changed.toLocaleString()} ${run.loc.files_changed === 1 ? "file" : "files"}` : "";
+  return (
+    <div className="pi-stats" data-testid="run-stats">
+      <Stat icon={Clock} label="Duration" live={ticking} testid="stat-duration">
+        {durationLabel ?? "—"}
+        {ticking && <span className="d-sr" data-testid="stat-duration-live">live</span>}
+      </Stat>
+      <Stat icon={Layers} label="Node sessions started" testid="stat-sessions">
+        {(run.sessions_spawned ?? 0).toLocaleString()}
+      </Stat>
+      <Stat icon={GitCompare} label="Changes" title={run.loc ? `Changes · ${files}` : "Changes"} testid="stat-loc">
+        {run.loc ? (
+          // #748: the LOC stat opens the Diff tab — the count IS what the tab
+          // shows (same endpoint bounds), so the number links to it.
+          <button type="button" className="pi-stats__link" onClick={onOpenDiff} data-testid="stat-loc-open-diff">
+            <span className="ei-add">+{run.loc.insertions.toLocaleString()}</span>
+            <span className="ei-del">−{run.loc.deletions.toLocaleString()}</span>
+            <span className="d-sr">· {files}</span>
+          </button>
+        ) : (
+          "—"
+        )}
+      </Stat>
+      <Stat icon={Coins} label="Est. cost" title={cost?.title ?? "Est. cost"} testid="stat-cost">
+        {cost ? (
+          <span title={cost.title}>
+            {cost.text}
+            {cost.dagger && <span className="ei-warn">†</span>}
+            {ventilated && (
+              <span className="pi-sub"> · {slices.map((v) => `${v.text} via ${v.harness}`).join(" · ")}</span>
+            )}
+          </span>
+        ) : (
+          "—"
+        )}
+      </Stat>
     </div>
   );
 }
 
-const STATUS_DOT: Record<string, string> = {
-  running: "bg-st-running animate-pulse",
-  awaiting_user: "bg-st-await",
-  completed: "bg-st-done",
-  failed: "bg-st-failed",
-  halted: "bg-st-blocked",
-  archived: "bg-st-skipped",
-  pending: "bg-st-skipped",
-};
+/** `4m ago`, `3h ago`, `2d ago`: when the Run started. */
+function startedAgo(iso: string): string {
+  const ago = shortSavedAgo(iso);
+  return ago === "now" || ago === "" ? ago || "—" : `${ago} ago`;
+}
 
 export function InfoTab({
   run,
   pipeline,
   pipelineName,
   pipelineId,
-  hasAssistant,
   onOpenDiff,
 }: {
   run: RunState | null;
@@ -92,297 +145,188 @@ export function InfoTab({
   pipelineName: string;
   /** The template's id (its edit tab), for the `pipeline/config` sections; null on a Run. */
   pipelineId: string | null;
-  hasAssistant: boolean;
+  /** Kept for the hosts that still pass it: the Assistant is a tab of its own. */
+  hasAssistant?: boolean;
   /** #748: the Changes stat is the link to what it counts — the Diff tab. */
   onOpenDiff: () => void;
 }) {
-  const durationMs = useRunDuration(run?.started_at, run?.completed_at, run?.status);
-  const durationLabel = formatDuration(durationMs);
-  const durationTicking = run != null && run.completed_at == null && isLiveRun(run.status);
   const pipelines = useEditStore((s) => s.pipelines);
   // ADR-0088: a version shown in its own tab is read only, like a Run.
-  const viewingVersion = useEditStore(
-    (s) => s.openTabs.find((t) => t.id === s.activeTabId)?.version != null,
-  );
+  const shownVersion = useEditStore((s) => s.openTabs.find((t) => t.id === s.activeTabId)?.version ?? null);
+  const viewingVersion = shownVersion != null;
+  // The read-only Pipeline section names the version: the one a Run launched, the one a tab shows.
+  const versionRef = run ? (run.pipeline_version ?? null) : shownVersion;
+  const version = versionRef ? versionLabel({ number: versionRef.number, title: versionRef.title }) : null;
+  const waiting = run?.waiting_for_started_nodes ?? 0;
 
   return (
-    <>
-      <div className="border-b border-line px-3 py-3" style={{ fontSize: "11.5px" }}>
-        <div className="flex items-center gap-2">
-          <span
-            className={`h-2 w-2 shrink-0 rounded-full ${
-              STATUS_DOT[run?.status ?? ""] ?? "bg-st-skipped"
-            }`}
-          />
-          <div className="min-w-0 flex-1">
-            <div className="font-medium text-text" data-testid="info-panel-name">
-              {pipelineName}
-            </div>
-            <InfoVersionLine run={run} pipelineId={pipelineId} />
-          </div>
-          <NewerVersionPill run={run} />
-          {/* Sandbox badge (#410): shown for any sandboxed Run (full/minimal). An
-              `off`/host Run renders nothing — the field is absent on those. */}
-          {run?.sandbox && run.sandbox !== "off" && (
-            <span
-              className="flex shrink-0 items-center gap-1 rounded bg-surface-2 px-1.5 py-0.5 font-mono text-text-3"
-              style={{ fontSize: "9.5px" }}
-              data-testid="sandbox-badge"
-              title={`This run is isolated in a Docker sandbox (${run.sandbox})`}
-            >
-              <Box size={10} className="shrink-0" />
-              sandbox: {run.sandbox}
-            </span>
-          )}
-        </div>
-
-        {/* #752: what the standalone Run-info sidebar carried besides Repositories
-            lives here now — the failure / awaiting reason (#503, #598), the frozen
-            harness (#551) and the editing note (#315). Clicking a red dot lands on
-            this tab, so the failure must be the first thing it says. */}
-        {run?.failure_reason && (
-          <div
-            className="mt-2 rounded border border-st-failed/30 bg-st-failed/14 px-2 py-1.5 text-text-2"
-            style={{ fontSize: "10.5px" }}
-            data-testid="run-failure-reason"
-          >
-            <div className="font-medium text-st-failed">
-              {run.status === "halted" ? "Halted" : run.status === "skipped" ? "Skipped" : "Failed"}
-            </div>
-            <div className="mt-0.5 break-words">{run.failure_reason}</div>
-          </div>
+    <div className="pi-info" data-testid="info-tab">
+      <div className="pi-head">
+        {run ? (
+          <StatusIcon kind="run" status={run.status} />
+        ) : (
+          <FileCode size={14} strokeWidth={1.5} aria-hidden className="ei-ic" />
         )}
-        {run?.awaiting_reason && (
-          <div
-            className="mt-2 rounded border border-st-await/30 bg-st-await/14 px-2 py-1.5 text-text-2"
-            style={{ fontSize: "10.5px" }}
-            data-testid="run-awaiting-reason"
-          >
-            {/* #588: only an incident carries a machine slug; a declared wait is
-                the agent's question (or an awaiting child), not an interruption. */}
-            <div className="font-medium text-st-await">
-              {run.awaiting_reason_code ? "Interrupted · awaiting you" : "Awaiting you"}
-            </div>
-            <div className="mt-0.5 break-words">{run.awaiting_reason}</div>
-          </div>
+        <span className="pi-head__name" title={pipelineName} data-testid="info-panel-name">
+          {pipelineName}
+        </span>
+        {run ? (
+          <span className="d-mono ei-dim" title={run.run_id}>
+            {run.run_id.slice(-7)}
+          </span>
+        ) : (
+          <Chip>template</Chip>
         )}
-        <WaitingForStartedNodesReason run={run ?? null} />
-        {/* #804 / ADR-0070 §1: a Trigger fire that could not refresh the remotes
-            before cutting. Deliberately NOT red and NOT a failure — this Run ran;
-            it simply started from the last state known locally, which is the one
-            thing you cannot deduce from anywhere else on the page. Stale-tinted
-            (the same amber as a stale node), between the awaiting box and the
-            harness: it explains what the Run started ON, so it belongs with the
-            other facts about its start. */}
-        {run?.source_fetch_error && (
-          <div
-            className="mt-2 rounded border border-st-skipped/30 bg-st-skipped/14 px-2 py-1.5 text-text-2"
-            style={{ fontSize: "10.5px" }}
-            data-testid="run-source-fetch-error"
-          >
-            <div className="flex items-center gap-1.5 font-medium text-st-skipped">
-              <CloudOff size={11} className="shrink-0" />
-              Started on local state · fetch failed
-            </div>
-            <div className="mt-0.5 break-words">
-              {run.source_branch ? (
-                <>
-                  Source branch <span className="font-mono">{run.source_branch}</span> could not
-                  be refreshed before the cut.
-                </>
-              ) : (
-                <>The source ref could not be refreshed before the cut.</>
-              )}{" "}
-              The Run starts from the last state known locally.
-            </div>
-            {/* git's own words, one line: enough to recognise "no network" from
-                "no key" at a glance, the whole of it on hover and selectable for
-                a paste into a terminal. */}
-            <div
-              className="mt-1 truncate font-mono text-text-3"
-              style={{ fontSize: "9.5px" }}
-              title={run.source_fetch_error.message}
-              data-testid="run-source-fetch-stderr"
-            >
-              {run.source_fetch_error.message}
-            </div>
-          </div>
-        )}
-        {run?.harness && (
-          <div className="mt-2 flex items-center gap-1.5 text-text-3" style={{ fontSize: "10.5px" }} data-testid="run-harness">
-            <span className="text-text-3">Harness</span>
-            <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-text-2">{run.harness}</span>
-          </div>
-        )}
-        {run && <SourceBlock run={run} />}
+        {/* #315: a Run's settings are read-only; canvas edits apply to it only. */}
         {run && (
-          <div
-            className="mt-2 rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text-3"
-            style={{ fontSize: "10.5px" }}
-            data-testid="run-info-note"
-          >
-            {run.status === "archived"
-              ? "Archived run · read-only · outputs preserved"
-              : "Canvas edits apply to this run only · run settings are read-only"}
-          </div>
+          <span className="pi-head__note" data-testid="run-info-note">
+            <Chip
+              icon={run.status === "archived" ? Archive : Lock}
+              title={
+                run.status === "archived"
+                  ? "Archived run · read-only · outputs preserved"
+                  : "Canvas edits apply to this run only · run settings are read-only"
+              }
+            >
+              {run.status === "archived" ? "archived" : "read only"}
+            </Chip>
+          </span>
         )}
       </div>
+      <InfoVersionLine run={run} pipelineId={pipelineId} />
 
-      {/* Sandbox preparation banner (#410, amber): the image is being pulled/built
-          at first use. Only while `sandbox_prep === "pending"` — it clears to
-          `ready` once the container is about to run, so the Run never looks stuck. */}
+      {/* #752: the failure / awaiting reason (#503, #598) first: clicking a red
+          dot lands on this tab. */}
+      {run?.failure_reason && (
+        <div data-testid="run-failure-reason">
+          <Banner
+            tone={run.status === "halted" ? "blocked" : run.status === "skipped" ? "skipped" : "failed"}
+            title={run.status === "halted" ? "Halted" : run.status === "skipped" ? "Skipped" : "Failed"}
+            text={run.failure_reason}
+          />
+        </div>
+      )}
+      {run?.awaiting_reason && (
+        <div data-testid="run-awaiting-reason">
+          {/* #588: only an incident carries a machine slug; a declared wait is
+              the agent's question (or an awaiting child), not an interruption. */}
+          <Banner
+            tone="awaiting"
+            title={run.awaiting_reason_code ? "Interrupted · awaiting you" : "Awaiting you"}
+            text={run.awaiting_reason}
+          />
+        </div>
+      )}
+      {waiting > 0 && (
+        <div data-testid="run-waiting-started-nodes-reason">
+          <Banner tone="awaiting" title="Reached End" text={waitingForStartedNodesLabel(waiting)} />
+        </div>
+      )}
+      {/* #804 / ADR-0070 §1: a Trigger fire that could not refresh the remotes
+          before cutting. Not a failure — the Run ran, from the last state known
+          locally. git's own words in full on hover. */}
+      {run?.source_fetch_error && (
+        <div data-testid="run-source-fetch-error">
+          <Banner
+            tone="skipped"
+            title="Started on local state · fetch failed"
+            text={run.source_branch ?? "source ref"}
+          />
+          <div className="ei-idline" title={run.source_fetch_error.message} data-testid="run-source-fetch-stderr">
+            {run.source_fetch_error.message}
+          </div>
+        </div>
+      )}
+      {/* Sandbox preparation (#410): the image is pulled or built at first use,
+          only while `sandbox_prep === "pending"`. */}
       {run?.sandbox_prep === "pending" && (
-        <div
-          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await/14 px-3 py-2"
-          data-testid="sandbox-prep-banner"
-        >
-          <Loader size={14} className="shrink-0 animate-spin text-st-await" />
-          <span
-            className="text-st-await"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            Preparing the sandbox — pulling/building the image…
-          </span>
+        <div data-testid="sandbox-prep-banner">
+          <Banner tone="running" title="Preparing the sandbox" text="pulling or building the image" />
         </div>
       )}
 
-      {/* Notion #6 / #948: Pipeline info is the only surface of the pipeline's
-          metadata — editable on a template, read-only on a Run (active or
-          archived) and on a version. Order: header → Identity → Variables → Canvas → Stats → note. */}
-      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null || viewingVersion} />}
+      {run && (
+        <Section title="Run">
+          <KeyValue
+            rows={[
+              {
+                k: "Status",
+                v: (
+                  <span className="ei-line" data-testid="run-status">
+                    <StatusIcon kind="run" status={run.status} size="sm" />
+                    {run.status.replace(/_/g, " ")}
+                  </span>
+                ),
+                tip: run.status,
+              },
+              ...(run.harness
+                ? [{ k: "Harness", v: <span data-testid="run-harness">{run.harness}</span>, mono: true, tip: run.harness }]
+                : []),
+              ...(run.target_repo ? [{ k: "Repo", v: run.target_repo, mono: true }] : []),
+              // Sandbox (#410): any sandboxed Run (full/minimal); an `off`/host Run has no row.
+              ...(run.sandbox && run.sandbox !== "off"
+                ? [
+                    {
+                      k: "Sandbox",
+                      v: <span data-testid="sandbox-badge">{run.sandbox}</span>,
+                      mono: true,
+                      tip: `Docker sandbox (${run.sandbox})`,
+                    },
+                  ]
+                : []),
+              ...(run.started_at
+                ? [
+                    {
+                      k: "Started",
+                      v: <span data-testid="run-started">{startedAgo(run.started_at)}</span>,
+                      tip: Number.isNaN(Date.parse(run.started_at)) ? run.started_at : new Date(run.started_at).toLocaleString(),
+                    },
+                  ]
+                : []),
+              ...(run.triggered_by ? [{ k: "Trigger", v: run.triggered_by, mono: true }] : []),
+            ]}
+          />
+          <SourceBlock run={run} />
+        </Section>
+      )}
 
-      {(run || pipeline) && (
-        <div
-          className="border-b border-line px-3 py-3"
-          style={{ fontSize: "11.5px" }}
-          data-testid="info-stats"
-        >
-          <SectionHead title="Stats" />
-          {pipeline && (
-            <div className="mt-2 flex gap-4 text-text-3" style={{ fontSize: "10px" }} data-testid="pipeline-graph-stats">
-              <span>{pipeline.nodes.length} nodes</span>
-              <span>{pipeline.edges.length} edges</span>
-            </div>
-          )}
-          {run && (
-          <div className="mt-2 flex flex-col gap-1" data-testid="run-stats">
-            <StatRow label="Duration" testid="stat-duration">
-              <span className="flex items-center gap-1.5">
-                {durationLabel ?? "—"}
-                {durationTicking && (
-                  <span
-                    className="h-1.5 w-1.5 rounded-full bg-st-running animate-pulse"
-                    title="live"
-                    data-testid="stat-duration-live"
-                  />
-                )}
-              </span>
-            </StatRow>
-            <StatRow label="Node sessions started" testid="stat-sessions">
-              {(run.sessions_spawned ?? 0).toLocaleString()}
-            </StatRow>
-            <StatRow label="Changes" testid="stat-loc">
-              {run.loc ? (
-                // #748: the LOC stat opens the Diff tab — the count IS what the
-                // tab shows (same endpoint bounds), so the number links to it.
-                <button
-                  onClick={onOpenDiff}
-                  className="flex items-center gap-1.5 rounded px-1 -mx-1 transition-colors hover:bg-hover hover:text-text-2 cursor-pointer"
-                  data-testid="stat-loc-open-diff"
-                  title="Open the Diff tab"
-                >
-                  <span className="text-st-done">
-                    +{run.loc.insertions.toLocaleString()}
-                  </span>
-                  <span className="text-st-failed">
-                    −{run.loc.deletions.toLocaleString()}
-                  </span>
-                  <span className="text-text-3">
-                    · {run.loc.files_changed.toLocaleString()}{" "}
-                    {run.loc.files_changed === 1 ? "file" : "files"}
-                  </span>
-                  <span className="text-text-3" aria-hidden>↗</span>
-                </button>
-              ) : (
-                "—"
-              )}
-            </StatRow>
-            <StatRow label="Est. cost" testid="stat-cost">
-              {run.cost ? (
-                (() => {
-                  // Shared honesty helper (#272/#377): same vocabulary as the
-                  // aggregated Stats charts.
-                  const c = formatEstCost(
-                    run.cost.usd,
-                    run.cost.partial,
-                    run.cost.unpriced_models,
-                    // #553: "—" + reason when a node ran on a harness with no cost
-                    // source (e.g. opencode) — never a misleading $0.
-                    run.cost.uncosted_harnesses ?? [],
-                    // #615: ventilate a mixed Run's total by harness.
-                    run.cost.by_harness ?? [],
-                  );
-                  // Show the per-harness breakdown only when it says more than the
-                  // total already does: a genuinely mixed Run (≥2 slices), or — when
-                  // the total is withheld as "—" — any slice at all, since then even
-                  // one says something the total cannot (#617 FP).
-                  const slices = c.ventilation ?? [];
-                  const ventilated = slices.length > (c.text === "—" ? 0 : 1);
-                  return (
-                    <span className="flex flex-col items-end gap-0.5" title={c.title}>
-                      <span className="flex items-center gap-1">
-                        {c.text}
-                        {c.dagger && <span className="text-st-await">†</span>}
-                      </span>
-                      {ventilated && (
-                        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
-                          {slices
-                            .map((v) => `${v.text} via ${v.harness}`)
-                            .join(" · ")}
-                        </span>
-                      )}
-                    </span>
-                  );
-                })()
-              ) : (
-                "—"
-              )}
-            </StatRow>
-          </div>
-          )}
-        </div>
+      {run && (
+        <Section title="Stats" flush>
+          <RunStats run={run} onOpenDiff={onOpenDiff} />
+        </Section>
       )}
 
       {run && <RunInfoSections run={run} />}
 
-      {/* ADR-0081 (#31): the `pipeline/config` sections of the extensions, after
-          a template's Stats — they followed the standalone inspector here (#948). */}
-      {!run && pipeline && pipelineId && (
-        <div className="flex flex-col gap-3 border-b border-line px-3 py-3 empty:hidden" style={{ fontSize: "11.5px" }}>
-          <PipelineConfigSections
-            pipelineId={pipelineId}
-            pipelineName={pipeline.name}
-            attributes={(pipelines ?? []).find((p) => p.id === pipelineId)?.attributes}
-          />
+      {/* Notion #6 / #948: Pipeline info is the only surface of the pipeline's
+          metadata — editable on a template, read-only on a Run (active or
+          archived) and on a version. */}
+      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null || viewingVersion} version={version} />}
+
+      {/* On a Run and a version the node and edge counts are rows of the
+          Pipeline section; a template keeps them in a section of their own. */}
+      {pipeline && run == null && !viewingVersion && (
+        <div data-testid="info-stats">
+          <Section title="Graph">
+            <KeyValue
+              rows={[
+                { k: "Nodes", v: <span data-testid="pipeline-graph-nodes">{pipeline.nodes.length}</span>, mono: true },
+                { k: "Edges", v: <span data-testid="pipeline-graph-edges">{pipeline.edges.length}</span>, mono: true },
+              ]}
+            />
+          </Section>
         </div>
       )}
 
-      {!run && (
-        <div className="px-3 py-3" style={{ fontSize: "11.5px" }}>
-          <div
-            className="flex items-center gap-2 rounded border border-dashed border-line-soft bg-surface-2 px-3 py-2.5 text-text-3"
-            style={{ fontSize: "11.5px" }}
-          >
-            <Info size={14} className="shrink-0" />
-            <span>
-              {hasAssistant
-                ? "This is a template. Use the Assistant tab to author it in natural language; the Manager tab becomes available while a Run is in progress."
-                : "No active run. The Manager tab becomes available while a Run is in progress."}
-            </span>
-          </div>
-        </div>
+      {/* ADR-0081 (#31): the `pipeline/config` sections of the extensions, after
+          a template's metadata — they followed the standalone inspector here (#948). */}
+      {!run && pipeline && pipelineId && (
+        <PipelineConfigSections
+          pipelineId={pipelineId}
+          pipelineName={pipeline.name}
+          attributes={(pipelines ?? []).find((p) => p.id === pipelineId)?.attributes}
+        />
       )}
-    </>
+    </div>
   );
 }
-

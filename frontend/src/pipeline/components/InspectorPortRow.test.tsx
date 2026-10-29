@@ -13,19 +13,11 @@ describe("InspectorPortRow — I1 hairline layout", () => {
     onRemove: vi.fn(),
   };
 
-  it("renders hairline border-bottom, no card background or border-radius", () => {
+  it("renders one line: the name field, then the delete button", () => {
     render(<InspectorPortRow {...baseProps} />, { wrapper: Wrapper });
     const row = screen.getByTestId("inspector-port-in");
-    expect(row.className).toContain("border-b");
-    expect(row.className).toContain("border-line-soft");
-    expect(row.className).not.toContain("rounded");
-    expect(row.className).not.toContain("bg-surface-2");
-  });
-
-  it("last row omits the bottom border", () => {
-    render(<InspectorPortRow {...baseProps} isLast />, { wrapper: Wrapper });
-    const row = screen.getByTestId("inspector-port-in");
-    expect(row.className).not.toContain("border-b");
+    expect(row.querySelector("input[aria-label='Port name']")).toHaveValue("in");
+    expect(row.querySelector("button[aria-label='Delete port']")).toBeTruthy();
   });
 
   it("offers neither a side (L/T/R/B) nor a repeated toggle", () => {
@@ -93,7 +85,7 @@ describe("InspectorPortRow — I1 hairline layout", () => {
     fireEvent.change(input, { target: { value: "verdict" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onUpdate).not.toHaveBeenCalled();
-    expect(screen.getByTestId("port-rename-refusal").textContent).toContain("« verdict » existe déjà sur ce nœud");
+    expect(screen.getByTestId("port-rename-refusal").textContent).toContain('"verdict" is taken on this node');
     fireEvent.blur(input);
     expect(onUpdate).not.toHaveBeenCalled();
     expect(screen.getByDisplayValue("in")).toBeTruthy();
@@ -118,8 +110,8 @@ describe("InspectorPortRow — I1 hairline layout", () => {
     fireEvent.change(screen.getByDisplayValue("in"), { target: { value: "in-v2" } });
     const notice = screen.getByTestId("port-rename-pending").textContent ?? "";
     expect(notice).toContain("in → in-v2");
-    expect(notice).toContain("2 edges suivent");
-    expect(notice).toContain("l'input in de builder et de reviewer est renommé");
+    expect(notice).toContain("2 edges follow");
+    expect(notice).toContain("the input in of builder and reviewer is renamed");
   });
 
   it("announces nothing for an unwired port", () => {
@@ -138,7 +130,7 @@ describe("InspectorPortRow — I1 hairline layout", () => {
   it("applies highlight styling when highlighted", () => {
     render(<InspectorPortRow {...baseProps} highlighted />, { wrapper: Wrapper });
     const row = screen.getByTestId("inspector-port-in");
-    expect(row.className).toContain("bg-selected");
+    expect(row).toHaveAttribute("data-hl", "true");
   });
 
   it("has port-row CSS class for design compatibility", () => {

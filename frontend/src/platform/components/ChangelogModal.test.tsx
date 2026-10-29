@@ -73,7 +73,7 @@ const UP_TO_DATE: UpdateChangelog = {
   missed_versions: [],
   source: "embedded",
   fallback_reason: null,
-  markdown: "# Changelog\n\n## 1.58.1\n\n**Livraison**\n",
+  markdown: "## 1.58.1\n\n**Livraison**\n",
 };
 
 const FALLBACK: UpdateChangelog = {
@@ -82,7 +82,7 @@ const FALLBACK: UpdateChangelog = {
   missed_versions: [],
   source: "embedded",
   fallback_reason: "The update check is off.",
-  markdown: "# Changelog\n\n## 1.58.1\n",
+  markdown: "## 1.58.1\n",
 };
 
 describe("ChangelogModal (#698)", () => {
@@ -140,7 +140,7 @@ describe("ChangelogModal (#698)", () => {
     );
     expect(await screen.findByTestId("changelog-uptodate")).toHaveTextContent("up to date");
     expect(screen.getByTestId("changelog-uptodate-banner")).toHaveTextContent(/Latest release/);
-    expect(screen.getByTestId("markdown-body")).toHaveTextContent("# Changelog");
+    expect(screen.getByTestId("markdown-body")).toHaveTextContent("1.58.1");
     expect(screen.queryByTestId("changelog-behind")).not.toBeInTheDocument();
     expect(screen.queryByTestId("changelog-fallback")).not.toBeInTheDocument();
     expect(screen.getByTitle(/Nothing to update/)).toBeInTheDocument();
@@ -159,7 +159,7 @@ describe("ChangelogModal (#698)", () => {
     expect(banner).toHaveTextContent("Release notes offline");
     expect(banner).toHaveAttribute("title", expect.stringContaining("The update check is off."));
     expect(banner).toHaveTextContent(/breaking changes only/);
-    expect(screen.getByTestId("markdown-body")).toHaveTextContent("# Changelog");
+    expect(screen.getByTestId("markdown-body")).toHaveTextContent("1.58.1");
     // Bare version in the header: no arrow, no « up to date » claim.
     expect(screen.getByTestId("changelog-header")).toHaveTextContent("v1.58.1");
     expect(screen.queryByTestId("changelog-latest")).not.toBeInTheDocument();
@@ -206,15 +206,15 @@ describe("ChangelogModal (#698)", () => {
     expect(screen.getByTestId("changelog-copy-command")).toBeInTheDocument();
   });
 
-  it("unknown install method: no Update button, the daemon's reason shown (#699)", async () => {
+  it("not updatable from here: no Update button, what to do in the line's tooltip (#699)", async () => {
     fetchUpdateChangelogMock.mockResolvedValue(NEWER);
-    render(
+    const { rerender } = render(
       <ChangelogModal
         update={status({
           install_method: "unknown",
           manual_command: "Build from source, then restart the daemon.",
           can_apply: false,
-          apply_blocked_reason: "Install method not detected: will not guess.",
+          apply_blocked_reason: "Install method not detected: update manually, then restart the daemon.",
         })}
         onClose={() => {}}
         onOpenVersionSettings={() => {}}
@@ -223,7 +223,29 @@ describe("ChangelogModal (#698)", () => {
     );
     await screen.findByTestId("markdown-body");
     expect(screen.queryByTestId("changelog-update")).not.toBeInTheDocument();
-    expect(screen.getByTestId("changelog-not-updatable")).toHaveAttribute("title", expect.stringContaining("will not guess"));
+    // The manual text says what to do; the reason would only repeat it.
+    expect(screen.getByTestId("changelog-not-updatable")).toHaveAttribute(
+      "title",
+      "Build from source, then restart the daemon.",
+    );
+
+    // No manual text (a channel without an update command): the daemon's reason.
+    rerender(
+      <ChangelogModal
+        update={status({
+          manual_command: null,
+          can_apply: false,
+          apply_blocked_reason: "acme declares no update command: update it the way it was installed, then restart the daemon.",
+        })}
+        onClose={() => {}}
+        onOpenVersionSettings={() => {}}
+        onRequestUpdate={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("changelog-not-updatable")).toHaveAttribute(
+      "title",
+      expect.stringContaining("update it the way it was installed"),
+    );
   });
 
   it("an attempt already running disables Update with the reason (#699)", async () => {

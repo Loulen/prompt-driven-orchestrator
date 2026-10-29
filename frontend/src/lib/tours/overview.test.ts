@@ -135,7 +135,7 @@ const START_INPUT = `${START_INSPECTOR} ${t("start-input-text")}`;
 const EDGE_PANEL = t("edge-detail-panel");
 const EDGE_CONDITION = `${EDGE_PANEL} ${t("condition-row")}`;
 const CLEANUP_MODAL = t("cleanup-confirm-modal");
-const CLEANUP_ITEM = t("run-menu-cleanup");
+const CLEANUP_ITEM = `${t("run-menu-cleanup")}[data-run-id="${RUN_ID}"]`;
 const node = (id: string) => `.react-flow__node[data-id="${id}"]`;
 
 /** The canvas document of the Run: the pipeline the preparation wrote. */
@@ -626,6 +626,8 @@ describe("gestures advance only on the observed state", () => {
     const step = stepById("archive-run");
     const run = at("archive-run", fake);
     expect(step.target(fake.obs())).toEqual([RUN_ROW]);
+    fake.show(`${t("run-menu-cleanup")}[data-run-id="another-run"]`);
+    expect(step.target(fake.obs()), "another Run's menu is not the tour's").toEqual([RUN_ROW]);
     fake.openRunMenu();
     expect(step.target(fake.obs()), "the menu is a portal: its Cleanup entry is lit").toEqual([CLEANUP_ITEM]);
     expect(stepSoft(step, fake.obs()), "the whole menu stays clickable").toBe(true);

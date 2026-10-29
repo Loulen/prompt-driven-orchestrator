@@ -189,7 +189,7 @@ function ChangelogFooter({
           // One line: what to do and why the app does not, in its tooltip.
           <span
             className="flex min-w-0 items-center gap-1.5"
-            title={[update.manual_command, update.apply_blocked_reason].filter(Boolean).join("\n") || undefined}
+            title={update.manual_command ?? update.apply_blocked_reason ?? undefined}
             data-testid="changelog-not-updatable"
           >
             <TriangleAlert size={12} strokeWidth={1.5} className="shrink-0 text-st-await" aria-hidden />

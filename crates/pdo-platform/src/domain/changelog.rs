@@ -222,7 +222,15 @@ mod tests {
             assert!(
                 identifier(before) || identifier(after),
                 "« PDO » shown in What's new: {}",
-                &shown[i.saturating_sub(40)..(i + 40).min(shown.len())]
+                shown[..i]
+                    .chars()
+                    .rev()
+                    .take(40)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .chain(shown[i..].chars().take(40))
+                    .collect::<String>()
             );
         }
     }

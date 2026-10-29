@@ -35,7 +35,6 @@ import {
   removeExampleTrigger,
 } from "./overviewPreparation";
 import {
-  CLEANUP_ITEM,
   CLEANUP_MODAL,
   NEW_PIPELINE_BUTTON,
   NEW_RUN_BUTTON,
@@ -50,6 +49,7 @@ import {
   STATUS_DOTS,
   TRIGGERS_LIST,
   TRIGGERS_TAB,
+  cleanupItem,
   isArchived,
   readStep,
   runRow,
@@ -111,7 +111,8 @@ const APP_STEPS: TourStep[] = [
       if (o.present(CLEANUP_MODAL)) {
         return "Cleanup removes the Run's worktree and keeps its history and outputs. Skip leaves the Run as it is.";
       }
-      return o.present(CLEANUP_ITEM)
+      const id = overviewRunId();
+      return id && o.present(cleanupItem(id))
         ? "Choose Cleanup, then confirm."
         : "Open the ⋯ menu of your Run's row, choose Cleanup, then confirm. The worktree goes; the Run and its outputs stay.";
     },
@@ -119,11 +120,15 @@ const APP_STEPS: TourStep[] = [
     // zone so it is not under the blocker), then the confirmation.
     target: (o) => {
       if (o.present(CLEANUP_MODAL)) return [CLEANUP_MODAL];
-      if (o.present(CLEANUP_ITEM)) return [CLEANUP_ITEM];
       const id = overviewRunId();
-      return id ? [runRow(id)] : [];
+      if (!id) return [];
+      // Only this Run's menu: another row's Cleanup would archive the wrong Run.
+      return o.present(cleanupItem(id)) ? [cleanupItem(id)] : [runRow(id)];
     },
-    soft: (o) => !o.present(CLEANUP_MODAL) && o.present(CLEANUP_ITEM),
+    soft: (o) => {
+      const id = overviewRunId();
+      return !o.present(CLEANUP_MODAL) && id != null && o.present(cleanupItem(id));
+    },
     waitingFor: "your Run in the list",
     failureHint: "An archived Run moves to the Archived section at the bottom of the list.",
     targetTimeoutMs: READING_TIMEOUT_MS,

@@ -354,6 +354,14 @@
     width: auto;
     min-width: 0;
   }
+  /* The end of a provisioning row (paths matched, or its conflict): one width for every row,
+     so the fields end on the same edge. */
+  .set-prov__end {
+    display: flex;
+    flex: 0 0 76px;
+    justify-content: flex-end;
+    min-width: 0;
+  }
   /* A value read before the row's control (the /metrics address before its switch). */
   .set-before-ctl {
     margin-right: var(--g-4);
@@ -821,20 +829,6 @@
     font-size: var(--fs-xs);
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .set-bar {
-    position: relative;
-    flex: 1 1 auto;
-    height: 3px;
-    overflow: hidden;
-    border-radius: 2px;
-    background: var(--surface-2);
-  }
-  .set-bar > span {
-    position: absolute;
-    inset: 0 auto 0 0;
-    background: var(--color-st-running);
-    transition: width 0.3s;
   }
   .set-ok {
     color: var(--color-st-done);

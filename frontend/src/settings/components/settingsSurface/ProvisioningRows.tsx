@@ -101,9 +101,10 @@ export default function ProvisioningRows({ section }: { section: SettingsSection
 
   // Written at once: a pause after the last edit, one write after the other, and only the
   // latest speaks. An edit still waiting when the section goes (Settings closed) is written
-  // on the way out; one held by a conflict is not, and a toast says so.
+  // on the way out: at once when its preview is back clean, after its preview when that is
+  // still on its way; one held by a conflict or a failed preview is not, and a toast says so.
   const pending = useRef<string | null>(null);
-  const heldBack = useRef(false);
+  const heldBack = useRef<{ payload: string; awaiting: { repository: string } | null; reason: string } | null>(null);
   const chain = useRef<Promise<void>>(Promise.resolve());
   const writes = useRef(0);
   const mounted = useRef(true);
@@ -135,9 +136,17 @@ export default function ProvisioningRows({ section }: { section: SettingsSection
   useEffect(() => {
     writeRef.current = write;
   });
+  const awaitingPreview = previewing && preview?.key !== previewKey && !previewError;
   useEffect(() => {
     const changed = texts != null && serialized !== sent.current;
-    heldBack.current = changed && blocked;
+    heldBack.current =
+      changed && blocked
+        ? {
+            payload: serialized,
+            awaiting: awaitingPreview ? { repository } : null,
+            reason: previewError ?? "fix the conflict first",
+          }
+        : null;
     if (!changed || blocked) {
       pending.current = null;
       return;
@@ -145,13 +154,27 @@ export default function ProvisioningRows({ section }: { section: SettingsSection
     pending.current = serialized;
     const timer = window.setTimeout(() => writeRef.current(serialized), PROVISIONING_SAVE_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [serialized, blocked, texts]);
+  }, [serialized, blocked, texts, awaitingPreview, repository, previewError]);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      const held = heldBack.current;
       if (pending.current != null) writeRef.current(pending.current);
-      else if (heldBack.current) toast("Provisioning not saved: fix the conflict first", "warning");
+      else if (held?.awaiting) {
+        const rules = JSON.parse(held.payload) as ProvisioningRules;
+        previewProvisioning(held.awaiting.repository, "instance", rules, [])
+          .then((checked) => {
+            if (checked.conflicts.some((c) => c.scope === "instance")) {
+              toast("Provisioning not saved: fix the conflict first", "warning");
+            } else {
+              writeRef.current(held.payload);
+            }
+          })
+          .catch((error: unknown) => {
+            toast(`Provisioning not saved: ${error instanceof Error ? error.message : "preview failed"}`, "warning");
+          });
+      } else if (held) toast(`Provisioning not saved: ${held.reason}`, "warning");
     };
   }, []);
 
@@ -172,7 +195,6 @@ export default function ProvisioningRows({ section }: { section: SettingsSection
     (plan?.rules ?? [])
       .filter((rule) => rule.scope === "instance" && rule.mode === mode)
       .reduce((total, rule) => total + rule.paths.length + rule.excluded_paths.length, 0);
-
 
   return (
     <Section
@@ -201,6 +223,7 @@ export default function ProvisioningRows({ section }: { section: SettingsSection
           onChange={(event) => setRepository(event.target.value)}
           placeholder="/absolute/path/to/repository"
         />
+        <span className="set-prov__end" />
       </SettingRow>
       {loadError && (
         <div className="set-row__note set-row__note--failed" role="alert">
@@ -238,16 +261,19 @@ export default function ProvisioningRows({ section }: { section: SettingsSection
               }}
               placeholder={key === "copy" ? ".env" : key === "symlink" ? "node_modules" : undefined}
             />
-            {conflict && (
-              <RowError title={`${conflict.relative_path}: ${conflict.modes.join(" and ")}; keep one`}>
-                conflict
-              </RowError>
-            )}
-            {plan && !conflict && (
-              <span className="set-faint set-mono text-xs" title="Paths matched in the repository">
-                {counts(key)}
-              </span>
-            )}
+            <span className="set-prov__end">
+              {conflict ? (
+                <RowError title={`${conflict.relative_path}: ${conflict.modes.join(" and ")}; keep one`}>
+                  conflict
+                </RowError>
+              ) : (
+                plan && (
+                  <span className="set-faint set-mono text-xs" title="Paths matched in the repository">
+                    {counts(key)}
+                  </span>
+                )
+              )}
+            </span>
           </SettingRow>
         );
       })}

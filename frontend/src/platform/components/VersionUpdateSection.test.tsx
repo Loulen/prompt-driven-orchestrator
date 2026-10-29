@@ -112,13 +112,13 @@ describe("Settings › Version & update — a distribution's release channel (#2
         checked_at: null,
         source: null,
         source_url: null,
-        reason: "No release source is declared for this build: the version check does not run.",
+        reason: "No release source declared: no version check.",
       }),
     );
     renderSection();
     const latest = await screen.findByTestId("setting-version-latest");
     expect(latest).toHaveTextContent("—");
-    expect(latest).toHaveTextContent("No release source is declared");
+    expect(latest).toHaveTextContent("No release source declared");
     const check = screen.getByTestId("setting-version-check-now");
     expect(check).toBeDisabled();
     expect(screen.getByTestId("setting-version-update-button")).toBeDisabled();

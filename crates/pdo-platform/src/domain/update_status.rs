@@ -7,8 +7,7 @@ use super::release::{is_newer, source_label};
 use super::update_check::UpdateCache;
 
 /// Why there is no latest version when the release channel declares no source.
-pub const NO_SOURCE_REASON: &str =
-    "No release source is declared for this build: the version check does not run.";
+pub const NO_SOURCE_REASON: &str = "No release source declared: no version check.";
 
 /// The daemon's version-check state.
 #[derive(Debug, Clone, PartialEq, Eq)]

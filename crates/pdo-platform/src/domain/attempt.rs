@@ -100,8 +100,7 @@ pub fn apply_gate(
         return (
             false,
             Some(
-                "Install method not detected (neither a Homebrew Cellar path nor a cargo-dist \
-                 receipt): update manually, then restart the daemon."
+                "Install method not detected: update manually, then restart the daemon."
                     .to_string(),
             ),
         );

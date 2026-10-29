@@ -190,7 +190,7 @@ describe("Settings › General › Version & update — Update (#699)", () => {
         install_method: "unknown",
         manual_command: "Build from source, then restart the daemon.",
         can_apply: false,
-        apply_blocked_reason: "Install method not detected (neither a Homebrew Cellar path nor a cargo-dist receipt): update manually, then restart the daemon.",
+        apply_blocked_reason: "Install method not detected: update manually, then restart the daemon.",
       }),
     );
     render(

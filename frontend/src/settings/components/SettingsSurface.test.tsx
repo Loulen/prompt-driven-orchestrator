@@ -147,6 +147,7 @@ import type { UiContribution } from "../../shared/generated/UiContribution";
 import type { PageProps } from "../../shared/extensions/contract";
 import { openPage, resetPages, usePages } from "../../shared/extensions/deepLink";
 import { hostReactMajor } from "../../shared/extensions/shared";
+import { resetToasts, useToasts } from "../../shared/ui/toast";
 import {
   resetExtensions,
   useExtensionsStore,
@@ -3047,6 +3048,69 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     expect(await screen.findAllByText("conflict")).toHaveLength(2);
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(saveInstanceProvisioningMock).not.toHaveBeenCalled();
+  });
+
+  it("Worktree provisioning closed before its preview is back: written once the preview clears it", async () => {
+    let answer: (plan: unknown) => void = () => {};
+    previewProvisioningMock.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    resetToasts();
+    const { rerender } = render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    const copy = await screen.findByLabelText("Copy patterns");
+    await waitFor(() => expect(copy).not.toBeDisabled());
+    fireEvent.change(
+      within(screen.getByTestId("setting-row-provisioning-repository")).getByRole("textbox"),
+      { target: { value: "/repo" } },
+    );
+    fireEvent.change(copy, { target: { value: "README.md" } });
+    rerender(<SettingsSurface open={false} onClose={() => {}} />);
+    await waitFor(() =>
+      expect(previewProvisioningMock).toHaveBeenLastCalledWith(
+        "/repo",
+        "instance",
+        { copy: ["README.md"], hardlink: [], symlink: [] },
+        [],
+      ),
+    );
+    expect(saveInstanceProvisioningMock).not.toHaveBeenCalled();
+    act(() => answer({ entries: [], rules: [], conflicts: [] }));
+    await waitFor(() =>
+      expect(saveInstanceProvisioningMock).toHaveBeenCalledWith({ copy: ["README.md"], hardlink: [], symlink: [] }),
+    );
+    expect(useToasts.getState().toasts).toHaveLength(0);
+  });
+
+  it("Worktree provisioning closed before its preview is back: a conflict found then keeps it unwritten", async () => {
+    let answer: (plan: unknown) => void = () => {};
+    previewProvisioningMock.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    resetToasts();
+    const { rerender } = render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    const copy = await screen.findByLabelText("Copy patterns");
+    await waitFor(() => expect(copy).not.toBeDisabled());
+    fireEvent.change(
+      within(screen.getByTestId("setting-row-provisioning-repository")).getByRole("textbox"),
+      { target: { value: "/repo" } },
+    );
+    fireEvent.change(copy, { target: { value: "node_modules" } });
+    fireEvent.change(screen.getByLabelText("Symlink patterns"), { target: { value: "node_modules" } });
+    rerender(<SettingsSurface open={false} onClose={() => {}} />);
+    act(() =>
+      answer({
+        entries: [],
+        rules: [],
+        conflicts: [{ scope: "instance", relative_path: "node_modules", modes: ["copy", "symlink"] }],
+      }),
+    );
+    await waitFor(() =>
+      expect(useToasts.getState().toasts.map((t) => t.message)).toEqual([
+        "Provisioning not saved: fix the conflict first",
+      ]),
+    );
+    expect(saveInstanceProvisioningMock).not.toHaveBeenCalled();
+    resetToasts();
   });
 
   it("under a search, no category is current and the section column steps aside", async () => {

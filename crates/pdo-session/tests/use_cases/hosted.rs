@@ -12,7 +12,8 @@ use pdo_extension_api::{
 use pdo_kernel::extension_host::NodeContribution;
 use pdo_kernel::{Actor, ResourceKind, Verb};
 use pdo_session::application::assistant::FocusCell;
-use pdo_session::application::hosted::{Hosted, HostedPorts, HostedStore};
+use pdo_session::application::declared_wait::{LiftWait, TypedInput};
+use pdo_session::application::hosted::{Hosted, HostedPorts, HostedStore, HostedWaitError};
 use pdo_session::application::session_ledger::SessionLedger;
 use pdo_session::application::sweep::{ReaperGauge, SweepOrphans};
 use pdo_session::domain::reaper::SweepTtls;
@@ -23,11 +24,13 @@ const EXT: &str = "fake";
 
 struct World {
     hosted: Arc<Hosted>,
+    typed: Arc<TypedInput>,
     tmux: Arc<FakeTmux>,
     host: Arc<Host>,
     ledger: Arc<SessionLedger>,
     store: Arc<HostedRecords>,
     cap: Arc<Cap>,
+    harnesses: Arc<Harnesses>,
     home: tempfile::TempDir,
     repo: tempfile::TempDir,
 }
@@ -46,29 +49,36 @@ impl World {
         let repo = tempfile::tempdir().unwrap();
         let ledger = Arc::new(SessionLedger::new(tmux.clone(), host.clone()));
         let cap = Arc::new(Cap::default());
-        let hosted = Arc::new(Hosted::new(
-            HostedPorts {
-                store: store.clone(),
-                places: Arc::new(Places {
-                    home: Some(home.path().to_path_buf()),
-                    repo: Some(repo.path().to_path_buf()),
-                }),
-                harness: Arc::new(Harnesses),
-                admission: cap.clone(),
-            },
-            tmux.clone(),
-            host.clone(),
-            ledger.clone(),
-            6172,
-            None,
-        ));
+        let typed = Arc::new(TypedInput::default());
+        let harnesses = Arc::new(Harnesses::default());
+        let hosted = Arc::new(
+            Hosted::new(
+                HostedPorts {
+                    store: store.clone(),
+                    places: Arc::new(Places {
+                        home: Some(home.path().to_path_buf()),
+                        repo: Some(repo.path().to_path_buf()),
+                    }),
+                    harness: harnesses.clone(),
+                    admission: cap.clone(),
+                },
+                tmux.clone(),
+                host.clone(),
+                ledger.clone(),
+                6172,
+                None,
+            )
+            .with_typed(typed.clone()),
+        );
         Self {
             hosted,
+            typed,
             tmux,
             host,
             ledger,
             store,
             cap,
+            harnesses,
             home,
             repo,
         }
@@ -85,6 +95,39 @@ impl World {
         let created = self.tmux.created.lock().unwrap();
         let (_, dir, script) = created.iter().find(|(name, _, _)| name == id).unwrap();
         (dir.clone(), script.clone())
+    }
+
+    /// The script of the last launch of `id`.
+    fn last_script_of(&self, id: &str) -> String {
+        let created = self.tmux.created.lock().unwrap();
+        let (_, _, script) = created
+            .iter()
+            .rev()
+            .find(|(name, _, _)| name == id)
+            .unwrap();
+        script.clone()
+    }
+
+    fn launches_of(&self, id: &str) -> usize {
+        let created = self.tmux.created.lock().unwrap();
+        created.iter().filter(|(name, _, _)| name == id).count()
+    }
+
+    /// The Terminals' Enter rule over these Sessions hébergées.
+    fn lift(&self) -> LiftWait {
+        LiftWait::new(
+            Arc::new(crate::fakes::Waits::default()),
+            self.typed.clone(),
+            self.host.clone(),
+        )
+        .with_hosted(self.hosted.clone())
+    }
+
+    /// Open `open` and end it (terminated).
+    async fn ended(&self, open: OpenSession) -> pdo_extension_api::HostedSession {
+        let key = open.key.clone();
+        self.hosted.open(EXT, &alice(), open).await.unwrap();
+        self.hosted.terminate(EXT, &alice(), &key).await.unwrap()
     }
 
     fn changes(&self) -> Vec<(HostedState, Option<EndReason>)> {
@@ -554,4 +597,596 @@ async fn a_session_that_exited_keeps_its_reason_when_it_is_terminated() {
         .filter(|(state, _)| *state == HostedState::Ended)
         .count();
     assert_eq!(ends, 1, "ended once");
+}
+
+fn bob() -> Actor {
+    Actor::Identified {
+        namespace: "test".into(),
+        id: "bob".into(),
+    }
+}
+
+#[tokio::test]
+async fn a_relaunched_agent_resumes_its_conversation_with_who_relaunched_it() {
+    let w = World::new();
+    let open = OpenSession::agent("a")
+        .in_project("p1")
+        .with_config(HostedConfig::default().with_prompt("Bonjour"));
+    let ended = w.ended(open).await;
+    let conversation = w.store.load()[0].conversation_id.clone().unwrap();
+    assert!(w.last_script_of(&ended.id).contains(&conversation));
+    std::fs::remove_file(w.store.state_dir(&ended.id).join("primer.md")).unwrap();
+
+    let session = w.hosted.relaunch(EXT, &bob(), "a").await.unwrap();
+
+    assert_eq!(session.state, HostedState::Running);
+    assert_eq!(session.end_reason, None);
+    assert_eq!(session.started_by, Some(bob()));
+    assert_eq!(session.id, ended.id, "the same session");
+    let script = w.last_script_of(&session.id);
+    assert!(
+        script.contains(&format!("--resume '\\''{conversation}'\\''")),
+        "{script}"
+    );
+    assert!(!script.contains("--session-id"), "{script}");
+    assert!(
+        !script.contains("primer.md"),
+        "nothing is read again: {script}"
+    );
+    assert!(
+        !w.store.state_dir(&session.id).join("primer.md").exists(),
+        "no primer written for a resumed conversation"
+    );
+    assert_eq!(w.store.load()[0].conversation_id, Some(conversation));
+    let relaunch = w.host.asked().last().unwrap().clone();
+    assert_eq!(relaunch.verb, Verb::Action("relaunch".into()));
+    assert_eq!(relaunch.target.as_deref(), Some(session.id.as_str()));
+    assert_eq!(relaunch.projects, ["p1"]);
+    let launches = w.host.launches.lock().unwrap().clone();
+    assert_eq!(
+        launches.last().unwrap().started_by,
+        Some(bob()),
+        "the Contribution au lancement is asked for who relaunches"
+    );
+    assert_eq!(
+        w.changes()[w.changes().len() - 2..],
+        [(HostedState::Starting, None), (HostedState::Running, None)]
+    );
+    assert_eq!(w.ledger.started_by(&session.id), Some(bob()));
+    assert_eq!(w.ledger.hosted_live(), 1);
+}
+
+#[tokio::test]
+async fn an_agent_nobody_spoke_to_relaunches_on_a_new_conversation() {
+    let w = World::new();
+    let ended = w
+        .ended(OpenSession::agent("a").with_config(HostedConfig::default().with_prompt("Un")))
+        .await;
+    let before = w.store.load()[0].conversation_id.clone().unwrap();
+    w.harnesses.unwritten.lock().unwrap().push(before.clone());
+    w.hosted.relaunch(EXT, &alice(), "a").await.unwrap();
+    let after = w.store.load()[0].conversation_id.clone().unwrap();
+    assert_ne!(after, before);
+    let script = w.last_script_of(&ended.id);
+    assert!(!script.contains("--resume"), "{script}");
+    assert!(script.contains(&after), "{script}");
+    assert!(script.contains("primer.md"), "its prompt is read: {script}");
+}
+
+#[tokio::test]
+async fn a_relaunched_shell_is_new_and_only_an_ended_session_relaunches() {
+    let w = World::new();
+    let shell = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::shell("s"))
+        .await
+        .unwrap();
+    let refused = w.hosted.relaunch(EXT, &alice(), "s").await.unwrap_err();
+    assert_eq!(refused.status, 409, "{refused}");
+    assert!(refused.message.contains("not ended"), "{refused}");
+    assert_eq!(
+        w.hosted
+            .relaunch(EXT, &alice(), "never")
+            .await
+            .unwrap_err()
+            .status,
+        404
+    );
+
+    w.hosted.terminate(EXT, &alice(), "s").await.unwrap();
+    let again = w.hosted.relaunch(EXT, &alice(), "s").await.unwrap();
+    assert_eq!(again.state, HostedState::Running);
+    assert_eq!(w.launches_of(&shell.id), 2);
+    assert!(w.last_script_of(&shell.id).contains("bash -i"));
+    assert!(w.tmux.has(&shell.id));
+}
+
+#[tokio::test]
+async fn a_full_cap_or_a_refused_operation_relaunches_nothing() {
+    let store = Arc::new(HostedRecords::default());
+    let tmux = Arc::new(FakeTmux::default());
+    let w = World::over(store.clone(), tmux.clone(), Host::allowing());
+    let ended = w.ended(OpenSession::agent("a")).await;
+
+    *w.cap.full.lock().unwrap() = true;
+    let refused = w.hosted.relaunch(EXT, &alice(), "a").await.unwrap_err();
+    assert_eq!(refused.status, 409);
+    assert!(
+        refused.message.contains("session cap reached (2/2"),
+        "{refused}"
+    );
+    assert!(refused.message.contains("relaunched"), "{refused}");
+    assert_eq!(w.launches_of(&ended.id), 1);
+    assert_eq!(
+        w.hosted.registry().find(EXT, "a").unwrap().session.state,
+        HostedState::Ended
+    );
+
+    let refusing = World::over(store, tmux, Host::refusing());
+    let refused = refusing
+        .hosted
+        .relaunch(EXT, &alice(), "a")
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status, 403);
+    assert_eq!(refusing.launches_of(&ended.id), 1);
+}
+
+#[tokio::test]
+async fn a_configuration_applies_at_the_next_relaunch_and_not_before() {
+    let w = World::new();
+    let open = OpenSession::agent("a").with_config(HostedConfig::default().with_prompt("Un"));
+    let session = w.hosted.open(EXT, &alice(), open).await.unwrap();
+    let first = w.last_script_of(&session.id);
+
+    let configured = w
+        .hosted
+        .configure(
+            EXT,
+            &alice(),
+            "a",
+            HostedConfig::default()
+                .with_model("opus")
+                .with_effort("high")
+                .with_prompt("Deux"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(configured.config.model.as_deref(), Some("opus"));
+    assert_eq!(configured.state, HostedState::Running, "still running");
+    assert_eq!(w.launches_of(&session.id), 1, "not relaunched");
+    assert_eq!(w.last_script_of(&session.id), first);
+    assert_eq!(
+        w.host.asked().last().unwrap().verb,
+        Verb::Action("configure".into())
+    );
+    assert_eq!(
+        w.hosted
+            .registry()
+            .find(EXT, "a")
+            .unwrap()
+            .session
+            .config
+            .prompt
+            .as_deref(),
+        Some("Deux"),
+        "recorded"
+    );
+    assert_eq!(
+        w.changes().last().map(|c| c.0),
+        Some(HostedState::Running),
+        "the change is published"
+    );
+
+    w.hosted.terminate(EXT, &alice(), "a").await.unwrap();
+    w.hosted.relaunch(EXT, &alice(), "a").await.unwrap();
+    let script = w.last_script_of(&session.id);
+    assert!(script.contains("--resume"), "{script}");
+    assert!(script.contains("opus"), "the new model: {script}");
+    assert!(script.contains("high"), "the new effort: {script}");
+}
+
+#[tokio::test]
+async fn another_harness_starts_a_new_conversation_with_the_new_prompt() {
+    let w = World::new();
+    let ended = w.ended(OpenSession::agent("a")).await;
+    let before = w.store.load()[0].conversation_id.clone().unwrap();
+    // Its conversation ran on another harness than the one it relaunches on.
+    w.hosted.registry().update(&ended.id, |r| {
+        r.harness = Some("elsewhere".into());
+        true
+    });
+    w.hosted
+        .configure(
+            EXT,
+            &alice(),
+            "a",
+            HostedConfig::default()
+                .on_harness("claude")
+                .with_prompt("Deux"),
+        )
+        .await
+        .unwrap();
+    w.hosted.relaunch(EXT, &alice(), "a").await.unwrap();
+    let after = w.store.load()[0].conversation_id.clone().unwrap();
+    assert_ne!(after, before, "a new conversation");
+    let script = w.last_script_of(&ended.id);
+    assert!(script.contains("--session-id"), "{script}");
+    assert!(script.contains(&after), "{script}");
+    assert!(!script.contains("--resume"), "{script}");
+    assert_eq!(
+        std::fs::read_to_string(w.store.state_dir(&ended.id).join("primer.md")).unwrap(),
+        "Deux"
+    );
+    assert_eq!(w.store.load()[0].harness.as_deref(), Some("claude"));
+}
+
+#[tokio::test]
+async fn a_shell_has_no_configuration_and_an_unknown_harness_is_refused() {
+    let w = World::new();
+    w.hosted
+        .open(EXT, &alice(), OpenSession::shell("s"))
+        .await
+        .unwrap();
+    let refused = w
+        .hosted
+        .configure(EXT, &alice(), "s", HostedConfig::default().with_model("x"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status, 400, "{refused}");
+    w.hosted
+        .open(EXT, &alice(), OpenSession::agent("a"))
+        .await
+        .unwrap();
+    let refused = w
+        .hosted
+        .configure(
+            EXT,
+            &alice(),
+            "a",
+            HostedConfig::default().on_harness("nope"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status, 400, "{refused}");
+    assert!(refused.message.contains("unknown harness"), "{refused}");
+    assert_eq!(
+        w.hosted.registry().find(EXT, "a").unwrap().session.config,
+        HostedConfig::default()
+    );
+}
+
+#[tokio::test]
+async fn a_text_is_laid_in_the_input_without_enter_and_the_gesture_is_an_operation() {
+    let w = World::new();
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::agent("a").in_project("p1"))
+        .await
+        .unwrap();
+    let answered = w
+        .hosted
+        .type_text(EXT, &alice(), "a", "bonjour")
+        .await
+        .unwrap();
+    assert_eq!(answered.id, session.id);
+    assert_eq!(
+        *w.tmux.pasted_without_enter.lock().unwrap(),
+        [(session.id.clone(), "bonjour".to_string())]
+    );
+    assert!(w.tmux.typed.lock().unwrap().is_empty(), "no Enter");
+    let typed = w.host.asked().last().unwrap().clone();
+    assert_eq!(typed.verb, Verb::Action("type".into()));
+    assert_eq!(typed.projects, ["p1"]);
+
+    assert_eq!(
+        w.hosted
+            .type_text(EXT, &alice(), "a", "")
+            .await
+            .unwrap_err()
+            .status,
+        400
+    );
+    *w.tmux.refuse_paste.lock().unwrap() = true;
+    assert_eq!(
+        w.hosted
+            .type_text(EXT, &alice(), "a", "x")
+            .await
+            .unwrap_err()
+            .status,
+        409
+    );
+    w.hosted.terminate(EXT, &alice(), "a").await.unwrap();
+    let refused = w
+        .hosted
+        .type_text(EXT, &alice(), "a", "x")
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status, 409);
+    assert!(refused.message.contains("not running"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_refused_text_is_not_laid() {
+    let store = Arc::new(HostedRecords::default());
+    let tmux = Arc::new(FakeTmux::default());
+    let w = World::over(store.clone(), tmux.clone(), Host::allowing());
+    w.hosted
+        .open(EXT, &alice(), OpenSession::shell("s"))
+        .await
+        .unwrap();
+    let refusing = World::over(store, tmux.clone(), Host::refusing());
+    let refused = refusing
+        .hosted
+        .type_text(EXT, &alice(), "s", "rm -rf")
+        .await
+        .unwrap_err();
+    assert_eq!(refused.status, 403);
+    assert!(tmux.pasted_without_enter.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_artefacts_live_are_listed_read_published_kept_and_forgotten() {
+    let w = World::new();
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::agent("a"))
+        .await
+        .unwrap();
+    let live = w.store.state_dir(&session.id).join("live");
+    let script = w.last_script_of(&session.id);
+    assert!(script.contains("PDO_LIVE_DIR"), "{script}");
+    assert!(script.contains(&*live.to_string_lossy()), "{script}");
+    assert!(live.is_dir(), "created before the launch");
+    assert!(w.hosted.live_artifacts(EXT, "a").is_empty());
+
+    std::fs::create_dir_all(live.join("notes")).unwrap();
+    std::fs::write(live.join("notes/plan.md"), "# Plan").unwrap();
+    std::fs::write(live.join("progress.md"), "50 %").unwrap();
+    w.hosted.reconcile();
+    let listed = w.hosted.live_artifacts(EXT, "a");
+    let paths: Vec<&str> = listed.iter().map(|a| a.path.as_str()).collect();
+    assert_eq!(paths, ["notes/plan.md", "progress.md"]);
+    assert_eq!(listed[1].size, 4);
+    assert_eq!(
+        w.hosted.live_artifact(EXT, "a", "notes/plan.md").unwrap(),
+        b"# Plan"
+    );
+    let published = |w: &World| {
+        w.host
+            .events()
+            .into_iter()
+            .filter(|(_, e)| e["type"] == "hosted_live_artifacts_changed")
+            .collect::<Vec<_>>()
+    };
+    let events = published(&w);
+    assert_eq!(events.len(), 1);
+    assert!(events[0].0, "on the bus, hence /ws");
+    assert_eq!(events[0].1["key"], "a");
+    assert_eq!(events[0].1["artifacts"][0]["path"], "notes/plan.md");
+    w.hosted.reconcile();
+    assert_eq!(published(&w).len(), 1, "nothing changed, nothing published");
+    std::fs::write(live.join("progress.md"), "100 %").unwrap();
+    w.hosted.reconcile();
+    assert_eq!(published(&w).len(), 2);
+
+    for bad in ["../session.json", "/etc/passwd"] {
+        assert_eq!(
+            w.hosted.live_artifact(EXT, "a", bad).unwrap_err().status,
+            400,
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        w.hosted
+            .live_artifact(EXT, "a", "nope.md")
+            .unwrap_err()
+            .status,
+        404
+    );
+    assert_eq!(
+        w.hosted
+            .live_artifact(EXT, "never", "a")
+            .unwrap_err()
+            .status,
+        404
+    );
+
+    w.hosted.terminate(EXT, &alice(), "a").await.unwrap();
+    w.hosted.relaunch(EXT, &alice(), "a").await.unwrap();
+    assert_eq!(
+        w.hosted.live_artifacts(EXT, "a").len(),
+        2,
+        "kept across a relaunch"
+    );
+
+    let refused = w.hosted.forget(EXT, &alice(), "a").await.unwrap_err();
+    assert_eq!(refused.status, 409, "a live session is not forgotten");
+    w.hosted.terminate(EXT, &alice(), "a").await.unwrap();
+    let forgotten = w.hosted.forget(EXT, &alice(), "a").await.unwrap();
+    assert_eq!(forgotten.id, session.id);
+    assert_eq!(
+        w.host.asked().last().unwrap().verb,
+        Verb::Action("forget".into())
+    );
+    assert!(w.hosted.registry().find(EXT, "a").is_none());
+    assert!(w.store.load().is_empty());
+    assert!(
+        !w.store.state_dir(&session.id).exists(),
+        "its state is erased"
+    );
+    assert!(w.hosted.live_artifacts(EXT, "a").is_empty());
+    assert!(w
+        .host
+        .events()
+        .iter()
+        .any(|(_, e)| e["type"] == "hosted_session_forgotten" && e["session"]["key"] == "a"));
+    assert_eq!(
+        w.hosted
+            .forget(EXT, &alice(), "a")
+            .await
+            .unwrap_err()
+            .status,
+        404
+    );
+    let reopened = w.hosted.open(EXT, &alice(), OpenSession::agent("a")).await;
+    assert!(reopened.is_ok(), "its key is free again");
+}
+
+#[tokio::test]
+async fn a_declared_wait_is_published_and_lifted_by_an_enter_after_typing() {
+    let w = World::new();
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::agent("a").in_project("p1"))
+        .await
+        .unwrap();
+    let declared = w
+        .hosted
+        .declare_wait(&alice(), &session.id, Some("Which DB?"))
+        .unwrap();
+    assert_eq!(
+        declared,
+        pdo_session::domain::declared_wait::DeclareOutcome::Declared
+    );
+    let record = w.hosted.registry().find(EXT, "a").unwrap().session;
+    assert_eq!(record.state, HostedState::AwaitingUser);
+    assert_eq!(record.wait_message.as_deref(), Some("Which DB?"));
+    assert_eq!(w.changes().last().unwrap().0, HostedState::AwaitingUser);
+    let asked = w.host.asked().last().unwrap().clone();
+    assert_eq!(asked.verb, Verb::Action("wait_user".into()));
+    assert_eq!(asked.projects, ["p1"]);
+    assert_eq!(
+        w.hosted
+            .declare_wait(&alice(), &session.id, Some("Which DB?"))
+            .unwrap(),
+        pdo_session::domain::declared_wait::DeclareOutcome::Noop
+    );
+
+    let lift = w.lift();
+    lift.note_input(&bob(), &session.id, b"\r").await;
+    assert_eq!(
+        w.hosted.registry().find(EXT, "a").unwrap().session.state,
+        HostedState::AwaitingUser,
+        "a bare Enter types nothing"
+    );
+    lift.note_input(&bob(), &session.id, b"postgres").await;
+    lift.note_input(&bob(), &session.id, b"\r").await;
+    let record = w.hosted.registry().find(EXT, "a").unwrap().session;
+    assert_eq!(record.state, HostedState::Running);
+    assert_eq!(record.wait_message, None);
+    assert_eq!(w.changes().last().unwrap().0, HostedState::Running);
+    assert_eq!(
+        w.host.asked().last().unwrap().verb,
+        Verb::Action("resume".into())
+    );
+
+    // A text laid by the extension counts as typed: its Enter lifts.
+    w.hosted.declare_wait(&alice(), &session.id, None).unwrap();
+    w.hosted.type_text(EXT, &alice(), "a", "oui").await.unwrap();
+    lift.note_input(&bob(), &session.id, b"\r").await;
+    assert_eq!(
+        w.hosted.registry().find(EXT, "a").unwrap().session.state,
+        HostedState::Running
+    );
+}
+
+#[tokio::test]
+async fn a_wait_needs_a_running_hosted_session() {
+    let w = World::new();
+    assert_eq!(
+        w.hosted
+            .declare_wait(&alice(), "pdo-hosted-nobody", None)
+            .unwrap_err(),
+        HostedWaitError::NotFound
+    );
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::agent("a"))
+        .await
+        .unwrap();
+    w.tmux.sessions.lock().unwrap().remove(&session.id);
+    assert_eq!(
+        w.hosted
+            .declare_wait(&alice(), &session.id, None)
+            .unwrap_err(),
+        HostedWaitError::NotRunning,
+        "its process is gone"
+    );
+    w.hosted.reconcile();
+    assert_eq!(
+        w.hosted
+            .declare_wait(&alice(), &session.id, None)
+            .unwrap_err(),
+        HostedWaitError::NotRunning
+    );
+    let refusing = World::over(w.store.clone(), w.tmux.clone(), Host::refusing());
+    let other = refusing
+        .hosted
+        .declare_wait(&alice(), &session.id, None)
+        .unwrap_err();
+    assert!(matches!(other, HostedWaitError::Refused(_)), "{other:?}");
+}
+
+#[tokio::test]
+async fn an_awaiting_session_is_taken_back_awaiting_after_a_restart() {
+    let w = World::new();
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::agent("a"))
+        .await
+        .unwrap();
+    w.hosted
+        .declare_wait(&alice(), &session.id, Some("?"))
+        .unwrap();
+    let after = w.restarted();
+    after.hosted.restore();
+    assert_eq!(
+        after
+            .hosted
+            .registry()
+            .find(EXT, "a")
+            .unwrap()
+            .session
+            .state,
+        HostedState::AwaitingUser
+    );
+}
+
+#[tokio::test]
+async fn the_sessions_of_an_absent_extension_are_terminated_at_restart_and_kept() {
+    let w = World::new();
+    let gone = w
+        .hosted
+        .open("uninstalled", &alice(), OpenSession::agent("a"))
+        .await
+        .unwrap();
+    let kept = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::shell("s"))
+        .await
+        .unwrap();
+    let after = w.restarted();
+    after.hosted.restore();
+    let record = after
+        .hosted
+        .registry()
+        .find("uninstalled", "a")
+        .unwrap()
+        .session;
+    assert_eq!(record.state, HostedState::Ended);
+    assert_eq!(record.end_reason, Some(EndReason::Terminated));
+    assert!(!after.tmux.has(&gone.id), "its process is killed");
+    assert_eq!(
+        after
+            .hosted
+            .registry()
+            .find(EXT, "s")
+            .unwrap()
+            .session
+            .state,
+        HostedState::Running
+    );
+    assert!(after.tmux.has(&kept.id));
+    assert_eq!(after.ledger.hosted_live(), 1);
 }

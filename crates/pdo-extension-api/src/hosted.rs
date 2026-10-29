@@ -12,10 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::Actor;
 
-/// The `type` of the event the core publishes each time the state of a
-/// Session hébergée changes ([`HostedSessionChanged`]).
-pub const HOSTED_SESSION_CHANGED: &str = "hosted_session_changed";
-
 /// What a Session hébergée runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -199,6 +195,10 @@ pub struct HostedSession {
     pub state: HostedState,
     /// Set once it ended.
     pub end_reason: Option<EndReason>,
+    /// What its agent said it waits for (`pdo wait-user --message`), while it
+    /// is `awaiting_user`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_message: Option<String>,
     /// When it was opened, then last changed (RFC 3339).
     pub created_at: String,
     pub updated_at: String,
@@ -227,6 +227,7 @@ impl HostedSession {
             started_by: None,
             state: HostedState::Starting,
             end_reason: None,
+            wait_message: None,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -269,35 +270,26 @@ impl std::error::Error for HostedRefusal {}
 pub type HostedGesture =
     Pin<Box<dyn Future<Output = Result<HostedSession, HostedRefusal>> + Send + 'static>>;
 
-/// The event of a change of state of a Session hébergée: to every
-/// extension's `on_event` and, on `/ws`, to the connections whose Actor may
-/// read the session (`session` × `read`, in its Projet).
-///
-/// On the wire: `{"type": "hosted_session_changed", "session": <HostedSession>}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One Artefact live of a Session hébergée: a file its agent wrote in its
+/// `PDO_LIVE_DIR`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct HostedSessionChanged {
-    pub session: HostedSession,
+pub struct LiveArtifact {
+    /// Its path under `PDO_LIVE_DIR`, `/`-separated (`notes/plan.md`).
+    pub path: String,
+    /// Its size, in bytes.
+    pub size: u64,
+    /// When it was last written (RFC 3339).
+    pub modified_at: String,
 }
 
-impl HostedSessionChanged {
-    pub fn new(session: HostedSession) -> Self {
-        Self { session }
-    }
-
-    /// The event as `on_event` receives it.
-    pub fn to_event(&self) -> serde_json::Value {
-        serde_json::json!({ "type": HOSTED_SESSION_CHANGED, "session": self.session })
-    }
-
-    /// The change `event` is, if it is one.
-    pub fn from_event(event: &serde_json::Value) -> Option<Self> {
-        if event.get("type")? != HOSTED_SESSION_CHANGED {
-            return None;
+impl LiveArtifact {
+    pub fn new(path: impl Into<String>, size: u64, modified_at: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            size,
+            modified_at: modified_at.into(),
         }
-        serde_json::from_value(event.get("session")?.clone())
-            .ok()
-            .map(Self::new)
     }
 }
 
@@ -320,31 +312,27 @@ mod tests {
             started_by: Some(Actor::LocalOperator),
             state: HostedState::Ended,
             end_reason: Some(EndReason::Terminated),
+            wait_message: None,
             created_at: "2026-10-28T10:00:00Z".into(),
             updated_at: "2026-10-28T10:05:00Z".into(),
         }
     }
 
     #[test]
-    fn a_change_carries_its_type_and_the_session_and_reads_back() {
-        let change = HostedSessionChanged::new(session());
-        let json = change.to_event();
-        assert_eq!(json["type"], HOSTED_SESSION_CHANGED);
-        assert_eq!(json["session"]["state"], "ended");
-        assert_eq!(json["session"]["end_reason"], "terminated");
-        assert_eq!(json["session"]["kind"], "agent");
+    fn a_wait_message_travels_only_when_there_is_one() {
+        let mut waiting = session();
+        assert!(serde_json::to_value(&waiting)
+            .unwrap()
+            .get("wait_message")
+            .is_none());
+        waiting.state = HostedState::AwaitingUser;
+        waiting.wait_message = Some("Which DB?".into());
+        let json = serde_json::to_value(&waiting).unwrap();
+        assert_eq!(json["state"], "awaiting_user");
+        assert_eq!(json["wait_message"], "Which DB?");
         assert_eq!(
-            json["session"]["folder"],
-            serde_json::json!({ "kind": "path", "path": "/tmp/x" })
-        );
-        assert_eq!(
-            json["session"]["config"],
-            serde_json::json!({ "model": "opus" })
-        );
-        assert_eq!(HostedSessionChanged::from_event(&json), Some(change));
-        assert_eq!(
-            HostedSessionChanged::from_event(&serde_json::json!({ "type": "session_ended" })),
-            None
+            serde_json::from_value::<HostedSession>(json).unwrap(),
+            waiting
         );
     }
 

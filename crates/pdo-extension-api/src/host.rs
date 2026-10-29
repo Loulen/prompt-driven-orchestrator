@@ -1,9 +1,9 @@
 use serde::Serialize;
 
 use crate::{
-    Actor, ActorDisplay, Attributes, Authorization, EntityRef, HostedGesture, HostedRefusal,
-    HostedSession, NewRun, OpenSession, OperationApplied, Presence, Resource, RunCostRead,
-    RunCreation, RunNotCreated,
+    Actor, ActorDisplay, Attributes, Authorization, EntityRef, HostedConfig, HostedGesture,
+    HostedRefusal, HostedSession, LiveArtifact, NewRun, OpenSession, OperationApplied, Presence,
+    Resource, RunCostRead, RunCreation, RunNotCreated,
 };
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
@@ -151,9 +151,7 @@ pub trait Host: Send + Sync {
     /// is published ([`HostedSessionChanged`](crate::HostedSessionChanged)).
     /// By default (and with the [`NeutralHost`]), `503`: nothing is opened.
     fn open_session(&self, _actor: &Actor, _open: OpenSession) -> HostedGesture {
-        Box::pin(std::future::ready(Err(HostedRefusal::unavailable(
-            "this host holds no hosted session",
-        ))))
+        no_hosted_session()
     }
 
     /// The Session hébergée the calling extension opened under `key` (API
@@ -176,10 +174,87 @@ pub trait Host: Send + Sync {
     /// is answered as it is; `404` for a key it never gave. By default,
     /// `503`.
     fn terminate_session(&self, _actor: &Actor, _key: &str) -> HostedGesture {
-        Box::pin(std::future::ready(Err(HostedRefusal::unavailable(
-            "this host holds no hosted session",
-        ))))
+        no_hosted_session()
     }
+
+    /// Relaunch the ended Session hébergée `key` of the calling extension on
+    /// behalf of `actor` (API 0.17), who becomes who started it: the
+    /// Operation `session` × `relaunch` first, then the Cap (a full Cap
+    /// refuses at once, `409`), then the Contribution au lancement asked
+    /// anew. An agent resumes its conversation when its harness re-enters one
+    /// by the identity pinned at its launch and its harness did not change;
+    /// otherwise it starts a new one, reading the extensions' text and its
+    /// initial prompt. A shell starts anew. It runs on its configuration as
+    /// it now stands ([`Host::configure_session`]); its Artefacts live stay.
+    ///
+    /// Answers the session, `running`; `409` for a session that is not
+    /// `ended`, `404` for a key it never gave. By default, `503`.
+    fn relaunch_session(&self, _actor: &Actor, _key: &str) -> HostedGesture {
+        no_hosted_session()
+    }
+
+    /// Change the configuration (harness, model, effort, initial prompt) of
+    /// the agent session `key` of the calling extension on behalf of `actor`
+    /// (API 0.17): the Operation `session` × `configure` first. `config`
+    /// replaces the whole configuration. A running agent keeps the one it was
+    /// launched with: the new one applies at its next relaunch, its initial
+    /// prompt only when that relaunch starts a new conversation. Answers the session with its new configuration; `400`
+    /// for a shell or a harness the core does not know, `404` for a key it
+    /// never gave. By default, `503`.
+    fn configure_session(
+        &self,
+        _actor: &Actor,
+        _key: &str,
+        _config: HostedConfig,
+    ) -> HostedGesture {
+        no_hosted_session()
+    }
+
+    /// Lay `text` in the input of the live Session hébergée `key` of the
+    /// calling extension on behalf of `actor` (API 0.17), as a paste,
+    /// **without** submitting it: it waits for a person to complete it and
+    /// press Enter. The Operation `session` × `type` first. Answers the
+    /// session; `400` for an empty text, `409` for a session that is not
+    /// running, `404` for a key it never gave. By default, `503`.
+    fn type_in_session(&self, _actor: &Actor, _key: &str, _text: &str) -> HostedGesture {
+        no_hosted_session()
+    }
+
+    /// Forget the ended Session hébergée `key` of the calling extension on
+    /// behalf of `actor` (API 0.17): the Operation `session` × `forget`
+    /// first, then its record and its state folder (its Artefacts live
+    /// included) are erased, and its key is free again. Answers the session
+    /// as it was last recorded; `409` for a session that is not `ended`,
+    /// `404` for a key it never gave. By default, `503`.
+    fn forget_session(&self, _actor: &Actor, _key: &str) -> HostedGesture {
+        no_hosted_session()
+    }
+
+    /// The Artefacts live of the Session hébergée `key` of the calling
+    /// extension (API 0.17): the files its agent wrote in its
+    /// `PDO_LIVE_DIR`, by path. Empty for a key it never gave, and by
+    /// default. Synchronous and quick.
+    fn live_artifacts(&self, _key: &str) -> Vec<LiveArtifact> {
+        Vec::new()
+    }
+
+    /// The content of the Artefact live `path` (as
+    /// [`Host::live_artifacts`] names it) of the Session hébergée `key` of
+    /// the calling extension (API 0.17). `404` for a key it never gave or a
+    /// file that is not there, `400` for a path that leaves `PDO_LIVE_DIR`.
+    /// By default, `503`. Synchronous.
+    fn live_artifact(&self, _key: &str, _path: &str) -> Result<Vec<u8>, HostedRefusal> {
+        Err(HostedRefusal::unavailable(NO_HOSTED_SESSION))
+    }
+}
+
+const NO_HOSTED_SESSION: &str = "this host holds no hosted session";
+
+/// The answer of a gesture on a Session hébergée of a host that holds none.
+fn no_hosted_session() -> HostedGesture {
+    Box::pin(std::future::ready(Err(HostedRefusal::unavailable(
+        NO_HOSTED_SESSION,
+    ))))
 }
 
 /// The host of an extension alone: everything allowed, events go nowhere, no
@@ -353,6 +428,23 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(refused.status, 503);
+        for gesture in [
+            NeutralHost.relaunch_session(&Actor::LocalOperator, "s"),
+            NeutralHost.configure_session(
+                &Actor::LocalOperator,
+                "s",
+                crate::HostedConfig::default(),
+            ),
+            NeutralHost.type_in_session(&Actor::LocalOperator, "s", "hi"),
+            NeutralHost.forget_session(&Actor::LocalOperator, "s"),
+        ] {
+            assert_eq!(gesture.await.unwrap_err().status, 503);
+        }
+        assert!(NeutralHost.live_artifacts("s").is_empty());
+        assert_eq!(
+            NeutralHost.live_artifact("s", "a.md").unwrap_err().status,
+            503
+        );
     }
 
     #[tokio::test]

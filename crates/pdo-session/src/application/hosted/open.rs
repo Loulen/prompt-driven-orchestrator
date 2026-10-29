@@ -12,7 +12,9 @@ use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::info;
 
 use super::{Hosted, NotAdmitted};
-use crate::domain::hosted::{folder_lookup, primer_path, FolderError, FolderLookup, HostedRecord};
+use crate::domain::hosted::{
+    folder_lookup, live_dir, primer_path, FolderError, FolderLookup, HostedRecord,
+};
 use crate::domain::launch::{build_hosted_script, HostedTail};
 use crate::domain::names::hosted_session_name;
 
@@ -46,19 +48,13 @@ impl Hosted {
             .in_projects(open.project.iter().cloned());
         authorize(self.host.as_ref(), actor, &operation)
             .map_err(|denied| HostedRefusal::new(403, denied.to_string()))?;
-        let cwd = self.folder(&open).await?;
+        let cwd = self.folder(&open.folder, open.project.as_deref()).await?;
         let harness = match open.kind {
             HostedKind::Agent => Some(self.harness(open.config.harness.as_deref()).await?),
             _ => None,
         };
 
-        let slot = self.admission.admit().await.map_err(|refused| match refused {
-            NotAdmitted::CapReached { live, cap } => HostedRefusal::new(
-                409,
-                format!("session cap reached ({live}/{cap} live sessions): no hosted session is opened"),
-            ),
-            NotAdmitted::Unavailable(why) => HostedRefusal::unavailable(why),
-        })?;
+        let slot = self.admit("opened").await?;
         let id = hosted_session_name(&uuid::Uuid::new_v4().simple().to_string()[..12]);
         let now = pdo_kernel::clock::now_iso();
         let mut record = HostedRecord::opening(&id, extension, &open, &cwd, &now);
@@ -67,6 +63,7 @@ impl Hosted {
             .as_ref()
             .filter(|h| h.pins_session_id())
             .map(|_| uuid::Uuid::new_v4().to_string());
+        record.harness = harness.as_ref().map(|h| h.name.clone());
         self.registry
             .insert(record.clone())
             .map_err(|e| HostedRefusal::new(409, e))?;
@@ -83,7 +80,11 @@ impl Hosted {
                 actor.clone(),
             );
             tokio::task::spawn_blocking(move || {
-                hosted.launch(&record, &session_ref, &actor, harness.as_ref())
+                let agent = harness.as_ref().map(|harness| Agent {
+                    harness,
+                    resume: false,
+                });
+                hosted.launch(&record, &session_ref, &actor, agent)
             })
             .await
             .unwrap_or_else(|e| Err(anyhow::anyhow!("the launch panicked: {e}")))
@@ -126,10 +127,32 @@ impl Hosted {
         }
     }
 
-    /// The folder `open` works in, which must exist.
-    async fn folder(&self, open: &OpenSession) -> Result<PathBuf, HostedRefusal> {
+    /// A slot of the Cap for a session to be `done` (opened, relaunched), or
+    /// the refusal at once.
+    pub(super) async fn admit(&self, done: &str) -> Result<super::AdmissionSlot, HostedRefusal> {
+        self.admission
+            .admit()
+            .await
+            .map_err(|refused| match refused {
+                NotAdmitted::CapReached { live, cap } => HostedRefusal::new(
+                    409,
+                    format!(
+                    "session cap reached ({live}/{cap} live sessions): no hosted session is {done}"
+                ),
+                ),
+                NotAdmitted::Unavailable(why) => HostedRefusal::unavailable(why),
+            })
+    }
+
+    /// The folder `folder` (of a session in `project`) resolves to, which
+    /// must exist.
+    pub(super) async fn folder(
+        &self,
+        folder: &pdo_extension_api::HostedFolder,
+        project: Option<&str>,
+    ) -> Result<PathBuf, HostedRefusal> {
         let bad = |message: String| HostedRefusal::new(400, message);
-        let cwd = match folder_lookup(&open.folder, open.project.as_deref()) {
+        let cwd = match folder_lookup(folder, project) {
             Ok(FolderLookup::Path(path)) => path,
             Ok(FolderLookup::ProjectRepo(project)) => {
                 self.places.project_repo(&project).await.ok_or_else(|| {
@@ -158,7 +181,7 @@ impl Hosted {
         Ok(cwd)
     }
 
-    async fn harness(
+    pub(super) async fn harness(
         &self,
         name: Option<&str>,
     ) -> Result<pdo_harness::registry::HarnessDescriptor, HostedRefusal> {
@@ -171,13 +194,14 @@ impl Hosted {
     }
 
     /// Ask the extensions for the launch, write the primer into the state
-    /// folder (never into the session's folder), and create the tmux session.
-    fn launch(
+    /// folder (never into the session's folder), and create the tmux session:
+    /// a shell, or an `agent` that starts its conversation or resumes it.
+    pub(super) fn launch(
         &self,
         record: &HostedRecord,
         session_ref: &SessionRef,
         actor: &Actor,
-        harness: Option<&pdo_harness::registry::HarnessDescriptor>,
+        agent: Option<Agent<'_>>,
     ) -> anyhow::Result<()> {
         let contribution = self.host.session_launch(
             &SessionLaunch::new(session_ref.clone())
@@ -186,29 +210,43 @@ impl Hosted {
         );
         let env: Vec<(String, String)> = contribution.env.clone().into_iter().collect();
         let state_dir = self.registry.store().state_dir(record.id());
-        std::fs::create_dir_all(&state_dir)?;
+        let live = live_dir(&state_dir);
+        std::fs::create_dir_all(&live)?;
         let config = &record.session.config;
-        let primer = match harness {
-            Some(_) => write_primer(
+        let resumed = agent
+            .as_ref()
+            .filter(|agent| agent.resume)
+            .and(record.conversation_id.as_deref());
+        // A resumed conversation read the extensions' text and its prompt
+        // when it started.
+        let primer = match &agent {
+            Some(_) if resumed.is_none() => write_primer(
                 &state_dir,
                 contribution.above(config.prompt.clone().unwrap_or_default()),
             )?,
-            None => None,
+            _ => None,
         };
-        let tail = match harness {
-            Some(harness) => HostedTail::Agent {
-                harness,
+        let tail = match (agent, resumed) {
+            (Some(agent), Some(session_id)) => HostedTail::Resume {
+                harness: agent.harness,
+                model: config.model.as_deref(),
+                effort: config.effort.as_deref(),
+                session_id,
+            },
+            (Some(agent), None) => HostedTail::Agent {
+                harness: agent.harness,
                 primer: primer.as_deref(),
                 model: config.model.as_deref(),
                 effort: config.effort.as_deref(),
                 session_id: record.conversation_id.as_deref(),
             },
-            None => HostedTail::Shell,
+            (None, _) => HostedTail::Shell,
         };
         let script = build_hosted_script(
             record.id(),
             self.daemon_port,
             &self.tmux.session_path(),
+            &live,
             tail,
             self.tmux_cmd_override.as_deref(),
             &env,
@@ -217,6 +255,13 @@ impl Hosted {
         self.tmux
             .new_session(record.id(), cwd, &script, Some("hosted"))
     }
+}
+
+/// The agent a Session hébergée launches: on `harness`, resuming the
+/// conversation of its record or starting it.
+pub(super) struct Agent<'a> {
+    pub(super) harness: &'a pdo_harness::registry::HarnessDescriptor,
+    pub(super) resume: bool,
 }
 
 /// Write what the agent reads first, unless there is nothing to read.

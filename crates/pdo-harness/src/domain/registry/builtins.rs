@@ -8,7 +8,9 @@ use super::*;
 /// byte** once its holes are empty — that is the #550 gate, pinned by the goldens
 /// in [`crate::domain::argv`]. The resume template reproduces the pre-#550
 /// `build_resume_script` tail; its `{resume}` hole is the identity-or-blind
-/// selector the resume seam computes (ADR-0045 keeps that choice in code).
+/// selector the resume seam computes (ADR-0045 keeps that choice in code). Its
+/// `{model}` hole stays empty on a Node's resume (the conversation keeps its
+/// model); a Session hébergée relaunched on another model fills it.
 pub fn claude() -> HarnessDescriptor {
     HarnessDescriptor {
         name: CLAUDE.to_string(),
@@ -31,6 +33,7 @@ pub fn claude() -> HarnessDescriptor {
             "claude",
             "--dangerously-skip-permissions",
             "{resume}",
+            "--model {model}",
             "--effort {effort}",
             "--settings {settings}",
         ]
@@ -148,6 +151,7 @@ pub fn copilot() -> HarnessDescriptor {
             "--allow-all",
             "--no-ask-user",
             "{resume}",
+            "--model {model}",
         ]
         .iter()
         .map(|s| s.to_string())
@@ -228,6 +232,7 @@ pub fn pi() -> HarnessDescriptor {
             "pi",
             "-a",
             "{resume}",
+            "--model {model}",
             "--thinking {effort}",
             "-e {settings}",
         ]

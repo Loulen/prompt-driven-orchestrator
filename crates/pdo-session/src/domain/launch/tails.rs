@@ -81,6 +81,45 @@ pub(super) fn build_agent_tail(
     pdo_harness::argv::render(&descriptor.launch, &holes)
 }
 
+/// The `{resume}` hole of a harness's resume template: `<resume_by_id>
+/// '<id>'` re-enters the conversation `session_id` by its identity; with no
+/// id (or a harness that cannot re-enter by one), the harness's blind verb,
+/// which may be empty.
+pub(super) fn resume_selector(
+    descriptor: &pdo_harness::registry::HarnessDescriptor,
+    session_id: Option<&str>,
+) -> String {
+    match session_id {
+        Some(s) if !s.is_empty() && !descriptor.resume_by_id.is_empty() => {
+            format!("{} {}", descriptor.resume_by_id, sh_single_quote(s))
+        }
+        _ => descriptor.resume_blind.clone(),
+    }
+}
+
+/// The tail that re-enters the conversation `session_id` by its identity,
+/// through the harness's resume template, with the `model` and `effort`
+/// re-posed when the template has their holes.
+pub(super) fn build_resume_tail(
+    descriptor: &pdo_harness::registry::HarnessDescriptor,
+    model: Option<&str>,
+    effort: Option<&str>,
+    session_id: &str,
+) -> String {
+    let quote_opt = |v: Option<&str>| {
+        v.filter(|s| !s.is_empty())
+            .map(sh_single_quote)
+            .unwrap_or_default()
+    };
+    let holes = pdo_harness::argv::Holes {
+        resume: resume_selector(descriptor, Some(session_id)),
+        model: quote_opt(model),
+        effort: quote_opt(effort),
+        ..Default::default()
+    };
+    pdo_harness::argv::render(&descriptor.resume, &holes)
+}
+
 /// The `claude` CCR suppression, forced by the wrapper for `script` / `shell`
 /// tails (AC #4): those run bash, not an agent, so they carry no descriptor — but
 /// a hand-typed `claude` in a run shell still depends on it (CONTEXT.md §*Shell de

@@ -16,6 +16,9 @@ use super::*;
 /// Don't reach for `std::process::exit`: it skips the `reqwest` client's
 /// destructors and breaks the symmetry with the other subcommands.
 pub fn run_complete(auto: bool) -> std::process::ExitCode {
+    if let Some(refused) = refused_in_hosted_session("complete") {
+        return refused;
+    }
     let rid = match cli_run_id() {
         Ok(v) => v,
         Err(e) => return complete_breakdown(&format!("{e:#}")),

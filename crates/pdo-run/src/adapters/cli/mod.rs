@@ -119,6 +119,30 @@ pub fn run_skip(reason: String) -> Result<()> {
     Ok(())
 }
 
+/// The Session hébergée this CLI process runs in (ADR-0091): a
+/// `PDO_SESSION_ID` that names one, outside any node session.
+pub fn hosted_session_claim() -> Option<String> {
+    if session_env_claim().is_some() {
+        return None;
+    }
+    let id = std::env::var("PDO_SESSION_ID").ok()?.trim().to_string();
+    id.starts_with(pdo_session::domain::names::HOSTED_SESSION_PREFIX)
+        .then_some(id)
+}
+
+/// `pdo complete`, `fail` or `skip` (`command`) from a Session hébergée: a
+/// refusal that says why, with the exit code of a refusal that leaves the
+/// turn to the caller (`3`). `None` outside a Session hébergée.
+pub fn refused_in_hosted_session(command: &str) -> Option<std::process::ExitCode> {
+    let id = hosted_session_claim()?;
+    eprintln!(
+        "pdo {command} REFUSED — hosted_session: {id} is a hosted session, outside any Run. \
+         It is never completed, failed or skipped: it ends when someone terminates it.\n\
+         Nothing changed; the session goes on."
+    );
+    Some(std::process::ExitCode::from(EXIT_REFUSED_RECOVERABLE))
+}
+
 /// The session identity this CLI process carries via the `PDO_RUN_ID` /
 /// `PDO_NODE_ID` env vars every node session is wrapped with
 /// (`pdo_session::domain::launch::wrap_with_env`). Only a non-empty PAIR is a claim —

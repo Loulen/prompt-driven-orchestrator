@@ -14,7 +14,9 @@
 //! - **Session ledger**: who started each session, who takes control of its
 //!   terminal, when it ends, as the extensions are told (CORE-61).
 //! - **Sessions hébergées**: an agent or a shell an extension has the core
-//!   hold outside any Run (ADR-0091), recorded across restarts.
+//!   hold outside any Run (ADR-0091), recorded across restarts: relaunched,
+//!   configured, typed into, forgotten, their declared wait and their
+//!   Artefacts live.
 //!
 //! Hexagonal inside: `domain/` holds the pure rules, `application/` the ports
 //! (tmux behind the one [`Tmux`](application::ports::Tmux) port) and one use case
@@ -136,14 +138,17 @@ impl Session {
         let focus = Arc::new(FocusCell::default());
         let reaper = Arc::new(ReaperGauge::default());
         let ledger = Arc::new(SessionLedger::new(tmux.clone(), extensions.clone()));
-        let hosted = Arc::new(Hosted::new(
-            hosted,
-            tmux.clone(),
-            extensions.clone(),
-            ledger.clone(),
-            options.daemon_port,
-            options.tmux_cmd_override.clone(),
-        ));
+        let hosted = Arc::new(
+            Hosted::new(
+                hosted,
+                tmux.clone(),
+                extensions.clone(),
+                ledger.clone(),
+                options.daemon_port,
+                options.tmux_cmd_override.clone(),
+            )
+            .with_typed(typed.clone()),
+        );
         // A Session hébergée's Operations are in the Projet of its record.
         let projects: Arc<dyn RunProjects> = Arc::new(WithHosted {
             runs: projects,
@@ -172,7 +177,7 @@ impl Session {
             .with_terminals(shared_terminals.clone()),
             terminals: Terminals::new(
                 tmux.clone(),
-                LiftWait::new(waits, typed, extensions.clone()),
+                LiftWait::new(waits, typed, extensions.clone()).with_hosted(hosted.clone()),
                 extensions.clone(),
             )
             .with_projects(projects.clone())

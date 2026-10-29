@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use pdo_extension_api::{
     ActorDisplay, Attributes, Authorization, EntityRef, ExtensionData, ExtensionEvent, Host,
-    HostedGesture, HostedRefusal, HostedSession, NewRun, OpenSession, OperationApplied, Presence,
-    Resource, RunCostRead, RunCreation, RunNotCreated,
+    HostedConfig, HostedGesture, HostedRefusal, HostedSession, LiveArtifact, NewRun, OpenSession,
+    OperationApplied, Presence, Resource, RunCostRead, RunCreation, RunNotCreated,
 };
 
 use super::{ExtensionHost, Extensions, HostedSessions, Registry};
@@ -43,9 +43,11 @@ impl ExtensionHostOf {
 /// what holds them.
 fn not_hosted() -> HostedGesture {
     Box::pin(std::future::ready(Err(HostedRefusal::unavailable(
-        "the daemon holds no hosted session yet (starting or stopping)",
+        NOT_HOSTED,
     ))))
 }
+
+const NOT_HOSTED: &str = "the daemon holds no hosted session yet (starting or stopping)";
 
 impl Host for ExtensionHostOf {
     fn authorize(&self, actor: &Actor, operation: &Operation) -> Authorization {
@@ -166,6 +168,47 @@ impl Host for ExtensionHostOf {
         match self.hosted() {
             Some(hosted) => hosted.terminate(&self.id, actor.clone(), key),
             None => not_hosted(),
+        }
+    }
+
+    fn relaunch_session(&self, actor: &Actor, key: &str) -> HostedGesture {
+        match self.hosted() {
+            Some(hosted) => hosted.relaunch(&self.id, actor.clone(), key),
+            None => not_hosted(),
+        }
+    }
+
+    fn configure_session(&self, actor: &Actor, key: &str, config: HostedConfig) -> HostedGesture {
+        match self.hosted() {
+            Some(hosted) => hosted.configure(&self.id, actor.clone(), key, config),
+            None => not_hosted(),
+        }
+    }
+
+    fn type_in_session(&self, actor: &Actor, key: &str, text: &str) -> HostedGesture {
+        match self.hosted() {
+            Some(hosted) => hosted.type_text(&self.id, actor.clone(), key, text),
+            None => not_hosted(),
+        }
+    }
+
+    fn forget_session(&self, actor: &Actor, key: &str) -> HostedGesture {
+        match self.hosted() {
+            Some(hosted) => hosted.forget(&self.id, actor.clone(), key),
+            None => not_hosted(),
+        }
+    }
+
+    fn live_artifacts(&self, key: &str) -> Vec<LiveArtifact> {
+        self.hosted()
+            .map(|hosted| hosted.live_artifacts(&self.id, key))
+            .unwrap_or_default()
+    }
+
+    fn live_artifact(&self, key: &str, path: &str) -> Result<Vec<u8>, HostedRefusal> {
+        match self.hosted() {
+            Some(hosted) => hosted.live_artifact(&self.id, key, path),
+            None => Err(HostedRefusal::unavailable(NOT_HOSTED)),
         }
     }
 }

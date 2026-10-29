@@ -3,7 +3,9 @@
 
 use std::sync::Arc;
 
-use pdo_extension_api::{HostedGesture, HostedSession, OpenSession};
+use pdo_extension_api::{
+    HostedConfig, HostedGesture, HostedRefusal, HostedSession, LiveArtifact, OpenSession,
+};
 
 use super::Extensions;
 use crate::Actor;
@@ -23,6 +25,38 @@ pub trait HostedSessions: Send + Sync {
 
     /// Terminate the session `key` of `extension`, on behalf of `actor`.
     fn terminate(&self, extension: &str, actor: Actor, key: &str) -> HostedGesture;
+
+    /// Relaunch the ended session `key` of `extension`, on behalf of `actor`.
+    fn relaunch(&self, extension: &str, actor: Actor, key: &str) -> HostedGesture;
+
+    /// Change the configuration of the session `key` of `extension`, on
+    /// behalf of `actor`.
+    fn configure(
+        &self,
+        extension: &str,
+        actor: Actor,
+        key: &str,
+        config: HostedConfig,
+    ) -> HostedGesture;
+
+    /// Lay `text` in the input of the session `key` of `extension`, on
+    /// behalf of `actor`, without submitting it.
+    fn type_text(&self, extension: &str, actor: Actor, key: &str, text: &str) -> HostedGesture;
+
+    /// Forget the ended session `key` of `extension`, on behalf of `actor`.
+    fn forget(&self, extension: &str, actor: Actor, key: &str) -> HostedGesture;
+
+    /// The Artefacts live of the session `key` of `extension`.
+    fn live_artifacts(&self, extension: &str, key: &str) -> Vec<LiveArtifact>;
+
+    /// The content of the Artefact live `path` of the session `key` of
+    /// `extension`.
+    fn live_artifact(
+        &self,
+        extension: &str,
+        key: &str,
+        path: &str,
+    ) -> Result<Vec<u8>, HostedRefusal>;
 }
 
 impl Extensions {
@@ -38,7 +72,7 @@ impl Extensions {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pdo_extension_api::{Extension, HostedKind, HostedRefusal, Manifest};
+    use pdo_extension_api::{Extension, HostedKind, Manifest};
     use std::sync::Mutex;
 
     struct Quiet;
@@ -76,6 +110,69 @@ mod tests {
                 .collect()
         }
         fn terminate(&self, extension: &str, _actor: Actor, key: &str) -> HostedGesture {
+            self.found(extension, key)
+        }
+        fn relaunch(&self, extension: &str, _actor: Actor, key: &str) -> HostedGesture {
+            self.found(extension, key)
+        }
+        fn configure(
+            &self,
+            extension: &str,
+            _actor: Actor,
+            key: &str,
+            config: HostedConfig,
+        ) -> HostedGesture {
+            let mut sessions = self.0.lock().unwrap();
+            let found = sessions
+                .iter_mut()
+                .find(|s| s.extension == extension && s.key == key)
+                .map(|s| {
+                    s.config = config;
+                    s.clone()
+                });
+            Box::pin(std::future::ready(
+                found.ok_or_else(|| HostedRefusal::new(404, "no such session")),
+            ))
+        }
+        fn type_text(
+            &self,
+            extension: &str,
+            _actor: Actor,
+            key: &str,
+            _text: &str,
+        ) -> HostedGesture {
+            self.found(extension, key)
+        }
+        fn forget(&self, extension: &str, _actor: Actor, key: &str) -> HostedGesture {
+            let found = self.read(extension, key);
+            self.0
+                .lock()
+                .unwrap()
+                .retain(|s| !(s.extension == extension && s.key == key));
+            Box::pin(std::future::ready(
+                found.ok_or_else(|| HostedRefusal::new(404, "no such session")),
+            ))
+        }
+        fn live_artifacts(&self, extension: &str, key: &str) -> Vec<LiveArtifact> {
+            self.read(extension, key)
+                .map(|_| vec![LiveArtifact::new("a.md", 1, "t")])
+                .unwrap_or_default()
+        }
+        fn live_artifact(
+            &self,
+            extension: &str,
+            key: &str,
+            path: &str,
+        ) -> Result<Vec<u8>, HostedRefusal> {
+            match self.read(extension, key) {
+                Some(_) if path == "a.md" => Ok(b"a".to_vec()),
+                _ => Err(HostedRefusal::new(404, "no such artefact")),
+            }
+        }
+    }
+
+    impl Recorder {
+        fn found(&self, extension: &str, key: &str) -> HostedGesture {
             let found = self.read(extension, key);
             Box::pin(std::future::ready(
                 found.ok_or_else(|| HostedRefusal::new(404, "no such session")),
@@ -116,5 +213,25 @@ mod tests {
                 .status,
             404
         );
+
+        let actor = Actor::LocalOperator;
+        assert_eq!(host.relaunch_session(&actor, "s1").await.unwrap().key, "s1");
+        let configured = host
+            .configure_session(&actor, "s1", HostedConfig::default().with_model("opus"))
+            .await
+            .unwrap();
+        assert_eq!(configured.config.model.as_deref(), Some("opus"));
+        assert_eq!(
+            host.type_in_session(&actor, "s1", "hi").await.unwrap().key,
+            "s1"
+        );
+        assert_eq!(host.live_artifacts("s1").len(), 1);
+        assert_eq!(host.live_artifact("s1", "a.md").unwrap(), b"a");
+        assert!(
+            extensions.host_of("other").live_artifacts("s1").is_empty(),
+            "an extension reads only its own"
+        );
+        assert_eq!(host.forget_session(&actor, "s1").await.unwrap().key, "s1");
+        assert_eq!(host.hosted_session("s1"), None);
     }
 }

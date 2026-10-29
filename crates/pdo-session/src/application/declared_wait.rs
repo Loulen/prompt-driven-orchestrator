@@ -10,6 +10,7 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::{info, warn};
 
+use crate::application::hosted::Hosted;
 use crate::application::ports::{NoRunProjects, NodeWaits, RunProjects, Tmux};
 use crate::domain::declared_wait::{
     check_target, classify_input, liftable, plan_declaration, DeclareOutcome, WaitRefusal,
@@ -23,7 +24,7 @@ use crate::domain::names::{node_session_name, parse_session_name, ParsedSession}
 pub struct TypedInput(Mutex<HashSet<String>>);
 
 impl TypedInput {
-    fn forget(&self, session: &str) {
+    pub(crate) fn forget(&self, session: &str) {
         self.0.lock().unwrap().remove(session);
     }
 
@@ -188,13 +189,14 @@ impl DeclareWait {
     }
 }
 
-/// The Enter rule: every binary frame a browser writes into a **node** session
-/// crosses here, after it reached the pane.
+/// The Enter rule: every binary frame a browser writes into a **node** session,
+/// or a Session hébergée, crosses here, after it reached the pane.
 pub struct LiftWait {
     waits: Arc<dyn NodeWaits>,
     typed: Arc<TypedInput>,
     host: Arc<dyn ExtensionHost>,
     projects: Arc<dyn RunProjects>,
+    hosted: Option<Arc<Hosted>>,
 }
 
 impl LiftWait {
@@ -208,6 +210,7 @@ impl LiftWait {
             typed,
             host,
             projects: Arc::new(NoRunProjects),
+            hosted: None,
         }
     }
 
@@ -217,18 +220,29 @@ impl LiftWait {
         self
     }
 
+    /// The same use case, lifting the waits of the Sessions hébergées of
+    /// `hosted` too.
+    pub fn with_hosted(mut self, hosted: Arc<Hosted>) -> Self {
+        self.hosted = Some(hosted);
+        self
+    }
+
     /// Remember typed bytes per session; on an Enter that follows at least one
     /// typed byte since the last declaration, lift the wait if the node awaits on
     /// a declared / refused-completion cause. Never touches a `children_pending`
     /// marker nor a derived wait.
     pub async fn note_input(&self, actor: &Actor, session: &str, bytes: &[u8]) {
-        let Some(ParsedSession::NodeRun {
-            run_id,
-            node_id,
-            iter,
-        }) = parse_session_name(session)
-        else {
-            return;
+        let (run_id, node_id, iter) = match parse_session_name(session) {
+            Some(ParsedSession::NodeRun {
+                run_id,
+                node_id,
+                iter,
+            }) => (run_id, node_id, iter),
+            Some(ParsedSession::Hosted) => {
+                self.note_hosted_input(actor, session, bytes);
+                return;
+            }
+            _ => return,
         };
         let signal = classify_input(bytes);
         if !signal.typed && !signal.enter {
@@ -243,6 +257,22 @@ impl LiftWait {
         match self.lift(actor, &run_id, &node_id, iter).await {
             Ok(_) => {}
             Err(e) => warn!("Run {run_id}: failed to lift the wait of {node_id} iter-{iter}: {e}"),
+        }
+    }
+
+    /// The Enter rule on a Session hébergée: an Enter after a typed byte
+    /// lifts its wait.
+    fn note_hosted_input(&self, actor: &Actor, session: &str, bytes: &[u8]) {
+        let Some(hosted) = &self.hosted else { return };
+        let signal = classify_input(bytes);
+        if !self
+            .typed
+            .enter_after_typing(session, signal.typed, signal.enter)
+        {
+            return;
+        }
+        if let Err(e) = hosted.lift_wait(actor, session) {
+            warn!("Failed to lift the wait of hosted session {session}: {e}");
         }
     }
 

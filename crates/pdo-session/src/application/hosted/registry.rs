@@ -146,12 +146,36 @@ impl HostedRegistry {
         self.count();
     }
 
+    /// Forget the record `id` and its state folder if it is ended, checked
+    /// under the lock. Whether it was forgotten.
+    pub fn forget_ended(&self, id: &str) -> bool {
+        {
+            let mut records = self.lock();
+            let before = records.len();
+            records.retain(|r| r.id() != id || r.is_live());
+            if records.len() == before {
+                return false;
+            }
+            self.store.remove(id);
+        }
+        self.count();
+        true
+    }
+
     fn changed(&self, record: &HostedRecord) {
         self.count();
+        self.announce(
+            record,
+            HostedSessionChanged::new(record.session.clone()).to_event(),
+        );
+    }
+
+    /// Publish `event` about the session `record`: to every extension and,
+    /// on `/ws`, to the connections that may read the session.
+    pub fn announce(&self, record: &HostedRecord, event: serde_json::Value) {
         let read = Operation::new(ResourceKind::Session, Verb::Read)
             .on(record.id())
             .in_projects(record.projects());
-        let event = HostedSessionChanged::new(record.session.clone()).to_event();
         self.host.announce(guarded(event, &read));
     }
 

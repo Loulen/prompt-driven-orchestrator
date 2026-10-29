@@ -10,10 +10,30 @@ use crate::application::children_wait::CHILDREN_WAIT_SERVER_MAX_SECS;
 /// (ADR-0069 §3). Not a failure: the agent loops and calls again.
 pub const EXIT_WAIT_TIMEOUT: u8 = 2;
 
-/// `pdo wait-user [--message]` — declare the wait (#588 / ADR-0069 §1). Exit `0`
-/// declared or legal no-op · `3` refused by name (script node, no live session:
-/// still your turn, nothing terminal happened) · `1` daemon unreachable.
+/// `pdo wait-user [--message]` — declare the wait (#588 / ADR-0069 §1), of
+/// the node, or of the Session hébergée the process runs in (ADR-0091). Exit
+/// `0` declared or legal no-op · `3` refused by name (script node, no live
+/// session: still your turn, nothing terminal happened) · `1` daemon
+/// unreachable.
 pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
+    let message = message
+        .as_deref()
+        .map(pdo_session::domain::declared_wait::truncate_message)
+        .filter(|m| !m.is_empty());
+    if let Some(id) = hosted_session_claim() {
+        let request = reqwest::blocking::Client::builder()
+            .default_headers(pdo_kernel::env::cli_headers())
+            .build()
+            .unwrap_or_default()
+            .post(format!("{}/sessions/{id}/wait-user", cli_daemon_url()))
+            .json(&serde_json::json!({ "message": message }));
+        return wait_user_verdict(
+            request,
+            &format!("Hosted session {id}"),
+            "The wait lifts when the user answers in its terminal (Enter).",
+            message.as_deref(),
+        );
+    }
     let (rid, nid) = match (cli_run_id(), cli_node_id()) {
         (Ok(r), Ok(n)) => (r, n),
         (Err(e), _) | (_, Err(e)) => {
@@ -23,20 +43,31 @@ pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
     };
     let url = cli_daemon_url();
     let iter = cli_node_iter();
-    let message = message
-        .as_deref()
-        .map(pdo_session::domain::declared_wait::truncate_message)
-        .filter(|m| !m.is_empty());
-    let resp = match reqwest::blocking::Client::builder()
+    let request = reqwest::blocking::Client::builder()
         .default_headers(pdo_kernel::env::cli_headers())
         .build()
         .unwrap_or_default()
         .post(format!("{url}/runs/{rid}/nodes/{nid}/wait-user"))
         .header(SESSION_RUN_HEADER, &rid)
         .header(SESSION_NODE_HEADER, &nid)
-        .json(&serde_json::json!({ "iter": iter, "message": message }))
-        .send()
-    {
+        .json(&serde_json::json!({ "iter": iter, "message": message }));
+    wait_user_verdict(
+        request,
+        &format!("Node {nid}"),
+        "The wait lifts when the user answers in the PDO terminal (Enter) or releases completion.",
+        message.as_deref(),
+    )
+}
+
+/// Send the declaration `request` of `who`'s wait and say its verdict, with
+/// `lifts`, how the wait lifts.
+fn wait_user_verdict(
+    request: reqwest::blocking::RequestBuilder,
+    who: &str,
+    lifts: &str,
+    message: Option<&str>,
+) -> std::process::ExitCode {
+    let resp = match request.send() {
         Ok(r) => r,
         Err(e) => {
             eprintln!("pdo wait-user FAILED to reach the daemon — {e}");
@@ -57,10 +88,8 @@ pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
             "now awaiting the user"
         };
         eprintln!(
-            "Node {nid} is {what}.{}\nThe wait lifts when the user answers in the PDO terminal \
-             (Enter) or releases completion. Keep the conversation going; never block on it.",
+            "{who} is {what}.{}\n{lifts} Keep the conversation going; never block on it.",
             message
-                .as_deref()
                 .map(|m| format!(" Banner: “{m}”"))
                 .unwrap_or_default()
         );
@@ -79,7 +108,7 @@ pub fn run_wait_user(message: Option<String>) -> std::process::ExitCode {
         .and_then(|v| v.as_str())
         .unwrap_or(raw.as_str());
     eprintln!(
-        "pdo wait-user REFUSED — {slug}: {detail}.\nNothing changed; the node is still yours. \
+        "pdo wait-user REFUSED — {slug}: {detail}.\nNothing changed; it is still your turn. \
          Do NOT run `pdo fail`."
     );
     std::process::ExitCode::from(EXIT_REFUSED_RECOVERABLE)

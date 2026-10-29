@@ -1,25 +1,37 @@
 //! The Sessions hébergées (ADR-0091): an agent or a shell an extension has
-//! the core hold outside any Run. Opened and terminated on an extension's
-//! gesture (each an Opération on the Ressource `session`), recorded so they
-//! survive a restart of the daemon, never swept while recorded live, counted
-//! by the Cap de sessions concurrentes, and ended when their process exits.
+//! the core hold outside any Run. Opened, relaunched, configured, typed into,
+//! terminated and forgotten on an extension's gesture (each an Opération on
+//! the Ressource `session`), recorded so they survive a restart of the
+//! daemon, never swept while recorded live, counted by the Cap de sessions
+//! concurrentes, and ended when their process exits. Their agent may declare
+//! it waits for a person (`pdo wait-user`) and publish Artefacts live.
 
+mod gestures;
 mod lifecycle;
+mod live;
 mod open;
 pub mod ports;
 mod registry;
+mod relaunch;
+mod wait;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
+use pdo_extension_api::LiveArtifact;
 use pdo_kernel::extension_host::ExtensionHost;
 
+pub use gestures::{FORGET, TYPE};
 pub use lifecycle::TERMINATE;
 pub use open::OPEN;
 pub use ports::{
     AdmissionSlot, HostedHarness, HostedPlaces, HostedStore, NotAdmitted, SessionAdmission,
 };
 pub use registry::HostedRegistry;
+pub use relaunch::{CONFIGURE, RELAUNCH};
+pub use wait::{HostedWaitError, WAIT_USER};
 
+use crate::application::declared_wait::TypedInput;
 use crate::application::ports::Tmux;
 use crate::application::session_ledger::SessionLedger;
 
@@ -42,6 +54,11 @@ pub struct Hosted {
     admission: Arc<dyn SessionAdmission>,
     daemon_port: u16,
     tmux_cmd_override: Option<String>,
+    /// The sessions a person typed into: shared with the terminals, so the
+    /// Enter that follows lifts a declared wait.
+    typed: Arc<TypedInput>,
+    /// The Artefacts live of each session, as last published.
+    live_seen: Mutex<HashMap<String, Vec<LiveArtifact>>>,
 }
 
 impl Hosted {
@@ -71,7 +88,15 @@ impl Hosted {
             admission,
             daemon_port,
             tmux_cmd_override,
+            typed: Arc::default(),
+            live_seen: Mutex::default(),
         }
+    }
+
+    /// The same Sessions hébergées, sharing `typed` with the terminals.
+    pub fn with_typed(mut self, typed: Arc<TypedInput>) -> Self {
+        self.typed = typed;
+        self
     }
 
     /// The records, as the sweep, the terminals and the Host read them.

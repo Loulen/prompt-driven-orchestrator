@@ -50,6 +50,7 @@ mod event;
 mod extension;
 mod host;
 mod hosted;
+mod hosted_event;
 mod launch;
 mod manifest;
 mod operation;
@@ -71,7 +72,11 @@ pub use extension::{Extension, ExtensionContext, RequestParts};
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use hosted::{
     EndReason, HostedConfig, HostedFolder, HostedGesture, HostedKind, HostedRefusal, HostedSession,
-    HostedSessionChanged, HostedState, OpenSession, HOSTED_SESSION_CHANGED,
+    HostedState, LiveArtifact, OpenSession,
+};
+pub use hosted_event::{
+    HostedLiveArtifactsChanged, HostedSessionChanged, HostedSessionForgotten,
+    HOSTED_LIVE_ARTIFACTS_CHANGED, HOSTED_SESSION_CHANGED, HOSTED_SESSION_FORGOTTEN,
 };
 pub use launch::{NodeEnv, NodeKind, NodeLaunch, TriggerProvenance, TriggerRef};
 pub use manifest::Manifest;
@@ -110,7 +115,10 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// session, `session_env` and `session_preamble`, and the session events; 0.16
 /// only added `NewRun::project_id`, the Projet a Run is launched in; 0.17
 /// only added the Sessions hébergées: the Host's `open_session`,
-/// `hosted_session`, `hosted_sessions` and `terminate_session`,
+/// `hosted_session`, `hosted_sessions`, `terminate_session`,
+/// `relaunch_session`, `configure_session`, `type_in_session`,
+/// `forget_session`, `live_artifacts` and `live_artifact`,
 /// `SessionKind::Hosted`, the extension and key of a `SessionRef`, and the
-/// `hosted_session_changed` event).
+/// `hosted_session_changed`, `hosted_session_forgotten` and
+/// `hosted_live_artifacts_changed` events).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

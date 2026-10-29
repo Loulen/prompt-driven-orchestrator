@@ -591,6 +591,7 @@ impl HostedStore for HostedRecords {
 
     fn remove(&self, id: &str) {
         self.records.lock().unwrap().retain(|r| r.id() != id);
+        let _ = std::fs::remove_dir_all(self.state_dir(id));
     }
 
     fn state_dir(&self, id: &str) -> PathBuf {
@@ -616,8 +617,12 @@ impl HostedPlaces for Places {
     }
 }
 
-/// The harnesses: `claude` by default or by name, nothing else.
-pub struct Harnesses;
+/// The harnesses: `claude` by default or by name, nothing else. Every
+/// conversation was written, but those of `unwritten`.
+#[derive(Default)]
+pub struct Harnesses {
+    pub unwritten: Mutex<Vec<String>>,
+}
 
 impl HostedHarness for Harnesses {
     fn resolve<'a>(
@@ -629,6 +634,16 @@ impl HostedHarness for Harnesses {
             Some(_) => None,
         };
         Box::pin(async move { found })
+    }
+
+    fn conversation_written<'a>(
+        &'a self,
+        _harness: &'a str,
+        _cwd: &'a Path,
+        id: &'a str,
+    ) -> BoxFuture<'a, Option<bool>> {
+        let written = !self.unwritten.lock().unwrap().iter().any(|u| u == id);
+        Box::pin(async move { Some(written) })
     }
 }
 

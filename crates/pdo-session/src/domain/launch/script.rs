@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use super::quote::sh_single_quote;
-use super::tails::{build_agent_tail, build_script_tail, forced_ccr_env};
+use super::tails::{build_agent_tail, build_script_tail, forced_ccr_env, resume_selector};
 use super::wrap::{extension_exports, wrap_tail_in_docker_exec, wrap_with_env};
 use super::{SandboxWrap, SessionTail};
 
@@ -258,12 +258,7 @@ pub fn build_resume_script_with(
     // declares neither (an empty `resume_by_id`/`resume_blind` for the case at
     // hand) renders no resume flag: `copilot` resumes by identity or not at all,
     // never a blind continue (AC).
-    let resume_selector = match session_id {
-        Some(s) if !s.is_empty() && !descriptor.resume_by_id.is_empty() => {
-            format!("{} {}", descriptor.resume_by_id, sh_single_quote(s))
-        }
-        _ => descriptor.resume_blind.clone(),
-    };
+    let resume_selector = resume_selector(descriptor, session_id);
     let quote_opt = |v: Option<&str>| {
         v.filter(|s| !s.is_empty())
             .map(sh_single_quote)

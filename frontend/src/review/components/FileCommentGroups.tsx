@@ -29,8 +29,8 @@ export default function FileCommentGroups({ runId, pair, comments, outdatedEntri
     <>
       {nOutdated > 0 && (
         <div data-testid="review-outdated-group" data-hidden={showOutdated ? undefined : "true"} className="border-b border-line pb-1">
-          <div className="mx-3 mt-2 flex items-center gap-2 text-fg-3" style={{ fontSize: "10.5px" }}>
-            <span className="inline-flex items-center gap-1 text-st-stale">
+          <div className="mx-3 mt-2 flex items-center gap-2 text-text-3 text-xs">
+            <span className="inline-flex items-center gap-1 text-st-skipped">
               <History size={10} /> {plural(nOutdated, "outdated comment")}
             </span>
             <span className="h-px flex-1 bg-line" />
@@ -46,10 +46,10 @@ export default function FileCommentGroups({ runId, pair, comments, outdatedEntri
       )}
       {orphanDrafts.length > 0 && (
         <div data-testid="review-orphan-drafts" className="border-b border-line pb-1">
-          <div className="mx-3 mt-2 flex items-center gap-2 text-st-await" style={{ fontSize: "10.5px" }}>
+          <div className="mx-3 mt-2 flex items-center gap-2 text-st-await text-xs">
             ✎ {plural(orphanDrafts.length, "draft")} on a line that changed
             <span className="h-px flex-1 bg-line" />
-            <span className="cursor-help text-fg-4" title="Drafts are never re-mapped: the line this draft was written under is no longer in the diff. Edit, send or delete it.">
+            <span className="cursor-help text-text-3" title="Drafts are never re-mapped: the line this draft was written under is no longer in the diff. Edit, send or delete it.">
               line changed
             </span>
           </div>

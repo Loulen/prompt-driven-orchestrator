@@ -13,7 +13,7 @@ export default function ExtensionDetailTab({
   const { Component, extension } = tab;
   if (!Component) return null;
   return (
-    <div className="px-3 py-3" style={{ fontSize: "11px" }} data-testid={`extension-tab-${tab.key}`}>
+    <div className="pi-ext" data-testid={`extension-tab-${tab.key}`}>
       <ExtensionBoundary extensionId={extension.id}>
         <Component
           extension={{ id: extension.id, name: extension.name }}

@@ -46,13 +46,12 @@ export default function FolderDetailView({
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="folder-detail">
       <div className="flex items-center gap-2">
         <Folder size={16} className="text-st-await" />
-        <h3 className="truncate font-semibold text-fg" style={{ fontSize: "17px" }}>
+        <h3 className="truncate font-semibold text-text text-xl">
           {folderPathLabel(folder.id, folders)}
         </h3>
         {source && (
           <span
-            className="rounded border border-acc/40 bg-acc/10 px-1.5 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
+            className="rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-primary text-2xs"
             data-testid="folder-source-badge"
           >
             Source
@@ -65,18 +64,17 @@ export default function FolderDetailView({
           disabled={count === 0}
           title={count === 0 ? "No skill in this folder" : undefined}
           data-testid="folder-detail-export"
-          className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg-2 hover:border-acc disabled:cursor-not-allowed disabled:opacity-45"
-          style={{ fontSize: "11.5px" }}
+          className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 text-text-2 hover:border-primary disabled:cursor-not-allowed disabled:opacity-45 text-xs"
         >
           <Download size={11} />
           Export folder
         </button>
       </div>
-      <p className="mt-1.5 text-fg-3" style={{ fontSize: "12px" }}>
+      <p className="mt-1.5 text-text-3 text-sm">
         {count} skill{count === 1 ? "" : "s"} in this folder and below. Checking a folder in a
         selector will check its skills at that instant; nothing references a folder.
       </p>
-      <p className="mt-1 text-fg-4" style={{ fontSize: "11px" }} data-testid="folder-export-hint">
+      <p className="mt-1 text-text-3 text-xs" data-testid="folder-export-hint">
         The zip holds one folder per skill (<code>SKILL.md</code> + its reference files), the format
         « + Add › Upload a zip » reads back on another instance.
       </p>
@@ -105,48 +103,47 @@ export default function FolderDetailView({
       {source && (
         <>
           <div className="mt-4 overflow-hidden rounded-md border border-line" data-testid="folder-provenance">
-            <div className="flex items-center justify-between bg-bg-3 px-3 py-1.5">
-              <span className="text-fg-4 uppercase tracking-wide" style={{ fontSize: "9.5px" }}>
+            <div className="flex items-center justify-between bg-surface-2 px-3 py-1.5">
+              <span className="text-text-3 uppercase tracking-wide text-2xs">
                 Provenance
               </span>
               <button
                 type="button"
                 onClick={onUpdateFromSource}
                 data-testid="folder-update-from-source"
-                className="flex items-center gap-1 text-acc hover:underline"
-                style={{ fontSize: "11px" }}
+                className="flex items-center gap-1 text-primary hover:underline text-xs"
               >
                 <RefreshCw size={10} />
                 Update from source…
               </button>
             </div>
-            <table className="w-full" style={{ fontSize: "11.5px" }}>
+            <table className="w-full text-xs">
               <tbody>
                 <ProvenanceRow label="source">
-                  <span className="font-mono text-fg" title={source.url}>
+                  <span className="font-mono text-text" title={source.url}>
                     {tildify(source.url, home)}
                   </span>
                 </ProvenanceRow>
                 <ProvenanceRow label="ref">
-                  <span className="font-mono text-fg">{source.ref ?? "default branch"}</span>
+                  <span className="font-mono text-text">{source.ref ?? "default branch"}</span>
                 </ProvenanceRow>
                 <ProvenanceRow label="commit">
-                  <span className="font-mono text-fg">{source.commit ? shortCommit(source.commit) : "—"}</span>
+                  <span className="font-mono text-text">{source.commit ? shortCommit(source.commit) : "—"}</span>
                   {source.imported_at && (
-                    <span className="ml-2 font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+                    <span className="ml-2 font-mono text-text-3 text-xs">
                       · imported {timeAgo(source.imported_at)}
                     </span>
                   )}
                 </ProvenanceRow>
                 <ProvenanceRow label="path">
-                  <span className="font-mono text-fg">{source.path ? `${source.path}/` : "."}</span>
+                  <span className="font-mono text-text">{source.path ? `${source.path}/` : "."}</span>
                 </ProvenanceRow>
                 <ProvenanceRow label="imported">
-                  <span className="text-fg">
+                  <span className="text-text">
                     {importedHere} of {source.found} skill{source.found === 1 ? "" : "s"} found at the source
                   </span>
                   {source.invalid > 0 && (
-                    <span className="ml-2 text-fg-4" style={{ fontSize: "10.5px" }}>
+                    <span className="ml-2 text-text-3 text-xs">
                       · {source.invalid} invalid
                     </span>
                   )}
@@ -154,7 +151,7 @@ export default function FolderDetailView({
               </tbody>
             </table>
           </div>
-          <p className="mt-3 rounded-md border border-dashed border-line px-3 py-2 text-fg-4" style={{ fontSize: "10.5px" }}>
+          <p className="mt-3 rounded-md border border-dashed border-line px-3 py-2 text-text-3 text-xs">
             Renaming or moving this folder keeps its provenance. Deleting it moves its skills to the parent and drops the
             link to the source; the skills keep their own provenance.
           </p>
@@ -167,7 +164,7 @@ export default function FolderDetailView({
 function ProvenanceRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <tr className="border-t border-line">
-      <td className="w-[110px] px-3 py-1.5 align-top text-fg-4">{label}</td>
+      <td className="w-[110px] px-3 py-1.5 align-top text-text-3">{label}</td>
       <td className="px-3 py-1.5">{children}</td>
     </tr>
   );

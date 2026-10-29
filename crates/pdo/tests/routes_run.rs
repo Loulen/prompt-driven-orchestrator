@@ -1,5 +1,6 @@
 //! Layer 4 (ADR-0080) — the Run routes no integration test called before the
-//! refactor net (#914): the reapable listing, the Pipeline Manager on demand
+//! refactor net (#914): the reapable listing, the costs of the listed Runs and
+//! the progress the list carries, the Pipeline Manager on demand
 //! (start, stop, attach), the release of an interactive node's completion, the
 //! Run's refs and its drift from the source branch, and the terminal pop-out of
 //! a session.
@@ -66,6 +67,58 @@ async fn reapable_lists_terminal_runs_whose_worktree_is_still_on_disk() {
     .ok();
     let list = daemon.get_json("/runs/reapable").await;
     assert_eq!(list, serde_json::json!([]));
+}
+
+// --- GET /runs: the row's progress and duration; GET /runs/costs ------------
+
+#[tokio::test]
+async fn the_list_carries_each_run_s_working_nodes_and_its_end() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let done = flow::completed_solo_run(&daemon, SOLO).await;
+    let live = flow::create_run(&daemon, SOLO).await;
+    flow::wait_node_status(&daemon, &live, "worker", "running").await;
+
+    let list = daemon.get_json("/runs").await;
+    let entry = |id: &str| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["run_id"] == id)
+            .cloned()
+            .unwrap()
+    };
+    let finished = entry(&done);
+    assert!(finished["completed_at"].is_string(), "{finished}");
+    assert_eq!(finished["nodes"][0]["id"], "worker", "{finished}");
+    assert_eq!(finished["nodes"][0]["status"], "completed", "{finished}");
+    let running = entry(&live);
+    assert!(running.get("completed_at").is_none(), "{running}");
+    assert_eq!(running["nodes"][0]["status"], "running", "{running}");
+}
+
+#[tokio::test]
+async fn costs_answers_for_the_runs_asked_that_exist_in_the_order_asked() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let done = flow::completed_solo_run(&daemon, SOLO).await;
+
+    let costs = daemon
+        .get_json(&format!("/runs/costs?ids=no-such-run,{done},{done}"))
+        .await;
+    let runs = costs["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{costs}");
+    assert_eq!(runs[0]["run_id"], done.as_str());
+
+    let none = daemon.get_json("/runs/costs").await;
+    assert_eq!(none, serde_json::json!({ "runs": [] }));
+
+    let many = (0..101)
+        .map(|i| format!("r{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let resp = reqwest::get(format!("{}/runs/costs?ids={many}", daemon.url()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
 }
 
 // --- POST /runs/{id}/manager/start|stop --------------------------------------

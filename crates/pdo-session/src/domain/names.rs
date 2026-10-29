@@ -82,7 +82,7 @@ pub fn libassist_session_name_of(actor: &Actor) -> String {
     }
 }
 
-/// The prefix of every Session hébergée's name (ADR-0091): the sweep keeps a
+/// The prefix of every Session hébergée's name (ADR-0092): the sweep keeps a
 /// name with it only while a live session of that name is recorded, and kills
 /// any other.
 pub const HOSTED_SESSION_PREFIX: &str = "pdo-hosted-";
@@ -147,7 +147,7 @@ pub enum ParsedSession {
     /// Owns no Run; reaped by the explicit `DELETE` on leaving every edit view,
     /// with the sweep's idle arm as the backstop.
     LibAssist,
-    /// A Session hébergée (ADR-0091, [`hosted_session_name`]). Owns no Run:
+    /// A Session hébergée (ADR-0092, [`hosted_session_name`]). Owns no Run:
     /// its record, not its name, says whether it should be alive.
     Hosted,
 }
@@ -203,7 +203,7 @@ pub fn parse_session_name(name: &str) -> Option<ParsedSession> {
         return None;
     }
 
-    // ADR-0091: a Session hébergée, parsed before the `-iter-` split like the
+    // ADR-0092: a Session hébergée, parsed before the `-iter-` split like the
     // other names without a Run. Its suffix must be non-empty.
     if let Some(suffix) = rest.strip_prefix("hosted-") {
         if !suffix.is_empty() {

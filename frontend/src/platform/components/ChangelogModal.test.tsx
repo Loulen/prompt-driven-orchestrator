@@ -64,7 +64,7 @@ const NEWER: UpdateChangelog = {
   source: "releases",
   fallback_reason: null,
   markdown:
-    "## v1.60.0\n\n*Released 2026-09-06 · [GitHub release](https://github.com/x/y/releases/tag/v1.60.0)*\n\n- sixty\n\n## v1.59.0\n\n- fifty-nine\n",
+    "## [v1.60.0](https://github.com/x/y/releases/tag/v1.60.0) · 2026-09-06\n\n- sixty\n\n## v1.59.0\n\n- fifty-nine\n",
 };
 
 const UP_TO_DATE: UpdateChangelog = {
@@ -73,7 +73,7 @@ const UP_TO_DATE: UpdateChangelog = {
   missed_versions: [],
   source: "embedded",
   fallback_reason: null,
-  markdown: "# Changelog\n\n## 1.58.1\n\n**Livraison**\n",
+  markdown: "## 1.58.1\n\n**Livraison**\n",
 };
 
 const FALLBACK: UpdateChangelog = {
@@ -82,7 +82,7 @@ const FALLBACK: UpdateChangelog = {
   missed_versions: [],
   source: "embedded",
   fallback_reason: "The update check is off.",
-  markdown: "# Changelog\n\n## 1.58.1\n",
+  markdown: "## 1.58.1\n",
 };
 
 describe("ChangelogModal (#698)", () => {
@@ -109,15 +109,15 @@ describe("ChangelogModal (#698)", () => {
     expect(screen.getByText("Loading...")).toBeInTheDocument();
     const body = await screen.findByTestId("markdown-body");
     const md = body.textContent ?? "";
-    expect(md.indexOf("## v1.60.0")).toBeGreaterThanOrEqual(0);
-    expect(md.indexOf("## v1.60.0")).toBeLessThan(md.indexOf("## v1.59.0"));
+    expect(md.indexOf("[v1.60.0](")).toBeGreaterThanOrEqual(0);
+    expect(md.indexOf("[v1.60.0](")).toBeLessThan(md.indexOf("## v1.59.0"));
     expect(md).toContain("- sixty");
 
     const header = screen.getByTestId("changelog-header");
     expect(header).toHaveTextContent("What's new");
     expect(header).toHaveTextContent("v1.58.1");
     expect(screen.getByTestId("changelog-latest")).toHaveTextContent("v1.60.0");
-    expect(screen.getByTestId("changelog-behind")).toHaveTextContent("2 versions behind");
+    expect(screen.getByTestId("changelog-behind")).toHaveTextContent("2 behind");
     expect(screen.queryByTestId("changelog-uptodate")).not.toBeInTheDocument();
     expect(screen.queryByTestId("changelog-fallback")).not.toBeInTheDocument();
 
@@ -125,8 +125,8 @@ describe("ChangelogModal (#698)", () => {
     expect(screen.getByTestId("changelog-manual-command")).toHaveTextContent(
       "brew update && brew upgrade Loulen/tap/pdo",
     );
-    expect(screen.getByTestId("changelog-copy-command")).toHaveTextContent("Copy command");
-    expect(screen.getByText(/To update, run in a terminal/)).toBeInTheDocument();
+    expect(screen.getByTestId("changelog-copy-command")).toHaveAccessibleName("Copy command");
+    expect(screen.getByTitle(/To update, run in a terminal/)).toBeInTheDocument();
   });
 
   it("says « up to date » with the embedded changelog when nothing is missed", async () => {
@@ -139,11 +139,11 @@ describe("ChangelogModal (#698)", () => {
       />,
     );
     expect(await screen.findByTestId("changelog-uptodate")).toHaveTextContent("up to date");
-    expect(screen.getByTestId("changelog-uptodate-banner")).toHaveTextContent(/You run the latest release/);
-    expect(screen.getByTestId("markdown-body")).toHaveTextContent("# Changelog");
+    expect(screen.getByTestId("changelog-uptodate-banner")).toHaveTextContent(/Latest release/);
+    expect(screen.getByTestId("markdown-body")).toHaveTextContent("1.58.1");
     expect(screen.queryByTestId("changelog-behind")).not.toBeInTheDocument();
     expect(screen.queryByTestId("changelog-fallback")).not.toBeInTheDocument();
-    expect(screen.getByText(/Nothing to update/)).toBeInTheDocument();
+    expect(screen.getByTitle(/Nothing to update/)).toBeInTheDocument();
   });
 
   it("signals the fallback to the embedded changelog with its reason", async () => {
@@ -156,10 +156,10 @@ describe("ChangelogModal (#698)", () => {
       />,
     );
     const banner = await screen.findByTestId("changelog-fallback");
-    expect(banner).toHaveTextContent("Release notes unavailable");
-    expect(banner).toHaveTextContent("The update check is off.");
+    expect(banner).toHaveTextContent("Release notes offline");
+    expect(banner).toHaveAttribute("title", expect.stringContaining("The update check is off."));
     expect(banner).toHaveTextContent(/breaking changes only/);
-    expect(screen.getByTestId("markdown-body")).toHaveTextContent("# Changelog");
+    expect(screen.getByTestId("markdown-body")).toHaveTextContent("1.58.1");
     // Bare version in the header: no arrow, no « up to date » claim.
     expect(screen.getByTestId("changelog-header")).toHaveTextContent("v1.58.1");
     expect(screen.queryByTestId("changelog-latest")).not.toBeInTheDocument();
@@ -169,7 +169,7 @@ describe("ChangelogModal (#698)", () => {
   it("shows the endpoint error in a banner and keeps the footer", async () => {
     fetchUpdateChangelogMock.mockRejectedValue(new Error("HTTP 500"));
     render(<ChangelogModal update={status()} onClose={() => {}} onOpenVersionSettings={() => {}} />);
-    expect(await screen.findByTestId("changelog-error")).toHaveTextContent("Could not load the changelog: HTTP 500.");
+    expect(await screen.findByTestId("changelog-error")).toHaveTextContent("Changelog unavailable: HTTP 500");
     expect(screen.getByTestId("changelog-copy-command")).toBeInTheDocument();
   });
 
@@ -183,8 +183,9 @@ describe("ChangelogModal (#698)", () => {
       />,
     );
     await screen.findByTestId("markdown-body");
-    expect(screen.getByText(/Install method not detected/)).toBeInTheDocument();
-    expect(screen.getByTestId("changelog-manual-command")).toHaveTextContent("Build from source");
+    const line = screen.getByTestId("changelog-not-updatable");
+    expect(line).toHaveTextContent(/^Install method not detected$/);
+    expect(line).toHaveAttribute("title", expect.stringContaining("Build from source"));
     expect(screen.queryByTestId("changelog-copy-command")).not.toBeInTheDocument();
     expect(screen.getByTestId("changelog-open-settings")).toBeInTheDocument();
   });
@@ -205,15 +206,15 @@ describe("ChangelogModal (#698)", () => {
     expect(screen.getByTestId("changelog-copy-command")).toBeInTheDocument();
   });
 
-  it("unknown install method: no Update button, the daemon's reason shown (#699)", async () => {
+  it("not updatable from here: no Update button, what to do in the line's tooltip (#699)", async () => {
     fetchUpdateChangelogMock.mockResolvedValue(NEWER);
-    render(
+    const { rerender } = render(
       <ChangelogModal
         update={status({
           install_method: "unknown",
           manual_command: "Build from source, then restart the daemon.",
           can_apply: false,
-          apply_blocked_reason: "Install method not detected: PDO will not guess.",
+          apply_blocked_reason: "Install method not detected: update manually, then restart the daemon.",
         })}
         onClose={() => {}}
         onOpenVersionSettings={() => {}}
@@ -222,7 +223,29 @@ describe("ChangelogModal (#698)", () => {
     );
     await screen.findByTestId("markdown-body");
     expect(screen.queryByTestId("changelog-update")).not.toBeInTheDocument();
-    expect(screen.getByTestId("changelog-apply-blocked")).toHaveTextContent("will not guess");
+    // The manual text says what to do; the reason would only repeat it.
+    expect(screen.getByTestId("changelog-not-updatable")).toHaveAttribute(
+      "title",
+      "Build from source, then restart the daemon.",
+    );
+
+    // No manual text (a channel without an update command): the daemon's reason.
+    rerender(
+      <ChangelogModal
+        update={status({
+          manual_command: null,
+          can_apply: false,
+          apply_blocked_reason: "acme declares no update command: update it the way it was installed, then restart the daemon.",
+        })}
+        onClose={() => {}}
+        onOpenVersionSettings={() => {}}
+        onRequestUpdate={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("changelog-not-updatable")).toHaveAttribute(
+      "title",
+      expect.stringContaining("update it the way it was installed"),
+    );
   });
 
   it("an attempt already running disables Update with the reason (#699)", async () => {
@@ -250,9 +273,9 @@ describe("ChangelogModal (#698)", () => {
     await screen.findByTestId("markdown-body");
     fireEvent.click(screen.getByTestId("changelog-copy-command"));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("brew update && brew upgrade Loulen/tap/pdo"));
-    await waitFor(() => expect(screen.getByTestId("changelog-copy-command")).toHaveTextContent("Copied"));
+    await waitFor(() => expect(screen.getByTestId("changelog-copy-command")).toHaveAccessibleName("Copied"));
     vi.advanceTimersByTime(1600);
-    await waitFor(() => expect(screen.getByTestId("changelog-copy-command")).toHaveTextContent("Copy command"));
+    await waitFor(() => expect(screen.getByTestId("changelog-copy-command")).toHaveAccessibleName("Copy command"));
     vi.useRealTimers();
   });
 

@@ -31,7 +31,7 @@ function useIconLoaded(url: string | null | undefined): boolean {
 export default function ExtensionIcon({
   url,
   label,
-  size = 15,
+  size = 14,
 }: {
   url?: string | null;
   label: string;
@@ -53,8 +53,8 @@ export default function ExtensionIcon({
     <span
       aria-hidden
       data-testid="extension-icon-fallback"
-      className="grid shrink-0 place-items-center rounded-[3px] border border-current font-semibold leading-none"
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.6) }}
+      className="grid shrink-0 place-items-center rounded-[3px] border border-current text-2xs font-semibold leading-none"
+      style={{ width: size, height: size }}
     >
       {(label.trim()[0] ?? "?").toUpperCase()}
     </span>

@@ -3,13 +3,12 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import LibraryDropdown from "./LibraryDropdown";
 import type { LibraryEntry } from "../model/library";
 import { useEditStore } from "../store/editStore";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 function renderDropdown(props: Parameters<typeof LibraryDropdown>[0]) {
   return render(
-    <TooltipProvider>
+    <>
       <LibraryDropdown {...props} />
-    </TooltipProvider>,
+    </>,
   );
 }
 
@@ -84,7 +83,7 @@ describe("LibraryDropdown", () => {
   it("shows empty state when no entries and dropdown opened", () => {
     renderDropdown({ entries: [], onDelete: vi.fn() });
     fireEvent.click(screen.getByTestId("toolbar-library"));
-    expect(screen.getByText(/No saved nodes yet/)).toBeInTheDocument();
+    expect(screen.getByText("No saved node")).toBeInTheDocument();
   });
 
   it("shows entries when dropdown is opened", () => {
@@ -99,7 +98,7 @@ describe("LibraryDropdown", () => {
     const entries = [makeEntry("Reviewer"), makeEntry("Implementer")];
     renderDropdown({ entries: entries, onDelete: vi.fn() });
     fireEvent.click(screen.getByTestId("toolbar-library"));
-    const searchInput = screen.getByPlaceholderText("Search nodes...");
+    const searchInput = screen.getByPlaceholderText("Search nodes");
     fireEvent.change(searchInput, { target: { value: "review" } });
     expect(screen.getByText("Reviewer")).toBeInTheDocument();
     expect(screen.queryByText("Implementer")).not.toBeInTheDocument();
@@ -109,14 +108,7 @@ describe("LibraryDropdown", () => {
     const entries = [makeEntry("A"), makeEntry("B"), makeEntry("C")];
     renderDropdown({ entries: entries, onDelete: vi.fn() });
     fireEvent.click(screen.getByTestId("toolbar-library"));
-    expect(screen.getByText("3 entries")).toBeInTheDocument();
-  });
-
-  it("shows singular count for 1 entry", () => {
-    const entries = [makeEntry("Solo")];
-    renderDropdown({ entries: entries, onDelete: vi.fn() });
-    fireEvent.click(screen.getByTestId("toolbar-library"));
-    expect(screen.getByText("1 entry")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
   });
 
   it("shows prompt preview truncated to 60 chars", () => {
@@ -184,7 +176,7 @@ describe("LibraryDropdown", () => {
     renderDropdown({ entries: [makeEntry("Sharer")], onDelete: vi.fn() });
     fireEvent.click(screen.getByTestId("toolbar-library"));
     fireEvent.mouseEnter(screen.getByText("Sharer").closest("div.group")!);
-    fireEvent.click(screen.getByTitle("Add to canvas"));
+    fireEvent.click(screen.getByRole("button", { name: "Add to canvas" }));
 
     await vi.waitFor(() => {
       const tab = useEditStore.getState().openTabs[0];

@@ -201,7 +201,7 @@ export default function SkillTree({
       {/* Root drop zone: the space below the rows. */}
       <div
         className={`min-h-[48px] flex-1 rounded-md transition-colors ${
-          dropTarget === "root" ? "bg-acc/10 outline-dashed outline-1 outline-acc/50" : ""
+          dropTarget === "root" ? "bg-primary/10 outline-dashed outline-1 outline-primary/50" : ""
         }`}
         data-testid="skill-tree-root-drop"
         onDragOver={(event) => allowDrop(event, "root")}

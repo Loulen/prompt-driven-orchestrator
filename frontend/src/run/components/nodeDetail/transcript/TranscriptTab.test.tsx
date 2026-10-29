@@ -68,7 +68,7 @@ describe("TranscriptTab", () => {
     expect(fetchPage).toHaveBeenCalledWith("r1", "worker", 2, 0, 50);
     expect(screen.getByTestId("transcript-message-prompt")).toBeTruthy();
     expect(screen.getByTestId("transcript-message-agent").textContent).toContain("asks for a debounce");
-    expect(screen.getByTestId("transcript-counts").textContent).toBe("2 messages · 1 tool call folded");
+    expect(screen.getByTestId("transcript-counts")).toHaveAccessibleName("2 messages · 1 tool call");
     expect(screen.getByText("iter 2")).toBeTruthy();
     const toolRow = screen.getByTestId("transcript-tool");
     expect(toolRow.textContent).toContain("Read");
@@ -122,7 +122,7 @@ describe("TranscriptTab", () => {
     renderTab();
     // The counts and the size sit out of the summary's ellipsis.
     expect((await screen.findByTestId("transcript-tool-diffstat")).textContent).toBe("+1 −1");
-    expect(screen.getByTestId("transcript-tool-size").textContent).toBe("· 40 B");
+    expect(screen.getByTestId("transcript-tool-size").textContent).toBe("40 B");
     expect(screen.getByTitle(path).textContent).toBe(path);
     fireEvent.click(screen.getByTestId("transcript-tool-toggle"));
     const diff = await screen.findByTestId("transcript-tool-diff");
@@ -137,9 +137,7 @@ describe("TranscriptTab", () => {
   it("says a harness without a reader is unavailable", async () => {
     fetchPage.mockResolvedValue({ ...PAGE, available: false, harness: "opencode", entries: [], total: 0 });
     renderTab();
-    expect((await screen.findByTestId("transcript-unavailable")).textContent).toBe(
-      "Transcript unavailable for this harness (opencode). The terminal above still shows the session.",
-    );
+    expect((await screen.findByTestId("transcript-unavailable")).textContent).toBe("Unavailable for opencode");
   });
 
   it("follows a live iteration from its first running tool call", async () => {
@@ -195,8 +193,6 @@ describe("TranscriptTab", () => {
   it("says when the iteration has written nothing yet", async () => {
     fetchPage.mockResolvedValue({ ...PAGE, entries: [], total: 0, messages: 0, tool_calls: 0 });
     renderTab(true);
-    expect((await screen.findByTestId("transcript-empty")).textContent).toBe(
-      "Waiting for the session's first message…",
-    );
+    expect((await screen.findByTestId("transcript-empty")).textContent).toBe("Waiting for the first message");
   });
 });

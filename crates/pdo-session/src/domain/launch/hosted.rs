@@ -1,4 +1,4 @@
-//! The script a Session hébergée runs (ADR-0091): none of a Run's identity,
+//! The script a Session hébergée runs (ADR-0092): none of a Run's identity,
 //! only `PDO_SESSION_ID`, `PDO_DAEMON_URL` and `PDO_LIVE_DIR`, then the
 //! extensions' variables, then the agent or the shell.
 

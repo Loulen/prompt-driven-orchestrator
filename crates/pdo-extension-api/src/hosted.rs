@@ -1,4 +1,4 @@
-//! The Sessions hébergées (API 0.17, ADR-0091 of the core): a session of an
+//! The Sessions hébergées (API 0.19, ADR-0092 of the core): a session of an
 //! agent, or a shell, an extension has the core hold outside any Run, through
 //! its [`Host`](crate::Host). The core records it, keeps it alive across a
 //! restart of the daemon, publishes each change of its state and never writes
@@ -173,6 +173,17 @@ pub enum EndReason {
     Exited,
 }
 
+/// The Zoom du terminal of a session nobody changed, in percent.
+pub const DEFAULT_TERMINAL_ZOOM: u16 = 100;
+/// The smallest Zoom du terminal, in percent.
+pub const MIN_TERMINAL_ZOOM: u16 = 50;
+/// The largest Zoom du terminal, in percent.
+pub const MAX_TERMINAL_ZOOM: u16 = 200;
+
+fn default_terminal_zoom() -> u16 {
+    DEFAULT_TERMINAL_ZOOM
+}
+
 /// A Session hébergée, as the core records it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -199,6 +210,11 @@ pub struct HostedSession {
     /// is `awaiting_user`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_message: Option<String>,
+    /// Its Zoom du terminal: the size of its terminal's text, in percent
+    /// ([`MIN_TERMINAL_ZOOM`] to [`MAX_TERMINAL_ZOOM`]), the same on every
+    /// Poste ([`Host::zoom_session`](crate::Host::zoom_session)).
+    #[serde(default = "default_terminal_zoom")]
+    pub terminal_zoom: u16,
     /// When it was opened, then last changed (RFC 3339).
     pub created_at: String,
     pub updated_at: String,
@@ -228,6 +244,7 @@ impl HostedSession {
             state: HostedState::Starting,
             end_reason: None,
             wait_message: None,
+            terminal_zoom: DEFAULT_TERMINAL_ZOOM,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -313,6 +330,7 @@ mod tests {
             state: HostedState::Ended,
             end_reason: Some(EndReason::Terminated),
             wait_message: None,
+            terminal_zoom: 150,
             created_at: "2026-10-28T10:00:00Z".into(),
             updated_at: "2026-10-28T10:05:00Z".into(),
         }
@@ -333,6 +351,20 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<HostedSession>(json).unwrap(),
             waiting
+        );
+    }
+
+    #[test]
+    fn a_session_carries_its_zoom_and_one_recorded_without_it_is_at_100() {
+        let json = serde_json::to_value(session()).unwrap();
+        assert_eq!(json["terminal_zoom"], 150);
+        let mut legacy = json;
+        legacy.as_object_mut().unwrap().remove("terminal_zoom");
+        let read: HostedSession = serde_json::from_value(legacy).unwrap();
+        assert_eq!(read.terminal_zoom, DEFAULT_TERMINAL_ZOOM);
+        assert_eq!(
+            HostedSession::new("i", "e", "k", HostedKind::Shell, "/").terminal_zoom,
+            100
         );
     }
 

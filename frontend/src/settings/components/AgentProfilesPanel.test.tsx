@@ -4,6 +4,9 @@ import userEvent from "@testing-library/user-event";
 import AgentProfilesPanel from "./AgentProfilesPanel";
 import { createAgentProfile, updateAgentProfile } from "../api/agentProfiles";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
+import { SETTINGS_CATEGORIES } from "../model/settingsCategories";
+
+const SECTION = SETTINGS_CATEGORIES.flatMap((c) => c.sections).find((s) => s.id === "agent-profiles")!;
 
 // #798: the panel derives the effort offer from the SERVED catalogue via
 // `useHarnessCatalog` (→ `fetchSettings`). Two harnesses: `union` — the reported
@@ -66,7 +69,7 @@ beforeEach(() => {
 
 async function openDraft() {
   const user = userEvent.setup();
-  render(<AgentProfilesPanel profiles={[]} onChanged={onChanged} />);
+  render(<AgentProfilesPanel section={SECTION} profiles={[]} onChanged={onChanged} />);
   await user.click(await screen.findByTestId("agent-profile-new"));
   await user.type(screen.getByLabelText("Name"), "worker");
   return user;
@@ -170,7 +173,7 @@ describe("AgentProfilesPanel — per-model effort support (#798)", () => {
       updated_at: "",
     };
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[profile]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[profile]} onChanged={onChanged} />);
     // Unknown capabilities: the stored value renders in the pass-through
     // segment, un-clobbered, and is NOT called unsupported.
     await user.click(screen.getByRole("button", { name: "Edit mystery-agent" }));
@@ -206,24 +209,28 @@ const DEFAULT: AgentProfile = {
 };
 
 describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#899)", () => {
-  it("clicking a profile's name or meta line opens nothing", async () => {
+  it("lays a profile out in columns; its name opens the editor, its other cells nothing", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
-    await user.click(screen.getByText("daily driver"));
-    await user.click(screen.getByText("claude · opus · medium"));
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
+    const row = screen.getByTestId("agent-profile-row-p1");
+    expect(within(row).getAllByRole("cell").map((cell) => cell.textContent)).toEqual(
+      expect.arrayContaining(["daily driver", "claude", "opus", "medium"]),
+    );
+    await user.click(screen.getByText("opus"));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.queryByLabelText("Name")).toBeNull();
-    // The row exposes exactly its two icon buttons, nothing row-wide.
-    expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent?.trim())).toEqual([
+    // Besides its name, the row exposes exactly its two icon buttons.
+    expect(within(row).getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent?.trim())).toEqual([
+      "daily driver",
       "Edit daily driver",
       "Delete daily driver",
-      "New profile",
     ]);
+    await user.click(screen.getByText("daily driver"));
+    expect(screen.getByRole("dialog", { name: "Edit daily driver" })).toBeInTheDocument();
   });
 
   it("Edit opens a modal pre-filled with the profile; Save profile updates, closes and refreshes", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
 
     const modal = screen.getByRole("dialog", { name: "Edit daily driver" });
@@ -251,26 +258,27 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
 
   it("the row reads the new values once the list refreshes", async () => {
     const user = userEvent.setup();
-    const { rerender } = render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    const { rerender } = render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
     await user.click(screen.getByRole("button", { name: "Save profile" }));
     rerender(
-      <AgentProfilesPanel profiles={[{ ...DAILY, name: "nightly", effort: "high" }]} onChanged={onChanged} />,
+      <AgentProfilesPanel section={SECTION} profiles={[{ ...DAILY, name: "nightly", effort: "high" }]} onChanged={onChanged} />,
     );
     expect(screen.getByText("nightly")).toBeInTheDocument();
-    expect(screen.getByText("claude · opus · high")).toBeInTheDocument();
+    expect(within(screen.getByTestId("agent-profile-row-p1")).getByText("high")).toBeInTheDocument();
     expect(screen.queryByText("daily driver")).toBeNull();
   });
 
   it("bounds the profile modal to the window: only the fields scroll (#940)", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByTestId("agent-profile-new"));
 
     const modal = screen.getByTestId("agent-profile-modal");
-    expect(modal).toHaveClass("flex", "flex-col", "max-h-[85vh]");
+    // The kit's frame: bounded to the window, a scrolling body between the bars.
+    expect(modal).toHaveClass("d-frame");
     const body = screen.getByTestId("agent-profile-body");
-    expect(body).toHaveClass("min-h-0", "overflow-y-auto");
+    expect(body).toHaveClass("d-frame__body");
     expect(body).toContainElement(within(modal).getByLabelText("Name"));
     expect(body).not.toContainElement(screen.getByTestId("agent-profile-save"));
     expect(body).not.toContainElement(screen.getByTestId("agent-profile-cancel"));
@@ -279,7 +287,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
 
   it("New profile opens the same modal, empty, with Create; creating calls createAgentProfile", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByTestId("agent-profile-new"));
 
     const modal = screen.getByRole("dialog", { name: "New agent profile" });
@@ -310,7 +318,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
 
   it("changing the harness resets model and effort", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
     await pickHarness(user, "union");
     await user.click(screen.getByRole("button", { name: "Save profile" }));
@@ -334,7 +342,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
     }],
   ])("%s closes the modal without sending anything", async (_label, dismiss) => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
     await user.type(screen.getByLabelText("Name"), " edited");
     await dismiss(user);
@@ -350,7 +358,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
 
   it("a click inside the modal does not close it", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
     await user.click(screen.getByText("Edit agent profile"));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -358,7 +366,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
 
   it("Escape in an open Harness menu closes the menu, not the modal", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
     await user.click(screen.getByTestId("agent-profile-harness"));
     await screen.findByTestId("agent-profile-harness-option-union");
@@ -373,7 +381,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
     ["a padded name", "  default  "],
   ])("a name already used (%s) disables validation", async (_label, name) => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DEFAULT, DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DEFAULT, DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
     await user.clear(screen.getByLabelText("Name"));
     await user.type(screen.getByLabelText("Name"), name);
@@ -382,7 +390,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
 
   it("keeping a profile's own name (another case) stays valid", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DEFAULT, DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DEFAULT, DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
     await user.clear(screen.getByLabelText("Name"));
     await user.type(screen.getByLabelText("Name"), "Daily Driver");
@@ -391,7 +399,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
 
   it("an empty name disables validation", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
     await user.clear(screen.getByLabelText("Name"));
     await user.type(screen.getByLabelText("Name"), "   ");
@@ -400,7 +408,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
 
   it("the default profile stays editable and cannot be deleted", async () => {
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DEFAULT, DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DEFAULT, DAILY]} onChanged={onChanged} />);
     expect(screen.getByRole("button", { name: "Delete Default" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete daily driver" })).toBeEnabled();
 
@@ -417,7 +425,7 @@ describe("AgentProfilesPanel — the Edit button opens the editor in a modal (#8
   it("a failed save keeps the modal open and shows the error", async () => {
     vi.mocked(updateAgentProfile).mockRejectedValueOnce(new Error("name taken"));
     const user = userEvent.setup();
-    render(<AgentProfilesPanel profiles={[DAILY]} onChanged={onChanged} />);
+    render(<AgentProfilesPanel section={SECTION} profiles={[DAILY]} onChanged={onChanged} />);
     await user.click(screen.getByRole("button", { name: "Edit daily driver" }));
     await user.click(screen.getByRole("button", { name: "Save profile" }));
     const modal = screen.getByRole("dialog");

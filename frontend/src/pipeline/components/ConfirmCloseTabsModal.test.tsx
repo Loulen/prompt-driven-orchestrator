@@ -2,6 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
 import type { OpenPipeline } from "../store/editState";
+import { INITIAL_DRAFT_STATE } from "../store/draftSession";
 
 function tab(id: string, over: Partial<OpenPipeline> = {}): OpenPipeline {
   return {
@@ -67,6 +68,7 @@ describe("ConfirmCloseTabsModal (#342)", () => {
   it("cancels on a backdrop click", () => {
     const onCancel = vi.fn();
     render(<ConfirmCloseTabsModal open tabs={[tab("a", { dirty: true })]} onCancel={onCancel} onConfirm={() => {}} />);
+    // The backdrop of a modal <dialog> is the dialog itself.
     fireEvent.click(screen.getByTestId("close-tabs-backdrop"));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
@@ -75,10 +77,44 @@ describe("ConfirmCloseTabsModal (#342)", () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();
     render(<ConfirmCloseTabsModal open tabs={[tab("a", { dirty: true })]} onCancel={onCancel} onConfirm={onConfirm} />);
-    fireEvent.keyDown(document, { key: "Enter" });
+    const dialog = screen.getByTestId("close-tabs-backdrop");
+    fireEvent.keyDown(dialog, { key: "Enter" });
+    fireEvent.keyDown(dialog, { key: "Enter", ctrlKey: true });
     expect(onConfirm).not.toHaveBeenCalled();
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ConfirmCloseTabsModal — a shared draft keeps its changes (ADR-0088)", () => {
+  const draft = {
+    ...INITIAL_DRAFT_STATE,
+    status: "offline" as const,
+    synced: true,
+    canWrite: true,
+    connection: "1",
+    changes: 1,
+  };
+
+  it("says the shared draft keeps what reached it, not that all is lost", () => {
+    render(<ConfirmCloseTabsModal open tabs={[tab("flow", { dirty: true, draft })]} onCancel={() => {}} onConfirm={() => {}} />);
+    expect(screen.getByRole("dialog")).toHaveTextContent("Close tab?");
+    expect(screen.getByTestId("close-tabs-drafts")).toHaveTextContent("Its draft keeps the sent changes · unsent edits are lost");
+    expect(screen.getByTestId("close-tabs-body")).not.toHaveTextContent("Loses its changes");
+    expect(screen.getByTestId("close-tabs-confirm")).toHaveTextContent("Close tab");
+  });
+
+  it("names the tabs that lose their changes apart from the drafts", () => {
+    render(
+      <ConfirmCloseTabsModal
+        open
+        tabs={[tab("flow", { dirty: true, draft }), tab("local", { dirty: true })]}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent("Discard unsaved changes?");
+    expect(screen.getByTestId("close-tabs-body")).toHaveTextContent("Loses its changeslocal.yamlIts draft keeps the sent changes · unsent edits are lostflow.yaml");
   });
 });
 
@@ -87,8 +123,9 @@ describe("ConfirmCloseTabsModal — bounded to the window (#940)", () => {
     const tabs = Array.from({ length: 60 }, (_, i) => tab(`tab_${i}`, { dirty: true }));
     render(<ConfirmCloseTabsModal open tabs={tabs} onCancel={() => {}} onConfirm={() => {}} />);
     const body = screen.getByTestId("close-tabs-body");
-    expect(body).toHaveClass("min-h-0", "overflow-y-auto");
-    expect(body.parentElement).toHaveClass("flex", "flex-col", "max-h-[85vh]");
+    // The modal's body scrolls (`d-frame__body`), bounded to the window (`d-frame`).
+    expect(body.parentElement).toHaveClass("d-frame__body");
+    expect(body.parentElement?.parentElement).toHaveClass("d-frame");
     expect(body).toHaveTextContent("tab_59.yaml");
     expect(body).not.toContainElement(screen.getByTestId("close-tabs-confirm"));
   });

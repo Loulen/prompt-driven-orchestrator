@@ -4,7 +4,8 @@ What an extension gets from `pdo-extension-api` besides its interface (ADR-0081 
 amendments; the interface is [extension-ui.md](extension-ui.md)). The crate's rustdoc is the
 source of truth for signatures; this page says what each part is for and what goes on the wire.
 
-Version: **0.17.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+Version: **0.19.0** (0.17 added the design system of `@pdo/extension-ui`, see
+[extension-ui.md](extension-ui.md#the-design-system); 0.19 the Sessions hébergées). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -106,7 +107,7 @@ The core asks `authorize` before it serves these reads (0.8, CORE-5), with the v
 
 | Read | Operation | Refused |
 | --- | --- | --- |
-| `GET /runs`, `/runs/reapable`, `/runs/{id}/children` | `run` × `read`, targeted, per Run listed | the Run is absent |
+| `GET /runs`, `/runs/reapable`, `/runs/costs`, `/runs/{id}/children` | `run` × `read`, targeted, per Run listed | the Run is absent |
 | any `GET /runs/{id}…` (detail, events, nodes, artifacts, diff, review comments, a node's pane…) | `run` × `read` on `{id}` | `403` `operation_refused` |
 | `/ws` | `run` × `read`, per Run a message is about (its events, `run_forgotten`, `operation_applied` on it or its nodes, its creation included), per connection (answer kept 5 s) | the message is not sent to that connection; a `trigger_fired` is sent without its `run_id` |
 | `GET /projects` | `project` × `read`, per Projet | the Projet is absent |
@@ -192,10 +193,11 @@ core's mechanisms (amendment #34):
   when an Actor's rights change, so that an open view follows without reloading.
 - `open_session(actor, OpenSession)`, `hosted_session(key)`, `hosted_sessions()`,
   `terminate_session(actor, key)`, `relaunch_session(actor, key)`,
-  `configure_session(actor, key, HostedConfig)`, `type_in_session(actor, key, text)`,
-  `forget_session(actor, key)`, `live_artifacts(key)`, `live_artifact(key, path)` (0.17): have
+  `configure_session(actor, key, HostedConfig)`, `zoom_session(actor, key, zoom)`,
+  `type_in_session(actor, key, text)`, `forget_session(actor, key)`, `live_artifacts(key)`,
+  `live_artifact(key, path)` (0.19): have
   the core hold an agent or a shell outside any Run
-  ([Sessions hébergées](#sessions-hébergées-017)).
+  ([Sessions hébergées](#sessions-hébergées-019)).
 
 `NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone, creates no
 Run (`503`), names no Projet, signals nothing, sees nobody on a Run, knows no cost and holds no
@@ -332,7 +334,7 @@ library assistant do too. `session_env` and `session_preamble` receive a `Sessio
   "node": null }
 ```
 
-- `session.kind`: `node`, `manager`, `library_assistant`, `hosted` (0.17, a Session hébergée:
+- `session.kind`: `node`, `manager`, `library_assistant`, `hosted` (0.19, a Session hébergée:
   `session.extension` and `session.key` name it, absent for the other kinds), or `shell`, in the
   events only: a run shell runs no agent and asks no hook. `session.id` is the tmux session's name, the one the
   terminals use (`/sessions/<id>/pty`).
@@ -394,9 +396,9 @@ Without an extension, nothing is published. `SessionEvent::from_event` reads one
 `on_event`; it answers `None` for a `kind` of session added by a later version of the API, so
 read the JSON yourself if you must see every session.
 
-## Sessions hébergées (0.17)
+## Sessions hébergées (0.19)
 
-A Session hébergée (ADR-0091 of the core) is an agent or a shell an extension has the core hold
+A Session hébergée (ADR-0092 of the core) is an agent or a shell an extension has the core hold
 **outside any Run**: no Pipeline, no worktree, no place in the list of the Runs. The extension
 names it by a key of its own; the core records it, keeps it across a restart of the daemon,
 publishes every change of its state and **never writes into its folder**.
@@ -436,7 +438,8 @@ let session = host
   `extension`, `key`, `kind`, `config`, `folder`, `cwd` (the folder resolved), `project`,
   `started_by`, `state` (`starting`, `running`, `awaiting_user`, `ended`), `end_reason`
   (`terminated` or `exited`), `wait_message` (while `awaiting_user`, what its agent said it
-  waits for; absent otherwise), `created_at`, `updated_at`.
+  waits for; absent otherwise), `terminal_zoom` (its Zoom du terminal, in percent, 100 for a new
+  session), `created_at`, `updated_at`.
 - **Reading** (`hosted_session(key)`, `hosted_sessions()`) is synchronous and answers only the
   calling extension's sessions, ended ones included.
 - **Terminating** asks `session` × `terminate` on the session (its id, in its Projet), ends it
@@ -458,6 +461,12 @@ let session = host
   published at once, and applies at its next relaunch: a running agent keeps the one it was
   launched with, and a resumed conversation does not read a new initial prompt. `400` for a
   shell or a harness the core does not know.
+- **Its Zoom du terminal** (`zoom_session`, in percent from `MIN_TERMINAL_ZOOM` 50 to
+  `MAX_TERMINAL_ZOOM` 200) asks `session` × `zoom` on it, then is recorded and published at once:
+  the size of its terminal's text on every Poste, wherever it shows, live or ended, agent or
+  shell. `400` out of range, after the Operation. Any Poste sets it too, through
+  `PUT /sessions/<id>/terminal-zoom` (the same Operation, for the browser's Actor); the
+  terminal `@pdo/extension-ui` exports follows it (see extension-ui.md).
 - **Laying a text** (`type_in_session`) asks `session` × `type` on it, then pastes the text in
   its input as one bracketed paste, **without** Enter: it waits there for a person to complete
   and submit it, as a file dropped on a terminal. `400` for an empty text, `409` for a session
@@ -494,7 +503,10 @@ let session = host
 
 Each change of its state is published as `hosted_session_changed`, to every extension's
 `on_event` and, on `/ws`, to the connections whose Actor may run `session` × `read` on it (in its
-Projet); `HostedSessionChanged::from_event` reads it back. The whole session travels, its
+Projet); `HostedSessionChanged::from_event` reads it back. The Operations on a session reach
+`/ws` the same way: an `operation_applied` on the Ressource `session` only reaches the connections
+that may read that session (an opening, untargeted, those that may read the sessions of its
+Projet). The whole session travels, its
 `config` (the initial prompt included) and its `cwd` too: every extension receives it.
 
 ```json
@@ -503,7 +515,7 @@ Projet); `HostedSessionChanged::from_event` reads it back. The whole session tra
                "kind": "agent", "config": { "model": "opus" },
                "folder": { "kind": "project_repo" }, "cwd": "/repos/app", "project": "p1",
                "started_by": { "kind": "identified", "namespace": "acme", "id": "bob" },
-               "state": "running", "end_reason": null,
+               "state": "running", "end_reason": null, "terminal_zoom": 100,
                "created_at": "…", "updated_at": "…" } }
 ```
 

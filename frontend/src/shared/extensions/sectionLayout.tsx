@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ExtensionEntry } from "../generated/ExtensionEntry";
+import ExtensionIcon from "./ExtensionIcon";
 
 export interface RenderedSection {
   key: string;
@@ -9,18 +10,32 @@ export interface RenderedSection {
   body: ReactNode;
 }
 
-/** A modal's section (`project/edit`, `run/new`): a rule above, the label and the extension's name. */
+/** The icon an extension shows for itself: the one of its first page, if any. */
+export function extensionIconUrl(extension: ExtensionEntry): string | null {
+  for (const c of extension.ui?.contributions ?? []) {
+    if (c.type === "page" && c.icon) return c.icon;
+  }
+  return null;
+}
+
+/**
+ * A modal's section (`project/edit`, `run/new`), drawn like the host's own:
+ * a rule above, the label as a caps tag with the extension's icon (its name in
+ * the tooltip), the body in the control column.
+ */
 export function modalSection({ key, label, extension, body }: RenderedSection) {
   return (
-    <section className="mb-3 border-t border-line pt-3" data-testid={`extension-section-${key}`}>
-      <div className="mb-2 flex items-center gap-1.5 font-medium text-fg" style={{ fontSize: "12px" }}>
+    <section className="ln-sec" data-testid={`extension-section-${key}`}>
+      <span className="d-caps ln-sec__tag" title={`${label} · ${extension.name}`}>
         {label}
-        <span className="font-normal text-fg-4" style={{ fontSize: "10.5px" }}>
-          · {extension.name}
+        <span className="ln-sec__ext" aria-label={extension.name} role="img">
+          <ExtensionIcon url={extensionIconUrl(extension)} label={extension.name} size={11} />
         </span>
+      </span>
+      <div className="ln-row">
+        <span className="ln-row__label" />
+        <div className="ln-row__ctl ln-row__ctl--block">{body}</div>
       </div>
-      {body}
     </section>
   );
 }
-

@@ -3,7 +3,17 @@
 // A plain ES module, no build step: `react` is the front's own, shared through
 // its import map.
 import React from "react";
-import { copyToClipboard, openProbedSocket, useActorDisplay, useCurrentActor } from "@pdo/extension-ui";
+import {
+  Button,
+  copyToClipboard,
+  KeyValue,
+  openProbedSocket,
+  Segmented,
+  SessionTerminal,
+  TerminalZoom,
+  useActorDisplay,
+  useCurrentActor,
+} from "@pdo/extension-ui";
 
 const h = React.createElement;
 
@@ -137,15 +147,23 @@ function useProbedStream() {
 
 // Page of `topbar/end`: the context it is opened with (the selected Run and its
 // Projet), the path of the deep link, in the shell's breadcrumb too, and the
-// state of its probed socket.
+// state of its probed socket. At the path `hosted` (`agent`: `hosted/agent`),
+// the demonstration of a Session hébergée (API 0.19).
 export function TestPage({ context, navigate, shell }) {
-  const run = context?.run ?? null;
-  const project = context?.project ?? null;
   const path = context?.path ?? "";
-  const stream = useProbedStream();
   React.useEffect(() => {
     shell?.setBreadcrumb(path ? path.split("/") : []);
   }, [shell, path]);
+  if (path === "hosted" || path.startsWith("hosted/")) {
+    return h(HostedSessionDemo, { agent: path === "hosted/agent" });
+  }
+  return h(TestPageBody, { context, navigate, path });
+}
+
+function TestPageBody({ context, navigate, path }) {
+  const run = context?.run ?? null;
+  const project = context?.project ?? null;
+  const stream = useProbedStream();
   return h(
     "div",
     { style: { ...box, padding: "20px 28px" }, "data-testid": "test-extension-page" },
@@ -162,6 +180,144 @@ export function TestPage({ context, navigate, shell }) {
       { type: "button", onClick: () => navigate("deep/inside"), style: { alignSelf: "flex-start", textDecoration: "underline" } },
       "Go to deep/inside",
     ),
+    h(
+      "button",
+      { type: "button", onClick: () => navigate("hosted"), style: { alignSelf: "flex-start", textDecoration: "underline" } },
+      "Hosted session demo",
+    ),
+  );
+}
+
+// The demonstration of a Session hébergée (API 0.19): one shell (`demo`), or
+// one agent (`demo-agent`), the same for every browser that opens the page.
+// Opened on the first visit, through the test extension's Host; its terminal is
+// the core's (`SessionTerminal`), its Zoom du terminal the core's control
+// (`TerminalZoom`), and a zoom the page imposes on top shows how the two
+// combine.
+async function callDemo(method, url, body) {
+  const response = await fetch(url, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(json.error ?? `${method} ${url}: ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return json;
+}
+
+function useDemoSession(key, kind) {
+  const [session, setSession] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const url = `/ext/test/sessions/${key}`;
+  React.useEffect(() => {
+    let alive = true;
+    const show = (s) => alive && setSession(s);
+    const fail = (e) => alive && setError(e.message);
+    // Another browser may open it at the same moment: its key is then taken.
+    callDemo("GET", url)
+      .catch((e) =>
+        e.status === 404
+          ? callDemo("POST", "/ext/test/sessions", { key, kind }).catch((again) =>
+              again.status === 409 ? callDemo("GET", url) : Promise.reject(again),
+            )
+          : Promise.reject(e),
+      )
+      .then(show, fail);
+    const socket = openProbedSocket("/ws");
+    socket.onMessage((data) => {
+      if (typeof data !== "string") return;
+      let message;
+      try {
+        message = JSON.parse(data);
+      } catch {
+        return;
+      }
+      if (message.type === "hosted_session_changed" && message.session?.key === key) show(message.session);
+    });
+    return () => {
+      alive = false;
+      socket.close();
+    };
+  }, [key, kind, url]);
+  const gesture = (method, suffix) => {
+    setError(null);
+    callDemo(method, `${url}${suffix}`).then(setSession, (e) => setError(e.message));
+  };
+  return {
+    session,
+    error,
+    terminate: () => gesture("DELETE", ""),
+    relaunch: () => gesture("POST", "/relaunch"),
+  };
+}
+
+const HOST_ZOOMS = [
+  { value: "1", label: "None" },
+  { value: "0.75", label: "×0.75" },
+];
+
+function HostedSessionDemo({ agent }) {
+  const { session, error, terminate, relaunch } = useDemoSession(agent ? "demo-agent" : "demo", agent ? "agent" : "shell");
+  const [hostZoom, setHostZoom] = React.useState("1");
+  const starter = useActorDisplay(session?.started_by ?? null);
+  const ended = session?.state === "ended";
+  return h(
+    "div",
+    { "data-testid": "hosted-demo", style: { display: "flex", flex: 1, width: "100%", height: "100%", minHeight: 0 } },
+    h(
+      "div",
+      { style: { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, minHeight: 0 } },
+      session
+        ? h(SessionTerminal, { session: session.id, zoom: Number(hostZoom) })
+        : h("p", { style: { padding: "var(--g-5)" }, "data-testid": "hosted-demo-loading" }, error ?? "Opening the session…"),
+    ),
+    h(
+      "aside",
+      {
+        style: {
+          display: "flex",
+          flexDirection: "column",
+          gap: "var(--g-5)",
+          width: "400px",
+          flex: "none",
+          padding: "var(--g-5)",
+          borderLeft: "1px solid var(--line)",
+          background: "var(--surface-1)",
+          overflow: "auto",
+        },
+      },
+      h("span", { className: "d-caps" }, "Hosted session"),
+      session &&
+        h(KeyValue, {
+          rows: [
+            { k: "Key", v: session.key, mono: true },
+            { k: "Kind", v: session.kind },
+            { k: "State", v: h("span", { "data-testid": "hosted-demo-state" }, session.state) },
+            { k: "Folder", v: session.cwd, mono: true },
+            { k: "Started by", v: starter?.name ?? session.started_by?.kind ?? "unknown" },
+          ],
+        }),
+      session && h(TerminalZoom, { session: session.id }),
+      h(
+        "div",
+        { style: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "var(--g-2)" } },
+        h("span", { className: "d-caps" }, "Zoom the page imposes"),
+        h(Segmented, { label: "Host zoom", size: "sm", items: HOST_ZOOMS, value: hostZoom, onChange: setHostZoom }),
+      ),
+      session &&
+        h(
+          "div",
+          { style: { display: "flex", gap: "var(--g-3)" } },
+          ended
+            ? h(Button, { onClick: relaunch, "data-testid": "hosted-demo-relaunch" }, "Relaunch")
+            : h(Button, { tone: "danger", onClick: terminate, "data-testid": "hosted-demo-terminate" }, "Terminate"),
+        ),
+      error && session && h("p", { role: "alert", "data-testid": "hosted-demo-error" }, error),
+    ),
   );
 }
 
@@ -172,6 +328,7 @@ function describe(context) {
   const parts = [context.location ?? "?"];
   const entity = context.entity;
   if (entity) parts.push(`${entity.kind} ${entity.id}${entity.status ? ` (${entity.status})` : ""}`);
+  if (context.selected) parts.push(`selected ${context.selected.kind} ${context.selected.id}`);
   if (context.selection) parts.push(`${context.selection.ids.length} selected: ${context.selection.ids.join(", ")}`);
   if (context.pipeline) parts.push(`pipeline ${context.pipeline.id}`);
   if (context.review) parts.push(`review ${context.review.from} → ${context.review.to}`);
@@ -467,4 +624,54 @@ export function TagChip({ text }) {
     },
     text,
   );
+}
+
+// 0.18: the Source de recherche of the command field. Its notes, already
+// filtered as the test extension's rights would; each opens the test page on
+// its path. `query` is the text typed, `context.selected` the item selected.
+const NOTES = [
+  { id: "1", ref: "N-1", title: "Release checklist", meta: "Ops", tone: "done", status: "Done" },
+  { id: "2", ref: "N-2", title: "Search index rebuild", meta: "Platform", tone: "running", status: "In progress" },
+  { id: "3", ref: "N-3", title: "Retry budget for flaky searches", meta: "Platform", tone: "skipped", status: "To do" },
+];
+
+function noteResult(note) {
+  return {
+    id: note.id,
+    ref: note.ref,
+    title: note.title,
+    meta: note.meta,
+    status: { tone: note.tone, label: note.status },
+    link: `#/ext/test/topbar/end/notes/${note.id}`,
+  };
+}
+
+export function searchNotes(query) {
+  const q = query.toLowerCase();
+  return NOTES.filter((note) => note.title.toLowerCase().includes(q) || note.ref.toLowerCase().includes(q)).map(
+    noteResult,
+  );
+}
+
+// The same notes, answered after 3 s: a slow source.
+export function searchSlowly(query) {
+  return new Promise((resolve) => setTimeout(() => resolve(searchNotes(query)), 3000));
+}
+
+// A source that always fails: its error stays in its own group.
+export function searchFailing() {
+  return Promise.reject(new Error("index unavailable"));
+}
+
+// A source that answers 200 results with 200-character titles: the core keeps
+// the first ones.
+export function searchMany(query) {
+  const long = `${query} ${"a-very-long-segment-without-any-space-".repeat(6)}`.slice(0, 200);
+  return Array.from({ length: 200 }, (_, i) => ({
+    id: String(i),
+    ref: `M-${i + 1}`,
+    title: `${i} ${long}`.slice(0, 200),
+    meta: "Many",
+    link: `#/ext/test/topbar/end/many/${i}`,
+  }));
 }

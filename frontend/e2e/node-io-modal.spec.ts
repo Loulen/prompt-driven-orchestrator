@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 
@@ -18,7 +19,9 @@ import { openRunNodeDetails, cleanupRuns, runMultipart } from "./helpers";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-io-modal-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
@@ -120,7 +123,7 @@ test("clicking anywhere on port card opens modal with markdown + frontmatter", a
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");
@@ -134,25 +137,21 @@ test("clicking anywhere on port card opens modal with markdown + frontmatter", a
   await expect(modal).toContainText("Review");
   await expect(modal).toContainText("No issues");
 
-  // Frontmatter card with the typed verdict. It is a sibling of the markdown
-  // body inside the modal overlay (not inside `.artifact-markdown`); scope to
-  // the overlay so the output port card's own `verdict` chip doesn't collide.
-  const overlay = page
-    .locator(".fixed.inset-0.z-50")
-    .filter({ has: page.locator(".artifact-markdown") });
+  // Frontmatter strip with the typed verdict. It is a sibling of the markdown
+  // body inside the modal (not inside `.artifact-markdown`); scope to the
+  // modal so the output port card's own `verdict` chip doesn't collide.
+  const overlay = page.getByTestId("artifact-modal");
   await expect(overlay.getByText("verdict")).toBeVisible();
   await expect(overlay.getByText("PASS")).toBeVisible();
 
-  // Close via the X button (scope to the modal overlay so we don't grab an
-  // inspector icon-button instead).
-  const closeBtn = overlay.locator("button").filter({ has: page.locator("svg") }).last();
-  await closeBtn.click();
+  // Close via the X button of the modal's header.
+  await overlay.getByTestId("artifact-close").click();
   await expect(modal).not.toBeVisible({ timeout: 2_000 });
 });
 
 test("modal closes on Escape key", async ({ page, baseURL }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");
@@ -170,7 +169,7 @@ test("modal closes on Escape key", async ({ page, baseURL }) => {
 
 test("modal closes on backdrop click", async ({ page, baseURL }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");
@@ -192,7 +191,7 @@ test("port card with no files renders as non-interactive div", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");
@@ -212,7 +211,7 @@ test("port card opens modal via keyboard (Enter key)", async ({
   baseURL,
 }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   if (!runId) await createRunAndSeedArtifacts(page, baseURL!);
   await openRunNodeDetails(page, runId, "reviewer");

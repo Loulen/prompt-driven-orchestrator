@@ -4,6 +4,7 @@ import { defaultCollapsed, filePath, readListOpen, readView, writeListOpen, writ
 import type { ViewMode } from "../../run/model/runRefs";
 import type { Anchor } from "../model/drafts";
 import { allDirs, ancestorDirs, buildFileTree, visibleRows } from "../model/fileTree";
+import { toCss } from "../../shared/ui/zoom";
 
 const NARROW_QUERY = "(max-width: 900px)";
 /** What the reader does that ends a landing's pinning. */
@@ -21,7 +22,8 @@ const READER_MOVES = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
  * the list shows (a collapsed folder's are skipped), `←` / `→` fold and unfold
  * the folders around the current file.
  */
-export function useReviewLayout(files: DiffFile[]) {
+/** `viewed`: the files marked « Viewed » for the pair — they open folded. */
+export function useReviewLayout(files: DiffFile[], viewed?: ReadonlySet<string>) {
   const [view, setView] = useState<ViewMode>(() => readView());
   const [narrow, setNarrow] = useState<boolean>(() => window.matchMedia?.(NARROW_QUERY).matches ?? false);
   const [listOpen, setListOpen] = useState<boolean>(() => readListOpen());
@@ -52,14 +54,20 @@ export function useReviewLayout(files: DiffFile[]) {
     return () => mq.removeEventListener?.("change", onChange);
   }, []);
 
-  /** A new pair: default collapse, first file, back to the top. */
+  /** A new pair: default collapse (the large diff, the binaries, the files
+   *  viewed), first file, back to the top. */
   const resetForPair = () => {
     setCollapsed(null);
     setCurrentIdx(0);
   };
   const scrollTop = () => mainRef.current?.scrollTo?.({ top: 0 });
 
-  const collapsedSet = useMemo(() => collapsed ?? defaultCollapsed(files), [collapsed, files]);
+  const collapsedSet = useMemo(() => {
+    if (collapsed) return collapsed;
+    const init = defaultCollapsed(files);
+    for (const f of files) if (viewed?.has(filePath(f))) init.add(filePath(f));
+    return init;
+  }, [collapsed, files, viewed]);
   const toggleFile = (path: string) => {
     const next = new Set(collapsedSet);
     if (next.has(path)) next.delete(path);
@@ -202,7 +210,8 @@ export function useReviewLayout(files: DiffFile[]) {
       dir === 1
         ? rows.find((r) => r.getBoundingClientRect().top > base + 4)
         : [...rows].reverse().find((r) => r.getBoundingClientRect().top < base - 4);
-    if (target) el.scrollBy?.({ top: target.getBoundingClientRect().top - base, behavior: "smooth" });
+    // The rects are screen pixels; the scroll is in the page's CSS pixels (UI scale).
+    if (target) el.scrollBy?.({ top: toCss(target.getBoundingClientRect().top - base, el), behavior: "smooth" });
   }, []);
 
   /** Scroll the anchored line of an entry into view, expanding its file first. */

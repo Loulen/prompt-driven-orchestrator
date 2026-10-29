@@ -126,7 +126,7 @@ describe("the intro card", () => {
   it("says what the tour will do, and shows a line per preparation", async () => {
     await openCard();
     expect(screen.getByTestId("tour-intro-card")).toHaveTextContent("Launch your first Run");
-    expect(screen.getByTestId("tour-intro-card")).toHaveTextContent("First run · ~4 min · 1 steps");
+    expect(screen.getByTestId("tour-intro-card")).toHaveTextContent("~4 min · 1 steps");
     expect(screen.getByTestId("tour-intro-prep-repo")).toHaveTextContent("/tmp/pdo-tutorial");
     expect(screen.getByTestId("tour-intro-prep-pipeline")).toHaveTextContent("tutorial-interactive");
   });
@@ -191,7 +191,8 @@ describe("the intro card", () => {
 
     expect(screen.queryByTestId("tour-intro-card")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("tour-popover")).toBeInTheDocument());
-    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First run · 1 / 1");
+    expect(screen.getByTestId("tour-popover")).toHaveTextContent("First run");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("1/1");
   });
 
   /**
@@ -348,7 +349,7 @@ describe("a Full tour", () => {
     document.body.append(opened);
     await waitFor(() => expect(screen.getByTestId("tour-end-card")).toBeInTheDocument());
 
-    expect(screen.getByTestId("tour-finish")).toHaveTextContent("Continue · First pipeline");
+    expect(screen.getByTestId("tour-finish")).toHaveTextContent("Continue");
     await user().click(screen.getByTestId("tour-finish"));
 
     expect(Object.keys(loadToursDone())).toEqual(["first-run"]);

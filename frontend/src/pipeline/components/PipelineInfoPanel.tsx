@@ -3,7 +3,10 @@
  */
 
 import { useState, useCallback, useMemo } from "react";
-import { Info, Terminal, X, FileText, Code, Bot, FileDiff, FolderGit2, History } from "lucide-react";
+import { Bot, FileCode, FolderGit2, GitCompare, History, Info, Puzzle, Sparkles, X } from "lucide-react";
+import { EmptyState, IconButton } from "../../shared/ui/kit";
+import InfoTabs, { type InfoTabItem } from "./InfoTabs";
+import "./inspect.css";
 import AssistantPanel from "../../session/components/AssistantPanel";
 import DiffTab from "../../review/components/DiffTab";
 import RepositoriesSection from "../../run/components/RepositoriesSection";
@@ -135,118 +138,65 @@ export default function PipelineInfoPanel({
   // Cleared by opening the Review page (per browser, localStorage).
   const unreadReplies = useReviewUnread(run);
 
-  const tabs: { id: TabId; label: string; icon: typeof Info; show: boolean }[] = [
-    { id: "info", label: "Info", icon: FileText, show: true },
-    { id: "versions", label: "Versions", icon: History, show: hasVersions },
-    { id: "diff", label: "Diff", icon: FileDiff, show: run != null },
-    // #752 (closing the second half of #566): the Repositories view is a tab of
-    // the Run panel — `Info | Diff | Repositories | Manager | YAML` — reachable
-    // on any selection, archived Runs included (frozen list). No dot: nothing
-    // asynchronous happens to repositories; errors show inline in the tab.
-    { id: "repositories", label: "Repositories", icon: FolderGit2, show: run != null },
-    { id: "manager", label: "Manager", icon: Terminal, show: run != null },
-    { id: "assistant", label: "Assistant", icon: Bot, show: hasAssistant },
-    { id: "yaml", label: "YAML", icon: Code, show: true },
-  ];
-
   // The quiet nudge (manager on demand): the exact moment a manager helps most
   // is when the Run is parked on the user — an amber dot on the tab points it
   // out without banners or auto-switching.
   const nudgeManager = run?.status === "awaiting_user" && !(run.has_manager ?? false);
 
-  return (
-    <aside
-      className="flex h-full flex-col bg-bg-2 overflow-y-auto"
-      data-testid="pipeline-info-panel"
-    >
-      <div
-        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-fg-2"
-        style={{ fontSize: "11.5px" }}
-      >
-        <span>Pipeline info</span>
-        <button
-          onClick={onClose}
-          className="grid h-5 w-5 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
-          data-testid="info-panel-close"
-          // #397: no Tooltip here to borrow a name from — the `X` icon is
-          // `aria-hidden`, so the label has to be explicit.
-          aria-label="Close pipeline info"
-        >
-          <X size={12} />
-        </button>
-      </div>
+  const core: (InfoTabItem & { show: boolean })[] = [
+    { key: "info", label: "Info", icon: Info, show: true },
+    { key: "versions", label: "Versions", icon: History, show: hasVersions },
+    {
+      key: "diff",
+      label: "Diff",
+      icon: GitCompare,
+      show: run != null,
+      // #751: sent review comments with an unread reply — a count that replaces
+      // the blue dot while > 0 (a number beats a dot; both mean "come look").
+      count: unreadReplies > 0 ? unreadReplies : undefined,
+      countTitle: `${unreadReplies} review comment${unreadReplies === 1 ? "" : "s"} with an unread reply`,
+      countTestId: "diff-tab-unread",
+      dot: unreadReplies === 0 && nudgeDiff ? "var(--color-st-running)" : undefined,
+      dotTestId: "diff-tab-dot",
+    },
+    // #752 (closing the second half of #566): the Repositories view is a tab of
+    // the Run panel, reachable on any selection, archived Runs included (frozen
+    // list). No dot: nothing asynchronous happens to repositories.
+    { key: "repositories", label: "Repos", title: "Repositories", icon: FolderGit2, show: run != null },
+    {
+      key: "manager",
+      label: "Manager",
+      icon: Bot,
+      show: run != null,
+      dot: nudgeManager ? "var(--color-st-await)" : undefined,
+      dotTestId: "manager-tab-dot",
+    },
+    { key: "assistant", label: "Assistant", icon: Sparkles, show: hasAssistant },
+    { key: "yaml", label: "YAML", icon: FileCode, show: true },
+  ];
+  // ADR-0081: the tabs extensions add to a Run's detail, after the core's.
+  const items: InfoTabItem[] = [
+    ...core.filter((t) => t.show),
+    ...(run
+      ? extensionTabs.map((t) => ({ key: `ext-${t.key}`, label: t.contribution.label, icon: Puzzle }))
+      : []),
+  ];
+  const activeKey = activeExtension ? `ext-${activeExtension.key}` : (shownTab ?? "info");
 
-      {/* #31: the tab bar scrolls sideways rather than overflow the panel (the
-          extension tabs add up after the core's); a picked tab scrolls into view. */}
-      <div
-        className="flex shrink-0 overflow-x-auto border-b border-line [scrollbar-width:thin]"
-        style={{ fontSize: "11px" }}
-        data-testid="pipeline-info-tabs"
-      >
-        {tabs
-          .filter((t) => t.show)
-          .map((t) => (
-            <button
-              key={t.id}
-              data-testid={`info-tab-${t.id}`}
-              onClick={(e) => {
-                e.currentTarget.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-                selectTab(t.id);
-              }}
-              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2 py-1.5 transition-colors cursor-pointer ${
-                shownTab === t.id
-                  ? "border-b-2 border-acc text-fg font-medium"
-                  : "text-fg-3 hover:text-fg-2"
-              }`}
-            >
-              <t.icon size={12} />
-              {t.label}
-              {t.id === "manager" && nudgeManager && (
-                <span
-                  className="h-1.5 w-1.5 rounded-full bg-st-await"
-                  aria-hidden
-                  data-testid="manager-tab-dot"
-                />
-              )}
-              {t.id === "diff" && unreadReplies > 0 ? (
-                <span
-                  className="inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-[7px] bg-st-running px-1 font-semibold text-white"
-                  style={{ fontSize: "9.5px" }}
-                  title={`${unreadReplies} review comment${unreadReplies === 1 ? "" : "s"} with an unread reply — open the Review page`}
-                  data-testid="diff-tab-unread"
-                >
-                  {unreadReplies}
-                </span>
-              ) : (
-                t.id === "diff" &&
-                nudgeDiff && (
-                  <span
-                    className="h-1.5 w-1.5 rounded-full bg-st-running"
-                    aria-hidden
-                    data-testid="diff-tab-dot"
-                  />
-                )
-              )}
-            </button>
-          ))}
-        {run &&
-          extensionTabs.map((t) => (
-            <button
-              key={t.key}
-              data-testid={`info-tab-ext-${t.key}`}
-              onClick={(e) => {
-                e.currentTarget.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-                setExtensionTab(t.key);
-              }}
-              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2 py-1.5 transition-colors cursor-pointer ${
-                activeExtension?.key === t.key
-                  ? "border-b-2 border-acc text-fg font-medium"
-                  : "text-fg-3 hover:text-fg-2"
-              }`}
-            >
-              {t.contribution.label}
-            </button>
-          ))}
+  return (
+    <aside className="ei" data-testid="pipeline-info-panel">
+      <div className="ei-bar">
+        <InfoTabs
+          items={items}
+          value={activeKey}
+          onChange={(key) => {
+            if (key.startsWith("ext-")) setExtensionTab(key.slice(4));
+            else selectTab(key as TabId);
+          }}
+        />
+        <span className="ei-bar__actions">
+          <IconButton icon={X} label="Close pipeline info" kbd="Esc" onClick={onClose} data-testid="info-panel-close" />
+        </span>
       </div>
 
       {activeExtension && run && (
@@ -282,12 +232,12 @@ export default function PipelineInfoPanel({
       )}
 
       {shownTab === "repositories" && run && (
-        <div data-testid="repositories-tab" className="flex flex-col">
+        <div data-testid="repositories-tab" className="pi-body">
           {run.target_repo ? (
             <RepositoriesSection key={run.run_id} run={run} onEdited={onRefreshRun} />
           ) : (
-            <div className="px-3 py-3 text-fg-4" style={{ fontSize: "11px" }} data-testid="repositories-tab-empty">
-              This Run recorded no target repository — it works in the daemon's own checkout.
+            <div data-testid="repositories-tab-empty" title="The Run works in the daemon's own checkout">
+              <EmptyState icon={FolderGit2}>No target repository</EmptyState>
             </div>
           )}
         </div>

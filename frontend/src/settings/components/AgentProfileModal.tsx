@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
+import { Button, Field, IconButton, TextInput } from "../../shared/ui/kit";
 import { createAgentProfile, updateAgentProfile } from "../api/agentProfiles";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
 import ModelPicker from "../../harness/components/ModelPicker";
@@ -84,9 +85,21 @@ export default function AgentProfileModal({
     }
   };
 
+  const modelState = failed[draft.harness] ? (
+    <span className="d-err set-ellipsis" role="alert" title={failed[draft.harness]} data-testid="agent-profile-models-failed">
+      {failed[draft.harness]}
+    </span>
+  ) : (
+    harnessOption?.installed && (
+      <span className="set-faint text-xs" data-testid="agent-profile-models-probed">
+        {refreshing ? "Probing…" : `${modelCount(harnessOption.models.length)} · ${probedAgo(harnessOption.probedAt)}`}
+      </span>
+    )
+  );
+
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-[60] grid place-items-center bg-scrim"
       data-testid="agent-profile-backdrop"
       onClick={(event) => {
         event.stopPropagation();
@@ -94,120 +107,102 @@ export default function AgentProfileModal({
       }}
     >
       <div
-        className="flex max-h-[85vh] w-[440px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-4"
-        style={{ fontSize: "12px" }}
+        className="d-frame w-[500px] max-w-[calc(90vw/var(--app-zoom,1))] rounded-(--radius-ui) border border-line bg-surface-0"
         role="dialog"
         aria-modal="true"
         aria-label={profile ? `Edit ${profile.name}` : "New agent profile"}
         data-testid="agent-profile-modal"
         onClick={(event) => event.stopPropagation()}
       >
-        {/* #940: bounded to the window like New Run — only the fields scroll; the
-            borders mark where the scrolling body is cut off. */}
-        <div className="shrink-0 border-b border-line px-4 py-3 font-medium text-fg">
-          {profile ? "Edit agent profile" : "New agent profile"}
-        </div>
-        <div className="min-h-0 space-y-2 overflow-y-auto px-4 py-3" data-testid="agent-profile-body">
-        <label className="block text-fg-3" style={{ fontSize: 10 }}>
-          Name
-          <input
-            autoFocus
-            value={draft.name}
-            onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-            className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg"
-          />
-        </label>
-        <label className="block text-fg-3" style={{ fontSize: 10 }}>
-          Harness <span className="text-acc">required</span>
-          <HarnessSelect
-            value={draft.harness}
-            onChange={(harness) => setDraft({ ...draft, harness, model: null, effort: null })}
-            catalog={catalog}
-            inheritLabel="Choose a harness…"
-            data-testid="agent-profile-harness"
-            className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5"
-          />
-        </label>
-        {draft.harness && (
-          <>
-            <div className="block text-fg-3" style={{ fontSize: 10 }}>
-              <div className="flex items-center gap-2">
-                <span>
-                  Model <span className="text-fg-4">optional</span>
+        <header className="d-frame__head">
+          <h2 className="d-frame__title">{profile ? "Edit agent profile" : "New agent profile"}</h2>
+          <span className="d-grow" />
+          <IconButton icon={X} label="Close" kbd="Esc" onClick={onClose} />
+        </header>
+        {/* #940: bounded to the window like New Run — only the fields scroll. */}
+        <div className="d-frame__body flex flex-col gap-2" data-testid="agent-profile-body">
+          <Field label="Name">
+            <TextInput
+              autoFocus
+              value={draft.name}
+              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+            />
+          </Field>
+          <Field label="Harness" help="Required">
+            <HarnessSelect
+              value={draft.harness}
+              onChange={(harness) => setDraft({ ...draft, harness, model: null, effort: null })}
+              catalog={catalog}
+              inheritLabel="Choose a harness…"
+              data-testid="agent-profile-harness"
+              className="d-input"
+            />
+          </Field>
+          {draft.harness && (
+            <>
+              <div className="d-field">
+                <span className="d-field__label" title="Optional">
+                  Model
                 </span>
-                <span className="flex-1" />
-                {failed[draft.harness] ? (
-                  <span className="truncate text-st-failed" role="alert" data-testid="agent-profile-models-failed">
-                    {failed[draft.harness]}
+                <div className="d-field__ctl flex-col items-stretch gap-1">
+                  <ModelPicker
+                    value={draft.model}
+                    onChange={(model) => setDraft({ ...draft, model })}
+                    models={harnessOption?.models ?? []}
+                    contexts={harnessOption?.modelContexts}
+                    testid="agent-profile-model"
+                    subject={profile?.id ?? "new"}
+                  />
+                  <span className="set-line">
+                    {modelState}
+                    <span className="d-grow" />
+                    <IconButton
+                      icon={RefreshCw}
+                      label="Refresh models"
+                      size="sm"
+                      className={refreshing ? "[&>svg]:animate-spin" : undefined}
+                      onClick={() => void refresh(draft.harness)}
+                      disabled={refreshing || !(harnessOption?.installed ?? false)}
+                      data-testid="agent-profile-models-refresh"
+                    />
                   </span>
-                ) : (
-                  harnessOption?.installed && (
-                    <span className="text-fg-4" data-testid="agent-profile-models-probed">
-                      {refreshing
-                        ? "Probing…"
-                        : `${modelCount(harnessOption.models.length)} · ${probedAgo(harnessOption.probedAt)}`}
-                    </span>
-                  )
-                )}
-                <button
-                  type="button"
-                  onClick={() => void refresh(draft.harness)}
-                  disabled={refreshing || !(harnessOption?.installed ?? false)}
-                  aria-label="Refresh models"
-                  title="Probe the models of this harness again"
-                  className="grid h-4 w-4 place-items-center rounded text-fg-3 hover:text-fg disabled:opacity-40"
-                  data-testid="agent-profile-models-refresh"
-                >
-                  <RefreshCw size={11} className={refreshing ? "animate-spin" : undefined} />
-                </button>
+                </div>
               </div>
-              <div className="mt-1">
-                <ModelPicker
-                  value={draft.model}
-                  onChange={(model) => setDraft({ ...draft, model })}
-                  models={harnessOption?.models ?? []}
-                  contexts={harnessOption?.modelContexts}
-                  testid="agent-profile-model"
-                  subject={profile?.id ?? "new"}
-                />
+              <div className="d-field">
+                <span className="d-field__label" title="Optional">
+                  Effort
+                </span>
+                <div className="d-field__ctl">
+                  <EffortPicker
+                    value={draft.effort}
+                    onChange={(next) => setDraft({ ...draft, effort: next })}
+                    efforts={effort.levels}
+                    strict={effort.authoritative}
+                    testid="agent-profile-effort"
+                    disabled={!(harnessOption?.hasEffort ?? true)}
+                  />
+                </div>
               </div>
-            </div>
-            <label className="block text-fg-3" style={{ fontSize: 10 }}>
-              Effort <span className="text-fg-4">optional</span>
-              <EffortPicker
-                value={draft.effort}
-                onChange={(next) => setDraft({ ...draft, effort: next })}
-                efforts={effort.levels}
-                strict={effort.authoritative}
-                testid="agent-profile-effort"
-                disabled={!(harnessOption?.hasEffort ?? true)}
-              />
-            </label>
-          </>
-        )}
+            </>
+          )}
         </div>
-        <div className="shrink-0 border-t border-line px-4 py-3">
-        {error && <p className="mb-2 text-st-failed" style={{ fontSize: 10 }}>{error}</p>}
-        <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded border border-line px-2 py-1 text-fg-3"
-            data-testid="agent-profile-cancel"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={!canSave}
-            onClick={() => void save()}
-            className="rounded bg-acc px-2 py-1 text-bg-1 disabled:opacity-40"
-            data-testid="agent-profile-save"
-          >
-            {profile ? "Save profile" : "Create"}
-          </button>
-        </div>
-        </div>
+        <footer className="d-frame__foot">
+          <span className="d-frame__note">
+            {error && (
+              <span className="d-err set-ellipsis" role="alert" title={error}>
+                {error}
+              </span>
+            )}
+          </span>
+          <div className="d-frame__actions">
+            <Button onClick={onClose} data-testid="agent-profile-cancel">
+              Cancel
+            </Button>
+            <Button tone="primary" disabled={!canSave} onClick={() => void save()} data-testid="agent-profile-save">
+              {profile ? "Save profile" : "Create"}
+            </Button>
+          </div>
+        </footer>
       </div>
     </div>
   );

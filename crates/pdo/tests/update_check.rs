@@ -387,10 +387,7 @@ async fn changelog_assembles_missed_releases_newest_first_and_memoises_the_list(
         body["fallback_reason"],
         "The release source has not been checked yet."
     );
-    assert!(body["markdown"]
-        .as_str()
-        .unwrap()
-        .starts_with("# Changelog"));
+    assert!(body["markdown"].as_str().unwrap().starts_with("## "));
     assert_eq!(fixture.list_hits(), 0);
 
     daemon.run_update_check_tick().await;
@@ -405,13 +402,12 @@ async fn changelog_assembles_missed_releases_newest_first_and_memoises_the_list(
         "strictly newer, sorted desc, pre-release and ancient dropped"
     );
     let md = body["markdown"].as_str().unwrap();
-    let h99 = md.find("## v99.0.0").expect("one heading per version");
-    let h98 = md.find("## v98.0.0").expect("one heading per version");
+    let h99 = md.find("## [v99.0.0](").expect("one heading per version");
+    let h98 = md.find("## [v98.0.0](").expect("one heading per version");
     assert!(h99 < h98, "newest first:\n{md}");
-    assert!(!md.contains("## v0.0.1"), "older releases are not listed");
+    assert!(!md.contains("v0.0.1"), "older releases are not listed");
     assert!(!md.contains("100.0.0"), "pre-releases are not listed");
-    assert!(md.contains("Released 2026-09-05"));
-    assert!(md.contains("[GitHub release](https://example.test/releases/tag/v99.0.0)"));
+    assert!(md.contains("## [v99.0.0](https://example.test/releases/tag/v99.0.0) · 2026-09-05"));
     assert!(md.contains("- ninety-nine"), "notes verbatim");
     assert!(md.contains("| a | b |"), "GFM table verbatim");
 
@@ -439,10 +435,7 @@ async fn changelog_falls_back_to_the_embedded_file_with_a_reason() {
     assert_eq!(body["fallback_reason"], "The update check is off.");
     assert_eq!(body["latest_version"], serde_json::Value::Null);
     assert_eq!(body["missed_versions"], serde_json::json!([]));
-    assert!(body["markdown"]
-        .as_str()
-        .unwrap()
-        .starts_with("# Changelog"));
+    assert!(body["markdown"].as_str().unwrap().starts_with("## "));
     assert_eq!(fixture.list_hits(), 0, "off: the list is never fetched");
 
     // Source unreachable at the last check: same body, the other reason.
@@ -456,7 +449,7 @@ async fn changelog_falls_back_to_the_embedded_file_with_a_reason() {
         body["fallback_reason"],
         "The release source was unreachable at the last check."
     );
-    assert!(body["markdown"].as_str().unwrap().contains("## 1.59.0"));
+    assert!(body["markdown"].as_str().unwrap().starts_with("## "));
 }
 
 #[tokio::test]
@@ -488,10 +481,7 @@ async fn changelog_on_an_up_to_date_daemon_says_so_with_the_embedded_body() {
         serde_json::Value::Null,
         "up to date is nominal, not a fallback"
     );
-    assert!(body["markdown"]
-        .as_str()
-        .unwrap()
-        .starts_with("# Changelog"));
+    assert!(body["markdown"].as_str().unwrap().starts_with("## "));
     assert_eq!(
         fixture.list_hits(),
         0,

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { BookOpen, Plus, Trash2, FilePlus } from "lucide-react";
+import { BookOpen, Plus, Search, Trash2, FilePlus } from "lucide-react";
+import { EmptyState, IconButton } from "../../shared/ui/kit";
 import type { LibraryEntry } from "../model/library";
 import { instantiateFromLibrary } from "../api/library";
 import { libraryPortToPortDef } from "../model/library";
@@ -8,7 +9,6 @@ import { generateNodeId } from "../../lib/nanoid";
 import { resolveIsolation, workspaceLabel } from "../../lib/nodeIsolation";
 import { NodeTypeIcon } from "./NodeTypeIcon";
 import type { NodeType } from "../../shared/generated/NodeType";
-import { Tooltip } from "../../shared/ui/tooltip";
 import type { EditorNodeDef } from "../model/pipeline";
 
 
@@ -84,37 +84,31 @@ export default function LibraryDropdown({
 
   return (
     <div ref={ref} className="relative">
-      <Tooltip content="Library · L">
-        <button
-          data-testid="toolbar-library"
-          onClick={() => setOpen(!open)}
-          className="grid h-7 w-7 place-items-center rounded-md border border-transparent bg-transparent text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
-        >
-          <BookOpen size={14} />
-        </button>
-      </Tooltip>
+      <IconButton
+        icon={BookOpen}
+        label="Library"
+        data-testid="toolbar-library"
+        pressed={open}
+        onClick={() => setOpen(!open)}
+      />
 
       {open && (
         <div
-          className="absolute left-0 top-full z-50 mt-1 flex w-[280px] flex-col overflow-hidden rounded-lg border border-line bg-bg-4 shadow-lg"
-          style={{ maxHeight: "60vh" }}
+          className="absolute left-0 top-full z-50 mt-1 flex w-[280px] flex-col overflow-hidden rounded border border-line bg-surface-2 shadow-lg"
+          style={{ maxHeight: "calc(60vh / var(--app-zoom, 1))" }}
         >
-          <div className="flex items-center justify-between border-b border-line px-3 py-2">
-            <span className="font-medium text-fg" style={{ fontSize: "12px" }}>
-              Library
-            </span>
-            <span className="text-fg-4" style={{ fontSize: "10px" }}>
-              {entries.length} {entries.length === 1 ? "entry" : "entries"}
-            </span>
+          <div className="flex h-8 items-center justify-between border-b border-line px-2">
+            <span className="d-caps">Library</span>
+            <span className="d-chip font-mono text-2xs">{entries.length}</span>
           </div>
 
-          <div className="border-b border-line px-2 py-1.5">
+          <div className="border-b border-line px-2 py-1">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search nodes..."
-              className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
-              style={{ fontSize: "11px" }}
+              placeholder="Search nodes"
+              aria-label="Search nodes"
+              className="d-input w-full"
               autoFocus
             />
           </div>
@@ -128,24 +122,23 @@ export default function LibraryDropdown({
                 setOpen(false);
                 onAddNodeFromYaml();
               }}
-              className="flex w-full cursor-pointer items-center gap-2 border-b border-line px-3 py-1.5 text-left text-fg-2 transition-colors hover:bg-bg-3 hover:text-fg"
-              style={{ fontSize: "11px" }}
+              className="flex h-6 w-full cursor-pointer items-center gap-1.5 border-b border-line px-2 text-left text-sm text-text-2 transition-colors hover:bg-hover hover:text-text"
             >
-              <FilePlus size={12} className="shrink-0 text-fg-4" />
-              <span>Add node from YAML…</span>
+              <FilePlus size={14} strokeWidth={1.5} className="shrink-0 text-text-3" />
+              <span>Node from YAML…</span>
             </button>
           )}
 
           <div className="flex-1 overflow-y-auto">
             {filtered.length === 0 && entries.length === 0 && (
-              <div className="px-3 py-6 text-center text-fg-4" style={{ fontSize: "11px" }}>
-                No saved nodes yet. Star a node in the inspector to add it here.
-              </div>
+              <EmptyState icon={BookOpen} layout="row">
+                No saved node
+              </EmptyState>
             )}
             {filtered.length === 0 && entries.length > 0 && (
-              <div className="px-3 py-4 text-center text-fg-4" style={{ fontSize: "11px" }}>
-                No matches.
-              </div>
+              <EmptyState icon={Search} layout="row">
+                No match
+              </EmptyState>
             )}
             {filtered.map((entry) => (
               <LibraryRow
@@ -180,57 +173,55 @@ function LibraryRow({
 
   return (
     <div
-      className="group flex items-center gap-2 px-3 py-1.5 transition-colors hover:bg-bg-3"
+      className="group flex h-10 items-center gap-2 px-2 transition-colors hover:bg-hover"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
       {/* #655: the same glyph the canvas and the inspector use for the type.
           The two-letter badge it replaces only knew `agent`, so a starred
           `script` — or any other type — read `??` in its own library. */}
-      <span className="shrink-0 text-fg-4">
+      <span className="shrink-0 text-text-3">
         <NodeTypeIcon type={entry.type as NodeType} size={12} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5">
-          <span className="truncate font-medium text-fg" style={{ fontSize: "11px" }}>
+          <span className="truncate text-md font-medium text-text" title={entry.name}>
             {entry.name}
           </span>
           {isolation !== null && (
             <span
               data-testid={`library-workspace-${isolation ? "isolated" : "shared"}`}
-              className="shrink-0 text-fg-4"
-              style={{ fontSize: "9px" }}
+              className="shrink-0 font-mono text-2xs text-text-3"
             >
               {workspaceLabel(isolation)}
             </span>
           )}
         </div>
-        <div className="truncate text-fg-4" style={{ fontSize: "10px" }}>
+        <div className="truncate text-xs text-text-3">
           {preview || "No prompt"}
         </div>
       </div>
       {hovered && (
         <div className="flex shrink-0 items-center gap-1">
-          <button
+          <IconButton
+            icon={Plus}
+            size="sm"
+            label="Add to canvas"
             onClick={(e) => {
               e.stopPropagation();
               onAdd();
             }}
-            className="rounded p-0.5 text-acc hover:bg-acc/10"
-            title="Add to canvas"
-          >
-            <Plus size={12} />
-          </button>
-          <button
+          />
+          <IconButton
+            icon={Trash2}
+            size="sm"
+            tone="danger"
+            label="Remove from library"
             onClick={(e) => {
               e.stopPropagation();
               onDelete();
             }}
-            className="rounded p-0.5 text-fg-4 hover:text-st-failed"
-            title="Remove from library"
-          >
-            <Trash2 size={12} />
-          </button>
+          />
         </div>
       )}
     </div>

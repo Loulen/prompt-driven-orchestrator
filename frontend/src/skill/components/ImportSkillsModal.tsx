@@ -46,7 +46,7 @@ export default function ImportSkillsModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim"
       onClick={(event) => {
         event.stopPropagation();
         requestClose();
@@ -54,7 +54,7 @@ export default function ImportSkillsModal({
       data-testid="import-skills-backdrop"
     >
       <div
-        className="flex w-[1020px] max-w-[96vw] max-h-[88vh] flex-col rounded-lg border border-line bg-bg-4 shadow-xl"
+        className="flex w-[1020px] max-w-[calc(96vw/var(--app-zoom,1))] max-h-[calc(88vh/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-2 shadow-xl"
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-label="Import skills from a source"
@@ -62,15 +62,15 @@ export default function ImportSkillsModal({
         data-step={step}
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h3 className="flex items-center gap-2 font-semibold text-fg" style={{ fontSize: "13.5px" }}>
-            <Download size={14} className="text-fg-3" />
+          <h3 className="flex items-center gap-2 font-semibold text-text text-lg">
+            <Download size={14} className="text-text-3" />
             Import skills from a source
           </h3>
           <button
             type="button"
             onClick={requestClose}
             aria-label="Close import popup"
-            className="grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-bg-5 hover:text-fg"
+            className="grid h-6 w-6 place-items-center rounded text-text-3 hover:bg-active hover:text-text"
           >
             <X size={14} />
           </button>
@@ -89,7 +89,7 @@ export default function ImportSkillsModal({
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-3">
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="text-text-3 text-xs">
             {step === "scanning"
               ? "Esc cancels the scan"
               : step === "source"
@@ -99,14 +99,13 @@ export default function ImportSkillsModal({
           <div className="flex items-center gap-2">
             {confirmDiscard ? (
               <>
-                <span className="text-fg-2" style={{ fontSize: "11px" }} data-testid="import-discard-prompt">
+                <span className="text-text-2 text-xs" data-testid="import-discard-prompt">
                   Leave without importing?
                 </span>
                 <button
                   type="button"
                   onClick={() => setConfirmDiscard(false)}
-                  className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 hover:bg-bg-4"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover text-xs"
                 >
                   Stay
                 </button>
@@ -114,8 +113,7 @@ export default function ImportSkillsModal({
                   type="button"
                   onClick={onClose}
                   data-testid="import-discard"
-                  className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-white hover:opacity-90"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink hover:opacity-90 text-xs"
                 >
                   Leave
                 </button>
@@ -126,8 +124,7 @@ export default function ImportSkillsModal({
                   type="button"
                   onClick={requestClose}
                   data-testid="import-cancel"
-                  className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 hover:bg-bg-4"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover text-xs"
                 >
                   Cancel
                 </button>
@@ -137,8 +134,7 @@ export default function ImportSkillsModal({
                     onClick={startScan}
                     disabled={!parsed || step === "scanning"}
                     data-testid="import-scan"
-                    className="rounded-md bg-acc px-3 py-1.5 font-medium text-bg-1 transition-opacity hover:opacity-90 disabled:opacity-40"
-                    style={{ fontSize: "11.5px" }}
+                    className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40 text-xs"
                   >
                     {step === "scanning" ? "Scanning…" : "Scan source"}
                   </button>
@@ -148,8 +144,7 @@ export default function ImportSkillsModal({
                     onClick={() => void submit()}
                     disabled={!canImport}
                     data-testid="import-submit"
-                    className="rounded-md bg-acc px-3 py-1.5 font-medium text-bg-1 transition-opacity hover:opacity-90 disabled:opacity-40"
-                    style={{ fontSize: "11.5px" }}
+                    className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40 text-xs"
                   >
                     {step === "importing"
                       ? "Importing…"

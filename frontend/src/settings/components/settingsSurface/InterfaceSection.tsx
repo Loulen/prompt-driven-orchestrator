@@ -1,14 +1,19 @@
 import { useState } from "react";
-import GridSizePicker from "../../../pipeline/components/GridSizePicker";
 import ThemeSelect from "../../../shared/ui/ThemeSelect";
+import { Segmented, Switch } from "../../../shared/ui/kit";
+import { setUiScale, UI_SCALES, useUiScale, type UiScale } from "../../../lib/uiScale";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../../../lib/uiPrefs";
+import { GRID_SIZES, gridStep, type GridSize } from "../../../lib/wiringGrid";
 import { useEditStore } from "../../../pipeline/store/editStore";
 import { useWiringStore } from "../../../stores/wiringStore";
 import type { SettingsSection } from "../../model/settingsCategories";
+import { SettingRow } from "./fields";
 import Section from "./Section";
 
+const SCALE_ITEMS = UI_SCALES.map((scale) => ({ value: String(scale), label: `${scale} %` }));
+
 /**
- * Per-client UI preferences (#342, #759). Both controls persist to localStorage AT
+ * Per-client UI preferences (#342, #759). Every control persists to localStorage AT
  * THE CHANGE — NOT behind the instance form's Save, and never part of the dirty set.
  * Rendered even when `GET /settings` failed (Trap A).
  */
@@ -28,214 +33,85 @@ export default function InterfaceSection({ section }: { section: SettingsSection
   const setGridFeedback = useWiringStore((s) => s.setGridFeedback);
   const defaultGridSize = useWiringStore((s) => s.defaultGridSize);
   const setDefaultGridSize = useWiringStore((s) => s.setDefaultGridSize);
+  const uiScale = useUiScale();
 
   return (
     <Section section={section}>
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
-            Theme
-          </span>
-          <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
-            data-testid="setting-theme-badge"
-          >
-            Device-local · saved immediately
-          </span>
-        </div>
+      <SettingRow label="Theme" help="System follows the operating system" scope="device" testId="setting-row-theme">
         <ThemeSelect />
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
-          With nothing chosen, PDO paints dark — the look it has always had.
-          System follows your operating system's light/dark setting and keeps
-          following it. Light and dark pin PDO, whatever the system does.
-        </div>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
-            Single-tab mode
-          </span>
-          <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
-            data-testid="setting-tabs-disabled-badge"
-          >
-            Device-local · saved immediately
-          </span>
-        </div>
-        <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={singleTabMode}
-            aria-label="Single-tab mode"
-            data-testid="setting-tabs-disabled"
-            onClick={() => setSingleTabMode(!singleTabMode)}
-            className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-              singleTabMode ? "bg-acc" : "bg-fg-5"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
-                singleTabMode ? "left-3" : "left-0.5"
-              }`}
-            />
-          </button>
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-            Opening a pipeline or run replaces the current tab instead of stacking a new one.
-            Enabling it closes the other open tabs.
-          </span>
-        </div>
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
-          Stored in this browser's localStorage. Not shared with other browsers or the daemon.
-        </div>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
-            Child runs
-          </span>
-          <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
-            data-testid="setting-child-runs-badge"
-          >
-            Device-local · saved immediately
-          </span>
-        </div>
-        <div
-          role="radiogroup"
-          aria-label="Child runs"
-          className="flex gap-1"
-          data-testid="setting-child-runs"
-        >
-          {(
-            [
-              { v: true, id: "expanded", label: "Expanded by default" },
-              { v: false, id: "collapsed", label: "Collapsed by default" },
-            ] as const
-          ).map(({ v, id, label }) => {
-            const selected = childRunsExpanded === v;
-            return (
-              <button
-                key={id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                tabIndex={selected ? 0 : -1}
-                data-testid={`setting-child-runs-${id}`}
-                onClick={() => pickChildRuns(v)}
-                onKeyDown={(e) => {
-                  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
-                    e.preventDefault();
-                    pickChildRuns(!v);
-                  }
-                }}
-                className={`flex flex-1 cursor-pointer items-center justify-center rounded border px-2 py-1.5 font-medium transition-colors ${
-                  selected
-                    ? "border-acc bg-acc-bg text-acc"
-                    : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
-                }`}
-                style={{ fontSize: "10px" }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
-          Applied when the run list loads. Toggling a row or the expand/collapse-all button only
-          affects the current session.
-        </div>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
-            Wiring grid
-          </span>
-          <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
-            data-testid="setting-wiring-grid-badge"
-          >
-            Device-local · saved immediately
-          </span>
-        </div>
-        <div
-          role="radiogroup"
-          aria-label="Wiring grid"
-          className="flex gap-1"
-          data-testid="setting-wiring-grid"
-        >
-          {(
-            [
-              { v: "none", label: "Hidden" },
-              { v: "dots", label: "Dots" },
-              { v: "lines", label: "Lines" },
-            ] as const
-          ).map(({ v, label }, i, all) => {
-            const selected = gridFeedback === v;
-            return (
-              <button
-                key={v}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                tabIndex={selected ? 0 : -1}
-                data-testid={`setting-wiring-grid-${v}`}
-                onClick={() => setGridFeedback(v)}
-                onKeyDown={(e) => {
-                  if (["ArrowLeft", "ArrowUp"].includes(e.key)) {
-                    e.preventDefault();
-                    setGridFeedback(all[(i + all.length - 1) % all.length].v);
-                  }
-                  if (["ArrowRight", "ArrowDown"].includes(e.key)) {
-                    e.preventDefault();
-                    setGridFeedback(all[(i + 1) % all.length].v);
-                  }
-                }}
-                className={`flex flex-1 cursor-pointer items-center justify-center rounded border px-2 py-1.5 font-medium transition-colors ${
-                  selected
-                    ? "border-acc bg-acc-bg text-acc"
-                    : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
-                }`}
-                style={{ fontSize: "10px" }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
-          How the wiring grid shows itself while you draw an edge on the canvas.
-        </div>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-fg-2" style={{ fontSize: "11.5px" }}>
-            Wiring grid size
-          </span>
-          <span
-            className="rounded-full border border-acc-border bg-acc-bg px-2 py-0.5 text-acc"
-            style={{ fontSize: "9.5px" }}
-            data-testid="setting-wiring-grid-size-badge"
-          >
-            Device-local · saved immediately
-          </span>
-        </div>
-        <GridSizePicker
-          value={defaultGridSize}
-          onChange={(v) => v && setDefaultGridSize(v)}
-          ariaLabel="Wiring grid size"
-          testId="setting-wiring-grid-size"
+      </SettingRow>
+      <SettingRow
+        label="UI scale"
+        help="Size of the whole interface on this device"
+        keywords="zoom"
+        scope="device"
+        testId="setting-row-ui-scale"
+      >
+        <Segmented
+          label="UI scale"
+          size="sm"
+          value={String(uiScale)}
+          onChange={(v) => setUiScale(Number(v) as UiScale)}
+          items={SCALE_ITEMS}
         />
-        <div className="text-fg-3" style={{ fontSize: "10.5px" }}>
-          The step edges snap to on the canvas, for every pipeline that has no size of its own. A
-          pipeline can pick its own size in its Pipeline info; that choice is saved in the
-          pipeline file and wins over this one. Existing routes are never re-snapped.
-        </div>
-      </div>
+      </SettingRow>
+      <SettingRow
+        label="Single-tab mode"
+        help="Opening a pipeline or a run replaces the current tab; turning it on closes the other tabs"
+        scope="device"
+        testId="setting-row-tabs-disabled"
+      >
+        <Switch label="Single-tab mode" checked={singleTabMode} onChange={setSingleTabMode} />
+      </SettingRow>
+      <SettingRow
+        label="Child runs"
+        help="How the run list opens; a row's chevron only changes the current session"
+        scope="device"
+        testId="setting-row-child-runs"
+      >
+        <Segmented
+          label="Child runs"
+          size="sm"
+          value={childRunsExpanded ? "expanded" : "collapsed"}
+          onChange={(v) => pickChildRuns(v === "expanded")}
+          items={[
+            { value: "expanded", label: "Expanded" },
+            { value: "collapsed", label: "Collapsed" },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Wiring grid"
+        help="How the grid shows while you draw an edge on the canvas"
+        scope="device"
+        testId="setting-row-wiring-grid"
+      >
+        <Segmented
+          label="Wiring grid"
+          size="sm"
+          value={gridFeedback}
+          onChange={setGridFeedback}
+          items={[
+            { value: "none", label: "Hidden" },
+            { value: "dots", label: "Dots" },
+            { value: "lines", label: "Lines" },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow
+        label="Wiring grid size"
+        help="The step edges snap to, for every pipeline without a size of its own; existing routes are never re-snapped"
+        scope="device"
+        testId="setting-row-wiring-grid-size"
+      >
+        <Segmented<GridSize>
+          label="Wiring grid size"
+          size="sm"
+          value={defaultGridSize}
+          onChange={setDefaultGridSize}
+          items={GRID_SIZES.map((size) => ({ value: size, label: size, title: `${size}, ${gridStep(size)} px` }))}
+        />
+      </SettingRow>
     </Section>
   );
 }

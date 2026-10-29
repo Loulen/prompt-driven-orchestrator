@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { Button, Modal } from "../../../shared/ui/kit";
 import { SETTINGS_CATEGORIES, type DirtyRollup } from "../../model/settingsCategories";
 
+/** Closing Settings with an unsaved draft: keep editing, discard it, or save and close. */
 export function ConfirmCloseDialog({
   rollup,
   saving,
@@ -14,11 +15,6 @@ export function ConfirmCloseDialog({
   onDiscard: () => void;
   onSaveAndClose: () => void;
 }) {
-  const keepRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    keepRef.current?.focus();
-  }, []);
-
   const places = SETTINGS_CATEGORIES.flatMap((category) =>
     category.sections
       .filter((section) => rollup.sections.has(section.id))
@@ -27,64 +23,34 @@ export function ConfirmCloseDialog({
   const count = rollup.fields.size;
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
-      onClick={onKeep}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-confirm-title"
-        className="w-[380px] rounded-lg border border-line bg-bg-4 p-4 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-        data-testid="settings-confirm-close"
-      >
-        <h3 id="settings-confirm-title" className="font-semibold text-fg" style={{ fontSize: "13px" }}>
-          Discard unsaved changes?
-        </h3>
-        <p className="mt-2 text-fg-3" style={{ fontSize: "11px" }}>
-          You edited{" "}
-          {places.map((place, index) => (
-            <span key={place}>
-              {index > 0 && ", "}
-              <strong className="text-fg-2">{place}</strong>
-            </span>
-          ))}{" "}
-          ({count} field{count === 1 ? "" : "s"}). Closing Settings without saving drops the
-          edit{count === 1 ? "" : "s"}.
-        </p>
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <button
-            ref={keepRef}
-            type="button"
-            onClick={onKeep}
-            data-testid="settings-confirm-keep"
-            className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 hover:bg-bg-5"
-            style={{ fontSize: "11.5px" }}
-          >
+    <Modal
+      size="s"
+      title="Close settings?"
+      onClose={onKeep}
+      onSubmit={onSaveAndClose}
+      data-testid="settings-confirm-close"
+      actions={
+        <>
+          <Button onClick={onKeep} data-testid="settings-confirm-keep" data-autofocus="">
             Keep editing
-          </button>
-          <button
-            type="button"
-            onClick={onDiscard}
-            data-testid="settings-confirm-discard"
-            className="rounded-md border border-st-failed/40 bg-st-failed-bg px-3 py-1.5 text-st-failed hover:border-st-failed"
-            style={{ fontSize: "11.5px" }}
-          >
+          </Button>
+          <Button tone="danger" onClick={onDiscard} data-testid="settings-confirm-discard">
             Discard
-          </button>
-          <button
-            type="button"
-            onClick={onSaveAndClose}
-            disabled={saving}
-            data-testid="settings-confirm-save-close"
-            className="rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc hover:bg-acc-dim disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
-          >
+          </Button>
+          <Button tone="primary" onClick={onSaveAndClose} disabled={saving} data-testid="settings-confirm-save-close">
             {saving ? "Saving…" : "Save & close"}
-          </button>
-        </div>
+          </Button>
+        </>
+      }
+    >
+      <div className="d-confirm">
+        <p className="d-confirm__line">
+          {count} unsaved change{count === 1 ? "" : "s"}
+        </p>
+        <code className="d-code d-confirm__target" data-testid="settings-confirm-places">
+          {places.join(", ")}
+        </code>
       </div>
-    </div>
+    </Modal>
   );
 }

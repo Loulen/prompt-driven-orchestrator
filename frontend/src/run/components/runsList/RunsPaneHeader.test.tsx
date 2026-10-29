@@ -1,24 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import RunsPaneHeader, { NO_RUN_ANYWHERE } from "./RunsPaneHeader";
+import RunsPaneHeader from "./RunsPaneHeader";
 import { act } from "react";
 import {
   RECHECK_RIGHTS_EVERY_MS,
   useRunCreationRightsStore,
 } from "../../store/runCreationRightsStore";
-import { runCreationRights, UNKNOWN_RIGHTS } from "../../model/runCreationRights";
+import { NO_RUN_ANYWHERE, runCreationRights, UNKNOWN_RIGHTS } from "../../model/runCreationRights";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import type { Project } from "../../../workspace/model/project";
-import { TooltipProvider } from "../../../shared/ui/tooltip";
 
 vi.mock("../../../shared/extensions/ExtensionActions", () => ({
   ExtensionActionButtons: () => null,
 }));
 
 const pane = {
-  availableRepos: [],
-  projectOf: () => null,
-  openProjectSettings: vi.fn(),
+  allParentIds: [],
+  filterActive: false,
 } as unknown as RunsPaneState;
 
 const P1 = { id: "p1", name: "PDO", members: ["/r"] } as unknown as Project;
@@ -26,9 +24,9 @@ const P1 = { id: "p1", name: "PDO", members: ["/r"] } as unknown as Project;
 function renderHeader() {
   const onNewRun = vi.fn();
   render(
-    <TooltipProvider>
-      <RunsPaneHeader pane={pane} onNewRun={onNewRun} />
-    </TooltipProvider>,
+    <>
+      <RunsPaneHeader pane={pane} runs={[]} triggers={[]} onNewRun={onNewRun} />
+    </>,
   );
   return onNewRun;
 }

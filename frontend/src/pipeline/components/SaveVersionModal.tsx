@@ -1,14 +1,46 @@
 import { useEffect, useRef, useState } from "react";
-import { Save, X } from "lucide-react";
+import { Save } from "lucide-react";
 import type { PipelineVersionRef } from "../../shared/generated/PipelineVersionRef";
+import { Button, Kbd, Modal, Segmented, TextInput, toast } from "../../shared/ui/kit";
+import type { SaveResult } from "../api/pipelines";
 import type { SaveAs } from "../api/versions";
 import { defaultTitle } from "../model/versions";
+import "./inspect.css";
+
+/** The three outcomes of a Save; they exclude each other. */
+type SaveKind = "version" | "keep" | "replace";
+
+/** What the button says: « Save v8 », « Save v8, keep v7 », « Replace v7 ». */
+function saveActionLabel(kind: SaveKind, last: PipelineVersionRef): string {
+  const n = last.number;
+  if (kind === "version") return `Save v${n + 1}`;
+  if (kind === "keep") return `Save v${n + 1}, keep v${n}`;
+  return `Replace v${n}`;
+}
+
+/** The pipeline the last version is kept as: `<name> (vN)`. */
+function keptName(pipelineName: string, number: number): string {
+  return `${pipelineName} (${defaultTitle(number)})`;
+}
+
+function saveAsOf(kind: SaveKind, title: string): SaveAs {
+  if (kind === "replace") return { new_version: false, keep_old: false };
+  return { new_version: true, title, keep_old: kind === "keep" };
+}
+
+/** What the daemon did, by the version it numbered: another Save may have come first. */
+function savedMessage(pipelineName: string, saveAs: SaveAs, saved: PipelineVersionRef, kept: boolean): string {
+  const name = `${pipelineName} ${defaultTitle(saved.number)}`;
+  if (!saveAs.new_version) return `Replaced ${name}`;
+  // Kept: the pipeline's name once, so a long one leaves the kept name in view.
+  return kept ? `Saved ${defaultTitle(saved.number)} · kept ${keptName(pipelineName, saved.number - 1)}` : `Saved ${name}`;
+}
 
 /**
- * « Save… » of a shared draft (ADR-0088): the draft becomes the next version,
- * titled `vN` unless renamed; unticked, it replaces the last version under its
- * number. « Keep old as new pipeline » keeps the version saved until now as a
- * pipeline of its own, `<name> (vN)`.
+ * « Save <pipeline> » of a shared draft (ADR-0088): one choice among three,
+ * the button names the outcome. A new version `vN+1`, titled `vN+1` unless
+ * renamed; the same, with `vN` also kept as a pipeline of its own; or the
+ * draft replaces `vN` under its number.
  */
 export default function SaveVersionModal({
   pipelineName,
@@ -19,151 +51,139 @@ export default function SaveVersionModal({
   pipelineName: string;
   /** The last version: the file, what a replacement replaces. */
   last: PipelineVersionRef;
-  onSave: (saveAs: SaveAs) => Promise<void>;
+  /** Resolves what the daemon saved; nothing when the save failed. */
+  onSave: (saveAs: SaveAs) => Promise<SaveResult | undefined>;
   onClose: () => void;
 }) {
-  const next = last.number + 1;
-  const [newVersion, setNewVersion] = useState(true);
-  const [title, setTitle] = useState(defaultTitle(next));
-  const [keepOld, setKeepOld] = useState(false);
+  const n = last.number;
+  const [kind, setKind] = useState<SaveKind>("version");
+  const [title, setTitle] = useState(defaultTitle(n + 1));
   const [saving, setSaving] = useState(false);
+  // Enter and Ctrl+Enter twice before a render must not save twice.
+  const inFlight = useRef(false);
   const titleRef = useRef<HTMLInputElement>(null);
 
   // The default title is selected: typing replaces it.
   useEffect(() => {
     titleRef.current?.select();
-  }, [newVersion]);
+  }, []);
 
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose]);
-
-  const lastName = defaultTitle(last.number);
+  const lastName = defaultTitle(n);
   const lastTitle = last.title.trim() !== "" && last.title !== lastName ? last.title : null;
-  const action = newVersion ? `Save v${next}` : `Replace ${lastName}`;
+  const replace = kind === "replace";
+  const action = saveActionLabel(kind, last);
 
   const submit = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setSaving(true);
-    await onSave({
-      new_version: newVersion,
-      ...(newVersion ? { title } : {}),
-      keep_old: keepOld,
-    });
+    const saveAs = saveAsOf(kind, title);
+    const result = await onSave(saveAs);
+    inFlight.current = false;
     setSaving(false);
+    if (result?.version) toast(savedMessage(pipelineName, saveAs, result.version, result.kept != null), "success");
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      data-testid="save-version-backdrop"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="save-version-title"
-        data-testid="save-version-modal"
-        className="w-[460px] max-w-[90vw] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-2">
-          <h3 id="save-version-title" className="font-medium text-fg" style={{ fontSize: "13px" }}>
-            Save <span className="font-mono">{pipelineName}</span>
-          </h3>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="grid h-5 w-5 cursor-pointer place-items-center rounded text-fg-3 hover:bg-bg-3 hover:text-fg"
+    <Modal
+      size="s"
+      title={
+        <>
+          Save <span className="font-mono">{pipelineName}</span>
+        </>
+      }
+      titleText={`Save ${pipelineName}`}
+      onClose={onClose}
+      onSubmit={() => void submit()}
+      data-testid="save-version-modal"
+      actions={
+        <>
+          <Button onClick={onClose} data-testid="save-version-cancel">
+            Cancel
+          </Button>
+          <Button
+            tone={replace ? "danger" : "primary"}
+            icon={Save}
+            disabled={saving}
+            title={`${action} (Ctrl+Enter)`}
+            onClick={() => void submit()}
+            data-testid="save-version-confirm"
           >
-            <X size={12} />
-          </button>
+            {action}
+            <Kbd>Ctrl ↵</Kbd>
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-2 text-sm" data-testid="save-version-body">
+        <div className="flex *:min-w-0 *:flex-1 [&_[role=radio]]:min-w-0 [&_[role=radio]]:flex-1 [&_[role=radio]]:justify-center [&_[role=radio]>span]:truncate">
+          <Segmented<SaveKind>
+            label="Save as"
+            value={kind}
+            onChange={setKind}
+            items={[
+              {
+                value: "version",
+                label: `New version v${n + 1}`,
+                title: "New version",
+              },
+              {
+                value: "keep",
+                label: `Keep v${n} apart`,
+                title: `New version, keep v${n} as a pipeline`,
+              },
+              {
+                value: "replace",
+                label: `Replace v${n}`,
+                title: `Replace v${n}`,
+              },
+            ]}
+          />
         </div>
-
-        <label className="mt-3 flex cursor-pointer items-center gap-2 text-fg">
-          <input
-            type="checkbox"
-            checked={newVersion}
-            onChange={(e) => setNewVersion(e.target.checked)}
-            data-testid="save-version-new"
-            className="accent-acc"
+        <label className="grid grid-cols-[40px_minmax(0,1fr)] items-center gap-x-1.5">
+          <span className="text-text-2">Title</span>
+          <TextInput
+            ref={titleRef}
+            mono
+            data-autofocus=""
+            aria-label="Version title"
+            spellCheck={false}
+            value={replace ? (lastTitle ?? lastName) : title}
+            disabled={replace}
+            // A Replace keeps the version's title: the field only shows it.
+            className={replace ? "ei-ro" : undefined}
+            title={replace ? `Replace keeps the title of ${lastName}` : undefined}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault();
+                void submit();
+              }
+            }}
+            data-testid="save-version-title-input"
           />
-          Save as a new version
         </label>
-        {newVersion ? (
-          <div className="mt-2 flex items-center gap-2 pl-6">
-            <span className="text-fg-4" style={{ fontSize: "11px" }}>
-              Title
-            </span>
-            <input
-              ref={titleRef}
-              autoFocus
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !saving) void submit();
-              }}
-              data-testid="save-version-title-input"
-              className="min-w-0 flex-1 rounded-md border border-line-strong bg-bg-1 px-2 py-1 text-fg outline-none focus:border-acc"
-            />
-          </div>
-        ) : (
-          <p className="mt-1 pl-6 text-st-await" style={{ fontSize: "11px" }} data-testid="save-version-replaces">
-            Replaces {lastName}
-            {lastTitle && <> « {lastTitle} »</>} and keeps its number. Runs launched on {lastName} keep showing{" "}
-            {lastName}.
-          </p>
-        )}
-
-        <label className="mt-3 flex cursor-pointer items-center gap-2 text-fg">
-          <input
-            type="checkbox"
-            checked={keepOld}
-            onChange={(e) => setKeepOld(e.target.checked)}
-            data-testid="save-version-keep-old"
-            className="accent-acc"
-          />
-          Keep old as new pipeline
-        </label>
-        <p className="mt-1 pl-6 text-fg-4" style={{ fontSize: "11px" }} data-testid="save-version-keep-hint">
-          {keepOld ? (
+        <p
+          className={`m-0 flex min-h-5 min-w-0 items-center gap-1 ${replace ? "text-st-await" : "text-text-2"}`}
+          data-testid="save-version-effect"
+        >
+          {kind === "version" && <>{lastName} stays in Versions</>}
+          {kind === "keep" && (
             <>
-              {lastName} stays as a separate pipeline{" "}
-              <span className="font-mono text-fg-3">
-                {pipelineName} ({lastName})
-              </span>{" "}
-              in the Library.
+              <span className="flex-none">{lastName} also kept as</span>{" "}
+              <code className="d-code min-w-0 truncate" title={keptName(pipelineName, n)}>
+                {keptName(pipelineName, n)}
+              </code>
             </>
-          ) : (
-            <>{lastName} is only kept in the history.</>
+          )}
+          {replace && (
+            <span className="min-w-0 truncate" title={lastTitle ?? undefined}>
+              Overwrites {lastName}
+              {lastTitle && <> « {lastTitle} »</>}, same number
+            </span>
           )}
         </p>
-
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            data-testid="save-version-cancel"
-            className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => void submit()}
-            disabled={saving}
-            data-testid="save-version-confirm"
-            className="flex cursor-pointer items-center gap-1 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
-          >
-            <Save size={11} />
-            {saving ? "Saving…" : action}
-          </button>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 }

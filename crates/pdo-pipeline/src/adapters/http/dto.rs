@@ -47,6 +47,11 @@ pub(super) struct PipelineListEntry {
     /// Whether a manual Run must supply a non-empty prompt. Surfaced so the New Run
     /// modal can make the prompt field optional.
     prompt_required: bool,
+    /// Why its file does not parse, when it does not: the row marks it
+    /// invalid. Absent on a valid pipeline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    invalid: Option<String>,
     /// The entity attributes the extensions stamped on it (CONTEXT.md §
     /// *Extensions*); absent when none.
     #[serde(skip_serializing_if = "Attributes::is_empty")]
@@ -98,6 +103,7 @@ impl
                 .map(|(k, v)| (k.clone(), v.into()))
                 .collect(),
             prompt_required: summary.prompt_required,
+            invalid: summary.invalid,
             attributes,
             validation,
             draft,

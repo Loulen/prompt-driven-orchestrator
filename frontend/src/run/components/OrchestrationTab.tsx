@@ -1,7 +1,8 @@
 // #723 — Orchestration tab of the NodeRun detail panel + the shared count pastilles.
 import { useEffect, useState } from "react";
-import { ExternalLink, GitFork } from "lucide-react";
-import type { RunStatus } from "../../shared/generated/RunStatus";
+import { ArrowRight, ExternalLink, GitFork, Hourglass } from "lucide-react";
+import { Button, EmptyState, StatusIcon } from "../../shared/ui/kit";
+import NodeBanner from "./nodeDetail/NodeBanner";
 import { isLiveRun } from "../model/runStatus";
 import { formatDuration } from "../model/runDuration";
 import { formatCostAmount } from "../model/costLabel";
@@ -12,25 +13,6 @@ import {
   type RunChildEntry,
   totalChildren,
 } from "../model/orchestration";
-
-const RUN_STATUS_LABEL: Record<RunStatus, string> = {
-  running: "Running",
-  awaiting_user: "Awaiting user",
-  completed: "Completed",
-  failed: "Failed",
-  skipped: "Skipped",
-  halted: "Halted",
-  paused: "Paused",
-  archived: "Archived",
-};
-
-function runStatusDot(status: RunStatus): string {
-  if (status === "failed") return "bg-st-failed";
-  if (status === "awaiting_user") return "bg-st-await";
-  if (status === "paused") return "bg-st-stopped";
-  if (isLiveRun(status)) return "bg-st-running";
-  return "bg-st-done";
-}
 
 /**
  * The green / red / orange / blue counters (« compteurs d'enfants », #723/#783):
@@ -52,7 +34,8 @@ export function ChildCountPills({
   clickHint,
 }: {
   counts: ChildCounts;
-  size?: "sm" | "xs";
+  /** `pill`: a tinted pill per kind (canvas card, detail tab); `sm` / `xs`: a dot and a number. */
+  size?: "sm" | "xs" | "pill";
   testId?: string;
   /** When set, the cluster is clickable and stops the click from reaching the row. */
   onClick?: () => void;
@@ -60,29 +43,41 @@ export function ChildCountPills({
   clickHint?: string;
 }) {
   if (totalChildren(counts) === 0) return null;
+  const pill = size === "pill";
   const dot = size === "xs" ? 6 : 7;
-  const fs = size === "xs" ? 9.5 : 10.5;
   const hint = onClick && clickHint ? ` — ${clickHint}` : "";
-  const item = (n: number, bg: string, label: string, id: string) =>
+  const item = (n: number, bg: string, tone: string, label: string, id: string) =>
     n > 0 ? (
-      <span
-        key={id}
-        data-testid={`${testId}-${id}`}
-        title={`${n} ${label} child run${n > 1 ? "s" : ""}${hint}`}
-        className="inline-flex items-center gap-1 font-mono text-fg-2"
-        style={{ fontSize: fs, lineHeight: 1 }}
-      >
-        <span className={`inline-block rounded-full ${bg}`} style={{ width: dot, height: dot }} />
-        {n}
-      </span>
+      pill ? (
+        <span
+          key={id}
+          data-testid={`${testId}-${id}`}
+          data-st={tone}
+          title={`${n} ${label} child run${n > 1 ? "s" : ""}${hint}`}
+          className="cv-kid"
+        >
+          <i aria-hidden />
+          {n}
+        </span>
+      ) : (
+        <span
+          key={id}
+          data-testid={`${testId}-${id}`}
+          title={`${n} ${label} child run${n > 1 ? "s" : ""}${hint}`}
+          className={`inline-flex items-center gap-1 font-mono leading-none text-text-2 ${size === "xs" ? "text-2xs" : "text-xs"}`}
+        >
+          <span className={`inline-block rounded-full ${bg}`} style={{ width: dot, height: dot }} />
+          {n}
+        </span>
+      )
     ) : null;
   const label = `${counts.finished} finished, ${counts.failed} failed, ${counts.stale} stale, ${counts.running} running child runs`;
   const body = (
     <>
-      {item(counts.finished, "bg-st-done", "finished", "finished")}
-      {item(counts.failed, "bg-st-failed", "failed", "failed")}
-      {item(counts.stale, "bg-st-stale", "stale", "stale")}
-      {item(counts.running, "bg-st-running", "running", "running")}
+      {item(counts.finished, "bg-st-done", "done", "finished", "finished")}
+      {item(counts.failed, "bg-st-failed", "failed", "failed", "failed")}
+      {item(counts.stale, "bg-st-skipped", "blocked", "stale", "stale")}
+      {item(counts.running, "bg-st-running", "running", "running", "running")}
     </>
   );
   if (onClick) {
@@ -90,7 +85,7 @@ export function ChildCountPills({
       <span
         role="button"
         tabIndex={-1}
-        className="inline-flex cursor-pointer items-center gap-2 rounded px-0.5 hover:bg-bg-4"
+        className="inline-flex cursor-pointer items-center gap-2 rounded px-0.5 hover:bg-hover"
         data-testid={testId}
         aria-label={label}
         onClick={(e) => {
@@ -103,7 +98,7 @@ export function ChildCountPills({
     );
   }
   return (
-    <span className="inline-flex items-center gap-2" data-testid={testId} aria-label={label}>
+    <span className={pill ? "cv-kids" : "inline-flex items-center gap-2"} data-testid={testId} aria-label={label}>
       {body}
     </span>
   );
@@ -140,67 +135,59 @@ function ChildRow({
     : now;
   const duration =
     started && ended != null ? formatDuration(ended - started.getTime()) : null;
-  const failed = child.status === "failed";
-  // #588: a child awaiting its user (itself or by derivation) is tinted the same
-  // amber as the parent's banner — the row is the signpost to the child.
+  // #588: a child awaiting its user (itself or by derivation) is tinted the
+  // awaiting tone, a failed one the failed tone: the row is the signpost.
   const awaiting = child.status === "awaiting_user";
+  const name = child.name || child.run_id;
   return (
     <li
       data-testid="orchestration-child"
       data-run-id={child.run_id}
       data-awaiting={awaiting || undefined}
-      className={`group flex flex-col gap-0.5 rounded border px-2 py-1.5 ${
-        failed
-          ? "border-st-failed/40 bg-st-failed-bg/40"
-          : awaiting
-            ? "border-st-await/40 bg-st-await-bg/40"
-            : "border-line bg-bg-3"
-      }`}
+      data-st={child.status}
+      className="ri-orch__row"
     >
-      <div className="flex items-center gap-1.5">
-        <span
-          title={RUN_STATUS_LABEL[child.status] ?? child.status}
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${runStatusDot(child.status)} ${live ? "animate-pulse" : ""}`}
-        />
-        <button
-          type="button"
-          data-testid="orchestration-child-title"
-          onClick={() => onOpen(child.run_id)}
-          title="Open this child run — the back arrow brings you back here"
-          className="flex min-w-0 flex-1 cursor-pointer items-center gap-1 text-left font-medium text-fg hover:text-acc hover:underline"
-          style={{ fontSize: "11.5px" }}
-        >
-          <span className="truncate">{child.name || child.run_id}</span>
-          <ExternalLink size={10} className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
-        </button>
-        {awaiting && (
-          <span
-            data-testid="orchestration-child-awaiting"
-            className="shrink-0 text-st-await"
-            style={{ fontSize: "9.5px", fontWeight: 500 }}
+      <StatusIcon kind="run" status={child.status} />
+      <div className="ri-orch__stack">
+        <div className="ri-orch__l1">
+          <button
+            type="button"
+            data-testid="orchestration-child-title"
+            onClick={() => onOpen(child.run_id)}
+            title={`Open ${name}`}
+            className="ri-orch__title"
           >
-            awaiting you →
-          </span>
-        )}
-      </div>
-      <div className="flex items-center gap-1 pl-3 font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
-        <span className="truncate">{child.pipeline_name}</span>
-        {started && (
+            <span>{name}</span>
+            <ExternalLink size={11} strokeWidth={1.5} className="ri-orch__ext" aria-hidden />
+          </button>
+          {awaiting && (
+            <button
+              type="button"
+              data-testid="orchestration-child-awaiting"
+              className="ri-orch__you"
+              onClick={() => onOpen(child.run_id)}
+            >
+              awaiting you
+              <ArrowRight size={11} strokeWidth={1.5} aria-hidden />
+            </button>
+          )}
+        </div>
+        <div className="ri-orch__l2">
           <span>
-            {" · "}
-            started {started.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            {child.pipeline_name}
+            {started && ` · ${started.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+            {duration && (
+              <span data-testid="orchestration-child-duration">
+                {" · "}
+                {duration}
+                {live ? "…" : ""}
+              </span>
+            )}
           </span>
-        )}
-        {duration && (
-          <span data-testid="orchestration-child-duration">
-            {" · "}
-            {duration}
-            {live ? "…" : ""}
+          <span data-testid="orchestration-child-cost" className="ri-orch__cost">
+            {childCostText(child.cost)}
           </span>
-        )}
-        <span data-testid="orchestration-child-cost" className="ml-auto">
-          {childCostText(child.cost)}
-        </span>
+        </div>
       </div>
     </li>
   );
@@ -223,53 +210,47 @@ export function OrchestrationTab({
 }) {
   if (childRuns.length === 0) {
     return (
-      <div
-        data-testid="orchestration-empty"
-        className="flex flex-1 flex-col items-center justify-center gap-1.5 px-6 py-8 text-center text-fg-4"
-        style={{ fontSize: "11px" }}
-      >
-        <GitFork size={16} className="text-fg-5" />
-        {nodeLive ? (
-          <>
-            <span className="text-fg-3">No child run yet.</span>
-            <span>
-              The agent creates them with <code className="font-mono text-fg-3">pdo run create</code>; they
-              will appear here as they start.
-            </span>
-          </>
-        ) : (
-          <span>This node created no child run.</span>
-        )}
+      <div data-testid="orchestration-empty" title={nodeLive ? "The agent creates them with pdo run create" : undefined}>
+        <EmptyState icon={GitFork} layout="row">
+          {nodeLive ? "No child run yet" : "No child run"}
+        </EmptyState>
       </div>
     );
   }
+  const failedChild = childRuns.find((c) => c.status === "failed");
   return (
-    <div className="flex flex-col gap-1.5 px-3 py-2" data-testid="orchestration-tab">
+    <div className="ri-orch" data-testid="orchestration-tab">
       {nodeAwaiting && counts.failed > 0 && (
-        <div
-          data-testid="orchestration-failed-banner"
-          className="rounded border border-st-failed/40 bg-st-failed-bg px-2 py-1.5 text-st-failed"
-          style={{ fontSize: "10.5px", lineHeight: 1.45 }}
-        >
-          {counts.failed} child run{counts.failed > 1 ? "s" : ""} failed — the node waits for you. Open the
-          child to retry it, or <em>Mark complete</em> above to force the node through.
+        <NodeBanner
+          tone="failed"
+          title={`${counts.failed} child run${counts.failed > 1 ? "s" : ""} failed`}
+          text="the node waits for you · open the child to retry it, or Approve"
+          testId="orchestration-failed-banner"
+          actions={
+            failedChild && (
+              <Button size="sm" onClick={() => onOpenChild(failedChild.run_id)}>
+                Open
+              </Button>
+            )
+          }
+        />
+      )}
+      {nodeLive && counts.running + counts.stale > 0 && (
+        <div className="ri-orch__hint" title="The node completes once every child is terminal">
+          <Hourglass size={12} strokeWidth={1.5} aria-hidden />
+          completes when every child ends
         </div>
       )}
-      {nodeLive && counts.running > 0 && (
-        <div className="flex items-center gap-1.5 text-fg-4" style={{ fontSize: "10px" }}>
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-st-running" />
-          Node completes once every child is terminal.
-        </div>
-      )}
-      <ul className="flex flex-col gap-1">
+      <ul className="m-0 list-none p-0">
         {childRuns.map((child) => (
           <ChildRow key={child.run_id} child={child} onOpen={onOpenChild} />
         ))}
       </ul>
-      <div className="flex items-center justify-between font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
+      <div className="ri-orch__foot">
         <span>
           {childRuns.length} child run{childRuns.length > 1 ? "s" : ""}
         </span>
+        <span className="ri-orch__fill" />
         <span title="Sum of the children's estimated costs">
           Σ{" "}
           {(() => {

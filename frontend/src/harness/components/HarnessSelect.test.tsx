@@ -69,10 +69,11 @@ describe("HarnessSelect (#586)", () => {
       expect(screen.getByTestId(`hs-option-${name}`)).toBeInTheDocument();
     }
 
-    // The legend explains the two sections and names the descriptor file.
-    expect(
-      screen.getByText(/~\/\.pdo\/harnesses\/descriptors\.yaml/),
-    ).toBeInTheDocument();
+    // The section headers' tooltips explain them; the descriptors' names the file.
+    expect(screen.getByTestId("hs-section-descriptors")).toHaveAttribute(
+      "title",
+      "~/.pdo/harnesses/descriptors.yaml",
+    );
   });
 
   it("greys and disables a harness whose binary is not installed", async () => {

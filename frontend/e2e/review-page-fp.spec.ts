@@ -136,7 +136,7 @@ async function openInfoPanel(page: Page, runId: string) {
 test("Review page: fork → tip, one node's delivery, context expansion, node shortcut", async ({ page, baseURL }) => {
   test.setTimeout(150_000);
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   const resp = await page.request.post(`${baseURL}/runs`, {
     multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "review fp" }),
@@ -218,7 +218,7 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
 
   // ===== Step 1 — Diff tab → « Expand and comment » → Review page, fork → working tree.
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openInfoPanel(page, run_id);
   await page.getByTestId("info-tab-diff").click();
   await expect(page.getByTestId("diff-tab")).toBeVisible({ timeout: 10_000 });
@@ -288,10 +288,10 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
 
   // ===== Step 4 — from beta's node panel, the shortcut preselects its delivery.
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openRunNodeDetails(page, run_id, "beta");
   const shortcut = page.getByTestId("node-review-shortcut");
-  await expect(shortcut).toHaveText(/Review this node's delivery/);
+  await expect(shortcut).toHaveAccessibleName(/Review this node's delivery/);
   await shortcut.click();
   await expect(page).toHaveURL(/from=node%3Abeta%3A1%3Abefore&to=node%3Abeta%3A1%3Aafter/);
   await expect(page.getByTestId("review-delivery-chip")).toContainText("Reviewing the delivery of beta · iter 1", {
@@ -304,7 +304,7 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
 
 test("the Split | Unified toggle is remembered and « Nothing to compare » for the same ref", async ({ page, baseURL }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   const resp = await page.request.post(`${baseURL}/runs`, {
     multipart: runMultipart({ pipeline: PIPELINE_NAME, input: "review toggle" }),
   });

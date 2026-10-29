@@ -25,4 +25,13 @@ trigger: string,
 /**
  * The function the bundle exports, `(query, context) => suggestions`.
  */
-suggest: string, render?: CompletionRender, };
+suggest: string, render?: CompletionRender, } | { "type": "search", 
+/**
+ * The function the bundle exports, `(query, context) => results`.
+ */
+search: string, 
+/**
+ * An SVG the extension serves, the icon of its group in the palette;
+ * the extension's first letter, boxed, without one.
+ */
+icon?: string, };

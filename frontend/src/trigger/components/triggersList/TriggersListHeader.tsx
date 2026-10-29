@@ -1,7 +1,9 @@
-import { AlertCircle, PauseCircle, Plus } from "lucide-react";
+import { Pause, Play, Plus } from "lucide-react";
+import { Banner, Button, IconButton } from "../../../shared/ui/kit";
+import LeftPaneBar from "../../../shared/ui/LeftPaneBar";
 
 /**
- * The Triggers tab's header — the #348 master switch and "New Trigger" — and,
+ * The Triggers tab's header — the #348 master switch and New trigger — and,
  * while paused, the amber banner. The two channels (global pause vs per-row
  * disabled) stay visually distinct: the banner never grays a row.
  */
@@ -16,60 +18,34 @@ export default function TriggersListHeader({
 }) {
   return (
     <>
-      <div
-        className="flex h-[36px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
-        style={{ fontSize: "11.5px" }}
-      >
-        Triggers
-        <div className="ml-auto flex items-center gap-2">
-          {/* #348 master switch — global kill-switch, deliberately distinct from
-              the per-row enable/disable toggle (amber st-await when active, vs the
-              per-row green/grey Power). */}
-          <span
-            role="switch"
-            aria-checked={paused}
-            aria-label={paused ? "Resume all triggers" : "Pause all triggers"}
-            title={
-              paused
-                ? "Resume all triggers"
-                : "Pause all triggers (global kill-switch)"
-            }
-            onClick={onTogglePause}
-            data-testid="triggers-pause-switch"
-            className={`flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 transition-colors ${
-              paused
-                ? "bg-st-await-bg text-st-await"
-                : "text-fg-4 hover:bg-bg-4 hover:text-fg-2"
-            }`}
-            style={{ fontSize: "10.5px" }}
-          >
-            <PauseCircle size={12} />
-            {paused ? "Paused" : "Pause all"}
-          </span>
-          <button
-            onClick={onNewTrigger}
-            className="flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim"
-            style={{ fontSize: "10.5px" }}
-          >
-            <Plus size={10} />
-            New Trigger
-          </button>
-        </div>
-      </div>
+      <LeftPaneBar title="Triggers">
+        {/* #348 master switch — global kill-switch, deliberately distinct from
+            the per-row enable/disable toggle. */}
+        <IconButton
+          icon={paused ? Play : Pause}
+          label={paused ? "Resume all triggers" : "Pause all triggers"}
+          role="switch"
+          aria-checked={paused}
+          onClick={onTogglePause}
+          data-testid="triggers-pause-switch"
+        />
+        <IconButton icon={Plus} label="New trigger" onClick={onNewTrigger} />
+      </LeftPaneBar>
 
       {paused && (
-        <div
-          className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-2"
-          data-testid="triggers-paused-banner"
-        >
-          <AlertCircle size={14} className="shrink-0 text-st-await" />
-          <span
-            className="text-st-await"
-            style={{ fontSize: "11.5px", fontWeight: 500 }}
-          >
-            All triggers paused — scheduled fires are suppressed. Manual “Run now”
-            still works.
-          </span>
+        <div data-testid="triggers-paused-banner">
+          <Banner
+            tone="awaiting"
+            title="All triggers paused"
+            text="Scheduled fires are suppressed; Run now still works."
+            actions={
+              onTogglePause && (
+                <Button size="sm" tone="ghost" onClick={onTogglePause}>
+                  Resume
+                </Button>
+              )
+            }
+          />
         </div>
       )}
     </>

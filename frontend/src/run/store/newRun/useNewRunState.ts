@@ -55,7 +55,6 @@ export function useNewRunState(open: boolean) {
     repoValid,
     repoError,
     repoValidating,
-    repoBorderClass,
     handleRepoChange,
     resetRepo,
   } = useRepoValidation({ open, loadBranches, clearBranches });
@@ -205,7 +204,7 @@ export function useNewRunState(open: boolean) {
     pipelineChosen, setPipelineChosen, loadPipelines, branches,
     branchesLoading, sourceBranch, setSourceBranch, loadBranches, clearBranches, lastFetchAt,
     branchFetchError, branchesFetching, refetchRemotes, rereadBranches, fastForward,
-    targetRepo, repoValid, repoError, repoValidating, repoBorderClass, handleRepoChange,
+    targetRepo, repoValid, repoError, repoValidating, handleRepoChange,
     resetRepo, runName, setRunName, autoName, setAutoName, input, setInput, overrides,
     setOverrides, mode, setMode, editingTriggerId, setEditingTriggerId, triggerName,
     setTriggerName, cronPresetId, setCronPresetId, dailyHour, setDailyHour, dailyMinute,

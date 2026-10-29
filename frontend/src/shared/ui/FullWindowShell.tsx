@@ -1,5 +1,6 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { X } from "lucide-react";
+import { IconButton } from "./kit";
 
 export interface RailItem {
   id: string;
@@ -11,6 +12,8 @@ export interface RailItem {
   /** What the dot means, for screen readers and the hover title. Defaults to
    *  Settings' « Unsaved changes » — Stats says why its numbers moved instead. */
   dirtyLabel?: string;
+  /** Drawn before the label in a strip of tabs (`railPlacement="top"`). */
+  icon?: ReactNode;
 }
 
 /**
@@ -26,7 +29,7 @@ export interface ShellDrawer {
   escHint: string;
   /** Panel header content, before the hint (Stats' « Sync costs »). */
   actions?: ReactNode;
-  /** Width class of the panel, a literal Tailwind class (`w-[min(420px,90vw)]`). */
+  /** Width class of the panel, a literal Tailwind class (`w-[min(420px,calc(90vw/var(--app-zoom,1)))]`). */
   widthClassName: string;
   /** `data-testid` of the panel; its ✕ is `${testId}-close` unless `closeTestId` says otherwise. */
   testId: string;
@@ -43,6 +46,8 @@ interface Props {
   title: string;
   /** Drawn before the title (an extension page's icon). */
   titleIcon?: ReactNode;
+  /** After the title, lighter: what the surface shows (Stats' tab). */
+  subtitle?: string;
   /** Rendered after the title, in the header row (Stats' period presets, etc.). */
   headerExtras?: ReactNode;
   /** Right-aligned header content, before the close button (hints, refresh…). */
@@ -52,9 +57,14 @@ interface Props {
   rail?: RailItem[];
   activeRail?: string;
   onRailChange?: (id: string) => void;
-  /** Rail width in px. Stats keeps 144; Settings needs 176 for "Sandbox & worktrees". */
+  /** Width of a left rail in px; Settings needs 176 for "Sandbox & worktrees". */
   railWidth?: number;
   railAriaLabel?: string;
+  /** Where the rail sits: a column on the left, or a strip of tabs under the
+   *  header (Stats), navigated with ←→. */
+  railPlacement?: "left" | "top";
+  /** Right end of the strip of tabs (Stats' period dates). */
+  railAside?: ReactNode;
   /** `data-testid` prefix of a rail entry: `${prefix}-${id}`. */
   railTestIdPrefix?: string;
   /** The secondary panel, framed by the shell (Stats' pricing details, Settings' skill bank). */
@@ -76,7 +86,8 @@ interface Props {
 
 /**
  * The full-window surface Stats, Settings and the extensions' pages share (#690): overlay,
- * header (title + ✕), optional left rail navigated with ↑↓, main slot, optional secondary panel
+ * header (title + ✕), optional rail (a left column navigated with ↑↓, or a strip of tabs under
+ * the header navigated with ←→), main slot, optional secondary panel
  * and optional footer.
  *
  * The shell owns Escape: ignored while a tooltip is open (the tooltip consumes it), else
@@ -87,6 +98,7 @@ interface Props {
 export default function FullWindowShell({
   title,
   titleIcon,
+  subtitle,
   headerExtras,
   headerActions,
   rail,
@@ -94,6 +106,8 @@ export default function FullWindowShell({
   onRailChange,
   railWidth = 144,
   railAriaLabel,
+  railPlacement = "left",
+  railAside,
   railTestIdPrefix,
   drawer,
   footer,
@@ -120,72 +134,112 @@ export default function FullWindowShell({
     return () => window.removeEventListener("keydown", onKey);
   }, [onEscape, onClose]);
 
+  const top = railPlacement === "top";
+  const navRef = useRef<HTMLElement>(null);
+  const fade = useScrollFade(navRef, top, rail?.map((item) => `${item.label}${item.dirty ? "•" : ""}`).join("\n") ?? "");
+  // A strip narrower than its tabs scrolls: the active one is kept in view.
+  useEffect(() => {
+    if (!top) return;
+    navRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [top, activeRail]);
+  // The keys that move along the rail: ↑↓ in a column, ←→ in a strip of tabs.
+  const [prevKey, nextKey] = top ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
+  const railNav = rail ? (
+    <nav
+      ref={navRef}
+      className={
+        top
+          ? "flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none]"
+          : "flex shrink-0 flex-col gap-px border-r border-line bg-surface-1 p-2"
+      }
+      style={top ? fade : { width: railWidth }}
+      role="tablist"
+      aria-label={railAriaLabel}
+      onKeyDown={(event) => {
+        if (event.key !== prevKey && event.key !== nextKey) return;
+        event.preventDefault();
+        const index = rail.findIndex((item) => item.id === activeRail);
+        const delta = event.key === nextKey ? 1 : -1;
+        const next = rail[(index + delta + rail.length) % rail.length];
+        onRailChange?.(next.id);
+        document.querySelector<HTMLElement>(`[data-testid='${railTestIdPrefix}-${next.id}']`)?.focus();
+      }}
+    >
+      {rail.map((item) => {
+        const on = activeRail === item.id;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            tabIndex={on ? 0 : -1}
+            data-testid={`${railTestIdPrefix}-${item.id}`}
+            data-dirty={item.dirty ? "true" : undefined}
+            onClick={() => onRailChange?.(item.id)}
+            className={
+              top
+                ? `relative flex shrink-0 items-center gap-1.5 px-2.5 text-md whitespace-nowrap ${
+                    on
+                      ? "text-text after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary"
+                      : "text-text-2 hover:text-text"
+                  }`
+                : `flex h-(--h-row) items-center justify-between gap-2 rounded px-2 text-left text-md ${
+                    on ? "bg-selected text-text" : "text-text-2 hover:bg-hover hover:text-text"
+                  }`
+            }
+          >
+            {top && item.icon}
+            {top ? (
+              <span className="max-w-48 truncate" title={item.label}>
+                {item.label}
+              </span>
+            ) : (
+              <span>{item.label}</span>
+            )}
+            {item.dirty && (
+              <span
+                aria-label={item.dirtyLabel ?? "Unsaved changes"}
+                title={item.dirtyLabel ?? "Unsaved changes"}
+                data-testid={`${railTestIdPrefix}-${item.id}-dirty`}
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-await"
+              />
+            )}
+          </button>
+        );
+      })}
+    </nav>
+  ) : null;
+
   return (
-    <div className="fixed inset-0 z-50 bg-bg-2">
-      <div className="relative flex h-screen w-screen flex-col bg-bg-4" data-testid={testId}>
-        <header className="flex min-h-14 items-center gap-4 border-b border-line px-4">
-          <h2 className="flex items-center gap-2 font-semibold text-fg">
+    <div className="fixed inset-0 z-50 bg-surface-1">
+      <div className="relative flex h-[calc(100dvh/var(--app-zoom,1))] w-[calc(100vw/var(--app-zoom,1))] flex-col bg-surface-2" data-testid={testId}>
+        <header
+          className="flex h-(--h-topbar) shrink-0 items-center gap-3 border-b border-line bg-surface-1 pr-2 pl-3"
+          data-testid={`${testId}-header`}
+        >
+          <h2 className="flex min-w-0 shrink-0 items-center gap-2 text-lg leading-none font-semibold whitespace-nowrap text-text">
             {titleIcon}
             {title}
+            {subtitle && <span className="truncate font-normal text-text-2">{subtitle}</span>}
           </h2>
-          {headerExtras}
-          <div className="ml-auto flex items-center gap-2">{headerActions}</div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={closeLabel}
-            className="grid h-7 w-7 place-items-center rounded text-fg-3 hover:bg-bg-5"
-          >
-            <X size={15} />
-          </button>
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">{headerExtras}</div>
+          <div className="flex shrink-0 items-center gap-2">{headerActions}</div>
+          <span className="h-4 w-px shrink-0 bg-line" aria-hidden />
+          <IconButton icon={X} label={closeLabel} kbd="Esc" onClick={onClose} />
         </header>
 
+        {rail && railPlacement === "top" && (
+          <div className="flex h-(--h-bar) shrink-0 items-stretch gap-3 border-b border-line bg-surface-1 pr-3 pl-1">
+            {railNav}
+            <span className="flex-1" />
+            {railAside && <div className="flex shrink-0 items-center">{railAside}</div>}
+          </div>
+        )}
         <div className="flex min-h-0 flex-1">
-          {rail && (
-            <nav
-              className="flex shrink-0 flex-col gap-1 border-r border-line bg-bg-3 p-3"
-              style={{ width: railWidth }}
-              role="tablist"
-              aria-label={railAriaLabel}
-              onKeyDown={(event) => {
-                if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-                event.preventDefault();
-                const index = rail.findIndex((item) => item.id === activeRail);
-                const delta = event.key === "ArrowDown" ? 1 : -1;
-                const next = rail[(index + delta + rail.length) % rail.length];
-                onRailChange?.(next.id);
-                document
-                  .querySelector<HTMLElement>(`[data-testid='${railTestIdPrefix}-${next.id}']`)
-                  ?.focus();
-              }}
-            >
-              {rail.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeRail === item.id}
-                  tabIndex={activeRail === item.id ? 0 : -1}
-                  data-testid={`${railTestIdPrefix}-${item.id}`}
-                  data-dirty={item.dirty ? "true" : undefined}
-                  onClick={() => onRailChange?.(item.id)}
-                  className={`flex items-center justify-between gap-2 rounded px-3 py-2 text-left ${
-                    activeRail === item.id ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-4"
-                  }`}
-                >
-                  <span>{item.label}</span>
-                  {item.dirty && (
-                    <span
-                      aria-label={item.dirtyLabel ?? "Unsaved changes"}
-                      title={item.dirtyLabel ?? "Unsaved changes"}
-                      data-testid={`${railTestIdPrefix}-${item.id}-dirty`}
-                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-await"
-                    />
-                  )}
-                </button>
-              ))}
-            </nav>
-          )}
+          {rail && railPlacement === "left" && railNav}
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <main className={mainClassName}>{children}</main>
@@ -197,6 +251,39 @@ export default function FullWindowShell({
       </div>
     </div>
   );
+}
+
+/** The hint that a strip of tabs scrolls: its edge fades on each side that
+ *  hides a tab. */
+function useScrollFade(
+  ref: RefObject<HTMLElement | null>,
+  enabled: boolean,
+  /** What the tabs show: a change can widen the strip without resizing it. */
+  tabsKey: string,
+): CSSProperties | undefined {
+  const [edges, setEdges] = useState({ start: false, end: false });
+  useEffect(() => {
+    const el = ref.current;
+    if (!enabled || !el) return;
+    const measure = () => {
+      const start = el.scrollLeft > 1;
+      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setEdges((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      observer?.disconnect();
+    };
+  }, [ref, enabled, tabsKey]);
+  if (!edges.start && !edges.end) return undefined;
+  const mask = `linear-gradient(to right, ${edges.start ? "transparent" : "black"}, black 24px, black calc(100% - 24px), ${
+    edges.end ? "transparent" : "black"
+  })`;
+  return { maskImage: mask, WebkitMaskImage: mask };
 }
 
 /** The frame of the secondary panel: under the header, title + actions + Escape hint + ✕. */
@@ -221,30 +308,24 @@ function SecondaryPanel({ drawer }: { drawer: ShellDrawer }) {
   return (
     <aside
       ref={panelRef}
-      className={`absolute bottom-0 right-0 top-14 z-20 flex flex-col border-l border-line bg-bg-4 shadow-2xl ${drawer.widthClassName}`}
+      className={`absolute bottom-0 right-0 top-(--h-topbar) z-20 flex flex-col border-l border-line bg-surface-2 shadow-2xl ${drawer.widthClassName}`}
       aria-label={drawer.title}
       data-testid={drawer.testId}
       {...drawer.dataAttributes}
     >
-      <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-        <h3 className="font-semibold text-fg" style={{ fontSize: "13px" }}>
-          {drawer.title}
-        </h3>
-        <div className="ml-auto flex items-center gap-3">
+      <div className="flex h-(--h-bar) shrink-0 items-center gap-3 border-b border-line pr-2 pl-3">
+        <h3 className="truncate text-md font-semibold text-text">{drawer.title}</h3>
+        <div className="ml-auto flex shrink-0 items-center gap-3">
           {drawer.actions}
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-            {drawer.escHint}
-          </span>
+          <span className="text-xs text-text-3">{drawer.escHint}</span>
         </div>
-        <button
-          type="button"
+        <IconButton
+          icon={X}
+          label="Close panel"
+          kbd="Esc"
           onClick={drawer.onClose}
-          aria-label="Close panel"
           data-testid={drawer.closeTestId ?? `${drawer.testId}-close`}
-          className="grid h-6 w-6 shrink-0 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
-        >
-          <X size={14} />
-        </button>
+        />
       </div>
       <div className={drawer.bodyClassName ?? "flex min-h-0 flex-1 flex-col overflow-y-auto"}>
         {drawer.content}

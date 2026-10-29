@@ -106,43 +106,40 @@ export default function BulkActionModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="bulk-action-backdrop"
       onClick={() => {
         if (phase !== "running") onClose();
       }}
     >
       <div
-        className="w-[380px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className="w-[380px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"
         onClick={(e) => e.stopPropagation()}
         data-testid="bulk-action-modal"
       >
         {phase === "confirm" && (
           <>
-            <h3 className="flex items-center gap-2 font-medium text-fg" style={{ fontSize: "13px" }}>
+            <h3 className="flex items-center gap-2 font-medium text-text text-md">
               {destructive && <AlertTriangle size={14} className="shrink-0 text-st-failed" />}
               {title}
             </h3>
-            <div className="mt-2 text-fg-3" style={{ fontSize: "11.5px" }}>
+            <div className="mt-2 text-text-3 text-xs">
               {description}
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={onClose}
                 data-testid="bulk-cancel"
-                className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-                style={{ fontSize: "11.5px" }}
+                className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
               >
                 Cancel
               </button>
               <button
                 onClick={begin}
                 data-testid="bulk-confirm"
-                className={`cursor-pointer rounded-md px-3 py-1.5 text-white transition-colors ${
-                  destructive ? "bg-st-failed hover:bg-st-failed/80" : "bg-acc text-on-acc hover:bg-acc-dim"
-                }`}
-                style={{ fontSize: "11.5px" }}
+                className={`cursor-pointer rounded-md px-3 py-1.5 text-primary-ink transition-colors ${
+                  destructive ? "bg-st-failed hover:bg-st-failed/80" : "bg-primary text-primary-ink hover:bg-primary-hi"
+                } text-xs`}
               >
                 {confirmLabel}
               </button>
@@ -152,8 +149,8 @@ export default function BulkActionModal({
 
         {phase === "running" && (
           <div className="flex flex-col items-center gap-3 py-2" data-testid="bulk-progress">
-            <Loader2 size={20} className="animate-spin text-acc" />
-            <div className="text-fg-2" style={{ fontSize: "12px" }}>
+            <Loader2 size={20} className="animate-spin text-primary" />
+            <div className="text-text-2 text-sm">
               {runningLabel}… {done}/{items.length}
             </div>
           </div>
@@ -161,18 +158,17 @@ export default function BulkActionModal({
 
         {phase === "result" && outcome && (
           <>
-            <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+            <h3 className="font-medium text-text text-md">
               {outcome.succeeded.length} done, {outcome.failed.length} failed
             </h3>
             <ul
-              className="mt-2 max-h-40 overflow-y-auto rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-fg-2"
-              style={{ fontSize: "11px" }}
+              className="mt-2 max-h-40 overflow-y-auto rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-text-2 text-xs"
               data-testid="bulk-failures"
             >
               {outcome.failed.map((f) => (
                 <li key={f.id} className="truncate">
-                  <span className="font-medium text-fg">{f.label}</span>
-                  {f.error ? <span className="text-fg-4"> — {f.error}</span> : null}
+                  <span className="font-medium text-text">{f.label}</span>
+                  {f.error ? <span className="text-text-3"> — {f.error}</span> : null}
                 </li>
               ))}
             </ul>
@@ -180,8 +176,7 @@ export default function BulkActionModal({
               <button
                 onClick={onClose}
                 data-testid="bulk-result-close"
-                className="cursor-pointer rounded-md bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-                style={{ fontSize: "11.5px" }}
+                className="cursor-pointer rounded-md bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
               >
                 Close
               </button>

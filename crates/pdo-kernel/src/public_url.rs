@@ -38,7 +38,7 @@ pub fn normalize(raw: &str) -> Result<Option<String>, String> {
         return invalid("must name a host");
     }
     if !rest[host.len()..].trim_end_matches('/').is_empty() {
-        return invalid("must be an origin, without a path: PDO is served from the root");
+        return invalid("must be an origin, without a path: the app is served from the root");
     }
     Ok(Some(format!("{}://{host}", scheme.to_ascii_lowercase())))
 }

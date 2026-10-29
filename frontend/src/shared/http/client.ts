@@ -123,7 +123,7 @@ export function transportFailureMessage(args: {
     }
     return (
       `Upload interrupted after ${seconds}s while sending ${sent} of attachments to ${host}: ` +
-      `the network or a proxy in front of PDO cut the connection (${causeText}). ${REMOTE_HINT}`
+      `the network or a proxy in front of the daemon cut the connection (${causeText}). ${REMOTE_HINT}`
     );
   }
   return `${label} failed: could not reach ${host} (${causeText}).`;
@@ -143,13 +143,13 @@ export function intermediaryFailureMessage(
   if (status === 413) {
     const sent = uploadBytes > 0 ? ` (${formatBytes(uploadBytes)} of attachments)` : "";
     return (
-      `The server in front of PDO at ${host} refused the request body${sent} before it ` +
-      `reached the daemon (413). No PDO error came back, so this is the reverse proxy's ` +
+      `The server in front of the daemon at ${host} refused the request body${sent} before it ` +
+      `reached the daemon (413). No daemon error came back, so this is the reverse proxy's ` +
       "limit (nginx `client_max_body_size`), not `max_attachments_mb`: raise it or attach less."
     );
   }
   return (
-    `${label} failed: ${status} (no PDO error body — the reply came from a proxy or ` +
+    `${label} failed: ${status} (no daemon error body — the reply came from a proxy or ` +
     `another intermediary in front of ${host}).`
   );
 }

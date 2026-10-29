@@ -1,7 +1,7 @@
 import { FlaskConical, Folders, Globe } from "lucide-react";
 import type { PipelineValidation } from "../../shared/generated/PipelineValidation";
 import type { Project } from "../../workspace/model/project";
-import { Tooltip, TooltipProvider } from "../../shared/ui/tooltip";
+import { Tooltip } from "../../shared/ui/kit";
 import { validationSummary, validationTooltip } from "../model/pipelineValidation";
 
 /**
@@ -23,26 +23,20 @@ export default function ValidationIndicator({
   const summary = validationSummary(validation, projects);
   const tooltip = validationTooltip(summary);
   const Icon = summary.all ? Globe : summary.count > 0 ? Folders : FlaskConical;
-  // Its own provider: the indicator sits in rows and bars that are rendered on
-  // their own too (tests), and a Radix tooltip needs one above it.
+  const state = summary.all ? "all" : summary.count > 0 ? "projects" : "none";
   return (
-    <TooltipProvider>
-      <Tooltip content={tooltip}>
-        <span
-          data-testid={testId}
-          data-validation={summary.all ? "all" : summary.count > 0 ? "projects" : "none"}
-          data-count={summary.all ? undefined : summary.count}
-          aria-label={tooltip}
-          role="img"
-          className={`inline-flex shrink-0 items-center gap-0.5 font-sans ${
-            summary.all || summary.count > 0 ? "text-fg-3" : "text-fg-5"
-          }`}
-          style={{ fontSize: "10px" }}
-        >
-          <Icon size={11} aria-hidden />
-          <span>{summary.all ? "All" : summary.count}</span>
-        </span>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip label={tooltip}>
+      <span
+        data-testid={testId}
+        data-validation={state}
+        data-count={summary.all ? undefined : summary.count}
+        aria-label={tooltip}
+        role="img"
+        className="lp-valid"
+      >
+        <Icon size={11} strokeWidth={1.75} aria-hidden />
+        <span>{summary.all ? "All" : summary.count}</span>
+      </span>
+    </Tooltip>
   );
 }

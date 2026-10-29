@@ -241,8 +241,9 @@ fn core_entry(
         ),
         ResourceKind::Session => (
             "Sessions",
-            "Open, attach and take control of terminals; open, relaunch, configure, type into, terminate and forget the hosted sessions",
+            "Open, attach and take control of terminals; open, read, relaunch, configure, zoom, type into, terminate and forget the hosted sessions",
             &[
+                READ,
                 CREATE,
                 UPDATE,
                 DELETE,
@@ -253,6 +254,7 @@ fn core_entry(
                 "terminate",
                 "relaunch",
                 "configure",
+                "zoom",
                 "type",
                 "forget",
                 "wait_user",
@@ -260,7 +262,7 @@ fn core_entry(
         ),
         ResourceKind::Update => (
             "Updates",
-            "Check for and apply updates of PDO",
+            "Check for and apply updates",
             &["check", "apply"],
         ),
         ResourceKind::Service => (
@@ -320,7 +322,8 @@ mod tests {
             .filter(|r| r.verbs.iter().any(|v| v == "read"))
             .map(|r| r.resource.as_str())
             .collect();
-        assert_eq!(readable, ["run", "project", "repository"]);
+        // A session is read too (CORE-124): its events on `/ws`, its Zoom du terminal.
+        assert_eq!(readable, ["run", "project", "repository", "session"]);
         assert!(Resource::of_core(&ResourceKind::extension("test", "note")).is_none());
     }
 

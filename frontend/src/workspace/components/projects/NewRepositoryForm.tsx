@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { FolderOpen, FolderPlus } from "lucide-react";
+import { FolderOpen, FolderPlus, X } from "lucide-react";
+import { Button, IconButton, TextInput } from "../../../shared/ui/kit";
 import FsExplorerModal from "../FsExplorerModal";
 import { tildify } from "../../../lib/homePath";
 import { newRepositoryTarget } from "../../model/projectsSettings";
@@ -43,17 +44,12 @@ export default function NewRepositoryForm({
   }
 
   return (
-    <div
-      className="flex flex-col gap-2 rounded-md border border-acc-border bg-bg-2 px-3 py-2.5"
-      data-testid="project-new-repo"
-    >
-      <div className="flex items-center gap-1.5 font-medium text-fg" style={{ fontSize: "11.5px" }}>
-        <FolderPlus size={12} className="text-acc" />
-        New empty repository
-      </div>
-      <div className="flex gap-1.5">
-        <input
+    <div className="set-cform set-cform--new" data-testid="project-new-repo">
+      <div className="set-line">
+        <FolderPlus size={13} strokeWidth={1.5} className="set-faint" aria-hidden />
+        <TextInput
           autoFocus
+          mono
           value={typed}
           onChange={(e) => {
             setTyped(e.target.value);
@@ -68,61 +64,49 @@ export default function NewRepositoryForm({
           }}
           aria-label="Folder of the new repository"
           placeholder="~/code/new-repository"
+          title="Created, or an empty folder; git init and a first commit"
           data-testid="project-new-repo-path"
-          className="min-w-0 flex-1 rounded border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg outline-none focus:border-acc"
-          style={{ fontSize: "12px" }}
         />
         {canBrowse && (
-          <button
-            type="button"
+          <IconButton
+            icon={FolderOpen}
+            label="Choose the parent folder"
+            size="sm"
             onClick={() => setExplorer(true)}
-            title="Choose the parent folder"
-            aria-label="Choose the parent folder"
             data-testid="project-new-repo-browse"
-            className="shrink-0 rounded border border-line-strong bg-bg-3 px-2 text-fg-3 hover:border-acc hover:text-fg"
-          >
-            <FolderOpen size={13} />
-          </button>
+          />
         )}
-      </div>
-      <div className="flex items-center justify-between gap-2 text-fg-4" style={{ fontSize: "10.5px" }}>
-        <span className="truncate">
-          {target ? (
-            <>
-              Into <span className="font-mono text-fg-3">{tildify(target.parent, home)}</span> ·{" "}
-              <span className="font-mono text-fg-3">{target.name}</span>, created or empty
-            </>
-          ) : (
-            "An absolute path, ending with the folder name"
-          )}
-        </span>
-        <span className="shrink-0">git init · first commit</span>
-      </div>
-      {error && (
-        <div className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid="project-new-repo-error">
-          {error}
-        </div>
-      )}
-      <div className="flex justify-end gap-1.5">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded px-2.5 py-1 text-fg-3 hover:bg-bg-4"
-          style={{ fontSize: "11px" }}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
+        <Button
+          size="sm"
+          tone="primary"
           onClick={() => void create()}
           disabled={!target || busy}
+          title="git init, first commit"
           data-testid="project-new-repo-create"
-          className="rounded bg-acc px-2.5 py-1 font-medium text-on-acc hover:bg-acc-dim disabled:opacity-50"
-          style={{ fontSize: "11px" }}
         >
           {busy ? "Creating…" : "Create and add"}
-        </button>
+        </Button>
+        <IconButton icon={X} label="Cancel" kbd="Esc" size="sm" onClick={onCancel} />
       </div>
+      <div className="set-line set-cform__meta">
+        {target ? (
+          <>
+            <span className="set-faint">Into</span>
+            <span className="set-mono set-ellipsis" title={target.parent}>
+              {tildify(target.parent, home)}
+            </span>
+            <span className="set-faint">·</span>
+            <span className="set-mono">{target.name}</span>
+          </>
+        ) : (
+          <span className="set-faint">An absolute path, ending with the folder name</span>
+        )}
+      </div>
+      {error && (
+        <span className="set-cform__err" title={error} data-testid="project-new-repo-error">
+          {error}
+        </span>
+      )}
       {explorer && (
         <FsExplorerModal
           title="Where to create the repository"

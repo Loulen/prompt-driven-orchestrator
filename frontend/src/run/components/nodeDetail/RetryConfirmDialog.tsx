@@ -10,19 +10,18 @@ export default function RetryConfirmDialog({
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="retry-confirm-backdrop"
       onClick={cancelRetry}
     >
       <div
-        className="w-[360px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className="w-[360px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+        <h3 className="font-medium text-text text-md">
           Retry this node?
         </h3>
-        <p className="mt-2 text-fg-3" style={{ fontSize: "11.5px" }}>
+        <p className="mt-2 text-text-3 text-xs">
           This will reset {retryConfirm.affectedCount} downstream{" "}
           {retryConfirm.affectedCount === 1 ? "node" : "nodes"} with
           artifacts. Continue?
@@ -31,16 +30,14 @@ export default function RetryConfirmDialog({
           <button
             data-testid="retry-confirm-cancel"
             onClick={cancelRetry}
-            className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
+            className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
           >
             Cancel
           </button>
           <button
             data-testid="retry-confirm-ok"
             onClick={confirmRetry}
-            className="rounded-md bg-accent px-3 py-1.5 text-white transition-colors hover:bg-accent/80"
-            style={{ fontSize: "11.5px" }}
+            className="rounded-md bg-hover px-3 py-1.5 text-primary-ink transition-colors hover:bg-hover/80 text-xs"
           >
             Retry
           </button>

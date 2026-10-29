@@ -1,0 +1,543 @@
+/*
+ * The shell of the app (the Workbench): top bar, status bar, the header of
+ * the left panel, the document tabs and the empty centre (the command
+ * palette's are in `palette/palette.css`). Tokens only (`public/shared/tokens.css`), like the kit.
+ */
+
+@layer components {
+  /* ---------------------------------------------------------------- top bar, 36 px */
+  .sh-tb {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    height: var(--h-topbar);
+    padding: 0 var(--g-4) 0 0;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
+    font-size: var(--fs-sm);
+  }
+  .sh-tb__mark {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 40px;
+    height: 100%;
+    color: var(--text);
+  }
+  .sh-tb__nav {
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: var(--g-1);
+    min-width: 0;
+    overflow: hidden;
+  }
+  .sh-tb__navitem {
+    flex: none;
+    max-width: 160px;
+    height: var(--h-control);
+    padding: 0 6px;
+    overflow: hidden;
+    border: 0;
+    border-radius: var(--radius-ui);
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: var(--fs-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .sh-tb__navitem:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .sh-tb__navitem:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+  .sh-tb__mid {
+    display: flex;
+    flex: 1 1 0;
+    justify-content: center;
+    min-width: 120px;
+    padding: 0 var(--g-4);
+  }
+  .sh-tb__end {
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: var(--g-1);
+    min-width: 0;
+  }
+  .sh-tb__ext {
+    display: flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: var(--g-1);
+    min-width: 0;
+    overflow: hidden;
+  }
+  .sh-tb__sep {
+    flex: none;
+    width: 1px;
+    height: 16px;
+    margin: 0 var(--g-2) 0 var(--g-3);
+    background: var(--line);
+  }
+  .sh-tb__account {
+    flex: none;
+    margin-left: var(--g-2);
+  }
+  .sh-tb .d-icon[aria-disabled="true"],
+  .sh-left-head .d-icon[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .sh-tb .d-icon[aria-disabled="true"]:hover,
+  .sh-left-head .d-icon[aria-disabled="true"]:hover {
+    background: transparent;
+  }
+
+  /* the command field */
+  .sh-cmd {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    width: min(480px, 100%);
+    min-width: 0;
+    height: var(--h-control);
+    padding: 0 var(--g-2) 0 var(--pad-x);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+    background: var(--surface-0);
+    color: var(--text-3);
+    font: inherit;
+    font-size: var(--fs-sm);
+    cursor: pointer;
+  }
+  .sh-cmd:hover {
+    border-color: var(--text-3);
+    color: var(--text-2);
+  }
+  .sh-cmd:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+  .sh-cmd svg {
+    flex: none;
+  }
+  .sh-cmd__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sh-cmd .d-kbd {
+    flex: none;
+  }
+
+  /* ---------------------------------------------------------------- status bar, 22 px */
+  .sh-sb {
+    display: flex;
+    flex: none;
+    align-items: stretch;
+    min-width: 0;
+    height: var(--h-statusbar);
+    padding: 0 var(--g-1);
+    overflow: hidden;
+    border-top: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .sh-sb__item {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-2);
+    height: 100%;
+    padding: 0 5px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: var(--fs-xs);
+  }
+  button.sh-sb__item {
+    cursor: pointer;
+  }
+  button.sh-sb__item:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .sh-sb__item:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: -1px;
+  }
+  .sh-sb__num {
+    font-family: var(--font-code);
+    font-variant-numeric: tabular-nums;
+  }
+  .sh-sb__item[data-st="connected"] {
+    color: var(--color-st-done);
+  }
+  .sh-sb__item[data-st="reconnecting"],
+  .sh-sb__item[data-near-cap="true"],
+  .sh-sb__warn {
+    color: var(--color-st-await);
+  }
+  .sh-sb__item[data-st="disconnected"] {
+    color: var(--color-st-failed);
+  }
+  .sh-sb__pill {
+    padding: 0 4px;
+    border: 1px solid color-mix(in oklab, var(--color-st-await) 40%, transparent);
+    border-radius: var(--radius-ui);
+    background: color-mix(in oklab, var(--color-st-await) 14%, transparent);
+    color: var(--color-st-await);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+    line-height: 14px;
+  }
+  .sh-sb__ext {
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    padding: 0 5px;
+    overflow: hidden;
+  }
+
+  /* ---------------------------------------------------------------- left panel header, 32 px */
+  .sh-left-head {
+    gap: var(--g-2);
+    padding-right: var(--g-4);
+    padding-left: var(--g-2);
+    background: var(--surface-1);
+  }
+  .sh-left-head__tabs {
+    display: flex;
+    flex: none;
+    align-items: center;
+  }
+  .sh-left-head__tab[aria-selected="true"] {
+    background: var(--active);
+    color: var(--text);
+  }
+  .sh-left-head__dot {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--selected-edge);
+  }
+  .sh-left-head__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: var(--g-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sh-left-head__acts {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-1);
+  }
+
+  /* ---------------------------------------------------------------- Runs filters: funnel and menu */
+  .sh-rf-funnel[data-on],
+  .sh-rf-funnel[data-on]:hover:not(:disabled) {
+    color: var(--selected-edge);
+  }
+  .sh-rf-funnel[aria-expanded="true"] {
+    background: var(--active);
+    color: var(--text);
+  }
+  .sh-rf-funnel[data-on][aria-expanded="true"] {
+    color: var(--selected-edge);
+  }
+  .sh-rf-funnel .d-icon__badge {
+    background: var(--selected-edge);
+    color: var(--surface-0);
+  }
+  .d-pop.sh-rf-pop {
+    padding: 0;
+    overflow: visible;
+  }
+  .sh-rf {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 288px;
+    max-width: 100%;
+    padding: var(--g-3);
+    font-size: var(--fs-sm);
+  }
+  .sh-rf__row {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    align-items: center;
+    column-gap: var(--g-3);
+    min-height: 28px;
+  }
+  .sh-rf__row--top {
+    align-items: start;
+    padding-top: 2px;
+  }
+  .sh-rf__row--top .sh-rf__label {
+    height: var(--h-control-sm);
+  }
+  .sh-rf__label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+  .sh-rf__label svg {
+    flex: none;
+    color: var(--text-3);
+  }
+  .sh-rf__row--ext {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--g-2);
+    min-width: 0;
+    color: var(--text-2);
+    font-size: var(--fs-xs);
+  }
+  .sh-rf__text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sh-rf__ctl {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    font-size: var(--fs-xs);
+  }
+  .sh-rf__sel {
+    width: 100%;
+    min-width: 0;
+  }
+  .sh-rf__sel--on,
+  .sh-rf__sel--on:hover:not(:disabled) {
+    border-color: var(--primary);
+  }
+  .sh-rf__date {
+    display: flex;
+    flex-direction: column;
+    gap: var(--g-2);
+    min-width: 0;
+    width: 100%;
+  }
+  .sh-rf__date-row {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+  }
+  .sh-rf__date-row .sh-rf__sel {
+    flex: 1 1 0;
+  }
+  .sh-rf__day {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0 4px;
+  }
+  .sh-rf__dim {
+    flex: none;
+    color: var(--text-3);
+  }
+  .sh-rf__rule {
+    height: 1px;
+    margin: var(--g-2) 0;
+    background: var(--line-soft);
+  }
+  .sh-rf__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--g-3);
+    margin-top: var(--g-2);
+    padding-top: var(--g-3);
+    border-top: 1px solid var(--line-soft);
+  }
+
+  /* ---------------------------------------------------------------- document tabs, 32 px */
+  .sh-tabs {
+    display: flex;
+    flex: none;
+    align-items: stretch;
+    min-width: 0;
+    height: var(--h-bar);
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-1);
+  }
+  .sh-tabs__list {
+    display: flex;
+    flex: 0 1 auto;
+    align-items: stretch;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .sh-tabs__list::-webkit-scrollbar {
+    display: none;
+  }
+  .sh-tabs__more {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    padding: 0 2px;
+  }
+  .sh-tabs__fill {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .sh-tabs__actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-2);
+    padding: 0 var(--g-2);
+  }
+  .sh-tabs__saved {
+    padding: 0 var(--g-2);
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .sh-tab {
+    position: relative;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    max-width: 220px;
+    height: 100%;
+    padding: 0 4px 0 10px;
+    border: 0;
+    border-right: 1px solid var(--line);
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: var(--fs-sm);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .sh-tab:hover {
+    color: var(--text);
+  }
+  .sh-tab:focus-visible {
+    outline: 1px solid var(--focus-ring);
+    outline-offset: -1px;
+  }
+  .sh-tab[aria-selected="true"] {
+    background: var(--surface-0);
+    color: var(--text);
+  }
+  .sh-tab[aria-selected="true"]::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 1px;
+    background: var(--selected-edge);
+  }
+  .sh-tab[aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 1px;
+    background: var(--surface-0);
+  }
+  .sh-tab[data-dragging] {
+    opacity: 0.5;
+  }
+  .sh-tab[data-drop="before"] {
+    box-shadow: inset 2px 0 0 var(--selected-edge);
+  }
+  .sh-tab[data-drop="after"] {
+    box-shadow: inset -2px 0 0 var(--selected-edge);
+  }
+  .sh-tab__kind {
+    flex: none;
+    color: var(--text-3);
+  }
+  .sh-tab__label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sh-tab__ext {
+    color: var(--text-3);
+  }
+  .sh-tab__end {
+    position: relative;
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+  }
+  .sh-tab__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-2);
+  }
+  .sh-tab__dot[data-external] {
+    background: var(--color-st-blocked);
+  }
+  .sh-tab__x {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border-radius: var(--radius-ui);
+    color: var(--text-2);
+    opacity: 0;
+  }
+  .sh-tab:hover .sh-tab__x,
+  .sh-tab:focus-visible .sh-tab__x,
+  .sh-tab[aria-selected="true"] .sh-tab__end:not([data-dirty]) .sh-tab__x {
+    opacity: 1;
+  }
+  .sh-tab:hover .sh-tab__dot {
+    opacity: 0;
+  }
+  .sh-tab__x:hover {
+    background: var(--active);
+    color: var(--text);
+  }
+
+  /* ---------------------------------------------------------------- empty centre */
+  .sh-center-empty {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+  }
+}

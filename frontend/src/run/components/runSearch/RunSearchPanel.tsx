@@ -11,7 +11,7 @@ function SnippetText({ snippet }: { snippet: TranscriptSnippet }) {
   return (
     <span className="min-w-0 truncate" title={`${snippet.before}${snippet.matched}${snippet.after}`}>
       {snippet.before}
-      <mark className="rounded-[3px] bg-st-await px-[2px] text-on-acc-warn">{snippet.matched}</mark>
+      <mark className="rounded-[3px] bg-st-await px-[2px] text-primary-ink">{snippet.matched}</mark>
       {snippet.after}
     </span>
   );
@@ -19,7 +19,7 @@ function SnippetText({ snippet }: { snippet: TranscriptSnippet }) {
 
 function HitIcon({ hit }: { hit: RunTranscriptHit["hit"] }) {
   const Icon = hit.kind === "tool" ? Wrench : hit.speaker === "prompt" ? User : Bot;
-  return <Icon size={11} className="shrink-0 text-fg-4" />;
+  return <Icon size={11} className="shrink-0 text-text-3" />;
 }
 
 /**
@@ -70,11 +70,10 @@ export default function RunSearchPanel({
   return (
     <div
       data-testid="run-search-panel"
-      className="absolute left-3 top-[50px] z-20 flex max-h-[60%] w-[420px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-md border border-line-strong bg-bg-2 shadow-lg"
-      style={{ fontSize: "11px" }}
+      className="absolute left-3 top-[50px] z-20 flex max-h-[60%] w-[420px] max-w-[calc(100%-24px)] flex-col overflow-hidden rounded-md border border-line-strong bg-surface-1 shadow-lg text-xs"
     >
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-2.5 py-1.5">
-        <Search size={12} className="shrink-0 text-fg-4" />
+        <Search size={12} className="shrink-0 text-text-3" />
         <input
           autoFocus
           data-testid="run-search-input"
@@ -83,17 +82,15 @@ export default function RunSearchPanel({
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Search the messages and tool calls of this Run"
-          className="min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-5"
-          style={{ fontSize: "12px" }}
+          className="min-w-0 flex-1 bg-transparent text-text outline-none placeholder:text-text-3 text-sm"
         />
         {result && typed && (
-          <span className="shrink-0 font-mono text-fg-4" style={{ fontSize: "10px" }} data-testid="run-search-count">
+          <span className="shrink-0 font-mono text-text-3 text-2xs" data-testid="run-search-count">
             {countLabel(result)}
           </span>
         )}
         <kbd
-          className="shrink-0 rounded border border-line-strong px-1 font-mono text-fg-4"
-          style={{ fontSize: "9.5px" }}
+          className="shrink-0 rounded border border-line-strong px-1 font-mono text-text-3 text-2xs"
         >
           esc
         </kbd>
@@ -111,21 +108,21 @@ export default function RunSearchPanel({
             </div>
           )}
           {status === "searching" && !result && (
-            <div className="px-3 py-2 text-fg-4" data-testid="run-search-searching">
+            <div className="px-3 py-2 text-text-3" data-testid="run-search-searching">
               Searching…
             </div>
           )}
           {result && result.matched === 0 && status !== "error" && (
-            <div className="px-3 py-2 text-fg-4" data-testid="run-search-empty">
+            <div className="px-3 py-2 text-text-3" data-testid="run-search-empty">
               No match for « {result.query} » in the transcripts of this Run.
             </div>
           )}
           {groups.map((group) => (
             <div key={`${group.nodeId}:${group.iter}:${group.first}`} data-testid="run-search-group">
-              <div className="flex items-center gap-1.5 px-2.5 pb-0.5 pt-1.5 font-mono text-fg-3" style={{ fontSize: "10.5px" }}>
-                <Box size={11} className="shrink-0 text-fg-4" />
+              <div className="flex items-center gap-1.5 px-2.5 pb-0.5 pt-1.5 font-mono text-text-3 text-xs">
+                <Box size={11} className="shrink-0 text-text-3" />
                 <span data-testid="run-search-group-node">{nodeName(group.nodeId)}</span>
-                <span className="text-fg-4">iter {group.iter}</span>
+                <span className="text-text-3">iter {group.iter}</span>
               </div>
               {group.hits.map((hit, i) => {
                 const at = group.first + i;
@@ -138,17 +135,17 @@ export default function RunSearchPanel({
                     data-selected={at === selected}
                     onMouseEnter={() => select(at)}
                     onClick={() => onChoose(hit)}
-                    className={`mx-1 flex w-[calc(100%-8px)] cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left text-fg-2 ${
-                      at === selected ? "bg-acc/15" : "hover:bg-bg-3"
+                    className={`mx-1 flex w-[calc(100%-8px)] cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left text-text-2 ${
+                      at === selected ? "bg-primary/15" : "hover:bg-hover"
                     }`}
                   >
                     <HitIcon hit={hit.hit} />
                     {hit.hit.kind === "tool" && (
-                      <span className="shrink-0 font-mono text-fg-3">{hit.hit.name}</span>
+                      <span className="shrink-0 font-mono text-text-3">{hit.hit.name}</span>
                     )}
                     <SnippetText snippet={hit.hit.snippet} />
                     {hit.hit.at && (
-                      <span className="ml-auto shrink-0 pl-2 font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
+                      <span className="ml-auto shrink-0 pl-2 font-mono text-text-3 text-2xs">
                         {formatTime(hit.hit.at)}
                       </span>
                     )}
@@ -159,7 +156,7 @@ export default function RunSearchPanel({
           ))}
         </div>
       )}
-      <div className="shrink-0 border-t border-line px-2.5 py-1 text-fg-4" style={{ fontSize: "9.5px" }}>
+      <div className="shrink-0 border-t border-line px-2.5 py-1 text-text-3 text-2xs">
         ↑↓ choose · ↵ open in the node's Transcript · first {SEARCH_MAX_HITS} hits
         {result?.truncated ? ` of ${result.matched}` : ""}
       </div>

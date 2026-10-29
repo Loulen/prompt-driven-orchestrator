@@ -75,58 +75,50 @@ export default function EffortPicker({
     ...(set && !known ? [{ id: value, label: value, slug: "passthrough" }] : []),
   ];
 
+  // The kit's segmented control (`d-seg`), in buttons of its own: the pass-through and
+  // unsupported segments are not something `Segmented` knows.
   return (
-    <div
-      role="radiogroup"
-      aria-label="Effort"
-      aria-disabled={disabled}
-      className={`flex flex-wrap gap-1 ${disabled ? "opacity-50" : ""}`}
-    >
-      {options.map((o) => {
-        // `""` is normalised to unset, so an empty-string value selects Default.
-        const selected = (set ? value : null) === o.id;
-        return (
-          <button
-            key={o.slug}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            disabled={disabled || (unsupported && o.slug === "passthrough")}
-            data-testid={`${testid}-option-${o.slug}`}
-            onClick={() => {
-              if (!disabled) onChange(o.id);
-            }}
-            className={`flex-1 rounded border px-2 py-1 font-medium transition-colors ${
-              disabled ? "cursor-not-allowed" : "cursor-pointer"
-            } ${
-              selected
-                ? o.id == null
-                  ? "border-fg-4 bg-bg-3 text-fg"
-                  : unsupported
-                    ? "border-st-blocked bg-st-blocked/10 text-st-blocked"
-                    : "border-acc bg-acc-bg text-acc"
-                : "border-line-strong bg-bg-3 text-fg-4 hover:text-fg-3"
-            }`}
-            style={{ fontSize: "10px" }}
-            {...(unsupported && o.slug === "passthrough" ? { "data-unsupported": "true" } : {})}
-          >
-            {o.label}
-          </button>
-        );
-      })}
+    <div className="flex flex-wrap items-center gap-1">
+      <div
+        role="radiogroup"
+        aria-label="Effort"
+        aria-disabled={disabled || undefined}
+        className="d-seg d-seg--sm max-w-full overflow-x-auto"
+      >
+        {options.map((o) => {
+          // `""` is normalised to unset, so an empty-string value selects Default.
+          const selected = (set ? value : null) === o.id;
+          const flagged = unsupported && o.slug === "passthrough";
+          return (
+            <button
+              key={o.slug}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={disabled || flagged}
+              data-testid={`${testid}-option-${o.slug}`}
+              onClick={() => {
+                if (!disabled) onChange(o.id);
+              }}
+              className={`d-seg__btn ${flagged ? "text-st-blocked" : ""}`}
+              {...(flagged ? { "data-unsupported": "true" } : {})}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
       {unsupported && (
-        <p
+        <span
           data-testid={`${testid}-unsupported`}
           role="status"
-          className="mt-1 flex basis-full items-start gap-1 text-st-blocked"
-          style={{ fontSize: "9.5px", lineHeight: 1.4 }}
+          title={`"${value}" is not supported by the selected model. Pick a supported level, or Default to unset.`}
+          className="flex items-center gap-1 text-st-blocked text-xs"
         >
-          <TriangleAlert size={10} className="mt-[1px] shrink-0" />
-          <span>
-            "{value}" is not supported by the selected model. Pick a supported
-            level, or Default to unset.
-          </span>
-        </p>
+          <TriangleAlert size={12} strokeWidth={1.5} aria-hidden className="shrink-0" />
+          <span className="d-sr">"{value}" is not supported by the selected model. Pick a supported level, or Default to unset.</span>
+          <span aria-hidden>Unsupported</span>
+        </span>
       )}
     </div>
   );

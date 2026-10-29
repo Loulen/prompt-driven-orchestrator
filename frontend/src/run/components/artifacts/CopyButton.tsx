@@ -1,6 +1,6 @@
 import type { MouseEvent } from "react";
 import { Check, Copy, X } from "lucide-react";
-import { Tooltip, TooltipProvider } from "../../../shared/ui/tooltip";
+import { Tooltip } from "../../../shared/ui/tooltip";
 import type { CopyStatus } from "../../store/useCopyToClipboard";
 
 export const COPY_RAW_FILE = "Copy raw file";
@@ -18,6 +18,7 @@ export default function CopyButton({
   disabled,
   className = "",
   testId = "copy-raw-file",
+  size = "sm",
 }: {
   status: CopyStatus;
   error?: string;
@@ -25,17 +26,20 @@ export default function CopyButton({
   disabled?: boolean;
   className?: string;
   testId?: string;
+  /** 20 px in a row (`sm`), 24 px in a header bar (`md`). */
+  size?: "sm" | "md";
 }) {
+  const box = size === "md" ? "h-(--h-control) min-w-(--h-control)" : "h-(--h-control-sm) min-w-(--h-control-sm)";
   const tone =
     status === "copied"
       ? "text-st-done"
       : status === "failed"
         ? "text-st-failed"
-        : "text-fg-3 hover:text-fg";
+        : "text-text-3 hover:text-text";
   return (
     // Own provider: the button is mounted by surfaces that may sit outside the
     // app-level one (a modal rendered on its own, a test harness).
-    <TooltipProvider>
+    <>
       <Tooltip content={status === "failed" && error ? error : COPY_RAW_FILE}>
         <button
           type="button"
@@ -44,24 +48,23 @@ export default function CopyButton({
           aria-label={COPY_RAW_FILE}
           data-testid={testId}
           data-status={status}
-          className={`flex items-center gap-1 rounded p-1 hover:bg-bg-3 disabled:pointer-events-none disabled:text-fg-5 ${tone} ${className}`}
-          style={{ fontSize: "11px" }}
+          className={`flex ${box} items-center justify-center gap-1 rounded px-1 text-xs hover:bg-hover disabled:pointer-events-none disabled:text-text-3 ${tone} ${className}`}
         >
           {status === "copied" ? (
             <>
-              <Check size={13} aria-hidden="true" />
+              <Check size={14} strokeWidth={1.5} aria-hidden="true" />
               <span>Copied!</span>
             </>
           ) : status === "failed" ? (
             <>
-              <X size={13} aria-hidden="true" />
+              <X size={14} strokeWidth={1.5} aria-hidden="true" />
               <span>Copy failed</span>
             </>
           ) : (
-            <Copy size={13} aria-hidden="true" />
+            <Copy size={14} strokeWidth={1.5} aria-hidden="true" />
           )}
         </button>
       </Tooltip>
-    </TooltipProvider>
+    </>
   );
 }

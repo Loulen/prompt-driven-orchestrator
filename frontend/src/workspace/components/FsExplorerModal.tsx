@@ -5,6 +5,8 @@ import { browseFs } from "../api/browse";
 import type { BrowseEntry } from "../../shared/generated/BrowseEntry";
 import type { BrowseOptions } from "../api/browse";
 import { useDialogFocus } from "../store/useDialogFocus";
+import { Button, IconButton } from "../../shared/ui/kit";
+import MidPath from "../../shared/ui/MidPath";
 
 interface Props {
   /**
@@ -151,18 +153,18 @@ export default function FsExplorerModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Escape closes THIS layer alone. `document` (not `window`) + `stopPropagation`,
-  // both load-bearing: sibling document listeners in a parent (e.g. RepoCombobox's
-  // recents dropdown) fire in registration order.
+  // Escape closes THIS layer alone: caught on the way down and stopped there,
+  // before the dialog it sits in (New Run) or a list of its parent sees it.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
+        e.preventDefault();
         e.stopPropagation();
         onClose();
       }
     }
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [onClose]);
 
   // Initial focus, its restitution, and the Tab trap (#437).
@@ -212,7 +214,7 @@ export default function FsExplorerModal({
 
   return (
     <div
-      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-black/50`}
+      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-scrim`}
       data-testid={`${testIdPrefix}-backdrop`}
       onClick={(e) => {
         // Unconditional `stopPropagation`: keeps a backdrop click from bubbling up the
@@ -228,158 +230,106 @@ export default function FsExplorerModal({
         aria-modal="true"
         aria-labelledby={title ? `${modalId}-title` : undefined}
         aria-label={title ? undefined : mode === "file" ? "Choose a file" : "Choose a folder"}
-        className="flex max-h-[70vh] w-[460px] flex-col rounded-lg border border-line bg-bg-4 shadow-xl focus:outline-none"
+        className="d-dlg d-dlg--m ln-fs"
         data-testid={modalId}
         onClick={(e) => e.stopPropagation()}
       >
-        {title && (
-          <div className="border-b border-line px-3 py-2">
-            <span
-              id={`${modalId}-title`}
-              className="font-semibold text-fg"
-              style={{ fontSize: "12.5px" }}
-            >
-              {title}
+        <div className="d-frame">
+          {/* The title bar: the up arrow and the folder you stand in, cut in its
+              middle so the folder's own name stays whole. */}
+          <header className="d-frame__head ln-fs__head">
+            {title && (
+              <h2 id={`${modalId}-title`} className="d-frame__title ln-fs__title">
+                {title}
+              </h2>
+            )}
+            <IconButton
+              icon={ArrowUp}
+              label="Up one level"
+              onClick={() => parent && void navigateTo(parent)}
+              disabled={parent == null}
+              data-testid={`${testIdPrefix}-up`}
+            />
+            <span className="ln-fs__path" title={currentDir} data-testid={`${testIdPrefix}-path`}>
+              {currentDir ? <MidPath path={currentDir} title={false} /> : "…"}
             </span>
+          </header>
+
+          {/* Body: entry list */}
+          <div className="d-frame__body ln-fs__body">
+            {error && (
+              <div className="ln-err ln-fs__msg" data-testid={`${testIdPrefix}-error`}>
+                {error}
+              </div>
+            )}
+            {truncated && (
+              <div className="ln-faint ln-fs__msg">
+                {/* FROZEN COPY: `RepoCombobox.test.tsx` asserts /Showing first 1000/. */}
+                Showing first 1000 {mode === "file" ? "entries" : "folders"}
+              </div>
+            )}
+            {loading && entries.length === 0 && <div className="ln-faint ln-fs__msg">Loading…</div>}
+            {!loading && !error && entries.length === 0 && <div className="ln-faint ln-fs__msg">{emptyLabel}</div>}
+            <ul className="ln-fs__list">
+              {entries.map((entry) => {
+                const on = picked === entry.path || pickedMany.includes(entry.path);
+                return (
+                  <li key={entry.path}>
+                    <button
+                      type="button"
+                      onClick={(event) => handleRow(entry, event)}
+                      aria-pressed={multi && !entry.is_dir ? pickedMany.includes(entry.path) : undefined}
+                      className="ln-fs__row"
+                      data-on={on || undefined}
+                      data-testid={`${testIdPrefix}-entry`}
+                      // #824: which entry this row is. Every row shares one testid,
+                      // so nothing outside could aim at a named folder — and a guided
+                      // tour that says "click pdo-tutorial" has to be able to ring
+                      // that row rather than whichever one happens to be first.
+                      data-entry-name={entry.name}
+                      title={entry.name}
+                    >
+                      {multi && !entry.is_dir && (
+                        <input type="checkbox" tabIndex={-1} aria-hidden readOnly checked={pickedMany.includes(entry.path)} />
+                      )}
+                      {entry.is_git_repo ? (
+                        <FolderGit2 size={14} strokeWidth={1.5} className="ln-fs__git" data-testid={`${testIdPrefix}-git-dot`} />
+                      ) : entry.is_dir || mode === "dir" ? (
+                        <Folder size={14} strokeWidth={1.5} className="ln-faint" />
+                      ) : (
+                        <FileIcon size={14} strokeWidth={1.5} className="ln-faint" />
+                      )}
+                      <span className="ln-fs__name">{entry.name}</span>
+                      {entry.is_symlink && (
+                        <Link2 size={12} strokeWidth={1.5} className="ln-faint" aria-label="symlink" data-testid={`${testIdPrefix}-symlink`} />
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
-        )}
 
-        {/* Header: up affordance + breadcrumb */}
-        <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-          <button
-            type="button"
-            onClick={() => parent && void navigateTo(parent)}
-            disabled={parent == null}
-            className="flex shrink-0 items-center justify-center rounded p-1 text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent"
-            title="Up one level"
-            aria-label="Up one level"
-            data-testid={`${testIdPrefix}-up`}
-          >
-            <ArrowUp size={14} />
-          </button>
-          <span
-            className="min-w-0 flex-1 truncate font-mono text-fg-2"
-            style={{ fontSize: "11.5px" }}
-            title={currentDir}
-            data-testid={`${testIdPrefix}-path`}
-          >
-            {currentDir || "…"}
-          </span>
-        </div>
-
-        {/* Body: entry list */}
-        <div className="min-h-[120px] flex-1 overflow-y-auto">
-          {error && (
-            <div
-              className="px-3 py-2 font-mono text-st-failed"
-              style={{ fontSize: "11px" }}
-              data-testid={`${testIdPrefix}-error`}
-            >
-              {error}
-            </div>
-          )}
-          {truncated && (
-            <div className="px-3 py-1 text-fg-4" style={{ fontSize: "10.5px" }}>
-              {/* FROZEN COPY: `RepoCombobox.test.tsx` asserts /Showing first 1000/. */}
-              Showing first 1000 {mode === "file" ? "entries" : "folders"}
-            </div>
-          )}
-          {loading && entries.length === 0 && (
-            <div className="px-3 py-2 text-fg-4" style={{ fontSize: "11.5px" }}>
-              Loading…
-            </div>
-          )}
-          {!loading && !error && entries.length === 0 && (
-            <div className="px-3 py-2 text-fg-4" style={{ fontSize: "11.5px" }}>
-              {emptyLabel}
-            </div>
-          )}
-          <ul>
-            {entries.map((entry) => (
-              <li key={entry.path}>
-                <button
-                  type="button"
-                  onClick={(event) => handleRow(entry, event)}
-                  aria-pressed={multi && !entry.is_dir ? pickedMany.includes(entry.path) : undefined}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-bg-5 ${
-                    picked === entry.path || pickedMany.includes(entry.path) ? "bg-bg-5" : ""
-                  }`}
-                  data-testid={`${testIdPrefix}-entry`}
-                  // #824: which entry this row is. Every row shares one testid,
-                  // so nothing outside could aim at a named folder — and a guided
-                  // tour that says "click pdo-tutorial" has to be able to ring
-                  // that row rather than whichever one happens to be first.
-                  data-entry-name={entry.name}
-                >
-                  {multi && !entry.is_dir && (
-                    <span
-                      aria-hidden
-                      className={`grid h-3 w-3 shrink-0 place-items-center rounded-sm border ${
-                        pickedMany.includes(entry.path) ? "border-acc bg-acc" : "border-line-strong"
-                      }`}
-                    />
-                  )}
-                  {entry.is_git_repo ? (
-                    <FolderGit2
-                      size={14}
-                      className="shrink-0 text-acc"
-                      data-testid={`${testIdPrefix}-git-dot`}
-                    />
-                  ) : entry.is_dir || mode === "dir" ? (
-                    <Folder size={14} className="shrink-0 text-fg-4" />
-                  ) : (
-                    <FileIcon size={14} className="shrink-0 text-fg-4" />
-                  )}
-                  <span
-                    className="min-w-0 flex-1 truncate font-mono text-fg"
-                    style={{ fontSize: "12px" }}
-                  >
-                    {entry.name}
-                  </span>
-                  {entry.is_symlink && (
-                    <Link2
-                      size={12}
-                      className="shrink-0 text-fg-4"
-                      aria-label="symlink"
-                      data-testid={`${testIdPrefix}-symlink`}
-                    />
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* Footer: cancel + confirm */}
-        <div className="flex items-center justify-end gap-2 border-t border-line px-3 py-2">
-          {multi && (
-            <span className="mr-auto text-fg-4" style={{ fontSize: "10.5px" }} data-testid={`${testIdPrefix}-count`}>
-              {pickedMany.length} selected · click toggles, ⇧-click ranges
+          <footer className="d-frame__foot">
+            <span className="d-frame__note">
+              {multi && (
+                <span title="Click toggles, ⇧-click ranges" data-testid={`${testIdPrefix}-count`}>
+                  {pickedMany.length} selected
+                </span>
+              )}
             </span>
-          )}
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md px-3 py-1.5 text-fg-3 transition-colors hover:text-fg"
-            style={{ fontSize: "11.5px" }}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={confirm}
-            disabled={!confirmTarget}
-            className="rounded-md bg-acc px-3 py-1.5 font-medium text-bg-1 transition-opacity hover:opacity-90 disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
-            data-testid={`${testIdPrefix}-select`}
-          >
-            {confirmLabel ??
-              (multi
-                ? `Add ${pickedMany.length} file${pickedMany.length === 1 ? "" : "s"}`
-                : mode === "file"
-                  ? "Select this file"
-                  : "Select this folder")}
-          </button>
+            <div className="d-frame__actions">
+              <Button onClick={onClose}>Cancel</Button>
+              <Button tone="primary" onClick={confirm} disabled={!confirmTarget} data-testid={`${testIdPrefix}-select`}>
+                {confirmLabel ??
+                  (multi
+                    ? `Add ${pickedMany.length} file${pickedMany.length === 1 ? "" : "s"}`
+                    : mode === "file"
+                      ? "Select this file"
+                      : "Select this folder")}
+              </Button>
+            </div>
+          </footer>
         </div>
       </div>
     </div>

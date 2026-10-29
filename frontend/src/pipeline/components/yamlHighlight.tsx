@@ -20,7 +20,7 @@ export function highlightYaml(yaml: string, errorLine?: number): ReactNode {
         {commentIdx >= 0 ? (
           <>
             {highlightLine(line.slice(0, commentIdx))}
-            <span className="text-fg-4 italic">{line.slice(commentIdx)}</span>
+            <span className="text-text-3 italic">{line.slice(commentIdx)}</span>
           </>
         ) : (
           highlightLine(line)
@@ -39,8 +39,8 @@ function highlightLine(line: string): ReactNode {
     return (
       <>
         {indent}
-        <span className="text-acc">{key}</span>
-        <span className="text-fg-4">:</span>
+        <span className="text-st-running">{key}</span>
+        <span className="text-text-3">:</span>
         {highlightValue(rest)}
       </>
     );
@@ -51,7 +51,7 @@ function highlightLine(line: string): ReactNode {
     const [, prefix, rest] = listMatch;
     return (
       <>
-        <span className="text-fg-4">{prefix}</span>
+        <span className="text-text-3">{prefix}</span>
         {highlightValue(rest)}
       </>
     );
@@ -77,8 +77,8 @@ function highlightValue(value: string): ReactNode {
   }
 
   if (/^\{.*\}$/.test(trimmed)) {
-    return <>{leading}<span className="text-fg-3">{trimmed}</span></>;
+    return <>{leading}<span className="text-text-3">{trimmed}</span></>;
   }
 
-  return <>{leading}<span className="text-fg-2">{trimmed}</span></>;
+  return <>{leading}<span className="text-text-2">{trimmed}</span></>;
 }

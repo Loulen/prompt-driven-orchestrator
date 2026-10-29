@@ -60,7 +60,7 @@ export default function OverwriteDefaultPipelineModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="overwrite-default-backdrop"
       onClick={() => { if (!busy) onClose(); }}
     >
@@ -68,18 +68,17 @@ export default function OverwriteDefaultPipelineModal({
         role="dialog"
         aria-label="Overwrite default pipeline"
         data-testid="overwrite-default-modal"
-        className="flex max-h-[85vh] w-[440px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="shrink-0 font-medium text-fg" style={{ fontSize: "13px" }}>
+        <h3 className="shrink-0 font-medium text-text text-md">
           Overwrite the default pipeline?
         </h3>
-        <div className="mt-2 flex min-h-0 flex-col gap-2 overflow-y-auto text-fg-2" data-testid="overwrite-default-body">
+        <div className="mt-2 flex min-h-0 flex-col gap-2 overflow-y-auto text-text-2" data-testid="overwrite-default-body">
           <p data-testid="overwrite-default-future-runs">
             This run's version (graph and prompts) replaces{" "}
-            <code className="rounded bg-bg-4 px-1 py-0.5 font-mono text-fg">{pipelineName}</code>.{" "}
-            <strong className="font-medium text-fg">All future runs will use it.</strong> Runs already
+            <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-text">{pipelineName}</code>.{" "}
+            <strong className="font-medium text-text">All future runs will use it.</strong> Runs already
             started keep their own copy.
           </p>
           {loadError && (
@@ -88,7 +87,7 @@ export default function OverwriteDefaultPipelineModal({
             </p>
           )}
           {preview == null && loadError == null && (
-            <p className="text-fg-4" data-testid="overwrite-default-loading">Checking triggers and changes…</p>
+            <p className="text-text-3" data-testid="overwrite-default-loading">Checking triggers and changes…</p>
           )}
           {preview != null && !preview.pipeline_exists && (
             <p className="text-st-failed" data-testid="overwrite-default-missing">
@@ -99,7 +98,7 @@ export default function OverwriteDefaultPipelineModal({
             <OverwriteImpact preview={preview} triggers={triggers} />
           )}
           {tab.dirty && (
-            <p className="text-fg-3" data-testid="overwrite-default-saves-first">
+            <p className="text-text-3" data-testid="overwrite-default-saves-first">
               Your unsaved changes are saved for this run first.
             </p>
           )}
@@ -112,8 +111,7 @@ export default function OverwriteDefaultPipelineModal({
             onClick={onClose}
             disabled={busy}
             data-testid="overwrite-default-cancel"
-            className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4 disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover disabled:opacity-40 text-xs"
           >
             Cancel
           </button>
@@ -121,8 +119,7 @@ export default function OverwriteDefaultPipelineModal({
             onClick={() => void confirm()}
             disabled={!canConfirm}
             data-testid="overwrite-default-confirm"
-            className="cursor-pointer rounded-md bg-st-failed px-3 py-1.5 font-medium text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 text-xs"
           >
             {busy ? "Overwriting…" : "Overwrite default pipeline"}
           </button>
@@ -154,9 +151,9 @@ function OverwriteImpact({
             </p>
             <ul className="mt-1 flex flex-col gap-0.5 pl-3">
               {triggers.map((t) => (
-                <li key={t.id} className="list-disc text-fg" data-testid="overwrite-default-trigger">
+                <li key={t.id} className="list-disc text-text" data-testid="overwrite-default-trigger">
                   {t.name}
-                  {!t.enabled && <span className="text-fg-4"> (disabled)</span>}
+                  {!t.enabled && <span className="text-text-3"> (disabled)</span>}
                 </li>
               ))}
             </ul>
@@ -176,8 +173,8 @@ function OverwriteImpact({
         </p>
       )}
       {preview.modified_since_launch == null && (
-        <p className="text-fg-4" data-testid="overwrite-default-modified-unknown">
-          PDO cannot tell whether the default pipeline changed since this run was launched.
+        <p className="text-text-3" data-testid="overwrite-default-modified-unknown">
+          There is no telling whether the default pipeline changed since this run was launched.
         </p>
       )}
     </>

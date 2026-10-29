@@ -21,7 +21,8 @@ export function TableCombinedIcon({
   );
 }
 
-/** A Pipeline row's name, with the `[⧉ N]` icon when it absorbs others. */
+/** A Pipeline row's name, cut with an ellipsis, with the `[⧉ N]` icon when it
+ *  absorbs others. Sits in a flex row (`.sx-name`). */
 export function PipelineName({
   row,
   onOpenMembers,
@@ -30,11 +31,16 @@ export function PipelineName({
   onOpenMembers?: (id: string) => void;
 }) {
   const absorbed = row.absorbed?.length ?? 0;
-  if (!onOpenMembers || absorbed === 0) return <>{row.name}</>;
-  return (
-    <span className="inline-flex items-center gap-1.5">
+  const name = (
+    <span className="sx-ellipsis" title={row.name}>
       {row.name}
-      <CombinedIcon count={absorbed} onOpen={() => onOpenMembers(row.id)} />
     </span>
+  );
+  if (!onOpenMembers || absorbed === 0) return name;
+  return (
+    <>
+      {name}
+      <CombinedIcon count={absorbed} onOpen={() => onOpenMembers(row.id)} />
+    </>
   );
 }

@@ -39,13 +39,18 @@ export function useScrollSpy<Id extends string>(
     const list = ids.split("\u0000") as Id[];
     const pick = () => {
       if (pinnedRef.current) return;
+      // At the bottom by the scroll metrics, or by the boxes: the last section's end is in
+      // view. The boxes agree under the UI scale's `zoom`, where the metrics may not.
+      const box = container.getBoundingClientRect();
+      const last = container.querySelector<HTMLElement>(`[data-section-id="${list[list.length - 1]}"]`);
       const atBottom =
-        container.scrollTop + container.clientHeight >= container.scrollHeight - 2;
+        container.scrollTop + container.clientHeight >= container.scrollHeight - 2 ||
+        (last != null && last.getBoundingClientRect().bottom <= box.bottom + 2);
       if (atBottom && container.scrollHeight > container.clientHeight) {
         setSpied(list[list.length - 1]);
         return;
       }
-      const top = container.getBoundingClientRect().top;
+      const top = box.top;
       let best: Id | null = null;
       let bestDelta = Number.POSITIVE_INFINITY;
       for (const id of list) {

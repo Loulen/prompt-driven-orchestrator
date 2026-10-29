@@ -1,4 +1,4 @@
-import { Loader } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import type { RunState } from "../../shared/generated/RunState";
 import { waitingForStartedNodesLabel } from "../model/nodePlay";
 import type { useNodePlay } from "../store/useNodePlay";
@@ -13,20 +13,15 @@ export default function WaitingForStartedNodesBanner({ run }: { run: RunState | 
   const count = run?.waiting_for_started_nodes ?? 0;
   if (count === 0) return null;
   return (
-    <div className="absolute left-0 right-0 top-10 z-10">
-      <div
-        className="flex items-center gap-2 border-b border-st-await/30 bg-st-await-bg px-3 py-1.5"
-        data-testid="run-waiting-started-nodes"
-        role="status"
-      >
-        <Loader size={12} className="shrink-0 animate-spin text-st-await" />
-        <span className="text-st-await" style={{ fontSize: "11.5px", fontWeight: 500 }}>
-          Reached End, {waitingForStartedNodesLabel(count)}
-        </span>
-        <span className="text-fg-3" style={{ fontSize: "11px" }}>
-          — the run ends when they are done.
-        </span>
-      </div>
+    <div
+      className="cv-line"
+      data-st="awaiting"
+      data-testid="run-waiting-started-nodes"
+      role="status"
+      title="The run ends when they are done"
+    >
+      <LoaderCircle size={13} strokeWidth={1.5} className="d-spin" aria-hidden />
+      <span className="cv-line__msg">Reached End, {waitingForStartedNodesLabel(count)}</span>
     </div>
   );
 }
@@ -37,8 +32,7 @@ export function WaitingForStartedNodesReason({ run }: { run: RunState | null }) 
   if (count === 0) return null;
   return (
     <div
-      className="mt-2 rounded border border-st-await/30 bg-st-await-bg px-2 py-1.5 text-fg-2"
-      style={{ fontSize: "10.5px" }}
+      className="mt-2 rounded border border-st-await/30 bg-st-await/14 px-2 py-1.5 text-xs text-text-2"
       data-testid="run-waiting-started-nodes-reason"
     >
       <div className="font-medium text-st-await">Reached End, {waitingForStartedNodesLabel(count)}</div>

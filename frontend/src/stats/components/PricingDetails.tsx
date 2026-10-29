@@ -4,17 +4,16 @@ import type { SyncCostPricesReport } from "../model/prices";
 
 function PriceRows({ rows }: { rows: PriceRow[] }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col">
       {rows.map((row) => (
         <div
           key={row.key}
-          className="flex items-center justify-between rounded bg-bg-3 px-2 py-1 font-mono text-fg-3"
-          style={{ fontSize: "10.5px" }}
+          className="flex items-center justify-between gap-3 border-b border-line-soft px-1 py-1 font-mono text-xs text-text-3"
         >
           <span>{row.key}</span>
           <span>
-            <span className="mr-2 text-fg-4">{row.tier}</span>
-            <span className="text-fg-2">${row.input}/${row.output} /MTok</span>
+            <span className="mr-2 text-text-3">{row.tier}</span>
+            <span className="text-text-2">${row.input}/${row.output} /MTok</span>
           </span>
         </div>
       ))}
@@ -26,14 +25,14 @@ function SyncResult({ report }: { report: SyncCostPricesReport | null }) {
   if (!report) return null;
   if (report.noop) {
     return (
-      <div className="text-fg-4" data-testid="stats-sync-noop">
+      <div className="text-text-3" data-testid="stats-sync-noop">
         {report.reason ?? "Price table already up to date."}
       </div>
     );
   }
   return (
     <div
-      className="rounded-md border border-st-await/40 bg-st-await/10 px-3 py-2 text-fg-2"
+      className="border border-st-await/40 px-3 py-2 text-text-2"
       data-testid="stats-sync-report"
     >
       <div>
@@ -69,10 +68,10 @@ export function PricingDetailsContent({
     ? [...cost.total.unpriced_models, ...cost.total.missing_reasons]
     : [];
   return (
-    <div className="flex flex-col gap-3" style={{ fontSize: "10.5px" }}>
+    <div className="flex flex-col gap-3 text-xs">
       {syncError && (
         <div
-          className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
+          className="sx-err"
           data-testid="stats-sync-error"
         >
           {syncError}
@@ -87,7 +86,7 @@ export function PricingDetailsContent({
       {cost?.resolved.length ? (
         <PriceRows rows={cost.resolved} />
       ) : (
-        <div className="text-fg-4">No resolved prices.</div>
+        <div className="text-text-3">No resolved prices.</div>
       )}
     </div>
   );

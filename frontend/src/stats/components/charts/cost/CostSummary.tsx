@@ -1,12 +1,12 @@
 import type { StatsCostAggregate } from "../../../../shared/generated/StatsCostAggregate";
 import type { StatsCostPeriod } from "../../../../shared/generated/StatsCostPeriod";
 import { formatCostAmount } from "../../../../run/model/costLabel";
-import { HarnessBars } from "../common/ChartPrimitives";
-import { HarnessCards } from "./CostCells";
+import { harnessColor } from "../../../../harness/model/color";
+import { HarnessBars, Kpis } from "../common/ChartPrimitives";
 
-/** What the drill level on screen cost: the headline (total and median per
- *  Run or execution), one card per harness, the Runs without a computable cost
- *  and the cost over time. */
+/** What the drill level on screen cost: on one line the total and its median
+ *  per Run or execution, then each harness; the Runs without a computable cost;
+ *  the cost over time. */
 export function CostSummary({
   aggregate,
   periods,
@@ -20,37 +20,35 @@ export function CostSummary({
 }) {
   return (
     <>
-      <div className="mt-4 text-fg" data-testid="stats-selection-headline">
-        {formatCostAmount(
-          aggregate.usd,
-          aggregate.partial,
-          aggregate.estimated,
-        )}{" "}
-        total
-        {" · "}
-        {formatCostAmount(
-          aggregate.median_usd,
-          aggregate.partial,
-          aggregate.estimated,
-        )}{" "}
-        median per {unit}
-      </div>
-      <div className="mt-4">
-        <HarnessCards aggregate={aggregate} />
-      </div>
+      <Kpis
+        items={[
+          {
+            key: "total",
+            label: "Total",
+            value: formatCostAmount(aggregate.usd, aggregate.partial, aggregate.estimated),
+            sub: `${formatCostAmount(aggregate.median_usd, aggregate.partial, aggregate.estimated)} median per ${unit}`,
+            testid: "stats-selection-headline",
+          },
+          ...aggregate.harnesses.map((metric) => ({
+            key: metric.harness,
+            label: metric.harness,
+            swatch: harnessColor(metric.harness),
+            value: formatCostAmount(metric.usd, metric.partial, metric.estimated),
+            sub:
+              metric.median_usd === null
+                ? "— median"
+                : `${formatCostAmount(metric.median_usd, metric.partial, metric.estimated)} median`,
+            testid: `stats-harness-card-${metric.harness}`,
+          })),
+        ]}
+      />
       {aggregate.unknown > 0 && (
-        <div className="mt-4 text-st-await" style={{ fontSize: "10.5px" }}>
+        <div className="sx-note sx-note--warn">
           {aggregate.unknown} {unit}
           {aggregate.unknown === 1 ? "" : "s"} without computable cost
         </div>
       )}
-      <div className="mt-4">
-        <HarnessBars
-          periods={periods}
-          harnesses={harnesses}
-          value="usd"
-        />
-      </div>
+      <HarnessBars title="Cost by harness" periods={periods} harnesses={harnesses} value="usd" />
     </>
   );
 }

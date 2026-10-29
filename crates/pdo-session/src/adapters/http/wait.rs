@@ -1,7 +1,7 @@
 //! `POST /runs/{run_id}/nodes/{node_id}/wait-user` — the declared wait (#588 /
 //! ADR-0069): the agent says it is waiting on its user; and
 //! `POST /sessions/{session_id}/wait-user`, the same from the agent of a
-//! Session hébergée (ADR-0091).
+//! Session hébergée (ADR-0092).
 
 use std::sync::Arc;
 

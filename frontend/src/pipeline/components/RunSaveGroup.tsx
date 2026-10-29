@@ -23,8 +23,7 @@ export default function RunSaveGroup({ tab }: { tab: OpenPipeline & { runId: str
       <button
         onClick={() => save(tab.id)}
         disabled={!tab.dirty}
-        className="flex cursor-pointer items-center gap-1 rounded-l-md bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
-        style={{ fontSize: "11px" }}
+        className="flex cursor-pointer items-center gap-1 rounded-l-md bg-primary px-2 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40 text-xs"
         data-testid="save-button"
       >
         <Save size={11} />
@@ -34,19 +33,18 @@ export default function RunSaveGroup({ tab }: { tab: OpenPipeline & { runId: str
         <DropdownMenuTrigger
           data-testid="save-menu"
           aria-label="More save options"
-          className="flex cursor-pointer items-center self-stretch rounded-r-md border-l border-bg-0/30 bg-acc px-1 text-on-acc transition-colors hover:bg-acc-dim"
+          className="flex cursor-pointer items-center self-stretch rounded-r-md border-l border-surface-0/30 bg-primary px-1 text-primary-ink transition-colors hover:bg-primary-hi"
         >
           <ChevronDown size={11} />
         </DropdownMenuTrigger>
         <DropdownMenuContent
-          className="min-w-[200px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg"
+          className="min-w-[200px] rounded-md border border-line-strong bg-surface-2 p-1 shadow-lg"
           side="bottom"
           align="end"
         >
           <DropdownMenuItem
             data-testid="save-menu-overwrite"
-            className="flex cursor-pointer items-center rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
+            className="flex cursor-pointer items-center rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
             onClick={() => setOverwriting(true)}
           >
             Overwrite default pipeline…

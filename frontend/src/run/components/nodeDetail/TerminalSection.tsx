@@ -1,5 +1,7 @@
 import { useCallback, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
-import { Maximize2 } from "lucide-react";
+import { ChevronDown, Lock } from "lucide-react";
+import { nodeStatusTone } from "../../../shared/ui/kit/statusMeta";
+import { toneColor } from "../../../shared/ui/kit/tones";
 import type { NodeState } from "../../../shared/generated/NodeState";
 import type { NodeStatus } from "../../../shared/generated/NodeStatus";
 import {
@@ -11,7 +13,6 @@ import TmuxTerminal from "../../../session/components/TmuxTerminal";
 import { terminalPlaceholder } from "../../model/nodeStatus";
 import { importBlockedReason, SEND_NEEDS_CONTROL } from "../../model/nodeImport";
 import ImportFilesModal from "./ImportFilesModal";
-import { STATUS_BORDER } from "../../../nodeStyles";
 import type { TerminalView } from "./types";
 import {
   EnlargedCompletionGestures,
@@ -21,9 +22,9 @@ import {
 } from "./EnlargedTerminalBar";
 import { useEnlargedTerminal } from "./useEnlargedTerminal";
 
-/** #44: the enlarged terminal's drop shadow and backdrop, `RunShellModal`'s. */
-const OVERLAY_SHADOW = "0 30px 80px rgba(0,0,0,0.6)";
-const OVERLAY_BACKDROP = { background: "rgba(5,7,10,0.66)", backdropFilter: "blur(4px)" } as const;
+/** #44: the enlarged terminal's drop shadow and backdrop. */
+const OVERLAY_SHADOW = "0 30px 80px var(--shadow)";
+const OVERLAY_BACKDROP = { background: "var(--dim)", backdropFilter: "blur(4px)" } as const;
 /** #44: the light halo an awaiting frame adds, at 18% of the status colour. */
 const AWAIT_HALO = "0 0 0 3px color-mix(in srgb, var(--color-st-await) 18%, transparent)";
 
@@ -107,12 +108,13 @@ export default function TerminalSection({
       ref={frameRef}
       className={
         expanded
-          ? `fixed inset-4 z-[41] flex flex-col overflow-hidden rounded-lg border-[1.5px] bg-bg-2 transition-[border-color,box-shadow] duration-[250ms] ${STATUS_BORDER[node.status]}`
+          ? "fixed inset-4 z-[41] flex flex-col overflow-hidden rounded border transition-[border-color,box-shadow] duration-[250ms]"
           : "flex h-full flex-col overflow-hidden"
       }
       style={
         expanded
           ? {
+              borderColor: `color-mix(in oklab, ${toneColor(nodeStatusTone(node.status))} 50%, var(--line))`,
               boxShadow:
                 node.status === "awaiting_user"
                   ? `${AWAIT_HALO}, ${OVERLAY_SHADOW}`
@@ -159,19 +161,12 @@ export default function TerminalSection({
           importDisabledReason={importReason}
         />
       ) : (
-        <div className="flex h-full flex-col" data-testid="pending-placeholder">
-          <div
-            className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
-            style={{ fontSize: "11px" }}
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-fg-5" />
-            Terminal
+        <div className="flex h-full flex-col" data-theme="dark" data-testid="pending-placeholder">
+          <div className="ri-term-bar">
+            <Lock size={12} strokeWidth={1.5} aria-hidden />
+            <span className="ri-term-bar__session">no session</span>
           </div>
-          <div className="flex flex-1 items-center justify-center bg-bg-0">
-            <span className="text-fg-4" style={{ fontSize: "11px" }}>
-              {terminalPlaceholder(node)}
-            </span>
-          </div>
+          <div className="ri-term-empty">{terminalPlaceholder(node)}</div>
         </div>
       )}
       {expanded && (
@@ -226,15 +221,16 @@ export default function TerminalSection({
         <button
           type="button"
           onClick={() => setTerminalView("split")}
+          data-theme="dark"
           data-testid="term-restore"
-          className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3 transition-colors hover:text-fg-2"
-          style={{ fontSize: "11px" }}
-          title="Agrandir le terminal"
+          className="ri-term-min"
+          title="Show the terminal"
         >
-          <span className="h-1.5 w-1.5 rounded-full bg-fg-5" />
-          Terminal
-          <span className="flex-1" />
-          <Maximize2 size={12} />
+          <Lock size={12} strokeWidth={1.5} aria-hidden />
+          <span className="truncate font-mono">{sessionName}</span>
+          <span className="ri-term-min__fill" />
+          <span className="ri-term-bar__tag">ended</span>
+          <ChevronDown size={12} strokeWidth={1.5} aria-hidden />
         </button>
         {/* detailsPane has an inner h-full wrapper → frame it flex-1 /
             min-h-0 under the bar so it takes the remaining height. */}

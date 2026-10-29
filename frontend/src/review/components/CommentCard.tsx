@@ -1,4 +1,4 @@
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Send, Trash2 } from "lucide-react";
 import type { ReviewEntry } from "../model/entries";
 import { relativeTime } from "../model/commentStatus";
 import { anchorLabel } from "../model/drafts";
@@ -86,8 +86,7 @@ export default function CommentCard({
   const label = anchorLabel(entry.anchor);
   const body = (text: string) => (
     <div
-      className="artifact-markdown px-2.5 py-2 text-fg [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
-      style={{ fontSize: "11.5px", lineHeight: 1.5 }}
+      className="artifact-markdown rv-ct__body [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
       data-testid="review-comment-body"
     >
       <ReviewMarkdown text={text} />
@@ -117,21 +116,20 @@ export default function CommentCard({
   if (sending) {
     return (
       <div
-        className="my-2 ml-3 mr-3 max-w-[720px] overflow-hidden rounded-md border border-line-strong bg-bg-2 font-sans opacity-70"
-        style={{ fontSize: "11px", whiteSpace: "normal" }}
+        className="rv-ct rv-ct--muted"
         data-testid="review-comment"
         data-state="sending"
         data-anchor={label}
       >
-        <div className="flex items-center gap-2 border-b border-line bg-bg-3 px-2.5 py-[5px] text-fg-3" style={{ fontSize: "10.5px" }}>
+        <div className="rv-ct__head rv-ct__head--open">
           <Badge kind="sent">
             <Spinner /> Sending
           </Badge>
-          <span className="font-medium text-fg-2">you</span>
-          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+          <span className="font-medium text-text-2">you</span>
+          <span className="rv-ct__fit font-mono text-text-3 text-2xs" title={label}>
             {label}
           </span>
-          <span className="text-fg-4">· {startingManager ? "starting the manager…" : "handing over…"}</span>
+          <span className="text-text-3">· {startingManager ? "starting the manager…" : "handing over…"}</span>
         </div>
         {body(d.text)}
       </div>
@@ -140,43 +138,42 @@ export default function CommentCard({
 
   return (
     <div
-      className="group my-2 ml-3 mr-3 max-w-[720px] overflow-hidden rounded-md border border-line-strong bg-bg-2 font-sans"
-      style={{ fontSize: "11px", whiteSpace: "normal" }}
+      className="group rv-ct"
       data-testid="review-comment"
       data-state="draft"
       data-anchor={label}
     >
-      <div className="flex items-center gap-2 border-b border-line bg-bg-3 px-2.5 py-[5px] text-fg-3" style={{ fontSize: "10.5px" }}>
+      <div className="rv-ct__head rv-ct__head--open">
         <Badge kind="draft">✎ Draft</Badge>
-        <span className="font-medium text-fg-2">you</span>
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="font-medium text-text-2">you</span>
+        <span className="rv-ct__fit font-mono text-text-3 text-2xs" title={label}>
           {label}
         </span>
-        <span className="text-fg-4">· {relativeTime(d.updated_at)}</span>
+        <span className="text-text-3">· {relativeTime(d.updated_at)}</span>
         <span className="ml-auto inline-flex gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
           <button
             type="button"
             onClick={onEdit}
             title="Edit draft"
             data-testid="review-comment-edit"
-            className="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-4 hover:text-fg-2"
+            className="d-icon d-icon--sm"
           >
-            <Pencil size={11} />
+            <Pencil size={12} strokeWidth={1.5} />
           </button>
           <button
             type="button"
             onClick={onDelete}
             title="Delete draft"
             data-testid="review-comment-delete"
-            className="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-4 hover:text-st-failed"
+            className="d-icon d-icon--sm d-icon--danger"
           >
-            <Trash2 size={11} />
+            <Trash2 size={12} strokeWidth={1.5} />
           </button>
         </span>
       </div>
       {body(d.text)}
-      <div className="flex items-center gap-2 border-t border-line px-2.5 py-[5px] text-fg-4" style={{ fontSize: "10px" }}>
-        <span>Only in this browser until sent.</span>
+      <div className="rv-ct__foot">
+        <span className="rv-ct__fit" title="Only in this browser until sent.">Only in this browser until sent.</span>
         <span className="ml-auto">
           <button
             type="button"
@@ -184,10 +181,9 @@ export default function CommentCard({
             disabled={!!sendDisabledReason}
             title={sendDisabledReason ?? "Send this comment to the manager (one message)"}
             data-testid="review-comment-send"
-            className="cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 hover:bg-bg-4 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-            style={{ fontSize: "10.5px" }}
+            className="d-btn d-btn--sm"
           >
-            ↗ Send to manager
+            <Send size={11} strokeWidth={1.5} aria-hidden /> Send to manager
           </button>
         </span>
       </div>

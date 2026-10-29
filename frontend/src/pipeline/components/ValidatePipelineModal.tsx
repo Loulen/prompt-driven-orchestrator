@@ -99,7 +99,7 @@ export default function ValidatePipelineModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="validate-pipeline-backdrop"
       onClick={onClose}
     >
@@ -108,21 +108,20 @@ export default function ValidatePipelineModal({
         aria-modal="true"
         aria-labelledby="validate-pipeline-title"
         data-testid="validate-pipeline-modal"
-        className="flex max-h-[85vh] w-[400px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className="flex max-h-[calc(85vh/var(--app-zoom,1))] w-[400px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 id="validate-pipeline-title" className="shrink-0 font-medium text-fg" style={{ fontSize: "13px" }}>
+        <h3 id="validate-pipeline-title" className="shrink-0 font-medium text-text text-md">
           Validate <span className="font-mono">{pipelineName}</span>
         </h3>
-        <p className="mt-1 shrink-0 text-fg-3">
+        <p className="mt-1 shrink-0 text-text-3">
           Choose the projects whose New Run and Trigger forms offer this pipeline, or list it
           first.
         </p>
 
-        <div className="mt-3 min-h-0 overflow-y-auto rounded-md border border-line bg-bg-1 p-1">
+        <div className="mt-3 min-h-0 overflow-y-auto rounded-md border border-line bg-surface-0 p-1">
           <label
-            className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg hover:bg-bg-3"
+            className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text hover:bg-hover"
             data-testid="validate-all-row"
           >
             <input
@@ -130,16 +129,15 @@ export default function ValidatePipelineModal({
               checked={all}
               onChange={(e) => setAll(e.target.checked)}
               data-testid="validate-all"
-              className="accent-acc"
+              className="accent-primary"
             />
-            <Globe size={12} className="shrink-0 text-fg-4" aria-hidden />
+            <Globe size={12} className="shrink-0 text-text-3" aria-hidden />
             <span>All projects (current and future)</span>
           </label>
           <div className="my-1 h-px bg-line" />
           <p
-            className="px-2 pt-1 pb-0.5 uppercase tracking-wider text-fg-4"
+            className="px-2 pt-1 pb-0.5 uppercase tracking-wider text-text-3 text-2xs"
             data-testid="validate-projects-heading"
-            style={{ fontSize: "9.5px" }}
           >
             {all ? "Listed first for" : "Only offered to"}
             {all && (
@@ -147,14 +145,14 @@ export default function ValidatePipelineModal({
             )}
           </p>
           {projects.length === 0 ? (
-            <p className="px-2 py-1.5 text-fg-4" data-testid="validate-no-project" style={{ fontSize: "11px" }}>
+            <p className="px-2 py-1.5 text-text-3 text-xs" data-testid="validate-no-project">
               No project yet. Name a repository group in the Runs list to create one.
             </p>
           ) : (
             projects.map((project) => (
               <label
                 key={project.id}
-                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 hover:bg-bg-3"
+                className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-text-2 hover:bg-hover"
               >
                 <input
                   type="checkbox"
@@ -162,10 +160,10 @@ export default function ValidatePipelineModal({
                   checked={ticked.includes(project.id)}
                   onChange={() => toggle(project.id)}
                   data-testid={`validate-project-${project.id}`}
-                  className="accent-acc"
+                  className="accent-primary"
                 />
                 <span className="truncate">{project.name}</span>
-                <span className="ml-auto shrink-0 text-fg-4" style={{ fontSize: "10px" }}>
+                <span className="ml-auto shrink-0 text-text-3 text-2xs">
                   {project.members.length} repo{project.members.length === 1 ? "" : "s"}
                 </span>
               </label>
@@ -173,11 +171,11 @@ export default function ValidatePipelineModal({
           )}
         </div>
 
-        <p className="mt-2 shrink-0 text-fg-4" data-testid="validate-verdict" style={{ fontSize: "11px" }}>
+        <p className="mt-2 shrink-0 text-text-3 text-xs" data-testid="validate-verdict">
           {verdict}
         </p>
         {error && (
-          <p className="mt-2 shrink-0 text-st-failed" data-testid="validate-error" style={{ fontSize: "11px" }}>
+          <p className="mt-2 shrink-0 text-st-failed text-xs" data-testid="validate-error">
             {error}
           </p>
         )}
@@ -186,8 +184,7 @@ export default function ValidatePipelineModal({
           <button
             onClick={onClose}
             data-testid="validate-cancel"
-            className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
           >
             Cancel
           </button>
@@ -195,8 +192,7 @@ export default function ValidatePipelineModal({
             onClick={save}
             disabled={saving}
             data-testid="validate-save"
-            className="cursor-pointer rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:opacity-40"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40 text-xs"
           >
             {saving ? "Saving…" : "Save validation"}
           </button>

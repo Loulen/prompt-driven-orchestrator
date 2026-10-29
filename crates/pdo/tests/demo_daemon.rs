@@ -45,17 +45,21 @@
 //!   preamble (`Ligne de fixture`); none by default (`PUT /ext/test/launch
 //!   {"preamble": …}`).
 //!
-//! Its Sessions hébergées (API 0.17): `POST /ext/test/sessions {"key", "kind":
+//! Its Sessions hébergées (API 0.19): `POST /ext/test/sessions {"key", "kind":
 //! "agent"|"shell", "folder"?: {"kind": "path", "path"}|{"kind": "home"}|
 //! {"kind": "project_repo"}, "project"?, "config"?: {"harness", "model",
 //! "effort", "prompt"}}` opens one on behalf of the caller, `GET
 //! /ext/test/sessions[/<key>]` reads them, `DELETE /ext/test/sessions/<key>`
 //! terminates one, `POST /ext/test/sessions/<key>/relaunch` relaunches an
 //! ended one, `PUT /ext/test/sessions/<key>/config {"harness", "model",
-//! "effort", "prompt"}` configures its next relaunch, `POST
+//! "effort", "prompt"}` configures its next relaunch, `PUT
+//! /ext/test/sessions/<key>/zoom {"zoom"}` sets its Zoom du terminal, `POST
 //! /ext/test/sessions/<key>/type {"text"}` lays a text in its input without
 //! Enter, `POST /ext/test/sessions/<key>/forget` forgets an ended one, `GET
 //! /ext/test/sessions/<key>/live[/<path>]` lists and reads its Artefacts live.
+//! The test page at `#/ext/test/topbar/end/hosted` opens the shell `demo`
+//! (`…/hosted/agent`: the agent `demo-agent`) and shows its terminal and its
+//! Zoom du terminal, the same for every browser.
 //! Their records live under `$HOME/.pdo/hosted/`; a hosted session's `pdo`
 //! acts as who opened it (`pdo wait-user` declares its wait, `pdo complete`
 //! is refused).

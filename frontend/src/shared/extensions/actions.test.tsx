@@ -34,7 +34,6 @@ import NodeDetailHeader from "../../run/components/nodeDetail/NodeDetailHeader";
 import ReviewFileHeader from "../../review/components/ReviewFileHeader";
 import Toaster from "../ui/Toaster";
 import { resetToasts } from "../ui/toast";
-import { TooltipProvider } from "../ui/tooltip";
 import type { Project } from "../../workspace/model/project";
 import type { CommandContext } from "./contract";
 import ExtensionContextProvider from "./ExtensionContextProvider";
@@ -111,12 +110,12 @@ function shell(children: ReactNode, selected: RunState | null = null) {
   const runs = [{ run_id: "r1", pipeline_name: "demo", status: "running", effective_repo: "/repos/pdo", project_id: "p1" }] as unknown as RunListEntry[];
   const projects = [{ id: "p1", name: "PDO", members: ["/repos/pdo"] }] as unknown as Project[];
   return (
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={selected} runs={runs} projects={projects}>
         {children}
         <Toaster />
       </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
 }
 
@@ -159,8 +158,8 @@ function fakePane(over: Partial<RunsPaneState> = {}): RunsPaneState {
     visibleRunIds: [],
     runById: new Map(),
     filteredRuns: [],
-    availableRepos: [],
-    projectOf: () => null,
+    allParentIds: [],
+    filterActive: false,
     openProjectSettings: vi.fn(),
     runningWillStop: 0,
     cleanupItems: [],
@@ -209,7 +208,7 @@ afterEach(() => {
 describe("a bar of the catalogue (runs/header)", () => {
   it("shows one icon button per action, before the core's, and calls its command with the context", async () => {
     serve([extension("demo", "Demo", [action("runs/header", "sync")])]);
-    render(shell(<RunsPaneHeader pane={fakePane()} onNewRun={vi.fn()} />, { run_id: "r1", pipeline_name: "demo", status: "running" } as RunState));
+    render(shell(<RunsPaneHeader pane={fakePane()} runs={[]} triggers={[]} onNewRun={vi.fn()} />, { run_id: "r1", pipeline_name: "demo", status: "running" } as RunState));
     const button = await screen.findByTestId("extension-action-demo:sync");
     expect(button).toHaveAccessibleName("Do sync");
     // Before « New Run » in the header's order.
@@ -228,7 +227,7 @@ describe("a bar of the catalogue (runs/header)", () => {
 
   it("adds nothing without a contribution", async () => {
     serve([]);
-    render(shell(<RunsPaneHeader pane={fakePane()} onNewRun={vi.fn()} />));
+    render(shell(<RunsPaneHeader pane={fakePane()} runs={[]} triggers={[]} onNewRun={vi.fn()} />));
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(screen.queryByTestId("extension-actions-runs/header")).toBeNull();
   });
@@ -364,7 +363,6 @@ describe("the « ⋯ » menus of the Trigger and Pipeline rows", () => {
           trigger={trigger}
           isSelected={false}
           rowSelected={false}
-          allRepos={[]}
           onSelect={onSelect}
           onSelectControl={vi.fn()}
           onDelete={onDelete}
@@ -416,7 +414,9 @@ describe("the « ⋯ » menus of the Trigger and Pipeline rows", () => {
     expect(onDelete).toHaveBeenCalledTimes(1);
 
     rerender(
-      shell(<LibraryRow name="Lib" nodeCount={1} showDuplicate={false} onDelete={vi.fn()} deleteTitle="Delete" />),
+      shell(
+        <LibraryRow name="Lib" nodeCount={1} showDuplicate={false} onOpen={vi.fn()} onDelete={vi.fn()} deleteTitle="Delete" />,
+      ),
     );
     expect(screen.queryByTestId("pipeline-row-menu")).toBeNull();
   });

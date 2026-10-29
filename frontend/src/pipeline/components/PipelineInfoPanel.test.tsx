@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RunState } from "../../shared/generated/RunState";
 
@@ -132,12 +132,12 @@ describe("PipelineInfoPanel — sandbox surface (#410)", () => {
   it("shows the sandbox badge for a sandboxed run (minimal)", () => {
     renderPanel(makeRun({ sandbox: "minimal" }));
     const badge = screen.getByTestId("sandbox-badge");
-    expect(badge).toHaveTextContent(/sandbox:\s*minimal/i);
+    expect(badge).toHaveTextContent("minimal");
   });
 
   it("shows the sandbox badge for a full run", () => {
     renderPanel(makeRun({ sandbox: "full" }));
-    expect(screen.getByTestId("sandbox-badge")).toHaveTextContent(/sandbox:\s*full/i);
+    expect(screen.getByTestId("sandbox-badge")).toHaveTextContent("full");
   });
 
   it("omits the badge for an off/host run", () => {
@@ -514,7 +514,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Copy" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Clipboard access was denied. Use Download instead.",
+      "Clipboard deniedUse Download",
     );
   });
 
@@ -604,7 +604,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
 
     rerender(panel("yaml"));
     expect(screen.queryByTestId("assistant-tab")).toBeNull();
-    expect(screen.getByTestId("info-tab-yaml").className).toContain("border-acc");
+    expect(screen.getByTestId("info-tab-yaml").getAttribute("aria-selected")).toBe("true");
   });
 
   it("controlled: a tab the context lacks resolves to Info", () => {
@@ -618,7 +618,7 @@ describe("PipelineInfoPanel — Assistant tab (#302)", () => {
         assistantId="alpha"
       />,
     );
-    expect(screen.getByTestId("info-tab-info").className).toContain("border-acc");
+    expect(screen.getByTestId("info-tab-info").getAttribute("aria-selected")).toBe("true");
   });
 });
 
@@ -649,7 +649,7 @@ describe("PipelineInfoPanel — Diff tab (#748)", () => {
     expect(link).toHaveTextContent("−11");
     expect(link).toHaveTextContent("4 files");
     fireEvent.click(link);
-    expect(screen.getByTestId("info-tab-diff").className).toContain("border-acc");
+    expect(screen.getByTestId("info-tab-diff").getAttribute("aria-selected")).toBe("true");
     // Info's body is gone: the Diff tab owns the panel now.
     expect(screen.queryByTestId("run-stats")).toBeNull();
   });
@@ -742,7 +742,8 @@ describe("PipelineInfoPanel — Diff tab (#748)", () => {
 describe("PipelineInfoPanel — Repositories tab and Info header (#752)", () => {
   it("offers Info | Diff | Repositories | Manager | YAML for a Run, and no Repositories tab on a template", () => {
     renderPanel(makeRun());
-    expect(screen.getByTestId("info-tab-repositories")).toHaveTextContent("Repositories");
+    expect(screen.getByTestId("info-tab-repositories")).toHaveTextContent("Repos");
+    expect(screen.getByTestId("info-tab-repositories")).toHaveAttribute("title", "Repositories");
     expect(screen.queryByTestId("repositories-tab")).toBeNull();
     fireEvent.click(screen.getByTestId("info-tab-repositories"));
     expect(screen.getByTestId("repositories-tab")).toBeInTheDocument();
@@ -806,12 +807,13 @@ describe("PipelineInfoPanel — Repositories tab and Info header (#752)", () => 
   it("Info shows the frozen harness when named (#551) and the editing / archived note (#315)", () => {
     const { unmount } = renderPanel(makeRun({ status: "running", harness: "opencode" } as Partial<RunState>));
     expect(screen.getByTestId("run-harness")).toHaveTextContent("opencode");
-    expect(screen.getByTestId("run-info-note")).toHaveTextContent("Canvas edits apply to this run only · run settings are read-only");
+    expect(screen.getByTestId("run-info-note")).toHaveTextContent("read only");
+    expect(within(screen.getByTestId("run-info-note")).getByTitle("Canvas edits apply to this run only · run settings are read-only")).toBeInTheDocument();
     unmount();
     renderPanel(makeRun({ status: "archived" }));
     expect(screen.queryByTestId("run-harness")).toBeNull();
-    expect(screen.getByTestId("run-info-note")).toHaveTextContent("Archived run");
-    expect(screen.getByTestId("run-info-note")).toHaveTextContent("read-only");
+    expect(screen.getByTestId("run-info-note")).toHaveTextContent("archived");
+    expect(within(screen.getByTestId("run-info-note")).getByTitle("Archived run · read-only · outputs preserved")).toBeInTheDocument();
   });
 
   it("shows no note, reason or harness on a template", () => {
@@ -844,8 +846,6 @@ describe("PipelineInfoPanel — a Run cut after a failed pre-cut fetch (#804)", 
     const box = screen.getByTestId("run-source-fetch-error");
     expect(box).toHaveTextContent("Started on local state · fetch failed");
     expect(box).toHaveTextContent("origin/main");
-    expect(box).toHaveTextContent("could not be refreshed before the cut");
-    expect(box).toHaveTextContent("last state known locally");
   });
 
   it("quotes git verbatim, in full on hover", () => {
@@ -858,9 +858,7 @@ describe("PipelineInfoPanel — a Run cut after a failed pre-cut fetch (#804)", 
 
   it("speaks of the source ref when the Run named no branch", () => {
     renderPanel(makeRun({ source_fetch_error: FETCH_ERROR } as Partial<RunState>));
-    expect(screen.getByTestId("run-source-fetch-error")).toHaveTextContent(
-      "The source ref could not be refreshed before the cut.",
-    );
+    expect(screen.getByTestId("run-source-fetch-error")).toHaveTextContent("source ref");
   });
 
   it("does not turn the Run red — it did not fail", () => {
@@ -958,7 +956,7 @@ describe("PipelineInfoPanel — the Source block (#803)", () => {
 
     await screen.findByTestId("run-source-block");
     expect(screen.getByTestId("source-drift-chip")).toHaveTextContent("unavailable");
-    expect(screen.getByTestId("run-source-unavailable")).toHaveTextContent("branch deleted");
+    expect(screen.getByTestId("run-source-unavailable")).toHaveAttribute("title", expect.stringContaining("branch deleted"));
     expect(screen.queryByTestId("run-source-fetch")).not.toBeInTheDocument();
   });
 

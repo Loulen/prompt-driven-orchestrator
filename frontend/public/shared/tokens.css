@@ -1,0 +1,193 @@
+/*
+ * The tokens of the shared design system (ADR-0091), at a stable address:
+ * `/shared/tokens.css`. The front imports this very file (src/index.css), and a
+ * page an extension serves outside the interface links it, so both paint with
+ * the same palette, type and sizes.
+ *
+ * Two layers:
+ *  - the palette (`--color-*`): paper, ink, rules, the ruby accent and the six
+ *    status colours, redefined by each theme;
+ *  - the roles (`--surface-*`, `--text*`, `--line*`, `--primary*`, `--hover`…),
+ *    which components paint with. They read the palette, and are declared again
+ *    on every `[data-theme]` element, so a container can carry the other theme.
+ *
+ * Dark is the default (`:root` without `data-theme`); `data-theme="light"` on
+ * `<html>` or on any container switches what is under it. The fonts ship with
+ * the binary under `/shared/fonts/`, with their licence (SIL OFL 1.1).
+ */
+
+@font-face {
+  font-family: "Archivo";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/archivo-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Archivo";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/archivo-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/geist-mono-symbols2-wght-normal.woff2") format("woff2");
+  unicode-range: U+2000-2001, U+2004-2008, U+200A, U+23B8-23BD, U+2500-259F;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/geist-mono-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/shared/fonts/geist-mono-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ------------------------------------------------------------ type and sizes */
+:root {
+  /* One UI sans, one mono for ids, hashes, paths, durations, costs and code. */
+  --font-ui: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --font-code: "Geist Mono", ui-monospace, Menlo, monospace;
+
+  /* Type scale: 13 px base. */
+  --fs-2xs: 10px; /* badges, counters */
+  --fs-xs: 11px; /* meta, caps section headers, status bar */
+  --fs-sm: 12px; /* secondary text, controls */
+  --fs-md: 13px; /* default UI text, list titles */
+  --fs-lg: 14px; /* pane titles */
+  --fs-xl: 16px; /* dialog titles, the only "big" text */
+  --lh-ui: 1.35;
+  --w-regular: 400;
+  --w-medium: 500;
+  --w-strong: 600;
+  --tracking-caps-ui: 0.06em;
+
+  /* Heights, on a 4 px grid. */
+  --h-row: 24px; /* list row, tree row, menu item */
+  --h-row-2: 40px; /* two-line row */
+  --h-control: 24px; /* buttons, inputs, selects, tabs */
+  --h-control-sm: 20px; /* inline chips, mini buttons */
+  --h-bar: 32px; /* pane headers, tab bars, toolbars */
+  --h-topbar: 36px;
+  --h-statusbar: 22px;
+  --icon: 14px;
+  --icon-lg: 16px;
+  --pad-x: 8px; /* horizontal padding inside rows and controls */
+  --gap: 6px;
+  --g-1: 2px;
+  --g-2: 4px;
+  --g-3: 6px;
+  --g-4: 8px;
+  --g-5: 12px;
+  --g-6: 16px;
+  --g-7: 24px;
+
+  /* Corners: controls 2 px, panes and frames square. The floating row toolbar
+     alone takes the larger radius. */
+  --radius-ui: 2px;
+  --radius-pop: 6px;
+}
+
+/* ------------------------------------------------------------ palette, dark */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-paper: oklch(18.5% 0.004 265);
+  --color-paper-2: oklch(20.5% 0.005 265);
+  --color-paper-3: oklch(23% 0.006 265);
+  --color-rule: oklch(30% 0.007 265);
+  --color-rule-2: oklch(25.5% 0.006 265);
+  --color-rule-strong: oklch(46% 0.01 260);
+  --color-ink: oklch(87% 0.004 250);
+  --color-ink-2: oklch(76% 0.006 250);
+  --color-muted: oklch(64% 0.008 250);
+  --color-accent: oklch(64% 0.16 8);
+  --color-accent-hi: oklch(70% 0.14 8);
+  --color-accent-ink: oklch(18.5% 0.004 265);
+  --color-st-running: oklch(68% 0.12 255);
+  --color-st-await: oklch(74% 0.12 75);
+  --color-st-done: oklch(70% 0.11 160);
+  --color-st-blocked: oklch(71% 0.125 55);
+  --color-st-failed: oklch(66% 0.15 28);
+  --color-st-skipped: oklch(64% 0.018 255);
+  /* Light text on a dark ground reads heavier: medium and strong step down. */
+  --w-medium: 470;
+  --w-strong: 560;
+  --shadow: oklch(0% 0 0 / 0.45);
+  --dim: oklch(0% 0 0 / 0.62);
+  --dim-soft: oklch(0% 0 0 / 0.48);
+}
+
+/* ------------------------------------------------------------ palette, light */
+[data-theme="light"] {
+  color-scheme: light;
+  --color-paper: oklch(99.4% 0.005 230);
+  --color-paper-2: oklch(96.8% 0.005 230);
+  --color-paper-3: oklch(94.4% 0.005 229);
+  --color-rule: oklch(86% 0.006 245);
+  --color-rule-2: oklch(91.5% 0.005 240);
+  --color-rule-strong: oklch(62% 0.012 260);
+  --color-ink: oklch(28.2% 0.019 272);
+  --color-ink-2: oklch(42% 0.017 270);
+  --color-muted: oklch(47.5% 0.014 265);
+  --color-accent: oklch(43.6% 0.155 5);
+  --color-accent-hi: oklch(38.5% 0.14 5);
+  --color-accent-ink: oklch(99.4% 0.005 230);
+  --color-st-running: oklch(48% 0.15 255);
+  --color-st-await: oklch(50% 0.11 70);
+  --color-st-done: oklch(47% 0.1 160);
+  --color-st-blocked: oklch(51% 0.14 50);
+  --color-st-failed: oklch(50% 0.175 30);
+  --color-st-skipped: oklch(50% 0.02 255);
+  --w-medium: 500;
+  --w-strong: 600;
+  --shadow: oklch(28.2% 0.019 272 / 0.16);
+  --dim: oklch(28.2% 0.019 272 / 0.45);
+  --dim-soft: oklch(28.2% 0.019 272 / 0.32);
+}
+
+/* ------------------------------------------------------------ roles */
+:root,
+[data-theme] {
+  --surface-0: var(--color-paper); /* editor, canvas, dialogs, inputs */
+  --surface-1: var(--color-paper-2); /* side bars, panels */
+  --surface-2: var(--color-paper-3); /* top bar, popovers, menus */
+  --hover: color-mix(in oklch, var(--color-ink) 6%, transparent);
+  --active: color-mix(in oklch, var(--color-ink) 10%, transparent);
+  --selected: color-mix(in oklch, var(--color-accent) 14%, transparent);
+  --selected-edge: var(--color-accent);
+  --line: var(--color-rule);
+  --line-soft: var(--color-rule-2);
+  --line-strong: var(--color-rule-strong);
+  --text: var(--color-ink);
+  --text-2: var(--color-ink-2);
+  --text-3: var(--color-muted);
+  /* Ruby: the one primary action of a view, the selection and "on" states. */
+  --primary: var(--color-accent);
+  --primary-hi: var(--color-accent-hi);
+  --primary-ink: var(--color-accent-ink);
+  --focus-ring: color-mix(in oklch, var(--color-st-running) 70%, transparent);
+  --scrim: color-mix(in oklch, var(--color-paper) 55%, transparent);
+}

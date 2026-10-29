@@ -3,7 +3,9 @@
  */
 
 import { useState, useMemo, useRef, useEffect } from "react";
-import { Copy, Download, ChevronDown, ChevronRight } from "lucide-react";
+import { Check, Copy, Download, EyeOff, FileCode } from "lucide-react";
+import { Banner, Button, Chip, EmptyState, IconButton } from "../../shared/ui/kit";
+import "./inspect.css";
 import { fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar } from "../../run/api/runPipeline";
 import { fetchPipelineDocument, fetchPipelineSkillsSidecar } from "../api/document";
 import { serializePipeline } from "../../lib/serializePipeline";
@@ -79,6 +81,7 @@ export function YamlTab({
 
   useEffect(() => {
     if (scrollToLine == null || !preRef.current) return;
+    // The line height of `.pi-yaml`: 11 px type at 1.6.
     const lineHeight = 11 * 1.6;
     const scrollTop = Math.max(0, (scrollToLine - 3) * lineHeight);
     preRef.current.scrollTop = scrollTop;
@@ -86,8 +89,8 @@ export function YamlTab({
 
   if (!pipeline) {
     return (
-      <div className="flex flex-1 items-center justify-center text-fg-4" style={{ fontSize: "12px" }}>
-        No pipeline loaded.
+      <div className="pi-center">
+        <EmptyState icon={FileCode}>No pipeline</EmptyState>
       </div>
     );
   }
@@ -129,92 +132,76 @@ export function YamlTab({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-      <div className="border-b border-line bg-bg-3 px-3 py-2" data-testid="portable-document-bar">
-        <div className="flex items-center gap-2">
-          <span className="h-1.5 w-1.5 rounded-full bg-acc" />
-          <span className="font-medium text-fg-2" style={{ fontSize: "11px" }}>
-            Portable document · v1
-          </span>
-          <button
-            className="ml-auto flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
-            onClick={copyDocument}
-            disabled={yaml == null}
-          >
-            <Copy size={11} />
-            {copied ? "✓ Copied" : "Copy"}
-          </button>
-          <button
-            className="flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
-            onClick={downloadDocument}
-            disabled={yaml == null}
-          >
-            <Download size={11} />
-            Download
-          </button>
+    <div className="pi-body">
+      <div className="pi-docbar" data-testid="portable-document-bar">
+        <span className="ei-trunc" title="The document as Save writes it, portable to another instance">
+          Portable document · v1
+        </span>
+        {runId && <Chip title="This is the pipeline that ran, not the Run: no runtime value">ran</Chip>}
+        <span className="ei-row__end">
+          <IconButton icon={copied ? Check : Copy} label={copied ? "Copied" : "Copy"} onClick={copyDocument} disabled={yaml == null} />
+          <IconButton icon={Download} label="Download" onClick={downloadDocument} disabled={yaml == null} />
           {skillCount > 0 && (
-            <button
-              className="flex items-center gap-1 rounded px-1.5 py-1 text-fg-3 hover:bg-bg-4 hover:text-fg"
+            <Button
+              size="sm"
+              tone="ghost"
+              icon={Download}
               onClick={() => void downloadSkillsSidecar()}
               title={`The ${skillCount} skill${skillCount === 1 ? "" : "s"} this pipeline selects, as ${pipelineName}.skills/<id>/… to unpack next to the YAML`}
               data-testid="download-skills-sidecar"
             >
-              <Download size={11} />
               Skills ({skillCount})
-            </button>
+            </Button>
           )}
-        </div>
-        {copyError && (
-          <div className="mt-1 text-st-failed" role="alert">
-            Clipboard access was denied. Use Download instead.
-          </div>
-        )}
-        {sidecarError && (
-          <div className="mt-1 text-st-failed" role="alert" data-testid="skills-sidecar-error">
-            {sidecarError}
-          </div>
-        )}
-        {skillCount > 0 && (
-          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }} data-testid="skills-sidecar-note">
-            {skillCount} skill{skillCount === 1 ? "" : "s"} referenced by id. Their content travels in
-            the sidecar <code>{pipelineName}.skills/</code>; import both so the bank recreates them.
-          </p>
-        )}
-        {dirty && (
-          <p className="mt-1 text-st-await" style={{ fontSize: "10px" }} data-testid="yaml-unsaved-note">
-            Unsaved edits shown. Copy and Download export the last saved document until you Save.
-          </p>
-        )}
-        {runId && (
-          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
-            This is the pipeline that ran, not the Run. Runtime values are not included.
-          </p>
-        )}
-        <button
-          className="mt-1.5 flex items-center gap-1 text-fg-4 hover:text-fg-2"
-          style={{ fontSize: "10.5px" }}
-          onClick={() => setShowExcluded((value) => !value)}
-        >
-          {showExcluded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-          Not included
-        </button>
-        {showExcluded && (
-          <p className="mt-1 text-fg-4" style={{ fontSize: "10px" }}>
-            Secrets, environment, runtime values, and instance configuration. Named agent
-            profiles become Inherit; shared nodes become ordinary nodes. Skills are content,
-            not configuration: they travel in the separate skills sidecar.
-          </p>
-        )}
+          <IconButton
+            icon={EyeOff}
+            label="Not included"
+            pressed={showExcluded}
+            onClick={() => setShowExcluded((value) => !value)}
+            data-testid="yaml-not-included"
+          />
+        </span>
       </div>
-      <pre
-        ref={preRef}
-        className="flex-1 overflow-auto p-3 font-mono text-fg-3 select-text"
-        style={{ fontSize: "11px", lineHeight: "1.6", tabSize: 2 }}
-        data-testid="info-yaml-content"
-      >
+      {copyError && (
+        <div>
+          <Banner tone="failed" title="Clipboard denied" text="Use Download" />
+        </div>
+      )}
+      {sidecarError && (
+        <div data-testid="skills-sidecar-error">
+          <Banner tone="failed" title="Skills" text={sidecarError} />
+        </div>
+      )}
+      {skillCount > 0 && (
+        <div
+          className="pi-docnote ei-dim"
+          title="Skills are content: import the sidecar with the YAML so the bank recreates them"
+          data-testid="skills-sidecar-note"
+        >
+          <span className="ei-trunc">
+            {skillCount} skill{skillCount === 1 ? "" : "s"} by id · sidecar <span className="d-mono">{pipelineName}.skills/</span>
+          </span>
+        </div>
+      )}
+      {dirty && (
+        <div
+          className="pi-docnote ei-warn"
+          title="Copy and Download export the last saved document until you Save"
+          data-testid="yaml-unsaved-note"
+        >
+          <span className="ei-trunc">Unsaved edits shown · exports the last save</span>
+        </div>
+      )}
+      {showExcluded && (
+        <div className="pi-docnote ei-dim" data-testid="yaml-excluded">
+          <span className="ei-trunc" title="Named agent profiles become Inherit; shared nodes become ordinary nodes; skills travel in the sidecar">
+            Not included: secrets, environment, runtime values, instance configuration
+          </span>
+        </div>
+      )}
+      <pre ref={preRef} className="pi-yaml" data-testid="info-yaml-content">
         {highlightYaml(shownYaml, scrollToLine)}
       </pre>
     </div>
   );
 }
-

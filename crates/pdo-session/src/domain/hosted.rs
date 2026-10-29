@@ -1,21 +1,15 @@
-//! A Session hébergée as the core records it (ADR-0091): what the extensions
-//! read of it ([`HostedSession`]), plus what only the core keeps (the
-//! conversation to resume, the Zoom du terminal), and the transitions of its
-//! state. Pure: the clock is a parameter.
+//! A Session hébergée as the core records it (ADR-0092): what the extensions
+//! read of it ([`HostedSession`], its Zoom du terminal included), plus what
+//! only the core keeps (the conversation to resume), and the transitions of
+//! its state. Pure: the clock is a parameter.
 
 use std::path::{Path, PathBuf};
 
 use pdo_extension_api::{
     Actor, EndReason, HostedConfig, HostedFolder, HostedSession, HostedState, OpenSession,
+    MAX_TERMINAL_ZOOM, MIN_TERMINAL_ZOOM,
 };
 use serde::{Deserialize, Serialize};
-
-/// The Zoom du terminal of a session nobody changed, in percent.
-pub const DEFAULT_TERMINAL_ZOOM: u16 = 100;
-
-fn default_zoom() -> u16 {
-    DEFAULT_TERMINAL_ZOOM
-}
 
 /// One Session hébergée, as it is stored and survives a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,8 +23,6 @@ pub struct HostedRecord {
     /// starts a new conversation.
     #[serde(default)]
     pub harness: Option<String>,
-    #[serde(default = "default_zoom")]
-    pub terminal_zoom: u16,
 }
 
 impl HostedRecord {
@@ -48,7 +40,6 @@ impl HostedRecord {
             session,
             conversation_id: None,
             harness: None,
-            terminal_zoom: DEFAULT_TERMINAL_ZOOM,
         }
     }
 
@@ -135,11 +126,46 @@ impl HostedRecord {
         true
     }
 
+    /// Its Zoom du terminal is now `zoom` percent, for every Poste. Whether it
+    /// changed; a zoom out of range is refused and changes nothing.
+    pub fn zoom(&mut self, zoom: u16, now: &str) -> Result<bool, ZoomOutOfRange> {
+        let zoom = terminal_zoom(zoom)?;
+        if self.session.terminal_zoom == zoom {
+            return Ok(false);
+        }
+        self.session.terminal_zoom = zoom;
+        self.session.updated_at = now.to_string();
+        Ok(true)
+    }
+
     fn set(&mut self, state: HostedState, reason: Option<EndReason>, now: &str) {
         self.session.state = state;
         self.session.end_reason = reason;
         self.session.wait_message = None;
         self.session.updated_at = now.to_string();
+    }
+}
+
+/// A Zoom du terminal outside [`MIN_TERMINAL_ZOOM`]..=[`MAX_TERMINAL_ZOOM`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZoomOutOfRange(pub u16);
+
+impl std::fmt::Display for ZoomOutOfRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "a terminal zoom is {MIN_TERMINAL_ZOOM} to {MAX_TERMINAL_ZOOM} %, not {}",
+            self.0
+        )
+    }
+}
+
+/// `zoom` as a Zoom du terminal, or why it is none.
+pub fn terminal_zoom(zoom: u16) -> Result<u16, ZoomOutOfRange> {
+    if (MIN_TERMINAL_ZOOM..=MAX_TERMINAL_ZOOM).contains(&zoom) {
+        Ok(zoom)
+    } else {
+        Err(ZoomOutOfRange(zoom))
     }
 }
 
@@ -479,6 +505,23 @@ mod tests {
         legacy.as_object_mut().unwrap().remove("terminal_zoom");
         let back: HostedRecord = serde_json::from_value(legacy).unwrap();
         assert_eq!(back, record);
+    }
+
+    #[test]
+    fn a_zoom_stays_within_its_range_and_says_whether_it_changed() {
+        let open = OpenSession::shell("s");
+        let mut record =
+            HostedRecord::opening("pdo-hosted-3", "test", &open, Path::new("/h"), "t0");
+        assert_eq!(record.zoom(150, "t1"), Ok(true));
+        assert_eq!(record.session.terminal_zoom, 150);
+        assert_eq!(record.session.updated_at, "t1");
+        assert_eq!(record.zoom(150, "t2"), Ok(false));
+        assert_eq!(record.session.updated_at, "t1");
+        assert_eq!(record.zoom(49, "t3"), Err(ZoomOutOfRange(49)));
+        assert_eq!(record.zoom(201, "t3"), Err(ZoomOutOfRange(201)));
+        assert_eq!(record.zoom(50, "t4"), Ok(true));
+        assert_eq!(record.zoom(200, "t5"), Ok(true));
+        assert_eq!(record.session.terminal_zoom, 200);
     }
 
     #[test]

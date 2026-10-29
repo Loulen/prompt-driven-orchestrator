@@ -11,7 +11,7 @@
  */
 
 import type { PortSide } from "../shared/generated/PortSide";
-import type { Point } from "./orthogonalRouter";
+import type { Point, Rect } from "./orthogonalRouter";
 
 export type LabelAxis = "horizontal" | "vertical";
 
@@ -172,4 +172,24 @@ export function midpointAxis(points: Point[], mid: Point): LabelAxis {
     if (within) return segmentAxis(a, b) ?? "horizontal";
   }
   return "horizontal";
+}
+
+/**
+ * The widest a condition pill centred on `center` may grow without running
+ * over a card: twice the distance to the nearest card on its line, less a
+ * margin, between a floor that still shows a few characters and the pill's own
+ * cap. The pill is a 16 px line; a card counts when it overlaps that line.
+ */
+export function conditionPillMaxWidth(center: Point, cards: Rect[]): number {
+  const CAP = 220; // `.cv-pill` max-width in canvas.css
+  const FLOOR = 40;
+  const MARGIN = 4;
+  const HALF_HEIGHT = 8; // half the `.cv-pill` height
+  let half = CAP / 2;
+  for (const c of cards) {
+    if (c.y > center.y + HALF_HEIGHT || c.y + c.height < center.y - HALF_HEIGHT) continue;
+    const gap = c.x >= center.x ? c.x - center.x : center.x - (c.x + c.width);
+    half = Math.min(half, gap - MARGIN);
+  }
+  return Math.max(FLOOR, Math.min(CAP, 2 * half));
 }

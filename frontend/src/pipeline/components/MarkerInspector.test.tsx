@@ -19,7 +19,7 @@ describe("MarkerInspector (#684)", () => {
     render(<MarkerInspector node={marker("start")} />);
     expect(screen.getByText("Pipeline start")).toBeInTheDocument();
     expect(screen.getByText("user_prompt")).toBeInTheDocument();
-    expect(screen.getByText(/cannot be edited, deleted or duplicated/)).toBeInTheDocument();
+    expect(screen.getAllByTitle(/cannot be edited, deleted or duplicated/).length).toBeGreaterThan(0);
   });
 
   it("renders the end marker read-only with its input port", () => {
@@ -30,7 +30,8 @@ describe("MarkerInspector (#684)", () => {
 
   it("exposes no editing controls", () => {
     render(<MarkerInspector node={marker("start")} />);
-    expect(screen.queryByRole("button")).toBeNull();
+    // Only the section's fold head: nothing that edits.
+    expect(screen.queryAllByRole("button").filter((b) => !b.classList.contains("d-sec__toggle"))).toEqual([]);
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.queryByText(/Save to library/i)).toBeNull();
     expect(screen.queryByText(/Delete port/i)).toBeNull();

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openPipelineForEdit } from "./helpers";
+import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -78,7 +78,7 @@ test.afterAll(async () => {
 
 async function open(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   await expect(page.locator('.react-flow__node[data-id="designer"]')).toBeVisible({ timeout: 5_000 });
 }
@@ -188,6 +188,16 @@ test("dezoomed, a wire starts at the first try from the pixel pressed", async ({
 
 test("zooming in and out does not move a drawn route", async ({ page }) => {
   await open(page);
+  // The routes settle once every card is measured: read them when two reads agree.
+  let previous = "";
+  await expect
+    .poll(async () => {
+      const now = `${await edgePath(page, 0)}|${await edgePath(page, 1)}`;
+      const stable = now === previous;
+      previous = now;
+      return stable;
+    })
+    .toBe(true);
   const before = [await edgePath(page, 0), await edgePath(page, 1)];
   await zoomTo(page, 0.25);
   expect([await edgePath(page, 0), await edgePath(page, 1)]).toEqual(before);
@@ -205,7 +215,7 @@ test("renaming a wired output applies on validation, its edges and inputs follow
   await field.fill("spec-v2");
   // Nothing moves while typing.
   await expect(page.getByTestId("edge-output-label-e-0-spec")).toBeVisible();
-  await expect(page.getByTestId("port-rename-pending")).toContainText("2 edges suivent");
+  await expect(page.getByTestId("port-rename-pending")).toContainText("2 edges follow");
   // Under the card, as in the design, not in its head.
   await expect(page.getByTestId("output-port-notices-spec").getByTestId("port-rename-pending")).toBeVisible();
   await field.press("Enter");
@@ -222,7 +232,7 @@ test("renaming a wired output applies on validation, its edges and inputs follow
   const again = page.getByTestId("output-port-card-spec-v2").getByLabel("Port name");
   await again.fill("verdict");
   await again.press("Enter");
-  await expect(page.getByTestId("port-rename-refusal")).toContainText("« verdict » existe déjà");
+  await expect(page.getByTestId("port-rename-refusal")).toContainText("\"verdict\" is taken");
   await again.press("Escape");
   await expect(page.getByTestId("output-port-card-spec-v2")).toBeVisible();
 });
@@ -242,7 +252,7 @@ test("a broken edge is deleted from the canvas, and its lint goes with the save"
   }
   try {
     await page.goto("/");
-    await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
     await openPipelineForEdit(page, name);
     const lint = page.getByTestId("lint-banner").getByText(/port 'draft'/);
     await expect(lint).toHaveCount(1);
@@ -251,6 +261,7 @@ test("a broken edge is deleted from the canvas, and its lint goes with the save"
     await page.getByTestId("edge-broken-delete-e-3").click();
     await expect(page.getByTestId("edge-broken-label-e-3")).toHaveCount(0);
     await page.getByTestId("save-button").click();
+    await confirmSaveVersion(page);
 
     await expect(lint).toHaveCount(0);
     expect(await fs.readFile(file, "utf8")).not.toContain("draft");

@@ -27,11 +27,21 @@ fn the_list_is_sorted_by_name_and_carries_each_pipelines_metadata() {
     assert!(!alpha.prompt_required);
     assert_eq!(alpha.variables["retries"].var_type, VariableType::Int);
     assert_eq!(alpha.modified.as_deref(), Some("2026-09-27T00:00:00Z"));
-    // A file that does not parse is still listed, under its stem.
+    assert_eq!(alpha.invalid, None);
+    // A file that does not parse is still listed, under its stem, with why.
     let broken = &list[1];
     assert_eq!(broken.name, "broken");
     assert_eq!(broken.node_count, 0);
     assert!(broken.prompt_required);
+    assert!(
+        broken
+            .invalid
+            .as_deref()
+            .unwrap()
+            .starts_with("invalid YAML"),
+        "{:?}",
+        broken.invalid
+    );
     assert!(list[2].prompt_required);
 }
 

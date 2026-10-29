@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 // Layer 3b — resizable panels (testing pyramid per ADR 0004).
 // Verifies that dragging a divider persists to localStorage and survives reload.
@@ -12,10 +12,9 @@ import { fileURLToPath } from "node:url";
 // pencil "Toggle edit mode" with a separate `pdo.layout.edit` key — opening a
 // pipeline into the canvas reuses the same panel group and the same layout key.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-resizable-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// The instance pipelines the daemon watches.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // A valid pipeline the strict parser (get_pipeline) accepts: every node needs a
@@ -57,8 +56,8 @@ test.afterAll(async () => {
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("PDO").first()).toBeVisible();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByTestId("acogni-mark")).toBeVisible();
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 });
@@ -104,7 +103,7 @@ test("drag divider persists layout to localStorage across reload", async ({
 
   // Reload and verify size is preserved
   await page.reload();
-  await expect(page.getByText("PDO").first()).toBeVisible();
+  await expect(page.getByTestId("acogni-mark")).toBeVisible();
 
   const leftPanelAfterReload = page
     .locator('[data-slot="resizable-panel"]')

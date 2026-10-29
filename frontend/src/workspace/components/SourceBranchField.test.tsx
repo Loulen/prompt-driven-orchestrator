@@ -326,7 +326,7 @@ describe("the sync popover", () => {
     const popover = screen.getByTestId("branch-sync-popover");
     expect(popover).toHaveTextContent("main is 3 commits behind origin/main");
     expect(popover).toHaveTextContent("Fetched 12 s ago.");
-    expect(popover).toHaveTextContent("PDO never pulls into your checkout");
+    expect(popover).toHaveTextContent("Never pulled into your checkout");
   });
 
   it("switches the selection to the upstream ref on the shortcut", () => {

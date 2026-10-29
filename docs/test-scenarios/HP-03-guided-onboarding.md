@@ -82,7 +82,7 @@ Features validated while crossing the tour:
    (`tutorial-overview` is listed, without a reload), then Settings and Stats, lit but not opened.
    The gestures advance on the observed state — and stop for `Next` when the card has something new
    to say; the rest take `Next`.
-4. The **intermediate card** recaps *Overview* and offers *Continue · First run*. **Continue** → the
+4. The **intermediate card** recaps *Overview* and offers **Continue** (next: *First run*). **Continue** → the
    example Trigger is gone from the Triggers tab, and the *First run* tour opens on its card, which
    names what it is about to do and shows a line per **preparation** (training repository, training
    pipeline, Projet « Tutorial » with the pipeline validated for it). `Start` stays dead until all
@@ -96,7 +96,7 @@ Features validated while crossing the tour:
    the skills picker — which stays open across the two ticks, the card's checklist ticking as you go,
    and folds back to « 2 active skills » — paste the prompt → each step advances **on the gesture**,
    with no extra confirmation but the ones the card asks for.
-7. **Launch** → the Run appears in the list on the left and the tour points at its row. Launch also
+7. **Run** → the Run appears in the list on the left and the tour points at its row. The launch also
    opens the Run's tab by itself, so the card says so and waits for a `Next` — the step is shown,
    never skipped past.
 8. Open the **node** on the canvas → the inspector shows its live terminal.
@@ -109,7 +109,7 @@ Features validated while crossing the tour:
 12. Open the node's **`out`** output → the artifact modal shows the summary the agent wrote, lit as a
     soft zone with the card beside it. Read it, then `Next`.
 13. The **intermediate card** says how far along the full tour is, recaps what was actually observed,
-    and offers *Finish here* or *Continue · First pipeline*.
+    and offers *Finish here* or **Continue** (next: *First pipeline*).
 14. **Continue** → the artifact modal closes and the *First pipeline* tour starts on a clear screen.
     Carry it to its end card and `Finish`. Right after **Save**, the card asks to **Validate the
     pipeline**: Validate (next to Save) opens the modal; tick **All projects (current and future)**

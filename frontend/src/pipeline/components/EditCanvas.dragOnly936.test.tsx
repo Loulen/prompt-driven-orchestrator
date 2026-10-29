@@ -4,7 +4,6 @@ import EditCanvas from "./EditCanvas";
 import { useEditStore } from "../store/editStore";
 import { type OpenPipeline } from "../store/editState";
 import type { EditorPipelineDef } from "../model/pipeline";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 // #936: an edge is born from a DRAG only. xyflow's click-to-connect (on by
 // default in v12) turned "click a rim, then click another node" into a wire.
@@ -96,9 +95,9 @@ function seedTab() {
 
 function renderCanvas() {
   return render(
-    <TooltipProvider>
+    <>
       <EditCanvas libraryEntries={[]} onLibraryDelete={() => {}} />
-    </TooltipProvider>,
+    </>,
   );
 }
 

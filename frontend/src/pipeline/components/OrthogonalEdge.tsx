@@ -7,9 +7,10 @@ import {
   type Edge,
 } from "@xyflow/react";
 import type { Point } from "../../lib/orthogonalRouter";
-import { pathToSvg, pathMidpoint, segHandleStyle } from "../../lib/edgePath";
+import { arrowChevron, pathMidpoint, pathToSvg, roundedPathToSvg, segHandleStyle } from "../../lib/edgePath";
 import {
   conditionLabelOffset,
+  conditionPillMaxWidth,
   departureHeading,
   midpointAxis,
   outputLabelPlacement,
@@ -89,7 +90,6 @@ export default function OrthogonalEdge({
   source,
   target,
   sourcePosition,
-  markerEnd,
   data,
 }: EdgeProps<Edge<OrthogonalEdgeData>>) {
   const updateEdge = useEditStore((s) => s.updateEdge);
@@ -109,7 +109,9 @@ export default function OrthogonalEdge({
 
   const route = useEdgeRoute(source, target, sourceX, sourceY, targetX, targetY, data);
   const { points, handles, targetPt } = route;
-  const d = pathToSvg(points);
+  // Right angles with rounded corners, an open chevron at the arrival.
+  const d = roundedPathToSvg(points, 8);
+  const chevron = arrowChevron(points);
 
   const edgeIndex = data?.edgeIndex;
   const onHandleDrag = useSegmentDrag(edgeIndex, route);
@@ -170,17 +172,16 @@ export default function OrthogonalEdge({
     ev.stopPropagation();
   }, []);
 
-  // Pastel orange when this edge is the selected one, grey otherwise (#177).
-  // The override flows through to the condition pill border and segment handles
-  // below, which both read `strokeColor`, so the whole edge reads as selected.
+  // The selection ruby when this edge is the selected one, red when broken,
+  // the edge grey otherwise (#177); the segment handles read the same colour.
   const isSelected = selection.kind === "edge" && selection.edgeIndex === edgeIndex;
   const missingPorts = data?.missingPorts ?? [];
   const broken = missingPorts.length > 0;
   const strokeColor = isSelected
-    ? "var(--color-edge-selected, #fdba74)"
+    ? "var(--selected-edge)"
     : broken
       ? "var(--color-st-failed)"
-      : data?.strokeColor ?? "var(--color-fg-4)";
+      : "var(--cv-edge)";
 
   // Anchor the condition pill at the path's arc-length midpoint (#176) — the
   // median vertex drifts off-center on unbalanced routes and stacks sibling
@@ -194,6 +195,9 @@ export default function OrthogonalEdge({
     x: mid.x + midOffset.x,
     y: mid.y + midOffset.y,
   };
+  // Never wider than the room between the cards on its line: a long condition
+  // on a short edge ellipsizes instead of covering a card's title.
+  const pillMaxWidth = conditionPillMaxWidth(labelPoint, route.cards);
 
   // On the wire, as in the design; pushed to the other side of it when a
   // condition pill sits at `mid + midOffset`, so neither hides the other.
@@ -218,19 +222,27 @@ export default function OrthogonalEdge({
 
   return (
     <>
-      <BaseEdge
-        id={id}
-        path={d}
-        markerEnd={markerEnd}
-        style={{
-          stroke: strokeColor,
-          strokeWidth: isSelected ? 2.5 : 1.5,
-          strokeDasharray: broken ? "4 3" : data?.dashed ? "6 3" : undefined,
-        }}
-      />
+      <g
+        className="cv-edge"
+        data-selected={isSelected || undefined}
+        data-broken={broken || undefined}
+      >
+        <BaseEdge
+          id={id}
+          path={d}
+          className="cv-edge__line"
+          style={{
+            stroke: strokeColor,
+            strokeWidth: isSelected ? 1.75 : 1.25,
+            // Dashed into End and on an else branch; a broken edge too.
+            strokeDasharray: broken || data?.dashed || data?.isElse ? "4 3" : undefined,
+          }}
+        />
+        {chevron && <polyline points={chevron} className="cv-edge__chev" data-testid={`edge-chevron-${id}`} />}
+      </g>
       {/* Wide invisible hit area to make click-to-select forgiving. */}
       <path
-        d={d}
+        d={pathToSvg(points)}
         fill="none"
         stroke="transparent"
         strokeWidth={14}
@@ -256,7 +268,6 @@ export default function OrthogonalEdge({
             return (
               <div
                 key={port}
-                className="nodrag nopan"
                 data-testid={`edge-output-label-${id}-${port}`}
                 onPointerDown={onLabelDrag((p) =>
                   patchEdge({
@@ -267,6 +278,7 @@ export default function OrthogonalEdge({
                   }),
                 )}
                 onContextMenu={onLabelContextMenu}
+                className="nodrag nopan cv-port-label"
                 style={{
                   position: "absolute",
                   transform: `translate(${shiftX}, -50%) translate(${x}px, ${y}px)`,
@@ -276,16 +288,6 @@ export default function OrthogonalEdge({
                   // what looks like a drag is the pane panning underneath.
                   pointerEvents: "all",
                   zIndex: labelZ,
-                  fontFamily: "var(--font-mono, monospace)",
-                  fontSize: 9.5,
-                  lineHeight: 1.3,
-                  whiteSpace: "nowrap",
-                  cursor: "grab",
-                  color: "var(--color-fg-2)",
-                  background: "var(--color-bg-3)",
-                  border: "1px solid var(--color-line)",
-                  borderRadius: 2,
-                  padding: "1px 4px",
                 }}
               >
                 {port}
@@ -305,8 +307,11 @@ export default function OrthogonalEdge({
         {/* Conditional pill (ADR-0011) — always visible, draggable since #845. */}
         {data?.label && (
           <div
-            className="nodrag nopan"
+            className="nodrag nopan cv-pill"
             data-testid={`edge-condition-label-${id}`}
+            data-else={data.isElse || undefined}
+            data-selected={isSelected || undefined}
+            title={data.label}
             onPointerDown={onLabelDrag((p) =>
               patchEdge({
                 condition_label_pos: { x: Math.round(p.x), y: Math.round(p.y) },
@@ -316,19 +321,11 @@ export default function OrthogonalEdge({
             style={{
               position: "absolute",
               transform: `translate(-50%, -50%) translate(${labelPoint.x}px, ${labelPoint.y}px)`,
-              fontFamily: "var(--font-mono, monospace)",
-              fontSize: 10,
-              color: "var(--color-fg)",
-              background: "var(--color-bg-2, #1e1e1e)",
-              border: `1px solid ${strokeColor}`,
-              borderRadius: 6,
-              padding: "3px 6px",
+              maxWidth: pillMaxWidth,
               // Grabbable, not click-through (#845): a plain click still hands
               // the selection to the edge, so the pill never blocks it.
               pointerEvents: "all",
               zIndex: labelZ,
-              cursor: "grab",
-              whiteSpace: "nowrap",
             }}
           >
             {data.label}

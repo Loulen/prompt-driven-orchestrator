@@ -1,6 +1,7 @@
 import type { PortIO, FileInfo } from "../../api/nodes";
 import type { PortType } from "../../../shared/generated/PortType";
 import PortRow from "./PortRow";
+import { Section } from "../../../shared/ui/kit";
 
 export default function IOSection({
   title,
@@ -23,17 +24,8 @@ export default function IOSection({
   onOpenFile: (portName: string, files: FileInfo[], portType: PortType) => void;
 }) {
   return (
-    <div className="border-t border-line">
-      <div
-        className="flex items-center gap-1.5 px-3 py-1.5 text-fg-3"
-        style={{ fontSize: "11px" }}
-      >
-        {title}
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
-          {ports.length}
-        </span>
-      </div>
-      <div className="flex flex-col gap-1 px-3 pb-2">
+    <Section title={title} count={ports.length} flush>
+      <div className="ri-ports">
         {ports.map((port) => (
           <PortRow
             key={port.port}
@@ -46,6 +38,6 @@ export default function IOSection({
           />
         ))}
       </div>
-    </div>
+    </Section>
   );
 }

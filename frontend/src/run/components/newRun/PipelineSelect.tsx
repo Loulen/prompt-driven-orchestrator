@@ -1,9 +1,8 @@
 import { useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Search, Workflow } from "lucide-react";
 import type { PipelineListEntry } from "../../../shared/generated/PipelineListEntry";
 import type { Project } from "../../../workspace/model/project";
 import { validationOf, type PipelineSections } from "../../../pipeline/model/pipelineValidation";
-import { SelectedMarker } from "../../../harness/components/HarnessSelect";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -22,10 +21,9 @@ import * as newRunForm from "../../model/newRunForm";
  * The reason is not cosmetic: a native `<option>` cannot carry a stable selector, so a
  * tour's Projecteur could never aim at ONE pipeline (ADR-0071, conséquence 2). Every row
  * here carries `pipeline-select-option-<id>`, which is the prerequisite the First run
- * tour is waiting on. The sandbox `<select>` right below deliberately stays native, so
- * the closed trigger is built to be indistinguishable from it — same border, same
- * background, same mono, same chevron, same 6/10 padding — and the selected row wears
- * HarnessSelect's accent bar and check.
+ * tour is waiting on. The closed trigger is the kit's dropdown (`overlays.pipelinePicker`
+ * = compact combobox): the pipeline's name, its node count at the end; the selected row
+ * wears the kit's check.
  *
  * What is NEW in the family is the filter field at the head of the popup. It is always
  * there rather than appearing past N pipelines: the tour aims at this menu, and a
@@ -157,20 +155,25 @@ export default function PipelineSelect({
         // `data-pipeline-id` repeats it for anything that must build a query.
         data-testid={`pipeline-select-option-${pipeline.id}`}
         data-pipeline-id={pipeline.id}
-        className={`relative pl-6 font-mono ${isSelected ? "bg-acc-bg text-acc" : ""}`}
+        aria-selected={isSelected}
+        className="ln-pp__row"
+        title={pipeline.path}
         onClick={() => choose(pipeline.id)}
         onKeyDown={(e) => onOptionKeyDown(e, index)}
       >
-        {isSelected && <SelectedMarker />}
-        <span className="truncate">
+        <span className="d-pop__mark">
+          {/* `size-[13px]`: the menu row sizes every svg without a `size-*` class. */}
+          {isSelected && <Check size={12} strokeWidth={2} className="size-[13px]" aria-hidden />}
+        </span>
+        <span className="ln-pp__name">
           {highlightSegments(pipeline.name, query).map((seg, s) => (
-            <span
-              key={s}
-              className={seg.match ? "underline decoration-acc underline-offset-2" : undefined}
-            >
+            <span key={s} className={seg.match ? "ln-pp__hit" : undefined}>
               {seg.text}
             </span>
           ))}
+        </span>
+        <span className="ln-pp__n" title={`${pipeline.node_count} nodes`} aria-label={`${pipeline.node_count} nodes`}>
+          {pipeline.node_count}n
         </span>
       </DropdownMenuItem>
     );
@@ -183,21 +186,12 @@ export default function PipelineSelect({
     empty: string,
   ) => (
     <DropdownMenuGroup data-testid={`pipeline-select-section-${key}`}>
-      <DropdownMenuLabel
-        className="px-1.5 pt-1.5 pb-0.5 font-sans uppercase tracking-wider text-fg-4"
-        style={{ fontSize: "9.5px" }}
-      >
-        {label}
-      </DropdownMenuLabel>
+      <DropdownMenuLabel className="d-caps ln-pp__group">{label}</DropdownMenuLabel>
       {rows.length > 0 ? (
         rows.map(renderRow)
       ) : (
-        <div
-          data-testid={`pipeline-select-section-${key}-empty`}
-          className="px-2 py-1 text-fg-4"
-          style={{ fontSize: "10.5px" }}
-        >
-          {query ? `No match for “${query}”` : empty}
+        <div data-testid={`pipeline-select-section-${key}-empty`} className="d-pop__empty ln-pp__empty">
+          {query ? "No match" : empty}
         </div>
       )}
     </DropdownMenuGroup>
@@ -225,51 +219,45 @@ export default function PipelineSelect({
         // pipeline is free to change.
         data-pipeline-id={value || undefined}
         disabled={disabled}
-        className="flex w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-left font-mono text-fg outline-none transition-colors focus:border-acc data-[popup-open]:border-acc disabled:cursor-not-allowed disabled:opacity-40"
-        style={{ fontSize: "12px" }}
+        title={selected ? `${selected.name} · ${selected.path}` : placeholder}
+        className="d-sel ln-pp__field"
       >
-        <span className={`truncate ${selected ? "" : "font-sans text-fg-3"}`}>
+        <Workflow className="d-sel__lead" size={13} strokeWidth={1.5} aria-hidden />
+        <span className={selected ? "d-sel__val ln-pp__val" : "d-sel__val d-sel__val--ph"}>
           {selected ? selected.name : placeholder}
         </span>
-        <ChevronDown size={12} className="shrink-0 text-fg-4" />
+        {selected && (
+          <span className="ln-sel__count" aria-label={`${selected.node_count} nodes`}>
+            {selected.node_count}n
+          </span>
+        )}
+        <ChevronDown className="d-sel__chev" size={12} strokeWidth={1.5} aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         data-testid="pipeline-select-menu"
-        className="text-fg"
+        className="ln-pp__pop"
         side="bottom"
         align="start"
       >
-        <div className="mb-1 flex items-center gap-1.5 border-b border-line px-1.5 pb-1.5">
-          <Search size={12} className="shrink-0 text-fg-4" />
+        <label className="d-pop__search ln-pp__search">
+          <Search size={13} strokeWidth={1.5} aria-hidden />
           <input
             ref={filterRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onFilterKeyDown}
-            placeholder="Filter pipelines…"
+            placeholder="Pipelines"
             aria-label="Filter pipelines"
+            spellCheck={false}
             data-testid="pipeline-select-filter"
-            className="min-w-0 flex-1 bg-transparent text-fg placeholder:text-fg-4 focus:outline-none"
-            style={{ fontSize: "11.5px" }}
           />
-          {query && (
-            <kbd
-              className="shrink-0 rounded border border-line px-1 font-mono text-fg-4"
-              style={{ fontSize: "10px" }}
-            >
-              esc
-            </kbd>
-          )}
-        </div>
+          {query && <kbd className="d-kbd">Esc</kbd>}
+        </label>
 
         {query && visible.length === 0 ? (
           // Mute, and the current selection is untouched: the fragment is a lens, not
           // an action.
-          <div
-            data-testid="pipeline-select-empty"
-            className="px-2 py-2.5 text-center text-fg-4"
-            style={{ fontSize: "11px" }}
-          >
+          <div data-testid="pipeline-select-empty" className="d-pop__empty">
             No pipeline matches “{query}”
           </div>
         ) : (
@@ -279,34 +267,33 @@ export default function PipelineSelect({
                 "project",
                 `Project pipelines · ${project.name}`,
                 shown.project,
-                `No pipeline validated for ${project.name} yet`,
+                "No pipeline",
               )}
             {renderSection(
               "global",
               "Global pipelines",
               shown.global,
-              "No pipeline validated for all projects",
+              "No pipeline",
             )}
           </>
         )}
 
         {sections.test.length > 0 && (
           <>
-            <div className="my-1 h-px bg-line" />
+            <div className="d-pop__sep" />
             <DropdownMenuItem
               data-testid="pipeline-select-show-tests"
               aria-expanded={showTests}
               // Folding is not a choice: the menu stays open.
               closeOnClick={false}
               onClick={() => setShowTests((v) => !v)}
-              className="gap-1 font-sans text-fg-3"
-              style={{ fontSize: "11px" }}
+              className="ln-pp__fold"
             >
-              {showTests ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-              <span>{showTests ? "Hide test pipelines" : "Show test pipelines"}</span>
-              <span className="ml-auto text-fg-4" style={{ fontSize: "10px" }}>
-                {sections.test.length}
+              <span className="d-pop__mark">
+                {showTests ? <ChevronDown size={12} strokeWidth={1.5} /> : <ChevronRight size={12} strokeWidth={1.5} />}
               </span>
+              <span className="ln-pp__name">{showTests ? "Hide test pipelines" : "Show test pipelines"}</span>
+              <span className="ln-pp__n">{sections.test.length}</span>
             </DropdownMenuItem>
             {showTests &&
               renderSection("test", "Unvalidated pipelines", shown.test, "No test pipeline")}

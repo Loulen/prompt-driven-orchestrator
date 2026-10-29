@@ -12,6 +12,9 @@ import type { Decision, OperationQuestion } from "../../shared/authorization/api
 import { isAllowed } from "../../shared/authorization/api";
 import type { Project } from "../../workspace/model/project";
 
+/** Why New run is disabled (CORE-5). */
+export const NO_RUN_ANYWHERE = "You can't create Runs in any Project. Ask an administrator for access.";
+
 export interface RunCreationRights {
   /** The answer arrived. Before it, everything shows (the daemon decides). */
   known: boolean;

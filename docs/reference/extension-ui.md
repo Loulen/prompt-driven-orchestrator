@@ -2,7 +2,8 @@
 
 How an extension adds to PDO's interface (ADR-0081, amendments #29, #30, #31 and #32): a
 catalogue of **named locations**, a few **kinds of contribution**, **commands**, **`when`
-clauses**, and the locations an extension **hosts** in its own interface. The locations,
+clauses**, the locations an extension **hosts** in its own interface, and the **design
+system** it draws with (ADR-0091). The locations,
 what each accepts and the context each hands over are part of the semver of
 `pdo-extension-api`.
 
@@ -74,6 +75,7 @@ exclusive.
 | Decoration (`decoration`) | `UiContribution::decoration(…)` | the exported component, a small mark on an item (a row, a card, the status bar) |
 | List filter (`list_filter`) | `UiContribution::list_filter(…)` | the exported component, above a list |
 | Source of completion (`completion`, 0.14) | `UiContribution::completion(location, id, label, trigger, suggest)`, `.rendering(pattern, component)` | the core: a list of the exported function's suggestions, opened by `trigger` in a text field; the exported component draws each match of `pattern` in the rendered text |
+| Source de recherche (`search`, 0.18) | `UiContribution::search(location, id, label, search)`, `.with_icon(url)` | the core: the exported function's results for the query of the command field, in the extension's group ([Sources de recherche](#sources-de-recherche)) |
 
 Every contribution may carry a `when` clause (`.when(When::…)`): the core renders it only while
 the clause holds.
@@ -96,17 +98,19 @@ selected Run, or when its repository belongs to no Projet.
 ### `topbar/start`
 
 - **Accepts**: page.
-- **Renders**: a text entry per page, after the PDO mark. The page opens full-window, with every
-  page of the location on its rail.
+- **Renders**: a text entry per page, after the Acogni mark, before the command field. The page
+  opens full-window, with every page of the location on its rail. A long label ends in an ellipsis.
 - **Context**: `PageContext` (below).
 - **0.1**: the `Navigation` slot.
 
 ### `topbar/end`
 
 - **Accepts**: page, action.
-- **Renders**: an icon button per element in the top bar's right-hand group, **before Stats**,
-  with the label as tooltip. A page's button opens it full-window **without rail**: the page
-  brings its own navigation. An action's button calls its command.
+- **Renders**: a 24 px icon button per element in the top bar's right-hand group, **before the
+  core's icons** (New run, Stats, Settings, the theme), a hairline after them, the label as
+  tooltip. With many, the group keeps its icons aligned and is clipped before it overlaps the
+  command field. A page's button opens it full-window **without rail**: the page brings its own
+  navigation. An action's button calls its command.
 - **Icon**: a page's `icon`, or an action's command `icon`, is an SVG the extension serves. It is
   drawn as a mask in the colour of the text around it (hover and accent states apply). Without one,
   or while it loads, the button shows the label's first letter, boxed.
@@ -115,7 +119,7 @@ selected Run, or when its repository belongs to no Projet.
 ### `topbar/account`
 
 - **Accepts**: decoration.
-- **Renders**: the component as is, at the far right of the top bar, **after Settings**: an avatar
+- **Renders**: the component as is, at the far right of the top bar, **after the theme**: an avatar
   opening the menu of the signed-in person (Profile, Administration, Sign out), say. The component
   draws its own button and menu (the `DropdownMenu` of its bundle). Nothing without a
   contribution.
@@ -150,9 +154,10 @@ selected Run, or when its repository belongs to no Projet.
 ### `stats/tab`
 
 - **Accepts**: tab.
-- **Renders**: a rail entry of the Stats per tab, labelled with its label, **after Performance**.
-  The tab renders in the Stats frame: its header (period presets, « Computed », Refresh, ✕) stays
-  the core's, the component fills the content pane, behind its error boundary (a component that
+- **Renders**: a tab of the Stats strip per tab, labelled with its label and a generic icon,
+  **after Performance**. The tab renders in the Stats frame: its header (period presets,
+  « Computed », Refresh, ✕) stays the core's, the component fills the content pane (padded, no
+  filter bar of the core), behind its error boundary (a component that
   throws shows « This element of the extension … failed » in its tab, the other tabs, the
   extension's included, still open).
   Nothing without a contribution.
@@ -173,7 +178,11 @@ selected Run, or when its repository belongs to no Projet.
 ### `runs/filter`
 
 - **Accepts**: list filter.
-- **Renders**: a row under the Runs list's own filters, one control per contribution.
+- **Renders**: a row of the Runs list's filter menu (the funnel of its header), after the core's
+  filters: the contribution's control, captioned by its `label`; the row's tooltip names the
+  extension. The funnel counts an attribute set as one filter in force, and « Clear all » empties
+  the filter. The menu stays open over the kit's floating panels (`Select`, `Menu`, `Popover`); a
+  click in a panel drawn otherwise closes it.
 - **Context**: `ListFilterContext` = `LocationContext` + `resource` (`"run"`) + `filter`. The
   component also receives `resource`, `filter` (prefixed key → value) and `setFilter(next)`; the
   list keeps the Runs carrying every attribute of the filter, as `?attr.<id>/<key>=<value>` does.
@@ -315,7 +324,8 @@ unchanged.
 A decoration location renders the marks the extensions put on one item, side by side, each behind
 its own error boundary (a failing one becomes a small « ! » whose tooltip names the extension).
 **Without a contribution nothing is rendered at all**: the item keeps its layout. Several wrap
-rather than push the item's own text out. The component receives `entity` and `context`:
+rather than push the item's own text out, except on the rows of the left panel's lists, which
+keep one line and end in an ellipsis. The component receives `entity` and `context`:
 `DecorationContext` = `LocationContext` + `entity` (`EntityContext`, `null` on the status bar).
 Its `when` clause sees the entity: `When::has("entity.attributes.test/note")` marks only the items
 that carry the attribute.
@@ -326,16 +336,17 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 ### `run/item`
 
 - **Accepts**: decoration.
-- **Renders**: a row of the Runs list, in its right-hand column, on line 2 (the line of the child
-  counts, before them), so a badge never truncates the pipeline's name.
+- **Renders**: a row of the Runs list (two lines of 46 px), at the end of line 2, after the
+  pipeline's name and before the duration and the cost, on one line: the pipeline's name gives way
+  first, then the marks end in an ellipsis. Keep a mark 14 px high (a mono reference chip, an icon).
 - **Context**: `DecorationContext`, `entity` = `{ kind: "run", id, name?, attributes }`.
 
 ### `run/item/people`
 
 - **Accepts**: decoration.
-- **Renders**: a row of the Runs list, in its left-hand column, on line 2 after the pipeline's
-  name (and its trigger badge): the people of the Run. **The core draws no person there**:
-  nothing without a contribution, neither the creator nor anyone else.
+- **Renders**: a row of the Runs list, at the end of line 2, after the `run/item` marks and
+  before the duration and the cost: the people of the Run (16 px avatars fit the row). **The core
+  draws no person there**: nothing without a contribution, neither the creator nor anyone else.
 - **Context**: `RunPeopleContext` = `DecorationContext` + `presences`, `entity` = `{ kind: "run",
   id, name?, attributes, created_by }`:
 
@@ -354,8 +365,8 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 ### `trigger/item`
 
 - **Accepts**: decoration.
-- **Renders**: a row of the Triggers list, on a third line of its own under the pipeline and the
-  schedule, so a badge never truncates the pipeline's name; several wrap.
+- **Renders**: a row of the Triggers list (two lines of 46 px), at the end of line 1, after the
+  name and before the mode icons, on one line: the name gives way first.
 - **Context**: `DecorationContext`, `entity` = a `TriggerEntity` (`{ kind: "trigger", id, name,
   pipeline, enabled, attributes, last_editor, suspension }`): its last editor and, when an
   extension suspends it, `{ extension, reason }` (API 0.8).
@@ -363,8 +374,8 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 ### `pipeline/item`
 
 - **Accepts**: decoration.
-- **Renders**: a row of the Pipelines list, at the end of its second line (after the node count
-  and the date).
+- **Renders**: a row of the Pipelines list (two lines of 46 px), at the end of its second line,
+  after the node count and the version, before the edit date, on one line.
 - **Context**: `DecorationContext`, `entity` = `{ kind: "pipeline", id, name, attributes }`.
 
 ### `canvas/node`
@@ -406,7 +417,9 @@ locations.
 ### `statusbar`
 
 - **Accepts**: decoration.
-- **Renders**: the status bar, right-hand group, before the service health.
+- **Renders**: the 22 px status bar, right-hand group, before the service health and the version,
+  on one line (clipped, never wrapped). The bar shows icons and numbers: draw an icon and a short
+  number, the name in a tooltip (`Tooltip` of `@pdo/extension-ui`).
 - **Context**: `DecorationContext`, `entity` = `null`.
 
 ### `runs/empty`
@@ -421,7 +434,8 @@ locations.
 
 ### List filters
 
-A list-filter location renders a row under the list's own filters, one control per contribution.
+A list-filter location renders a row under the list's own filters, one control per contribution;
+the Runs list puts them in its filter menu instead.
 The component receives `resource`, `label` (the contribution's declared label, its caption),
 `filter` (prefixed key → value) and `setFilter(next)`, and
 `context` = `ListFilterContext` (`LocationContext` + `resource` + `filter`). The list keeps what
@@ -444,17 +458,19 @@ carries every attribute of the filter, as `?attr.<id>/<key>=<value>` does on the
 ### `projects/filter`
 
 - **Accepts**: list filter.
-- **Renders**: above the Runs list and above the Triggers list, which both group by Projet (each
-  list keeps its own filter); `resource` is `"project"`. A list keeps the items whose Projet
+- **Renders**: in the Runs list's filter menu, after the `runs/filter` rows (the label's tooltip
+  says « Project »), and above the Triggers list; both lists group by Projet and each keeps its own
+  filter. `resource` is `"project"`. A list keeps the items whose Projet
   carries every attribute of the filter (`GET /projects?attr.…`), by the grouping's rule: the
   Projet whose members hold the repository (of the Run's root, of the Trigger). An item outside
-  any Projet is left out while the filter is active. The row opens on a « Project » tag, so its
-  controls never read as the list's own.
+  any Projet is left out while the filter is active. Above the Triggers, the row opens on a
+  « Project » tag, so its controls never read as the list's own.
 - **0.1**: the `ListFilter { resource: Project }` slot.
 ### The Action locations
 
 Every location below accepts **actions only** (amendment #30), except `review/file`, which
-also takes decorations (amendment #31). The core renders each action and
+also takes decorations (amendment #31), and `palette`, which also takes Sources de recherche
+(0.18). The core renders each action and
 calls its command with the location's context; the `when` clause reads that same context.
 
 - **In a bar**: an icon button per action, before the core's buttons: the command's `icon`, or the
@@ -466,6 +482,9 @@ calls its command with the location's context; the `when` clause reads that same
   separator.
 - **A command that fails** (a throw, a rejection) shows an error toast; the bar or the menu keeps
   working. Every element sits in its own error boundary.
+- **A refused action is absent** (0.18): when its command declares the Operation it makes
+  ([Commands](#commands)), the core asks the question of authorization before rendering the
+  action, and leaves it out if refused. Never greyed out.
 
 The contexts they hand over, on top of `LocationContext`:
 
@@ -499,8 +518,8 @@ interface ReviewFileContext extends ReviewContext { entity: FileEntity; file: { 
 ### `runs/header`
 
 - **Accepts**: action.
-- **Renders**: an icon button per action in the Runs tab's title bar, before « Project » and
-  « New Run ».
+- **Renders**: an icon button per action in the Runs tab's title bar, before the filters'
+  funnel and « New Run ».
 - **Context**: `LocationContext`.
 
 ### `run/item/menu`
@@ -601,6 +620,75 @@ interface ReviewFileContext extends ReviewContext { entity: FileEntity; file: { 
 - **Renders**: the « ⋮ » menu of a skill or a folder of the skill bank: its verbs, the
   extensions' groups, then its delete (or « Managed by PDO » on a locked skill).
 - **Context**: `ItemContext<SkillEntity>`.
+
+### `palette`
+
+- **Accepts**: action, Source de recherche. Since 0.18.
+- **Renders**: the command field of the top bar (Ctrl+K, or a click on the field). An action of
+  `palette` is a **global Action**: a row in a group per extension, titled with the extension's
+  name in caps after the core's groups, its icon the command's. Under `>` (the commands only),
+  the extensions' Actions join the core's commands. A Source de recherche's results join the
+  same group ([Sources de recherche](#sources-de-recherche)).
+- **The selection's Actions**: for the item selected when the palette opens, the core also lists,
+  in its « Selection » group, the actions of the location that acts on it, with that location's
+  context: a Run, `run/item/menu`; a node of the Run on screen, `node/toolbar`; a Trigger,
+  `trigger/item/menu`; the Pipeline of the editor tab, `pipeline/item/menu`. Their rows show the
+  item they act on.
+- **Context**: `PaletteContext`.
+
+```ts
+interface PaletteContext extends LocationContext {
+  selected: EntityContext | null; // a RunEntity, NodeEntity, TriggerEntity or PipelineEntity
+}
+```
+
+## Sources de recherche
+
+A Source de recherche (0.18) answers the query typed in the command field with the extension's
+own entities (its notes, say). The extension filters by the Actor's rights:
+the core shows what it answers.
+
+```rust
+use pdo_extension_api::{UiContribution, UiContributions, UiLocation};
+
+UiContributions::bundle("/ext/test/ui.js", 19).contribute(
+    UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes")
+        .with_icon("/ext/test/icon.svg"),
+)
+```
+
+```ts
+interface SearchResult {
+  id: string;                    // unique within the answer
+  title: string;                 // the row's main text
+  ref?: string | null;           // before the title, in mono (N-12)
+  meta?: string | null;          // facts at the right of the row
+  icon?: string | null;          // an SVG the extension serves, when there is no status
+  status?: { tone: StatusTone; label: string } | null; // the tone's icon, the label as tooltip
+  link: string;                  // #/ext/<extension>/<location>/<path> or #/runs/<id>
+  highlights?: [number, number][] | null; // ranges of title the query matched
+}
+type SearchFunction = (query: string, context: PaletteContext, signal: AbortSignal)
+  => SearchResult[] | Promise<SearchResult[]>;
+```
+
+- **`search`**: the function the bundle exports under that name. The core calls it 120 ms after
+  the last keystroke, never with an empty query nor under `>`. `signal` aborts when the query
+  changes or the palette closes.
+- **Group**: the results join the extension's group, after its Actions; its header shows the
+  icon of the extension's first source (`.with_icon`), else its name's first letter. Several
+  sources of one extension share the group.
+- **Cap**: the core keeps the first **50** results of a source; the group shows 5 of them, then
+  « Show all n ».
+- **Delay**: the core never waits for a source. Its results join the group when they arrive; a
+  source late by 300 ms shows « Searching » in its group; after **5 s** it is given up on.
+- **Errors**: a source that throws, rejects or is given up on shows « Search failed », its
+  message and Retry in its own group; the other groups are untouched. An answer to an older
+  query is dropped.
+- **Choosing a result** follows its `link`. The core remembers it among the recent picks shown
+  on an empty query.
+- **Without `highlights`**, the core highlights each occurrence of the query in the title.
+- A source whose bundle does not export `search` is left out.
 
 ## Sources of completion
 
@@ -714,6 +802,19 @@ core calls it with the context of the location of the action that was clicked (`
 that action's id). It may return a promise. A throw or a rejection reaches the operator in an
 error toast. An action whose command the bundle does not export is not rendered.
 
+`.guarded_by(resource, verb)` (0.18) declares the Operation the command makes. Before rendering
+an action that calls it, wherever it sits, the core asks `POST /authorize` about that Operation,
+aimed at the `entity` of the action's location when it hands one over (placed in its Projets as
+the daemon places its own), and leaves the action out when it is refused, or until it is
+answered. A command without one always shows; the extension's route still refuses what it must.
+
+```rust
+let archive = UiCommand::new("test.archive", "Archive", "archive")
+    .guarded_by(ResourceKind::extension("test", "note"), Verb::Action("archive".into()));
+```
+
+On the wire: `"operation": { "resource": "test/note", "verb": { "action": "archive" } }`.
+
 ## `when` clauses
 
 A declarative condition on the location's context, evaluated by the core. A key is a dotted path:
@@ -813,6 +914,8 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `useCurrentActor()`, `useActorDisplay(actor)` | The Actors' names, since 0.8 ([The Actors' names](#the-actors-names)) |
 | `openProbedSocket(path, options?)` | A WebSocket to the daemon, opened through the probe, since 0.10; its delay of silence since 0.11 ([WebSockets](#websockets)) |
 | `copyToClipboard(text)` | Put `text` on the clipboard from a user gesture, as every Copy button of the core does: the Clipboard API, or outside a secure context (an instance served over plain http) `execCommand("copy")` on a hidden textarea. Resolves to whether the text was written, never rejects. Since 0.11 |
+| `Button`, `IconButton`, `Select`, `Menu`, `Modal`, `toast`… | The primitives of the design system, since 0.17 ([The design system](#the-design-system)) |
+| `SessionTerminal`, `TerminalZoom`, `useTerminalZoom(session)` | The core's session terminal and the Zoom du terminal, since 0.19 ([The session terminal](#the-session-terminal)) |
 | `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
 
 - **Context**: an element receives the host's `context`, merged over the context every location
@@ -825,6 +928,148 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 - **Version**: a bundle that imports the module declares it (`importing_ui_module()`, on the wire
   `ui.ui_module_major`). A bundle built against another major than the front's is never loaded,
   and a banner says so, as for React. The module's version is `pdo-extension-api`'s.
+
+## The design system
+
+Since 0.17 the core serves its design system to the extensions' interfaces (ADR-0091): its tokens
+and the primitives it draws its own controls with. An extension's interface draws with them and
+ships no copy of either: a change of style of the core reaches it without a rebuild. They are
+part of the semver of `@pdo/extension-ui`: removing or breaking a primitive, or a token, is a
+new major.
+
+### Tokens
+
+The tokens are custom properties, defined by `/shared/tokens.css`, a stylesheet at a stable
+address served by the binary. The interface loads it; a page an extension serves outside the
+interface (a sign-in page) links it:
+
+```html
+<html data-theme="dark">
+  <head><link rel="stylesheet" href="/shared/tokens.css" /></head>
+  <body style="margin: 0; background: var(--surface-0); color: var(--text); font-family: var(--font-ui)">
+```
+
+| Tokens | What they are |
+| --- | --- |
+| `--surface-0`, `--surface-1`, `--surface-2` | The editor and dialogs, the side bars and panels, the top bar and the popovers |
+| `--hover`, `--active`, `--selected` | Translucent fills of a hovered, pressed and selected row or control |
+| `--text`, `--text-2`, `--text-3` | Primary, secondary and muted ink; every one holds 4.5:1 on every surface |
+| `--line`, `--line-soft`, `--line-strong` | Hairlines |
+| `--primary`, `--primary-hi`, `--primary-ink` | The ruby of the one primary action of a view and of the selection, its hover, the ink on it |
+| `--selected-edge`, `--focus-ring`, `--scrim`, `--shadow`, `--dim`, `--dim-soft` | The selection's edge, the focus ring, a dialog's backdrop, a floating layer's shadow, a tour's dim |
+| `--color-st-running`, `-await`, `-done`, `-blocked`, `-failed`, `-skipped` | The six status colours (a status is shown as colour and icon) |
+| `--fs-2xs` … `--fs-xl`, `--lh-ui`, `--w-regular`, `--w-medium`, `--w-strong` | The type scale, 10 to 16 px, 13 px for the body text; line height; weights |
+| `--h-row`, `--h-row-2`, `--h-control`, `--h-control-sm`, `--h-bar`, `--h-topbar`, `--h-statusbar` | Heights: rows 24 and 40 px, controls 24 and 20 px, bars 32 px, top bar 36 px, status bar 22 px |
+| `--g-1` … `--g-7`, `--pad-x`, `--gap` | Spacing, on a 4 px grid |
+| `--radius-ui`, `--radius-pop` | 2 px corners; 6 px for the floating toolbar of a row only |
+| `--font-ui`, `--font-code` | Archivo and Geist Mono, served by the binary under `/shared/fonts/` with their licence (SIL OFL 1.1) |
+
+Dark is the default, `data-theme="light"` switches to the light theme. The attribute applies to
+any element: a container carrying the other theme repaints what is under it. The interface sets
+it on `<html>`; an extension reads nothing, its interface follows a switch at once.
+
+The interface is drawn at the **UI scale** (Settings › Interface, 100, 110 or 120 %, 120 by
+default), a CSS `zoom` on its root. A length in pixels needs nothing. A position computed from
+the screen (`getBoundingClientRect`, `clientX`, `innerWidth`) is divided by the zoom before it is
+written to a style: the element's `currentCSSZoom`. The primitives place their floating layers
+so.
+
+The classes of the design system are there for an extension's own markup: `d-mono` (code), `d-meta`
+(11 px muted), `d-caps` (a caps header), `d-row` (a 24 px row with its hover and selection),
+`d-bar` (a 32 px bar).
+
+Version 0.17 renamed every token, with no alias. An extension built against an earlier version
+migrates its styles:
+
+| Before 0.17 | Since 0.17 |
+| --- | --- |
+| `--color-bg-0`, `--color-bg-1` | `--surface-0` |
+| `--color-bg-2` | `--surface-1` |
+| `--color-bg-3` | `--surface-2` (a fill under a pointer: `--hover`) |
+| `--color-bg-4`, `--color-bg-5` | `--hover`, `--active` |
+| `--color-fg`, `--color-fg-2` | `--text`, `--text-2` |
+| `--color-fg-3`, `--color-fg-4`, `--color-fg-5` | `--text-3` |
+| `--color-line`, `--color-line-strong`, `--color-line-soft` | `--line`, `--line-strong`, `--line-soft` |
+| `--color-acc`, `--color-acc-hi`, `--color-acc-dim` | `--primary`, `--primary-hi` |
+| `--color-acc-bg` | `--selected` |
+| `--color-on-acc` | `--primary-ink` |
+| `--color-st-<status>-bg` | `color-mix(in oklab, var(--color-st-<status>) 14%, transparent)` |
+| `--color-st-stopped`, `-archived`, `-stale`, `-pending` | `--color-st-skipped` |
+| `--color-st-interrupted`, `--color-st-paused` | `--color-st-await`, `--color-st-blocked` |
+| `--color-edge-selected` | `--selected-edge` |
+| `--font-sans`, `--font-mono` | `--font-ui`, `--font-code` |
+
+### Primitives
+
+Dense (24 px controls, 13 px text), in both themes, keyboard and screen reader included. Their
+props are in `pdo-extension-ui.d.ts`; an `icon` prop takes a `lucide-react` icon or any component
+taking `size`, `strokeWidth` and `className`.
+
+| Export | What it draws |
+| --- | --- |
+| `Button` | A text button, hairline: `tone` `primary` (ruby, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon` |
+| `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count |
+| `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most |
+| `Kbd` | A key or a chord |
+| `TextInput`, `TextArea` | Inputs; `invalid`, `mono`, `small` |
+| `Field` | A form row: the label in a 96 px column (`help` in its tooltip), the control, the `error` at the row end |
+| `Select` | A single value out of `options` (icons, hints, groups, a search box past 8) |
+| `Segmented` | Two to four exclusive choices, arrow keys |
+| `Switch`, `Checkbox` | On/off, ruby when on; a box with its text, `mixed` |
+| `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
+| `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger` |
+| `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit` |
+| `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms |
+| `toast(text, kind?, options?)` | A toast in the core's stack: `info`, `success`, `warning`, `error`, a `title`, one action |
+| `Tabs` | A tab strip, the live tab underlined in ruby, a count |
+| `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
+| `KeyValue` | A read-only property grid |
+| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions |
+| `EmptyState` | An icon, two to four words, one action; loading and error alike |
+| `Chip` | A neutral chip, a status `tone` as its icon; removable |
+| `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name |
+| `Avatar` | A neutral square with the initials; a robot for an agent, a bolt for a trigger |
+
+The test extension `kit` (`crates/pdo/tests/test_extension/kit.js`) is a page drawn with nothing
+else.
+
+## The session terminal
+
+Since 0.19 `@pdo/extension-ui` hands out the core's own session terminal: an extension shows any
+session by its id without shipping xterm or writing the protocol of the shared terminal. Poste,
+Pilote, Spectateur and Prise de main, the resizing of the grid, the veil and the reconnection of
+a fallen connection are the core's, the same as on a Node.
+
+```ts
+import { SessionTerminal, TerminalZoom } from "@pdo/extension-ui";
+
+// The terminal of a Session hébergée (`session.id`, `pdo-hosted-…`), in a parent with a height.
+<div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+  <SessionTerminal session={session.id} zoom={hostZoom} />
+</div>
+// Its Zoom du terminal, for everyone watching.
+<TerminalZoom session={session.id} />
+```
+
+| Export | What it does |
+| --- | --- |
+| `SessionTerminal({ session, zoom?, toolbarIdentity?, toolbarActions?, expanded?, onExpand?, onLiveSocketChange?, onSpectatingChange? })` | The terminal of the session `session` (its tmux session's name: a Session hébergée's `id`, or any session the daemon holds), filling its parent. Its text is the core's size times the session's Zoom du terminal, live, times `zoom`, the factor the host imposes (`1` by default: a surface it scales, a thumbnail). The toolbar slots and callbacks are those of the core's terminal |
+| `TerminalZoom({ session })` | The control of the Zoom du terminal: 50, 75, 100, 125, 150 and 200 % between − and +, « same for everyone watching ». A refused change shows an error toast and goes back. Off for a session that carries none |
+| `useTerminalZoom(session)` | `{ zoom, hosted, setZoom }`: the Zoom du terminal in percent (100 for a session that carries none), followed live; `hosted` is `null` until the daemon answered; `setZoom(zoom)` sets it for every Poste and rejects with the refusal |
+
+The Zoom du terminal belongs to a Session hébergée, recorded with it: the same on every Poste and
+in every place its terminal shows. The control and `setZoom` go through
+`PUT /sessions/<id>/terminal-zoom` (`{"zoom": 150}`, the Operation `session` × `zoom` for the
+browser's Actor; `400` out of 50 to 200, `404` for a session that is not hosted), the reading
+through `GET /sessions/<id>/terminal-zoom` (`{"zoom", "hosted"}`, `session` × `read`; any other
+session answers `{"zoom": 100, "hosted": false}`), and every change reaches the terminals in
+`hosted_session_changed`. An extension sets it from its side with `Host::zoom_session`.
+
+A Session hébergée's declared wait is lifted by a person's answer: at least one character typed in
+its terminal (a laid text counts), then Enter. An Enter alone does not lift it.
+
+The test extension's page at `#/ext/test/topbar/end/hosted` opens a shell (`hosted/agent`: an
+agent) and shows it with these exports.
 
 ## The Actors' names
 

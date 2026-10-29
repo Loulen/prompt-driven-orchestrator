@@ -19,12 +19,15 @@ export default function ExtensionDecorations<C extends DecorationContext>({
   extra,
   className = "",
   block = false,
+  nowrap = false,
 }: {
   location: UiLocation;
   extra: Omit<C, keyof LocationContext>;
   className?: string;
   /** A row of its own (a `div`, `flex`) rather than a run of inline marks. */
   block?: boolean;
+  /** On one line whatever the room: a list row, whose line ends in an ellipsis. */
+  nowrap?: boolean;
 }) {
   const context = useLocationContext<C>(location, extra);
   // `review/file` also takes actions (#30): those render as its buttons, not here.
@@ -34,7 +37,7 @@ export default function ExtensionDecorations<C extends DecorationContext>({
   const Wrapper = block ? "div" : "span";
   return (
     <Wrapper
-      className={`${block ? "flex" : "inline-flex"} min-w-0 flex-wrap items-center gap-1 ${className}`}
+      className={`${block ? "flex" : "inline-flex"} min-w-0 ${nowrap ? "flex-nowrap" : "flex-wrap"} items-center gap-1 ${className}`}
       data-testid={`extension-decorations-${location}`}
     >
       {decorations.map(({ key, extension, Component }) =>

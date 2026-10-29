@@ -23,7 +23,12 @@ describe("contrastRatio — WCAG 2.1 relative luminance (#759)", () => {
     expect(contrastRatio("#fff", "#000")).toBeCloseTo(21, 2);
   });
 
-  it("rejects anything that is not a hex colour", () => {
-    expect(() => contrastRatio("rebeccapurple", "#fff")).toThrow(/hex/i);
+  it("reads OKLCH as well as hex", () => {
+    expect(contrastRatio("oklch(100% 0 0)", "oklch(0% 0 0)")).toBeCloseTo(21, 2);
+  });
+
+  it("rejects what is not an opaque colour", () => {
+    expect(() => contrastRatio("rebeccapurple", "#fff")).toThrow(/colour/i);
+    expect(() => contrastRatio("rgba(0, 0, 0, 0.5)", "#fff")).toThrow(/colour/i);
   });
 });

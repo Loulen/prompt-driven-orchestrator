@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { Copy, FileUp, Plus, Trash2 } from "lucide-react";
+import { Copy, FileUp, Funnel, Plus, Trash2, Workflow } from "lucide-react";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import { duplicatePipeline } from "../api/pipelines";
 import { useEditStore } from "../store/editStore";
@@ -27,6 +27,9 @@ import ImportWorkflowModal from "./ImportWorkflowModal";
 import NewPipelineModal from "./NewPipelineModal";
 import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
 import ExtensionListFilters from "../../shared/extensions/ExtensionListFilters";
+import LeftPaneBar from "../../shared/ui/LeftPaneBar";
+import { IconButton } from "../../shared/ui/kit";
+import ListEmpty from "../../shared/ui/leftList/ListEmpty";
 import type { DecorationContext } from "../../shared/extensions/contract";
 import {
   isAttributeFilterActive,
@@ -51,7 +54,7 @@ function PipelineItemDecorations({ pipeline }: { pipeline: PipelineListEntry }) 
     <ExtensionDecorations<DecorationContext>
       location="pipeline/item"
       extra={extra}
-      className="shrink-0 flex-nowrap"
+      nowrap
     />
   );
 }
@@ -189,37 +192,30 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
 
   return (
     <>
-        <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
-      <div
-        className="flex h-[32px] shrink-0 items-center border-b border-line px-3 font-medium text-fg-2"
-        style={{ fontSize: "11.5px" }}
-      >
-        Pipelines
+        <div className="lp-pane" role="tabpanel">
+      <LeftPaneBar title="Pipelines">
         {/* #30 — `pipelines/header`: the extensions' icon buttons, before the
             core's. */}
-        <span className="ml-auto" />
         <ExtensionActionButtons
           location="pipelines/header"
           extra={NO_EXTRA}
-          className="mr-1.5 flex items-center gap-0.5"
+          className="flex items-center gap-px"
+          buttonClassName="d-icon"
+          iconSize={14}
         />
-        <button
+        <IconButton
+          icon={FileUp}
+          label="Import a workflow"
           onClick={() => setShowImportModal(true)}
-          className="grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
-          title="Import a workflow"
           data-testid="import-workflow-button"
-        >
-          <FileUp size={12} />
-        </button>
-        <button
+        />
+        <IconButton
+          icon={Plus}
+          label="New pipeline"
           onClick={() => setShowNewModal(true)}
           data-testid="new-pipeline-button"
-          className="ml-1.5 grid h-5 w-5 cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
-          title="New pipeline"
-        >
-          <Plus size={12} />
-        </button>
-      </div>
+        />
+      </LeftPaneBar>
 
       <ExtensionListFilters
         location="pipelines/filter"
@@ -228,7 +224,7 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
       />
 
         <div
-          className="flex-1 overflow-y-auto outline-none"
+          className="lp-scroll"
           tabIndex={-1}
           onKeyDown={(e) =>
             handleSelectionKeydown(e, {
@@ -243,22 +239,26 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
             })
           }
         >
-          {pipelines.length === 0 && (
-            <div
-              className="px-3 py-4 text-center text-fg-4"
-              style={{ fontSize: "11px" }}
-            >
-              {allPipelines.length > 0 ? "No pipelines match filters" : "No pipelines found"}
-              {allPipelines.length > 0 && (
-                <button
-                  className="mt-1 block w-full cursor-pointer text-acc hover:underline"
-                  onClick={() => setAttributeFilter({})}
-                >
-                  Clear filters
-                </button>
-              )}
-            </div>
-          )}
+          {pipelines.length === 0 &&
+            (allPipelines.length > 0 ? (
+              <ListEmpty
+                icon={Funnel}
+                title="No match"
+                actionLabel="Clear filters"
+                onAction={() => setAttributeFilter({})}
+                testId="pipeline-filter-empty"
+              />
+            ) : (
+              <ListEmpty
+                icon={Workflow}
+                title="No pipelines"
+                actionLabel="New pipeline"
+                actionIcon={Plus}
+                onAction={() => setShowNewModal(true)}
+                testId="pipelines-empty"
+              />
+            ))}
+          <div className="lp-rows">
           {pipelines.map((p) => (
             <LibraryRow
               key={p.id}
@@ -268,15 +268,13 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
               name={p.name}
               nodeCount={p.node_count}
               checked={librarySel.has(`${p.scope}-${p.id}`)}
+              selecting={librarySelIds.length > 0}
+              invalid={p.invalid}
               onToggleSelect={(e) => {
                 const selId = `${p.scope}-${p.id}`;
                 if (e.shiftKey) selectRange("library", selId, libVisibleIds);
                 else toggleSel("library", selId);
               }}
-              // A pipeline counts as "starred" when a library entry exists with
-              // the same name. This is the visible link the user expects when
-              // they click the canvas star: their pipeline gets a star badge
-              // here, confirming the action had effect.
               selected={p.id === activeTabId}
               // #273: scope:"library" rows now appear here in block 1 (the
               // /pipelines scope-merge from #216 means they no longer fall
@@ -312,9 +310,10 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
               menuEntity={pipelineEntity(p)}
             />
           ))}
+          </div>
         </div>
 
-        {/* #577 — floating bulk-action bar for the Library tab. */}
+        {/* #577 — the floating bulk bar of the Pipelines tab. */}
         {librarySelIds.length > 0 && (
           <BulkActionBar
             count={librarySelIds.length}
@@ -322,14 +321,14 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
               {
                 key: "delete",
                 label: "Delete",
-                icon: <Trash2 size={13} />,
+                icon: <Trash2 size={14} strokeWidth={1.5} aria-hidden />,
                 destructive: true,
                 onClick: () => setLibBulkKind("delete"),
               },
               {
                 key: "duplicate",
                 label: "Duplicate",
-                icon: <Copy size={13} />,
+                icon: <Copy size={14} strokeWidth={1.5} aria-hidden />,
                 disabled: libDupItems.length === 0,
                 onClick: () => setLibBulkKind("duplicate"),
               },

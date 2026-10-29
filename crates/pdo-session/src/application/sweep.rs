@@ -102,7 +102,7 @@ impl SweepOrphans {
     }
 
     /// The same sweep, keeping the Sessions hébergées `hosted` records live
-    /// (ADR-0091). Without it, every name with their prefix is killed.
+    /// (ADR-0092). Without it, every name with their prefix is killed.
     pub fn with_hosted(mut self, hosted: Arc<HostedRegistry>) -> Self {
         self.hosted = Some(hosted);
         self

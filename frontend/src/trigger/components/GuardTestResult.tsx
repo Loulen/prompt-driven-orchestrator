@@ -1,14 +1,14 @@
 import type { ReactNode } from "react";
 import type { TestGuardResponse } from "../api/guard";
+import { ToneIcon } from "../../shared/ui/kit/tone";
 import GuardOutput from "./GuardOutput";
 
-/** Guard dry-run verdict → label + status color (#350/#351). 1:1 with the three
- * `GuardResult` variants: pass → would fire (green), skip → would skip (amber),
- * error → guard error (red). */
-const GUARD_VERDICT: Record<TestGuardResponse["outcome"], { label: string; cls: string }> = {
-  pass: { label: "Would fire", cls: "border-st-done/30 bg-st-done-bg text-st-done" },
-  skip: { label: "Would skip", cls: "border-st-paused/30 bg-st-paused-bg text-st-paused" },
-  error: { label: "Guard error", cls: "border-st-failed/30 bg-st-failed-bg text-st-failed" },
+/** Guard dry-run verdict → word + status (#350/#351): pass → would fire,
+ * skip → would skip, error → guard error. */
+const GUARD_VERDICT: Record<TestGuardResponse["outcome"], { label: string; st: "done" | "skipped" | "failed" }> = {
+  pass: { label: "Would fire", st: "done" },
+  skip: { label: "Would skip", st: "skipped" },
+  error: { label: "Guard error", st: "failed" },
 };
 
 interface GuardTestResultProps {
@@ -20,29 +20,25 @@ interface GuardTestResultProps {
   "data-testid"?: string;
 }
 
-/** Shared verdict card for a guard dry-run: colored badge + optional caveat +
- * the captured GuardOutput streams. Purely presentational — no fetching. Used by
- * the New-trigger dry-run (#350) and the detail-panel dry-run (#351). */
+/** Shared verdict of a guard dry-run: a line edged in the status colour (icon,
+ * word, exit code), an optional caveat, then the captured streams. Purely
+ * presentational. Used by the New-trigger dry-run (#350) and the detail-panel
+ * dry-run (#351). */
 export default function GuardTestResult({
   result,
   caveat,
   "data-testid": testId = "guard-test-result",
 }: GuardTestResultProps) {
+  const v = GUARD_VERDICT[result.outcome];
   return (
-    <div
-      className={`flex flex-col gap-1.5 rounded-md border px-2.5 py-2 ${GUARD_VERDICT[result.outcome].cls}`}
-      data-testid={testId}
-    >
-      <span className="font-medium" data-testid="guard-test-verdict" style={{ fontSize: "11.5px" }}>
-        {GUARD_VERDICT[result.outcome].label}
+    <div className="tg-verdict" data-st={v.st} data-testid={testId}>
+      <span className="tg-verdict__head">
+        <ToneIcon tone={v.st} />
+        <span data-testid="guard-test-verdict">{v.label}</span>
+        {result.exit_code != null && <span className="tg-faint tg-mono">exit {result.exit_code}</span>}
       </span>
       {caveat}
-      <GuardOutput
-        stdout={result.stdout}
-        stderr={result.stderr}
-        exitCode={result.exit_code}
-        data-testid="guard-test-output"
-      />
+      <GuardOutput stdout={result.stdout} stderr={result.stderr} data-testid="guard-test-output" />
     </div>
   );
 }

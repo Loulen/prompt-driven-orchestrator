@@ -5,7 +5,7 @@ import SessionCounter from "./SessionCounter";
 describe("SessionCounter", () => {
   it("shows the live session count over the cap", () => {
     render(<SessionCounter live={3} cap={10} />);
-    expect(screen.getByTestId("session-counter")).toHaveTextContent("3 / 10");
+    expect(screen.getByTestId("session-counter")).toHaveTextContent("3/10");
   });
 
   it("uses the normal treatment when comfortably below the cap", () => {

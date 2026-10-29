@@ -1,4 +1,4 @@
-//! The Sessions hébergées (ADR-0091): open, terminate, the exit of their
+//! The Sessions hébergées (ADR-0092): open, terminate, the exit of their
 //! process, a restart of the daemon, the sweep and the Cap, against tmux in
 //! memory.
 
@@ -13,7 +13,9 @@ use pdo_kernel::extension_host::NodeContribution;
 use pdo_kernel::{Actor, ResourceKind, Verb};
 use pdo_session::application::assistant::FocusCell;
 use pdo_session::application::declared_wait::{LiftWait, TypedInput};
-use pdo_session::application::hosted::{Hosted, HostedPorts, HostedStore, HostedWaitError};
+use pdo_session::application::hosted::{
+    Hosted, HostedPorts, HostedStore, HostedWaitError, HostedZoomError,
+};
 use pdo_session::application::session_ledger::SessionLedger;
 use pdo_session::application::sweep::{ReaperGauge, SweepOrphans};
 use pdo_session::domain::reaper::SweepTtls;
@@ -1189,4 +1191,126 @@ async fn the_sessions_of_an_absent_extension_are_terminated_at_restart_and_kept(
     );
     assert!(after.tmux.has(&kept.id));
     assert_eq!(after.ledger.hosted_live(), 1);
+}
+
+#[tokio::test]
+async fn the_zoom_of_a_session_is_an_operation_recorded_published_and_kept_after_a_restart() {
+    let w = World::new();
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::shell("s"))
+        .await
+        .unwrap();
+    assert_eq!(session.terminal_zoom, 100, "a new session is at 100 %");
+
+    let zoomed = w.hosted.zoom(EXT, &alice(), "s", 150).await.unwrap();
+    assert_eq!(zoomed.terminal_zoom, 150);
+    let asked = w.host.asked().last().cloned().unwrap();
+    assert_eq!(asked.resource, ResourceKind::Session);
+    assert_eq!(asked.verb, Verb::Action("zoom".into()));
+    assert_eq!(asked.target.as_deref(), Some(session.id.as_str()));
+    let published = w
+        .host
+        .events()
+        .iter()
+        .filter_map(|(_, event)| HostedSessionChanged::from_event(event))
+        .next_back()
+        .unwrap();
+    assert_eq!(published.session.terminal_zoom, 150, "every Poste follows");
+    assert_eq!(w.store.load()[0].session.terminal_zoom, 150, "recorded");
+    assert_eq!(w.hosted.zoom_of(&alice(), &session.id), Ok(Some(150)));
+    assert_eq!(
+        w.hosted.zoom_of(&alice(), "pdo-run1-impl-iter-1"),
+        Ok(None),
+        "any other session carries none"
+    );
+
+    // From any Poste, by its name; an ended session keeps its zoom.
+    w.hosted.terminate(EXT, &alice(), "s").await.unwrap();
+    let by_id = w.hosted.zoom_by_id(&bob(), &session.id, 75).unwrap();
+    assert_eq!(by_id.terminal_zoom, 75);
+    assert_eq!(by_id.state, HostedState::Ended);
+
+    let restarted = w.restarted();
+    assert_eq!(
+        restarted.hosted.zoom_of(&alice(), &session.id),
+        Ok(Some(75))
+    );
+}
+
+#[tokio::test]
+async fn a_zoom_out_of_range_or_refused_changes_nothing() {
+    let store = Arc::new(HostedRecords::default());
+    let tmux = Arc::new(FakeTmux::default());
+    let w = World::over(store.clone(), tmux.clone(), Host::allowing());
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::shell("s"))
+        .await
+        .unwrap();
+    for zoom in [0, 49, 201] {
+        let refused = w.hosted.zoom(EXT, &alice(), "s", zoom).await.unwrap_err();
+        assert_eq!(refused.status, 400, "{zoom}");
+    }
+    assert!(matches!(
+        w.hosted.zoom_by_id(&alice(), &session.id, 300),
+        Err(HostedZoomError::OutOfRange(_))
+    ));
+    assert_eq!(
+        w.hosted
+            .registry()
+            .find(EXT, "s")
+            .unwrap()
+            .session
+            .terminal_zoom,
+        100
+    );
+    assert_eq!(
+        w.hosted
+            .zoom(EXT, &alice(), "nope", 100)
+            .await
+            .unwrap_err()
+            .status,
+        404
+    );
+    assert!(matches!(
+        w.hosted.zoom_by_id(&alice(), "pdo-hosted-none", 100),
+        Err(HostedZoomError::NotFound(_))
+    ));
+
+    let refusing = World::over(store, tmux, Host::refusing());
+    assert!(
+        matches!(
+            refusing.hosted.zoom_by_id(&alice(), "pdo-hosted-none", 999),
+            Err(HostedZoomError::Refused(_))
+        ),
+        "a refused caller learns nothing of the session, nor of its zoom"
+    );
+    assert_eq!(
+        refusing
+            .hosted
+            .zoom(EXT, &alice(), "s", 150)
+            .await
+            .unwrap_err()
+            .status,
+        403
+    );
+    assert!(matches!(
+        refusing.hosted.zoom_by_id(&alice(), &session.id, 150),
+        Err(HostedZoomError::Refused(_))
+    ));
+    assert!(
+        refusing.hosted.zoom_of(&alice(), &session.id).is_err(),
+        "who may not read the session does not read its zoom"
+    );
+    assert_eq!(
+        refusing
+            .hosted
+            .registry()
+            .find(EXT, "s")
+            .unwrap()
+            .session
+            .terminal_zoom,
+        100
+    );
 }

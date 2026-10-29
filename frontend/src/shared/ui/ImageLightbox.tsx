@@ -94,7 +94,7 @@ export default function ImageLightbox({ images, index, alt = "", onClose }: Prop
           e.stopPropagation();
           onClose();
         }}
-        className="absolute right-4 top-4 rounded p-1.5 text-fg-3 hover:bg-bg-3 hover:text-fg"
+        className="absolute right-4 top-4 rounded p-1.5 text-text-3 hover:bg-hover hover:text-text"
         aria-label="Close image preview"
         data-testid="lightbox-close"
       >
@@ -103,7 +103,7 @@ export default function ImageLightbox({ images, index, alt = "", onClose }: Prop
       <img
         src={src}
         alt={alt}
-        className="max-h-[95vh] max-w-[95vw] cursor-zoom-out rounded object-contain"
+        className="max-h-[calc(95vh/var(--app-zoom,1))] max-w-[calc(95vw/var(--app-zoom,1))] cursor-zoom-out rounded object-contain"
         style={{ boxShadow: "0 30px 80px rgba(0,0,0,0.7)" }}
         onClick={(e) => {
           e.stopPropagation();
@@ -122,7 +122,7 @@ export default function ImageLightbox({ images, index, alt = "", onClose }: Prop
               goPrev();
             }}
             disabled={!hasPrev}
-            className="absolute left-4 top-1/2 -translate-y-1/2 rounded p-1.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:opacity-30"
+            className="absolute left-4 top-1/2 -translate-y-1/2 rounded p-1.5 text-text-3 hover:bg-hover hover:text-text disabled:opacity-30"
             aria-label="Previous image"
             data-testid="lightbox-prev"
           >
@@ -135,15 +135,14 @@ export default function ImageLightbox({ images, index, alt = "", onClose }: Prop
               goNext();
             }}
             disabled={!hasNext}
-            className="absolute right-4 top-1/2 -translate-y-1/2 rounded p-1.5 text-fg-3 hover:bg-bg-3 hover:text-fg disabled:opacity-30"
+            className="absolute right-4 top-1/2 -translate-y-1/2 rounded p-1.5 text-text-3 hover:bg-hover hover:text-text disabled:opacity-30"
             aria-label="Next image"
             data-testid="lightbox-next"
           >
             <ChevronRight size={28} />
           </button>
           <span
-            className="absolute bottom-4 left-1/2 -translate-x-1/2 font-mono text-fg-3"
-            style={{ fontSize: "11px" }}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 font-mono text-text-3 text-xs"
             data-testid="lightbox-counter"
           >
             {current + 1} of {images.length}

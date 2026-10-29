@@ -2,38 +2,45 @@ import { useState } from "react";
 import { Lock, Pencil, Plus, Trash2 } from "lucide-react";
 import { deleteAgentProfile, fetchAgentProfileReferents } from "../api/agentProfiles";
 import type { AgentProfile } from "../../shared/generated/AgentProfile";
+import { relativeTime } from "../../platform/model/updateStatus";
+import { ConfirmDialog, IconButton } from "../../shared/ui/kit";
 import type { AgentProfileReferents } from "../model/settings";
+import type { SettingsSection } from "../model/settingsCategories";
+import Section, { SectionExtra } from "./settingsSurface/Section";
 import AgentProfileModal from "./AgentProfileModal";
 
+/** The column heads of the profiles table. */
+const COLUMNS = ["Name", "Harness", "Model", "Effort", "Edited"];
+
 /**
- * Agent profiles list, mounted inline in Settings › Agents › Agent profiles (#691). Each
- * create / update / delete is its own request — profiles are their own REST resource, not
- * part of the grouped `PUT /settings`, which is why the section says `saves as you go` and
- * the form's Save never sends anything from here.
+ * Settings › Agents › Agent profiles (#691): one row per profile in columns — name,
+ * harness, model, effort, last edit — with Edit and Delete on hover. Each create / update /
+ * delete is its own request — profiles are their own REST resource, not part of the
+ * grouped `PUT /settings`, which is why the section is « saved at once » and the form's
+ * Save never sends anything from here.
  *
- * List-first: the list stays inline, the editor opens in a modal (#899) — only from a row's
- * **Edit** pencil or from **New profile**, the same modal for both. A row itself is plain
- * content, so a visit to the Agents page never shows a second primary button next to the
- * footer's Save.
+ * The editor opens in a modal (#899) — from a row's name or pencil, or from the section's
+ * « New profile » — the same modal for both. Delete asks first, naming how many live
+ * references will resolve at the next tier.
  */
 export default function AgentProfilesPanel({
+  section,
   profiles,
   onChanged,
 }: {
+  section: SettingsSection;
   profiles: AgentProfile[];
   onChanged: () => Promise<void>;
 }) {
   // The profile open in the modal, `"new"` for New profile, `null` when closed.
   const [editing, setEditing] = useState<AgentProfile | "new" | null>(null);
-  const [referents, setReferents] = useState<AgentProfileReferents | null>(null);
-  const [deleting, setDeleting] = useState<AgentProfile | null>(null);
+  const [deleting, setDeleting] = useState<{ profile: AgentProfile; referents: AgentProfileReferents } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const inspectDelete = async (profile: AgentProfile) => {
     setError(null);
     try {
-      setReferents(await fetchAgentProfileReferents(profile.id));
-      setDeleting(profile);
+      setDeleting({ profile, referents: await fetchAgentProfileReferents(profile.id) });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to load referents");
     }
@@ -42,92 +49,100 @@ export default function AgentProfilesPanel({
   const confirmDelete = async () => {
     if (!deleting) return;
     try {
-      await deleteAgentProfile(deleting.id);
+      await deleteAgentProfile(deleting.profile.id);
       setDeleting(null);
-      setReferents(null);
       await onChanged();
     } catch (cause) {
+      setDeleting(null);
       setError(cause instanceof Error ? cause.message : "Failed to delete agent profile");
     }
   };
 
-  if (deleting && referents) {
-    const count =
-      Number(referents.instance) + referents.projects.length + referents.triggers.length +
-      referents.pipelines.length + referents.runs.length;
-    return (
-      <div className="flex flex-col p-4" data-testid="agent-profile-delete">
-        <h3 className="font-semibold text-fg">Delete {deleting.name}?</h3>
-        <p className="mt-2 text-fg-3" style={{ fontSize: 11 }}>
-          These <strong>{count} live references</strong> will resolve at the next tier instead.
-        </p>
-        <div className="my-3 max-h-48 overflow-y-auto rounded border border-line bg-bg-3 p-2 font-mono text-fg-3" style={{ fontSize: 10 }}>
-          {referents.instance && <div>INSTANCE — settings</div>}
-          {referents.projects.map((item) => <div key={`p-${item.id}`}>PROJECT — {item.name}</div>)}
-          {referents.triggers.map((item) => <div key={`t-${item.id}`}>TRIGGER — {item.name}</div>)}
-          {referents.pipelines.map((item) => <div key={`l-${item.id}`}>PIPELINE — {item.name}</div>)}
-          {referents.runs.map((item) => <div key={`r-${item.run_id}`}>RUN — {item.name ?? item.run_id}</div>)}
-          {count === 0 && <div>No live references.</div>}
-        </div>
-        <p className="rounded border border-st-blocked/40 bg-st-blocked/10 p-2 text-fg-3" style={{ fontSize: 10 }}>
-          Runs already started are untouched — their combination was frozen at spawn.
-        </p>
-        <div className="mt-auto flex justify-end gap-2 pt-4">
-          <button onClick={() => setDeleting(null)} className="rounded border border-line px-3 py-1 text-fg-3">Cancel</button>
-          <button onClick={confirmDelete} className="rounded bg-st-failed px-3 py-1 text-white">Delete anyway</button>
-        </div>
-      </div>
-    );
-  }
+  const references = deleting ? referenceList(deleting.referents) : [];
 
   return (
-    <div className="flex flex-col p-4" data-testid="agent-profiles-panel">
-      <div className="space-y-1">
-        {profiles.map((profile) => (
-          <div key={profile.id} className="flex items-center rounded px-2 py-2">
-            <div className="min-w-0 flex-1">
-              <span className="flex items-center gap-1 font-medium text-fg" style={{ fontSize: 11 }}>
-                {profile.name} {profile.id === "default" && <Lock size={10} className="text-fg-4" />}
+    <Section
+      section={section}
+      tools={
+        <IconButton
+          icon={Plus}
+          label="New profile"
+          size="sm"
+          onClick={() => {
+            setError(null);
+            setEditing("new");
+          }}
+          data-testid="agent-profile-new"
+        />
+      }
+    >
+      <SectionExtra>
+        <div role="table" aria-label="Agent profiles" data-testid="agent-profiles-panel">
+          <div className="set-prow set-prow--head" role="row">
+            {COLUMNS.map((column) => (
+              <span key={column} role="columnheader">
+                {column}
               </span>
-              <span className="block font-mono text-fg-4" style={{ fontSize: 9.5 }}>
-                {[profile.harness, profile.model || "—", profile.effort || "—"].join(" · ")}
+            ))}
+            <span role="columnheader">
+              <span className="d-sr">Actions</span>
+            </span>
+          </div>
+          {profiles.map((profile) => (
+            <div key={profile.id} className="set-prow" role="row" data-testid={`agent-profile-row-${profile.id}`}>
+              <span role="cell">
+                <button
+                  type="button"
+                  className="set-prow__name"
+                  title={profile.name}
+                  onClick={() => {
+                    setError(null);
+                    setEditing(profile);
+                  }}
+                >
+                  <span>{profile.name}</span>
+                  {profile.id === "default" && (
+                    <Lock size={11} strokeWidth={1.5} className="set-faint" aria-label="Built in" />
+                  )}
+                </button>
+              </span>
+              <span role="cell" title={profile.harness}>
+                {profile.harness}
+              </span>
+              <span role="cell" className="set-mono" title={profile.model}>
+                {profile.model || "–"}
+              </span>
+              <span role="cell">{profile.effort || "–"}</span>
+              <span role="cell" className="set-mono set-faint" title={profile.updated_at}>
+                {edited(profile.updated_at)}
+              </span>
+              <span role="cell" className="set-prow__acts">
+                <IconButton
+                  icon={Pencil}
+                  label={`Edit ${profile.name}`}
+                  size="sm"
+                  onClick={() => {
+                    setError(null);
+                    setEditing(profile);
+                  }}
+                />
+                <IconButton
+                  icon={Trash2}
+                  label={`Delete ${profile.name}`}
+                  size="sm"
+                  disabled={profile.id === "default"}
+                  onClick={() => void inspectDelete(profile)}
+                />
               </span>
             </div>
-            <button
-              type="button"
-              aria-label={`Edit ${profile.name}`}
-              onClick={() => {
-                setError(null);
-                setEditing(profile);
-              }}
-              className="mr-3 text-fg-4 hover:text-fg"
-            >
-              <Pencil size={11} />
-            </button>
-            <button
-              type="button"
-              aria-label={`Delete ${profile.name}`}
-              disabled={profile.id === "default"}
-              onClick={() => void inspectDelete(profile)}
-              className="text-fg-4 disabled:opacity-25"
-            >
-              <Trash2 size={12} />
-            </button>
-          </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={() => {
-          setError(null);
-          setEditing("new");
-        }}
-        className="mt-2 self-start rounded border border-line px-2 py-1 text-fg-2"
-        data-testid="agent-profile-new"
-      >
-        <Plus size={11} className="mr-1 inline" /> New profile
-      </button>
-      {error && <p className="mt-2 text-st-failed" style={{ fontSize: 10 }}>{error}</p>}
+          ))}
+        </div>
+        {error && (
+          <p className="set-row__note set-row__note--failed" role="alert">
+            {error}
+          </p>
+        )}
+      </SectionExtra>
 
       {editing && (
         <AgentProfileModal
@@ -137,6 +152,37 @@ export default function AgentProfilesPanel({
           onSaved={onChanged}
         />
       )}
-    </div>
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete ${deleting.profile.name}?`}
+          consequence={
+            references.length === 0
+              ? "No live reference"
+              : `${references.length} reference${references.length === 1 ? "" : "s"} move to the next tier`
+          }
+          target={references.length > 0 ? references.join(", ") : undefined}
+          actionLabel="Delete"
+          danger
+          onConfirm={() => void confirmDelete()}
+          onClose={() => setDeleting(null)}
+        />
+      )}
+    </Section>
   );
+}
+
+/** Who still names the profile, one entry each: the instance, Projects, Triggers, pipelines, Runs. */
+function referenceList(referents: AgentProfileReferents): string[] {
+  return [
+    ...(referents.instance ? ["instance"] : []),
+    ...referents.projects.map((item) => `project ${item.name}`),
+    ...referents.triggers.map((item) => `trigger ${item.name}`),
+    ...referents.pipelines.map((item) => `pipeline ${item.name}`),
+    ...referents.runs.map((item) => `run ${item.name ?? item.run_id}`),
+  ];
+}
+
+/** How long ago a profile was last edited, « – » when the daemon gives no date. */
+function edited(at: string): string {
+  return at && !Number.isNaN(Date.parse(at)) ? relativeTime(at) : "–";
 }

@@ -3,7 +3,6 @@ import type { StatsCost } from "../../../../shared/generated/StatsCost";
 import type { StatsCostEntity } from "../../../../shared/generated/StatsCostEntity";
 import type { StatsEffortCostEntity } from "../../../../shared/generated/StatsEffortCostEntity";
 import type { StatsProjectCostEntity } from "../../../../shared/generated/StatsProjectCostEntity";
-import { formatCostAmount } from "../../../../run/model/costLabel";
 import { useStatsAbsorption } from "../../../store/useStatsAbsorption";
 import {
   coupleRows,
@@ -14,8 +13,8 @@ import {
 import { isCostNodeRow, type CostAxis } from "../../../model/cost";
 import { RUNS_COUNT } from "../../../model/rowCounts";
 import { Breadcrumb } from "../common/Breadcrumb";
-import { EmptyNote, HarnessLegend } from "../common/ChartPrimitives";
-import { MasterList } from "../common/MasterList";
+import type { TabFrame } from "../../StatsCharts";
+import { EmptyNote, Panel } from "../common/ChartPrimitives";
 import { ProvenanceName } from "../common/Provenance";
 import {
   PipelineName,
@@ -23,6 +22,7 @@ import {
 } from "../common/TableCombinedIcon";
 import type { CoupleSelection } from "../common/tableSelection";
 import { effortNameCell } from "./effortNameCell";
+import { CostRanking } from "./CostRanking";
 import { CostSummary } from "./CostSummary";
 import { CostTable } from "./CostTable";
 
@@ -31,11 +31,13 @@ export function CostTab({
   error,
   uncombined,
   onAbsorptionsChanged,
+  frame,
 }: {
   cost: StatsCost | null;
   error: string | null;
   uncombined: boolean;
   onAbsorptionsChanged: () => void;
+  frame: TabFrame;
 }) {
   const [axis, setAxis] = useState<CostAxis>("pipeline");
   // #890 / #892: Pipelines on « By pipeline », Models on « By model », the Nodes
@@ -64,14 +66,22 @@ export function CostTab({
     null,
   );
 
-  if (error) {
+  if (error || !cost) {
     return (
-      <div className="rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed">
-        {error}
+      <div className="sx-tab" data-testid="stats-chart-cost">
+        {frame.band()}
+        <div className="sx-page">
+          {error ? (
+            <div className="sx-err" role="alert">
+              {error}
+            </div>
+          ) : (
+            <EmptyNote>Loading cost…</EmptyNote>
+          )}
+        </div>
       </div>
     );
   }
-  if (!cost) return <EmptyNote>Loading cost…</EmptyNote>;
 
   const toTotal = () => {
     setSelectedId(null);
@@ -292,94 +302,71 @@ export function CostTab({
   );
 
   return (
-    <div className="relative flex min-h-full" data-testid="stats-chart-cost">
-      <aside
-        className="w-[290px] shrink-0 border-r border-line pr-4"
-        data-testid="stats-drilldown-navigation"
-      >
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-            Ranked by cost
-          </span>
-          <select
-            aria-label="Cost grouping"
-            value={axis}
-            onChange={(event) => {
-              setAxis(event.target.value as CostAxis);
-              toTotal();
-              absorption.clear();
-            }}
-            className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
-          >
-            <option value="pipeline">By pipeline</option>
-            <option value="project">By project</option>
-            <option value="model">By model</option>
-          </select>
-        </div>
-        <MasterList
-          rows={rows}
-          selected={axis === "model" ? selectedModelId : selectedId}
-          monoName={axis === "model"}
-          valueLabel={(row) =>
-            formatCostAmount(row.usd, row.partial, row.estimated)
-          }
-          selection={masterSelection}
-          onSelect={(id) => {
-            if (axis === "model") {
-              setSelectedModelId(id);
-              setSelectedEffortId(null);
-              setSelectedPipelineId(null);
-            } else {
-              setSelectedId(id);
-              setDrilledPipelineId(null);
-            }
-          }}
-        />
-        {axis === "model" && (
-          <div className="mt-3 text-fg-4" style={{ fontSize: "10.5px" }}>
-            Model ids verbatim, one row per id — the same id run through two
-            harnesses is one row, one column per harness. Hover a model or an
-            effort for where the value was read and its provider.
-            {noCostSource.length > 0 && (
-              <>
-                {" "}
-                <span className="font-mono">{noCostSource.join(", ")}</span> has
-                no cost source and is not on this axis.
-              </>
-            )}
-          </div>
-        )}
-      </aside>
-
-      <div className="min-w-0 flex-1 pl-5" data-testid="stats-drilldown-detail">
-        <Breadcrumb crumbs={clickableCrumbs} />
-        <HarnessLegend harnesses={cost.harnesses} />
+    <div className="sx-tab" data-testid="stats-chart-cost">
+      {frame.band(<Breadcrumb crumbs={clickableCrumbs} />)}
+      <div className="sx-page">
+        {frame.cohort}
         <CostSummary
           aggregate={aggregate}
           periods={periods}
           harnesses={cost.harnesses}
           unit={detailUnit}
         />
-        <div className="mt-4 min-h-[240px]">
-          <CostTable
-            key={`${axis}-${selectedId ?? ""}-${drilledPipelineId ?? ""}-${selectedModelId ?? ""}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}`}
-            rows={detailRows}
-            harnesses={tableHarnesses}
-            unit={detailUnit}
-            onOpen={onOpen}
-            renderName={detailRenderName}
-            expandablePairs={axis !== "model"}
-            selection={
-              detailRows === nodePipeline?.nodes
-                ? nodeSelection
-                : detailRows === model?.efforts
-                  ? effortSelection
-                  : undefined
-            }
-            coupleSelection={
-              detailRows === nodePipeline?.nodes ? coupleSelection : undefined
-            }
+        <div className="sx-split">
+          <CostRanking
+            axis={axis}
+            onAxisChange={(next) => {
+              setAxis(next);
+              toTotal();
+              absorption.clear();
+            }}
+            noCostSource={noCostSource}
+            rows={rows}
+            selected={axis === "model" ? selectedModelId : selectedId}
+            selection={masterSelection}
+            onSelect={(id) => {
+              if (axis === "model") {
+                setSelectedModelId(id);
+                setSelectedEffortId(null);
+                setSelectedPipelineId(null);
+              } else {
+                setSelectedId(id);
+                setDrilledPipelineId(null);
+              }
+            }}
           />
+
+          <div className="sx-detail" data-testid="stats-drilldown-detail">
+            <Panel
+              title={
+                crumbs.length > 1
+                  ? crumbs[crumbs.length - 1].label
+                  : { pipeline: "By pipeline", project: "By project", model: "By model" }[axis]
+              }
+              count={detailRows.length}
+              flush
+            >
+              <CostTable
+                key={`${axis}-${selectedId ?? ""}-${drilledPipelineId ?? ""}-${selectedModelId ?? ""}-${selectedEffortId ?? "total"}-${selectedPipelineId ?? ""}`}
+                rows={detailRows}
+                harnesses={tableHarnesses}
+                unit={detailUnit}
+                onOpen={onOpen}
+                renderName={detailRenderName}
+                expandablePairs={axis !== "model"}
+                selection={
+                  detailRows === nodePipeline?.nodes
+                    ? nodeSelection
+                    : detailRows === model?.efforts
+                      ? effortSelection
+                      : undefined
+                }
+                coupleSelection={
+                  detailRows === nodePipeline?.nodes ? coupleSelection : undefined
+                }
+              />
+            </Panel>
+          </div>
         </div>
       </div>
       {absorption.overlay}

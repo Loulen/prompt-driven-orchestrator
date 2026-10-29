@@ -6,6 +6,7 @@
 // offers.
 
 import type { HarnessDescriptorsView } from "./harness";
+import type { AgentCombination } from "../../settings/model/settings";
 
 /** The floor of the precedence chain — a node with no pin runs on `claude`. */
 export const HARNESS_FLOOR = "claude";
@@ -175,4 +176,17 @@ export function probedAgo(probedAt: string | null | undefined, now = new Date())
   if (s < 86400) return `probed ${Math.round(s / 3600)} h ago`;
   const days = Math.round(s / 86400);
   return `probed ${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/**
+ * A combination a node can start Custom from: the given harness, the model the
+ * harness lists first and its medium effort when it offers them (`null`, the
+ * harness's own default, otherwise).
+ */
+export function customDefaults(catalog: HarnessCatalog, from: AgentCombination): AgentCombination {
+  const option = findHarnessOption(catalog, from.harness);
+  const model = from.model ?? option?.models[0] ?? null;
+  const levels = effortOffer(option, model).levels;
+  const effort = from.effort ?? (levels.includes("medium") ? "medium" : null);
+  return { harness: from.harness, model, effort };
 }

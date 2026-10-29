@@ -3,7 +3,9 @@ import { Lock } from "lucide-react";
 import type { NodeState } from "../../shared/generated/NodeState";
 import type { SkillRef } from "../../shared/generated/SkillRef";
 import { useEditStore } from "../store/editStore";
-import { SectionHead } from "./InspectorPrimitives";
+import { FormRow } from "./InspectorPrimitives";
+import { Chip, Section } from "../../shared/ui/kit";
+import "./inspect.css";
 import { NodeTypeIcon } from "./NodeTypeIcon";
 import SkillSelector from "../../skill/components/SkillSelector";
 import { useSkillBank } from "../../skill/store/useSkillBank";
@@ -56,38 +58,36 @@ export default function NodeConfigView({
         (line): line is string => typeof line === "string",
       );
 
+  const hint = archived
+    ? "This run is archived and read-only."
+    : "Following this run: change it with Edit for this run, in the canvas toolbar.";
   return (
-    <aside className="flex h-full flex-col overflow-y-auto bg-bg-2" data-testid="node-config-view">
-      <div
-        className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-fg-2"
-        style={{ fontSize: "11.5px" }}
-      >
-        <span>Node config</span>
-        <span className="flex items-center gap-1 font-normal text-fg-4" style={{ fontSize: "10px" }}>
-          <Lock size={10} />
-          Read-only
+    <aside className="ei" data-testid="node-config-view">
+      <div className="ei-bar">
+        <span className="ei-bar__title" data-testid="node-config-name">
+          <NodeTypeIcon type={node.type} size={14} />
+          <span className="ei-trunc" title={node.name || node.id}>
+            {node.name || node.id}
+          </span>
+          <span className="ei-bar__sub">{node.id}</span>
+        </span>
+        <span className="ei-bar__actions">
+          <span title={hint} data-testid="node-config-hint">
+            <Chip icon={Lock}>
+              read only<span className="d-sr"> · {hint}</span>
+            </Chip>
+          </span>
         </span>
       </div>
-      <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
-        <p className="text-fg-4" style={{ fontSize: "10px" }} data-testid="node-config-hint">
-          {archived
-            ? "This run is archived and read-only."
-            : "You are following this run. To change this node, use the Edit pencil › Edit for this run in the canvas toolbar."}
-        </p>
-        <SectionHead title="Identity" />
-        <div className="flex items-center gap-2 text-fg" data-testid="node-config-name">
-          <NodeTypeIcon type={node.type} size={11} className="shrink-0 text-fg-3" />
-          <span className="font-medium">{node.name || node.id}</span>
-          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>{node.id}</span>
+      {node.on_demand && (
+        <div className="ei-idline" title="The runtime never launches it; the ▶ on its card does" data-testid="node-config-on-demand">
+          On demand
         </div>
-        {node.on_demand && (
-          <p className="text-fg-3" style={{ fontSize: "10.5px" }} data-testid="node-config-on-demand">
-            On demand — the runtime never launches it; the ▶ on its card does.
-          </p>
-        )}
+      )}
 
-        {!isScript && (
-          <>
+      {!isScript && (
+        <Section title="Skills" count={ownSkills.length}>
+          <FormRow label="Skills">
             <SkillSelector
               tier="node"
               own={ownSkills}
@@ -98,52 +98,39 @@ export default function NodeConfigView({
               testId="node-config-skills"
               readOnly
             />
-            <ul className="flex flex-wrap gap-1" data-testid="node-config-skill-list">
-              {ownSkills.length === 0 ? (
-                <li className="text-fg-4" style={{ fontSize: "10px" }}>No skill of its own.</li>
-              ) : (
-                ownSkills.map((skill) => (
-                  <li
-                    key={skill.id}
-                    className="rounded border border-line bg-bg-3 px-1.5 py-0.5 font-mono text-fg-2"
-                    style={{ fontSize: "10px" }}
-                  >
-                    {skill.name || skill.id}
-                  </li>
-                ))
-              )}
-            </ul>
-            {runNode?.skills && (
-              <p className="text-fg-4" style={{ fontSize: 9.5 }}>
-                Frozen at spawn:{" "}
-                {runNode.skills.length === 0 ? "none" : runNode.skills.map((skill) => skill.name).join(", ")}
-              </p>
+          </FormRow>
+          <div className="ei-chips" data-testid="node-config-skill-list">
+            {ownSkills.length === 0 ? (
+              <span className="ei-meta">No skill of its own</span>
+            ) : (
+              ownSkills.map((skill) => (
+                <Chip key={skill.id} mono>
+                  {skill.name || skill.id}
+                </Chip>
+              ))
             )}
-          </>
-        )}
+          </div>
+          {runNode?.skills && (
+            <FormRow label="At spawn">
+              <span className="ei-meta d-mono ei-trunc">
+                {runNode.skills.length === 0 ? "none" : runNode.skills.map((skill) => skill.name).join(", ")}
+              </span>
+            </FormRow>
+          )}
+        </Section>
+      )}
 
-        <SectionHead title={isScript ? "Script (bash)" : "Prompt"} />
-        <pre
-          data-testid="node-config-prompt"
-          className={`min-h-[80px] whitespace-pre-wrap break-words rounded border border-line bg-bg-3 px-2 py-1.5 font-mono text-fg-2 ${
-            invocations.length > 0 ? "rounded-b-none border-b-0" : ""
-          }`}
-          style={{ fontSize: "11px", lineHeight: "1.5" }}
-        >
-          {prompt || <span className="text-fg-4">No prompt.</span>}
+      <Section title={isScript ? "Script (bash)" : "Prompt"} flush>
+        <pre data-testid="node-config-prompt" className="ei-quote">
+          {prompt || <span className="ei-dim">No prompt</span>}
         </pre>
         {invocations.length > 0 && (
-          <div className="-mt-3 rounded-b border border-t-0 border-dashed border-line-strong bg-bg-2 px-2 py-1.5">
-            <div className="mb-1 flex items-center gap-1 text-fg-4" style={{ fontSize: "9.5px" }}>
-              <Lock size={9} />
-              Added by PDO at spawn
-            </div>
-            <pre className="whitespace-pre-wrap font-mono text-fg-3" style={{ fontSize: "10.5px", lineHeight: 1.5 }}>
-              {invocations.join("\n")}
-            </pre>
+          <div className="ei-amend" title="Added at spawn">
+            <Lock size={10} strokeWidth={1.75} aria-hidden />
+            <pre>{invocations.join("\n")}</pre>
           </div>
         )}
-      </div>
+      </Section>
     </aside>
   );
 }

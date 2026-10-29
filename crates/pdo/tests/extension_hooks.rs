@@ -522,6 +522,8 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("runs/empty", "decoration", "runs-empty"),
         triple("run/item/people", "decoration", "people"),
         triple("review/composer", "completion", "tags"),
+        triple("palette", "action", "new-note"),
+        triple("palette", "search", "notes"),
     ]);
     // One action at each Action location (#30), then the command that fails.
     expected.extend(
@@ -555,7 +557,18 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         tags["render"],
         json!({ "pattern": "#[a-z][a-z0-9-]*", "component": "TagChip" })
     );
+    let notes = contribution("notes");
+    assert_eq!(notes["search"], "searchNotes");
+    assert_eq!(notes["icon"], "/ext/test/icon.svg");
     let commands = ui["commands"].as_array().unwrap();
+    let new_note = commands
+        .iter()
+        .find(|c| c["id"] == test_extension::NEW_NOTE)
+        .unwrap();
+    assert_eq!(
+        new_note["operation"],
+        json!({ "resource": "test/note", "verb": "create" })
+    );
     assert!(commands.iter().any(|c| c["id"] == "test.at-runs-bulk"
         && c["title"] == "Test runs/bulk"
         && c["export"] == "showContext"));

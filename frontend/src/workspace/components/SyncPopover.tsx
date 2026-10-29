@@ -38,8 +38,7 @@ export function SyncPopover({
       type="button"
       onClick={onFetch}
       disabled={state.kind === "fetching" || frozen}
-      className="flex items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2 py-1 font-medium text-fg-2 transition-colors hover:bg-bg-5 disabled:opacity-40"
-      style={{ fontSize: "10.5px" }}
+      className="flex items-center gap-1.5 rounded border border-line-strong bg-surface-2 px-2 py-1 font-medium text-text-2 transition-colors hover:bg-active disabled:opacity-40 text-xs"
       data-testid={`${testIdPrefix}-sync-fetch`}
     >
       <RefreshCw size={11} className={state.kind === "fetching" ? "animate-spin" : undefined} />
@@ -52,8 +51,7 @@ export function SyncPopover({
       type="button"
       onClick={onSwitchToUpstream}
       disabled={frozen}
-      className="flex items-center gap-1.5 rounded border border-acc-border bg-acc-bg px-2 py-1 font-medium text-acc transition-colors hover:bg-acc/20 disabled:opacity-40"
-      style={{ fontSize: "10.5px" }}
+      className="flex items-center gap-1.5 rounded border border-primary/30 bg-selected px-2 py-1 font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-40 text-xs"
       data-testid={`${testIdPrefix}-sync-switch`}
     >
       <Cloud size={11} />
@@ -67,8 +65,7 @@ export function SyncPopover({
       type="button"
       onClick={onSwitchToUpstream}
       disabled={frozen}
-      className="flex items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2 py-1 font-medium text-fg-2 transition-colors hover:bg-bg-5 disabled:opacity-40"
-      style={{ fontSize: "10.5px" }}
+      className="flex items-center gap-1.5 rounded border border-line-strong bg-surface-2 px-2 py-1 font-medium text-text-2 transition-colors hover:bg-active disabled:opacity-40 text-xs"
       data-testid={`${testIdPrefix}-sync-switch`}
     >
       <Cloud size={11} />
@@ -81,8 +78,7 @@ export function SyncPopover({
       type="button"
       onClick={onFastForward}
       disabled={frozen}
-      className="flex items-center gap-1.5 rounded border border-acc-border bg-acc-bg px-2 py-1 font-medium text-acc transition-colors hover:bg-acc/20 disabled:opacity-40"
-      style={{ fontSize: "10.5px" }}
+      className="flex items-center gap-1.5 rounded border border-primary/30 bg-selected px-2 py-1 font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-40 text-xs"
       data-testid={`${testIdPrefix}-sync-ff`}
     >
       <ChevronsRight size={11} />
@@ -92,7 +88,7 @@ export function SyncPopover({
 
   return (
     <div
-      className="absolute right-0 top-full z-50 mt-1 w-[300px] rounded-md border border-line-strong bg-bg-4 p-3 shadow-xl"
+      className="absolute right-0 top-full z-50 mt-1 w-[300px] rounded-md border border-line-strong bg-surface-2 p-3 shadow-xl"
       data-testid={`${testIdPrefix}-sync-popover`}
       data-sync-state={state.kind}
       data-ff-state={ff.kind}
@@ -116,7 +112,7 @@ export function SyncPopover({
         <>
       {state.kind === "fetching" && (
         <>
-          <Title icon={<RefreshCw size={12} className="animate-spin text-fg-3" />}>
+          <Title icon={<RefreshCw size={12} className="animate-spin text-text-3" />}>
             Fetching all remotes…
           </Title>
           <div className="mt-2 flex flex-wrap gap-1.5">{fetchAgain}</div>
@@ -143,8 +139,8 @@ export function SyncPopover({
             {fastForwardButton ? (
               <>
                 {fetchedSentence(state.lastFetchAt)} Fast-forward moves{" "}
-                <span className="font-mono text-fg-2">{branchName}</span> onto{" "}
-                <span className="font-mono text-fg-2">{state.upstream}</span> — no merge,
+                <span className="font-mono text-text-2">{branchName}</span> onto{" "}
+                <span className="font-mono text-text-2">{state.upstream}</span> — no merge,
                 no rebase, no push.{" "}
                 {touchesCheckout === false
                   ? `${branchName} isn't checked out: only the ref moves, none of your files change.`
@@ -158,9 +154,9 @@ export function SyncPopover({
               </>
             ) : (
               <>
-                {fetchedSentence(state.lastFetchAt)} PDO never pulls into your checkout:
+                {fetchedSentence(state.lastFetchAt)} Never pulled into your checkout:
                 launch from the upstream ref to start from the fresh commits, or keep{" "}
-                <span className="font-mono text-fg-2">{branchName}</span> as is.
+                <span className="font-mono text-text-2">{branchName}</span> as is.
               </>
             )}
           </Body>
@@ -177,7 +173,7 @@ export function SyncPopover({
 
       {state.kind === "level" && (
         <>
-          <Title icon={<Check size={12} className="text-acc" />}>
+          <Title icon={<Check size={12} className="text-primary" />}>
             Up to date with <span className="font-mono">{state.upstream}</span>
           </Title>
           <Body>{fetchedSentence(state.lastFetchAt)}</Body>
@@ -187,7 +183,7 @@ export function SyncPopover({
 
       {state.kind === "unknown" && (
         <>
-          <Title icon={<CloudOff size={12} className="text-fg-3" />}>
+          <Title icon={<CloudOff size={12} className="text-text-3" />}>
             Gap unknown — fetch failed
           </Title>
           <Body>
@@ -195,11 +191,10 @@ export function SyncPopover({
               ? `Last successful fetch ${shortAge(state.lastFetchAt)} ago.`
               : "No successful fetch on record."}{" "}
             Launching is still possible: the run will cut from{" "}
-            <span className="font-mono text-fg-2">{branchName}</span> as it is on disk.
+            <span className="font-mono text-text-2">{branchName}</span> as it is on disk.
           </Body>
           <div
-            className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-bg-2 px-1.5 py-1 font-mono text-fg-3"
-            style={{ fontSize: "9.5px" }}
+            className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-surface-1 px-1.5 py-1 font-mono text-text-3 text-2xs"
             data-testid={`${testIdPrefix}-sync-stderr`}
           >
             {state.error.message}
@@ -215,7 +210,7 @@ export function SyncPopover({
 
       {state.kind === "remote" && (
         <>
-          <Title icon={<Cloud size={12} className="text-acc" />}>
+          <Title icon={<Cloud size={12} className="text-primary" />}>
             Remote ref — as of last fetch
           </Title>
           {/* #804: on a Trigger, "as of last fetch" understates it — the fire
@@ -238,9 +233,9 @@ export function SyncPopover({
 
       {state.kind === "no-upstream" && (
         <>
-          <Title icon={<Laptop size={12} className="text-fg-3" />}>No upstream branch</Title>
+          <Title icon={<Laptop size={12} className="text-text-3" />}>No upstream branch</Title>
           <Body>
-            <span className="font-mono text-fg-2">{branchName || "This branch"}</span> tracks
+            <span className="font-mono text-text-2">{branchName || "This branch"}</span> tracks
             nothing, so there is no gap to measure. {fetchedSentence(state.lastFetchAt)}
           </Body>
           <div className="mt-2 flex flex-wrap gap-1.5">{fetchAgain}</div>
@@ -254,8 +249,7 @@ export function SyncPopover({
           the second is long enough to need its own line at this width — and
           truncating a promise is worse than wrapping it. */}
       <div
-        className="mt-2 flex flex-wrap items-center justify-between gap-x-2 border-t border-line pt-1.5 text-fg-5"
-        style={{ fontSize: "9px" }}
+        className="mt-2 flex flex-wrap items-center justify-between gap-x-2 border-t border-line pt-1.5 text-text-3 text-2xs"
       >
         <span>fetch on open · on repo change · here</span>
         <span>never merges, rebases or pushes</span>

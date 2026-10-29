@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useDaemonSocket } from "../run/store/useDaemonSocket";
 import { usePresences } from "../run/store/presences";
-import { useResizableLayout } from "../hooks/useResizableLayout";
 import { useLibrary } from "../hooks/useLibrary";
 import { useSelectedRun } from "../run/store/useSelectedRun";
 import { useSelectedRunGestures } from "../run/store/gestureRightsStore";
 import { useDaemonSessions } from "../session/store/useDaemonSessions";
 import { useRightPaneRouter } from "../hooks/useRightPaneRouter";
-import { useTerminalOverlayOpen } from "../session/store/terminalOverlayStore";
 import UnifiedLeftPanel from "./UnifiedLeftPanel";
 import NewRunModal from "../run/components/NewRunModal";
 import { useUpdateStatus } from "../platform/store/useUpdateStatus";
@@ -15,7 +13,6 @@ import { useUpdateFlow } from "../platform/store/useUpdateFlow";
 import TopBar from "./TopBar";
 import { useTriggers } from "../trigger/store/useTriggers";
 import { useTriggersPause } from "../trigger/store/useTriggersPause";
-import { TooltipProvider } from "../shared/ui/tooltip";
 import Toaster from "../shared/ui/Toaster";
 import ExtensionContextProvider from "../shared/extensions/ExtensionContextProvider";
 import { useEditStore } from "../pipeline/store/editStore";
@@ -40,19 +37,15 @@ import { useShellRefresh } from "./useShellRefresh";
 import { useDaemonEvents } from "./useDaemonEvents";
 import { useInfoPanel } from "./useInfoPanel";
 import { useAssistantTarget } from "./useAssistantTarget";
-import { useCollapsibleRightPane } from "./useCollapsibleRightPane";
 import CenterPane from "./CenterPane";
+import { useShellLayout } from "./useShellLayout";
 import RightPane from "./RightPane";
+import PausedFireConfirm from "./PausedFireConfirm";
 import AppSurfaces from "./AppSurfaces";
 import StatusBar from "./StatusBar";
 import UpdateModals from "./UpdateModals";
 import EditorModals from "./EditorModals";
-import RunNowErrorToast from "./RunNowErrorToast";
-
-const PANEL_IDS = ["left", "center", "right"];
-const DEFAULT_SIZES = { left: 15, center: 60, right: 25 };
-/** #949: the right pane collapses on its own; the canvas takes its width meanwhile. */
-const RIGHT_COLLAPSIBLE = { panelId: "right", absorbInto: "center" };
+import { usePaletteHostSync } from "./palette/usePaletteHostSync";
 
 /** The app shell: the Runs, Triggers and Projets on the left, the canvas in the
  *  center, the inspector on the right, the status bar, and every global modal. */
@@ -143,7 +136,7 @@ export default function App() {
     setSelectedNodeId,
     setTriggerOpenedTabId,
   });
-  const { openNewRunModal, handleCloseNewRunModal, runNowError, setRunNowError } = launch;
+  const { openNewRunModal, handleCloseNewRunModal } = launch;
 
   const { paneOwner, selectedTrigger, triggerPromptRequired, runNode, collapsed: rightPaneCollapsed } =
     useRightPaneRouter({
@@ -228,20 +221,23 @@ export default function App() {
     bumpFiresRefreshKey,
   });
 
-  const layout = useResizableLayout("run", PANEL_IDS, DEFAULT_SIZES, RIGHT_COLLAPSIBLE);
-  // #44: an enlarged node terminal covers the app, its panels stop resizing.
-  const terminalOverlayOpen = useTerminalOverlayOpen();
-  const minSizePx = `${layout.minSizePx}px`;
-  const rightPane = useCollapsibleRightPane(rightPaneCollapsed, layout.persistedSize, DEFAULT_SIZES.right);
+  const { layout, rightPane, frozen, left, right } = useShellLayout(rightPaneCollapsed);
+
+  // CORE-112: what the command field lists and acts on.
+  usePaletteHostSync(
+    { runs, triggers, openRun: handleSelectRun, openTrigger: launch.handleSelectTrigger, openNewRunModal, openSettings, openStats },
+    { selectedTrigger, selectedRun, editTab, canvas: selection, pipelines },
+  );
 
   return (
-    <TooltipProvider>
+    <>
     {/* ADR-0081 #29: every extension contribution receives the selected Run and its Projet. */}
     <ExtensionContextProvider selectedRun={selectedRun} runs={runs} projects={projects}>
-    <div className="flex h-full flex-col bg-bg-1 text-fg">
+    <div className="flex h-full flex-col bg-surface-0 text-text">
       <TopBar
         onOpenSettings={() => openSettings()}
         onOpenStats={() => openStats()}
+        onNewRun={() => openNewRunModal({ kind: "run" })}
       />
       <main className="min-h-0 flex-1">
         <ResizablePanelGroup
@@ -249,9 +245,9 @@ export default function App() {
           defaultLayout={layout.defaultLayout}
           onLayoutChanged={layout.onLayoutChanged}
           // #44: no resizing under an enlarged node terminal.
-          disabled={terminalOverlayOpen}
+          disabled={frozen}
         >
-          <ResizablePanel defaultSize={layout.defaultLayout.left} minSize={minSizePx} id="left">
+          <ResizablePanel {...left} id="left">
             <UnifiedLeftPanel
               runs={runs}
               selectedRunId={selectedRunId}
@@ -292,6 +288,8 @@ export default function App() {
               onSelectRun={handleSelectRun}
               rightPaneCollapsed={rightPaneCollapsed}
               projects={projects}
+              runs={runs}
+              onNewRun={() => openNewRunModal({ kind: "run" })}
             />
           </ResizablePanel>
 
@@ -305,12 +303,10 @@ export default function App() {
           />
 
           <ResizablePanel
-            defaultSize={layout.defaultLayout.right}
-            minSize={minSizePx}
+            {...right}
             collapsible={rightPane.collapsible}
             panelRef={rightPane.panelRef}
             id="right"
-            className="panel-r"
             data-collapsed={rightPaneCollapsed || undefined}
           >
             <RightPane
@@ -318,6 +314,9 @@ export default function App() {
               selectedTrigger={selectedTrigger}
               triggerPromptRequired={triggerPromptRequired}
               firesRefreshKey={firesRefreshKey}
+              onRunNowTrigger={(t) => void launch.handleRunNowTrigger(t)}
+              onEditTrigger={(t) => openNewRunModal({ kind: "edit-trigger", trigger: t })}
+              projects={projects}
               runNode={runNode}
               editTab={editTab}
               selectedRun={selectedRun}
@@ -379,6 +378,7 @@ export default function App() {
       />
       {/* After the full-window surfaces, which it must paint over. */}
       <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />
+      <PausedFireConfirm launch={launch} />
       <EditorModals
         saveErrorTab={saveErrorTab}
         onViewYaml={info.handleViewYaml}
@@ -391,10 +391,9 @@ export default function App() {
         onWelcomeAnswered={() => setTourOffered(true)}
         onOpenTutorials={() => openSettings({ category: "general", section: "tutorials" })}
       />
-      {runNowError && <RunNowErrorToast error={runNowError} onDismiss={() => setRunNowError(null)} />}
       <Toaster />
     </div>
     </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
 }

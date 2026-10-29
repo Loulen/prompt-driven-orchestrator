@@ -28,7 +28,7 @@ describe("UpdateWaitingOverlay (#699)", () => {
     render(<UpdateWaitingOverlay flow={flow({ phase })} onDismiss={() => {}} onOpenVersionSettings={() => {}} />);
     expect(screen.getByTestId("update-waiting")).toHaveAttribute("data-phase", phase);
     expect(screen.getByTestId("update-waiting-message")).toHaveTextContent(re);
-    expect(screen.getByText(/Updating PDO from v1.60.0/)).toBeInTheDocument();
+    expect(screen.getByText(/Updating from v1.60.0/)).toBeInTheDocument();
     expect(screen.queryByTestId("update-waiting-slow")).not.toBeInTheDocument();
   });
 
@@ -46,7 +46,7 @@ describe("UpdateWaitingOverlay (#699)", () => {
     act(() => {
       vi.advanceTimersByTime(2000);
     });
-    expect(screen.getByTestId("update-waiting-slow")).toHaveTextContent(/taking longer than expected/);
+    expect(screen.getByTestId("update-waiting-slow")).toHaveTextContent(/Taking longer than expected/);
     fireEvent.click(screen.getByTestId("update-waiting-dismiss"));
     expect(onDismiss).toHaveBeenCalled();
   });

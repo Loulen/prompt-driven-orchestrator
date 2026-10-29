@@ -1,3 +1,6 @@
+import { Bot } from "lucide-react";
+import { Tooltip } from "../../shared/ui/kit";
+
 interface Props {
   /** Live NodeRun sessions counted daemon-wide (managers excluded). */
   live: number;
@@ -8,9 +11,9 @@ interface Props {
 /**
  * Live session counter for the bottom status bar (#159 / ADR-0012).
  *
- * Shows "N / cap sessions" and shifts to a warning (amber) treatment as the
- * count approaches the cap, so throttling is visible before it bites. Rendered
- * inline among the other technical info in the bottom status bar.
+ * Shows "N/cap" after a bot icon, and shifts to the amber treatment as the
+ * count approaches the cap, so throttling is visible before it bites. Its name
+ * is in the tooltip.
  */
 export default function SessionCounter({ live, cap }: Props) {
   // Warn within one slot of the cap (and once it is full): throttling is either
@@ -18,13 +21,19 @@ export default function SessionCounter({ live, cap }: Props) {
   const nearCap = cap > 0 && live >= cap - 1;
 
   return (
-    <span
-      data-testid="session-counter"
-      data-near-cap={nearCap}
-      className={nearCap ? "font-medium text-st-await" : undefined}
-      title="Live NodeRun sessions (manager sessions excluded)"
-    >
-      {live} / {cap} sessions
-    </span>
+    <Tooltip label="Sessions" description="Manager sessions excluded" side="top">
+      <span
+        data-testid="session-counter"
+        data-near-cap={nearCap}
+        className="sh-sb__item"
+        aria-label={`${live} / ${cap} sessions`}
+        tabIndex={0}
+      >
+        <Bot size={13} strokeWidth={1.5} aria-hidden />
+        <span className="sh-sb__num">
+          {live}/{cap}
+        </span>
+      </span>
+    </Tooltip>
   );
 }

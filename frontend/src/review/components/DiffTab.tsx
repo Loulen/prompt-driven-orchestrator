@@ -1,12 +1,18 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
-  ChevronRight,
-  ChevronDown,
   Archive,
   Check,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
   List,
+  ListCollapse,
+  ListTree,
+  RefreshCw,
   SquareArrowOutUpRight,
 } from "lucide-react";
+import { Button, Chip, EmptyState, IconButton } from "../../shared/ui/kit";
+import "../../pipeline/components/inspect.css";
 import { fetchRunStructuredDiff } from "../api/diff";
 import { reviewUrl } from "../../run/model/runRefs";
 import { pendingCount } from "../model/commentStatus";
@@ -20,7 +26,7 @@ import type { CollapsedFiles } from "../model/diffTab";
 import type { RunState } from "../../shared/generated/RunState";
 import type { StructuredDiff } from "../../shared/generated/StructuredDiff";
 import DiffFileBody from "./DiffFileBody";
-import { Badge, Counts, EmptyState, FilePath, MiniBar, Skeleton, StatusLetter } from "./diffTabParts";
+import { Badge, Counts, FilePath, Skeleton, StatusIcon, StatusLetter } from "./diffTabParts";
 
 /**
  * The Run-level **Diff tab** (#748, ADR-0067; CONTEXT.md § "Relecture de diff").
@@ -109,6 +115,9 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
   // --- scroll tracking: which file is on screen, are we past the ledger -----
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const ledgerRef = useRef<HTMLDivElement | null>(null);
+  const summaryRef = useRef<HTMLDivElement | null>(null);
+  // The sticky summary wraps onto a second line in a narrow pane: its height is read, not assumed.
+  const summaryHeight = () => summaryRef.current?.offsetHeight || 28;
   const headerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [pastLedger, setPastLedger] = useState(false);
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -123,8 +132,8 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
     let idx = 0;
     files.forEach((f, i) => {
       const h = headerRefs.current.get(fileKey(f));
-      // 40px: the sticky summary's height — a header tucked under it counts as passed.
-      if (h && h.offsetTop <= top + 40) idx = i;
+      // The sticky summary's height and a little: a header tucked under it counts as passed.
+      if (h && h.offsetTop <= top + summaryHeight() + 4) idx = i;
     });
     setCurrentIdx(idx);
   }, [files]);
@@ -134,7 +143,7 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
     const el = scrollRef.current;
     if (!h || !el) return;
     // The summary line is sticky: land the header just under it.
-    el.scrollTo({ top: Math.max(0, h.offsetTop - 36) });
+    el.scrollTo({ top: Math.max(0, h.offsetTop - summaryHeight()) });
   };
   const scrollToLedger = () => scrollRef.current?.scrollTo({ top: 0 });
 
@@ -146,12 +155,9 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
   // --- states ---------------------------------------------------------------
   if (isArchived) {
     return (
-      <EmptyState
-        testid="diff-archived"
-        icon={<Archive size={14} />}
-        title="Diff not preserved for archived runs"
-        subtitle="The run branch was deleted at cleanup."
-      />
+      <div className="pi-center" data-testid="diff-archived" title="The run branch was deleted at cleanup">
+        <EmptyState icon={Archive}>Diff not preserved</EmptyState>
+      </div>
     );
   }
 
@@ -161,190 +167,132 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
 
   if (load.kind === "error") {
     return (
-      <EmptyState
-        testid="diff-error"
-        icon={<Archive size={14} />}
-        title="Diff unavailable"
-        subtitle={load.message}
-        action={
-          <button
-            onClick={reload}
-            className="rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 transition-colors hover:text-fg-2 cursor-pointer"
-            style={{ fontSize: "10.5px" }}
-          >
-            Retry
-          </button>
-        }
-      />
+      <div className="pi-center" data-testid="diff-error">
+        <EmptyState
+          icon={CircleAlert}
+          action={
+            <Button size="sm" onClick={reload}>
+              Retry
+            </Button>
+          }
+        >
+          <span title={load.message}>Diff unavailable</span>
+        </EmptyState>
+      </div>
     );
   }
 
   const diff = load.diff;
   if (diff.files.length === 0) {
     return (
-      <EmptyState
-        testid="diff-empty"
-        icon={<Check size={14} />}
-        title="No changes"
-        subtitle="Fork point and run tip are identical."
-      />
+      <div className="pi-center" data-testid="diff-empty" title="Fork point and run tip are identical">
+        <EmptyState icon={Check}>No changes</EmptyState>
+      </div>
     );
   }
 
   const isLarge = diff.files.length > LARGE_DIFF_FILES;
   const currentFile = diff.files[currentIdx];
+  const pending = pendingCount(run.review_comments);
 
   return (
-    <div
-      ref={scrollRef}
-      onScroll={onScroll}
-      data-testid="diff-tab"
-      className="flex min-h-0 flex-1 flex-col overflow-y-auto"
-    >
+    <div ref={scrollRef} onScroll={onScroll} data-testid="diff-tab" className="pi-diff">
       {/* Sticky summary */}
-      <div
-        className="sticky top-0 z-10 flex h-9 shrink-0 items-center gap-2 border-b border-line bg-bg-2 px-3"
-        style={{ fontSize: "11px" }}
-        data-testid="diff-summary"
-      >
-        <span className="text-fg-2">
-          {diff.files_changed} {diff.files_changed === 1 ? "file" : "files"}
-        </span>
+      <div ref={summaryRef} className="pi-diffhead" data-testid="diff-summary">
         <Counts additions={diff.additions} deletions={diff.deletions} />
+        <Chip>
+          {diff.files_changed} {diff.files_changed === 1 ? "file" : "files"}
+        </Chip>
         {pastLedger && currentFile ? (
-          <span
-            className="min-w-0 truncate font-mono text-fg-4"
-            style={{ fontSize: "10.5px" }}
-            data-testid="diff-summary-current"
-            title={fileKey(currentFile)}
-          >
+          <span className="d-mono ei-meta ei-trunc" data-testid="diff-summary-current" title={fileKey(currentFile)}>
             {basename(fileKey(currentFile))} · {currentIdx + 1} / {diff.files.length}
           </span>
         ) : (
-          <span
-            className="min-w-0 truncate font-mono text-fg-4"
-            style={{ fontSize: "10.5px" }}
-            data-testid="diff-summary-refs"
-          >
+          <span className="d-mono ei-meta ei-trunc" data-testid="diff-summary-refs" title={`${diff.from_ref} → ${diff.to_ref}`}>
             {shortSha(diff.from_sha ?? diff.from_ref)} → {shortSha(diff.to_sha ?? diff.to_ref)}
           </span>
         )}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        <span className="pi-diffhead__end">
+          {isLarge && (
+            <span title="Large diff: files collapsed" data-testid="diff-large-banner">
+              <Chip>collapsed</Chip>
+            </span>
+          )}
           {reloading && (
-            <span
-              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running-bg px-1.5 py-px text-st-running"
-              style={{ fontSize: "10px" }}
-              data-testid="diff-updating"
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-st-running animate-pulse" />
-              updating
+            <span data-testid="diff-updating">
+              <Chip tone="running">updating</Chip>
             </span>
           )}
           {!reloading && changedSinceLoad && (
-            <button
-              onClick={reload}
-              className="flex items-center gap-1 rounded-full border border-st-running/40 bg-st-running-bg px-1.5 py-px text-st-running transition-colors hover:border-st-running cursor-pointer"
-              style={{ fontSize: "10px" }}
-              data-testid="diff-changed-reload"
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-st-running" />
+            <Button size="sm" tone="ghost" icon={RefreshCw} onClick={reload} data-testid="diff-changed-reload">
               Diff changed · Reload
-            </button>
+            </Button>
           )}
           {pastLedger && (
-            <button
-              onClick={scrollToLedger}
-              className="flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 transition-colors hover:text-fg-2 cursor-pointer"
-              style={{ fontSize: "10.5px" }}
-              data-testid="diff-files-button"
-            >
-              <List size={11} />
-              Files
-            </button>
+            <IconButton icon={List} size="sm" label="Files" onClick={scrollToLedger} data-testid="diff-files-button" />
           )}
+          <IconButton
+            icon={ListCollapse}
+            size="sm"
+            label="Collapse all"
+            onClick={collapseAll}
+            data-testid="diff-collapse-all"
+          />
+          <IconButton
+            icon={ListTree}
+            size="sm"
+            label="Expand all"
+            onClick={expandAll}
+            data-testid="diff-expand-all"
+          />
           {/* #749: the way to the Review page (the Run's default pair, same tab). */}
           <a
             href={reviewUrl(run.run_id)}
-            title="Open the Review page"
-            className="flex items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 transition-colors hover:text-fg-2"
-            style={{ fontSize: "10.5px" }}
+            title={pending > 0 ? `Review page · ${pending} comment(s) pending` : "Review page"}
+            aria-label="Review page"
+            className="d-icon"
             data-testid="diff-review-button"
           >
-            <SquareArrowOutUpRight size={11} />
-            Expand and comment
-            {pendingCount(run.review_comments) > 0 && (
+            <SquareArrowOutUpRight size={14} strokeWidth={1.5} aria-hidden />
+            {pending > 0 && (
               // #750: pending review comments (sent, not resolved) — CONTEXT.md « Accès rapide Review ».
-              <span
-                className="ml-0.5 inline-flex h-[14px] items-center rounded-[7px] bg-st-running-bg px-[5px] font-medium text-st-running"
-                style={{ fontSize: "9.5px" }}
-                title={`${pendingCount(run.review_comments)} review comment(s) pending — sent, not resolved`}
-                data-testid="diff-review-pending"
-              >
-                {pendingCount(run.review_comments)}
+              <span className="d-icon__badge" data-testid="diff-review-pending">
+                {pending}
               </span>
             )}
           </a>
         </span>
       </div>
 
-      {isLarge && (
-        <div
-          className="border-b border-line bg-bg-3 px-3 py-1.5 text-fg-3"
-          style={{ fontSize: "10.5px" }}
-          data-testid="diff-large-banner"
-        >
-          Large diff — files collapsed
-        </div>
-      )}
 
-      {/* Ledger */}
-      <div ref={ledgerRef} className="border-b border-line px-3 py-2" data-testid="diff-ledger">
-        <div className="flex flex-col">
-          {diff.files.map((f, i) => {
-            const key = fileKey(f);
-            const isCurrent = pastLedger && i === currentIdx;
-            return (
-              <button
-                key={key}
-                onClick={() => scrollToFile(key)}
-                className={`flex items-center gap-2 rounded px-1 py-px text-left transition-colors hover:bg-bg-3 cursor-pointer ${
-                  isCurrent ? "bg-bg-3" : ""
-                }`}
-                style={{ fontSize: "10.5px" }}
-                data-testid="diff-ledger-row"
-                title={key}
-              >
-                <StatusLetter status={f.status} />
-                <span className="min-w-0 flex-1 truncate font-mono text-fg-2">{key}</span>
-                <Counts additions={f.additions} deletions={f.deletions} />
-                <MiniBar additions={f.additions} deletions={f.deletions} />
-              </button>
-            );
-          })}
-        </div>
-        <div className="mt-1.5 flex items-center gap-1 text-fg-4" style={{ fontSize: "10.5px" }}>
-          <button
-            onClick={collapseAll}
-            className="hover:text-fg-2 cursor-pointer"
-            data-testid="diff-collapse-all"
-          >
-            Collapse all
-          </button>
-          <span>·</span>
-          <button
-            onClick={expandAll}
-            className="hover:text-fg-2 cursor-pointer"
-            data-testid="diff-expand-all"
-          >
-            Expand all
-          </button>
-        </div>
+      {/* Ledger: one SCM row per file */}
+      <div ref={ledgerRef} className="pi-dfiles" data-testid="diff-ledger">
+        {diff.files.map((f, i) => {
+          const key = fileKey(f);
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => scrollToFile(key)}
+              className="pi-dfile"
+              aria-current={pastLedger && i === currentIdx ? "true" : undefined}
+              data-testid="diff-ledger-row"
+              title={key}
+            >
+              <StatusIcon status={f.status} />
+              <FilePath file={f} />
+              <Counts additions={f.additions} deletions={f.deletions} />
+              <StatusLetter status={f.status} />
+            </button>
+          );
+        })}
       </div>
 
       {/* Flat transcript */}
       {diff.files.map((f) => {
         const key = fileKey(f);
         const isCollapsed = collapsedSet.has(key);
+        const isMove = f.status === "renamed" || f.status === "copied";
         return (
           <div key={key} data-testid="diff-file" data-path={key} data-collapsed={isCollapsed}>
             <div
@@ -354,22 +302,22 @@ export default function DiffTab({ run, collapsed, onCollapsedChange }: Props) {
               }}
             >
               <button
+                type="button"
                 onClick={() => toggleFile(key)}
-                className="flex w-full items-center gap-1.5 border-b border-line px-3 py-1.5 text-left transition-colors hover:bg-bg-3 cursor-pointer"
-                style={{ fontSize: "10.5px" }}
+                className="pi-dfile pi-dfile__head"
+                title={isMove ? `${f.old_path} → ${f.new_path}` : key}
                 data-testid="diff-file-header"
                 aria-expanded={!isCollapsed}
               >
                 {isCollapsed ? (
-                  <ChevronRight size={11} className="shrink-0 text-fg-4" />
+                  <ChevronRight size={14} strokeWidth={1.5} aria-hidden className="ei-ic" />
                 ) : (
-                  <ChevronDown size={11} className="shrink-0 text-fg-4" />
+                  <ChevronDown size={14} strokeWidth={1.5} aria-hidden className="ei-ic" />
                 )}
                 <FilePath file={f} />
                 <Badge file={f} />
-                <span className="ml-auto shrink-0">
-                  <Counts additions={f.additions} deletions={f.deletions} />
-                </span>
+                <Counts additions={f.additions} deletions={f.deletions} />
+                <StatusLetter status={f.status} />
               </button>
             </div>
             {!isCollapsed && !f.binary && (

@@ -226,6 +226,15 @@ pub enum UiLocation {
     /// `settings` location, whose sections it leaves untouched). Since 0.9.
     #[serde(rename = "settings/page")]
     SettingsPage,
+    /// The command field of the top bar (Ctrl+K), the one global Action
+    /// location: an entry per [`UiElement::Action`], in a group per
+    /// extension titled with its name, and a Source de recherche per
+    /// [`UiElement::Search`], whose results join the extension's group.
+    /// Hands over the selected item as `selected` (a Run, a node, a
+    /// Trigger, a Pipeline; `null` when none), and the query to a source.
+    /// Since 0.18.
+    #[serde(rename = "palette")]
+    Palette,
     /// A location an extension hosts, by its id `<extension>/<name>`
     /// (`a/panneau`): what it accepts and hands over is the host's
     /// [`HostedLocation`](super::HostedLocation) declaration. A contribution to
@@ -281,6 +290,7 @@ impl UiLocation {
         UiLocation::SkillMenu,
         UiLocation::StatsTab,
         UiLocation::SettingsPage,
+        UiLocation::Palette,
     ];
 
     /// The stable id: what the wire, the deep links (`#/ext/<extension>/<id>/…`)
@@ -329,6 +339,7 @@ impl UiLocation {
             UiLocation::SkillMenu => "skill/menu",
             UiLocation::StatsTab => "stats/tab",
             UiLocation::SettingsPage => "settings/page",
+            UiLocation::Palette => "palette",
             UiLocation::Hosted(id) => id,
         }
     }
@@ -470,6 +481,10 @@ mod tests {
                 suggest: "s".into(),
                 render: None,
             },
+            UiElement::Search {
+                search: "s".into(),
+                icon: None,
+            },
         ];
         for location in UiLocation::ALL {
             assert!(
@@ -514,12 +529,51 @@ mod tests {
                 "review/toolbar",
                 "review/file",
                 "skill/menu",
+                "palette",
             ]
         );
         for location in UiLocation::ALL.iter().filter(|l| l.is_action_location()) {
             assert!(location.accepts(&action), "{}", location.id());
             assert!(!location.accepts(&page), "{}", location.id());
             assert!(!location.accepts(&tab), "{}", location.id());
+        }
+    }
+
+    #[test]
+    fn the_palette_takes_actions_and_search_sources_only() {
+        assert_eq!(UiLocation::Palette.id(), "palette");
+        assert!(UiLocation::ALL.contains(&UiLocation::Palette));
+        assert_eq!(
+            serde_json::to_value(UiLocation::Palette).unwrap(),
+            "palette"
+        );
+        let search = UiElement::Search {
+            search: "s".into(),
+            icon: None,
+        };
+        let action = UiElement::Action {
+            command: "c".into(),
+        };
+        let completion = UiElement::Completion {
+            trigger: "#".into(),
+            suggest: "s".into(),
+            render: None,
+        };
+        let page = UiElement::Page {
+            component: "P".into(),
+            icon: None,
+        };
+        assert!(UiLocation::Palette.accepts(&search));
+        assert!(UiLocation::Palette.accepts(&action));
+        assert!(!UiLocation::Palette.accepts(&completion));
+        assert!(!UiLocation::Palette.accepts(&page));
+        assert!(UiLocation::Palette.is_action_location());
+        // A search source belongs to the command field only.
+        for location in UiLocation::ALL
+            .iter()
+            .filter(|l| **l != UiLocation::Palette)
+        {
+            assert!(!location.accepts(&search), "{}", location.id());
         }
     }
 

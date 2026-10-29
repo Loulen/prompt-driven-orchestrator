@@ -5,12 +5,12 @@ import type { SkillUpdateEntry } from "../../shared/generated/SkillUpdateEntry";
 import { displaySourceUrl, shortCommit } from "../model/skillSource";
 
 const UPDATE_BADGE: Record<SkillUpdateEntry["status"], { label: string; className: string }> = {
-  updated: { label: "updated", className: "border-st-blocked/50 bg-st-blocked-bg text-st-blocked" },
-  unchanged: { label: "unchanged", className: "border-line bg-bg-3 text-fg-4" },
-  new: { label: "new at source · not imported", className: "border-acc/40 bg-acc/10 text-acc" },
-  skipped: { label: "skipped", className: "border-line bg-bg-3 text-fg-4" },
-  gone: { label: "gone from source", className: "border-st-failed/40 bg-st-failed-bg text-st-failed" },
-  invalid: { label: "not importable", className: "border-st-failed/40 bg-st-failed-bg text-st-failed" },
+  updated: { label: "updated", className: "border-st-blocked/50 bg-st-blocked/14 text-st-blocked" },
+  unchanged: { label: "unchanged", className: "border-line bg-surface-2 text-text-3" },
+  new: { label: "new at source · not imported", className: "border-primary/40 bg-primary/10 text-primary" },
+  skipped: { label: "skipped", className: "border-line bg-surface-2 text-text-3" },
+  gone: { label: "gone from source", className: "border-st-failed/40 bg-st-failed/14 text-st-failed" },
+  invalid: { label: "not importable", className: "border-st-failed/40 bg-st-failed/14 text-st-failed" },
 };
 
 /**
@@ -42,10 +42,10 @@ export default function UpdateFromSourceConfirm({
   const updatedNames = report.entries.filter((e) => checked.has(e.path) && e.status === "updated").map((e) => e.name);
   return (
     <div className="flex min-h-0 flex-1 flex-col p-5" data-testid="folder-update">
-      <h3 className="font-semibold text-fg" style={{ fontSize: "17px" }}>
+      <h3 className="font-semibold text-text text-xl">
         Update {folder.name} from its source?
       </h3>
-      <p className="mt-1.5 text-fg-3" style={{ fontSize: "12px" }} data-testid="folder-update-summary">
+      <p className="mt-1.5 text-text-3 text-sm" data-testid="folder-update-summary">
         Re-scanned <span className="font-mono">{displaySourceUrl(report.source.url)}</span>
         {report.source.ref ? <span className="font-mono">@{report.source.ref}</span> : null} ·{" "}
         {sameCommit ? (
@@ -60,7 +60,7 @@ export default function UpdateFromSourceConfirm({
         )}{" "}
         · {changed} skill{changed === 1 ? "" : "s"} changed.
       </p>
-      <ul className="mt-3 flex flex-col overflow-hidden rounded-md border border-line bg-bg-1" data-testid="folder-update-entries">
+      <ul className="mt-3 flex flex-col overflow-hidden rounded-md border border-line bg-surface-0" data-testid="folder-update-entries">
         {report.entries.map((entry) => {
           const selectable = entry.status === "updated" || (entry.status === "new" && !entry.name_taken_by);
           const badge = UPDATE_BADGE[entry.status];
@@ -85,19 +85,19 @@ export default function UpdateFromSourceConfirm({
                     return next;
                   })
                 }
-                className={`mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--color-acc)] ${dim ? "opacity-40" : ""}`}
+                className={`mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--primary)] ${dim ? "opacity-40" : ""}`}
               />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className={`font-semibold ${dim ? "text-fg-3" : "text-fg"}`} style={{ fontSize: "12.5px" }}>
+                  <span className={`font-semibold ${dim ? "text-text-3" : "text-text"} text-sm`}>
                     {entry.name}
                   </span>
                   <span className="flex-1" />
-                  <span className={`rounded border px-1.5 py-0.5 whitespace-nowrap ${badge.className}`} style={{ fontSize: "9.5px" }}>
+                  <span className={`rounded border px-1.5 py-0.5 whitespace-nowrap ${badge.className} text-2xs`}>
                     {badge.label}
                   </span>
                 </div>
-                <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "10px" }}>
+                <div className="mt-0.5 font-mono text-text-3 text-2xs">
                   {entry.status === "updated"
                     ? [
                         entry.skill_md_changed ? "SKILL.md changed" : null,
@@ -124,17 +124,17 @@ export default function UpdateFromSourceConfirm({
           );
         })}
         {report.entries.length === 0 && (
-          <li className="px-3 py-4 text-center text-fg-4" style={{ fontSize: "11px" }}>
+          <li className="px-3 py-4 text-center text-text-3 text-xs">
             Nothing at the source.
           </li>
         )}
       </ul>
-      <p className="mt-3 rounded-md border border-st-blocked/40 bg-st-blocked-bg px-3 py-2 text-fg-2" style={{ fontSize: "11px" }}>
+      <p className="mt-3 rounded-md border border-st-blocked/40 bg-st-blocked/14 px-3 py-2 text-text-2 text-xs">
         Runs already started keep their frozen copy.
         {updatedNames.length > 0 && (
           <>
             {" "}
-            Nodes that select <strong className="text-fg">{updatedNames.join(", ")}</strong> will pick up the new content at
+            Nodes that select <strong className="text-text">{updatedNames.join(", ")}</strong> will pick up the new content at
             their next spawn.
           </>
         )}{" "}
@@ -144,8 +144,7 @@ export default function UpdateFromSourceConfirm({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 hover:bg-bg-4"
-          style={{ fontSize: "11.5px" }}
+          className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover text-xs"
         >
           Cancel
         </button>
@@ -157,8 +156,7 @@ export default function UpdateFromSourceConfirm({
             onConfirm(items);
           }}
           data-testid="folder-update-confirm"
-          className="rounded-md bg-acc px-3 py-1.5 font-medium text-bg-1 hover:opacity-90 disabled:opacity-40"
-          style={{ fontSize: "11.5px" }}
+          className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 hover:opacity-90 disabled:opacity-40 text-xs"
         >
           {submitting ? "Updating…" : `Update ${items.length} skill${items.length === 1 ? "" : "s"}`}
         </button>

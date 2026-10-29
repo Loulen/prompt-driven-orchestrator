@@ -6,7 +6,6 @@ import { useEditStore } from "../store/editStore";
 import { type OpenPipeline } from "../store/editState";
 import type { RunState } from "../../shared/generated/RunState";
 import type { RunStatus } from "../../shared/generated/RunStatus";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 // jsdom has no ResizeObserver; ReactFlow's container measurement needs it
 // (mirrors EditCanvas.banner225.test.tsx).
@@ -171,7 +170,7 @@ function seedRunTab() {
 
 function renderCanvas(status: RunStatus, extra: Partial<RunState> = {}) {
   return render(
-    <TooltipProvider>
+    <>
       <EditCanvas
         libraryEntries={[]}
         libraryPipelines={[]}
@@ -179,7 +178,7 @@ function renderCanvas(status: RunStatus, extra: Partial<RunState> = {}) {
         onLibraryPipelinesChanged={() => {}}
         runState={{ ...runState(status), ...extra }}
       />
-    </TooltipProvider>,
+    </>,
   );
 }
 

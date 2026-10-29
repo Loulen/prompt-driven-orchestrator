@@ -1,7 +1,6 @@
 import { type Node, type NodeProps } from "@xyflow/react";
 import { StickyNote } from "lucide-react";
 import { useEditStore } from "../store/editStore";
-import { SELECTION_RING_STYLE } from "../../nodeStyles";
 
 /**
  * Data carried by a `note` canvas node (#307 / ADR-0018). A note is an inert
@@ -17,11 +16,12 @@ export interface NoteNodeData {
   [key: string]: unknown;
 }
 
+/** A note card: a lightly tinted sheet, a small icon, the text. */
 export function NoteNode({ data, id, selected }: NodeProps<Node<NoteNodeData>>) {
   const selection = useEditStore((s) => s.selection);
   // OR-in xyflow's own `selected` (mirror of `EditNode`, #232) so a note lit as
-  // part of a multi-select group drag shows the accent ring too, not only the
-  // note the Zustand single-selection tracks.
+  // part of a multi-select group drag shows the ring too, not only the note the
+  // Zustand single-selection tracks.
   const isSelected =
     selected || (selection.kind === "note" && selection.noteId === id);
 
@@ -29,23 +29,16 @@ export function NoteNode({ data, id, selected }: NodeProps<Node<NoteNodeData>>) 
     <div
       data-testid="note-card"
       data-note-id={data.noteId}
-      className="rounded-md border border-dashed border-line-strong bg-st-await-bg px-3 py-2 text-fg-2"
-      style={{
-        width: 200,
-        fontSize: "12px",
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
-        ...(isSelected ? SELECTION_RING_STYLE : undefined),
-      }}
+      data-selected={isSelected || undefined}
+      className="cv-note"
     >
-      <div className="mb-1 flex items-center gap-1.5 text-fg-4" style={{ fontSize: "10px" }}>
-        <StickyNote size={12} className="shrink-0" />
-        <span style={{ textTransform: "uppercase", letterSpacing: "0.05em" }}>Note</span>
-      </div>
+      <StickyNote size={12} strokeWidth={1.5} className="cv-note__ic" aria-label="Note" />
       {data.content ? (
-        data.content
+        <p className="cv-note__text">{data.content}</p>
       ) : (
-        <span className="text-fg-5 italic">Empty note — click to edit</span>
+        <p className="cv-note__text" data-empty>
+          Empty note
+        </p>
       )}
     </div>
   );

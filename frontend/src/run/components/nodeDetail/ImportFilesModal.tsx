@@ -173,7 +173,7 @@ export default function ImportFilesModal({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim"
       onClick={(event) => {
         event.stopPropagation();
         if (!importing) onClose();
@@ -181,8 +181,8 @@ export default function ImportFilesModal({
       data-testid="import-files-backdrop"
     >
       <div
-        className={`relative flex max-h-[86vh] w-[560px] max-w-[94vw] flex-col rounded-lg border bg-bg-4 shadow-xl ${
-          droppable ? "border-acc" : "border-line"
+        className={`relative flex max-h-[calc(86vh/var(--app-zoom,1))] w-[560px] max-w-[calc(94vw/var(--app-zoom,1))] flex-col rounded-lg border bg-surface-2 shadow-xl ${
+          droppable ? "border-primary" : "border-line"
         }`}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
@@ -199,8 +199,8 @@ export default function ImportFilesModal({
           />
         )}
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h3 className="flex items-center gap-2 font-semibold text-fg" style={{ fontSize: "13.5px" }}>
-            <FileUp size={14} className="text-fg-3" />
+          <h3 className="flex items-center gap-2 font-semibold text-text text-lg">
+            <FileUp size={14} className="text-text-3" />
             Import files into <span className="font-mono">{nodeId}</span>
           </h3>
           <button
@@ -208,16 +208,16 @@ export default function ImportFilesModal({
             onClick={onClose}
             disabled={importing}
             aria-label="Close import"
-            className="grid h-6 w-6 place-items-center rounded text-fg-3 hover:bg-bg-5 hover:text-fg disabled:opacity-30"
+            className="grid h-6 w-6 place-items-center rounded text-text-3 hover:bg-active hover:text-text disabled:opacity-30"
           >
             <X size={14} />
           </button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4" style={{ fontSize: "11.5px" }}>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 text-xs">
           {blockedReason && (
             <div
-              className="flex items-start gap-2 rounded-md border border-st-failed/50 bg-st-failed-bg px-3 py-2 text-st-failed"
+              className="flex items-start gap-2 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-st-failed"
               role="alert"
               data-testid="import-blocked"
             >
@@ -228,21 +228,21 @@ export default function ImportFilesModal({
 
           {imported === null ? (
             <>
-              <p className="text-fg-3">Never committed, removed with the Run.</p>
+              <p className="text-text-3">Never committed, removed with the Run.</p>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => inputRef.current?.click()}
                   disabled={importing || !!blockedReason}
-                  className="rounded-md border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 hover:bg-bg-5 hover:text-fg disabled:opacity-40"
+                  className="rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 hover:bg-active hover:text-text disabled:opacity-40"
                   data-testid="import-choose"
                 >
                   Choose files…
                 </button>
-                <span className="text-fg-4">or drop them here</span>
+                <span className="text-text-3">or drop them here</span>
                 <span className="flex-1" />
                 {staged.length > 0 && (
-                  <span className={overBudget ? "text-st-failed" : "text-fg-4"} data-testid="import-counter">
+                  <span className={overBudget ? "text-st-failed" : "text-text-3"} data-testid="import-counter">
                     {formatAttachmentSize(total)} / {maxMb.toFixed(1)} MB
                   </span>
                 )}
@@ -263,19 +263,19 @@ export default function ImportFilesModal({
                   {staged.map((file) => (
                     <li
                       key={file.name}
-                      className="flex items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-1.5"
+                      className="flex items-center gap-2 rounded-md border border-line bg-surface-2 px-2.5 py-1.5"
                     >
-                      <span className="rounded border border-line-strong px-1 font-mono text-fg-3" style={{ fontSize: "9px" }}>
+                      <span className="rounded border border-line-strong px-1 font-mono text-text-3 text-2xs">
                         {attachmentBadge(file.name)}
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-fg">{file.name}</span>
-                      <span className="text-fg-4">{formatAttachmentSize(file.size)}</span>
+                      <span className="min-w-0 flex-1 truncate text-text">{file.name}</span>
+                      <span className="text-text-3">{formatAttachmentSize(file.size)}</span>
                       <button
                         type="button"
                         onClick={() => setStaged((prev) => prev.filter((f) => f !== file))}
                         disabled={importing}
                         aria-label={`Remove ${file.name}`}
-                        className="grid h-5 w-5 place-items-center rounded text-fg-4 hover:bg-bg-5 hover:text-fg"
+                        className="grid h-5 w-5 place-items-center rounded text-text-3 hover:bg-active hover:text-text"
                       >
                         <X size={12} />
                       </button>
@@ -291,7 +291,7 @@ export default function ImportFilesModal({
               )}
               {error && (
                 <div
-                  className="flex items-start gap-2 rounded-md border border-st-failed/50 bg-st-failed-bg px-3 py-2 text-st-failed"
+                  className="flex items-start gap-2 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-st-failed"
                   role="alert"
                   data-testid="import-error"
                 >
@@ -302,13 +302,13 @@ export default function ImportFilesModal({
             </>
           ) : (
             <>
-              <p className="text-fg-2" data-testid="import-done">
+              <p className="text-text-2" data-testid="import-done">
                 {imported.length === 1 ? "1 file imported." : `${imported.length} files imported.`} Give the agent
                 this text:
               </p>
               <ImportedText paths={paths} text={text} />
               {sendBlockedReason && (
-                <p className="text-fg-3" data-testid="import-send-blocked">
+                <p className="text-text-3" data-testid="import-send-blocked">
                   {sendBlockedReason}
                 </p>
               )}
@@ -329,8 +329,7 @@ export default function ImportFilesModal({
                 type="button"
                 onClick={onClose}
                 disabled={importing}
-                className="rounded-md px-3 py-1.5 text-fg-3 hover:bg-bg-5 hover:text-fg"
-                style={{ fontSize: "12px" }}
+                className="rounded-md px-3 py-1.5 text-text-3 hover:bg-active hover:text-text text-sm"
               >
                 Cancel
               </button>
@@ -338,8 +337,7 @@ export default function ImportFilesModal({
                 type="button"
                 onClick={() => void runImport()}
                 disabled={!canImport}
-                className="rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc hover:opacity-90 disabled:opacity-40"
-                style={{ fontSize: "12px" }}
+                className="rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink hover:opacity-90 disabled:opacity-40 text-sm"
                 data-testid="import-submit"
               >
                 {importing ? "Importing…" : staged.length > 1 ? `Import ${staged.length} files` : "Import"}
@@ -350,8 +348,7 @@ export default function ImportFilesModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-md px-3 py-1.5 text-fg-3 hover:bg-bg-5 hover:text-fg"
-                style={{ fontSize: "12px" }}
+                className="rounded-md px-3 py-1.5 text-text-3 hover:bg-active hover:text-text text-sm"
                 data-testid="import-close"
               >
                 Done
@@ -364,8 +361,7 @@ export default function ImportFilesModal({
                   sendBlockedReason ??
                   "Writes the text into the agent's input without submitting it, and copies it"
                 }
-                className="flex items-center gap-1.5 rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc hover:opacity-90 disabled:opacity-40"
-                style={{ fontSize: "12px" }}
+                className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink hover:opacity-90 disabled:opacity-40 text-sm"
                 data-testid="import-send"
               >
                 <Send size={12} />

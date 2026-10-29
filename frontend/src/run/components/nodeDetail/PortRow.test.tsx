@@ -1,6 +1,5 @@
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TooltipProvider } from "../../../shared/ui/tooltip";
 import type { PortIO } from "../../api/nodes";
 
 const fetchArtifactMock = vi.fn();
@@ -9,7 +8,7 @@ vi.mock("../../api/artifacts", async (importOriginal) => ({
   fetchArtifact: (...args: unknown[]) => fetchArtifactMock(...args),
 }));
 
-import PortRow from "./PortRow";
+import PortRow, { FrontmatterChips } from "./PortRow";
 
 function preview(exists: boolean): PortIO {
   return {
@@ -29,9 +28,9 @@ function preview(exists: boolean): PortIO {
 
 function renderRow(port: PortIO, onOpen = vi.fn()) {
   render(
-    <TooltipProvider>
+    <>
       <PortRow port={port} kind="output" runId="run-1" nodeId="worker" onOpen={onOpen} />
-    </TooltipProvider>,
+    </>,
   );
   return onOpen;
 }
@@ -128,5 +127,25 @@ describe("PortRow — downloads", () => {
   it("a port with nothing on disk offers no download", () => {
     renderRow(preview(false));
     expect(screen.queryByTestId("port-download")).not.toBeInTheDocument();
+  });
+});
+
+describe("FrontmatterChips", () => {
+  it("shows the verdict alone with a count of the other keys, every key in the tooltip", () => {
+    render(<FrontmatterChips values={{ score: 7, status: "draft", verdict: "PASS" }} />);
+    const card = screen.getByTestId("frontmatter-card");
+    const chips = card.querySelectorAll(".ri-fm__chip");
+    expect(chips).toHaveLength(2);
+    expect(chips[0]).toHaveTextContent("verdictPASS");
+    expect(chips[0]).toHaveAttribute("data-st", "done");
+    expect(chips[1]).toHaveTextContent("+2");
+    expect(card).toHaveAttribute("title", "score: 7\nstatus: draft\nverdict: PASS");
+  });
+
+  it("a single key shows alone, without a count", () => {
+    render(<FrontmatterChips values={{ score: 7 }} />);
+    const chips = screen.getByTestId("frontmatter-card").querySelectorAll(".ri-fm__chip");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveTextContent("score7");
   });
 });

@@ -141,9 +141,9 @@ describe("Stats absorption — selection (#890)", () => {
     await ctrlClick(user, masterRow(22));
 
     expect(masterRow(22)).toHaveAttribute("data-checked", "true");
-    expect(masterRow(22).className).toContain("bg-acc-bg");
+
     // The detail did not open: the table still reads « Total ».
-    expect(screen.queryByText("Total / interactive")).not.toBeInTheDocument();
+    expect(screen.getByTestId("stats-sessions-breadcrumb")).not.toHaveTextContent("interactive");
     // The design removed the discoverability line: one row selected shows
     // nothing but the highlighted row (supersedes the #890 AC).
     expect(screen.queryByText(/to combine/i)).not.toBeInTheDocument();
@@ -161,7 +161,7 @@ describe("Stats absorption — selection (#890)", () => {
     renderSessions([OTHER, OLD, NEW]);
 
     await user.click(masterRow(349));
-    expect(screen.getByText("Total / implement-loop")).toBeInTheDocument();
+    expect(screen.getByTestId("stats-sessions-breadcrumb")).toHaveTextContent("Total / implement-loop");
     expect(masterRow(349)).toHaveAttribute("data-checked", "false");
 
     await user.click(within(masterRow(22)).getByTestId("stats-row-select"));
@@ -276,7 +276,7 @@ describe("Stats absorption — the Combine modal (#890)", () => {
     expect(screen.queryByTestId("stats-combine-modal")).not.toBeInTheDocument();
     expect(screen.queryByTestId("bulk-action-bar")).not.toBeInTheDocument();
     // The absorbent is briefly ringed.
-    expect(masterRow(22).className).toContain("ring-acc");
+    expect(masterRow(22)).toHaveAttribute("data-flash", "true");
   });
 
   it("Escape closes the modal first, then the selection", async () => {
@@ -341,7 +341,7 @@ describe("Stats absorption — the combined icon and its members (#890)", () => 
 
     await user.click(icons[0]);
     // Opening the members never opens the row's detail.
-    expect(screen.queryByText("Total / interactive")).not.toBeInTheDocument();
+    expect(screen.getByTestId("stats-sessions-breadcrumb")).not.toHaveTextContent("interactive");
     const modal = screen.getByTestId("stats-members-modal");
     expect(
       within(modal).getByText("Counts the runs of 1 other pipeline too."),
@@ -593,11 +593,11 @@ describe("Stats absorption — Nodes (#892)", () => {
     combineMock.mockResolvedValue({ absorptions: [] });
     const { onAbsorptionsChanged } = renderSessions([REVIEWED, TRIAGE]);
     await user.click(masterRow(8));
-    expect(screen.getByText("Total / Reviewer")).toBeInTheDocument();
+    expect(screen.getByTestId("stats-sessions-breadcrumb")).toHaveTextContent("Total / Reviewer");
 
     await ctrlClick(user, nodeRow("Review"));
     expect(nodeRow("Review")).toHaveAttribute("data-checked", "true");
-    expect(nodeRow("Review").className).toContain("bg-acc-bg");
+
     await user.click(
       within(nodeRow("Code review")).getByTestId("stats-row-select"),
     );
@@ -634,7 +634,7 @@ describe("Stats absorption — Nodes (#892)", () => {
       }),
     );
     await waitFor(() => expect(onAbsorptionsChanged).toHaveBeenCalledTimes(1));
-    expect(nodeRow("Code review").className).toContain("ring-acc");
+    expect(nodeRow("Code review")).toHaveAttribute("data-flash", "true");
   });
 
   it("refuses, visibly, a selection that mixes Pipeline and Node rows", async () => {

@@ -64,36 +64,35 @@ export default function CleanupConfirmModal({
   }, [onCancel]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim">
       <div
         role="dialog"
         aria-modal="true"
         data-testid="cleanup-confirm-modal"
-        className="w-[360px] rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
+        className="w-[360px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
       >
         {isLive ? (
           <>
-            <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+            <h3 className="font-medium text-text text-md">
               Archive this run before it completes?
             </h3>
-            <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }}>
+            <p className="mt-2 text-text-3 text-sm">
               {LIVE_BODY}
             </p>
             {cascadeText && (
-              <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }} data-testid="cleanup-cascade">
+              <p className="mt-2 text-text-3 text-sm" data-testid="cleanup-cascade">
                 {cascadeText}
               </p>
             )}
-            <label className="mt-3 block text-fg-3" style={{ fontSize: "12px" }}>
+            <label className="mt-3 block text-text-3 text-sm">
               Type{" "}
-              <code className="rounded bg-bg-4 px-1 py-0.5 font-mono text-fg">
+              <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-text">
                 {shortId}
               </code>{" "}
               to confirm
             </label>
             <input
-              className="mt-1.5 w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
-              style={{ fontSize: "12px" }}
+              className="mt-1.5 w-full rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:border-primary focus:outline-none text-sm"
               placeholder={shortId}
               value={confirmText}
               onChange={(e) => setConfirmText(e.target.value)}
@@ -106,16 +105,16 @@ export default function CleanupConfirmModal({
           </>
         ) : (
           <>
-            <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+            <h3 className="font-medium text-text text-md">
               Cleanup Run
             </h3>
-            <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }}>
+            <p className="mt-2 text-text-3 text-sm">
               This removes the run's worktrees from disk. Its completed outputs
               are kept — the run stays viewable (read-only) after archiving.
               Proceed?
             </p>
             {cascadeText && (
-              <p className="mt-2 text-fg-3" style={{ fontSize: "12px" }} data-testid="cleanup-cascade">
+              <p className="mt-2 text-text-3 text-sm" data-testid="cleanup-cascade">
                 {cascadeText}
               </p>
             )}
@@ -124,8 +123,7 @@ export default function CleanupConfirmModal({
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
           >
             Cancel
           </button>
@@ -134,10 +132,9 @@ export default function CleanupConfirmModal({
             disabled={isLive && !canConfirm}
             className={
               isLive
-                ? "cursor-pointer rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-st-failed"
-                : "cursor-pointer rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80"
+                ? "cursor-pointer rounded-md bg-st-failed px-3 py-1.5 text-primary-ink transition-colors hover:bg-st-failed/80 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-st-failed text-xs"
+                : "cursor-pointer rounded-md bg-st-failed px-3 py-1.5 text-primary-ink transition-colors hover:bg-st-failed/80 text-xs"
             }
-            style={{ fontSize: "11.5px" }}
             data-testid="cleanup-confirm-button"
           >
             {isLive ? "Archive run" : "Cleanup"}

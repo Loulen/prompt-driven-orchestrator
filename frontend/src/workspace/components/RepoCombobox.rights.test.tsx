@@ -13,7 +13,6 @@ function renderCombobox(overrides: Partial<Parameters<typeof RepoCombobox>[0]> =
     repoValid: null,
     repoValidating: false,
     repoError: null,
-    borderClass: "",
     ...overrides,
   };
   render(<RepoCombobox {...props} />);

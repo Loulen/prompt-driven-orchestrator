@@ -1,8 +1,13 @@
+import { Star } from "lucide-react";
+import MidPath from "../../shared/ui/MidPath";
+import { tildify } from "../../lib/homePath";
+
 /**
- * The Projet's member repositories, a list with its own maximum height — nested, since
- * #940, in the modal's scrolling body. A repository may be a member of several Projets
- * (ADR-0087): the other Projets holding it are named, never in the way. The default
- * primary repository (the one New Run preselects) is chosen among the checked ones.
+ * The Projet's member repositories, a list with its own maximum height in the
+ * modal's scrolling body (#940): a box, the path cut in its middle, the other
+ * Projets holding it as `+N` (ADR-0087: a repository may be in several). The
+ * default primary repository (the one New Run preselects) is chosen among the
+ * checked ones: its pill, or « Make default » on hover.
  */
 export default function ProjectMembersList({
   candidates,
@@ -11,6 +16,7 @@ export default function ProjectMembersList({
   primary,
   onToggle,
   onPrimary,
+  home,
 }: {
   candidates: string[];
   checked: Set<string>;
@@ -20,17 +26,12 @@ export default function ProjectMembersList({
   primary: string | null;
   onToggle: (path: string) => void;
   onPrimary: (path: string) => void;
+  /** The daemon's home, to read a path as `~/code/…`. */
+  home?: string | null;
 }) {
   return (
-    <div
-      className="mb-3 max-h-48 overflow-y-auto rounded border border-line-strong bg-bg-3"
-      data-testid="project-members-list"
-    >
-      {candidates.length === 0 && (
-        <div className="px-2 py-2 text-fg-4" style={{ fontSize: "11px" }}>
-          No repositories to attach.
-        </div>
-      )}
+    <div className="ln-mlist" data-testid="project-members-list">
+      {candidates.length === 0 && <div className="d-empty--row ln-faint ln-mlist__none">No repository</div>}
       {candidates.map((path) => {
         const others = alsoIn.get(path) ?? [];
         const member = checked.has(path);
@@ -38,43 +39,44 @@ export default function ProjectMembersList({
         return (
           <div
             key={path}
-            className="flex items-center gap-2 border-b border-line-soft px-2 py-1.5 last:border-b-0 hover:bg-bg-4"
-            style={{ fontSize: "11px" }}
-            title={others.length > 0 ? `Also in ${others.join(", ")}` : path}
+            className="ln-mlist__row"
+            data-on={member || undefined}
+            title={path}
             data-testid="project-member-row"
             data-path={path}
           >
-            <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+            <label className="ln-mlist__label">
               <input
                 type="checkbox"
                 checked={member}
                 onChange={() => onToggle(path)}
+                aria-label={path}
                 data-testid="project-member-checkbox"
               />
-              <span className="truncate text-fg">{path}</span>
+              <MidPath path={tildify(path, home)} title={false} className="ln-grow" />
             </label>
             {others.length > 0 && (
-              <span className="shrink-0 text-fg-4" data-testid="project-member-also-in">
-                also in {others.join(", ")}
+              <span className="ln-faint ln-also" title={`Also in ${others.join(", ")}`} aria-label={`also in ${others.join(", ")}`}>
+                <span className="d-sr" data-testid="project-member-also-in">
+                  also in {others.join(", ")}
+                </span>
+                <span aria-hidden>+{others.length}</span>
               </span>
             )}
             {member &&
               (isPrimary ? (
-                <span
-                  className="shrink-0 rounded bg-acc/15 px-1.5 py-0.5 font-mono text-acc"
-                  style={{ fontSize: "9.5px" }}
-                  data-testid="project-member-primary"
-                >
+                <span className="d-chip ln-pill" title="Default repository: New Run preselects it" data-testid="project-member-primary">
                   default
                 </span>
               ) : (
                 <button
                   type="button"
-                  className="shrink-0 rounded px-1.5 py-0.5 text-fg-4 transition-colors hover:bg-bg-5 hover:text-fg-2"
-                  style={{ fontSize: "10px" }}
+                  className="d-btn d-btn--sm d-btn--ghost ln-mlist__make"
                   onClick={() => onPrimary(path)}
+                  title="Make it the default repository"
                   data-testid="project-member-make-primary"
                 >
+                  <Star size={12} strokeWidth={1.5} aria-hidden />
                   Make default
                 </button>
               ))}

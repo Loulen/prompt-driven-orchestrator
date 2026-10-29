@@ -16,8 +16,10 @@ import {
 } from "../model/terminalRole";
 import { posteId } from "../model/poste";
 import { isHeartbeatFrame, TERMINAL_SILENCE_MS, VEIL_GRACE_MS } from "../model/terminalConnection";
-import { BASE_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
+import { BASE_FONT_SIZE, MIN_SPECTATOR_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
+import { uiZoom, useUiScale } from "../../lib/uiScale";
 import { terminalTheme } from "../model/terminalTheme";
+import { cssToken } from "../../lib/cssColor";
 import {
   sendResize,
   TERMINAL_INSET_PX,
@@ -25,7 +27,6 @@ import {
   type FrozenPane,
   type PaneMode,
 } from "../model/terminalPane";
-import { useTheme } from "../../hooks/useTheme";
 import { openProbedSocket, type ProbedSocket } from "../../shared/http/probedSocket";
 import { wirePointerAndKeys } from "./xtermPointer";
 
@@ -54,6 +55,17 @@ export interface XtermSession {
 }
 
 /**
+ * The terminal's font size at the UI scale: the type scale's `--fs-xs`. The
+ * terminal is drawn out of the app's CSS zoom (`.pdo-unzoom`): xterm maps the
+ * pointer to its cells in screen pixels, and under a zoom the selection drifted
+ * from the mouse. The scale goes in the font instead.
+ */
+function baseFontSize(): number {
+  const size = Number.parseFloat(cssToken("--fs-xs", `${BASE_FONT_SIZE}px`));
+  return (Number.isFinite(size) ? size : BASE_FONT_SIZE) * uiZoom();
+}
+
+/**
  * The xterm of a session and its PTY socket (`WS /sessions/<session>/pty`): the
  * live attach, or — for a frozen pane — the snapshot written straight into the
  * same xterm with no socket at all (#617).
@@ -63,12 +75,21 @@ export function useXtermSession(
   session: string,
   mode: PaneMode,
   frozen: FrozenPane | null,
+  fontScale = 1,
 ): XtermSession {
   const terminalRef = useRef<Terminal | null>(null);
-  // #759: the live theme. Used to build the palette at mount and to repaint an
-  // already-open terminal when the theme switches (xterm paints on a canvas, so
-  // it cannot follow a CSS token on its own).
-  const { resolved } = useTheme();
+  // The grid's layout (fit, or the spectator's font), run again on a new UI
+  // scale: the terminal is drawn out of the app's zoom, its font carries it.
+  const layoutRef = useRef<(() => void) | null>(null);
+  const scale = useUiScale();
+  // CORE-124: the Zoom du terminal, times the host's: the font carries it too.
+  // A ref, read by the layout the xterm callbacks hold.
+  const fontScaleRef = useRef(fontScale);
+  const fontSize = () => baseFontSize() * fontScaleRef.current;
+  useEffect(() => {
+    fontScaleRef.current = fontScale;
+    layoutRef.current?.();
+  }, [scale, fontScale]);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<ProbedSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -128,9 +149,9 @@ export function useXtermSession(
       cursorBlink: !isFrozen,
       // Nothing to type into: the socket is not opened at all below.
       disableStdin: isFrozen,
-      fontSize: BASE_FONT_SIZE,
-      fontFamily: "'Geist Mono Variable', monospace",
-      theme: terminalTheme(resolved),
+      fontFamily: "'Geist Mono', monospace",
+      // An always-dark screen, whatever the theme of the interface.
+      theme: terminalTheme(),
       allowTransparency: false,
       scrollback: 5000,
       // #772: on macOS Option+drag is xterm's "force selection while the pty
@@ -138,6 +159,9 @@ export function useXtermSession(
       // `forcedSelectionEvent` relies on it.
       macOptionClickForcesSelection: true,
     });
+    // The grid's size: the type scale's, times the UI scale (`baseFontSize`) and
+    // the zoom (`fontScale`).
+    term.options.fontSize = fontSize();
 
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
@@ -195,10 +219,15 @@ export function useXtermSession(
       const current = roleRef.current;
       if (current.role === "spectator") {
         const pilot = current.pilot;
-        const size = spectatorFontSize(pilot, (fontSize) => {
-          term.options.fontSize = fontSize;
-          return fitAddon.proposeDimensions();
-        });
+        const size = spectatorFontSize(
+          pilot,
+          (candidate) => {
+            term.options.fontSize = candidate;
+            return fitAddon.proposeDimensions();
+          },
+          fontSize(),
+          MIN_SPECTATOR_FONT_SIZE * uiZoom(),
+        );
         term.options.fontSize = size;
         resizeAvoidingAltBufferCorruption(term, pilot, () => {
           term.resize(pilot.cols, pilot.rows);
@@ -206,8 +235,8 @@ export function useXtermSession(
         });
         return;
       }
-      if (term.options && term.options.fontSize !== BASE_FONT_SIZE) {
-        term.options.fontSize = BASE_FONT_SIZE;
+      if (term.options && term.options.fontSize !== fontSize()) {
+        term.options.fontSize = fontSize();
       }
       const apply = () => {
         fitAddon.fit();
@@ -327,6 +356,7 @@ export function useXtermSession(
 
     const resizeObserver = new ResizeObserver(layout);
     resizeObserver.observe(container);
+    layoutRef.current = layout;
 
     return () => {
       stopPointer();
@@ -342,23 +372,14 @@ export function useXtermSession(
       roleRef.current = SOLO;
       setTermRole(SOLO);
       clearTakenOver();
+      layoutRef.current = null;
       term.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
       wsRef.current = null;
     };
-    // `resolved` is deliberately NOT a dependency: recreating the Terminal on a
-    // theme switch would drop the scrollback and the attached socket. The effect
-    // below repaints the live instance instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, mode, frozen]);
-
-  // #759: repaint an already-open terminal when the theme switches.
-  useEffect(() => {
-    const term = terminalRef.current;
-    // `options` is absent when the Terminal is a test double — nothing to repaint.
-    if (term?.options) term.options.theme = terminalTheme(resolved);
-  }, [resolved]);
 
   return {
     connected,

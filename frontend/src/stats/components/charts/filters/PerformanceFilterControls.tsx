@@ -30,7 +30,7 @@ export function DurationModeSegments({
       role="radiogroup"
       aria-label="Duration mode"
       data-testid="stats-duration-mode"
-      className="flex items-center gap-0.5 rounded border border-line bg-bg-3 p-0.5"
+      className="d-seg d-seg--sm"
       onKeyDown={(event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
@@ -57,9 +57,7 @@ export function DurationModeSegments({
             data-duration-mode={mode}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(mode)}
-            className={`rounded px-2 py-0.5 transition-colors ${
-              selected ? "bg-bg-5 text-fg" : "text-fg-3 hover:text-fg-2"
-            }`}
+            className="d-seg__btn"
           >
             {DURATION_MODE_LABEL[mode]}
           </button>
@@ -87,7 +85,7 @@ export function WaitCoverage({
         role="img"
         aria-label={copy}
         data-testid="stats-wait-coverage"
-        className="inline-flex text-fg-4"
+        className="inline-flex text-text-3"
       >
         <Info size={12} />
       </span>
@@ -116,7 +114,6 @@ export function NodeKindChips({
     );
   return (
     <>
-      <span className="ml-1 text-fg-4">Node kind</span>
       {ALL_NODE_KINDS.map((kind) => {
         const on = nodeKinds.includes(kind);
         return (
@@ -126,15 +123,11 @@ export function NodeKindChips({
             aria-pressed={on}
             data-testid={`stats-node-kind-chip-${kind}`}
             onClick={() => toggleKind(kind)}
-            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 capitalize ${
-              on
-                ? "border-st-done bg-st-done/15 text-fg"
-                : "border-line bg-bg-3 text-fg-4 line-through"
-            }`}
+            className="sx-toggle capitalize"
           >
-            {on && <Check size={10} strokeWidth={3} aria-hidden="true" />}
+            {on && <Check size={11} strokeWidth={2} aria-hidden="true" />}
             {kind}
-            <span className="font-mono text-fg-4">{counts[kind]}</span>
+            <span className="sx-toggle__n">{counts[kind]}</span>
           </button>
         );
       })}

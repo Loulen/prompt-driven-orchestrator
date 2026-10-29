@@ -26,6 +26,9 @@ pub struct PipelineSummary {
     pub modified: Option<String>,
     pub variables: HashMap<String, VariableDef>,
     pub prompt_required: bool,
+    /// Why the file does not parse, when it does not: the list marks it
+    /// invalid.
+    pub invalid: Option<String>,
 }
 
 /// One pipeline, parsed, with its prompts and the parse's warnings.
@@ -61,16 +64,22 @@ impl Pipelines {
             .files()
             .into_iter()
             .map(|file| {
-                let parsed = file.yaml.as_deref().and_then(|y| parse_pipeline(y).ok());
-                let (name, node_count, variables, prompt_required) = match parsed {
-                    Some(r) => (
-                        r.pipeline.name.clone(),
-                        r.pipeline.nodes.len(),
-                        r.pipeline.variables.clone(),
-                        r.pipeline.prompt_required,
-                    ),
-                    None => (listed_name(&file), 0, HashMap::new(), true),
+                let parsed = file.yaml.as_deref().map(parse_pipeline);
+                let invalid = match &parsed {
+                    None => Some("the file cannot be read".to_string()),
+                    Some(Err(e)) => Some(e.to_string()),
+                    Some(Ok(_)) => None,
                 };
+                let (name, node_count, variables, prompt_required) =
+                    match parsed.and_then(Result::ok) {
+                        Some(r) => (
+                            r.pipeline.name.clone(),
+                            r.pipeline.nodes.len(),
+                            r.pipeline.variables.clone(),
+                            r.pipeline.prompt_required,
+                        ),
+                        None => (listed_name(&file), 0, HashMap::new(), true),
+                    };
                 PipelineSummary {
                     id: file.id,
                     name,
@@ -79,6 +88,7 @@ impl Pipelines {
                     modified: file.modified,
                     variables,
                     prompt_required,
+                    invalid,
                 }
             })
             .collect();

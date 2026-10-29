@@ -10,7 +10,6 @@ import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import type { Project } from "../../../workspace/model/project";
 import ExtensionContextProvider from "../../../shared/extensions/ExtensionContextProvider";
 import { resetExtensions } from "../../../shared/extensions/store";
-import { TooltipProvider } from "../../../shared/ui/tooltip";
 import { useSelectionStore } from "../../../stores/selectionStore";
 import { useGestureRightsStore } from "../../store/gestureRightsStore";
 import { NOTHING_REFUSED } from "../../model/runGestures";
@@ -51,6 +50,7 @@ function List({ selectedRunId = null }: { selectedRunId?: string | null }) {
       triggers={[]}
       selectedRunId={selectedRunId}
       onSelectRun={vi.fn()}
+      onNewRun={vi.fn()}
       onShowTriggers={vi.fn()}
     />
   );
@@ -58,11 +58,11 @@ function List({ selectedRunId = null }: { selectedRunId?: string | null }) {
 
 function tree(selectedRunId: string | null = null) {
   return (
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={null} runs={RUNS} projects={PROJECTS}>
         <List selectedRunId={selectedRunId} />
       </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
 }
 
@@ -100,8 +100,8 @@ describe("the fold of a Projet group", () => {
     fireEvent.click(within(mobile).getByTestId("run-group-chevron"));
     expect(group("Mobile").dataset.collapsed).toBe("true");
     expect(within(group("Mobile")).queryAllByTestId("run-display-label")).toHaveLength(0);
-    expect(within(group("Mobile")).getByTestId("run-group-count").textContent).toBe("3 · 1 awaiting");
-    expect(within(group("Mobile")).getByTestId("run-group-awaiting")).toBeTruthy();
+    expect(within(group("Mobile")).getByTestId("run-group-count").textContent).toBe("3");
+    expect(within(group("Mobile")).getByTestId("run-group-awaiting")).toHaveAccessibleName("1 awaiting you");
     // The other group stays open.
     expect(within(group("Checkout")).queryAllByTestId("run-display-label")).toHaveLength(1);
 

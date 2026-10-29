@@ -7,16 +7,37 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { CARD_HEIGHT, CARD_WIDTH } from "../../lib/nodePlacement";
 import { paneResizeAction, reframeOnPaneResize } from "../../lib/paneResizeViewport";
 import { useEditStore } from "./editStore";
+import { uiZoom } from "../../lib/uiScale";
 
 /**
  * #825 (FP iteration 2): never magnify. A two-marker pipeline fit-views to zoom 2
  * by default (a card 360px wide, barely two across the canvas). Cards at the size
  * they were drawn; a small graph sits in the middle.
+ *
+ * The canvas leaves the UI scale's CSS zoom and carries the scale in its own
+ * viewport zoom (`lib/uiScale.ts`): "the size they were drawn" is the scale.
  */
-export const CANVAS_FIT_VIEW_OPTIONS = { maxZoom: 1 } as const;
+export function canvasFitViewOptions(): CanvasFitViewOptions {
+  return { maxZoom: uiZoom(), padding: CANVAS_FIT_PADDING };
+}
+
+/**
+ * The room a fitted graph leaves around itself: at the top, the floating
+ * toolbar's (8 px from the edge, 28 px tall) and the corner chrome's, so no
+ * card lands under them; 24 px on the other sides.
+ */
+export const CANVAS_FIT_PADDING = { top: "48px", right: "24px", bottom: "24px", left: "24px" } as const;
+
+export interface CanvasFitViewOptions {
+  maxZoom: number;
+  padding: typeof CANVAS_FIT_PADDING;
+}
 
 /** The farthest the canvas dezooms (CORE-88): 25 %. xyflow's own floor is 50 %. */
 export const CANVAS_MIN_ZOOM = 0.25;
+
+/** The closest it zooms: xyflow's own ceiling, 200 %. */
+export const CANVAS_MAX_ZOOM = 2;
 
 export function usePaneToggleReframe(
   reactFlowRef: React.RefObject<HTMLDivElement | null>,
@@ -65,7 +86,7 @@ export function usePaneToggleReframe(
       if (action === "fit" || prevWidth == null) {
         // Queued by React Flow until the nodes are measured; this observer was
         // created after React Flow's own, so its width is already current.
-        void reactFlow.fitView(CANVAS_FIT_VIEW_OPTIONS);
+        void reactFlow.fitView(canvasFitViewOptions());
         return;
       }
       const selection = useEditStore.getState().selection;

@@ -1,6 +1,6 @@
-//! The Sessions hébergées (ADR-0091): an agent or a shell an extension has
-//! the core hold outside any Run. Opened, relaunched, configured, typed into,
-//! terminated and forgotten on an extension's gesture (each an Opération on
+//! The Sessions hébergées (ADR-0092): an agent or a shell an extension has
+//! the core hold outside any Run. Opened, relaunched, configured, zoomed,
+//! typed into, terminated and forgotten on an extension's gesture (each an Opération on
 //! the Ressource `session`), recorded so they survive a restart of the
 //! daemon, never swept while recorded live, counted by the Cap de sessions
 //! concurrentes, and ended when their process exits. Their agent may declare
@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use pdo_extension_api::LiveArtifact;
 use pdo_kernel::extension_host::ExtensionHost;
 
-pub use gestures::{FORGET, TYPE};
+pub use gestures::{HostedZoomError, FORGET, TYPE, ZOOM};
 pub use lifecycle::TERMINATE;
 pub use open::OPEN;
 pub use ports::{

@@ -416,6 +416,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             Some(json!({ "message": "anyone?" })),
         ),
         call(
+            "PUT",
+            "/sessions/{session_id}/terminal-zoom",
+            "/sessions/pdo-hosted-nobody/terminal-zoom".to_string(),
+            Some(json!({ "zoom": 150 })),
+        ),
+        call(
             "POST",
             "/sessions/{run_id}/manager/attach",
             format!("/sessions/{RUN}/manager/attach"),

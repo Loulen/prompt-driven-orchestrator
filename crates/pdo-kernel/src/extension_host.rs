@@ -75,7 +75,7 @@ struct Registry {
     /// 0.12), once the daemon wired its contexts.
     run_views: OnceLock<Arc<dyn RunViews>>,
     /// What holds the Sessions hébergées for [`Host::open_session`] and the
-    /// other gestures of API 0.17, once the daemon wired its contexts.
+    /// other gestures of API 0.19, once the daemon wired its contexts.
     hosted: OnceLock<Arc<dyn HostedSessions>>,
 }
 

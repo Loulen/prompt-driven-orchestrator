@@ -522,12 +522,12 @@ describe("App — Settings surface closes (#717 sibling-key regression)", () => 
     // passes 20 s.
   }, 60_000);
 
-  it("closes via the Cancel button", async () => {
+  it("closes via the ✕ button", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await openSettings(user);
-    await user.click(screen.getByTestId("settings-cancel"));
+    await user.click(screen.getByRole("button", { name: "Close settings" }));
     await expectClosed();
   }, 20_000);
 
@@ -745,7 +745,7 @@ describe("App — Assistant and Info toolbar buttons are exclusive (#938)", () =
     const panel = screen.queryByTestId("pipeline-info-panel");
     const shown = panel
       ? (["assistant", "info", "yaml"] as const).find((t) =>
-          screen.getByTestId(`info-tab-${t}`).className.includes("border-acc"),
+          screen.getByTestId(`info-tab-${t}`).getAttribute("aria-selected") === "true",
         )
       : null;
     return {

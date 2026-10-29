@@ -1,6 +1,7 @@
 import { useMemo } from "react";
-import TriggerFields from "./TriggerFields";
 import AttachmentsField from "./AttachmentsField";
+import VariableOverrides from "./VariableOverrides";
+import FormRow from "../../../shared/ui/FormRow";
 import type { NewRunForm } from "../../store/newRun/useNewRunForm";
 import type { Skill } from "../../../shared/generated/Skill";
 import { addRefs, resolveActiveSkills } from "../../../skill/model/skillSelection";
@@ -9,9 +10,10 @@ import SkillCompletionList from "../../../skill/components/SkillCompletionList";
 import SkillPromptHint from "../../../skill/components/SkillPromptHint";
 
 /**
- * ── WHAT / WHEN ── the trigger fields, the prompt and the attachments. The
- * prompt completes skills: `/` lists the bank's skills, those the Run already
- * receives first; one it does not receive joins the Run tier.
+ * ── WHAT ── the prompt (a Trigger's input template), the attachments and the
+ * pipeline's variables. The prompt completes skills: `/` lists the bank's
+ * skills, those the Run already receives first; one it does not receive joins
+ * the Run tier.
  */
 export default function WhatSection({ form }: { form: NewRunForm }) {
   const {
@@ -40,48 +42,42 @@ export default function WhatSection({ form }: { form: NewRunForm }) {
     onAdd: addSkill,
   });
   const added = promptAddedSkills.filter((a) => skills.some((s) => s.id === a.id));
+  const trigger = mode === "trigger";
   return (
-    <div className="flex flex-col gap-3 py-4">
-      <span className="text-fg-4 uppercase tracking-wider font-medium" style={{ fontSize: "10px" }}>
-        {mode === "trigger" ? "When" : "What"}
-      </span>
-
-      {/* Schedule (Trigger mode only, #160) */}
-      {mode === "trigger" && (
-        <TriggerFields form={form} />
-      )}
-
-      <div className="flex flex-col gap-1.5">
-        <label
-          className="font-medium text-fg-2"
-          style={{ fontSize: "11.5px" }}
-        >
-          {mode === "trigger"
-            ? "Input template (optional)"
-            : `Prompt${promptOptional ? " (optional)" : ""}`}
-        </label>
-        <textarea
-          className="w-full resize-y rounded-md border border-line-strong bg-bg-3 px-2.5 py-2 font-mono text-fg placeholder:text-fg-4 focus:border-acc focus:outline-none"
-          style={{ fontSize: "12px" }}
-          rows={5}
-          placeholder="Free-text prompt, a GitHub issue link, or a mix."
-          {...fieldProps}
-          data-testid="input-textarea"
-        />
-        <SkillCompletionList completion={completion} textarea={fieldProps.ref} onPick={pick} scope="run" />
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-          {mode === "trigger"
-            ? "Passed as the Run's input each time the trigger fires. Required unless the pipeline is prompt-not-required."
+    <>
+      <FormRow
+        label={trigger ? "Input" : "Prompt"}
+        top
+        htmlFor="new-run-input"
+        title={
+          trigger
+            ? "The Run's input at each fire; {{guard.stdout}} is the guard's output"
             : promptOptional
-            ? "This pipeline runs without a prompt — anything you enter is passed as additional info."
-            : "Free-text prompt, an issue link, or a mix."}
-        </span>
-        <SkillPromptHint scope="run" lastAdded={added[added.length - 1]?.name ?? null} testId="input-skill-hint" />
-      </div>
+              ? "Optional for this pipeline"
+              : "Free text, an issue link, or both; / completes a skill"
+        }
+      >
+        <div className="ln-col ln-grow">
+          <textarea
+            id="new-run-input"
+            className="d-input d-area ln-area"
+            rows={4}
+            placeholder={trigger ? "{{guard.stdout}}" : "Free-text prompt or issue URL"}
+            {...fieldProps}
+            data-testid="input-textarea"
+          />
+          <SkillCompletionList completion={completion} textarea={fieldProps.ref} onPick={pick} scope="run" />
+          {added.length > 0 && (
+            <SkillPromptHint scope="run" lastAdded={added[added.length - 1].name} testId="input-skill-hint" />
+          )}
+        </div>
+      </FormRow>
 
       {/* #779 Attachments — images as thumbnails, other files as chips, one
           wrapping row. One budget per run, read from Settings. */}
-      <AttachmentsField form={form} />
-    </div>
+      {mode === "run" && <AttachmentsField form={form} />}
+
+      <VariableOverrides form={form} />
+    </>
   );
 }

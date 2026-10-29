@@ -1,14 +1,44 @@
-import { AlertCircle, Play, RotateCcw, Square } from "lucide-react";
+import { Check, CheckCheck, CircleCheck, LockOpen, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
 import type { NodeState } from "../../../shared/generated/NodeState";
+import type { NodeStatus } from "../../../shared/generated/NodeStatus";
+import { Button, IconButton, Tooltip } from "../../../shared/ui/kit";
+import { ReviewIcon } from "../../../shared/ui/brand/AccentIcons";
 import type { ActionVerdict } from "../../store/useNodeRun";
-import RetryPlayButton from "./RetryPlayButton";
-import { RETRY_BUTTON_CLASS, RETRY_BUTTON_STYLE } from "./labels";
+import NodeBanner from "./NodeBanner";
 import type { NodeGestureRights } from "./types";
 
+/** The statuses a Retry re-drives (#598, ADR-0049, ADR-0086), with a live one. */
+const RETRYABLE: ReadonlySet<NodeStatus> = new Set([
+  "running",
+  "completed",
+  "failed",
+  "stopped",
+  "stale",
+  "interrupted",
+  "skipped",
+]);
+
+/** The statuses « Mark complete » applies to: take the artifacts as they are. */
+const COMPLETABLE: ReadonlySet<NodeStatus> = new Set(["awaiting_user", "running", "failed", "stale", "interrupted"]);
+
+export interface NodeCompletionControls {
+  /** Whether the caller may release the completion of this interactive iteration. */
+  canRelease: boolean;
+  released: boolean;
+  isReleasing: boolean;
+  /** #588 (A3): a refused unreleased completion makes « Mark ready » the call to action. */
+  releaseIsPrimary: boolean;
+  release: () => void;
+  /** CORE-42: « Mark complete » is allowed to the caller (else hidden). */
+  canMarkComplete: boolean;
+  markComplete: () => void;
+}
+
 /**
- * The Stop / Restart / Start / Retry-Play toolbar of a live (non-archived) run.
- * A gesture the caller may not make is not shown (CORE-42); without any, the
- * toolbar is gone.
+ * The node's controls, one line: Retry, Start, Restart clean, Mark ready,
+ * Mark complete and Stop as icons — a disabled one stays in place — and
+ * Approve as the ruby button while the node awaits you. A gesture the caller
+ * may not make is not shown (CORE-42); without any, nothing.
  */
 export default function NodeControls({
   node,
@@ -17,6 +47,8 @@ export default function NodeControls({
   start,
   retry,
   may,
+  completion,
+  review,
 }: {
   node: NodeState;
   stop: () => void;
@@ -24,52 +56,98 @@ export default function NodeControls({
   start: () => void;
   retry: () => void;
   may: NodeGestureRights;
+  /** Absent on an archived Run: nothing completes there. */
+  completion?: NodeCompletionControls;
+  /** #749: the Review page with this node's delivery preselected, and its name. */
+  review?: { href: string; label: string } | null;
 }) {
-  if (!may.stop && !may.restart && !may.start && !may.retry) return null;
+  const s = node.status;
+  const showRetry = may.retry && RETRYABLE.has(s);
+  const showStart = may.start && s === "pending";
+  const showRestart = may.restart && s === "running" && node.isolated_worktree === true;
+  const showRelease = completion?.canRelease === true && COMPLETABLE.has(s);
+  const showComplete = completion?.canMarkComplete === true && COMPLETABLE.has(s);
+  const approve = showComplete && s === "awaiting_user";
+  if (!showRetry && !showStart && !showRestart && !may.stop && !showRelease && !showComplete && !review) {
+    return null;
+  }
+  const ReleaseIcon = completion?.released ? CircleCheck : LockOpen;
+  const releaseLabel = completion?.isReleasing
+    ? "Releasing…"
+    : completion?.released
+      ? "Completion released"
+      : "Mark ready for completion";
   return (
-    <div
-      className="flex items-center gap-1.5 border-b border-line px-3 py-1.5"
-      data-testid="node-controls"
-    >
+    <div className="ri-ctl" role="toolbar" aria-label="Node actions" data-testid="node-controls">
+      {review && (
+        <Tooltip label={review.label}>
+          <a href={review.href} className="d-icon" aria-label={review.label} data-testid="node-review-shortcut">
+            <ReviewIcon size={14} />
+          </a>
+        </Tooltip>
+      )}
+      {showRetry && (
+        <IconButton
+          icon={RotateCcw}
+          label="Retry"
+          // A live node's retry, and a settled node's (the old « Play »).
+          data-testid={s === "running" ? "retry-btn" : "play-retry-btn"}
+          onClick={retry}
+        />
+      )}
+      {showStart && <IconButton icon={Play} label="Start" data-testid="start-btn" onClick={start} />}
+      {showRestart && (
+        <IconButton icon={RefreshCw} label="Restart clean" data-testid="restart-iteration-btn" onClick={restartIteration} />
+      )}
+      {showRelease &&
+        !completion.releaseIsPrimary && (
+          <IconButton
+            icon={ReleaseIcon}
+            label={releaseLabel}
+            pressed={completion.released}
+            disabled={completion.isReleasing}
+            data-testid="release-completion-btn"
+            onClick={completion.release}
+          />
+        )}
+      {showComplete && !approve && (
+        <IconButton icon={CheckCheck} label="Mark complete" data-testid="mark-complete-btn" onClick={completion.markComplete} />
+      )}
       {may.stop && (
-      <button
-        data-testid="stop-btn"
-        disabled={node.status !== "running"}
-        onClick={node.status === "running" ? stop : undefined}
-        className={
-          node.status === "running"
-            ? "flex cursor-pointer items-center gap-1 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-0.5 text-st-failed transition-colors hover:bg-st-failed/20"
-            : "flex items-center gap-1 rounded border border-line bg-bg-3 px-2 py-0.5 text-fg-4 opacity-50"
-        }
-        style={{ fontSize: "10.5px", fontWeight: 500 }}
-      >
-        <Square size={10} />
-        Stop
-      </button>
+        <IconButton
+          icon={Square}
+          label="Stop"
+          tone="danger"
+          data-testid="stop-btn"
+          disabled={s !== "running"}
+          onClick={s === "running" ? stop : undefined}
+        />
       )}
-      {may.restart && node.status === "running" && node.isolated_worktree && (
-        <button
-          data-testid="restart-iteration-btn"
-          onClick={restartIteration}
-          className={RETRY_BUTTON_CLASS}
-          style={RETRY_BUTTON_STYLE}
+      {showRelease && completion.releaseIsPrimary && (
+        <Button
+          tone="primary"
+          size="sm"
+          icon={LockOpen}
+          data-testid="release-completion-btn"
+          data-primary
+          disabled={completion.isReleasing}
+          onClick={completion.release}
         >
-          <RotateCcw size={10} />
-          Restart
-        </button>
+          {completion.isReleasing ? "Releasing…" : "Mark ready"}
+        </Button>
       )}
-      {may.start && node.status === "pending" && (
-        <button
-          data-testid="start-btn"
-          onClick={start}
-          className={RETRY_BUTTON_CLASS}
-          style={RETRY_BUTTON_STYLE}
+      {approve && (
+        <Button
+          tone="primary"
+          size="sm"
+          icon={Check}
+          data-testid="mark-complete-btn"
+          title="Approve: take the artifacts as they are"
+          onClick={completion.markComplete}
         >
-          <Play size={10} />
-          Start
-        </button>
+          Approve
+        </Button>
       )}
-      {may.retry && <RetryPlayButton status={node.status} onClick={retry} />}
     </div>
   );
 }
@@ -80,22 +158,19 @@ export function ActionVerdictBanner({
 }: {
   actionVerdict: ActionVerdict;
 }) {
+  const title =
+    actionVerdict.action === "retry"
+      ? "Retry refused"
+      : actionVerdict.action === "restart"
+        ? "Restart refused"
+        : "Start refused";
   return (
-    <div
-      className="flex items-start gap-2 border-b border-st-failed/30 bg-st-failed/10 px-3 py-2"
-      data-testid="action-verdict"
-      data-action={actionVerdict.action}
-    >
-      <AlertCircle size={14} className="mt-0.5 shrink-0 text-st-failed" />
-      <span className="text-st-failed" style={{ fontSize: "11.5px", fontWeight: 500 }}>
-        {actionVerdict.action === "retry"
-          ? "Retry refused"
-          : actionVerdict.action === "restart"
-            ? "Restart refused"
-            : "Start refused"}{" "}
-        —{" "}
-        {actionVerdict.message}
-      </span>
-    </div>
+    <NodeBanner
+      tone="failed"
+      title={title}
+      text={actionVerdict.message}
+      testId="action-verdict"
+      data={{ "data-action": actionVerdict.action }}
+    />
   );
 }

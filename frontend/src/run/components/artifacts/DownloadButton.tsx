@@ -1,5 +1,5 @@
 import { Download } from "lucide-react";
-import { Tooltip, TooltipProvider } from "../../../shared/ui/tooltip";
+import { Tooltip } from "../../../shared/ui/tooltip";
 
 export const DOWNLOAD_FILE = "Download";
 
@@ -13,15 +13,19 @@ export default function DownloadButton({
   label = DOWNLOAD_FILE,
   className = "",
   testId = "artifact-download",
+  size = "sm",
 }: {
   href: string;
   label?: string;
   className?: string;
   testId?: string;
+  /** 20 px in a row (`sm`), 24 px in a header bar (`md`). */
+  size?: "sm" | "md";
 }) {
+  const box = size === "md" ? "h-(--h-control) w-(--h-control)" : "h-(--h-control-sm) w-(--h-control-sm)";
   return (
     // Own provider, as CopyButton: mounted by surfaces outside the app-level one.
-    <TooltipProvider>
+    <>
       <Tooltip content={label}>
         <a
           href={href}
@@ -30,11 +34,11 @@ export default function DownloadButton({
           data-testid={testId}
           // Never the row's click: a download must not also open the artifact.
           onClick={(e) => e.stopPropagation()}
-          className={`flex items-center rounded p-1 text-fg-3 hover:bg-bg-3 hover:text-fg ${className}`}
+          className={`flex ${box} items-center justify-center rounded text-text-3 hover:bg-hover hover:text-text ${className}`}
         >
-          <Download size={13} aria-hidden="true" />
+          <Download size={14} strokeWidth={1.5} aria-hidden="true" />
         </a>
       </Tooltip>
-    </TooltipProvider>
+    </>
   );
 }

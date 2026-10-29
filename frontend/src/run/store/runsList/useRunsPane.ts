@@ -4,11 +4,9 @@ import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import type { DeletedProject } from "../../../shared/generated/DeletedProject";
 import type { Project } from "../../../workspace/model/project";
 import { useSelectionStore } from "../../../stores/selectionStore";
-import { useRecentReposStore } from "../../../stores/recentReposStore";
 import { type BulkItem, type BulkOutcome } from "../../../lib/bulk";
-import { groupByProject, type ProjectRef } from "../../../lib/groupByRepo";
+import { groupByProject } from "../../../lib/groupByRepo";
 import { cascadeImpact, flattenAll, flattenVisible, type RunTreeNode } from "../../model/runTree";
-import { projectLookup } from "../../../workspace/model/projectLookup";
 import { projectsEntryOf, type ProjectsEntry } from "../../../workspace/model/projectsSettings";
 import { RETRYABLE } from "../../components/runsList/runsListTables";
 import { useRunRowActions } from "./useRunRowActions";
@@ -40,7 +38,6 @@ export function useRunsPane({
   onOpenProjectSettings?: (entry?: ProjectsEntry) => void;
 }) {
   const actions = useRunRowActions(onSelectRun);
-  const recentRepos = useRecentReposStore((s) => s.recentRepos);
 
   // #577 — multi-select. The per-tab sets live in the shared store (so a tab's
   // count survives a switch as its badge); the pending bulk action is local.
@@ -66,23 +63,6 @@ export function useRunsPane({
     [gestureRights],
   );
   const { activeTree, archivedTree, filteredRuns, isExpanded, archivedOpen } = view;
-
-  // #552 — verbatim `path → Projet` lookup, and the candidate repos the pencil
-  // can attach (the distinct effective repos across ALL runs, so a filtered view
-  // never hides an attachable repo).
-  const projectOf = useMemo<(path: string) => ProjectRef | null>(
-    () => projectLookup(projects),
-    [projects],
-  );
-  const availableRepos = useMemo(() => {
-    const set = new Set<string>();
-    for (const path of recentRepos) set.add(path);
-    for (const r of runs) if (r.effective_repo) set.add(r.effective_repo);
-    for (const project of projects) {
-      for (const path of project.members) set.add(path);
-    }
-    return [...set];
-  }, [projects, recentRepos, runs]);
 
   // Group the active Runs list by the Projet each Run was launched in (#552,
   // ADR-0087), falling back to the #258 per-path grouping for a Run in no
@@ -185,8 +165,6 @@ export function useRunsPane({
     clearSel,
     runBulkKind,
     setRunBulkKind,
-    projectOf,
-    availableRepos,
     runGroups,
     isGroupCollapsed,
     toggleGroup,

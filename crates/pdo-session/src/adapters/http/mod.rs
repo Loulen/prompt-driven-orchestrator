@@ -11,6 +11,7 @@ mod pane;
 mod sessions;
 mod terminal;
 mod terminal_text;
+mod terminal_zoom;
 mod wait;
 pub mod ws_log;
 
@@ -28,6 +29,7 @@ pub use assistant::LibassistResponse;
 pub use pane::PaneResponse;
 pub use sessions::{AttachResponse, ShellResponse};
 pub use terminal_text::TerminalTextResponse;
+pub use terminal_zoom::TerminalZoomResponse;
 
 /// The routes of the session context, with their state.
 pub fn router(session: Arc<Session>) -> Router {
@@ -44,10 +46,15 @@ pub fn router(session: Arc<Session>) -> Router {
         .route("/runs/{run_id}/nodes/{node_id}/pane", get(pane::read))
         .route("/sessions/{session_id}/pty", get(terminal::pty))
         .route("/sessions/{session_id}/attach", post(sessions::attach))
-        // ADR-0091: `pdo wait-user` from a Session hébergée.
+        // ADR-0092: `pdo wait-user` from a Session hébergée.
         .route(
             "/sessions/{session_id}/wait-user",
             post(wait::declare_hosted),
+        )
+        // CORE-124: the Zoom du terminal, the same on every Poste.
+        .route(
+            "/sessions/{session_id}/terminal-zoom",
+            get(terminal_zoom::read).put(terminal_zoom::set),
         )
         .route(
             "/sessions/{run_id}/manager/attach",

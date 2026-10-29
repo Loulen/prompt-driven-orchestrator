@@ -21,20 +21,19 @@ export default function StagedRow({
   return (
     <li
       className={`flex items-center gap-2 rounded-md border px-3 py-1.5 ${
-        failed ? "border-st-failed/60 bg-st-failed-bg" : status.state === "uploading" ? "border-acc/50 bg-bg-3" : "border-line bg-bg-3"
-      }`}
-      style={{ fontSize: "11px" }}
+        failed ? "border-st-failed/60 bg-st-failed/14" : status.state === "uploading" ? "border-primary/50 bg-surface-2" : "border-line bg-surface-2"
+      } text-xs`}
       data-testid="paste-skill-file"
       data-path={file.path}
       data-state={status.state}
     >
-      <FileText size={11} className={`shrink-0 ${failed ? "text-st-failed" : "text-fg-3"}`} />
-      <span className="truncate font-mono text-fg">{file.path}</span>
+      <FileText size={11} className={`shrink-0 ${failed ? "text-st-failed" : "text-text-3"}`} />
+      <span className="truncate font-mono text-text">{file.path}</span>
       <StatusBadge status={status} replaces={file.replaces} />
-      {failed && <span className="truncate text-fg-2">{status.message}</span>}
+      {failed && <span className="truncate text-text-2">{status.message}</span>}
       {status.state === "uploading" && (
-        <span className="h-1 w-20 overflow-hidden rounded bg-bg-5" aria-hidden>
-          <span className="block h-full w-1/2 animate-pulse bg-acc" />
+        <span className="h-1 w-20 overflow-hidden rounded bg-surface-2" aria-hidden>
+          <span className="block h-full w-1/2 animate-pulse bg-primary" />
         </span>
       )}
       <span className="flex-1" />
@@ -44,8 +43,7 @@ export default function StagedRow({
             type="button"
             onClick={onRetry}
             data-testid="paste-skill-file-retry"
-            className="rounded-md border border-line-strong bg-bg-4 px-2 py-0.5 text-fg-2 hover:border-acc"
-            style={{ fontSize: "10.5px" }}
+            className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary text-xs"
           >
             Retry
           </button>
@@ -53,15 +51,14 @@ export default function StagedRow({
             type="button"
             onClick={onSkip}
             data-testid="paste-skill-file-skip"
-            className="rounded-md border border-line-strong bg-bg-4 px-2 py-0.5 text-fg-2 hover:border-acc"
-            style={{ fontSize: "10.5px" }}
+            className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary text-xs"
           >
             Skip
           </button>
         </>
       ) : (
         size !== null && (
-          <span className="font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+          <span className="font-mono text-text-3 text-xs">
             {formatBytes(size)}
           </span>
         )
@@ -71,7 +68,7 @@ export default function StagedRow({
           type="button"
           aria-label={`Remove ${file.path}`}
           onClick={onRemove}
-          className="grid h-4 w-4 place-items-center rounded text-fg-4 hover:text-fg"
+          className="grid h-4 w-4 place-items-center rounded text-text-3 hover:text-text"
         >
           <X size={10} />
         </button>
@@ -81,36 +78,35 @@ export default function StagedRow({
 }
 
 function StatusBadge({ status, replaces }: { status: StagedFile["status"]; replaces?: boolean }) {
-  const base = "rounded border px-1.5";
-  const style = { fontSize: "9.5px" };
+  const base = "rounded border px-1.5 text-2xs";
   switch (status.state) {
     case "staged":
       return (
-        <span className={`${base} border-acc/50 text-acc`} style={style}>
+        <span className={`${base} border-primary/50 text-primary`}>
           {replaces ? "replaces" : "to upload"}
         </span>
       );
     case "uploading":
       return (
-        <span className={`${base} border-acc/50 text-acc`} style={style}>
+        <span className={`${base} border-primary/50 text-primary`}>
           uploading
         </span>
       );
     case "uploaded":
       return (
-        <span className={`${base} border-line text-fg-4`} style={style}>
+        <span className={`${base} border-line text-text-3`}>
           uploaded
         </span>
       );
     case "failed":
       return (
-        <span className={`${base} border-st-failed/60 text-st-failed`} style={style}>
+        <span className={`${base} border-st-failed/60 text-st-failed`}>
           failed
         </span>
       );
     case "skipped":
       return (
-        <span className={`${base} border-line text-fg-4`} style={style}>
+        <span className={`${base} border-line text-text-3`}>
           skipped
         </span>
       );

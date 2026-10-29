@@ -51,22 +51,22 @@ export default function RunShellModal({ session, onClose }: Props) {
       data-testid="run-shell-modal"
     >
       <div
-        className="flex h-[80vh] w-[860px] max-w-[92vw] flex-col overflow-hidden rounded-lg border border-line-strong bg-bg-2"
+        className="flex h-[calc(80vh/var(--app-zoom,1))] w-[860px] max-w-[calc(92vw/var(--app-zoom,1))] flex-col overflow-hidden rounded-lg border border-line-strong bg-surface-1"
         style={{ boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-fg" style={{ fontSize: "13px" }}>
+            <span className="font-medium text-text text-md">
               Run shell
             </span>
-            <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+            <span className="font-mono text-text-3 text-2xs">
               {session}
             </span>
           </div>
           <button
             onClick={onClose}
-            className="rounded p-1 text-fg-3 hover:bg-bg-3 hover:text-fg"
+            className="rounded p-1 text-text-3 hover:bg-hover hover:text-text"
             aria-label="Close shell"
             data-testid="run-shell-close"
           >

@@ -1,4 +1,4 @@
-//! The declared wait of a Session hébergée (ADR-0091 §4): its agent says it
+//! The declared wait of a Session hébergée (ADR-0092 §4): its agent says it
 //! waits for a person (`pdo wait-user`), and the Enter of a person on its
 //! terminal lifts it, as for a Node (ADR-0069 §1).
 

@@ -6,13 +6,12 @@ import type { LibraryEntry } from "../model/library";
 import { fetchSettings } from "../../settings/api/settings";
 import { saveToLibrary, deleteFromLibrary, instantiateFromLibrary } from "../api/library";
 import { useEditStore } from "../store/editStore";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 function renderInspector(props: Parameters<typeof NodeInspector>[0]) {
   return render(
-    <TooltipProvider>
+    <>
       <NodeInspector {...props} />
-    </TooltipProvider>,
+    </>,
   );
 }
 
@@ -313,7 +312,7 @@ describe("NodeInspector — pooled emergent inputs (#153)", () => {
   it("shows the node ID", () => {
     seedPooledReviewPipeline();
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
-    expect(screen.getByText("impl")).toBeInTheDocument();
+    expect(screen.getAllByText("impl").length).toBeGreaterThan(0);
   });
 
   it("shows the declared output port schema fields", () => {
@@ -969,9 +968,9 @@ describe("NodeInspector — the model field does not follow the selection (#617)
 
     useEditStore.setState({ selection: { kind: "node", id: "cop" } });
     rerender(
-      <TooltipProvider>
+      <>
         <NodeInspector libraryEntries={[]} onLibraryChanged={() => {}} />
-      </TooltipProvider>,
+      </>,
     );
 
     expect((await field()).value).toBe("");
@@ -1178,10 +1177,10 @@ describe("NodeInspector — toggle skills (#588 / ADR-0069)", () => {
     seedTabWithReviewer(false);
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
     const toggle = screen.getByTestId("node-on-demand-toggle");
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
     expect(node().on_demand).toBe(true);
-    expect(screen.getByTestId("node-on-demand-toggle")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("node-on-demand-toggle")).toHaveAttribute("aria-checked", "true");
     fireEvent.click(screen.getByTestId("node-on-demand-toggle"));
     expect(node().on_demand).toBe(false);
   });

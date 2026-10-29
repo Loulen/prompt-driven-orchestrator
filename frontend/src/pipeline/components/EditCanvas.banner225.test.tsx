@@ -3,7 +3,6 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
 import { useEditStore } from "../store/editStore";
 import { type OpenPipeline } from "../store/editState";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 // jsdom has no ResizeObserver; ReactFlow's container measurement needs it
 // (mirrors LintBannerDuplication.test.tsx).
@@ -140,14 +139,14 @@ function seedTab(tab: OpenPipeline) {
 
 function renderCanvas() {
   return render(
-    <TooltipProvider>
+    <>
       <EditCanvas
         libraryEntries={[]}
         libraryPipelines={[]}
         onLibraryDelete={() => {}}
         onLibraryPipelinesChanged={() => {}}
       />
-    </TooltipProvider>,
+    </>,
   );
 }
 
@@ -253,6 +252,7 @@ describe("#268 — dismissible fan-out nudges", () => {
     renderCanvas();
 
     expect(screen.getByTestId("lint-banner")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("lint-banner-toggle"));
     expect(screen.getByTestId("lint-banner-dismiss-fanout:fixer")).toBeInTheDocument();
   });
 
@@ -262,6 +262,7 @@ describe("#268 — dismissible fan-out nudges", () => {
 
     // The lint message is present…
     expect(screen.getByText(DIAGNOSTIC)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("lint-banner-toggle"));
     // …but the only dismiss affordance in the banner is the nudge's.
     expect(screen.getAllByLabelText("Dismiss suggestion")).toHaveLength(1);
   });
@@ -270,6 +271,7 @@ describe("#268 — dismissible fan-out nudges", () => {
     seedTab(nudgeAndLintTab());
     renderCanvas();
 
+    fireEvent.click(screen.getByTestId("lint-banner-toggle"));
     const nudgeText = screen.getByText(/emits a list into/);
     expect(nudgeText).toBeInTheDocument();
 

@@ -1,99 +1,72 @@
-import type { ReactNode } from "react";
+import { FileDiff, FileMinus, FilePlus, FileSymlink, type LucideIcon } from "lucide-react";
 import { fileKey } from "../model/diffTab";
 import type { DiffFile } from "../../shared/generated/DiffFile";
 
-// The small pieces of the Diff tab (#748): its empty and loading states, the
-// +/- counts and bar, a file's status letter, path and badge.
-
-export function EmptyState({
-  testid,
-  icon,
-  title,
-  subtitle,
-  action,
-}: {
-  testid: string;
-  icon: ReactNode;
-  title: string;
-  subtitle: string;
-  action?: ReactNode;
-}) {
-  return (
-    <div
-      className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center"
-      data-testid={testid}
-    >
-      <span className="grid h-7 w-7 place-items-center rounded border border-line bg-bg-3 text-fg-3">
-        {icon}
-      </span>
-      <div className="text-fg-3" style={{ fontSize: "11.5px" }}>
-        {title}
-      </div>
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
-        {subtitle}
-      </div>
-      {action}
-    </div>
-  );
-}
+// The small pieces of the Diff tab (#748): its loading state, the +/- counts,
+// a file's status (icon and letter), its name and folder, its badge.
 
 export function Skeleton() {
   return (
-    <div className="flex flex-col gap-2 px-3 py-3" data-testid="diff-loading" aria-busy>
-      <div className="h-3 w-24 animate-pulse rounded bg-bg-4" />
-      <div className="mt-1 h-px bg-line" />
-      <div className="h-3 w-3/4 animate-pulse rounded bg-bg-3" />
-      <div className="h-3 w-full animate-pulse rounded bg-bg-3" />
-      <div className="h-3 w-2/3 animate-pulse rounded bg-bg-3" />
+    <div className="pi-skel" data-testid="diff-loading" aria-busy>
+      <span style={{ width: "30%" }} />
+      <span style={{ width: "75%" }} />
+      <span style={{ width: "100%" }} />
+      <span style={{ width: "66%" }} />
     </div>
   );
 }
 
 export function Counts({ additions, deletions }: { additions: number; deletions: number }) {
   return (
-    <span className="shrink-0 font-mono tabular-nums" style={{ fontSize: "10.5px" }}>
-      <span className="text-st-done">+{additions}</span>{" "}
-      <span className="text-st-failed">−{deletions}</span>
+    <span className="pi-counts">
+      <span className="ei-add">+{additions}</span>
+      <span className="ei-del">−{deletions}</span>
     </span>
   );
 }
 
-/** Five blocks, green then red, proportional to the file's +/- share. */
-export function MiniBar({ additions, deletions }: { additions: number; deletions: number }) {
-  const total = additions + deletions;
-  const green = total === 0 ? 0 : Math.round((additions / total) * 5);
-  return (
-    <span className="flex shrink-0 gap-px" aria-hidden>
-      {Array.from({ length: 5 }, (_, i) => (
-        <span
-          key={i}
-          className={`h-2 w-1.5 rounded-[1px] ${
-            total === 0 ? "bg-bg-4" : i < green ? "bg-st-done" : "bg-st-failed"
-          }`}
-        />
-      ))}
-    </span>
-  );
-}
-
-const STATUS_LETTER: Record<DiffFile["status"], { letter: string; className: string }> = {
-  modified: { letter: "M", className: "text-st-await" },
-  added: { letter: "A", className: "text-st-done" },
-  deleted: { letter: "D", className: "text-st-failed" },
-  renamed: { letter: "R", className: "text-st-running" },
-  copied: { letter: "C", className: "text-st-running" },
+const STATUS: Record<DiffFile["status"], { letter: string; color: string; icon: LucideIcon }> = {
+  modified: { letter: "M", color: "var(--color-st-await)", icon: FileDiff },
+  added: { letter: "A", color: "var(--color-st-done)", icon: FilePlus },
+  deleted: { letter: "D", color: "var(--color-st-failed)", icon: FileMinus },
+  renamed: { letter: "R", color: "var(--color-st-running)", icon: FileSymlink },
+  copied: { letter: "C", color: "var(--color-st-running)", icon: FileSymlink },
 };
 
+/** The status icon of a file, in its status colour. */
+export function StatusIcon({ status }: { status: DiffFile["status"] }) {
+  const s = STATUS[status];
+  return <s.icon size={14} strokeWidth={1.5} color={s.color} aria-hidden />;
+}
+
+/** The status letter at the end of a file row (`M`, `A`, `D`, `R`, `C`). */
 export function StatusLetter({ status }: { status: DiffFile["status"] }) {
-  const s = STATUS_LETTER[status];
+  const s = STATUS[status];
   return (
-    <span className={`w-2.5 shrink-0 text-center font-mono font-medium ${s.className}`}>
+    <span className="pi-dfile__st" style={{ color: s.color }} title={status}>
       {s.letter}
     </span>
   );
 }
 
-/** Directory dimmed, file name in clear; `old → new` for a rename/copy. */
+/** The characters a long file name keeps at its end when it is cut. */
+const NAME_TAIL = 10;
+
+/**
+ * A file name cut in its middle: long names often differ only at their end
+ * (`a_very_long_new_file_3.ts`), so the end and the extension stay visible.
+ */
+function FileName({ name }: { name: string }) {
+  const cut = name.length > NAME_TAIL * 2 ? name.length - NAME_TAIL : name.length;
+  return (
+    <span className="pi-dfile__name" title={name}>
+      <span className="pi-dfile__lead">{name.slice(0, cut)}</span>
+      {cut < name.length && <span className="pi-dfile__tail">{name.slice(cut)}</span>}
+    </span>
+  );
+}
+
+/** The file name in clear, its folder dimmed after it; `old → new` for a rename/copy. */
 export function FilePath({ file }: { file: DiffFile }) {
   const isMove = file.status === "renamed" || file.status === "copied";
   const key = fileKey(file);
@@ -101,16 +74,12 @@ export function FilePath({ file }: { file: DiffFile }) {
   const dir = i < 0 ? "" : key.slice(0, i + 1);
   const name = i < 0 ? key : key.slice(i + 1);
   return (
-    <span className="min-w-0 truncate font-mono" title={isMove ? `${file.old_path} → ${file.new_path}` : key}>
-      {isMove && file.old_path && (
-        <>
-          <span className="text-fg-4">{file.old_path}</span>
-          <span className="text-fg-4"> → </span>
-        </>
-      )}
-      <span className="text-fg-4">{dir}</span>
-      <span className="text-fg-2">{name || "(unknown path)"}</span>
-    </span>
+    <>
+      <FileName name={name || "(unknown path)"} />
+      <span className="pi-dfile__dir d-mono">
+        {isMove && file.old_path ? `${file.old_path} → ${dir}` : dir}
+      </span>
+    </>
   );
 }
 
@@ -127,18 +96,8 @@ export function Badge({ file }: { file: DiffFile }) {
             ? "copied"
             : null;
   if (!label) return null;
-  const tone =
-    label === "new"
-      ? "border-st-done/40 text-st-done"
-      : label === "deleted"
-        ? "border-st-failed/40 text-st-failed"
-        : "border-line-strong text-fg-4";
   return (
-    <span
-      className={`shrink-0 rounded border px-1 leading-4 ${tone}`}
-      style={{ fontSize: "9.5px" }}
-      data-testid="diff-file-badge"
-    >
+    <span className="d-chip" data-testid="diff-file-badge">
       {label}
     </span>
   );

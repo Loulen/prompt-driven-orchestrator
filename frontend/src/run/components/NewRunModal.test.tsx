@@ -213,9 +213,9 @@ async function pickPipeline(id: string) {
   await user.click(await screen.findByTestId(`pipeline-select-option-${id}`));
 }
 
-/** The pipeline the closed field shows — what a launch would post. */
+/** The pipeline the closed field shows — what a launch would post (its name, not its node count). */
 function selectedPipeline(): string {
-  return screen.getByTestId("pipeline-select").textContent ?? "";
+  return screen.getByTestId("pipeline-select").querySelector(".d-sel__val")?.textContent ?? "";
 }
 
 /** The rows the OPEN menu offers, in order, by pipeline id then name. */
@@ -224,7 +224,7 @@ function pipelineOptions(): Array<{ id: string; name: string }> {
     screen.getByTestId("pipeline-select-menu").querySelectorAll("[data-pipeline-id]"),
   ).map((row) => ({
     id: row.getAttribute("data-pipeline-id") ?? "",
-    name: row.textContent ?? "",
+    name: row.querySelector(".ln-pp__name")?.textContent ?? "",
   }));
 }
 
@@ -340,7 +340,7 @@ describe("NewRunModal — pipeline picker", () => {
     // #822: the dead end is stated ON the trigger, which is disabled — a menu with
     // nothing choosable in it has nothing to offer.
     const trigger = screen.getByTestId("pipeline-select");
-    expect(trigger).toHaveTextContent(/no pipelines found/i);
+    expect(trigger).toHaveTextContent(/no pipeline/i);
     expect(trigger).toBeDisabled();
   });
 
@@ -381,9 +381,9 @@ describe("NewRunModal — pipeline filter", () => {
     // Typing filters immediately: the field already has the caret.
     expect(screen.getByTestId("pipeline-select-filter")).toHaveFocus();
     // A row is its name: no scope column (every pipeline is the instance's).
-    expect(screen.getByTestId("pipeline-select-option-review-loop")).toHaveTextContent(
-      /^review-loop$/,
-    );
+    expect(
+      screen.getByTestId("pipeline-select-option-review-loop").querySelector(".ln-pp__name"),
+    ).toHaveTextContent(/^review-loop$/);
   });
 
   it("marks the selected row and no other", async () => {
@@ -417,7 +417,7 @@ describe("NewRunModal — pipeline filter", () => {
 
     const row = await screen.findByTestId("pipeline-select-option-review-loop");
     await waitFor(() =>
-      expect(row.querySelector(".underline")).toHaveTextContent("view"),
+      expect(row.querySelector(".ln-pp__hit")).toHaveTextContent("view"),
     );
   });
 
@@ -571,7 +571,7 @@ describe("NewRunModal — pipeline filter", () => {
     });
 
     vi.useRealTimers();
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
 
     await waitFor(() =>
       expect(createRun).toHaveBeenCalledWith(
@@ -586,7 +586,7 @@ describe("NewRunModal — pipeline filter", () => {
 
     const trigger = screen.getByTestId("pipeline-select");
     expect(trigger).toBeDisabled();
-    expect(trigger).toHaveTextContent("Select a repository first");
+    expect(trigger).toHaveTextContent("Choose a repository first");
   });
 });
 
@@ -626,7 +626,7 @@ describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
     await settleRepo("/code/shop-web");
     expect(screen.getByTestId("project-combobox")).toHaveTextContent("Checkout");
     expect(screen.getByTestId("project-combobox")).toHaveTextContent("3 repos");
-    expect(screen.getByTestId("project-default-badge")).toHaveTextContent("project default");
+    expect(screen.getByTestId("project-default-badge")).toHaveTextContent("default");
 
     fireEvent.click(screen.getByTestId("project-combobox"));
     const options = screen.getAllByTestId("project-option");
@@ -642,7 +642,7 @@ describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
     await settleRepo("/code/shop-web");
     const offered = screen.getAllByTestId("project-repo-unchecked").map((r) => r.getAttribute("data-path"));
     expect(offered).toEqual(["/code/shop-api", "/code/design-system"]);
-    expect(screen.getByTestId("add-secondary-repo")).toHaveTextContent("+ Add a repository outside Checkout");
+    expect(screen.getByTestId("add-secondary-repo")).toHaveTextContent("Repository outside Checkout");
 
     fireEvent.click(within(screen.getAllByTestId("project-repo-unchecked")[0]).getByRole("checkbox"));
     await settleRepo("/code/shop-api");
@@ -1077,7 +1077,7 @@ describe("NewRunModal — multi-repo form flow", () => {
     });
 
     vi.useRealTimers();
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
 
     await waitFor(() => {
       expect(createRun).toHaveBeenCalledWith(
@@ -1121,7 +1121,7 @@ describe("NewRunModal — multi-repo form flow", () => {
       });
 
       vi.useRealTimers();
-      fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^run/i }));
 
       await waitFor(() => {
         // Pre-fix this was `main`, a branch project-b does not have → the daemon
@@ -1158,7 +1158,7 @@ describe("NewRunModal — multi-repo form flow", () => {
       });
 
       vi.useRealTimers();
-      fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^run/i }));
 
       await waitFor(() => {
         expect(createRun).toHaveBeenCalledWith(
@@ -1190,7 +1190,7 @@ describe("NewRunModal — multi-repo form flow", () => {
     fireEvent.change(inputTextarea, { target: { value: "implement feature X" } });
 
     vi.useRealTimers();
-    const launchButton = screen.getByRole("button", { name: /launch/i });
+    const launchButton = screen.getByRole("button", { name: /^run/i });
     fireEvent.click(launchButton);
 
     await waitFor(() => {
@@ -1216,7 +1216,7 @@ describe("NewRunModal — multi-repo form flow", () => {
     renderModal();
     await enterValidRepo();
 
-    const launchButton = screen.getByRole("button", { name: /launch/i });
+    const launchButton = screen.getByRole("button", { name: /^run/i });
     expect(launchButton).toBeDisabled();
   });
 
@@ -1228,7 +1228,7 @@ describe("NewRunModal — multi-repo form flow", () => {
     await enterValidRepo();
 
     await waitFor(() => {
-      const launchButton = screen.getByRole("button", { name: /launch/i });
+      const launchButton = screen.getByRole("button", { name: /^run/i });
       expect(launchButton).toBeEnabled();
     });
   });
@@ -1241,11 +1241,11 @@ describe("NewRunModal — multi-repo form flow", () => {
     await enterValidRepo();
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled();
     });
 
     vi.useRealTimers();
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
 
     await waitFor(() => {
       expect(createRun).toHaveBeenCalledWith(
@@ -1277,13 +1277,13 @@ describe("NewRunModal — image upload", () => {
   it("renders the image upload area", async () => {
     renderModal();
     expect(screen.getByTestId("image-drop-zone")).toBeInTheDocument();
-    expect(screen.getByTestId("image-upload-button")).toBeInTheDocument();
-    expect(screen.getByText(/paste, drag-drop, or click/i)).toBeInTheDocument();
+    expect(screen.getByTestId("image-upload-button")).toHaveTextContent("Attach");
   });
 
-  it("shows 'Optional' hint when no images attached", () => {
+  it("says the budget in the Files label's tooltip, no hint under the row", () => {
     renderModal();
-    expect(screen.getByText(/optional/i)).toBeInTheDocument();
+    expect(screen.getByText("Files")).toHaveAttribute("title", expect.stringMatching(/50\.0 MB per run/));
+    expect(screen.queryByTestId("attachments-counter")).toBeNull();
   });
 
   it("adds images via file input and shows thumbnails", async () => {
@@ -1318,7 +1318,7 @@ describe("NewRunModal — image upload", () => {
     await waitFor(() => {
       expect(screen.queryAllByTestId("image-thumbnail")).toHaveLength(0);
     });
-    expect(screen.getByText(/optional/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("attachments-counter")).toBeNull();
   });
 
   it("supports multiple images", async () => {
@@ -1375,7 +1375,7 @@ describe("NewRunModal — image upload", () => {
     });
 
     vi.useRealTimers();
-    const launchButton = screen.getByRole("button", { name: /launch/i });
+    const launchButton = screen.getByRole("button", { name: /^run/i });
     fireEvent.click(launchButton);
 
     await waitFor(() => {
@@ -1410,7 +1410,7 @@ describe("NewRunModal — image upload", () => {
     fireEvent.change(inputTextarea, { target: { value: "text only" } });
 
     vi.useRealTimers();
-    const launchButton = screen.getByRole("button", { name: /launch/i });
+    const launchButton = screen.getByRole("button", { name: /^run/i });
     fireEvent.click(launchButton);
 
     await waitFor(() => {
@@ -1442,7 +1442,6 @@ describe("NewRunModal — image upload", () => {
     expect(chips[0]).toHaveTextContent("SPEC-779.md");
     expect(chips[0]).toHaveTextContent("6 B");
     expect(screen.getByTestId("attachments-counter")).toHaveTextContent(/^1 image, 1 file · /);
-    expect(screen.getByText(/passed to the entry node as/i)).toBeInTheDocument();
     expect(screen.getByTestId("attachments-meter")).toBeInTheDocument();
   });
 
@@ -1465,7 +1464,7 @@ describe("NewRunModal — image upload", () => {
 
     fireEvent.keyDown(screen.getByTestId("file-chip"), { key: "Delete" });
     await waitFor(() => expect(screen.queryAllByTestId("file-chip")).toHaveLength(0));
-    expect(screen.getByText(/optional — passed to the entry node/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("attachments-meter")).toBeNull();
   });
 
   it("replaces an attachment with the same name and says so", async () => {
@@ -1494,7 +1493,7 @@ describe("NewRunModal — image upload", () => {
     });
     renderModal();
     await waitFor(() =>
-      expect(screen.getByText(/up to 1\.0 MB per run/i)).toBeInTheDocument(),
+      expect(screen.getByText("Files")).toHaveAttribute("title", expect.stringMatching(/1\.0 MB per run/)),
     );
 
     const zone = screen.getByTestId("image-drop-zone");
@@ -1542,7 +1541,7 @@ describe("NewRunModal — image upload", () => {
     await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
 
     vi.useRealTimers();
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
     await waitFor(() => {
       expect(createRun).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1567,7 +1566,7 @@ describe("NewRunModal — image upload", () => {
     fireEvent.click(screen.getByTestId("new-run-cancel"));
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByTestId("attachments-close-warning")).toHaveTextContent(
-      "1 attachment will be lost",
+      "1 attachment lost on close",
     );
     fireEvent.click(screen.getByTestId("new-run-cancel"));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -1677,7 +1676,7 @@ describe("NewRunModal — form persistence across close/reopen", () => {
     // Notion #7: reopened collapsed (no remembered state), and emptied.
     const toggle = screen.getByRole("button", { name: /^Provisioning/ });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(toggle).toHaveTextContent("Provisioning · none");
+    expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("none");
     await userEvent.click(toggle);
     expect(screen.getByLabelText("Symlink patterns")).toHaveValue("");
   });
@@ -1763,7 +1762,7 @@ describe("NewRunModal — form persistence across close/reopen", () => {
     });
 
     vi.useRealTimers();
-    const launchButton = screen.getByRole("button", { name: /launch/i });
+    const launchButton = screen.getByRole("button", { name: /^run/i });
     fireEvent.click(launchButton);
 
     await waitFor(() => {
@@ -1783,7 +1782,7 @@ describe("NewRunModal run name field", () => {
 
     expect(screen.getByTestId("run-name-input")).toBeInTheDocument();
     expect(screen.getByTestId("auto-name-checkbox")).toBeInTheDocument();
-    expect(screen.getByText("Auto-generated by manager")).toBeInTheDocument();
+    expect(screen.getByTestId("auto-name-checkbox").closest("label")).toHaveTextContent("Auto");
   });
 
   it("name input is disabled when auto-generated is checked", () => {
@@ -1857,10 +1856,10 @@ describe("NewRunModal — auto-naming default (#338)", () => {
     ]);
     renderModal();
     await enterValidRepo();
-    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled());
 
     vi.useRealTimers();
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
     await waitFor(() => {
       expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ auto_name: true }));
     });
@@ -1881,7 +1880,7 @@ describe("NewRunModal — auto-naming default (#338)", () => {
     fireEvent.change(screen.getByTestId("run-name-input"), { target: { value: "Fix bug" } });
 
     vi.useRealTimers();
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
     await waitFor(() => {
       expect(createRun).toHaveBeenCalledWith(
         expect.objectContaining({ auto_name: false, name: "Fix bug" }),
@@ -1952,7 +1951,7 @@ describe("NewRunModal — Trigger mode (#160)", () => {
   it("relabels the prompt field as an optional input template in Trigger mode", async () => {
     await selectPipelineAndRepo();
     fireEvent.click(screen.getByTestId("mode-trigger"));
-    expect(screen.getByText(/input template \(optional\)/i)).toBeInTheDocument();
+    expect(screen.getByLabelText("Input")).toHaveAttribute("placeholder", "{{guard.stdout}}");
   });
 
   it("creates a trigger with the compiled cron and chosen pipeline", async () => {
@@ -2033,10 +2032,9 @@ describe("NewRunModal — Trigger mode (#160)", () => {
     await selectPipelineAndRepo();
     fireEvent.click(screen.getByTestId("mode-trigger"));
     expect(screen.getByTestId("guard-command-input")).toBeInTheDocument();
-    // The contract is explained inline so a correct guard can be written
-    // without reading docs (exit 0 fires, non-zero skips, stdout = input).
-    expect(screen.getByText(/exit 0 fires/i)).toBeInTheDocument();
-    expect(screen.getByText(/stdout/i)).toBeInTheDocument();
+    // The contract is one hover away, on the row's label (exit 0 fires,
+    // non-zero skips, stdout = input): no sentence under the field.
+    expect(screen.getByText("Guard")).toHaveAttribute("title", expect.stringMatching(/exit 0 fires.*stdout/i));
   });
 
   it("passes the guard command to createTrigger (#161)", async () => {
@@ -2066,10 +2064,10 @@ describe("NewRunModal — Trigger mode (#160)", () => {
     await selectPipelineAndRepo();
     fireEvent.click(screen.getByTestId("mode-trigger"));
     expect(screen.getByTestId("overlap-allow-checkbox")).toBeInTheDocument();
-    expect(screen.queryByTestId("max-concurrent-input")).not.toBeInTheDocument();
+    expect(screen.getByTestId("max-concurrent-input")).toBeDisabled();
 
     fireEvent.click(screen.getByTestId("overlap-allow-checkbox"));
-    expect(screen.getByTestId("max-concurrent-input")).toBeInTheDocument();
+    expect(screen.getByTestId("max-concurrent-input")).toBeEnabled();
   });
 
   it("creates an allow trigger with the chosen max_concurrent cap", async () => {
@@ -2134,7 +2132,7 @@ describe("NewRunModal — Test guard dry-run (#350)", () => {
     fireEvent.click(screen.getByTestId("mode-trigger"));
     const button = screen.getByTestId("guard-test-button");
     expect(button).toBeDisabled();
-    expect(button).toHaveAttribute("title", "Select a valid target repository first");
+    expect(button).toHaveAttribute("title", "Choose a repository first");
   });
 
   it("keeps Test guard disabled with a valid repo but an empty guard command, then enables it", async () => {
@@ -2184,9 +2182,8 @@ describe("NewRunModal — Test guard dry-run (#350)", () => {
     fireEvent.click(screen.getByTestId("guard-test-button"));
 
     expect(await screen.findByTestId("guard-test-verdict")).toHaveTextContent("Would skip");
-    const output = screen.getByTestId("guard-test-output");
-    expect(output).toHaveTextContent("3");
-    expect(output).toHaveTextContent("no work to do");
+    expect(screen.getByTestId("guard-test-result")).toHaveTextContent("exit 3");
+    expect(screen.getByTestId("guard-test-output")).toHaveTextContent("no work to do");
   });
 
   it("shows 'Guard error' and surfaces a request failure inline", async () => {
@@ -2308,7 +2305,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
 
     // Trigger mode with the existing config prefilled.
     await waitFor(() => {
-      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("dialog", { name: "Edit Trigger" })).toBeInTheDocument();
     });
     await waitFor(() => {
       expect(screen.getByTestId("trigger-name-input")).toHaveValue("Nightly audit");
@@ -2360,7 +2357,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("dialog", { name: "Edit Trigger" })).toBeInTheDocument();
     });
     // The box is pre-checked and the cap input pre-filled.
     await waitFor(() => {
@@ -2397,7 +2394,7 @@ describe("NewRunModal — run-now and edit from a Trigger (#162)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("dialog", { name: "Edit Trigger" })).toBeInTheDocument();
     });
     // Prefilled with the trigger's current pipeline.
     await waitFor(() => expect(selectedPipeline()).toBe("Auditor"));
@@ -2452,7 +2449,7 @@ describe("NewRunModal — open-intent reset (#386)", () => {
 
     // Opened in Edit-Trigger mode (footer is Save).
     await waitFor(() => {
-      expect(screen.getByTestId("mode-trigger")).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("dialog", { name: "Edit Trigger" })).toBeInTheDocument();
     });
     expect(screen.getByTestId("save-trigger-button")).toBeInTheDocument();
 
@@ -2529,7 +2526,7 @@ describe("NewRunModal — open-intent reset (#386)", () => {
 
     // The edit prefilled the shared draft from the trigger (prompt, repo, pipeline).
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/free-text prompt/i)).toHaveValue("audit the codebase");
+      expect(screen.getByTestId("input-textarea")).toHaveValue("audit the codebase");
     });
     await vi.advanceTimersByTimeAsync(500);
     await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
@@ -2600,7 +2597,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     const select = (await screen.findByTestId("sandbox-select")) as HTMLSelectElement;
     await waitFor(() => {
       expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
-        "Use instance default (full)",
+        "Default (full)",
       );
     });
     // The field asserts nothing of its own.
@@ -2629,7 +2626,7 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     const options = Array.from(select.options);
     expect(options.find((o) => o.value === "full")?.disabled).toBe(true);
     expect(options.find((o) => o.value === "minimal")?.disabled).toBe(true);
-    expect(screen.getByTestId("sandbox-docker-warning")).toHaveTextContent(/unreachable/i);
+    expect(screen.getByTestId("sandbox-doomed-warning")).toHaveAttribute("title", expect.stringMatching(/needs Docker/i));
 
     // The Run doomed to a RunFailed is still prevented — by refusing it, not by
     // answering `off` on the user's behalf.
@@ -2663,8 +2660,8 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     fireEvent.change(select, { target: { value: "full" } });
 
     vi.useRealTimers();
-    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
 
     await waitFor(() => {
       expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ sandbox: "full" }));
@@ -2791,13 +2788,14 @@ describe("NewRunModal — sandbox selector (#410)", () => {
     // The seeded value is NEVER rewritten: still selected, and visibly a tombstone.
     await waitFor(() => expect(select.value).toBe("full-no-mcp"));
     expect(screen.getByTestId("sandbox-missing-profile")).toBeInTheDocument();
-    expect(screen.getByTestId("sandbox-missing-profile-warning")).toHaveTextContent(
-      /does not fall back to a default/i,
+    expect(screen.getByTestId("sandbox-missing-profile-warning")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/does not fall back to a default/i),
     );
 
     vi.useRealTimers();
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /save trigger/i })).toBeDisabled(),
+      expect(screen.getByRole("button", { name: /^save/i })).toBeDisabled(),
     );
     expect(updateTrigger).not.toHaveBeenCalled();
   });
@@ -2832,9 +2830,9 @@ describe("NewRunModal — sandbox selector (#410)", () => {
       );
       await screen.findByTestId("sandbox-select");
       const link = screen.getByTestId("new-run-manage-staging-profiles");
-      expect(link).toHaveTextContent("Manage staging profiles…");
-      // Same label row as the Sandbox field: the link is the field's escape hatch, not a section.
-      expect(link.parentElement).toContainElement(screen.getByText("Sandbox", { selector: "label" }));
+      expect(link).toHaveAccessibleName("Manage staging profiles");
+      // At the end of the Sandbox row: the field's escape hatch, not a section.
+      expect(link.closest(".ln-row")).toContainElement(screen.getByText("Sandbox", { selector: "label" }));
       fireEvent.click(link);
       expect(onManage).toHaveBeenCalledTimes(1);
       // Opening Settings over the dialog never touches the field (#452).
@@ -2994,7 +2992,7 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
     // And the label catches up with the new default once the refetch lands.
     await waitFor(() =>
       expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
-        "Use instance default (full)",
+        "Default (full)",
       ),
     );
 
@@ -3074,7 +3072,7 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
     renderModal();
     await screen.findByTestId("sandbox-select");
     await waitFor(() =>
-      expect(screen.getByTestId("sandbox-default-reason")).toHaveTextContent(/deleted-profile/),
+      expect(screen.getByTestId("sandbox-default-reason")).toHaveAttribute("title", expect.stringMatching(/deleted-profile/)),
     );
   });
 
@@ -3096,7 +3094,7 @@ describe("NewRunModal — the launch dialog can defer to default_sandbox (#452)"
     await waitFor(() => expect(screen.getByTestId("sandbox-docker-warning")).toBeInTheDocument());
     expect(select.value).toBe("");
     expect(Array.from(select.options).find((o) => o.value === "")).toHaveTextContent(
-      "Use instance default",
+      "Default",
     );
     expect(Array.from(select.options).find((o) => o.value === "")).not.toHaveTextContent("(full)");
     expect(screen.queryByTestId("sandbox-doomed-warning")).not.toBeInTheDocument();
@@ -3194,9 +3192,8 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
       expect(screen.getByTestId("pipeline-select")).toBeDisabled();
     });
 
-    // Switching back to Run mode must not offer a Launch either.
-    fireEvent.click(screen.getByTestId("mode-run"));
-    expect(screen.getByTestId("launch-button")).toBeDisabled();
+    // An edited Trigger stays a Trigger: no switch to Run mode to launch from.
+    expect(screen.queryByTestId("mode-run")).toBeNull();
   });
 
   it("surfaces the daemon's refusal inline when createRun rejects", async () => {
@@ -3539,8 +3536,8 @@ describe("NewRunModal — harness selector (#551)", () => {
     await user.click(await screen.findByTestId("harness-select"));
     await user.click(await screen.findByTestId("harness-select-option-opencode"));
 
-    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
 
     await waitFor(() => {
       expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ harness: "opencode" }));
@@ -3558,8 +3555,8 @@ describe("NewRunModal — harness selector (#551)", () => {
     await screen.findByTestId("harness-select");
 
     vi.useRealTimers();
-    await waitFor(() => expect(screen.getByRole("button", { name: /launch/i })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^run/i })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
 
     await waitFor(() => expect(createRun).toHaveBeenCalled());
     // The Run names no harness — the daemon resolves through the instance default.
@@ -3736,7 +3733,7 @@ describe("NewRunModal — a run/new section provides a value (API 0.9)", () => {
       target: { value: "do the thing" },
     });
     vi.useRealTimers();
-    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
     await waitFor(() => expect(createRun).toHaveBeenCalled());
     return vi.mocked(createRun).mock.calls[0][0];
   }
@@ -3797,7 +3794,7 @@ describe("NewRunModal — a draft that differs from the last version (ADR-0088)"
     await waitFor(() => expect(selectedPipeline()).toContain(versioned.name));
     fireEvent.change(screen.getByPlaceholderText(/free-text prompt/i), { target: { value: "go" } });
     vi.useRealTimers();
-    fireEvent.click(screen.getByRole("button", { name: /^launch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^run/i }));
   }
 
   beforeEach(() => {
@@ -3868,5 +3865,100 @@ describe("NewRunModal — a draft that differs from the last version (ADR-0088)"
     await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId("launch-draft-modal")).not.toBeInTheDocument();
     expect(save).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The dialog itself (one column of label-left rows, `overlays.newRunLayout`):
+ * Escape closes it unless a layer inside takes it, and with no Projet yet one
+ * can be created from the Project row.
+ */
+describe("NewRunModal — the dialog", () => {
+  afterEach(() => {
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+  });
+
+  it("closes on Escape", () => {
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+    fireEvent.keyDown(screen.getByTestId("run-name-input"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns before an Escape loses attachments, then closes on the second", async () => {
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+    fireEvent.change(screen.getByTestId("image-file-input"), {
+      target: { files: [new File(["{}"], "fixtures.json", { type: "application/json" })] },
+    });
+    await waitFor(() => expect(screen.getAllByTestId("file-chip")).toHaveLength(1));
+    const dialog = screen.getByRole("dialog", { name: "New Run" });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("attachments-close-warning")).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets Escape close an open list without closing the dialog", async () => {
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { id: "prj-a", name: "Alpha", members: ["/code/a"], primary_repo: "/code/a" },
+    ]);
+    const onClose = vi.fn();
+    render(<NewRunModal open={true} onClose={onClose} onCreated={noop} />);
+    await settleRepo("/code/a");
+    fireEvent.click(screen.getByTestId("project-combobox"));
+    expect(screen.getByTestId("project-combobox-menu")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByTestId("project-combobox"), { key: "Escape" });
+    expect(screen.queryByTestId("project-combobox-menu")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("submits on Ctrl+Enter", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", prompt_required: false })]);
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "New Run" }), { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(createRun).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not launch on Ctrl+Enter while the Run button is disabled", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", prompt_required: true })]);
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    // A prompt-required pipeline and no prompt: the button is disabled.
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeDisabled());
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "New Run" }), { key: "Enter", ctrlKey: true });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(createRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps Tab inside the dialog", () => {
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    const dialog = screen.getByRole("dialog", { name: "New Run" });
+    screen.getByTestId("new-run-cancel").focus();
+    // The last enabled control is Cancel when Run is disabled: Tab wraps to the first.
+    fireEvent.keyDown(screen.getByTestId("new-run-cancel"), { key: "Tab" });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+  });
+
+  it("offers to create a Projet when there is none yet", async () => {
+    vi.mocked(fetchProjects).mockResolvedValue([]);
+    renderModal();
+    const create = await screen.findByTestId("launch-new-project");
+    expect(screen.queryByTestId("project-combobox")).toBeNull();
+    fireEvent.click(create);
+    expect(await screen.findByTestId("project-edit-modal")).toHaveTextContent("New project");
+  });
+
+  it("states what launches in the footer, in mono", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "p1", name: "P", node_count: 4 })]);
+    renderModal();
+    await enterValidRepo("/home/user/shop-api");
+    await waitFor(() =>
+      expect(screen.getByTestId("new-run-summary")).toHaveTextContent(/^4 nodes · .+ · shop-api@main$/),
+    );
   });
 });

@@ -5,6 +5,7 @@ import { caretOffset } from "../../shared/lib/caretOffset";
 import { placeAtCaret, type CaretPlace } from "../../shared/lib/placeAtCaret";
 import type { SkillOption } from "../model/skillCompletion";
 import type { SkillCompletion } from "../store/useSkillPromptField";
+import { cssViewport, layerHost, toCssRect } from "../../shared/ui/zoom";
 
 const WIDTH = 330;
 const MAX_HEIGHT = 280;
@@ -48,7 +49,8 @@ export default function SkillCompletionList({
     const el = textarea.current;
     if (!query || !el) return;
     const measure = () => {
-      const box = el.getBoundingClientRect();
+      // In the app's CSS pixels: it is drawn under the UI scale (`zoom.ts`).
+      const box = toCssRect(el.getBoundingClientRect());
       const caret = caretOffset(el, query.start);
       const top = box.top + caret.top;
       // Its height unclamped: the rows' full height, the foot, the borders.
@@ -57,7 +59,7 @@ export default function SkillCompletionList({
         placeAtCaret(
           { top, bottom: top + caret.height, left: box.left + caret.left },
           { width: WIDTH, height, maxHeight: MAX_HEIGHT },
-          { width: window.innerWidth, height: window.innerHeight },
+          cssViewport(),
         ),
       );
     };
@@ -113,26 +115,26 @@ export default function SkillCompletionList({
         onMouseMove={(event) => hover(index, event)}
         onClick={() => onPick(option)}
         className={`mx-1 grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-2 rounded px-1.5 py-1 ${
-          active ? "bg-acc-bg" : "hover:bg-bg-3"
+          active ? "bg-selected" : "hover:bg-hover"
         }`}
       >
         <span className="inline-flex w-4 justify-center">
           {option.received ? (
             <CircleCheck size={11} className="text-st-await" />
           ) : (
-            <Sparkles size={11} className="text-fg-4" />
+            <Sparkles size={11} className="text-text-3" />
           )}
         </span>
         <span className="min-w-0 truncate">
-          <span className="text-fg">/{option.skill.name}</span>
+          <span className="text-text">/{option.skill.name}</span>
           {option.folder && (
-            <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
+            <span className="font-mono text-text-3 text-2xs">
               {" "}
               {option.folder}
             </span>
           )}
         </span>
-        <span className="text-fg-4" style={{ fontSize: "10px" }}>
+        <span className="text-text-3 text-2xs">
           {option.received ? `on this ${scope}` : `adds it to the ${scope}`}
         </span>
       </div>
@@ -144,11 +146,10 @@ export default function SkillCompletionList({
       aria-label="Skills"
       data-testid="skill-completion-list"
       data-placement={place && "bottom" in place ? "above" : "below"}
-      className="fixed z-[60] flex flex-col rounded-md border border-line-strong bg-bg-2 font-sans shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
+      className="fixed z-[60] flex flex-col rounded-md border border-line-strong bg-surface-1 font-sans text-xs shadow-[0_12px_32px_var(--shadow)]"
       style={{
         ...(place ?? { top: 0, left: 0, maxHeight: MAX_HEIGHT }),
         width: WIDTH,
-        fontSize: "11px",
       }}
     >
       <div ref={rows} data-testid="skill-completion-rows" className="min-h-0 overflow-y-auto py-1">
@@ -157,17 +158,17 @@ export default function SkillCompletionList({
         {rest.length > 0 && <GroupHead label="Skill bank" />}
         {rest.map((option, i) => row(option, received.length + i))}
       </div>
-      <div ref={foot} className="border-t border-line px-2.5 py-1 text-fg-4" style={{ fontSize: "9.5px" }}>
+      <div ref={foot} className="border-t border-line px-2.5 py-1 text-text-3 text-2xs">
         ↑↓ choose · ↵ insert · esc close
       </div>
     </div>,
-    document.body,
+    layerHost() ?? document.body,
   );
 }
 
 function GroupHead({ label }: { label: string }) {
   return (
-    <div className="px-2.5 pb-0.5 pt-1 uppercase tracking-wider text-fg-4" style={{ fontSize: "9px" }}>
+    <div className="px-2.5 pb-0.5 pt-1 uppercase tracking-wider text-text-3 text-2xs">
       {label}
     </div>
   );

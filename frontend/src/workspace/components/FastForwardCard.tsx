@@ -40,7 +40,7 @@ export function FastForwardCard({
   if (ff.kind === "running") {
     return (
       <>
-        <Title icon={<RefreshCw size={12} className="animate-spin text-acc" />}>
+        <Title icon={<RefreshCw size={12} className="animate-spin text-primary" />}>
           Fast-forwarding <span className="font-mono">{branchName}</span>…
         </Title>
         <Body>Checking the checkout is clean, then moving the ref.</Body>
@@ -60,7 +60,7 @@ export function FastForwardCard({
     const { result } = ff;
     return (
       <>
-        <Title icon={<Check size={12} className="text-acc" />}>
+        <Title icon={<Check size={12} className="text-primary" />}>
           <span className="font-mono">{result.branch}</span> fast-forwarded to{" "}
           <span className="font-mono">{result.upstream}</span>
         </Title>
@@ -71,8 +71,7 @@ export function FastForwardCard({
             : "No file changed: the branch was checked out nowhere, so only the ref moved."}
         </Body>
         <div
-          className="mt-2 rounded border border-line bg-bg-2 px-1.5 py-1 font-mono text-fg-3"
-          style={{ fontSize: "9.5px" }}
+          className="mt-2 rounded border border-line bg-surface-1 px-1.5 py-1 font-mono text-text-3 text-2xs"
           data-testid={`${testIdPrefix}-sync-ff-moved`}
         >
           {result.from} → {result.to}
@@ -86,16 +85,15 @@ export function FastForwardCard({
   if (ff.kind === "error") {
     return (
       <>
-        <Title icon={<CloudOff size={12} className="text-fg-3" />}>
+        <Title icon={<CloudOff size={12} className="text-text-3" />}>
           The fast-forward could not be sent
         </Title>
         <Body>
-          Nothing moved: <span className="font-mono text-fg-2">{branchName}</span> is
+          Nothing moved: <span className="font-mono text-text-2">{branchName}</span> is
           exactly as it was. Launching is unaffected.
         </Body>
         <div
-          className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-bg-2 px-1.5 py-1 font-mono text-fg-3"
-          style={{ fontSize: "9.5px" }}
+          className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-surface-1 px-1.5 py-1 font-mono text-text-3 text-2xs"
           data-testid={`${testIdPrefix}-sync-ff-error`}
         >
           {ff.message}
@@ -117,8 +115,7 @@ export function FastForwardCard({
         <span className="flex flex-wrap items-baseline gap-1.5">
           <span>Can&apos;t fast-forward — {refusalHeadline(refusal.reason)}</span>
           <span
-            className="rounded bg-bg-2 px-1 py-0.5 font-mono font-normal text-fg-4"
-            style={{ fontSize: "9px" }}
+            className="rounded bg-surface-1 px-1 py-0.5 font-mono font-normal text-text-3 text-2xs"
             data-testid={`${testIdPrefix}-sync-ff-reason`}
           >
             {refusal.reason}
@@ -134,8 +131,7 @@ export function FastForwardCard({
           not know about. Same block as the error card: a quoted answer, not ours. */}
       {showsRefusalMessage(refusal) && (
         <div
-          className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-bg-2 px-1.5 py-1 font-mono text-fg-3"
-          style={{ fontSize: "9.5px" }}
+          className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-surface-1 px-1.5 py-1 font-mono text-text-3 text-2xs"
           data-testid={`${testIdPrefix}-sync-ff-message`}
         >
           {refusal.message}
@@ -143,8 +139,7 @@ export function FastForwardCard({
       )}
       {dirty && (refusal.dirty_files?.length ?? 0) > 0 && (
         <div
-          className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-bg-2 px-1.5 py-1 font-mono text-fg-3"
-          style={{ fontSize: "9.5px" }}
+          className="mt-2 max-h-16 overflow-y-auto rounded border border-line bg-surface-1 px-1.5 py-1 font-mono text-text-3 text-2xs"
           data-testid={`${testIdPrefix}-sync-ff-dirty`}
         >
           {refusal.dirty_files?.map((line: string) => (
@@ -163,8 +158,7 @@ export function FastForwardCard({
           <button
             type="button"
             onClick={onRetry}
-            className="flex items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2 py-1 font-medium text-fg-2 transition-colors hover:bg-bg-5"
-            style={{ fontSize: "10.5px" }}
+            className="flex items-center gap-1.5 rounded border border-line-strong bg-surface-2 px-2 py-1 font-medium text-text-2 transition-colors hover:bg-active text-xs"
             data-testid={`${testIdPrefix}-sync-ff-retry`}
           >
             <ChevronsRight size={11} />
@@ -196,14 +190,14 @@ function RefusalSentence({
   branchName: string;
   upstream: string | null;
 }) {
-  const name = <span className="font-mono text-fg-2">{branchName}</span>;
+  const name = <span className="font-mono text-text-2">{branchName}</span>;
   const up = upstream ? (
-    <span className="font-mono text-fg-2">{upstream}</span>
+    <span className="font-mono text-text-2">{upstream}</span>
   ) : (
     "its upstream"
   );
   const checkout = (
-    <span className="font-mono text-fg-2">
+    <span className="font-mono text-text-2">
       {refusal.checkout ? shortPath(refusal.checkout) : "another checkout"}
     </span>
   );
@@ -214,7 +208,7 @@ function RefusalSentence({
       return (
         <>
           {name} is checked out at {checkout} and {count} tracked file
-          {count > 1 ? "s are" : " is"} modified. PDO won&apos;t touch them. Commit or
+          {count > 1 ? "s are" : " is"} modified, left untouched. Commit or
           stash, then try again
           {upstream ? <> — or launch from {up}.</> : "."}
         </>
@@ -223,15 +217,15 @@ function RefusalSentence({
     case "checked_out_elsewhere":
       return (
         <>
-          {name} is checked out at {checkout}. PDO only fast-forwards a branch in the
-          repository you launch from.
+          {name} is checked out at {checkout}. Only a branch in the repository you
+          launch from is fast-forwarded.
           {upstream ? <> Launch from {up} instead.</> : ""}
         </>
       );
     case "diverged":
       return (
         <>
-          {name} has commits {up} does not, so a fast-forward would drop them — and PDO
+          {name} has commits {up} does not, so a fast-forward would drop them, and the daemon
           never merges or rebases. Reconcile in your terminal, or launch from {up} and
           leave {name} exactly as it is.
         </>

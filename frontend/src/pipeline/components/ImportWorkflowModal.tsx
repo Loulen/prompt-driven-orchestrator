@@ -93,16 +93,15 @@ export default function ImportWorkflowModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim">
       <div
-        className="w-[400px] rounded-lg border border-line bg-bg-4 p-4"
-        style={{ fontSize: "12px" }}
+        className="w-[400px] rounded-lg border border-line bg-surface-2 p-4 text-sm"
         data-testid="import-workflow-modal"
       >
-        <div className="mb-1 font-medium text-fg">Import a pipeline</div>
-        <div className="mb-3 grid grid-cols-2 rounded border border-line-strong bg-bg-3 p-0.5">
+        <div className="mb-1 font-medium text-text">Import a pipeline</div>
+        <div className="mb-3 grid grid-cols-2 rounded border border-line-strong bg-surface-2 p-0.5">
           {([
-            ["pdo", "Pipeline PDO"],
+            ["pdo", "Acogni Driver pipeline"],
             ["claude", "Workflow Claude Code"],
           ] as const).map(([value, label]) => (
             <button
@@ -113,7 +112,7 @@ export default function ImportWorkflowModal({
                 setWarnings(null);
               }}
               className={`rounded px-2 py-1.5 ${
-                mode === value ? "bg-bg-4 font-medium text-fg" : "text-fg-4"
+                mode === value ? "bg-surface-2 font-medium text-text" : "text-text-3"
               }`}
               aria-pressed={mode === value}
               data-testid={`import-mode-${value}`}
@@ -125,8 +124,8 @@ export default function ImportWorkflowModal({
 
         {mode === "pdo" ? (
           <>
-            <p className="mb-2 text-fg-4" style={{ fontSize: "11px" }}>
-              Paste a portable PDO pipeline document or load a YAML file. If the pipeline
+            <p className="mb-2 text-text-3 text-xs">
+              Paste a portable pipeline document or load a YAML file. If the pipeline
               selects skills, add its <code>.skills.zip</code> sidecar so the bank recreates them.
             </p>
             <textarea
@@ -135,12 +134,12 @@ export default function ImportWorkflowModal({
                 setContent(event.target.value);
                 setError(null);
               }}
-              className="h-48 w-full resize-y rounded border border-line-strong bg-bg-3 p-2 font-mono text-fg outline-none focus:border-acc"
+              className="h-48 w-full resize-y rounded border border-line-strong bg-surface-2 p-2 font-mono text-text outline-none focus:border-primary"
               data-testid="pipeline-document-input"
               autoFocus
             />
             <div className="mb-3 mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <label className="inline-block cursor-pointer text-acc hover:underline">
+              <label className="inline-block cursor-pointer text-primary hover:underline">
                 load files…
                 <input
                   type="file"
@@ -152,10 +151,10 @@ export default function ImportWorkflowModal({
                 />
               </label>
               {sidecar ? (
-                <span className="flex items-center gap-1 text-fg-3" data-testid="skills-sidecar-chip">
+                <span className="flex items-center gap-1 text-text-3" data-testid="skills-sidecar-chip">
                   skills sidecar: <code>{sidecar.name}</code>
                   <button
-                    className="text-fg-4 hover:text-fg"
+                    className="text-text-3 hover:text-text"
                     onClick={() => setSidecar(null)}
                     aria-label="Remove the skills sidecar"
                   >
@@ -163,13 +162,13 @@ export default function ImportWorkflowModal({
                   </button>
                 </span>
               ) : (
-                <span className="text-fg-4">no skills sidecar</span>
+                <span className="text-text-3">no skills sidecar</span>
               )}
             </div>
           </>
         ) : (
           <>
-            <p className="mb-2 text-fg-4" style={{ fontSize: "11px" }}>
+            <p className="mb-2 text-text-3 text-xs">
               Decompile a Claude Code workflow into a draft. Unmapped idioms are
               annotated instead of executed.
             </p>
@@ -178,16 +177,16 @@ export default function ImportWorkflowModal({
               accept=".js"
               data-testid="workflow-file-input"
               onChange={(event) => void loadFile(event.target.files?.[0] ?? null)}
-              className="mb-3 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5 text-fg outline-none file:mr-2 file:rounded file:border-0 file:bg-bg-4 file:px-2 file:py-0.5 file:text-fg-3"
+              className="mb-3 w-full rounded border border-line-strong bg-surface-2 px-2 py-1.5 text-text outline-none file:mr-2 file:rounded file:border-0 file:bg-surface-2 file:px-2 file:py-0.5 file:text-text-3"
             />
           </>
         )}
 
         {mismatch && (
-          <div className="mb-3 rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-fg-2">
-            This content looks like a {mode === "pdo" ? "Claude Code workflow" : "PDO pipeline"}.
+          <div className="mb-3 rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-text-2">
+            This content looks like a {mode === "pdo" ? "Claude Code workflow" : "Acogni Driver pipeline"}.
             <button
-              className="ml-1 text-acc hover:underline"
+              className="ml-1 text-primary hover:underline"
               onClick={() => setMode(mode === "pdo" ? "claude" : "pdo")}
             >
               Switch mode
@@ -197,8 +196,7 @@ export default function ImportWorkflowModal({
 
         {error && (
           <div
-            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
-            style={{ fontSize: "11px" }}
+            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed text-xs"
             data-testid="import-workflow-error"
           >
             {error}
@@ -207,8 +205,7 @@ export default function ImportWorkflowModal({
 
         {warnings && (
           <div
-            className="mb-3 max-h-40 overflow-y-auto rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-fg-2"
-            style={{ fontSize: "11px" }}
+            className="mb-3 max-h-40 overflow-y-auto rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-text-2 text-xs"
             data-testid="import-workflow-warnings"
           >
             <div className="mb-1 font-medium text-st-await">
@@ -226,7 +223,7 @@ export default function ImportWorkflowModal({
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="rounded border border-line-strong bg-bg-3 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
+            className="rounded border border-line-strong bg-surface-2 px-3 py-1 text-text-3 transition-colors hover:text-text"
           >
             {warnings ? "Done" : "Cancel"}
           </button>
@@ -234,7 +231,7 @@ export default function ImportWorkflowModal({
             <button
               onClick={handleImport}
               disabled={!content.trim() || submitting || !!mismatch}
-              className="rounded bg-acc px-3 py-1 font-medium text-bg-0 transition-colors hover:bg-acc-dim disabled:opacity-50"
+              className="rounded bg-primary px-3 py-1 font-medium text-surface-0 transition-colors hover:bg-primary-hi disabled:opacity-50"
             >
               {submitting ? "Importing…" : "Import"}
             </button>

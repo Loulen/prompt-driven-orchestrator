@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Bookmark, Check, ChevronDown, ChevronLeft, GitFork, SlidersHorizontal, TriangleAlert } from "lucide-react";
 import type { AgentChoice } from "../../shared/generated/AgentChoice";
 import type { AgentCombination } from "../model/settings";
@@ -8,10 +8,17 @@ import { findHarnessOption, effortOffer } from "../../harness/model/catalog";
 import HarnessSelect from "../../harness/components/HarnessSelect";
 import ModelPicker from "../../harness/components/ModelPicker";
 import EffortPicker from "../../harness/components/EffortPicker";
+import { AnchoredPanel } from "../../shared/ui/kit/layer";
+import { Button } from "../../shared/ui/kit";
 import { combinationLabel, resolveAgentChoice } from "../model/agentProfiles";
 
 const EMPTY: AgentCombination = { harness: "claude", model: null, effort: null };
 
+/**
+ * The agent of a tier (instance, Projet, Run, node): inherit, a profile, or a
+ * custom combination. The kit's dropdown look — the choice, then its
+ * combination in mono at the end — opening a panel of choices.
+ */
 export default function AgentControl({
   choice,
   onChange,
@@ -20,6 +27,7 @@ export default function AgentControl({
   inherited = EMPTY,
   allowInherit = true,
   label = "Agent",
+  showLabel = true,
   testId = "agent-control",
 }: {
   choice?: AgentChoice | null;
@@ -29,6 +37,8 @@ export default function AgentControl({
   inherited?: AgentCombination;
   allowInherit?: boolean;
   label?: string;
+  /** The caps label above the control; off in a label-left form row. */
+  showLabel?: boolean;
   testId?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -58,42 +68,20 @@ export default function AgentControl({
   // (`[]` included), missing key on the harness's global efforts; authoritative
   // ⇒ a stored effort outside the offer warns instead of silently persisting.
   const effort = effortOffer(harnessOption, custom.model);
+  const summary = broken ? `missing · ${combinationLabel(resolved.combination)}` : combinationLabel(resolved.combination);
 
-  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const close = () => {
     setOpen(false);
     setCustomPane(false);
   };
 
-  // Dismiss on outside click and Escape (#686). The nested Harness/Model/Effort
-  // pickers render through a portal, so a click or key inside one of them lands
-  // outside `rootRef` — those events belong to the nested menu and are ignored.
-  useEffect(() => {
-    if (!open) return;
-    const insidePortaledMenu = (target: EventTarget | null) =>
-      target instanceof Element && target.closest('[data-slot="dropdown-menu-content"]') != null;
-    const onMouseDown = (event: MouseEvent) => {
-      const target = event.target;
-      if (rootRef.current?.contains(target as Node) || insidePortaledMenu(target)) return;
-      close();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || insidePortaledMenu(event.target)) return;
-      close();
-    };
-    document.addEventListener("mousedown", onMouseDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onMouseDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
   return (
-    <div ref={rootRef} className="relative" data-testid={`${testId}-root`}>
-      <span className="mb-1 block uppercase tracking-wider text-fg-4" style={{ fontSize: 9 }}>{label}</span>
+    <div className="ln-agent" data-testid={`${testId}-root`}>
+      {showLabel && <span className="d-caps ln-agent__label">{label}</span>}
       <button
+        ref={triggerRef}
         type="button"
         data-testid={testId}
         // #824: what is chosen, machine-readable. The visible label is the
@@ -105,55 +93,38 @@ export default function AgentControl({
             ? `profile:${choice.profile_id}`
             : (choice?.mode ?? "inherit")
         }
+        aria-label={showLabel ? undefined : label}
         aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className={`flex w-full items-center gap-2 rounded border bg-bg-3 px-2 py-1.5 text-left ${
-          broken ? "border-st-blocked text-st-blocked" : "border-line-strong text-fg-2"
-        }`}
+        aria-invalid={broken || undefined}
+        title={broken ? `${modeLabel}: missing, resolution continues at the next tier` : `${modeLabel} · ${summary}`}
+        onClick={() => (open ? close() : setOpen(true))}
+        className="d-sel ln-agent__field"
       >
-        <Icon size={11} className="shrink-0" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium" style={{ fontSize: 10.5 }}>{modeLabel}</span>
-          <span className="block truncate font-mono text-fg-4" style={{ fontSize: 9.5 }}>
-            {broken ? `missing · ${combinationLabel(resolved.combination)}` : combinationLabel(resolved.combination)}
-          </span>
-        </span>
-        <ChevronDown size={11} className="shrink-0 text-fg-4" />
+        <Icon className="d-sel__lead" size={13} strokeWidth={1.5} aria-hidden />
+        <span className="d-sel__val">{modeLabel}</span>
+        <span className="ln-sel__count ln-agent__sum">{summary}</span>
+        <ChevronDown className="d-sel__chev" size={12} strokeWidth={1.5} aria-hidden />
       </button>
-      {broken && (
-        <p className="mt-1 text-st-blocked" style={{ fontSize: 9.5 }}>
-          Resolution continues at the next tier.
-        </p>
-      )}
 
-      {open && (
-        <div
-          role="dialog"
-          data-testid={`${testId}-popover`}
-          className="absolute left-0 z-40 mt-1 w-full min-w-[280px] rounded border border-line-strong bg-bg-4 p-1.5 shadow-xl"
-        >
+      <AnchoredPanel anchor={triggerRef} open={open} onClose={close} className="d-pop--panel ln-agent__pop">
+        <div role="dialog" aria-label={label} data-testid={`${testId}-popover`} className="ln-agent__body">
           {customPane ? (
             <>
-              <button
-                type="button"
-                onClick={() => setCustomPane(false)}
-                className="mb-2 flex w-full items-center gap-1 border-b border-line px-1 pb-2 text-fg-2"
-              >
-                <ChevronLeft size={12} /> Custom combination
+              <button type="button" onClick={() => setCustomPane(false)} className="d-pop__row ln-agent__back">
+                <ChevronLeft size={12} strokeWidth={1.5} aria-hidden /> Custom combination
               </button>
-              <div className="space-y-2 px-1 pb-1">
-                <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                  Harness <span className="text-acc">required</span>
+              <div className="ln-agent__custom">
+                <label className="ln-agent__f">
+                  <span className="ln-faint">Harness</span>
                   <HarnessSelect
                     value={custom.harness}
                     onChange={(harness) => setCustom({ harness: harness || "claude", model: null, effort: null })}
                     catalog={catalog}
                     inheritLabel="Choose a harness"
-                    className="mt-1 w-full rounded border border-line-strong bg-bg-3 px-2 py-1.5"
                   />
                 </label>
-                <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                  Model <span className="text-fg-4">optional</span>
+                <label className="ln-agent__f">
+                  <span className="ln-faint">Model</span>
                   <ModelPicker
                     value={custom.model ?? null}
                     onChange={(model) => setCustom({ ...custom, model })}
@@ -163,8 +134,8 @@ export default function AgentControl({
                     subject={testId}
                   />
                 </label>
-                <label className="block text-fg-3" style={{ fontSize: 10 }}>
-                  Effort <span className="text-fg-4">optional</span>
+                <label className="ln-agent__f">
+                  <span className="ln-faint">Effort</span>
                   <EffortPicker
                     value={custom.effort ?? null}
                     onChange={(next) => setCustom({ ...custom, effort: next })}
@@ -174,20 +145,22 @@ export default function AgentControl({
                     disabled={!(harnessOption?.hasEffort ?? true)}
                   />
                 </label>
-                <button
-                  type="button"
-                  className="ml-auto block rounded bg-acc px-2 py-1 text-bg-1"
-                  onClick={() => {
-                    onChange({ mode: "custom", ...custom });
-                    close();
-                  }}
-                >
-                  Apply
-                </button>
+                <div className="ln-line ln-line--end">
+                  <Button
+                    size="sm"
+                    tone="primary"
+                    onClick={() => {
+                      onChange({ mode: "custom", ...custom });
+                      close();
+                    }}
+                  >
+                    Apply
+                  </Button>
+                </div>
               </div>
             </>
           ) : (
-            <>
+            <div className="d-pop__list">
               {allowInherit && (
                 <ChoiceRow
                   testId={`${testId}-choice-inherit`}
@@ -200,7 +173,7 @@ export default function AgentControl({
                   }}
                 />
               )}
-              <div className="px-1 py-1 uppercase tracking-wider text-fg-4" style={{ fontSize: 9 }}>Profiles</div>
+              <div className="d-caps d-pop__group">Profiles</div>
               {profiles.map((profile) => (
                 <ChoiceRow
                   key={profile.id}
@@ -217,25 +190,21 @@ export default function AgentControl({
                   }}
                 />
               ))}
-              <div className="mt-1 border-t border-line pt-1">
-                <ChoiceRow
-                  testId={`${testId}-choice-custom`}
-                  name="Custom…"
-                  summary="A combination for this tier only"
-                  selected={choice?.mode === "custom"}
-                  onClick={() => {
-                    setCustom(choice?.mode === "custom" ? choice : inherited);
-                    setCustomPane(true);
-                  }}
-                />
-              </div>
-              <p className="border-t border-line px-1 pt-1 text-fg-4" style={{ fontSize: 9 }}>
-                — = not set on the profile, so the harness default applies.
-              </p>
-            </>
+              <div className="d-pop__sep" />
+              <ChoiceRow
+                testId={`${testId}-choice-custom`}
+                name="Custom…"
+                summary=""
+                selected={choice?.mode === "custom"}
+                onClick={() => {
+                  setCustom(choice?.mode === "custom" ? choice : inherited);
+                  setCustomPane(true);
+                }}
+              />
+            </div>
           )}
         </div>
-      )}
+      </AnchoredPanel>
     </div>
   );
 }
@@ -254,10 +223,17 @@ function ChoiceRow({
   testId?: string;
 }) {
   return (
-    <button type="button" data-testid={testId} onClick={onClick} className="relative block w-full rounded px-1.5 py-1 text-left hover:bg-bg-3">
-      <span className={`block font-medium ${selected ? "text-acc" : "text-fg"}`} style={{ fontSize: 10.5 }}>{name}</span>
-      <span className="block font-mono text-fg-4" style={{ fontSize: 9 }}>{summary}</span>
-      {selected && <Check size={12} className="absolute right-1.5 top-2 text-acc" />}
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={onClick}
+      aria-pressed={selected}
+      className="d-pop__row"
+      title={summary ? `${name} · ${summary} (— = the harness default)` : name}
+    >
+      <span className="d-pop__mark">{selected && <Check size={12} strokeWidth={2} aria-hidden />}</span>
+      <span className="d-pop__label">{name}</span>
+      {summary && <span className="d-pop__hint">{summary}</span>}
     </button>
   );
 }

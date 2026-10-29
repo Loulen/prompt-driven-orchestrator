@@ -133,9 +133,9 @@ describe("reduceUpdateFlow", () => {
 
 describe("activeRunsWarning", () => {
   it("counts the Runs and promises tmux survival, never a block", () => {
-    expect(activeRunsWarning(0)).toMatch(/No Run is active/);
-    expect(activeRunsWarning(1)).toMatch(/^1 Run is active\./);
-    expect(activeRunsWarning(3)).toMatch(/^3 Runs are active\./);
+    expect(activeRunsWarning(0)).toMatch(/No active Run/);
+    expect(activeRunsWarning(1)).toMatch(/^1 active Run ·/);
+    expect(activeRunsWarning(3)).toMatch(/^3 active Runs ·/);
     expect(activeRunsWarning(3)).toMatch(/tmux sessions survive/);
   });
 });

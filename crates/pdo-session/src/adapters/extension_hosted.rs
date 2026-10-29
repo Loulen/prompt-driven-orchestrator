@@ -1,5 +1,5 @@
 //! The Sessions hébergées as the extensions' [`Host`](pdo_extension_api::Host)
-//! reaches them (API 0.17): the kernel's port, over the session context.
+//! reaches them (API 0.19): the kernel's port, over the session context.
 
 use std::sync::Arc;
 
@@ -50,6 +50,11 @@ impl HostedSessions for ExtensionHostedSessions {
     ) -> HostedGesture {
         let (hosted, extension, key) = (self.0.clone(), extension.to_string(), key.to_string());
         Box::pin(async move { hosted.configure(&extension, &actor, &key, config).await })
+    }
+
+    fn zoom(&self, extension: &str, actor: Actor, key: &str, zoom: u16) -> HostedGesture {
+        let (hosted, extension, key) = (self.0.clone(), extension.to_string(), key.to_string());
+        Box::pin(async move { hosted.zoom(&extension, &actor, &key, zoom).await })
     }
 
     fn type_text(&self, extension: &str, actor: Actor, key: &str, text: &str) -> HostedGesture {

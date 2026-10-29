@@ -11,7 +11,7 @@ use crate::application::children_wait::CHILDREN_WAIT_SERVER_MAX_SECS;
 pub const EXIT_WAIT_TIMEOUT: u8 = 2;
 
 /// `pdo wait-user [--message]` — declare the wait (#588 / ADR-0069 §1), of
-/// the node, or of the Session hébergée the process runs in (ADR-0091). Exit
+/// the node, or of the Session hébergée the process runs in (ADR-0092). Exit
 /// `0` declared or legal no-op · `3` refused by name (script node, no live
 /// session: still your turn, nothing terminal happened) · `1` daemon
 /// unreachable.

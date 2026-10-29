@@ -8,8 +8,7 @@ export default function ExportSelectionBar({ bank, panel }: { bank: SkillBank; p
   const n = panel.checkedCount;
   return (
     <div
-      className="flex items-center gap-2 border-t border-line px-3 py-1.5 text-fg-2"
-      style={{ fontSize: "10.5px" }}
+      className="flex items-center gap-2 border-t border-line px-3 py-1.5 text-text-2 text-xs"
       data-testid="skill-export-bar"
     >
       <span className="flex-1 whitespace-nowrap" data-testid="skill-export-count">
@@ -19,7 +18,7 @@ export default function ExportSelectionBar({ bank, panel }: { bank: SkillBank; p
         type="button"
         onClick={panel.clearChecked}
         data-testid="skill-export-clear"
-        className="rounded px-1.5 py-1 text-fg-4 hover:text-fg"
+        className="rounded px-1.5 py-1 text-text-3 hover:text-text"
       >
         Clear
       </button>
@@ -27,7 +26,7 @@ export default function ExportSelectionBar({ bank, panel }: { bank: SkillBank; p
         type="button"
         onClick={() => void panel.exportBundle(exportRequest(panel.checked, bank))}
         data-testid="skill-export-selection"
-        className="flex items-center gap-1 rounded-md bg-acc px-2 py-1 font-medium text-bg-1 hover:opacity-90"
+        className="flex items-center gap-1 rounded-md bg-primary px-2 py-1 font-medium text-surface-0 hover:opacity-90"
       >
         <Download size={11} />
         Export .zip

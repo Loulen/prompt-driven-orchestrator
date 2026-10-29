@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import * as os from "node:os";
 import { cleanupRuns, runMultipart } from "./helpers";
 
 // Layer 3b — xterm.js wheel-scroll regression (refs #73, ADR 0005).
@@ -18,10 +18,10 @@ import { cleanupRuns, runMultipart } from "./helpers";
 // buffer or — in alt-screen mode where there is no scrollback — does nothing
 // (silent suppression).
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-scroll-wheel-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 // Post-refonte the parser requires exactly one start node (zero inputs, one
@@ -103,7 +103,7 @@ test("wheel inside alt-screen xterm does not leak arrow-key bytes to the PTY", a
   });
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({
     timeout: 10_000,
   });
 

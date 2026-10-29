@@ -9,11 +9,14 @@ import {
   type PerformanceAxis,
   type PerformanceMetric,
 } from "../../../model/performance";
+import { Info } from "lucide-react";
+import { Tooltip } from "../../../../shared/ui/tooltip";
+import { Panel } from "../common/ChartPrimitives";
 import { MasterList } from "../common/MasterList";
 import { FilteredValue } from "./NodeKindMarks";
 
-/** The Performance ranking: the grouping and sort selects (#737) over the
- *  master list. */
+/** The Performance ranking: a panel with the grouping and sort selects (#737)
+ *  in its head, the master list under it. */
 export function PerformanceAside({
   axis,
   onAxisChange,
@@ -39,20 +42,29 @@ export function PerformanceAside({
   anyHidden: boolean;
   onSelect: (id: string | null) => void;
 }) {
+  const axisNote =
+    "Model ids verbatim, one row per id — the same id run through two harnesses is one row, one column per harness. Hover a model or an effort for where the value was read.";
   return (
-    <aside className="w-[290px] shrink-0 border-r border-line pr-4">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-          Ranked by {performanceSortLabel(sort, mode)} (median)
-        </span>
-        <span className="flex items-center gap-1.5">
+    <Panel
+      title={`Ranked by ${performanceSortLabel(sort, mode)} (median)`}
+      flush
+      className="sx-aside"
+    >
+      <div className="sx-panel__tools">
+          {axis === "model" && (
+            <Tooltip content={axisNote} side="top">
+              <span role="img" aria-label={axisNote} className="inline-flex text-text-3">
+                <Info size={12} strokeWidth={1.5} />
+              </span>
+            </Tooltip>
+          )}
           <select
             aria-label="Performance grouping"
             value={axis}
             onChange={(event) =>
               onAxisChange(event.target.value as PerformanceAxis)
             }
-            className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+            className="sx-select"
           >
             <option value="pipeline">By pipeline</option>
             <option value="model">By model</option>
@@ -63,13 +75,12 @@ export function PerformanceAside({
             onChange={(event) =>
               onSortChange(event.target.value as PerformanceMetric)
             }
-            className="rounded border border-line bg-bg-3 px-2 py-1 text-fg-2"
+            className="sx-select"
           >
             <option value="context">By context</option>
             <option value="duration">By {durationWord(mode)}</option>
             <option value="steering">By steering</option>
           </select>
-        </span>
       </div>
       <MasterList
         rows={masterRows}
@@ -86,13 +97,6 @@ export function PerformanceAside({
         }}
         onSelect={onSelect}
       />
-      {axis === "model" && (
-        <div className="mt-3 text-fg-4" style={{ fontSize: "10.5px" }}>
-          Model ids verbatim, one row per id — the same id run through two
-          harnesses is one row, one column per harness. Hover a model or an
-          effort for where the value was read.
-        </div>
-      )}
-    </aside>
+    </Panel>
   );
 }

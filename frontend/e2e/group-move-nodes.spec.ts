@@ -107,7 +107,7 @@ async function nodePos(node: Locator): Promise<{ x: number; y: number }> {
 
 test("group drag moves every selected node, not just the grabbed one (#232)", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await openPipelineForEdit(page, PIPELINE_NAME);
 

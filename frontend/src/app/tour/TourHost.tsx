@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import Projecteur from "./Projecteur";
+import { toCssRect } from "../../shared/ui/zoom";
 import TourPopover, { TourAside } from "./TourPopover";
 import { TourEndCard, TourFailedCard } from "./TourCards";
 import { TourIntroCard } from "./TourIntroCard";
@@ -145,17 +146,24 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
       )}
 
       {view && view.run.phase === "running" && view.step && (
-        <Projecteur hole={view.hole} zone={view.zone} wide={view.wideZone} lit={view.lit}>
+        // The view measures the screen; the overlay is drawn in the app's CSS
+        // pixels, under the UI scale (`shared/ui/zoom.ts`).
+        <Projecteur
+          hole={view.hole && toCssRect(view.hole)}
+          zone={view.zone && toCssRect(view.zone)}
+          wide={view.wideZone}
+          lit={view.lit.map(toCssRect)}
+        >
           {/* Side bubbles first, so the card paints over one that strays under it. */}
           {view.asides.map((aside) => (
-            <TourAside key={aside.target} rect={aside.rect} text={aside.text} />
+            <TourAside key={aside.target} rect={toCssRect(aside.rect)} text={aside.text} />
           ))}
           <TourPopover
             tour={view.tour}
             step={view.step}
             stepNumber={view.stepNumber}
             total={view.total}
-            hole={view.hole}
+            hole={view.hole && toCssRect(view.hole)}
             body={view.body}
             note={view.note}
             ready={view.ready}
@@ -211,10 +219,9 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
       {quitNotice && (
         <div
           data-testid="tour-quit-notice"
-          className="fixed bottom-8 left-1/2 z-[110] -translate-x-1/2 rounded border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 shadow-lg"
-          style={{ fontSize: "11px" }}
+          className="fixed bottom-8 left-1/2 z-[110] -translate-x-1/2 rounded border border-line bg-surface-2 px-3 py-1.5 text-xs text-text-2 shadow-lg"
         >
-          Tour closed. Start it again from Settings › Tutorials.
+          Tour closed · Settings › Tutorials
         </div>
       )}
     </>

@@ -133,10 +133,13 @@ export interface OpenPipeline {
  * `saveError` implies `dirty` (it follows a failed save that leaves `dirty`),
  * but we spell it out so the guard reads as "would we lose anything the user
  * can't get back". `externalDirty` is intentionally excluded — it's the
- * transient 2 s hot-reload flash, not user work.
+ * transient 2 s hot-reload flash, not user work. A live shared draft
+ * (ADR-0088) holds its changes for everyone: closing its tab loses none.
  */
 export function hasUnsavedWork(t: OpenPipeline): boolean {
-  return t.dirty || t.saveError != null;
+  if (t.saveError != null) return true;
+  if (t.draft?.status === "live" && t.draft.synced) return false;
+  return t.dirty;
 }
 
 /**
@@ -236,6 +239,8 @@ export interface EditState {
   // `activeTabId` points at a closing tab flash the center panel and can
   // self-close the Trigger detail.
   closeTabs: (ids: string[]) => void;
+  /** Move the tab `id` to `index` in the tab bar (a drag of the tab). */
+  moveTab: (id: string, index: number) => void;
   // Single-tab pref (#342). Persists to localStorage immediately (at the toggle
   // change, not on a Save button) and, when enabling with several tabs open,
   // collapses to the active tab (parking for confirmation if any other is

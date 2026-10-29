@@ -1,0 +1,15 @@
+/*
+ * The pinned series colours of the harnesses (#638, #759), read resolved by
+ * `harness/model/color.ts` (`cssColor`): the charts take colours as props. The
+ * hue IS how a harness is recognised across the stats surface; the light theme
+ * darkens it so it carries text against a light ground.
+ */
+:root,
+[data-theme="dark"] {
+  --harness-copilot: rgb(88 166 255);
+  --harness-claude: rgb(240 136 62);
+}
+[data-theme="light"] {
+  --harness-copilot: rgb(11 92 196);
+  --harness-claude: rgb(162 68 9);
+}

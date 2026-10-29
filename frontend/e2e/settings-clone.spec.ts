@@ -77,7 +77,7 @@ test.afterAll(async ({ request, baseURL }) => {
 
 async function openProjectsSettings(page: Page) {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("open-settings").click();
   await page.getByTestId("settings-category-projects").click();
   await expect(page.getByTestId("projects-panel")).toBeVisible();
@@ -90,12 +90,12 @@ test("clone a URL into the clones folder from Settings, then New Run clones and 
 
   // The clones folder, saved with the form.
   await page.getByTestId("settings-section-clones-folder").click();
-  await expect(page.getByTestId("setting-source-clones-folder")).toHaveText(
-    "Source: built-in default (~/pdo/repos).",
-  );
+  // The source of the value is in the name's tooltip.
+  const clonesFolderName = page.getByTestId("setting-row-clones-folder").locator(".set-row__name");
+  await expect(clonesFolderName).toHaveAttribute("title", /Source: built-in default \(~\/pdo\/repos\)\./);
   await page.getByTestId("setting-clones-folder").fill(CLONES);
   await page.getByTestId("settings-save").click();
-  await expect(page.getByTestId("setting-source-clones-folder")).toHaveText("Source: stored setting.");
+  await expect(clonesFolderName).toHaveAttribute("title", /Source: stored setting\./);
 
   // A Projet, then a repository cloned by its URL.
   await page.getByTestId("projects-new").click();
@@ -103,7 +103,7 @@ test("clone a URL into the clones folder from Settings, then New Run clones and 
   await page.getByTestId("projects-new-name").press("Enter");
   await expect(page.getByTestId("project-detail-name")).toHaveText(PROJECT_NAME);
   await page.getByTestId("project-add-repo").click();
-  await page.getByTestId("project-add-repo-clone").click();
+  await page.getByRole("menuitem", { name: "Clone from a URL…" }).click();
   await page.getByTestId("project-clone-url").fill(analytics);
   const cloned = path.join(CLONES, "analytics");
   await expect(page.getByTestId("project-clone-into")).toHaveText(cloned);
@@ -115,7 +115,7 @@ test("clone a URL into the clones folder from Settings, then New Run clones and 
 
   // The same URL again: the clone is reused.
   await page.getByTestId("project-add-repo").click();
-  await page.getByTestId("project-add-repo-clone").click();
+  await page.getByRole("menuitem", { name: "Clone from a URL…" }).click();
   await page.getByTestId("project-clone-url").fill(analytics);
   await expect(page.getByTestId("project-clone-reused")).toBeVisible();
   await page.getByTestId("project-clone-dismiss").click();
@@ -130,13 +130,13 @@ test("clone a URL into the clones folder from Settings, then New Run clones and 
   expect(validated.ok(), await validated.text()).toBeTruthy();
   await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("tab", { name: "Runs" }).click();
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await page.getByTestId("project-combobox").click();
   await page.locator(`[data-testid="project-option"][data-project-id="${projectId}"]`).click();
   await page.getByTestId("target-repo-input").fill(shopWeb);
   const shopClone = path.join(CLONES, "shop-web");
-  await expect(page.getByTestId("remote-repo-hint")).toContainText(`will be cloned in full to ${shopClone}`);
-  await expect(page.getByTestId("pipeline-select")).toContainText("Available once the clone is done");
+  await expect(page.getByTestId("remote-repo-hint")).toContainText(`Clone into${shopClone}`);
+  await expect(page.getByTestId("pipeline-select")).toContainText("After the clone");
   await expect(page.getByTestId("clone-launch-button")).toHaveText("Clone and launch");
   await page.getByPlaceholder(/free-text prompt/i).fill("e2e clone and launch");
   const created = page.waitForResponse(

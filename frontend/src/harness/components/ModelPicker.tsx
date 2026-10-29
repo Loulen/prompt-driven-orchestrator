@@ -33,10 +33,10 @@ import {
    precisely so a new call site cannot forget it. */
 
 const ITEM_CLASSES =
-  "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-fg-2 transition-colors hover:bg-bg-4";
+  "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs text-text-2 transition-colors hover:bg-hover";
 
-const INPUT_CLASSES =
-  "w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc";
+/** The kit's text field (`d-input`). */
+const INPUT_CLASSES = "d-input";
 
 export default function ModelPicker({
   value,
@@ -126,22 +126,21 @@ export default function ModelPicker({
     <DropdownMenu>
       <DropdownMenuTrigger
         data-testid={`${testid}-trigger`}
-        className="flex w-full cursor-pointer items-center justify-between rounded border border-line-strong bg-bg-3 px-2 py-1 text-left text-fg outline-none transition-colors hover:bg-bg-4 focus:border-acc data-[popup-open]:border-acc"
+        className="d-input flex cursor-pointer items-center justify-between gap-2 text-left"
       >
-        <span className={value ? "font-mono" : "text-fg-4"}>
+        <span className={value ? "truncate font-mono" : "truncate text-text-3"}>
           {value ?? "default model"}
         </span>
-        <ChevronDown size={10} className="shrink-0 text-fg-4" />
+        <ChevronDown size={12} strokeWidth={1.5} className="shrink-0 text-text-3" />
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        className="min-w-[180px] rounded-md border border-line-strong bg-bg-3 p-1 shadow-lg"
+        className="min-w-[180px] rounded-md border border-line-strong bg-surface-2 p-1 shadow-lg"
         side="bottom"
         align="start"
       >
         <DropdownMenuItem
           data-testid={`${testid}-option-default`}
-          className={`${ITEM_CLASSES} ${value == null ? "bg-bg-4" : ""}`}
-          style={{ fontSize: "11px" }}
+          className={`${ITEM_CLASSES} ${value == null ? "bg-surface-2" : ""}`}
           onClick={() => onChange(null)}
         >
           Default
@@ -150,15 +149,14 @@ export default function ModelPicker({
           <DropdownMenuItem
             key={m}
             data-testid={`${testid}-option-${m}`}
-            className={`${ITEM_CLASSES} justify-between font-mono ${value === m ? "bg-bg-4" : ""}`}
-            style={{ fontSize: "11px" }}
+            className={`${ITEM_CLASSES} justify-between font-mono ${value === m ? "bg-surface-2" : ""}`}
             onClick={() => onChange(m)}
           >
             <span>{m}</span>
             {contexts?.[m] ? (
               <span
                 data-testid={`${testid}-context-${m}`}
-                className="ml-3 shrink-0 text-fg-4"
+                className="ml-3 shrink-0 text-text-3"
               >
                 {contexts[m]}
               </span>
@@ -169,7 +167,6 @@ export default function ModelPicker({
         <DropdownMenuItem
           data-testid={`${testid}-option-custom`}
           className={ITEM_CLASSES}
-          style={{ fontSize: "11px" }}
           onClick={() => setEditing(true)}
         >
           Custom…

@@ -18,6 +18,8 @@
 @import "./stats/stats.css";
 /* The Review page: header, ref bar, file tree, file cards, threads. */
 @import "./review/review.css";
+/* The launch forms: New Run, the Triggers, the Project modal. */
+@import "./run/components/newRun/launch.css";
 
 @custom-variant dark (&:is(.dark *));
 

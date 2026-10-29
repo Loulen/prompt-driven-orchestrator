@@ -50,10 +50,26 @@ export function Modal({
   const ref = React.useRef<HTMLDialogElement>(null);
   const submit = React.useRef(onSubmit);
   const close = React.useRef(onClose);
+  // An Escape a layer inside the dialog took (a dropdown that stopped it
+  // without cancelling it) still makes the engine send `cancel`: ignore that
+  // one, the layer closed itself.
+  const swallowed = React.useRef(false);
   React.useLayoutEffect(() => {
     submit.current = onSubmit;
     close.current = onClose;
   });
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Only an Escape aimed inside the dialog can be taken by a layer in it;
+      // one from outside (the focus on the body) still closes it.
+      swallowed.current = !!ref.current && e.target instanceof Node && ref.current.contains(e.target);
+      // `cancel` follows its keydown in the same task.
+      window.setTimeout(() => (swallowed.current = false));
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
   React.useEffect(() => {
     const d = ref.current;
     const opener = document.activeElement as HTMLElement | null;
@@ -81,7 +97,9 @@ export function Modal({
       className={cx("d-dlg", `d-dlg--${size}`)}
       onCancel={(e) => {
         e.preventDefault();
-        if (dismissable) close.current();
+        const taken = swallowed.current;
+        swallowed.current = false;
+        if (dismissable && !taken) close.current();
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget && dismissable) close.current();
@@ -89,6 +107,7 @@ export function Modal({
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           // jsdom and old engines send no `cancel`: close from here too.
+          swallowed.current = false;
           e.preventDefault();
           e.stopPropagation();
           if (dismissable) close.current();

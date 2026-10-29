@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { Clock, FolderGit2, GitBranch, Layers, User, Zap } from "lucide-react";
+import { Pause, Pencil, Play } from "lucide-react";
 import type { Trigger } from "../../shared/generated/Trigger";
 import { fetchSettings } from "../../settings/api/settings";
 import { humanizeCron } from "../model/cronPresets";
-import { formatFireTs, overlapLabel } from "../model/outcome";
+import { formatFireTs, lastOutcomeTooltip, outcomeTone, overlapLabel } from "../model/outcome";
 import { tildify } from "../../lib/homePath";
-import ConfigRow from "./triggerDetail/ConfigRow";
 import FireHistory from "./triggerDetail/FireHistory";
 import GuardSection from "./triggerDetail/GuardSection";
 import ExtensionDetailTab from "../../shared/extensions/ExtensionDetailTab";
 import { useDetailTabs } from "../../shared/extensions/catalogue";
 import ActorLabel from "../../shared/actors/ActorLabel";
+import { Button, IconButton, KeyValue, Section, type KeyValueRow } from "../../shared/ui/kit";
+import { ToneIcon } from "../../shared/ui/kit/tone";
+import MidPath from "../../shared/ui/MidPath";
 import SuspendedPill from "./triggersList/SuspendedPill";
 import { suspensionTooltip } from "../model/suspension";
 
@@ -31,19 +33,28 @@ interface Props {
    * that omit it (and tests) still typecheck — absent ⇒ no caveat.
    */
   promptRequired?: boolean;
+  /** « Run now » (#341) and « Edit » from the header; absent, no button. */
+  onRunNow?: () => void;
+  onEdit?: () => void;
+  /** The name of the Trigger's Projet, when it has one. */
+  projectName?: string | null;
 }
 
 /**
- * Right-panel detail view for a selected Trigger (#162). Shows the full config
- * (read-only — editing goes through the New Run modal) plus a reverse-chrono
- * fire history: the answer to "why didn't it fire last night?". Each "fired"
- * entry links to the Run it created.
+ * Right-panel detail view for a selected Trigger (#162): its last outcome and
+ * name in the header with Run now and Edit, then folding sections — its
+ * configuration (read-only, editing goes through the New Trigger dialog), its
+ * guard and its dry-run, its input template, and the fire history as a table:
+ * the answer to "why didn't it fire last night?".
  */
 export default function TriggerDetailPanel({
   trigger,
   onSelectRun,
   refreshKey,
   promptRequired,
+  onRunNow,
+  onEdit,
+  projectName,
 }: Props) {
   // The daemon's home, to read the repo as `~/code/…` (the title keeps the full path).
   const [home, setHome] = useState<string | null>(null);
@@ -74,149 +85,128 @@ export default function TriggerDetailPanel({
     };
   }, []);
 
-  return (
-    <aside className="flex h-full flex-col overflow-y-auto bg-surface-1" data-testid="trigger-detail-panel">
-      {/* Header */}
-      <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <Zap size={14} className="shrink-0 text-primary" />
-        <div className="min-w-0">
-          <div className="truncate font-medium text-text" style={{ fontSize: "12.5px" }}>
-            {trigger.name}
-          </div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-text-3" style={{ fontSize: "10px" }}>
-            <span>trigger</span>
-            {!trigger.enabled && (
-              <span
-                className="rounded border border-line-strong px-1 py-px"
-                style={{ fontSize: "9px" }}
-                data-testid="trigger-detail-disabled"
-              >
-                disabled
+  const rows: KeyValueRow[] = [
+    {
+      k: "Schedule",
+      v: <span data-testid="trigger-detail-schedule">{humanizeCron(trigger.cron)}</span>,
+      tip: `${humanizeCron(trigger.cron)} · ${trigger.cron}`,
+    },
+    { k: "Next", v: formatFireTs(trigger.next_fire_at) ?? (trigger.enabled ? "–" : "off"), mono: true },
+    ...(trigger.last_editor
+      ? [
+          {
+            k: "Last editor",
+            v: (
+              <span data-testid="trigger-last-editor">
+                <ActorLabel actor={trigger.last_editor} />
               </span>
-            )}
-            {trigger.suspension && <SuspendedPill suspension={trigger.suspension} />}
-          </div>
-        </div>
-      </div>
+            ),
+          },
+        ]
+      : []),
+    { k: "Pipeline", v: trigger.pipeline_name || trigger.pipeline_id, mono: true },
+    ...(trigger.project_id ? [{ k: "Project", v: projectName ?? trigger.project_id }] : []),
+    ...(trigger.target_repo
+      ? [
+          {
+            k: "Repo",
+            v: (
+              <span className="tg-kvpath" title={trigger.target_repo} data-testid="trigger-detail-repo">
+                <MidPath path={tildify(trigger.target_repo, home)} title={false} />
+              </span>
+            ),
+            tip: trigger.target_repo,
+          },
+        ]
+      : []),
+    ...(trigger.source_branch ? [{ k: "Branch", v: trigger.source_branch, mono: true }] : []),
+    { k: "Overlap", v: <span data-testid="trigger-detail-overlap">{overlapLabel(trigger)}</span>, tip: overlapLabel(trigger) },
+    trigger.sandbox
+      ? { k: "Sandbox", v: trigger.sandbox, mono: true }
+      : { k: "Sandbox", v: <span className="ln-faint">Instance default</span>, tip: "Instance default" },
+  ];
+
+  return (
+    <aside className="tg-detail" data-testid="trigger-detail-panel">
+      <header className="tg-detail__head">
+        <span className="tg-detail__status" role="img" aria-label={lastOutcomeTooltip(trigger)} title={lastOutcomeTooltip(trigger)}>
+          <ToneIcon tone={outcomeTone(trigger.last_outcome) ?? "neutral"} size={14} />
+        </span>
+        <h2 className="tg-detail__name" title={trigger.name}>
+          {trigger.name}
+        </h2>
+        {!trigger.enabled && (
+          <span className="d-chip" data-testid="trigger-detail-disabled">
+            disabled
+          </span>
+        )}
+        {trigger.suspension && <SuspendedPill suspension={trigger.suspension} />}
+        <span className="d-grow" />
+        {/* A suspended Trigger fires neither on its schedule nor by Run now. */}
+        {onRunNow && !trigger.suspension && (
+          <Button size="sm" icon={Play} onClick={onRunNow} title="Run now" data-testid="trigger-detail-run-now">
+            Run
+          </Button>
+        )}
+        {onEdit && <IconButton icon={Pencil} label="Edit trigger" onClick={onEdit} data-testid="trigger-detail-edit" />}
+      </header>
       {/* API 0.8: an extension suspends it — it fires neither on its schedule
           nor by Run now, until the extension lifts the suspension. */}
       {trigger.suspension && (
-        <div
-          className="border-b border-st-await/30 bg-st-await/14 px-3 py-2 text-text-2"
-          style={{ fontSize: "10.5px" }}
-          data-testid="trigger-detail-suspension"
-        >
-          <div className="font-medium text-st-await">Suspended · does not fire</div>
-          <div className="mt-0.5 whitespace-pre-line break-words">{suspensionTooltip(trigger.suspension)}</div>
+        <div className="tg-suspended" title={suspensionTooltip(trigger.suspension)} data-testid="trigger-detail-suspension">
+          <Pause size={12} strokeWidth={1.5} aria-hidden />
+          <span className="tg-suspended__word">Suspended · does not fire</span>
         </div>
       )}
 
       {tabs.length > 0 && (
-        <div className="flex shrink-0 overflow-x-auto border-b border-line" style={{ fontSize: "11px" }}>
+        <div className="d-tabs tg-detail__tabs" role="tablist" aria-label="Trigger">
           {[{ key: null, label: "Details" }, ...tabs.map((t) => ({ key: t.key, label: t.contribution.label }))].map(
-            ({ key, label }) => (
-              <button
-                key={key ?? "details"}
-                type="button"
-                data-testid={`trigger-tab-${key ?? "details"}`}
-                onClick={() => setTabKey(key)}
-                className={`shrink-0 cursor-pointer whitespace-nowrap px-2 py-1.5 transition-colors ${
-                  (activeTab?.key ?? null) === key
-                    ? "border-b-2 border-primary font-medium text-text"
-                    : "text-text-3 hover:text-text-2"
-                }`}
-              >
-                {label}
-              </button>
-            ),
+            ({ key, label }) => {
+              const on = (activeTab?.key ?? null) === key;
+              return (
+                <button
+                  key={key ?? "details"}
+                  type="button"
+                  role="tab"
+                  aria-selected={on}
+                  className="d-tab"
+                  data-testid={`trigger-tab-${key ?? "details"}`}
+                  onClick={() => setTabKey(key)}
+                >
+                  <span>{label}</span>
+                </button>
+              );
+            },
           )}
         </div>
       )}
 
-      {activeTab ? (
-        <ExtensionDetailTab key={`${activeTab.key}:${trigger.id}`} tab={activeTab} context={context} />
-      ) : (
-      <>
-      {/* Configuration */}
-      <div className="flex flex-col gap-2 p-3" style={{ fontSize: "11.5px" }}>
-        <span
-          className="font-medium uppercase tracking-wider text-text-3"
-          style={{ fontSize: "10px" }}
-        >
-          Configuration
-        </span>
+      <div className="tg-detail__body">
+        {activeTab ? (
+          <ExtensionDetailTab key={`${activeTab.key}:${trigger.id}`} tab={activeTab} context={context} />
+        ) : (
+          <>
+            <Section title="Configuration">
+              <KeyValue rows={rows} />
+            </Section>
 
-        {trigger.last_editor && (
-          <ConfigRow icon={<User size={12} />} label="Last editor">
-            <span className="truncate text-text-2" data-testid="trigger-last-editor">
-              <ActorLabel actor={trigger.last_editor} />
-            </span>
-          </ConfigRow>
+            {trigger.guard_command && (
+              <GuardSection trigger={trigger} guardCommand={trigger.guard_command} promptRequired={promptRequired} />
+            )}
+
+            {trigger.input_template && (
+              <Section title="Input template">
+                <pre className="tg-pre tg-pre--plain" data-testid="trigger-detail-input">
+                  {trigger.input_template}
+                </pre>
+              </Section>
+            )}
+
+            <FireHistory triggerId={trigger.id} refreshKey={refreshKey} onSelectRun={onSelectRun} />
+          </>
         )}
-
-        <ConfigRow icon={<Layers size={12} />} label="Pipeline">
-          <span className="font-mono text-text-2">{trigger.pipeline_name || trigger.pipeline_id}</span>
-        </ConfigRow>
-
-        {trigger.target_repo && (
-          <ConfigRow icon={<FolderGit2 size={12} />} label="Repo">
-            <span
-              className="truncate font-mono text-text-2"
-              title={trigger.target_repo}
-              data-testid="trigger-detail-repo"
-            >
-              {tildify(trigger.target_repo, home)}
-            </span>
-          </ConfigRow>
-        )}
-
-        {trigger.source_branch && (
-          <ConfigRow icon={<GitBranch size={12} />} label="Branch">
-            <span className="font-mono text-text-2">{trigger.source_branch}</span>
-          </ConfigRow>
-        )}
-
-        <ConfigRow icon={<Clock size={12} />} label="Schedule">
-          <span className="text-text-2" data-testid="trigger-detail-schedule">
-            {humanizeCron(trigger.cron)}
-          </span>
-        </ConfigRow>
-
-        <ConfigRow icon={<Layers size={12} />} label="Overlap">
-          <span className="text-text-2" data-testid="trigger-detail-overlap">
-            {overlapLabel(trigger)}
-          </span>
-        </ConfigRow>
-
-        {trigger.guard_command && (
-          <GuardSection
-            trigger={trigger}
-            guardCommand={trigger.guard_command}
-            promptRequired={promptRequired}
-          />
-        )}
-
-        {trigger.input_template && (
-          <div className="flex flex-col gap-1">
-            <div className="text-text-3">Input template</div>
-            <pre
-              className="whitespace-pre-wrap rounded border border-line bg-surface-2 px-2 py-1.5 font-mono text-text-2"
-              style={{ fontSize: "10.5px" }}
-              data-testid="trigger-detail-input"
-            >
-              {trigger.input_template}
-            </pre>
-          </div>
-        )}
-
-        <ConfigRow icon={<Clock size={12} />} label="Next fire">
-          <span className="font-mono text-text-2">{formatFireTs(trigger.next_fire_at) ?? "—"}</span>
-        </ConfigRow>
       </div>
-
-      <FireHistory triggerId={trigger.id} refreshKey={refreshKey} onSelectRun={onSelectRun} />
-      </>
-      )}
     </aside>
   );
 }

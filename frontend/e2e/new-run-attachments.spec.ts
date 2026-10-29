@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
 import { E2E_TARGET_REPO, pickPipeline } from "./helpers";
 
 // Layer 3b — « New run » attachments (#779).
@@ -61,7 +61,7 @@ test("a dropped file becomes a chip and reaches the run as `files`", async ({
   // Empty state: the helper names the budget the daemon enforces.
   const zone = page.getByTestId("image-drop-zone");
   await expect(zone).toBeVisible();
-  await expect(page.getByText(/up to .* MB per run/i)).toBeVisible();
+  await expect(page.getByText("Files", { exact: true })).toHaveAttribute("title", /MB per run/);
 
   // The hidden <input type=file> has no accept filter any more — any file goes.
   const input = page.getByTestId("image-file-input");

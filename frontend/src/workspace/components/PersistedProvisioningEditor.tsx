@@ -3,19 +3,27 @@ import { fetchInstanceProvisioning, fetchProjectProvisioning, saveInstanceProvis
 import { EMPTY_PROVISIONING_RULES } from "../model/provisioning";
 import type { ProvisioningRules } from "../../shared/generated/ProvisioningRules";
 import ProvisioningRulesEditor from "./ProvisioningRulesEditor";
+import { Button } from "../../shared/ui/kit";
+import { tildify, untildify } from "../../lib/homePath";
 
 export default function PersistedProvisioningEditor({
   scope,
   projectId,
   initialRepository = "",
   defaultExpanded = false,
+  home = null,
 }: {
   scope: "instance" | "project";
   projectId?: string;
   initialRepository?: string;
   defaultExpanded?: boolean;
+  /** The daemon's home, to read and type the repository as `~/code/…`. */
+  home?: string | null;
 }) {
-  const [repository, setRepository] = useState(initialRepository);
+  // The field as typed; `null` until it is, so a home read after the opening
+  // still shortens the initial repository.
+  const [typed, setTyped] = useState<string | null>(null);
+  const repository = typed === null ? initialRepository : untildify(typed, home);
   const [rules, setRules] = useState<ProvisioningRules>(EMPTY_PROVISIONING_RULES);
   const [valid, setValid] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -67,30 +75,32 @@ export default function PersistedProvisioningEditor({
       onValidityChange={setValid}
       projectId={scope === "project" ? (projectId ?? null) : null}
       defaultExpanded={defaultExpanded}
+      home={home}
       leading={
-        <label className="block text-text-3" style={{ fontSize: 10 }}>
-          Resolve against
+        <label className="ln-line ln-prov__against">
+          <span className="ln-faint">Resolve against</span>
           <input
-            value={repository}
-            onChange={(event) => setRepository(event.target.value)}
+            value={typed ?? tildify(initialRepository, home)}
+            onChange={(event) => setTyped(event.target.value)}
+            title={repository || undefined}
             placeholder="/absolute/path/to/repository"
-            className="mt-1 w-full rounded border border-line-strong bg-surface-2 px-2 py-1 font-mono text-text outline-none focus:border-primary"
+            spellCheck={false}
+            className="d-input d-input--sm d-input--mono ln-grow"
           />
         </label>
       }
       trailing={
-        <div className="flex items-center justify-between">
-          <span className={message?.includes("Failed") ? "text-st-failed" : "text-text-3"}>
-            {message}
-          </span>
-          <button
-            type="button"
+        <div className="ln-line">
+          <span className={message?.includes("Failed") ? "ln-err" : "ln-faint"}>{message}</span>
+          <span className="ln-grow" />
+          <Button
+            size="sm"
+            tone="primary"
             onClick={save}
             disabled={!valid || saving || (scope === "project" && !projectId)}
-            className="rounded bg-primary px-2.5 py-1 font-medium text-primary-ink disabled:opacity-40"
           >
             {saving ? "Saving…" : "Save provisioning"}
-          </button>
+          </Button>
         </div>
       }
     />

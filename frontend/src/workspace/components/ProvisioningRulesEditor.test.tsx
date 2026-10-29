@@ -112,9 +112,7 @@ describe("ProvisioningRulesEditor", () => {
 
     // Collapsed: the frozen marker and the summary still show.
     expect(screen.getByText(/frozen at 09:12 · reused on restart/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Provisioning/ })).toHaveTextContent(
-      "Provisioning · 1 inherited · 0 at this level",
-    );
+    expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("1 inherited · 0 at this level");
     await userEvent.click(screen.getByRole("button", { name: /^Provisioning/ }));
 
     await waitFor(() => expect(screen.getByText("fixtures/")).toBeInTheDocument());
@@ -315,8 +313,8 @@ describe("ProvisioningRulesEditor", () => {
       );
 
       expect(toggle()).toHaveAttribute("aria-expanded", "false");
-      expect(toggle()).toHaveTextContent("Provisioning · none");
-      expect(screen.getByText(SUBTITLE)).toBeInTheDocument();
+      expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("none");
+      expect(toggle()).toHaveAttribute("title", SUBTITLE);
       expect(screen.queryByLabelText("Copy patterns")).not.toBeInTheDocument();
       await waitFor(() => expect(previewProvisioning).toHaveBeenCalled());
       await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(true));
@@ -338,7 +336,7 @@ describe("ProvisioningRulesEditor", () => {
       expect(screen.getByLabelText("Copy patterns")).toBeInTheDocument();
       expect(screen.getByLabelText("Hardlink patterns")).toBeInTheDocument();
       expect(screen.getByLabelText("Symlink patterns")).toBeInTheDocument();
-      expect(screen.getByText(SUBTITLE)).toBeInTheDocument();
+      expect(toggle()).toHaveAttribute("title", SUBTITLE);
 
       await userEvent.click(toggle());
       expect(toggle()).toHaveAttribute("aria-expanded", "false");
@@ -403,7 +401,7 @@ describe("ProvisioningRulesEditor", () => {
       );
 
       await waitFor(() =>
-        expect(toggle()).toHaveTextContent("Provisioning · 2 inherited · 1 at this level"),
+        expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("2 inherited · 1 at this level"),
       );
       // Valid, non-empty rules do not open the block.
       expect(toggle()).toHaveAttribute("aria-expanded", "false");
@@ -420,7 +418,7 @@ describe("ProvisioningRulesEditor", () => {
         />,
       );
 
-      expect(toggle()).toHaveTextContent("Provisioning · 1 inherited · 2 at this level");
+      expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("1 inherited · 2 at this level");
       expect(previewProvisioning).not.toHaveBeenCalled();
     });
 
@@ -474,7 +472,7 @@ describe("ProvisioningRulesEditor", () => {
         "Provisioning preview failed: not a git repository",
       );
       // Unresolved inherited rules: the summary does not claim "none".
-      expect(toggle()).toHaveTextContent("Provisioning · 0 at this level · inherited unknown");
+      expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("0 at this level · inherited unknown");
     });
 
     it("stays open once the conflict is fixed, even if the header was clicked meanwhile", async () => {
@@ -508,6 +506,31 @@ describe("ProvisioningRulesEditor", () => {
       expect(screen.getByLabelText("Symlink patterns")).toHaveFocus();
     });
 
+    it("shows the repository it resolves against as a path cut in its middle, under ~", () => {
+      render(
+        <ProvisioningRulesEditor
+          level="run"
+          repository="/home/me/work/clients/acme/platform/services/billing-api"
+          rules={EMPTY}
+          onChange={() => {}}
+          home="/home/me"
+        />,
+      );
+
+      const marker = screen.getByTestId("provisioning-against");
+      expect(marker).toHaveAttribute(
+        "title",
+        "Resolve against /home/me/work/clients/acme/platform/services/billing-api",
+      );
+      expect(marker.querySelector(".ln-path__head")).toHaveTextContent("~/work/clients/acme/platform/services");
+      expect(marker.querySelector(".ln-path__tail")).toHaveTextContent("/billing-api");
+    });
+
+    it("shows no marker while no repository is known", () => {
+      render(<ProvisioningRulesEditor level="run" repository="" rules={EMPTY} onChange={() => {}} />);
+      expect(screen.queryByTestId("provisioning-against")).not.toBeInTheDocument();
+    });
+
     it("drops the header 'Resolve against' marker while the body shows its own field", async () => {
       render(
         <ProvisioningRulesEditor
@@ -519,10 +542,10 @@ describe("ProvisioningRulesEditor", () => {
         />,
       );
 
-      expect(screen.getByText("Resolve against /repo")).toBeInTheDocument();
+      expect(screen.getByTitle("Resolve against /repo")).toBeInTheDocument();
       await userEvent.click(toggle());
       expect(screen.getByText("leading slot")).toBeInTheDocument();
-      expect(screen.queryByText("Resolve against /repo")).not.toBeInTheDocument();
+      expect(screen.queryByTitle("Resolve against /repo")).not.toBeInTheDocument();
     });
 
     it("explains each mode and the level strip in keyboard-reachable tooltips", async () => {

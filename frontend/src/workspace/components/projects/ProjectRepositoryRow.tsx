@@ -1,5 +1,6 @@
 import { FolderGit2, X } from "lucide-react";
 import { tildify } from "../../../lib/homePath";
+import MidPath from "../../../shared/ui/MidPath";
 
 /**
  * A repository of the Projet shown in Settings › Projects (CORE-96): its path,
@@ -36,13 +37,10 @@ export default function ProjectRepositoryRow({
       <FolderGit2 size={13} className="shrink-0 text-text-3" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate font-mono text-text" style={{ fontSize: "11.5px" }}>
-            {tildify(path, home)}
-          </span>
+          <MidPath path={tildify(path, home)} title={false} testId="project-repo-path" />
           {primary && (
             <span
-              className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-primary"
-              style={{ fontSize: "9.5px" }}
+              className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-2xs text-primary"
               data-testid="project-repo-primary"
             >
               default primary
@@ -52,15 +50,14 @@ export default function ProjectRepositoryRow({
             <button
               type="button"
               onClick={onMakePrimary}
-              className="hidden shrink-0 rounded px-1.5 py-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover/repo:inline-flex group-focus-within/repo:inline-flex"
-              style={{ fontSize: "10px" }}
+              className="hidden shrink-0 rounded px-1.5 py-0.5 text-text-3 transition-colors hover:bg-hover hover:text-text-2 group-hover/repo:inline-flex group-focus-within/repo:inline-flex text-2xs"
               data-testid="project-repo-make-primary"
             >
               Make default
             </button>
           )}
         </div>
-        <div className="flex min-w-0 items-center gap-1 text-text-3" style={{ fontSize: "10.5px" }}>
+        <div className="flex min-w-0 items-center gap-1 text-2xs text-text-3">
           <span className="truncate font-mono" data-testid="project-repo-remote">
             {remote === undefined ? "…" : (remote ?? "no remote")}
           </span>

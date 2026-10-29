@@ -11,29 +11,19 @@ export function GapChip({ gap }: { gap: BranchGap | null }) {
   if (!gap) return null;
   if (gap.kind === "level") {
     return (
-      <Check size={11} className="shrink-0 text-text-3" aria-label="up to date" />
+      <Check size={12} strokeWidth={1.5} className="shrink-0 text-text-3" aria-label="up to date" />
     );
   }
   if (gap.kind === "unknown") {
     return (
-      <span
-        className="shrink-0 font-mono text-text-3"
-        style={{ fontSize: "10px" }}
-        title="Gap unknown — the last fetch failed"
-      >
+      <span className="ln-gap ln-gap--unknown" title="Gap unknown — the last fetch failed">
         ?
       </span>
     );
   }
   const ahead = gap.kind === "ahead";
   return (
-    <span
-      className={`shrink-0 rounded px-1 py-0.5 font-mono font-medium ${
-        ahead ? "bg-st-running/14 text-st-running" : "bg-st-await/14 text-st-await"
-      }`}
-      style={{ fontSize: "9.5px" }}
-      data-testid="branch-gap-chip"
-    >
+    <span className="d-chip d-chip--mono ln-gap" data-ahead={ahead || undefined} data-testid="branch-gap-chip">
       {gapLabel(gap)}
     </span>
   );
@@ -68,37 +58,38 @@ export function SyncButton({
   testIdPrefix: string;
 }) {
   const gap = state.kind === "gap" ? state.gap : null;
-  let border = "border-line-strong";
-  let icon = <RefreshCw size={12} className="text-text-3" />;
+  // The button's tone (`data-tone`): its icon's colour, and its edge.
+  let tone: "quiet" | "unknown" | "ok" | "gap" = "quiet";
+  let icon = <RefreshCw size={13} strokeWidth={1.5} aria-hidden />;
   let title = "Source branch freshness";
 
   switch (state.kind) {
     case "fetching":
-      icon = <RefreshCw size={12} className="animate-spin text-text-3" />;
+      icon = <RefreshCw size={13} strokeWidth={1.5} className="d-spin" aria-hidden />;
       title = "Fetching all remotes…";
       break;
     case "unknown":
-      border = "border-dashed border-text-3";
-      icon = <CloudOff size={12} className="text-text-3" />;
+      tone = "unknown";
+      icon = <CloudOff size={13} strokeWidth={1.5} aria-hidden />;
       title = "Gap unknown — the last fetch failed";
       break;
     case "remote":
-      border = "border-primary/30";
-      icon = <Cloud size={12} className="text-primary" />;
+      tone = "ok";
+      icon = <Cloud size={13} strokeWidth={1.5} aria-hidden />;
       title = "Remote ref — as of the last fetch";
       break;
     case "no-upstream":
-      icon = <Laptop size={12} className="text-text-3" />;
+      icon = <Laptop size={13} strokeWidth={1.5} aria-hidden />;
       title = "No upstream branch";
       break;
     case "level":
-      border = "border-primary/30";
-      icon = <Check size={12} className="text-primary" />;
+      tone = "ok";
+      icon = <Check size={13} strokeWidth={1.5} aria-hidden />;
       title = `Up to date with ${state.upstream}`;
       break;
     case "gap":
-      border = "border-st-await";
-      icon = <RefreshCw size={12} className="text-st-await" />;
+      tone = "gap";
+      icon = <RefreshCw size={13} strokeWidth={1.5} aria-hidden />;
       title = `${gapLabel(state.gap)} vs ${state.upstream}`;
       break;
   }
@@ -110,8 +101,8 @@ export function SyncButton({
   // "this branch is level", not a badge we paint ourselves after a click.
   const running = ff.kind === "running";
   if (running) {
-    border = "border-primary/30";
-    icon = <RefreshCw size={12} className="animate-spin text-primary" />;
+    tone = "ok";
+    icon = <RefreshCw size={13} strokeWidth={1.5} className="d-spin" aria-hidden />;
     title = `Fast-forwarding ${branchName}…`;
   }
 
@@ -123,7 +114,8 @@ export function SyncButton({
         title={title}
         aria-label={title}
         aria-expanded={open}
-        className={`flex items-center gap-1 rounded-md border bg-surface-2 px-2 py-1.5 transition-colors hover:bg-hover ${border}`}
+        className="d-btn ln-sync"
+        data-tone={tone}
         data-testid={`${testIdPrefix}-sync`}
         data-sync-state={running ? "fast-forwarding" : state.kind}
       >
@@ -131,11 +123,7 @@ export function SyncButton({
         {/* The ONLY écart on the form. Icon-only whenever there is none, so the
             button stays quiet until it has something to say. */}
         {gap && !running && (
-          <span
-            className="font-mono font-medium text-st-await"
-            style={{ fontSize: "10px" }}
-            data-testid={`${testIdPrefix}-sync-gap`}
-          >
+          <span className="ln-sync__gap" data-testid={`${testIdPrefix}-sync-gap`}>
             {gapLabel(gap)}
           </span>
         )}

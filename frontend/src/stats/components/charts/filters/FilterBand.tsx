@@ -1,16 +1,19 @@
-import { Check, Combine } from "lucide-react";
+import { Check, Combine, X } from "lucide-react";
+import { IconButton } from "../../../../shared/ui/kit";
 
-// --- The filter band (#819) ----------------------------------------------------
+// --- The filter bar (#819) -----------------------------------------------------
 
 /** Every tab's filters live at the top of its own pane, where their effect is
- *  read — the shell bar keeps the period alone. One frame, one legend naming
- *  the tab, controls left → right in the order the numbers depend on them:
- *  which Runs, which duration, which Nodes, how to draw them. */
+ *  read — the header keeps the period alone. One 32 px bar
+ *  (`overlays.statsFilters`): the drill path on the left as a breadcrumb, the
+ *  controls on the right in the order the numbers depend on them — which Runs,
+ *  which duration, which Nodes, how to draw them — then the reset. */
 export function StatsFilterBand({
   label,
   testid,
   children,
   onReset,
+  crumbs,
 }: {
   label: string;
   testid: string;
@@ -18,33 +21,18 @@ export function StatsFilterBand({
   /** `undefined` until the band deviates from the tab's defaults: a reset that
    *  resets nothing is noise. */
   onReset?: () => void;
+  /** The drill path of the tab (`Breadcrumb`), on the left. */
+  crumbs?: React.ReactNode;
 }) {
   return (
-    <fieldset
-      className="mb-3 rounded-md border border-line px-3 pb-2 pt-1"
-      data-testid={testid}
-      style={{ fontSize: "11px" }}
-    >
-      <legend
-        className="px-1 uppercase tracking-wide text-st-done"
-        style={{ fontSize: "9px" }}
-      >
-        {label}
-      </legend>
-      <div className="flex flex-wrap items-center gap-2">
-        {children}
-        {onReset && (
-          <button
-            type="button"
-            data-testid="stats-reset-filters"
-            onClick={onReset}
-            className="ml-auto text-text-3 underline decoration-dotted underline-offset-2 hover:text-text-2"
-          >
-            reset filters
-          </button>
-        )}
-      </div>
-    </fieldset>
+    <div className="sx-filt" role="toolbar" aria-label={label} data-testid={testid}>
+      {crumbs}
+      <span className="sx-grow" />
+      {children}
+      {onReset && (
+        <IconButton icon={X} label="Reset filters" size="sm" data-testid="stats-reset-filters" onClick={onReset} />
+      )}
+    </div>
   );
 }
 
@@ -63,14 +51,11 @@ export function CohortChip({
       role="checkbox"
       aria-checked={checked}
       data-testid="stats-completed-only"
+      title="Count only the runs that completed"
       onClick={() => onChange(!checked)}
-      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
-        checked
-          ? "border-st-done bg-st-done/15 text-text"
-          : "border-line-strong bg-surface-2 text-text-2"
-      }`}
+      className="sx-toggle"
     >
-      {checked && <Check size={10} strokeWidth={3} aria-hidden="true" />}
+      {checked && <Check size={11} strokeWidth={2} aria-hidden="true" />}
       completed runs only
     </button>
   );
@@ -95,48 +80,49 @@ export function UncombinedChip({
       data-testid="stats-uncombined"
       title="Show the original rows, as if nothing were combined"
       onClick={() => onChange(!checked)}
-      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
-        checked
-          ? "border-st-done bg-st-done/15 text-text"
-          : "border-line-strong bg-surface-2 text-text-2"
-      }`}
+      className="sx-toggle"
     >
       {checked ? (
-        <Check size={10} strokeWidth={3} aria-hidden="true" />
+        <Check size={11} strokeWidth={2} aria-hidden="true" />
       ) : (
-        <Combine size={10} aria-hidden="true" />
+        <Combine size={11} strokeWidth={1.5} aria-hidden="true" />
       )}
       uncombined
     </button>
   );
 }
 
-/** A thin divider between two groups of the band, so « which Runs » and « which
+/** A thin divider between two groups of the bar, so « which Runs » and « which
  *  duration » never read as one control. */
 export function BandDivider() {
-  return <span className="mx-1 h-4 w-px bg-line-strong" aria-hidden="true" />;
+  return <span className="sx-vsep" aria-hidden="true" />;
 }
 
-/** The band of a section that filters on the cohort alone (#819): Overview,
+/** The bar of a section that filters on the cohort alone (#819): Overview,
  *  Sessions, Triggers — which share one cohort, reading one response — and
  *  Cost, which owns its own. One control whose default is « off », so unticking
- *  IS the reset and no reset link is needed. */
+ *  IS the reset and no reset button is needed. */
 export function CohortOnlyBand({
   label,
   completedOnly,
   onCompletedOnlyChange,
   uncombined,
+  crumbs,
+  children,
 }: {
   label: string;
   completedOnly: boolean;
   onCompletedOnlyChange: (value: boolean) => void;
   /** The « Uncombined » chip, on the tabs that show Pipelines (not Overview). */
   uncombined?: { checked: boolean; onChange: (value: boolean) => void };
+  crumbs?: React.ReactNode;
+  /** The tab's own controls (Cost's grouping), before the cohort. */
+  children?: React.ReactNode;
 }) {
   return (
-    <StatsFilterBand label={label} testid="stats-filter-band">
+    <StatsFilterBand label={label} testid="stats-filter-band" crumbs={crumbs}>
+      {children}
       <CohortChip checked={completedOnly} onChange={onCompletedOnlyChange} />
-      <span className="text-text-3">default: all runs</span>
       {uncombined && (
         <UncombinedChip
           checked={uncombined.checked}

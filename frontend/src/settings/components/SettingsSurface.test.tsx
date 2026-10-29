@@ -3478,7 +3478,7 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
     );
   });
 
-  it("draws the ✕ like Settings' other actions, not as a faint glyph (#906)", async () => {
+  it("draws the ✕ as the kit's small icon button (#906)", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     const body = await screen.findByTestId(
       "settings-section-body-stats-absorptions",
@@ -3486,10 +3486,9 @@ describe("SettingsSurface — Stats absorptions (#891)", () => {
     const cross = await within(body).findByRole("button", {
       name: "Uncombine Digest",
     });
-    // The same readable foreground and bordered box as Settings' buttons.
-    expect(cross.className).toContain("text-text-2");
-    expect(cross.className).toContain("border-line-strong");
-    expect(cross.className).not.toContain("text-text-3");
+    // The kit's icon button: the same readable foreground and hover as the
+    // other icon actions of the interface.
+    expect(cross).toHaveClass("d-icon", "d-icon--sm");
   });
 
   it("says so when nothing is combined, and re-reads the list at each open", async () => {

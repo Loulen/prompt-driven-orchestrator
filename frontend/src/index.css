@@ -14,6 +14,10 @@
 @import "./app/leftList.css";
 /* The command field's palette. */
 @import "./app/palette/palette.css";
+/* Stats: filter bar, figures, charts, tables, absorptions. */
+@import "./stats/stats.css";
+/* The Review page: header, ref bar, file tree, file cards, threads. */
+@import "./review/review.css";
 /* The launch forms: New Run, the Triggers, the Project modal. */
 @import "./run/components/newRun/launch.css";
 /* The welcome modal and the guided tours. */
@@ -342,55 +346,6 @@ body {
   border-radius: 6px;
   outline-offset: 12px;
   animation: pdo-section-land 2.2s ease-out both;
-}
-
-/* ---------------------------------------------------------------------------
- * Review page (#749): map @git-diff-view/react's dark theme onto PDO tokens so
- * the third-party body reads like the rest of the app (added = st-done,
- * deleted = st-failed, plain = bg-2). Scoped to the page so nothing else moves.
- * ------------------------------------------------------------------------- */
-.pdo-review .diff-tailwindcss-wrapper {
-  --diff-border--: var(--line);
-  --diff-plain-content--: var(--surface-1);
-  --diff-plain-lineNumber--: var(--surface-1);
-  --diff-plain-lineNumber-color--: var(--text-3);
-  --diff-expand-content--: var(--surface-1);
-  --diff-expand-lineNumber--: var(--surface-1);
-  --diff-expand-lineNumber-color--: var(--text-3);
-  --diff-add-content--: color-mix(in oklab, var(--color-st-done) 14%, transparent);
-  --diff-add-content-highlight--: color-mix(in oklab, var(--color-st-done) 28%, transparent);
-  --diff-add-lineNumber--: color-mix(in oklab, var(--color-st-done) 14%, transparent);
-  --diff-del-content--: color-mix(in oklab, var(--color-st-failed) 14%, transparent);
-  --diff-del-content-highlight--: color-mix(in oklab, var(--color-st-failed) 28%, transparent);
-  --diff-del-lineNumber--: color-mix(in oklab, var(--color-st-failed) 14%, transparent);
-  --diff-empty-content--: var(--surface-2);
-  --diff-hunk-content--: var(--surface-2);
-  --diff-hunk-content-color--: var(--text-3);
-  --diff-hunk-lineNumber--: var(--surface-2);
-  --diff-hunk-lineNumber-hover--: var(--active);
-  --diff-add-widget--: var(--primary);
-  --diff-add-widget-color--: var(--primary-ink);
-  color: var(--text);
-}
-.pdo-review .diff-tailwindcss-wrapper .diff-style-root {
-  font-family: var(--font-code);
-}
-/* The hunk-separator expanders: PDO accent on hover, like the prototype. */
-.pdo-review .diff-line-hunk-action button:hover {
-  color: var(--primary);
-}
-
-/* #751: a review reply that just landed over the WebSocket — 2 s outline flash. */
-@keyframes pdo-review-flash {
-  0% {
-    box-shadow: 0 0 0 2px var(--color-st-running);
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-  }
-}
-.pdo-review-flash {
-  animation: pdo-review-flash 2.4s ease-out;
 }
 
 /* #779: the attachments zone flashes once when a drop is refused. */

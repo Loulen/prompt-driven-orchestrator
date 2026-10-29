@@ -52,8 +52,8 @@ export default function CompletionList({ completion, textarea, onPick }: Props) 
     <div
       role="listbox"
       data-testid="review-completion-list"
-      className="fixed z-[60] max-h-[240px] overflow-y-auto rounded-md border border-line-strong bg-surface-1 py-1 font-sans shadow-[0_12px_32px_rgba(0,0,0,0.55)]"
-      style={{ top: place?.top ?? 0, left: place?.left ?? 0, width: WIDTH, fontSize: "11px" }}
+      className="d-pop fixed z-[60] max-h-[240px] overflow-y-auto py-1 font-sans text-xs"
+      style={{ top: place?.top ?? 0, left: place?.left ?? 0, width: WIDTH }}
     >
       {items.map((item, i) => {
         const s = item.suggestion;
@@ -79,13 +79,13 @@ export default function CompletionList({ completion, textarea, onPick }: Props) 
             <span className="min-w-0 truncate">
               <span className="text-text">{s.label}</span>
               {s.hint && (
-                <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+                <span className="font-mono text-text-3 text-2xs">
                   {" "}
                   {s.hint}
                 </span>
               )}
             </span>
-            <span className="text-text-3" style={{ fontSize: "10px" }}>
+            <span className="text-text-3 text-2xs">
               {s.detail ?? ""}
             </span>
           </div>

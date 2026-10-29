@@ -154,9 +154,10 @@ selected Run, or when its repository belongs to no Projet.
 ### `stats/tab`
 
 - **Accepts**: tab.
-- **Renders**: a rail entry of the Stats per tab, labelled with its label, **after Performance**.
-  The tab renders in the Stats frame: its header (period presets, « Computed », Refresh, ✕) stays
-  the core's, the component fills the content pane, behind its error boundary (a component that
+- **Renders**: a tab of the Stats strip per tab, labelled with its label and a generic icon,
+  **after Performance**. The tab renders in the Stats frame: its header (period presets,
+  « Computed », Refresh, ✕) stays the core's, the component fills the content pane (padded, no
+  filter bar of the core), behind its error boundary (a component that
   throws shows « This element of the extension … failed » in its tab, the other tabs, the
   extension's included, still open).
   Nothing without a contribution.

@@ -142,3 +142,66 @@ describe("FullWindowShell — secondary panel frame (#944)", () => {
     });
   });
 });
+
+describe("FullWindowShell — a strip of tabs under the header", () => {
+  function Strip() {
+    const [active, setActive] = useState("a");
+    return (
+      <FullWindowShell
+        title="Surface"
+        subtitle={active === "a" ? "Alpha" : "Beta"}
+        testId="surface"
+        rail={[
+          { id: "a", label: "Alpha", icon: <span data-testid="icon-a" /> },
+          { id: "b", label: "Beta" },
+        ]}
+        railPlacement="top"
+        railAside={<span data-testid="strip-aside">dates</span>}
+        activeRail={active}
+        onRailChange={setActive}
+        railAriaLabel="Sections"
+        railTestIdPrefix="surface-tab"
+        onClose={() => {}}
+        closeLabel="Close surface"
+      >
+        <p>Main</p>
+      </FullWindowShell>
+    );
+  }
+
+  it("draws the tabs with their icons, the aside at the end, and walks them with ← →", () => {
+    render(<Strip />);
+    const strip = screen.getByRole("tablist", { name: "Sections" });
+    expect(screen.getByTestId("surface-header")).not.toContainElement(strip);
+    expect(within(strip).getByTestId("icon-a")).toBeInTheDocument();
+    expect(screen.getByTestId("strip-aside")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-header")).toHaveTextContent("SurfaceAlpha");
+
+    fireEvent.keyDown(strip, { key: "ArrowRight" });
+    expect(screen.getByTestId("surface-tab-b")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("surface-header")).toHaveTextContent("SurfaceBeta");
+    // ↑ ↓ belong to the left rail only.
+    fireEvent.keyDown(strip, { key: "ArrowDown" });
+    expect(screen.getByTestId("surface-tab-b")).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(strip, { key: "ArrowLeft" });
+    expect(screen.getByTestId("surface-tab-a")).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("cuts a long tab name, named in full on hover, and scrolls the tab chosen into view", () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      render(<Strip />);
+      const label = screen.getByText("Beta");
+      expect(label).toHaveClass("truncate");
+      expect(label).toHaveAttribute("title", "Beta");
+      fireEvent.keyDown(screen.getByRole("tablist", { name: "Sections" }), { key: "ArrowRight" });
+      expect((scrollIntoView.mock.instances.at(-1) as unknown as HTMLElement).dataset.testid).toBe("surface-tab-b");
+    } finally {
+      // jsdom ships none: put back its absence, not an own `undefined`.
+      if (original) Element.prototype.scrollIntoView = original;
+      else delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
+  });
+});

@@ -6,10 +6,16 @@ import React from "react";
 import {
   Button,
   copyToClipboard,
-  KeyValue,
+  LiveArtifacts,
   openProbedSocket,
   Segmented,
+  SessionActions,
+  SessionConfig,
+  SessionHeader,
+  SessionInfo,
+  SessionTabs,
   SessionTerminal,
+  SessionWaiting,
   TerminalZoom,
   useActorDisplay,
   useCurrentActor,
@@ -191,9 +197,12 @@ function TestPageBody({ context, navigate, path }) {
 // The demonstration of a Session hébergée (API 0.19): one shell (`demo`), or
 // one agent (`demo-agent`), the same for every browser that opens the page.
 // Opened on the first visit, through the test extension's Host; its terminal is
-// the core's (`SessionTerminal`), its Zoom du terminal the core's control
-// (`TerminalZoom`), and a zoom the page imposes on top shows how the two
-// combine.
+// the core's (`SessionTerminal`), and its detail, in a 400 px drawer, is
+// composed of the core's bricks: the wait, the header, the gestures (after the
+// page's own « Full screen »), the tabs (Details, Events, then the
+// `session/detail` tabs of the extensions), and under Details its Artefacts
+// live, its Zoom du terminal, what it is and its configuration. A zoom the
+// page imposes on top shows how the two zooms combine.
 async function callDemo(method, url, body) {
   const response = await fetch(url, {
     method,
@@ -209,14 +218,13 @@ async function callDemo(method, url, body) {
   return json;
 }
 
+// The session `key`, opened on the first visit; its id once known.
 function useDemoSession(key, kind) {
-  const [session, setSession] = React.useState(null);
+  const [id, setId] = React.useState(null);
   const [error, setError] = React.useState(null);
   const url = `/ext/test/sessions/${key}`;
   React.useEffect(() => {
     let alive = true;
-    const show = (s) => alive && setSession(s);
-    const fail = (e) => alive && setError(e.message);
     // Another browser may open it at the same moment: its key is then taken.
     callDemo("GET", url)
       .catch((e) =>
@@ -226,33 +234,15 @@ function useDemoSession(key, kind) {
             )
           : Promise.reject(e),
       )
-      .then(show, fail);
-    const socket = openProbedSocket("/ws");
-    socket.onMessage((data) => {
-      if (typeof data !== "string") return;
-      let message;
-      try {
-        message = JSON.parse(data);
-      } catch {
-        return;
-      }
-      if (message.type === "hosted_session_changed" && message.session?.key === key) show(message.session);
-    });
+      .then(
+        (session) => alive && setId(session.id),
+        (e) => alive && setError(e.message),
+      );
     return () => {
       alive = false;
-      socket.close();
     };
   }, [key, kind, url]);
-  const gesture = (method, suffix) => {
-    setError(null);
-    callDemo(method, `${url}${suffix}`).then(setSession, (e) => setError(e.message));
-  };
-  return {
-    session,
-    error,
-    terminate: () => gesture("DELETE", ""),
-    relaunch: () => gesture("POST", "/relaunch"),
-  };
+  return { id, error };
 }
 
 const HOST_ZOOMS = [
@@ -260,64 +250,68 @@ const HOST_ZOOMS = [
   { value: "0.75", label: "×0.75" },
 ];
 
+const pad = { padding: "var(--g-4) var(--g-5)" };
+
 function HostedSessionDemo({ agent }) {
-  const { session, error, terminate, relaunch } = useDemoSession(agent ? "demo-agent" : "demo", agent ? "agent" : "shell");
+  const { id, error } = useDemoSession(agent ? "demo-agent" : "demo", agent ? "agent" : "shell");
   const [hostZoom, setHostZoom] = React.useState("1");
-  const starter = useActorDisplay(session?.started_by ?? null);
-  const ended = session?.state === "ended";
+  const [full, setFull] = React.useState(false);
   return h(
     "div",
     { "data-testid": "hosted-demo", style: { display: "flex", flex: 1, width: "100%", height: "100%", minHeight: 0 } },
     h(
       "div",
       { style: { display: "flex", flex: 1, flexDirection: "column", minWidth: 0, minHeight: 0 } },
-      session
-        ? h(SessionTerminal, { session: session.id, zoom: Number(hostZoom) })
-        : h("p", { style: { padding: "var(--g-5)" }, "data-testid": "hosted-demo-loading" }, error ?? "Opening the session…"),
+      id
+        ? h(SessionTerminal, {
+            session: id,
+            zoom: Number(hostZoom),
+            toolbarActions: full
+              ? h(Button, { size: "sm", onClick: () => setFull(false), "data-testid": "hosted-demo-detail" }, "Show detail")
+              : null,
+          })
+        : h("p", { style: pad, "data-testid": "hosted-demo-loading" }, error ?? "Opening the session…"),
     ),
-    h(
-      "aside",
-      {
-        style: {
-          display: "flex",
-          flexDirection: "column",
-          gap: "var(--g-5)",
-          width: "400px",
-          flex: "none",
-          padding: "var(--g-5)",
-          borderLeft: "1px solid var(--line)",
-          background: "var(--surface-1)",
-          overflow: "auto",
+    id &&
+      !full &&
+      h(
+        "aside",
+        {
+          "data-testid": "hosted-demo-drawer",
+          style: {
+            display: "flex",
+            flexDirection: "column",
+            width: "400px",
+            flex: "none",
+            minHeight: 0,
+            borderLeft: "1px solid var(--line)",
+            background: "var(--surface-1)",
+            overflow: "auto",
+          },
         },
-      },
-      h("span", { className: "d-caps" }, "Hosted session"),
-      session &&
-        h(KeyValue, {
-          rows: [
-            { k: "Key", v: session.key, mono: true },
-            { k: "Kind", v: session.kind },
-            { k: "State", v: h("span", { "data-testid": "hosted-demo-state" }, session.state) },
-            { k: "Folder", v: session.cwd, mono: true },
-            { k: "Started by", v: starter?.name ?? session.started_by?.kind ?? "unknown" },
+        h(SessionWaiting, { session: id }),
+        h(SessionHeader, { session: id, name: agent ? "Demo agent" : "Demo shell", context: "on the test page" }),
+        h(
+          SessionActions,
+          { session: id },
+          h(Button, { onClick: () => setFull(true), "data-testid": "hosted-demo-full-screen" }, "Full screen"),
+        ),
+        h(SessionTabs, {
+          session: id,
+          details: [
+            h(LiveArtifacts, { key: "live", session: id }),
+            h("div", { key: "zoom", style: pad }, h(TerminalZoom, { session: id })),
+            h(SessionInfo, { key: "info", session: id }),
+            h(SessionConfig, { key: "config", session: id }),
+            h(
+              "div",
+              { key: "host-zoom", style: { ...pad, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "var(--g-2)" } },
+              h("span", { className: "d-caps" }, "Zoom the page imposes"),
+              h(Segmented, { label: "Host zoom", size: "sm", items: HOST_ZOOMS, value: hostZoom, onChange: setHostZoom }),
+            ),
           ],
         }),
-      session && h(TerminalZoom, { session: session.id }),
-      h(
-        "div",
-        { style: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "var(--g-2)" } },
-        h("span", { className: "d-caps" }, "Zoom the page imposes"),
-        h(Segmented, { label: "Host zoom", size: "sm", items: HOST_ZOOMS, value: hostZoom, onChange: setHostZoom }),
       ),
-      session &&
-        h(
-          "div",
-          { style: { display: "flex", gap: "var(--g-3)" } },
-          ended
-            ? h(Button, { onClick: relaunch, "data-testid": "hosted-demo-relaunch" }, "Relaunch")
-            : h(Button, { tone: "danger", onClick: terminate, "data-testid": "hosted-demo-terminate" }, "Terminate"),
-        ),
-      error && session && h("p", { role: "alert", "data-testid": "hosted-demo-error" }, error),
-    ),
   );
 }
 

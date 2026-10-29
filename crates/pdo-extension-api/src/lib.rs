@@ -90,7 +90,7 @@ pub use session::{
 };
 pub use skill::{ExtensionSkill, SkillFile};
 pub use ui::{
-    CommandOperation, CompletionRender, ContextKey, HostedLocation, Slot, UiCommand,
+    CommandOperation, CompletionRender, ContextKey, HostedLocation, PageCounter, Slot, UiCommand,
     UiContribution, UiContributions, UiElement, UiElementKind, UiLocation, UiSlot, When, UI_MODULE,
     UI_MODULE_MAJOR,
 };
@@ -123,6 +123,7 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `terminate_session`, `relaunch_session`, `configure_session`,
 /// `type_in_session`, `forget_session`, `zoom_session`, `live_artifacts` and
 /// `live_artifact`, `SessionKind::Hosted`, the extension and key of a
-/// `SessionRef`, and the `hosted_session_changed`, `hosted_session_forgotten`
-/// and `hosted_live_artifacts_changed` events).
+/// `SessionRef`, the `hosted_session_changed`, `hosted_session_forgotten`
+/// and `hosted_live_artifacts_changed` events, the `session/detail` location
+/// and the counter of a page's icon, `UiContribution::counter`).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

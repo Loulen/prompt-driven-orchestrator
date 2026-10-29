@@ -1,0 +1,269 @@
+/*
+ * CORE-125 — the bricks of a Session hébergée's detail, which an extension
+ * composes (a drawer, a pane): header, gestures, tabs, Artefacts live,
+ * information, configuration, Événements de session. Tokens only; the kit's
+ * primitives draw the controls.
+ */
+
+/* ---------------------------------------------------------------- header */
+.hs-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-1);
+  min-width: 0;
+  padding: var(--g-4) var(--g-5) var(--g-3);
+}
+
+.hs-head__line {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  min-width: 0;
+}
+
+.hs-head__icon {
+  flex: none;
+  color: var(--text-2);
+}
+
+.hs-head__name {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: var(--w-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hs-head__fill {
+  flex: 1;
+}
+
+.hs-head__meta {
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--font-code);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- gestures */
+.hs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--g-2);
+  padding: 0 var(--g-5) var(--g-4);
+}
+
+.hs-actions__fill {
+  flex: 1;
+}
+
+.hs-error {
+  flex-basis: 100%;
+  color: var(--color-st-failed);
+  font-size: var(--fs-xs);
+}
+
+/* ---------------------------------------------------------------- tabs */
+.hs-tabs {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+/* The kit's strip fills its bar's height. */
+.hs-tabs__bar {
+  flex: none;
+  height: var(--h-bar);
+  padding: 0 var(--g-5);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.hs-tabs__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hs-tabs__body > * + * {
+  border-top: 1px solid var(--line-soft);
+}
+
+.hs-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-2);
+  padding: var(--g-4) var(--g-5);
+}
+
+/* A title and its hint on one line, as the Zoom du terminal draws its own. */
+.hs-block__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--g-3);
+  min-width: 0;
+}
+
+.hs-block__title {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.hs-block__hint {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- Artefacts live */
+.hs-live__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-2);
+}
+
+.hs-live__row {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-ui);
+  background: var(--surface-1);
+}
+
+.hs-live__line {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  column-gap: var(--g-3);
+  padding: var(--g-2) var(--g-3);
+}
+
+.hs-live__ic {
+  color: var(--text-3);
+}
+
+.hs-live__name {
+  overflow: hidden;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: var(--fs-sm);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hs-live__name:hover {
+  text-decoration: underline;
+}
+
+.hs-live__where {
+  grid-column: 3 / 4;
+  overflow: hidden;
+  color: var(--text-3);
+  font-family: var(--font-code);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hs-live__size {
+  color: var(--text-3);
+  font-family: var(--font-code);
+  font-size: var(--fs-xs);
+}
+
+.hs-live__preview {
+  overflow: auto;
+  max-height: 320px;
+  padding: var(--g-2) var(--g-3) var(--g-3);
+  border-top: 1px solid var(--line-soft);
+}
+
+.hs-live__preview img {
+  display: block;
+  max-width: 100%;
+}
+
+/* A task list reads as its boxes, without bullets. */
+.hs-live__preview .contains-task-list {
+  padding-left: 0;
+}
+
+.hs-live__preview .task-list-item {
+  list-style: none;
+}
+
+.hs-live__text {
+  margin: 0;
+  color: var(--text-2);
+  font-family: var(--font-code);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---------------------------------------------------------------- configuration */
+.hs-config__prompt {
+  min-height: 72px;
+}
+
+.hs-config__save {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--g-2);
+}
+
+/* ---------------------------------------------------------------- Événements de session */
+.hs-events {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: var(--g-3) var(--g-5);
+  list-style: none;
+}
+
+.hs-event {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--g-3);
+  min-height: var(--h-row);
+  font-size: var(--fs-sm);
+}
+
+.hs-event__what {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hs-event__by {
+  color: var(--text-3);
+}
+
+.hs-event__at {
+  color: var(--text-3);
+  font-family: var(--font-code);
+  font-size: var(--fs-xs);
+}
+
+.hs-event__message {
+  grid-column: 2 / 4;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}

@@ -59,7 +59,13 @@
 //! /ext/test/sessions/<key>/live[/<path>]` lists and reads its Artefacts live.
 //! The test page at `#/ext/test/topbar/end/hosted` opens the shell `demo`
 //! (`…/hosted/agent`: the agent `demo-agent`) and shows its terminal and its
-//! Zoom du terminal, the same for every browser.
+//! detail (the core's bricks: header, gestures, tabs, Artefacts live, Zoom du
+//! terminal, information, configuration, journal), the same for every
+//! browser; `test2` adds a tab to that detail (`session/detail`). The test
+//! page's icon counts the live sessions the caller started (`GET
+//! /ext/test/counter`), in the accent while one waits. The detail drives the
+//! session by its id: `GET /sessions/<id>/hosted`, `POST …/terminate`, `POST
+//! …/relaunch`, `PUT …/config`, `GET …/events`, `GET …/live[/<path>]`.
 //! Their records live under `$HOME/.pdo/hosted/`; a hosted session's `pdo`
 //! acts as who opened it (`pdo wait-user` declares its wait, `pdo complete`
 //! is refused).
@@ -81,7 +87,8 @@
 //! its actor and its Projets (`operation.projects`).
 //!
 //! A second test extension (`test2`) is registered after it: it adds a section
-//! to `project/edit`, so that location shows two extensions' sections.
+//! to `project/edit`, so that location shows two extensions' sections, and a
+//! tab to `session/detail`.
 //!
 //! Its command line answers `PDO_DAEMON_URL=http://127.0.0.1:<port> pdo ext test
 //! echo salut` (stdout `salut`, stderr the Actor it sees), and its skill

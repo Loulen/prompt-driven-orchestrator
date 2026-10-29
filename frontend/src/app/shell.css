@@ -80,6 +80,32 @@
     min-width: 0;
     overflow: hidden;
   }
+  /* CORE-125: the counter of a Page's icon, a 14 px pill at its top right;
+     neutral, or in the accent when something waits for the Actor. */
+  .sh-tb__count {
+    position: absolute;
+    top: 0;
+    right: 0;
+    display: grid;
+    place-items: center;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--surface-2);
+    box-shadow: 0 0 0 1px var(--line);
+    color: var(--text-2);
+    font-family: var(--font-code);
+    font-size: var(--fs-2xs);
+    font-weight: var(--w-strong);
+    line-height: 1;
+    pointer-events: none;
+  }
+  .sh-tb__count[data-accent] {
+    background: var(--primary);
+    box-shadow: none;
+    color: var(--primary-ink);
+  }
   .sh-tb__sep {
     flex: none;
     width: 1px;

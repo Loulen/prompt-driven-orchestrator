@@ -218,6 +218,21 @@ impl SharedTerminalRegistry {
         self.inner.lock().unwrap().sessions.get(session)?.pilot()
     }
 
+    /// Who drives `session`: the Actor of the latest connection of the poste
+    /// whose keystrokes reach the pane (the pilot, or the one poste of a solo
+    /// terminal); `None` while no one shows it.
+    pub fn driver(&self, session: &str) -> Option<Actor> {
+        let inner = self.inner.lock().unwrap();
+        let presence = inner.sessions.get(session)?;
+        let poste = presence.driver()?;
+        presence
+            .connections
+            .iter()
+            .filter(|c| c.poste == poste)
+            .max_by_key(|c| c.arrived)
+            .map(|c| c.actor.clone())
+    }
+
     /// The pilot of `session` when `poste` watches it as a spectator; `None`
     /// when `poste` pilots it, is alone on it, or does not show it.
     pub fn spectated_pilot(&self, session: &str, poste: &str) -> Option<Pilot> {
@@ -372,6 +387,39 @@ mod tests {
         assert_eq!(a.last().unwrap()["role"], "solo");
         assert!(!a.spectator());
         assert!(!a.ignore_size());
+    }
+
+    fn join_as(reg: &SharedTerminalRegistry, poste: &str, actor: Actor) -> Probe {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let m = reg.join("s", Some(poste.to_string()), actor, tx);
+        Probe { m, rx }
+    }
+
+    fn named(id: &str) -> Actor {
+        Actor::Identified {
+            namespace: "test".into(),
+            id: id.into(),
+        }
+    }
+
+    #[test]
+    fn the_driver_is_the_lone_poste_then_the_pilot_and_nobody_once_all_left() {
+        let reg = SharedTerminalRegistry::default();
+        assert_eq!(reg.driver("s"), None, "nobody shows it");
+        let alice = join_as(&reg, "A", named("alice"));
+        assert_eq!(reg.driver("s"), Some(named("alice")), "solo: its one poste");
+        let bob = join_as(&reg, "B", named("bob"));
+        assert_eq!(
+            reg.driver("s"),
+            Some(named("alice")),
+            "the first arrived pilots"
+        );
+        assert!(reg.take_control("s", bob.m.id));
+        assert_eq!(reg.driver("s"), Some(named("bob")));
+        reg.leave("s", bob.m.id);
+        assert_eq!(reg.driver("s"), Some(named("alice")));
+        reg.leave("s", alice.m.id);
+        assert_eq!(reg.driver("s"), None);
     }
 
     #[test]

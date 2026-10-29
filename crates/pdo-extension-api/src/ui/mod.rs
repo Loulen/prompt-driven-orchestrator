@@ -16,7 +16,7 @@ mod when;
 use serde::Serialize;
 
 pub use command::{CommandOperation, UiCommand};
-pub use contribution::{CompletionRender, UiContribution, UiElement, UiElementKind};
+pub use contribution::{CompletionRender, PageCounter, UiContribution, UiElement, UiElementKind};
 pub use hosted::{ContextKey, HostedLocation};
 pub use location::UiLocation;
 pub use slot::{Slot, UiSlot};

@@ -77,6 +77,14 @@ pub enum UiLocation {
     /// contribution, after SKILL.md and Files.
     #[serde(rename = "skill/detail")]
     SkillDetail,
+    /// A tab of the detail of a Session hébergée, as the extension that holds
+    /// it composes that detail with the core's bricks (`SessionTabs` of
+    /// `@pdo/extension-ui`): a [`UiElement::Tab`] per contribution, after
+    /// Details and Events. Hands over the session as `entity` (`kind:
+    /// "session"`, its `id`, its key as `name`) and as `session` (its
+    /// extension, its key, its kind, its state). Since 0.19.
+    #[serde(rename = "session/detail")]
+    SessionDetail,
     /// A section of the Projet editor, under the core's fields, at creation as
     /// at edition: a [`UiElement::Section`] per contribution, taking part in the
     /// editor's Save and Cancel.
@@ -257,6 +265,7 @@ impl UiLocation {
         UiLocation::NodeDetail,
         UiLocation::TriggerDetail,
         UiLocation::SkillDetail,
+        UiLocation::SessionDetail,
         UiLocation::ProjectEdit,
         UiLocation::RunNew,
         UiLocation::NodeConfig,
@@ -306,6 +315,7 @@ impl UiLocation {
             UiLocation::NodeDetail => "node/detail",
             UiLocation::TriggerDetail => "trigger/detail",
             UiLocation::SkillDetail => "skill/detail",
+            UiLocation::SessionDetail => "session/detail",
             UiLocation::ProjectEdit => "project/edit",
             UiLocation::RunNew => "run/new",
             UiLocation::NodeConfig => "node/config",
@@ -575,6 +585,29 @@ mod tests {
         {
             assert!(!location.accepts(&search), "{}", location.id());
         }
+    }
+
+    #[test]
+    fn the_detail_of_a_hosted_session_takes_tabs_only() {
+        assert_eq!(UiLocation::SessionDetail.id(), "session/detail");
+        assert!(UiLocation::ALL.contains(&UiLocation::SessionDetail));
+        assert_eq!(
+            serde_json::to_value(UiLocation::SessionDetail).unwrap(),
+            "session/detail"
+        );
+        let tab = UiElement::Tab {
+            component: "T".into(),
+        };
+        let section = UiElement::Section {
+            component: "S".into(),
+        };
+        let action = UiElement::Action {
+            command: "c".into(),
+        };
+        assert!(UiLocation::SessionDetail.accepts(&tab));
+        assert!(!UiLocation::SessionDetail.accepts(&section));
+        assert!(!UiLocation::SessionDetail.accepts(&action));
+        assert!(!UiLocation::SessionDetail.is_action_location());
     }
 
     #[test]

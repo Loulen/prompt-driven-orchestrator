@@ -58,7 +58,7 @@ impl Hosted {
         let id = hosted_session_name(&uuid::Uuid::new_v4().simple().to_string()[..12]);
         let now = pdo_kernel::clock::now_iso();
         let mut record = HostedRecord::opening(&id, extension, &open, &cwd, &now);
-        record.session.started_by = Some(actor.clone());
+        record.opened_by(actor, &now);
         record.conversation_id = harness
             .as_ref()
             .filter(|h| h.pins_session_id())

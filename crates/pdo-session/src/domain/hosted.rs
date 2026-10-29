@@ -1,7 +1,7 @@
 //! A Session hébergée as the core records it (ADR-0092): what the extensions
 //! read of it ([`HostedSession`], its Zoom du terminal included), plus what
-//! only the core keeps (the conversation to resume), and the transitions of
-//! its state. Pure: the clock is a parameter.
+//! only the core keeps (the conversation to resume, its journal), and the
+//! transitions of its state. Pure: the clock is a parameter.
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +10,51 @@ use pdo_extension_api::{
     MAX_TERMINAL_ZOOM, MIN_TERMINAL_ZOOM,
 };
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+/// How many entries of its journal a record keeps: the oldest go first.
+pub const JOURNAL_LENGTH: usize = 50;
+
+/// What happened to a Session hébergée, as its detail lists it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum HostedSessionEventKind {
+    /// Someone opened it.
+    Opened,
+    /// Its process came up.
+    Running,
+    /// Its agent declared it waits for a person (`pdo wait-user`).
+    AwaitingUser,
+    /// A person answered: it runs again.
+    Resumed,
+    /// Someone terminated it.
+    Terminated,
+    /// Its process exited, or was gone when the daemon started.
+    Exited,
+    /// Someone relaunched it.
+    Relaunched,
+    /// Someone changed its configuration, for its next relaunch.
+    Configured,
+}
+
+/// One entry of the journal of a Session hébergée: a change of it, when, and by
+/// whom when a person or an agent made it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct HostedSessionEvent {
+    /// RFC 3339.
+    pub at: String,
+    pub kind: HostedSessionEventKind,
+    /// Who made it; `None` for what the session did by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub by: Option<Actor>,
+    /// What its agent said it waits for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message: Option<String>,
+}
 
 /// One Session hébergée, as it is stored and survives a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +68,9 @@ pub struct HostedRecord {
     /// starts a new conversation.
     #[serde(default)]
     pub harness: Option<String>,
+    /// Its journal, oldest first, the last [`JOURNAL_LENGTH`].
+    #[serde(default)]
+    pub journal: Vec<HostedSessionEvent>,
 }
 
 impl HostedRecord {
@@ -40,7 +88,34 @@ impl HostedRecord {
             session,
             conversation_id: None,
             harness: None,
+            journal: Vec::new(),
         }
+    }
+
+    /// `actor` opened it, `now`: its starter, and the first entry of
+    /// its journal.
+    pub fn opened_by(&mut self, actor: &Actor, now: &str) {
+        self.session.started_by = Some(actor.clone());
+        self.note(HostedSessionEventKind::Opened, Some(actor), None, now);
+    }
+
+    /// Add `kind` to its journal, keeping the last
+    /// [`JOURNAL_LENGTH`].
+    fn note(
+        &mut self,
+        kind: HostedSessionEventKind,
+        by: Option<&Actor>,
+        message: Option<String>,
+        now: &str,
+    ) {
+        self.journal.push(HostedSessionEvent {
+            at: now.to_string(),
+            kind,
+            by: by.cloned(),
+            message,
+        });
+        let over = self.journal.len().saturating_sub(JOURNAL_LENGTH);
+        self.journal.drain(..over);
     }
 
     /// The session's name (its tmux session).
@@ -65,16 +140,28 @@ impl HostedRecord {
             return false;
         }
         self.set(HostedState::Running, None, now);
+        self.note(HostedSessionEventKind::Running, None, None, now);
         true
     }
 
     /// It ended, for `reason`. Whether it changed: an ended session keeps
     /// the reason it ended for.
     pub fn end(&mut self, reason: EndReason, now: &str) -> bool {
+        self.end_by(reason, None, now)
+    }
+
+    /// It ended, for `reason`, by the gesture of `by` when someone made it.
+    /// Whether it changed, as [`Self::end`].
+    pub fn end_by(&mut self, reason: EndReason, by: Option<&Actor>, now: &str) -> bool {
         if !self.is_live() {
             return false;
         }
         self.set(HostedState::Ended, Some(reason), now);
+        let kind = match reason {
+            EndReason::Terminated => HostedSessionEventKind::Terminated,
+            _ => HostedSessionEventKind::Exited,
+        };
+        self.note(kind, by, None, now);
         true
     }
 
@@ -86,6 +173,7 @@ impl HostedRecord {
         }
         self.session.started_by = Some(actor.clone());
         self.set(HostedState::Starting, None, now);
+        self.note(HostedSessionEventKind::Relaunched, Some(actor), None, now);
         true
     }
 
@@ -101,7 +189,8 @@ impl HostedRecord {
             _ => return None,
         };
         self.set(HostedState::AwaitingUser, None, now);
-        self.session.wait_message = message;
+        self.session.wait_message = message.clone();
+        self.note(HostedSessionEventKind::AwaitingUser, None, message, now);
         Some(declared)
     }
 
@@ -112,17 +201,19 @@ impl HostedRecord {
             return false;
         }
         self.set(HostedState::Running, None, now);
+        self.note(HostedSessionEventKind::Resumed, None, None, now);
         true
     }
 
-    /// Its configuration is now `config`, for its next launch. Whether it
+    /// `by` made `config` its configuration, for its next launch. Whether it
     /// changed.
-    pub fn configure(&mut self, config: HostedConfig, now: &str) -> bool {
+    pub fn configure(&mut self, config: HostedConfig, by: &Actor, now: &str) -> bool {
         if self.session.config == config {
             return false;
         }
         self.session.config = config;
         self.session.updated_at = now.to_string();
+        self.note(HostedSessionEventKind::Configured, Some(by), None, now);
         true
     }
 
@@ -400,8 +491,8 @@ mod tests {
             Path::new("/w"),
             "t0",
         );
-        assert!(!record.configure(HostedConfig::default(), "t1"));
-        assert!(record.configure(HostedConfig::default().with_model("opus"), "t2"));
+        assert!(!record.configure(HostedConfig::default(), &alice(), "t1"));
+        assert!(record.configure(HostedConfig::default().with_model("opus"), &alice(), "t2"));
         assert_eq!(record.session.config.model.as_deref(), Some("opus"));
         assert_eq!(record.session.updated_at, "t2");
         assert_eq!(
@@ -409,6 +500,63 @@ mod tests {
             HostedState::Starting,
             "its state is not touched"
         );
+    }
+
+    #[test]
+    fn each_change_of_a_record_is_journaled_with_who_made_it() {
+        use HostedSessionEventKind::*;
+        let mut record = HostedRecord::opening(
+            "pdo-hosted-1",
+            "test",
+            &OpenSession::agent("k"),
+            Path::new("/w"),
+            "t0",
+        );
+        record.opened_by(&alice(), "t0");
+        assert_eq!(record.session.started_by, Some(alice()));
+        record.run("t1");
+        record.await_user(Some("Which DB?".into()), "t2");
+        record.resume("t3");
+        record.configure(HostedConfig::default().with_model("opus"), &alice(), "t4");
+        record.zoom(150, "t5").unwrap();
+        record.end_by(EndReason::Terminated, Some(&alice()), "t6");
+        record.relaunch(&alice(), "t7");
+        record.run("t8");
+        record.end(EndReason::Exited, "t9");
+        let kinds: Vec<_> = record.journal.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                Opened,
+                Running,
+                AwaitingUser,
+                Resumed,
+                Configured,
+                Terminated,
+                Relaunched,
+                Running,
+                Exited
+            ],
+            "a zoom is not journaled"
+        );
+        assert_eq!(record.journal[0].by, Some(alice()));
+        assert_eq!(record.journal[1].by, None, "it came up by itself");
+        assert_eq!(record.journal[2].message.as_deref(), Some("Which DB?"));
+        assert_eq!(record.journal[5].at, "t6");
+        assert_eq!(record.journal[5].by, Some(alice()));
+
+        for i in 0..JOURNAL_LENGTH {
+            record.configure(
+                HostedConfig::default().with_effort(i.to_string()),
+                &alice(),
+                "t",
+            );
+        }
+        assert_eq!(record.journal.len(), JOURNAL_LENGTH, "the oldest go first");
+        assert!(record.journal.iter().all(|e| e.kind == Configured));
+        let json = serde_json::to_value(&record.journal[0]).unwrap();
+        assert!(json.get("message").is_none());
+        assert_eq!(json["kind"], "configured");
     }
 
     #[test]

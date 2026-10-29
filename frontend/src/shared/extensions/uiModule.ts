@@ -13,7 +13,11 @@
  * (`SearchResult`, `SearchFunction`); nothing more is exported. Since 0.19 it
  * hands out the core's session terminal (`SessionTerminal`), for any session
  * by its id, and the Zoom du terminal of a Session hébergée
- * (`useTerminalZoom`, `TerminalZoom`).
+ * (`useTerminalZoom`, `TerminalZoom`); and the bricks of a Session
+ * hébergée's detail, which the extension lays out (`SessionHeader`,
+ * `SessionActions`, `SessionWaiting`, `SessionTabs`, `LiveArtifacts`,
+ * `SessionInfo`, `SessionConfig`, `SessionEvents`), with their live state
+ * (`useHostedSession`).
  */
 
 import { useActorDisplay, useCurrentActor } from "../actors/store";
@@ -22,6 +26,15 @@ import { copyToClipboard } from "../lib/clipboard";
 import SessionTerminal from "../../session/components/SessionTerminal";
 import TerminalZoom from "../../session/components/TerminalZoom";
 import { useTerminalZoom } from "../../session/store/useTerminalZoom";
+import { useHostedSession } from "../../session/store/useHostedSession";
+import LiveArtifacts from "../../session/components/hosted/LiveArtifacts";
+import SessionActions from "../../session/components/hosted/SessionActions";
+import SessionConfig from "../../session/components/hosted/SessionConfig";
+import SessionEvents from "../../session/components/hosted/SessionEvents";
+import SessionHeader from "../../session/components/hosted/SessionHeader";
+import SessionInfo from "../../session/components/hosted/SessionInfo";
+import SessionTabs from "../../session/components/hosted/SessionTabs";
+import SessionWaiting from "../../session/components/hosted/SessionWaiting";
 import * as kit from "../ui/kit";
 import { HostedContribution, HostedContributions } from "./HostedContributions";
 import { runHostedCommand, useHostedContributions } from "./hosted";
@@ -65,6 +78,15 @@ export const extensionUiModule = {
   SessionTerminal,
   useTerminalZoom,
   TerminalZoom,
+  useHostedSession,
+  SessionHeader,
+  SessionActions,
+  SessionWaiting,
+  SessionTabs,
+  LiveArtifacts,
+  SessionInfo,
+  SessionConfig,
+  SessionEvents,
 };
 
 export type ExtensionUiModule = typeof extensionUiModule;

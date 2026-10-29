@@ -245,10 +245,10 @@ pub trait Host: Send + Sync {
 
     /// The Artefacts live of the Session hébergée `key` of the calling
     /// extension (API 0.19): the files its agent wrote in its
-    /// `PDO_LIVE_DIR`, by path. Empty for a key it never gave, and by
-    /// default. Synchronous and quick.
-    fn live_artifacts(&self, _key: &str) -> Vec<LiveArtifact> {
-        Vec::new()
+    /// `PDO_LIVE_DIR`, by path. `404` for a key it never gave. By default,
+    /// `503`. Synchronous and quick.
+    fn live_artifacts(&self, _key: &str) -> Result<Vec<LiveArtifact>, HostedRefusal> {
+        Err(HostedRefusal::unavailable(NO_HOSTED_SESSION))
     }
 
     /// The content of the Artefact live `path` (as
@@ -453,7 +453,7 @@ mod tests {
         ] {
             assert_eq!(gesture.await.unwrap_err().status, 503);
         }
-        assert!(NeutralHost.live_artifacts("s").is_empty());
+        assert_eq!(NeutralHost.live_artifacts("s").unwrap_err().status, 503);
         assert_eq!(
             NeutralHost.live_artifact("s", "a.md").unwrap_err().status,
             503

@@ -6,6 +6,7 @@
 //! proxy whitelist (`frontend/vite.config.ts`).
 
 mod assistant;
+mod hosted;
 pub mod origin;
 mod pane;
 mod sessions;
@@ -55,6 +56,17 @@ pub fn router(session: Arc<Session>) -> Router {
         .route(
             "/sessions/{session_id}/terminal-zoom",
             get(terminal_zoom::read).put(terminal_zoom::set),
+        )
+        // CORE-125: a Session hébergée by its id, for the detail of a session.
+        .route("/sessions/{session_id}/hosted", get(hosted::read))
+        .route("/sessions/{session_id}/terminate", post(hosted::terminate))
+        .route("/sessions/{session_id}/relaunch", post(hosted::relaunch))
+        .route("/sessions/{session_id}/config", put(hosted::configure))
+        .route("/sessions/{session_id}/events", get(hosted::events))
+        .route("/sessions/{session_id}/live", get(hosted::live))
+        .route(
+            "/sessions/{session_id}/live/{*path}",
+            get(hosted::live_artifact),
         )
         .route(
             "/sessions/{run_id}/manager/attach",

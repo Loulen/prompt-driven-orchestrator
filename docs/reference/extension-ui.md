@@ -114,6 +114,14 @@ selected Run, or when its repository belongs to no Projet.
 - **Icon**: a page's `icon`, or an action's command `icon`, is an SVG the extension serves. It is
   drawn as a mask in the colour of the text around it (hover and accent states apply). Without one,
   or while it loads, the button shows the label's first letter, boxed.
+- **Counter** (since 0.19): a page may declare where the counter of its icon is read
+  (`UiContribution::with_counter("/ext/<id>/counter")`, on the wire `counter`). The core reads it
+  for the current Actor when it shows the icon, again at each event of the extension on `/ws` (its
+  `extension_event`s, the events of its Sessions hébergées) and at each resync, a burst of events
+  read once. The path answers a `PageCounter`: `{"count": 3, "accent": true, "detail": "1
+  waiting"}`. A count above 0 shows as a 14 px pill at the top right of the icon, neutral, or in
+  the accent colour when `accent` is set; `detail` joins the label in the tooltip. A count of 0, a
+  page without counter, or a read that fails, shows nothing.
 - **Context**: `PageContext` for a page, `LocationContext` for an action.
 
 ### `topbar/account`
@@ -225,6 +233,17 @@ view). The component receives `entity` and `context`: `TabContext` = `LocationCo
 - **Renders**: a tab of a skill of the bank, after « SKILL.md » and « Files ».
 - **Context**: `TabContext`, `entity` = `{ kind: "skill", id, name, attributes: {} }`.
 - **0.1**: the `DetailTab { resource: Skill }` slot.
+
+### `session/detail`
+
+- **Accepts**: tab.
+- **Renders**: a tab of the detail of a Session hébergée, after « Details » and « Events », in
+  the `SessionTabs` brick the extension holding the session composes ([The detail of a Session
+  hébergée](#the-detail-of-a-session-hébergée)). No tab without a contribution, and none while the
+  session cannot be read.
+- **Context**: `SessionTabContext` = `TabContext` + `session` (`{ id, extension, key, kind,
+  state }`), `entity` = `{ kind: "session", id: <its id>, name: <its key>, attributes: {} }`.
+  Since 0.19.
 
 ### Sections
 
@@ -916,6 +935,7 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `copyToClipboard(text)` | Put `text` on the clipboard from a user gesture, as every Copy button of the core does: the Clipboard API, or outside a secure context (an instance served over plain http) `execCommand("copy")` on a hidden textarea. Resolves to whether the text was written, never rejects. Since 0.11 |
 | `Button`, `IconButton`, `Select`, `Menu`, `Modal`, `toast`… | The primitives of the design system, since 0.17 ([The design system](#the-design-system)) |
 | `SessionTerminal`, `TerminalZoom`, `useTerminalZoom(session)` | The core's session terminal and the Zoom du terminal, since 0.19 ([The session terminal](#the-session-terminal)) |
+| `SessionHeader`, `SessionActions`, `SessionWaiting`, `SessionTabs`, `LiveArtifacts`, `SessionInfo`, `SessionConfig`, `SessionEvents`, `useHostedSession(session)` | The bricks of a Session hébergée's detail and its live state, since 0.19 ([The detail of a Session hébergée](#the-detail-of-a-session-hébergée)) |
 | `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
 
 - **Context**: an element receives the host's `context`, merged over the context every location
@@ -1053,12 +1073,13 @@ import { SessionTerminal, TerminalZoom } from "@pdo/extension-ui";
 
 | Export | What it does |
 | --- | --- |
-| `SessionTerminal({ session, zoom?, toolbarIdentity?, toolbarActions?, expanded?, onExpand?, onLiveSocketChange?, onSpectatingChange? })` | The terminal of the session `session` (its tmux session's name: a Session hébergée's `id`, or any session the daemon holds), filling its parent. Its text is the core's size times the session's Zoom du terminal, live, times `zoom`, the factor the host imposes (`1` by default: a surface it scales, a thumbnail). The toolbar slots and callbacks are those of the core's terminal |
+| `SessionTerminal({ session, zoom?, toolbarIdentity?, toolbarActions?, expanded?, onExpand?, onLiveSocketChange?, onSpectatingChange? })` | The terminal of the session `session` (its tmux session's name: a Session hébergée's `id`, or any session the daemon holds), filling its parent. Its text is the core's size times the session's Zoom du terminal, live, times `zoom`, the factor the host imposes (`1` by default: a surface it scales, a thumbnail). The toolbar slots and callbacks are those of the core's terminal. A Session hébergée relaunched after it ended is connected to anew |
 | `TerminalZoom({ session })` | The control of the Zoom du terminal: 50, 75, 100, 125, 150 and 200 % between − and +, « same for everyone watching ». A refused change shows an error toast and goes back. Off for a session that carries none |
 | `useTerminalZoom(session)` | `{ zoom, hosted, setZoom }`: the Zoom du terminal in percent (100 for a session that carries none), followed live; `hosted` is `null` until the daemon answered; `setZoom(zoom)` sets it for every Poste and rejects with the refusal |
 
 The Zoom du terminal belongs to a Session hébergée, recorded with it: the same on every Poste and
-in every place its terminal shows. The control and `setZoom` go through
+in every place its terminal shows. Any Poste may change it, Spectateur included, as long as its
+Actor may run `session` × `zoom`: it is a setting of the session, not a gesture in its terminal. The control and `setZoom` go through
 `PUT /sessions/<id>/terminal-zoom` (`{"zoom": 150}`, the Operation `session` × `zoom` for the
 browser's Actor; `400` out of 50 to 200, `404` for a session that is not hosted), the reading
 through `GET /sessions/<id>/terminal-zoom` (`{"zoom", "hosted"}`, `session` × `read`; any other
@@ -1070,6 +1091,72 @@ its terminal (a laid text counts), then Enter. An Enter alone does not lift it.
 
 The test extension's page at `#/ext/test/topbar/end/hosted` opens a shell (`hosted/agent`: an
 agent) and shows it with these exports.
+
+## The detail of a Session hébergée
+
+Since 0.19 `@pdo/extension-ui` hands out the **bricks** of a Session hébergée's detail: the
+extension lays them out (a drawer, a pane, a page) and adds its own controls around them. Each
+brick takes the session's id (`session.id`, `pdo-hosted-…`), reads it from the daemon and follows it
+on `/ws`; every brick of one session shares one subscription. Each gesture is the Opération its
+extension's would be, for the browser's Actor, with the same refusals.
+
+```ts
+import {
+  LiveArtifacts, SessionActions, SessionConfig, SessionHeader, SessionInfo, SessionTabs,
+  SessionWaiting, TerminalZoom,
+} from "@pdo/extension-ui";
+
+<aside style={{ width: 400, display: "flex", flexDirection: "column" }}>
+  <SessionWaiting session={id} />
+  <SessionHeader session={id} name={item.title} context="on the test page" actions={<Close />} />
+  <SessionActions session={id}>
+    <Button onClick={fullScreen}>Full screen</Button>
+  </SessionActions>
+  <SessionTabs
+    session={id}
+    details={[
+      <LiveArtifacts key="live" session={id} />,
+      <TerminalZoom key="zoom" session={id} />,
+      <SessionInfo key="info" session={id} />,
+      <SessionConfig key="config" session={id} />,
+    ]}
+  />
+</aside>
+```
+
+| Export | What it does |
+| --- | --- |
+| `useHostedSession(session)` | `{ session, live, events, loading, error, terminate, relaunch, configure }`: the session (`HostedSession` plus `driving`, the Actor of its terminal's Pilote, or of the one Poste that shows it, `null` while none does), its Artefacts live, its journal, live. `error.status` is `403` when the Actor may not read it, `404` when there is no such Session hébergée or it was forgotten. Each gesture resolves to the session as it now stands and rejects with the refusal (its message as the daemon gave it) |
+| `SessionHeader({ session, name?, context?, actions? })` | Its kind's icon, `name` (its key by default), its state (`Running`, `Waiting for you`, `Terminated`…) and its harness; in mono its kind, how long it has been in that state and `context` (where the host shows it). `actions` at the right of the first line. Its folder, Projet, starter and driver are `SessionInfo`'s |
+| `SessionActions({ session, children? })` | The host's buttons (`children`: « Full screen », a way back to what the session belongs to), then Terminate while it lives, Relaunch once it ended. A refusal shows under the buttons and in an error toast |
+| `SessionWaiting({ session })` | « Waiting for you » and what its agent asked (`pdo wait-user --message`), while it waits; its tooltip says to type an answer then press Enter (an Enter alone does not answer). Nothing otherwise |
+| `SessionTabs({ session, details? })` | Details (`details`, what the host composes there), Events (their count), then the tabs of the [`session/detail`](#sessiondetail) location |
+| `LiveArtifacts({ session })` | Its Artefacts live, live, the newest change in the head: a Markdown file rendered and open, an image or a text file on its name, each with its size and a download |
+| `SessionInfo({ session })` | Its kind, its folder, its Projet, who started it (who opened or last relaunched it: it acts on their behalf) and who drives its terminal |
+| `SessionConfig({ session })` | The agent (harness, model, effort; a profile is stored as its combination) and the initial prompt of an agent session, « applies at next relaunch »; a shell says it has none |
+| `SessionEvents({ session })` | Its journal, newest first: opened, running, waiting for you (and the question), answered, terminated, exited, relaunched, configuration changed; who did it, when |
+
+The bricks reach the daemon through the routes of a Session hébergée by its id, each guarded by
+the Opération on the Ressource `session`, in its Projet:
+
+| Route | Opération | Answers |
+| --- | --- | --- |
+| `GET /sessions/<id>/hosted` | `read` | the session and `driving` |
+| `POST /sessions/<id>/terminate` | `terminate` | the session; an ended one as it is |
+| `POST /sessions/<id>/relaunch` | `relaunch` | the session; `409` while it lives |
+| `PUT /sessions/<id>/config` | `configure` | the session; the body is the whole configuration (`{"harness", "model", "effort", "prompt"}`) |
+| `GET /sessions/<id>/events` | `read` | its journal, oldest first (`{"at", "kind", "by"?, "message"?}`, the last 50) |
+| `GET /sessions/<id>/live` | `read` | its Artefacts live (`{"path", "size", "modified_at"}`) |
+| `GET /sessions/<id>/live/<path>` | `read` | one, with its content type; `?download` as an attachment |
+
+A refused Opération answers `403` with the core's refusal (`{"error": "operation_refused",
+"message", "reason"}`), before anything is read: the caller learns nothing of the session. Any
+other refusal answers `{"error"}` with its status: `404` no such Session hébergée, `409` not in a
+state for the gesture.
+
+The test extension's page at `#/ext/test/topbar/end/hosted` composes a detail from these bricks,
+and its icon carries a counter: the live sessions the Actor started, in the accent colour while
+one waits.
 
 ## The Actors' names
 

@@ -7,9 +7,10 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WsMessage } from "../../run/model/liveStream";
 
-const { subscribers, terminalProps, fetchZoom, putZoom } = vi.hoisted(() => ({
+const { subscribers, terminalProps, mounts, fetchZoom, putZoom } = vi.hoisted(() => ({
   subscribers: [] as ((msg: WsMessage) => void)[],
   terminalProps: [] as Record<string, unknown>[],
+  mounts: { count: 0 },
   fetchZoom: vi.fn(),
   putZoom: vi.fn(),
 }));
@@ -30,12 +31,17 @@ vi.mock("../api/sessions", () => ({
 }));
 
 // The core's terminal, as the extensions get it: what it is handed.
-vi.mock("./TmuxTerminal", () => ({
-  default: (props: Record<string, unknown>) => {
+vi.mock("./TmuxTerminal", async () => {
+  const { useEffect } = await import("react");
+  function CoreTerminal(props: Record<string, unknown>) {
     terminalProps.push(props);
+    useEffect(() => {
+      mounts.count += 1;
+    }, []);
     return <div data-testid="core-terminal" data-font-scale={String(props.fontScale)} />;
-  },
-}));
+  }
+  return { default: CoreTerminal };
+});
 
 const toasts = vi.hoisted(() => [] as unknown[][]);
 vi.mock("../../shared/ui/kit", async (importOriginal) => ({
@@ -119,6 +125,34 @@ describe("the exported session terminal", () => {
     fetchZoom.mockResolvedValue({ zoom: 200, hosted: true });
     emit({ type: "resync" });
     await waitFor(() => expect(fontScale()).toBe(2));
+  });
+
+  it("connects anew to a Session hébergée relaunched after it ended", async () => {
+    mounts.count = 0;
+    render(<SessionTerminal session={HOSTED} />);
+    await waitFor(() => expect(fontScale()).toBe(1.25));
+    expect(mounts.count).toBe(1);
+    emit({ type: "hosted_session_changed", session: { id: HOSTED, state: "running" } });
+    expect(mounts.count).toBe(1);
+    emit({ type: "hosted_session_changed", session: { id: HOSTED, state: "ended" } });
+    expect(mounts.count).toBe(1);
+    emit({ type: "hosted_session_changed", session: { id: HOSTED, state: "starting" } });
+    emit({ type: "hosted_session_changed", session: { id: HOSTED, state: "running" } });
+    expect(mounts.count).toBe(2);
+    // Running on: nothing more.
+    emit({ type: "hosted_session_changed", session: { id: HOSTED, state: "awaiting_user" } });
+    emit({ type: "hosted_session_changed", session: { id: HOSTED, state: "running" } });
+    expect(mounts.count).toBe(2);
+  });
+
+  it("connects anew after a relaunch it did not see end (opened on an ended session)", async () => {
+    mounts.count = 0;
+    render(<SessionTerminal session={HOSTED} />);
+    await waitFor(() => expect(fontScale()).toBe(1.25));
+    emit({ type: "hosted_session_changed", session: { id: HOSTED, state: "starting" } });
+    expect(mounts.count, "not before its process is up").toBe(1);
+    emit({ type: "hosted_session_changed", session: { id: HOSTED, state: "running" } });
+    expect(mounts.count).toBe(2);
   });
 
   it("keeps 100 % when the zoom cannot be read", async () => {

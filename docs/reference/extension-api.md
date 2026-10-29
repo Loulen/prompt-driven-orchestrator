@@ -495,7 +495,8 @@ let session = host
 - **Its Artefacts live**: the files its agent writes in `PDO_LIVE_DIR`, a folder of its state
   folder, never in its working folder, kept from one relaunch to the next and erased when it is
   forgotten. `live_artifacts(key)` lists them (`LiveArtifact`: `path` under the folder,
-  `/`-separated, `size`, `modified_at`), `live_artifact(key, path)` reads one (`404` for a file
+  `/`-separated, `size`, `modified_at`; `404` for a key the extension never gave, `503` from a
+  host that holds no Session hébergée), `live_artifact(key, path)` reads one (`404` for a file
   that is not there, `400` for a path that leaves the folder; a link that leads out of it is
   not read). Each change of the list (a file added, written or removed) is published within a
   few seconds as `hosted_live_artifacts_changed` (`HostedLiveArtifactsChanged`), with every
@@ -531,6 +532,16 @@ Its Artefacts live and its forgetting are published the same way, to the same co
 Its start (and each relaunch), the take-overs of its terminal and its end are also
 `session_started`, `session_taken_over` and `session_ended` ([Session
 events](#session-events-013)), to the extensions only.
+
+**Its detail.** The core also keeps the journal of each Session hébergée, its last 50 changes
+(opened, running, waiting with its question, answered, terminated, exited, relaunched,
+configured; who made each gesture), recorded with it. The detail of a session the extension's UI
+composes from the core's bricks reads and drives it by its id, from any Poste, with the gestures
+above as the browser's Actor: `GET /sessions/<id>/hosted`, `POST …/terminate`, `POST
+…/relaunch`, `PUT …/config`, `GET …/events`, `GET …/live[/<path>]`
+([extension-ui.md](extension-ui.md#the-detail-of-a-session-hébergée)). Other extensions add tabs to
+that detail at `session/detail`; a page of `topbar/end` may show a counter on its icon
+(`UiContribution::with_counter`, answering a `PageCounter` for the Actor of the request).
 
 ## The creation of a Run (0.9)
 

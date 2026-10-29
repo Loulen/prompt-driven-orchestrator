@@ -27,6 +27,16 @@ pub struct UiContribution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub when: Option<When>,
+    /// Where the counter of a page's icon is read (0.19; a
+    /// [`UiElement::Page`] at `topbar/end`): an absolute path the extension
+    /// serves, usually under `/ext/<id>/`, answering a [`PageCounter`] for
+    /// the Actor of the request. The core reads it when it shows the icon,
+    /// and again at each event of the extension on `/ws` (its
+    /// `extension_event`s, the events of its Sessions hébergées) and at each
+    /// resync. Without one, the icon shows no counter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub counter: Option<String>,
 }
 
 /// The kinds of contribution: few kinds, many locations.
@@ -94,6 +104,47 @@ pub enum UiElement {
     },
 }
 
+/// What the counter of a page's icon says to one Actor (0.19): what its
+/// [`UiElement::Page`]'s `counter` path answers. A count of `0` shows nothing.
+///
+/// On the wire: `{"count": 3, "accent": true, "detail": "3 sessions, 1 waiting"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[non_exhaustive]
+pub struct PageCounter {
+    pub count: u32,
+    /// Drawn in the accent colour: something waits for the Actor.
+    #[serde(default)]
+    pub accent: bool,
+    /// One line for the icon's tooltip, after the page's label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub detail: Option<String>,
+}
+
+impl PageCounter {
+    /// `count`, neutral, without detail.
+    pub fn new(count: u32) -> Self {
+        Self {
+            count,
+            accent: false,
+            detail: None,
+        }
+    }
+
+    /// The same counter, in the accent colour when `accent`.
+    pub fn accented(mut self, accent: bool) -> Self {
+        self.accent = accent;
+        self
+    }
+
+    /// The same counter, with `detail` in the tooltip.
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+}
+
 /// How the text a [`UiElement::Completion`] inserted shows once the text is
 /// rendered: each match of `pattern` (a JavaScript regular expression) in its
 /// plain text is drawn by the exported `component` instead.
@@ -147,6 +198,7 @@ impl UiContribution {
             label: label.to_string(),
             element,
             when: None,
+            counter: None,
         }
     }
 
@@ -280,6 +332,15 @@ impl UiContribution {
         self
     }
 
+    /// The same page, its icon showing the counter `path` answers (0.19): see
+    /// [`UiContribution::counter`]. Ignored on any other element.
+    pub fn with_counter(mut self, path: impl Into<String>) -> Self {
+        if matches!(self.element, UiElement::Page { .. }) {
+            self.counter = Some(path.into());
+        }
+        self
+    }
+
     /// The same contribution, rendered only while `condition` holds.
     pub fn when(mut self, condition: When) -> Self {
         self.when = Some(condition);
@@ -302,6 +363,34 @@ mod tests {
                 "location": "topbar/end", "id": "home", "label": "Notes",
                 "type": "page", "component": "HomePage", "icon": "/ext/test/icon.svg",
             })
+        );
+    }
+
+    #[test]
+    fn a_page_may_name_the_counter_of_its_icon() {
+        let page = UiContribution::page(UiLocation::TopbarEnd, "home", "Notes", "HomePage")
+            .with_counter("/ext/test/counter");
+        assert_eq!(
+            serde_json::to_value(&page).unwrap()["counter"],
+            "/ext/test/counter"
+        );
+        let tab = UiContribution::tab(UiLocation::RunDetail, "t", "T", "T").with_counter("/x");
+        assert!(serde_json::to_value(&tab).unwrap().get("counter").is_none());
+        let plain = UiContribution::page(UiLocation::TopbarEnd, "p", "P", "P");
+        assert!(serde_json::to_value(&plain)
+            .unwrap()
+            .get("counter")
+            .is_none());
+
+        let counter = PageCounter::new(3).accented(true).with_detail("1 waiting");
+        let wire = serde_json::to_value(&counter).unwrap();
+        assert_eq!(
+            wire,
+            json!({ "count": 3, "accent": true, "detail": "1 waiting" })
+        );
+        assert_eq!(
+            serde_json::from_value::<PageCounter>(json!({ "count": 2 })).unwrap(),
+            PageCounter::new(2)
         );
     }
 

@@ -213,7 +213,7 @@ export interface EntityContext {
   name?: string | null;
 }
 
-/** A tab (`run/detail`, `node/detail`, `trigger/detail`, `skill/detail`): the entity it details. */
+/** A tab (`run/detail`, `node/detail`, `trigger/detail`, `skill/detail`, `session/detail`): the entity it details. */
 export interface TabContext extends LocationContext {
   entity: EntityContext;
 }

@@ -14,7 +14,7 @@ use pdo_kernel::{Actor, ResourceKind, Verb};
 use pdo_session::application::assistant::FocusCell;
 use pdo_session::application::declared_wait::{LiftWait, TypedInput};
 use pdo_session::application::hosted::{
-    Hosted, HostedPorts, HostedStore, HostedWaitError, HostedZoomError,
+    Hosted, HostedByIdError, HostedPorts, HostedStore, HostedWaitError, HostedZoomError,
 };
 use pdo_session::application::session_ledger::SessionLedger;
 use pdo_session::application::sweep::{ReaperGauge, SweepOrphans};
@@ -940,13 +940,18 @@ async fn the_artefacts_live_are_listed_read_published_kept_and_forgotten() {
     assert!(script.contains("PDO_LIVE_DIR"), "{script}");
     assert!(script.contains(&*live.to_string_lossy()), "{script}");
     assert!(live.is_dir(), "created before the launch");
-    assert!(w.hosted.live_artifacts(EXT, "a").is_empty());
+    assert!(w.hosted.live_artifacts(EXT, "a").unwrap().is_empty());
+    assert_eq!(
+        w.hosted.live_artifacts(EXT, "never").unwrap_err().status,
+        404,
+        "a key it never gave is not an empty list"
+    );
 
     std::fs::create_dir_all(live.join("notes")).unwrap();
     std::fs::write(live.join("notes/plan.md"), "# Plan").unwrap();
     std::fs::write(live.join("progress.md"), "50 %").unwrap();
     w.hosted.reconcile();
-    let listed = w.hosted.live_artifacts(EXT, "a");
+    let listed = w.hosted.live_artifacts(EXT, "a").unwrap();
     let paths: Vec<&str> = listed.iter().map(|a| a.path.as_str()).collect();
     assert_eq!(paths, ["notes/plan.md", "progress.md"]);
     assert_eq!(listed[1].size, 4);
@@ -997,7 +1002,7 @@ async fn the_artefacts_live_are_listed_read_published_kept_and_forgotten() {
     w.hosted.terminate(EXT, &alice(), "a").await.unwrap();
     w.hosted.relaunch(EXT, &alice(), "a").await.unwrap();
     assert_eq!(
-        w.hosted.live_artifacts(EXT, "a").len(),
+        w.hosted.live_artifacts(EXT, "a").unwrap().len(),
         2,
         "kept across a relaunch"
     );
@@ -1017,7 +1022,7 @@ async fn the_artefacts_live_are_listed_read_published_kept_and_forgotten() {
         !w.store.state_dir(&session.id).exists(),
         "its state is erased"
     );
-    assert!(w.hosted.live_artifacts(EXT, "a").is_empty());
+    assert_eq!(w.hosted.live_artifacts(EXT, "a").unwrap_err().status, 404);
     assert!(w
         .host
         .events()
@@ -1312,5 +1317,118 @@ async fn a_zoom_out_of_range_or_refused_changes_nothing() {
             .session
             .terminal_zoom,
         100
+    );
+}
+
+#[tokio::test]
+async fn the_detail_reads_and_drives_a_session_by_its_id_with_the_extensions_gestures() {
+    use pdo_session::domain::hosted::HostedSessionEventKind::*;
+    let store = Arc::new(HostedRecords::default());
+    let tmux = Arc::new(FakeTmux::default());
+    let w = World::over(store.clone(), tmux.clone(), Host::allowing());
+    let session = w
+        .hosted
+        .open(EXT, &alice(), OpenSession::agent("a"))
+        .await
+        .unwrap();
+    let id = session.id.as_str();
+
+    let read = w.hosted.read_by_id(&bob(), id).unwrap();
+    assert_eq!(read.session.key, "a");
+    assert_eq!(w.host.asked().last().unwrap().verb, Verb::Read);
+
+    let configured = w
+        .hosted
+        .configure_by_id(&bob(), id, HostedConfig::default().with_model("opus"))
+        .await
+        .unwrap();
+    assert_eq!(configured.config.model.as_deref(), Some("opus"));
+    assert_eq!(
+        w.host.asked().last().unwrap().verb,
+        Verb::Action("configure".into())
+    );
+
+    let ended = w.hosted.terminate_by_id(&bob(), id).unwrap();
+    assert_eq!(ended.state, HostedState::Ended);
+    assert_eq!(ended.end_reason, Some(EndReason::Terminated));
+    assert_eq!(
+        w.host.asked().last().unwrap().verb,
+        Verb::Action("terminate".into())
+    );
+    let relaunched = w.hosted.relaunch_by_id(&bob(), id).await.unwrap();
+    assert_eq!(relaunched.state, HostedState::Running);
+    assert_eq!(
+        relaunched.started_by,
+        Some(bob()),
+        "who relaunched it starts it"
+    );
+
+    let events = w.hosted.events_by_id(&alice(), id).unwrap();
+    let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+    assert_eq!(
+        kinds,
+        [Opened, Running, Configured, Terminated, Relaunched, Running]
+    );
+    assert_eq!(events[0].by, Some(alice()));
+    assert_eq!(events[3].by, Some(bob()), "terminated by bob");
+
+    let live = w.store.state_dir(id).join("live");
+    std::fs::write(live.join("progress.md"), "# 50 %").unwrap();
+    let listed = w.hosted.live_by_id(&alice(), id).unwrap();
+    assert_eq!(listed[0].path, "progress.md");
+    assert_eq!(
+        w.hosted
+            .live_artifact_by_id(&alice(), id, "progress.md")
+            .unwrap(),
+        b"# 50 %"
+    );
+    assert_eq!(
+        w.hosted
+            .live_artifact_by_id(&alice(), id, "../session.json")
+            .unwrap_err()
+            .status(),
+        400
+    );
+
+    let refused = w.hosted.relaunch_by_id(&alice(), id).await.unwrap_err();
+    assert_eq!(refused.status(), 409, "a live session does not relaunch");
+    for unknown in [
+        w.hosted
+            .read_by_id(&alice(), "pdo-hosted-none")
+            .unwrap_err(),
+        w.hosted
+            .live_by_id(&alice(), "pdo-hosted-none")
+            .unwrap_err(),
+        w.hosted
+            .terminate_by_id(&alice(), "pdo-hosted-none")
+            .unwrap_err(),
+    ] {
+        assert_eq!(unknown.status(), 404);
+    }
+
+    let refusing = World::over(store, tmux, Host::refusing());
+    for refused in [
+        refusing.hosted.read_by_id(&alice(), id).unwrap_err(),
+        refusing.hosted.events_by_id(&alice(), id).unwrap_err(),
+        refusing.hosted.live_by_id(&alice(), id).unwrap_err(),
+        refusing.hosted.terminate_by_id(&alice(), id).unwrap_err(),
+        refusing
+            .hosted
+            .terminate_by_id(&alice(), "pdo-hosted-none")
+            .unwrap_err(),
+        refusing
+            .hosted
+            .read_by_id(&alice(), "pdo-hosted-none")
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(refused, HostedByIdError::Refused(_)),
+            "a refused caller learns nothing: {refused:?}"
+        );
+    }
+    assert_eq!(
+        refusing.hosted.registry().by_id(id).unwrap().session.state,
+        HostedState::Running,
+        "a refused terminate leaves it running"
     );
 }

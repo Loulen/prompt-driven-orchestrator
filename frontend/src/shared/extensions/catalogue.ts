@@ -153,7 +153,7 @@ export function useStatsTabs(): ContributionElement<StatsTabProps>[] {
 }
 
 /** The locations that render tabs: a detail's. */
-export type TabLocation = "run/detail" | "node/detail" | "trigger/detail" | "skill/detail";
+export type TabLocation = "run/detail" | "node/detail" | "trigger/detail" | "skill/detail" | "session/detail";
 
 /**
  * The tabs of the detail `location` shows for `entity`, and their context;

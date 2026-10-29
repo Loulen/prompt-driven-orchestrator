@@ -11,13 +11,15 @@ use super::Hosted;
 use crate::domain::hosted::{live_dir, live_file, HostedRecord};
 
 impl Hosted {
-    /// The Artefacts live of the session `key` of `extension`, by path; none
-    /// for a key it never gave.
-    pub fn live_artifacts(&self, extension: &str, key: &str) -> Vec<LiveArtifact> {
-        self.registry
-            .find(extension, key)
+    /// The Artefacts live of the session `key` of `extension`, by path;
+    /// `404` for a key it never gave.
+    pub fn live_artifacts(
+        &self,
+        extension: &str,
+        key: &str,
+    ) -> Result<Vec<LiveArtifact>, HostedRefusal> {
+        self.recorded(extension, key)
             .map(|record| self.live_of(&record))
-            .unwrap_or_default()
     }
 
     /// The content of the Artefact live `path` of the session `key` of
@@ -83,7 +85,7 @@ impl Hosted {
             .remove(id);
     }
 
-    fn live_of(&self, record: &HostedRecord) -> Vec<LiveArtifact> {
+    pub(super) fn live_of(&self, record: &HostedRecord) -> Vec<LiveArtifact> {
         let dir = live_dir(&self.registry.store().state_dir(record.id()));
         let mut artifacts = Vec::new();
         collect(&dir, "", &mut artifacts);

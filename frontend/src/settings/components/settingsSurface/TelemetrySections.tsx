@@ -1,27 +1,22 @@
 /**
  * Settings › Telemetry (ADR-0090): the OTLP export — its switch, its collector, its
- * headers (saved with the form; a header's value is never shown again) and the answer of
- * its last export —, `/metrics` by its own switch, « include the Actor » with what it
- * obliges an employer to, then what is sent, read from the daemon's own list.
+ * headers (saved with the form; a header's value is never shown again) and, under them,
+ * the status line of its last export —, `/metrics` by its own switch, « include the
+ * Actor » with what it obliges an employer to, then what is sent, read from the daemon's
+ * own list.
  */
 
-import { Play, X } from "lucide-react";
+import { Loader2, Play, Plus, X } from "lucide-react";
 import type { TelemetryStatus } from "../../../shared/generated/TelemetryStatus";
+import { Button, EmptyState, IconButton, TextInput } from "../../../shared/ui/kit";
 import type { SettingsSection, SettingsSectionId } from "../../model/settingsCategories";
 import { telemetryEndpointSourceNote, telemetryOtlpSourceNote } from "../../model/sourceNotes";
 import type { TelemetryHeaderDraft } from "../../model/telemetryDraft";
 import { ago, useTelemetryStatus } from "../../store/useTelemetryStatus";
-import { FieldBlock } from "./fields";
+import { SettingRow, SwitchRow } from "./fields";
 import type { FormSectionProps } from "./GeneralSections";
-import Section from "./Section";
-import { Identity, PrometheusMetrics, Switch } from "./TelemetryMetricsIdentity";
-
-const INPUT =
-  "rounded-md border bg-surface-2 px-2.5 py-1.5 font-mono text-text placeholder:text-text-3 focus:outline-none";
-
-function border(dirty: boolean) {
-  return dirty ? "border-st-await focus:border-st-await" : "border-line-strong focus:border-primary";
-}
+import Section, { SectionExtra } from "./Section";
+import { ActorRow, PrometheusRow } from "./TelemetryMetricsIdentity";
 
 export default function TelemetrySections({
   sections,
@@ -33,96 +28,88 @@ export default function TelemetrySections({
   return (
     <>
       <Section section={section("otlp-export")}>
-        <OtlpExport {...form} {...telemetry} />
+        <OtlpRows {...form} />
+        <SectionExtra>
+          <ExportStatus
+            status={telemetry.status}
+            testing={telemetry.testing}
+            testError={telemetry.testError}
+            onTest={telemetry.testExport}
+            now={telemetry.now}
+          />
+        </SectionExtra>
       </Section>
       <Section section={section("prometheus-metrics")}>
-        <PrometheusMetrics {...form} />
+        <PrometheusRow {...form} />
       </Section>
       <Section section={section("identity")}>
-        <Identity {...form} />
+        <ActorRow {...form} />
       </Section>
       <Section section={section("what-is-sent")}>
-        <WhatIsSent status={telemetry.status} />
+        <SectionExtra>
+          <WhatIsSent status={telemetry.status} />
+        </SectionExtra>
       </Section>
     </>
   );
 }
 
-function OtlpExport({
-  values,
-  settings,
-  dirty,
-  setField,
-  status,
-  testing,
-  testError,
-  testExport,
-  now,
-}: Omit<FormSectionProps, "section"> & ReturnType<typeof useTelemetryStatus>) {
-  const on = values.telemetryOtlp;
-  const switchDirty = dirty.has("telemetry-otlp");
+function OtlpRows({ values, settings, dirty, setField }: Omit<FormSectionProps, "section">) {
   const headers = values.telemetryHeaders;
   const setHeaders = (next: TelemetryHeaderDraft[]) => setField("telemetryHeaders", next);
   const storedNames = new Set((settings.telemetry_otlp_headers ?? []).map((h) => h.name));
   return (
-    <div className="flex flex-col gap-4" style={{ maxWidth: 640 }}>
-      <div className="flex flex-col gap-1" data-dirty={switchDirty ? "true" : undefined}>
-        <Switch
-          on={on}
-          dirty={switchDirty}
-          label="Export metrics and traces over OTLP"
-          testId="setting-telemetry-otlp"
-          onToggle={() => setField("telemetryOtlp", !on)}
-        />
-        <div className="pl-[34px] text-text-3" style={{ fontSize: "10.5px" }}>
-          Off by default. Logs are never exported.
-        </div>
-        {settings.telemetry_otlp && (
-          <div
-            className="pl-[34px] text-text-3"
-            style={{ fontSize: "10.5px" }}
-            data-testid="setting-source-telemetry-otlp"
-          >
-            {telemetryOtlpSourceNote(settings.telemetry_otlp)}
-          </div>
-        )}
-      </div>
-
-      <FieldBlock
+    <>
+      <SwitchRow
+        label="Export over OTLP"
+        help="Metrics and traces; off by default; logs are never exported"
+        source={settings.telemetry_otlp ? telemetryOtlpSourceNote(settings.telemetry_otlp) : undefined}
+        keywords="PDO_TELEMETRY_OTLP opentelemetry"
+        testId="setting-row-telemetry-otlp"
+        checked={values.telemetryOtlp}
+        onChange={(on) => setField("telemetryOtlp", on)}
+        dirty={dirty.has("telemetry-otlp")}
+      />
+      <SettingRow
         label="Collector endpoint"
-        htmlFor="setting-telemetry-endpoint"
-        dirty={dirty.has("telemetry-endpoint")}
-        help="OTLP over HTTP (protobuf). The path /v1/metrics and /v1/traces is added."
+        help="OTLP over HTTP (protobuf); /v1/metrics and /v1/traces are added"
         source={
           settings.telemetry_otlp_endpoint
             ? telemetryEndpointSourceNote(settings.telemetry_otlp_endpoint)
             : undefined
         }
-        sourceTestId="setting-source-telemetry-endpoint"
+        keywords="PDO_TELEMETRY_OTLP_ENDPOINT"
+        kind="wide"
+        dirty={dirty.has("telemetry-endpoint")}
+        htmlFor="setting-telemetry-endpoint"
+        testId="setting-row-telemetry-endpoint"
       >
-        <input
+        <TextInput
           id="setting-telemetry-endpoint"
           data-testid="setting-telemetry-endpoint"
+          className="set-grow"
+          mono
           type="url"
           spellCheck={false}
           placeholder="https://otel.example.org:4318"
           value={values.telemetryEndpoint}
           onChange={(e) => setField("telemetryEndpoint", e.target.value)}
-          className={`${INPUT} w-full ${border(dirty.has("telemetry-endpoint"))}`}
-          style={{ fontSize: "12px" }}
         />
-      </FieldBlock>
-
-      <FieldBlock
+      </SettingRow>
+      <SettingRow
         label="Headers"
-        testId="setting-telemetry-headers"
+        help="Sent with every export (an API key); stored on the daemon, the value is never shown again"
+        kind="wide"
+        top
         dirty={dirty.has("telemetry-headers")}
-        help="Sent with every export, e.g. an API key. Stored on the daemon; the value is never shown again."
+        testId="setting-row-telemetry-headers"
       >
-        <div className="flex flex-col gap-1.5">
+        <div className="set-headers">
           {headers.map((header, index) => (
-            <div key={index} className="group flex items-center gap-1.5" data-testid="telemetry-header-row">
-              <input
+            <div key={index} className="set-line" data-testid="telemetry-header-row">
+              <TextInput
+                mono
+                className="set-headers__name"
                 aria-label="Header name"
                 data-testid={`telemetry-header-name-${index}`}
                 spellCheck={false}
@@ -131,19 +118,14 @@ function OtlpExport({
                 onChange={(e) =>
                   setHeaders(headers.map((h, i) => (i === index ? { ...h, name: e.target.value } : h)))
                 }
-                className={`${INPUT} w-[150px] ${border(dirty.has("telemetry-headers"))}`}
-                style={{ fontSize: "12px" }}
               />
-              <input
+              <TextInput
+                mono
                 aria-label="Header value"
                 data-testid={`telemetry-header-value-${index}`}
                 type="password"
                 autoComplete="off"
-                placeholder={
-                  header.value === null && storedNames.has(header.name)
-                    ? "•••••••••••• (set)"
-                    : "value"
-                }
+                placeholder={header.value === null && storedNames.has(header.name) ? "•••••••• set" : "value"}
                 value={header.value ?? ""}
                 onChange={(e) =>
                   setHeaders(
@@ -152,38 +134,35 @@ function OtlpExport({
                     ),
                   )
                 }
-                className={`${INPUT} min-w-0 flex-1 ${border(dirty.has("telemetry-headers"))}`}
-                style={{ fontSize: "12px" }}
               />
-              <button
-                type="button"
-                aria-label={`Remove header ${header.name}`}
+              <IconButton
+                icon={X}
+                label={`Remove header ${header.name}`}
+                size="sm"
                 data-testid={`telemetry-header-remove-${index}`}
                 onClick={() => setHeaders(headers.filter((_, i) => i !== index))}
-                className="rounded p-1 text-text-3 hover:bg-hover hover:text-text-2"
-              >
-                <X size={12} />
-              </button>
+              />
             </div>
           ))}
-          <button
-            type="button"
-            data-testid="telemetry-header-add"
-            onClick={() => setHeaders([...headers, { name: "", value: null }])}
-            className="self-start px-2.5 py-0.5 text-text-3 hover:text-text"
-            style={{ fontSize: "11px" }}
-          >
-            + Add header
-          </button>
+          <span>
+            <Button
+              size="sm"
+              tone="ghost"
+              icon={Plus}
+              data-testid="telemetry-header-add"
+              onClick={() => setHeaders([...headers, { name: "", value: null }])}
+            >
+              Header
+            </Button>
+          </span>
         </div>
-      </FieldBlock>
-
-      <ExportStatusBar status={status} testing={testing} testError={testError} onTest={testExport} now={now} />
-    </div>
+      </SettingRow>
+    </>
   );
 }
 
-function ExportStatusBar({
+/** The export's status line: dot, last export (or why nothing leaves), interval, Test. */
+function ExportStatus({
   status,
   testing,
   testError,
@@ -198,94 +177,88 @@ function ExportStatusBar({
 }) {
   const last = status?.last_export ?? null;
   const exporting = status?.exporting ?? false;
-  const [dot, text] = !exporting
-    ? ["bg-text-3", "Export off: nothing leaves this instance."]
+  const [st, text, tip] = !exporting
+    ? ["skipped", "Export off", "Nothing leaves this instance"]
     : last
-      ? [last.ok ? "bg-st-done" : "bg-st-failed", `Last export ${ago(last.at, now)} · ${last.detail}`]
-      : ["bg-text-3", "No export yet."];
+      ? [last.ok ? "done" : "failed", `Last export ${ago(last.at, now)} · ${last.detail}`, undefined]
+      : ["skipped", "No export yet", undefined];
   return (
-    <div className="flex flex-col gap-1">
-      <div
-        className="flex items-center gap-2.5 rounded-md border border-line bg-surface-1 px-3 py-2"
-        data-testid="telemetry-export-status"
-      >
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-        <span className="min-w-0 flex-1 truncate text-text-2" style={{ fontSize: "11px" }}>
+    <>
+      <div className="set-tstat" data-st={st} data-testid="telemetry-export-status">
+        <span className="set-dot" aria-hidden />
+        <span className="set-ellipsis" title={tip ?? text}>
           {text}
         </span>
-        {status && (
-          <span className="shrink-0 text-text-3" style={{ fontSize: "10.5px" }}>
-            every {status.interval_secs} s
-          </span>
-        )}
-        <button
-          type="button"
+        {status && exporting && <span className="set-faint set-mono text-xs">every {status.interval_secs} s</span>}
+        <span className="d-grow" />
+        <Button
+          size="sm"
+          icon={Play}
           data-testid="telemetry-test-export"
           disabled={!exporting || testing}
-          title={exporting ? undefined : "Turn the export on and save to send a test export."}
+          title={exporting ? "Send a test export" : "Turn the export on and save first"}
           onClick={() => void onTest()}
-          className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-1 text-text-2 hover:border-primary disabled:opacity-40"
-          style={{ fontSize: "10.5px" }}
         >
-          <Play size={9} />
-          {testing ? "Sending…" : "Send a test export"}
-        </button>
+          {testing ? "Sending…" : "Test"}
+        </Button>
       </div>
       {testError && (
-        <div className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid="telemetry-test-error">
-          {testError}
+        <div className="set-row__note set-row__note--failed" role="alert" data-testid="telemetry-test-error">
+          <span className="set-ellipsis" title={testError}>
+            {testError}
+          </span>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
 function WhatIsSent({ status }: { status: TelemetryStatus | null }) {
   if (!status) {
     return (
-      <div className="text-text-3" style={{ fontSize: "11px" }}>
-        Loading…
-      </div>
+      <EmptyState icon={Loader2} spin layout="row">
+        Loading
+      </EmptyState>
     );
   }
   const { sent } = status;
-  const groups: [string, string[]][] = [
-    ["On every measure", sent.resource],
-    ["On the Run and node metrics", sent.run_attributes],
-    ["On the traces only", sent.trace_only],
-    ["Only with Include the Actor", sent.with_actor],
+  const groups: [string, string[], string?][] = [
+    ["Every measure", sent.resource],
+    [
+      "Run and node metrics",
+      sent.run_attributes,
+      "The repository is its remote URL without credentials, or its folder name; never a local path",
+    ],
+    ["Traces only", sent.trace_only, "Run and node ids go on the traces, never on the metrics"],
+    [
+      "With the Actor",
+      sent.with_actor,
+      status.include_actor ? "Sent: Include the Actor is on" : "Never sent unless you include the Actor",
+    ],
     ["Metrics", sent.metrics],
     ["Traces", sent.traces],
   ];
   return (
-    <div className="flex flex-col gap-3" style={{ maxWidth: 640 }} data-testid="telemetry-what-is-sent">
-      {groups.map(([label, items]) => (
-        <div key={label} className="flex flex-col gap-1">
-          <div className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
+    <dl className="set-sent" data-testid="telemetry-what-is-sent">
+      {groups.map(([label, items, tip]) => (
+        <div key={label} className="contents">
+          <dt title={tip}>
             {label}
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {items.map((item) => (
-              <span
-                key={item}
-                className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-text-3"
-                style={{ fontSize: "10.5px" }}
-              >
-                {item}
+            {label === "With the Actor" && (
+              <span className={`d-chip ${status.include_actor ? "text-st-await" : ""}`}>
+                {status.include_actor ? "on" : "off"}
               </span>
+            )}
+          </dt>
+          <dd>
+            {items.map((item) => (
+              <code key={item} className="d-chip d-chip--mono">
+                {item}
+              </code>
             ))}
-          </div>
+          </dd>
         </div>
       ))}
-      <ul className="flex list-disc flex-col gap-1 pl-4 text-text-3" style={{ fontSize: "10.5px" }}>
-        <li>The repository is named by its remote URL, without credentials, or by its folder name. Never by a local path.</li>
-        <li>The Run and node ids go on the traces only, never on the metrics.</li>
-        <li>
-          {status.include_actor
-            ? "Who launched a Run, and who answered it, is sent: Include the Actor is on."
-            : "Who launched a Run or answered it is never sent, unless you include the Actor."}
-        </li>
-      </ul>
-    </div>
+    </dl>
   );
 }

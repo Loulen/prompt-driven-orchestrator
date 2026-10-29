@@ -14,6 +14,8 @@
 @import "./app/leftList.css";
 /* The command field's palette. */
 @import "./app/palette/palette.css";
+/* The Settings surface: rail, section column, setting rows, Save bar. */
+@import "./settings/settings.css";
 /* Stats: filter bar, figures, charts, tables, absorptions. */
 @import "./stats/stats.css";
 /* The Review page: header, ref bar, file tree, file cards, threads. */
@@ -326,18 +328,6 @@ body {
   max-width: 100% !important; /* override mermaid's inline max-width attr */
   height: auto;
   display: inline-block;
-}
-
-/* #691: a programmatic Settings open pulses the landed section once. */
-@keyframes pdo-section-land {
-  0% { box-shadow: 0 0 0 0 var(--primary); background: color-mix(in oklab, var(--primary) 14%, transparent); }
-  60% { box-shadow: 0 0 0 3px transparent; }
-  100% { box-shadow: none; background: transparent; }
-}
-.settings-section[data-landed] {
-  border-radius: 6px;
-  outline-offset: 12px;
-  animation: pdo-section-land 2.2s ease-out both;
 }
 
 /* #779: the attachments zone flashes once when a drop is refused. */

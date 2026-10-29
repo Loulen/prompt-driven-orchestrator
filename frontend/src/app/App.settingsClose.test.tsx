@@ -522,12 +522,12 @@ describe("App — Settings surface closes (#717 sibling-key regression)", () => 
     // passes 20 s.
   }, 60_000);
 
-  it("closes via the Cancel button", async () => {
+  it("closes via the ✕ button", async () => {
     const user = userEvent.setup();
     render(<App />);
 
     await openSettings(user);
-    await user.click(screen.getByTestId("settings-cancel"));
+    await user.click(screen.getByRole("button", { name: "Close settings" }));
     await expectClosed();
   }, 20_000);
 

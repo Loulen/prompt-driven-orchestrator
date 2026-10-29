@@ -260,8 +260,9 @@ describe("deep links", () => {
     serve([extension("demo", [page("home", "Demo", "ContextPage")])]);
     renderShell();
     const shell = await screen.findByTestId("extension-page");
-    expect(within(shell).getByText("path note/note-12")).toBeInTheDocument();
-    expect(screen.getByTestId("extension-page-breadcrumb")).toHaveTextContent("notenote-12");
+    // The page and its breadcrumb arrive on their own renders: wait for each.
+    expect(await within(shell).findByText("path note/note-12")).toBeInTheDocument();
+    expect(await screen.findByTestId("extension-page-breadcrumb")).toHaveTextContent("notenote-12");
   });
 
   it("toward an absent extension say so in an error toast, never a blank page", async () => {

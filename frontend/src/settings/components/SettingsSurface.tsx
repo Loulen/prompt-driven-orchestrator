@@ -1,14 +1,12 @@
-import { useCallback, useRef, useState } from "react";
-import FullWindowShell, { type RailItem } from "../../shared/ui/FullWindowShell";
-import TutorialsSection from "../../app/tour/TutorialsSection";
+import { useMemo, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import FullWindowShell from "../../shared/ui/FullWindowShell";
+import { EmptyState } from "../../shared/ui/kit";
+import { SettingsIcon } from "../../shared/ui/brand/AccentIcons";
 import { harnessCatalog } from "../../harness/model/catalog";
-import VersionUpdateSection from "../../platform/components/VersionUpdateSection";
 import { useSkillBank } from "../../skill/store/useSkillBank";
-import ExtensionSettingsPanels from "../../shared/extensions/ExtensionSettingsPanels";
 import { useSettingsPanels } from "../../shared/extensions/catalogue";
 import { leaveSettingsPage } from "../../shared/extensions/deepLink";
-import StatsAbsorptionsPanel from "../../stats/components/StatsAbsorptionsPanel";
-import { updateSettings } from "../api/settings";
 import {
   SETTINGS_CATEGORIES,
   type SettingsCategoryId,
@@ -20,67 +18,23 @@ import { useSettingsForm } from "../store/useSettingsForm";
 import { settingsPageOpen, useSettingsExtensionPages } from "../store/useSettingsExtensionPages";
 import AgentsSections from "./settingsSurface/AgentsSections";
 import CategoryPage from "./settingsSurface/CategoryPage";
+import GeneralCategory from "./settingsSurface/GeneralCategory";
 import { HarnessDescriptorRows, PriceTableRows } from "./settingsSurface/DiagnosticsRows";
-import { RunsSection, SessionsSection } from "./settingsSurface/GeneralSections";
-import InterfaceSection from "./settingsSurface/InterfaceSection";
-import PublicUrlSection from "./settingsSurface/PublicUrlSection";
 import { ConfirmCloseDialog } from "./settingsSurface/overlays";
 import SandboxSections from "./settingsSurface/SandboxSections";
-import Section from "./settingsSurface/Section";
+import ExtensionPanels from "./settingsSurface/ExtensionPanels";
+import { SearchContext, searching, type SettingsQuery } from "./settingsSurface/search";
+import { NoSettings, SearchLine } from "./settingsSurface/SearchLine";
+import SettingsRail from "./settingsSurface/SettingsRail";
+import { settingsRail } from "./settingsSurface/rail";
 import SettingsFooter from "./settingsSurface/SettingsFooter";
 import TelemetrySections from "./settingsSurface/TelemetrySections";
-import ProjectsSections, { type ProjectsSource } from "./settingsSurface/ProjectsSections";
+import ProjectsSections from "./settingsSurface/ProjectsSections";
 import { skillBankDrawer } from "./settingsSurface/skillBankDrawer";
-import type { ProjectsEntry } from "../../workspace/model/projectsSettings";
+import type { SettingsSurfaceProps } from "./settingsSurface/surfaceProps";
+import { useFound, useSaveShortcut } from "./settingsSurface/hooks";
 
-export interface SettingsPosition {
-  category: SettingsCategoryId;
-  section?: SettingsSectionId;
-  /** Settings › Projects (CORE-96): the Projet to show, or a new one to name. */
-  project?: ProjectsEntry;
-}
-
-export interface StatsOpenIntent {
-  tab: "cost";
-  pricingOpen: boolean;
-}
-
-interface Props {
-  open: boolean;
-  onClose: () => void;
-  /**
-   * Live NodeRun-session count, so the cap field can preview how the pending cap
-   * relates to the sessions running right now (reuses `SessionCounter`).
-   */
-  liveSessions?: number;
-  /**
-   * Called after a successful save so the caller can refresh derived UI — e.g.
-   * `refreshSessions()` to update the status-bar cap live.
-   */
-  onSaved?: () => void;
-  /**
-   * Programmatic entry (#690, story 18): where to land. Read once at mount — the host
-   * bumps the component `key` when it wants a new position applied. Without it the
-   * surface lands on the last visited category › section of this page session, else
-   * General › Interface.
-   */
-  initialPosition?: SettingsPosition;
-  /** Diagnostics › Price table links to Stats › Cost › Pricing details (one surface at a time). */
-  onOpenStats?: (intent: StatsOpenIntent) => void;
-  /** #698: Version & update › « What's new » opens the changelog modal over the surface. */
-  onOpenChangelog?: () => void;
-  /** #699: Version & update › « Update » — the host owns the confirm and the waiting flow. */
-  onRequestUpdate?: () => void;
-  /** #823: Tutorials › Start / Replay. Fired AFTER this surface has closed. */
-  onStartTour?: (tourId: string) => void;
-  /** #823: Tutorials › Full tour. Fired AFTER this surface has closed. */
-  onStartFullTour?: () => void;
-  /** CORE-96: the live Projets and the Runs Settings › Projects counts. */
-  projects?: ProjectsSource;
-}
-
-const RAIL_WIDTH = 176;
-
+export type { SettingsPosition, StatsOpenIntent } from "./settingsSurface/surfaceProps";
 
 /** The rail entry of the extensions' settings panels (ADR-0081), shown only when one exists. */
 const EXTENSIONS = "extensions";
@@ -90,16 +44,21 @@ const EXTENSIONS = "extensions";
  * « Surface Settings »): the shell Stats uses, a rail of categories, and per category
  * a scrollable page cut into sections that a second column lists and scroll-spies.
  *
+ * Each setting is a row: its name on the left — its help and the source of its value in
+ * the name's tooltip —, its control on the right. A search line above the page finds rows
+ * in every category, or only the changed ones.
+ *
  * Agents and Sandbox & worktrees (#691) mix two kinds of sections: fields of the instance
  * form (Save), and inline **panels with their own persistence** — agent profiles, staging
- * profiles, worktree provisioning — whose every edit is written at once (`saves as you go`
- * badge). A panel's write never touches the dirty set and Save never sends panel data; the
- * footer Save is disabled while the form is clean so the two never compete for the eye.
+ * profiles, worktree provisioning — whose every edit is written at once (the section's
+ * « Saved at once » icon). A panel's write never touches the dirty set and Save never sends
+ * panel data; the Save bar shows only while the form has something to save, so the two
+ * never compete for the eye.
  *
- * One explicit **Save** for the whole instance form, visible on every category
- * (`useSettingsForm`): a category switch renders another page but never touches the draft,
- * and the dirty set is derived — per field (amber border), per section (sub-column dot), per
- * category (rail dot) — from the same comparisons the PUT payload uses.
+ * One explicit **Save** for the whole instance form, on every category (`useSettingsForm`):
+ * a category switch renders another page but never touches the draft, and the dirty set is
+ * derived — per row (amber edge), per section (section-column dot), per category (rail
+ * dot) — from the same comparisons the PUT payload uses.
  *
  * Precedence is `stored → env → default`: a stored value wins, so this page is
  * authoritative. It discloses a shadowed env var (D6) rather than ignoring it, and
@@ -117,7 +76,7 @@ export default function SettingsSurface({
   onStartTour,
   onStartFullTour,
   projects,
-}: Props) {
+}: SettingsSurfaceProps) {
   const { settings, settled, save, refresh } = useSettings(open);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
   const { bank: skillBank, loaded: skillsLoaded, refresh: refreshSkills } = useSkillBank(open);
@@ -140,12 +99,18 @@ export default function SettingsSurface({
   // skill bank — a journey of its own, not a settings field.
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
-  // #697: the Version & update switch writes `update_check` at the change — outside
-  // the form's dirty set, like « Check now ».
-  const toggleUpdateCheck = useCallback(async (on: boolean) => {
-    await updateSettings({ update_check: on });
-    announceSettingsChanged();
-  }, []);
+  // The search line: a few words, or only the changed settings, across every category.
+  const [needle, setNeedle] = useState("");
+  const [modifiedOnly, setModifiedOnly] = useState(false);
+  const query = useMemo<SettingsQuery>(
+    () => ({ needle: needle.trim().toLowerCase(), modifiedOnly }),
+    [needle, modifiedOnly],
+  );
+  // The section column: the page on screen draws its list there.
+  const [navSlot, setNavSlot] = useState<HTMLDivElement | null>(null);
+  const pagesRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const found = useFound(pagesRef, searching(query) && open);
   /** #823 — a Tutorials Start waiting for this surface to actually close. */
   const pendingTour = useRef<(() => void) | null>(null);
 
@@ -194,28 +159,43 @@ export default function SettingsSurface({
       setDrawerOpen(false);
       return;
     }
+    // A search on screen is cleared first.
+    if (needle || modifiedOnly) {
+      setNeedle("");
+      setModifiedOnly(false);
+      return;
+    }
     requestClose();
   };
 
+  // Ctrl+S saves the instance form, not while an extension's page or the close
+  // confirmation is on screen.
+  useSaveShortcut(open, extensionPages.active || confirmClose ? null : form.handleSave);
+
   if (!open) return null;
 
-  const rail: RailItem[] = SETTINGS_CATEGORIES.map((item) => ({
-    id: item.id,
-    label: item.label,
-    dirty: rollup.categories.has(item.id),
-  }));
-  if (extensionPanels.length > 0) rail.push({ id: EXTENSIONS, label: "Extensions", dirty: false });
-  rail.push(...extensionPages.rail);
+  const rail = settingsRail(
+    SETTINGS_CATEGORIES.map((item) => ({ id: item.id, label: item.label, dirty: rollup.categories.has(item.id) })),
+    [...(extensionPanels.length > 0 ? [{ id: EXTENSIONS, label: "Extensions" }] : []), ...extensionPages.rail],
+  );
   const known = SETTINGS_CATEGORIES.some((item) => item.id === category) || extensionPages.active;
   // An extension page (or the Extensions entry) whose extension left: back to General.
   const shownCategory = known || (category === EXTENSIONS && extensionPanels.length > 0) ? category : "general";
   const catalog = settings ? harnessCatalog(settings.harness_descriptors) : null;
   const formProps = values && settings ? { values, settings, dirty: rollup.fields, setField } : null;
+  const inSearch = searching(query);
+  const shownLabel = rail.find((item) => item.id === shownCategory)?.label ?? "";
 
   const rememberSection = (cat: SettingsCategoryId, section: SettingsSectionId) =>
     setLastSection((current) =>
       current[cat] === section ? current : { ...current, [cat]: section },
     );
+
+  const selectCategory = (id: string) => {
+    setNeedle("");
+    setModifiedOnly(false);
+    extensionPages.select(id);
+  };
 
   const shellDrawer = skillBankDrawer({
     open: drawerOpen,
@@ -226,9 +206,12 @@ export default function SettingsSurface({
     refresh: refreshSkills,
   });
 
-  const loading = (
-    <div className="px-1 py-4 text-text-3" style={{ fontSize: "12px" }} data-testid="settings-loading">
-      Loading…
+  // Under a search, a category still loading shows nothing.
+  const loading = inSearch ? null : (
+    <div className="set-extra" data-testid="settings-loading">
+      <EmptyState icon={Loader2} spin layout="row">
+        Loading…
+      </EmptyState>
     </div>
   );
 
@@ -236,140 +219,162 @@ export default function SettingsSurface({
     <>
       <FullWindowShell
         title="Settings"
+        titleIcon={<SettingsIcon size={16} strokeWidth={1.5} aria-hidden />}
         testId="settings-surface"
         onClose={requestClose}
         onEscape={onEscape}
         closeLabel="Close settings"
-        rail={rail}
-        activeRail={shownCategory}
-        onRailChange={extensionPages.select}
-        railWidth={RAIL_WIDTH}
-        railAriaLabel="Settings categories"
-        railTestIdPrefix="settings-category"
-        headerExtras={extensionPages.headerExtras}
+        headerExtras={
+          inSearch ? undefined : (
+            <>
+              <span className="set-sub" title={shownLabel} data-testid="settings-header-category">
+                {shownLabel}
+              </span>
+              {extensionPages.headerExtras}
+            </>
+          )
+        }
         headerActions={extensionPages.headerActions(null)}
-        // An extension's page owns its writes: Save would read as saving it.
-        footer={!extensionPages.active && (
-          <SettingsFooter form={form} saveButtonRef={saveButtonRef} loaded={!!settings} onCancel={requestClose} />
-        )}
         drawer={shellDrawer}
+        mainClassName="set-main"
       >
-        {SETTINGS_CATEGORIES.map((item) => (
-          <CategoryPage
-            key={item.id}
-            categoryId={item.id}
-            active={shownCategory === item.id}
-            ready={settled}
-            initialSection={lastSection[item.id]}
-            highlight={initialPosition?.category === item.id && !!initialPosition.section}
-            dirtySections={rollup.sections}
-            onSectionChange={(section) => rememberSection(item.id, section)}
-            wide={item.id === "projects"}
-          >
-            {item.id === "general" && (
-              <>
-                <InterfaceSection section={item.sections[0]} />
-                {formProps ? (
-                  <>
-                    <PublicUrlSection section={item.sections[1]} {...formProps} />
-                    <SessionsSection
-                      section={item.sections[2]}
-                      {...formProps}
-                      liveSessions={liveSessions}
-                    />
-                    <RunsSection section={item.sections[3]} {...formProps} />
-                  </>
-                ) : (
-                  loading
-                )}
-                <Section section={item.sections[4]}>
-                  <VersionUpdateSection
-                    onRequestUpdate={onRequestUpdate}
+        {/* Under a search the rows come from every category: no category is current, and
+            the section column, which lists one category's sections, steps aside. */}
+        <SettingsRail entries={rail} active={inSearch ? null : shownCategory} onSelect={selectCategory} />
+        <div
+          ref={setNavSlot}
+          className="set-nav set-nav--sec"
+          hidden={!!extensionPages.active || inSearch}
+        />
+        <div className="set-right">
+          {!extensionPages.active && (
+            <SearchLine
+              ref={searchRef}
+              needle={needle}
+              onNeedle={setNeedle}
+              count={inSearch ? found.rows : null}
+              modifiedOnly={modifiedOnly}
+              onModifiedOnly={setModifiedOnly}
+            />
+          )}
+          <SearchContext.Provider value={query}>
+            <div ref={pagesRef} className={inSearch ? "set-pages set-pages--search" : "set-pages"}>
+            {SETTINGS_CATEGORIES.map((item) => (
+              <CategoryPage
+                key={item.id}
+                categoryId={item.id}
+                active={shownCategory === item.id}
+                searching={inSearch}
+                navSlot={navSlot}
+                ready={settled}
+                initialSection={lastSection[item.id]}
+                highlight={initialPosition?.category === item.id && !!initialPosition.section}
+                dirtySections={rollup.sections}
+                onSectionChange={(section) => rememberSection(item.id, section)}
+              >
+                {item.id === "general" && (
+                  <GeneralCategory
+                    sections={item.sections}
+                    form={formProps}
+                    loading={loading}
+                    liveSessions={liveSessions}
                     active={open}
+                    onRequestUpdate={onRequestUpdate}
                     onOpenChangelog={onOpenChangelog}
-                    onToggleCheck={toggleUpdateCheck}
-                  />
-                </Section>
-                {/* #823 — guided tours. Every entry closes this surface first:
-                    a tour points at the app, which is underneath it. */}
-                <Section section={item.sections[5]}>
-                  <TutorialsSection
+                    // #823 — guided tours. Every entry closes this surface first: a tour
+                    // points at the app, which is underneath it.
                     onStartTour={(tourId) => startTourAfterClose(() => onStartTour?.(tourId))}
                     onStartFullTour={() => startTourAfterClose(() => onStartFullTour?.())}
                   />
-                </Section>
-                {/* #891 — Stats absorptions: saves as you go, whatever `GET /settings` said. */}
-                <Section section={item.sections[6]}>
-                  <StatsAbsorptionsPanel active={open} />
-                </Section>
-              </>
-            )}
+                )}
 
-            {item.id === "agents" &&
-              (formProps && catalog ? (
-                <AgentsSections
-                  sections={item.sections}
-                  {...formProps}
-                  catalog={catalog}
-                  agentProfiles={agentProfiles}
-                  onProfilesChanged={async () => {
-                    await refreshAgentProfiles();
-                    announceAgentProfilesChanged();
-                    onSaved?.();
+                {item.id === "agents" &&
+                  (formProps && catalog ? (
+                    <AgentsSections
+                      sections={item.sections}
+                      {...formProps}
+                      catalog={catalog}
+                      agentProfiles={agentProfiles}
+                      onProfilesChanged={async () => {
+                        await refreshAgentProfiles();
+                        announceAgentProfilesChanged();
+                        onSaved?.();
+                      }}
+                      skillBank={skillBank}
+                      skillsLoaded={skillsLoaded}
+                      onOpenSkillBank={() => setDrawerOpen(true)}
+                    />
+                  ) : (
+                    loading
+                  ))}
+
+                {item.id === "sandbox" &&
+                  (formProps ? (
+                    <SandboxSections
+                      sections={item.sections}
+                      {...formProps}
+                      missingDefaultProfile={form.missingDefaultProfile}
+                      // Refetch `GET /settings` so the Default-sandbox `<select>` sees the new
+                      // name list (and a freshly dangling `reason`) without a reopen, and tell
+                      // New Run (mounted underneath) the same thing.
+                      onProfilesChanged={() => {
+                        void refresh();
+                        announceSettingsChanged();
+                        onSaved?.();
+                      }}
+                    />
+                  ) : (
+                    loading
+                  ))}
+
+                {item.id === "projects" && (
+                  <ProjectsSections sections={item.sections} source={projects} home={settings?.home ?? null}
+                    position={initialPosition} active={open && shownCategory === item.id}
+                    form={formProps} loading={loading} />
+                )}
+
+                {item.id === "telemetry" &&
+                  (formProps ? <TelemetrySections sections={item.sections} active={shownCategory === item.id} {...formProps} /> : loading)}
+
+                {item.id === "diagnostics" &&
+                  (settings ? (
+                    <>
+                      <PriceTableRows section={item.sections[0]} settings={settings} onOpenStats={onOpenStats} />
+                      <HarnessDescriptorRows section={item.sections[1]} settings={settings} />
+                    </>
+                  ) : (
+                    loading
+                  ))}
+              </CategoryPage>
+            ))}
+              {extensionPanels.length > 0 && !inSearch && (
+                <ExtensionPanels active={shownCategory === EXTENSIONS} navSlot={navSlot} />
+              )}
+              {!inSearch && extensionPages.content}
+              {inSearch && found.sections === 0 && (
+                <NoSettings
+                  onClear={() => {
+                    setNeedle("");
+                    setModifiedOnly(false);
                   }}
-                  skillBank={skillBank}
-                  skillsLoaded={skillsLoaded}
-                  onOpenSkillBank={() => setDrawerOpen(true)}
                 />
-              ) : (
-                loading
-              ))}
-
-            {item.id === "sandbox" &&
-              (formProps ? (
-                <SandboxSections
-                  sections={item.sections}
-                  {...formProps}
-                  missingDefaultProfile={form.missingDefaultProfile}
-                  // Refetch `GET /settings` so the Default-sandbox `<select>` sees the new
-                  // name list (and a freshly dangling `reason`) without a reopen, and tell
-                  // New Run (mounted underneath) the same thing.
-                  onProfilesChanged={() => {
-                    void refresh();
-                    announceSettingsChanged();
-                    onSaved?.();
-                  }}
-                />
-              ) : (
-                loading
-              ))}
-
-            {item.id === "projects" && (
-              <ProjectsSections sections={item.sections} source={projects} home={settings?.home ?? null}
-                position={initialPosition} active={open && shownCategory === item.id}
-                form={formProps} loading={loading} />
-            )}
-
-            {item.id === "telemetry" &&
-              (formProps ? <TelemetrySections sections={item.sections} active={shownCategory === item.id} {...formProps} /> : loading)}
-
-            {item.id === "diagnostics" &&
-              (settings ? (
-                <>
-                  <Section section={item.sections[0]}>
-                    <PriceTableRows settings={settings} onOpenStats={onOpenStats} />
-                  </Section>
-                  <Section section={item.sections[1]}>
-                    <HarnessDescriptorRows settings={settings} />
-                  </Section>
-                </>
-              ) : (
-                loading
-              ))}
-          </CategoryPage>
-        ))}
-        {extensionPanels.length > 0 && <ExtensionSettingsPanels active={shownCategory === EXTENSIONS} />}
-        {extensionPages.content}
+              )}
+            </div>
+          </SearchContext.Provider>
+          {/* An extension's page owns its writes: Save would read as saving it. */}
+          {!extensionPages.active && (
+            <SettingsFooter
+              form={form}
+              saveButtonRef={saveButtonRef}
+              loaded={!!settings}
+              onDiscard={() => {
+                form.reset();
+                // The bar goes with the draft: the focus goes to the search line.
+                searchRef.current?.focus();
+              }}
+            />
+          )}
+        </div>
       </FullWindowShell>
 
       {confirmClose && (

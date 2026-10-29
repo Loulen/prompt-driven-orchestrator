@@ -1,71 +1,86 @@
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { Check, CircleX, ExternalLink, RefreshCw } from "lucide-react";
 import { modelCount, probedAgo } from "../../../harness/model/catalog";
 import type { HarnessListItem } from "../../../harness/model/harness";
 import { useRefreshModels } from "../../../harness/store/useHarnessCatalog";
+import { IconButton } from "../../../shared/ui/kit";
 import { KeyValueRow } from "../../../shared/ui/key-value-row";
 import type { InstanceSettings } from "../../model/settings";
+import type { SettingsSection } from "../../model/settingsCategories";
 import type { StatsOpenIntent } from "../SettingsSurface";
+import Section, { SectionExtra } from "./Section";
 
 /**
- * Price table (#427, ADR-0034) — READ ONLY: which of the three price tiers is in force.
- * The paths are shown even when the files are absent, because nothing is ever seeded and
- * naming them is the only way a user learns where to write. The resolved read view and
- * "Sync costs" live in Stats › Cost › Pricing details, next to the numbers they change.
+ * Price table (#427, ADR-0034) — READ ONLY: which of the three price tiers is in force
+ * (`manual → fetched → built-in`). The paths are shown even when the files are absent,
+ * because nothing is ever seeded and naming them is the only way a user learns where to
+ * write. The resolved read view and « Sync costs » live in Stats › Cost › Pricing details,
+ * next to the numbers they change.
  */
 export function PriceTableRows({
+  section,
   settings,
   onOpenStats,
 }: {
+  section: SettingsSection;
   settings: InstanceSettings;
   onOpenStats?: (intent: StatsOpenIntent) => void;
 }) {
   const table = settings.price_table;
-  // Not dead code despite the type: under `vite dev` the SPA may face an older daemon.
-  if (!table) return null;
   return (
-    <div className="flex flex-col gap-1.5" data-testid="setting-price-table">
-      <KeyValueRow label="Manual overrides (wins)" testId="setting-price-table-manual-path">
-        <span className="font-mono">{table.manual_path ?? "— (HOME unset)"}</span>
-        {table.manual_keys.length > 0 && (
-          <span>
-            {" · "}
-            {table.manual_keys.length} model{table.manual_keys.length === 1 ? "" : "s"}:{" "}
-            {table.manual_keys.join(", ")}
-          </span>
-        )}
-      </KeyValueRow>
-      <KeyValueRow label="Fetched table (PDO writes this)" testId="setting-price-table-fetched-path">
-        <span className="font-mono">{table.fetched_path ?? "— (HOME unset)"}</span>
-        {` · ${table.fetched_rows} model${table.fetched_rows === 1 ? "" : "s"}`}
-      </KeyValueRow>
-      <KeyValueRow label="Last sync" testId="setting-price-table-fetched-at">
-        {table.fetched_at
-          ? `${table.fetched_at}${table.source ? ` from ${table.source}` : ""}`
-          : "Never synced — only the built-in prices apply."}
-      </KeyValueRow>
-      {table.reason && (
-        <KeyValueRow label="Refused" tone="failed" testId="setting-price-table-reason">
-          {table.reason}
-        </KeyValueRow>
-      )}
-      <div className="mt-1 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
+    <Section
+      section={section}
+      tools={
+        <IconButton
+          icon={ExternalLink}
+          label="Stats › Cost › Pricing details"
+          size="sm"
           onClick={() => onOpenStats?.({ tab: "cost", pricingOpen: true })}
           disabled={!onOpenStats}
           data-testid="settings-open-stats-pricing"
-          className="flex items-center gap-1.5 rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 text-text-2 hover:border-primary disabled:opacity-40"
-          style={{ fontSize: 11 }}
-        >
-          Open Stats › Cost › Pricing details
-          <ExternalLink size={11} />
-        </button>
-        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
-          Sync lives in Stats, next to the numbers it changes. Costs resolve{" "}
-          <span className="font-mono">manual → fetched → built-in</span>.
-        </span>
-      </div>
-    </div>
+        />
+      }
+    >
+      {/* Not dead code despite the type: under `vite dev` the SPA may face an older daemon. */}
+      {table && (
+        <SectionExtra testId="setting-price-table">
+          <KeyValueRow
+            label="Manual overrides"
+            title={table.manual_keys.length > 0 ? table.manual_keys.join(", ") : "Wins over the other tiers"}
+            testId="setting-price-table-manual-path"
+          >
+            <span className="set-mono set-ellipsis">{table.manual_path ?? "— (HOME unset)"}</span>
+            {table.manual_keys.length > 0 && (
+              <span className="set-faint">
+                {table.manual_keys.length} model{table.manual_keys.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </KeyValueRow>
+          <KeyValueRow label="Fetched table" testId="setting-price-table-fetched-path">
+            <span className="set-mono set-ellipsis">{table.fetched_path ?? "— (HOME unset)"}</span>
+            <span className="set-faint">
+              {table.fetched_rows} model{table.fetched_rows === 1 ? "" : "s"}
+            </span>
+          </KeyValueRow>
+          <KeyValueRow label="Last sync" testId="setting-price-table-fetched-at">
+            {table.fetched_at ? (
+              <span className="set-ellipsis">
+                {table.fetched_at}
+                {table.source && <span className="set-faint"> · {table.source}</span>}
+              </span>
+            ) : (
+              <span className="set-faint" title="Only the built-in prices apply">
+                Never
+              </span>
+            )}
+          </KeyValueRow>
+          {table.reason && (
+            <KeyValueRow label="Refused" tone="failed" title={table.reason} testId="setting-price-table-reason">
+              <span className="set-ellipsis">{table.reason}</span>
+            </KeyValueRow>
+          )}
+        </SectionExtra>
+      )}
+    </Section>
   );
 }
 
@@ -76,49 +91,62 @@ export function PriceTableRows({
  * offers and when they were probed, and « Refresh models », which probes them again
  * even at the same version; every open browser gets the new list.
  */
-export function HarnessDescriptorRows({ settings }: { settings: InstanceSettings }) {
+export function HarnessDescriptorRows({ section, settings }: { section: SettingsSection; settings: InstanceSettings }) {
   const { probing, failed, refresh } = useRefreshModels();
   const view = settings.harness_descriptors;
-  if (!view) return null;
   // A daemon predating the per-harness entries only names them.
-  const harnesses: HarnessListItem[] =
-    view.harnesses ?? view.names.map((name) => ({ name, source: "builtin", installed: true }));
+  const harnesses: HarnessListItem[] = view
+    ? (view.harnesses ?? view.names.map((name) => ({ name, source: "builtin", installed: true })))
+    : [];
   return (
-    <div className="flex flex-col gap-1.5" data-testid="setting-harness-descriptors">
-      <KeyValueRow label="Descriptor file" testId="setting-harness-descriptors-path">
-        <span className="font-mono">{view.path ?? "— (HOME unset)"}</span>
-      </KeyValueRow>
-      <div className="flex flex-col gap-1.5" data-testid="setting-harness-descriptors-names">
-        {harnesses.map((h) => (
-          <HarnessRow
-            key={h.name}
-            harness={h}
-            probing={probing.has(h.name)}
-            failure={failed[h.name] ?? null}
-            onRefresh={() => void refresh(h.name)}
-          />
-        ))}
-      </div>
-      {(view.rejected ?? []).map((item) => (
-        <KeyValueRow
-          key={item.name}
-          label={<span className="font-mono">{item.name}</span>}
-          tone="failed"
-          testId={`setting-harness-descriptor-rejected-${item.name}`}
-        >
-          refused: {item.why}
-        </KeyValueRow>
-      ))}
-      {view.reason && (
-        <KeyValueRow label="Refused" tone="failed" testId="setting-harness-descriptors-reason">
-          {view.reason}
-        </KeyValueRow>
+    <Section section={section}>
+      {view && (
+        <SectionExtra testId="setting-harness-descriptors">
+          <KeyValueRow label="Descriptor file" testId="setting-harness-descriptors-path">
+            <span className="set-mono set-ellipsis">{view.path ?? "— (HOME unset)"}</span>
+          </KeyValueRow>
+          <table className="set-table" data-testid="setting-harness-descriptors-names">
+            <thead>
+              <tr>
+                <th aria-label="State" />
+                <th>Harness</th>
+                <th>Version</th>
+                <th>Models</th>
+                <th>Probed</th>
+                <th aria-label="Refresh" />
+              </tr>
+            </thead>
+            <tbody>
+              {harnesses.map((h) => (
+                <HarnessRow
+                  key={h.name}
+                  harness={h}
+                  probing={probing.has(h.name)}
+                  failure={failed[h.name] ?? null}
+                  onRefresh={() => void refresh(h.name)}
+                />
+              ))}
+              {(view.rejected ?? []).map((item) => (
+                <tr key={item.name} data-testid={`setting-harness-descriptor-rejected-${item.name}`}>
+                  <td>
+                    <CircleX size={13} strokeWidth={1.5} className="set-bad" aria-label="refused" />
+                  </td>
+                  <td className="set-mono">{item.name}</td>
+                  <td colSpan={4} className="set-bad" title={item.why}>
+                    refused: {item.why}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {view.reason && (
+            <KeyValueRow label="Refused" tone="failed" title={view.reason} testId="setting-harness-descriptors-reason">
+              <span className="set-ellipsis">{view.reason}</span>
+            </KeyValueRow>
+          )}
+        </SectionExtra>
       )}
-      <p className="px-0.5 text-text-3" style={{ fontSize: "10.5px" }}>
-        A refresh re-reads the models a harness offers, even at the same version; every open browser
-        gets the new list.
-      </p>
-    </div>
+    </Section>
   );
 }
 
@@ -138,50 +166,58 @@ function HarnessRow({
   const probeFailed = harness.installed && harness.version === null;
   const probed = probedAgo(harness.probed_at);
   const fresh = probed === "probed just now";
+  const bad = !!failure || probeFailed;
   return (
-    <div
-      className="flex items-center gap-3 rounded bg-surface-2 px-2.5 py-1.5 text-text-3"
-      style={{ fontSize: "10.5px" }}
-      data-testid={`setting-harness-row-${harness.name}`}
-    >
-      <span className="w-20 shrink-0 truncate font-mono text-text-2">{harness.name}</span>
+    <tr data-testid={`setting-harness-row-${harness.name}`}>
+      <td>
+        {bad ? (
+          <CircleX size={13} strokeWidth={1.5} className="set-bad" aria-label="failed" />
+        ) : harness.installed ? (
+          <Check size={13} strokeWidth={1.5} className="set-ok" aria-label="loaded" />
+        ) : null}
+      </td>
+      <td className="set-mono">{harness.name}</td>
       {!harness.installed ? (
-        <span className="text-text-3">not installed</span>
+        <td colSpan={2} className="set-faint">
+          not installed
+        </td>
       ) : (
         <>
-          <span className="shrink-0 font-mono text-text-3">{harness.version ?? "—"}</span>
-          <span className="shrink-0 font-mono text-text-2" data-testid={`setting-harness-models-${harness.name}`}>
+          <td className="set-mono set-faint">{harness.version ?? "—"}</td>
+          <td className="set-mono" data-testid={`setting-harness-models-${harness.name}`}>
             {modelCount(models.length)}
-          </span>
+          </td>
         </>
       )}
-      <span className="flex-1" />
-      {failure ? (
-        <span className="min-w-0 truncate text-st-failed" role="alert" data-testid={`setting-harness-failed-${harness.name}`}>
-          {failure}
-        </span>
-      ) : probeFailed ? (
-        <span className="text-st-failed" data-testid={`setting-harness-failed-${harness.name}`}>
-          probe failed
-        </span>
-      ) : (
-        harness.installed && (
-          <span className={fresh ? "text-primary" : "text-text-3"} data-testid={`setting-harness-probed-${harness.name}`}>
-            {probed}
+      <td>
+        {failure ? (
+          <span className="set-bad" role="alert" title={failure} data-testid={`setting-harness-failed-${harness.name}`}>
+            {failure}
           </span>
-        )
-      )}
-      <button
-        type="button"
-        onClick={onRefresh}
-        disabled={probing || !harness.installed}
-        title={harness.installed ? "Probe the models of this harness again" : "Its binary is not installed"}
-        className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-surface-1 px-2 py-0.5 text-text-2 hover:border-primary disabled:opacity-50"
-        data-testid={`setting-harness-refresh-${harness.name}`}
-      >
-        <RefreshCw size={10} className={probing ? "animate-spin" : undefined} />
-        {probing ? "Probing…" : "Refresh models"}
-      </button>
-    </div>
+        ) : probeFailed ? (
+          <span className="set-bad" data-testid={`setting-harness-failed-${harness.name}`}>
+            probe failed
+          </span>
+        ) : (
+          harness.installed && (
+            <span className={fresh ? "set-ok" : "set-faint"} data-testid={`setting-harness-probed-${harness.name}`}>
+              {probed}
+            </span>
+          )
+        )}
+      </td>
+      <td className="set-table__act">
+        <IconButton
+          icon={RefreshCw}
+          label={probing ? "Probing…" : "Refresh models"}
+          size="sm"
+          className={probing ? "[&>svg]:animate-spin" : undefined}
+          onClick={onRefresh}
+          disabled={probing || !harness.installed}
+          description={harness.installed ? undefined : "Its binary is not installed"}
+          data-testid={`setting-harness-refresh-${harness.name}`}
+        />
+      </td>
+    </tr>
   );
 }

@@ -128,12 +128,20 @@ const cloneJob = (over: Partial<CloneJob> = {}): CloneJob => ({
   ...over,
 });
 
+/** « Add repository », then one of its entries, once the recent repositories are listed. */
+async function addRepository(name: string | RegExp) {
+  fireEvent.click(screen.getByTestId("project-add-repo"));
+  await screen.findByRole("menuitem", { name: "~/code/analytics" });
+  fireEvent.click(screen.getByRole("menuitem", { name }));
+}
+
 describe("ProjectsPanel", () => {
   it("lists the Projets by name and shows the one asked for, with its Runs and repositories", async () => {
     renderPanel({ entry: { projectId: "p1" } });
 
     const items = screen.getAllByTestId("projects-list-item");
-    expect(items.map((item) => item.textContent)).toEqual(["Checkout2 repos", "Platform1 repo"]);
+    expect(items.map((item) => item.textContent)).toEqual(["Checkout2", "Platform1"]);
+    expect(within(items[0]).getByTitle("2 repos")).toBeInTheDocument();
     expect(screen.getByTestId("project-detail-name")).toHaveTextContent("Checkout");
     expect(screen.getByTestId("project-detail-runs")).toHaveTextContent("2 runs");
 
@@ -146,8 +154,10 @@ describe("ProjectsPanel", () => {
         "git@github.com:acme/shop-web.git",
       ),
     );
-    expect(within(row("/home/me/code/shop-api")).getByTestId("project-repo-also-in")).toHaveTextContent(
-      "also in Platform",
+    expect(within(row("/home/me/code/shop-api")).getByTestId("project-repo-also-in")).toHaveTextContent("+1");
+    expect(within(row("/home/me/code/shop-api")).getByTestId("project-repo-also-in")).toHaveAttribute(
+      "title",
+      "Also in Platform",
     );
   });
 
@@ -186,10 +196,12 @@ describe("ProjectsPanel", () => {
   it("adds a recent repository the Projet does not hold yet", async () => {
     renderPanel({ entry: { projectId: "p1" } });
     fireEvent.click(screen.getByTestId("project-add-repo"));
-    const recent = await screen.findAllByTestId("project-add-repo-recent");
-    expect(recent.map((item) => item.textContent)).toEqual(["~/code/analytics"]);
+    const menu = await screen.findByRole("menu", { name: "Add repository" });
+    expect(within(menu).getByText("Recent")).toBeInTheDocument();
+    const recent = within(menu).getByRole("menuitem", { name: "~/code/analytics" });
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(4);
 
-    fireEvent.click(recent[0]);
+    fireEvent.click(recent);
     await waitFor(() =>
       expect(api.addProjectMember).toHaveBeenCalledWith("p1", "/home/me/code/analytics"),
     );
@@ -199,8 +211,7 @@ describe("ProjectsPanel", () => {
     api.validateRepo.mockResolvedValueOnce({ valid: false, error: "/home/me/code/picked is not a git repository" });
     renderPanel({ entry: { projectId: "p1" } });
 
-    fireEvent.click(screen.getByTestId("project-add-repo"));
-    fireEvent.click(screen.getByTestId("project-add-repo-local"));
+    await addRepository("Local folder…");
     fireEvent.click(screen.getByTestId("explorer-pick"));
     expect(await screen.findByTestId("project-detail-error")).toHaveTextContent(
       "/home/me/code/picked is not a git repository",
@@ -208,8 +219,7 @@ describe("ProjectsPanel", () => {
     expect(api.addProjectMember).not.toHaveBeenCalled();
 
     api.validateRepo.mockResolvedValueOnce({ valid: true });
-    fireEvent.click(screen.getByTestId("project-add-repo"));
-    fireEvent.click(screen.getByTestId("project-add-repo-local"));
+    await addRepository("Local folder…");
     fireEvent.click(screen.getByTestId("explorer-pick"));
     await waitFor(() => expect(api.addProjectMember).toHaveBeenCalledWith("p1", "/home/me/code/picked"));
   });
@@ -218,8 +228,7 @@ describe("ProjectsPanel", () => {
     api.createRepo.mockResolvedValue({ path: "/home/me/code/widgets", created: true });
     renderPanel({ entry: { projectId: "p1" } });
 
-    fireEvent.click(screen.getByTestId("project-add-repo"));
-    fireEvent.click(screen.getByTestId("project-add-repo-new"));
+    await addRepository(/New empty repository…/);
     expect(screen.getByTestId("project-new-repo-path")).toHaveValue("~/");
     fireEvent.change(screen.getByTestId("project-new-repo-path"), { target: { value: "~/code/widgets" } });
     fireEvent.click(screen.getByTestId("project-new-repo-create"));
@@ -233,8 +242,7 @@ describe("ProjectsPanel", () => {
     api.startClone.mockResolvedValue(cloneJob());
     const { onChanged } = renderPanel({ entry: { projectId: "p1" } });
 
-    fireEvent.click(screen.getByTestId("project-add-repo"));
-    fireEvent.click(screen.getByTestId("project-add-repo-clone"));
+    await addRepository("Clone from a URL…");
     fireEvent.change(screen.getByTestId("project-clone-url"), {
       target: { value: "https://github.com/acme/analytics.git" },
     });
@@ -265,8 +273,7 @@ describe("ProjectsPanel", () => {
   it("clones into the folder typed after « change », and says a URL already cloned is reused", async () => {
     api.startClone.mockResolvedValue(cloneJob({ state: "done", reused: true }));
     const { onChanged } = renderPanel({ entry: { projectId: "p1" } });
-    fireEvent.click(screen.getByTestId("project-add-repo"));
-    fireEvent.click(screen.getByTestId("project-add-repo-clone"));
+    await addRepository("Clone from a URL…");
     fireEvent.change(screen.getByTestId("project-clone-url"), {
       target: { value: "git@github.com:acme/shop-web.git" },
     });
@@ -325,8 +332,7 @@ describe("ProjectsPanel", () => {
   it("refuses a start the daemon refuses, naming why", async () => {
     api.startClone.mockRejectedValue(new Error("/home/me/pdo/repos/analytics already exists and is not a clone of https://github.com/acme/analytics.git"));
     renderPanel({ entry: { projectId: "p1" } });
-    fireEvent.click(screen.getByTestId("project-add-repo"));
-    fireEvent.click(screen.getByTestId("project-add-repo-clone"));
+    await addRepository("Clone from a URL…");
     expect(screen.getByTestId("project-clone-start")).toBeDisabled();
     fireEvent.change(screen.getByTestId("project-clone-url"), {
       target: { value: "https://github.com/acme/analytics.git" },
@@ -339,8 +345,7 @@ describe("ProjectsPanel", () => {
     api.createRepo.mockRejectedValue(new Error("/home/me/code/full exists and is not a git repository"));
     renderPanel({ entry: { projectId: "p1" } });
 
-    fireEvent.click(screen.getByTestId("project-add-repo"));
-    fireEvent.click(screen.getByTestId("project-add-repo-new"));
+    await addRepository(/New empty repository…/);
     fireEvent.change(screen.getByTestId("project-new-repo-path"), { target: { value: "/home/me/code/full" } });
     fireEvent.keyDown(screen.getByTestId("project-new-repo-path"), { key: "Enter" });
 
@@ -366,9 +371,10 @@ describe("ProjectsPanel", () => {
   it("deletes the Projet once confirmed", async () => {
     const { onChanged } = renderPanel({ entry: { projectId: "p1" } });
     fireEvent.click(screen.getByTestId("project-delete"));
-    const confirm = screen.getByTestId("confirm-delete-modal");
-    expect(confirm).toHaveTextContent("Repositories and Runs stay");
-    fireEvent.click(within(confirm).getByText("Delete"));
+    const confirm = screen.getByRole("dialog", { name: "Delete project Checkout?" });
+    expect(confirm).toHaveTextContent("Runs keep it, marked deleted");
+    expect(confirm).toHaveTextContent("2 repositories stay on disk");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => expect(api.deleteProject).toHaveBeenCalledWith("p1"));
     expect(onChanged).toHaveBeenCalled();

@@ -4,6 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { HarnessDescriptorRows } from "./DiagnosticsRows";
 import type { InstanceSettings } from "../../model/settings";
 import { HARNESS_CATALOGUE_CHANGED } from "../../../harness/store/useHarnessCatalog";
+import { SETTINGS_CATEGORIES } from "../../model/settingsCategories";
+
+const SECTION = SETTINGS_CATEGORIES.flatMap((c) => c.sections).find((s) => s.id === "harness-descriptors")!;
 
 // Settings › Diagnostics › Harness descriptors: one row per harness, and
 // « Refresh models », which probes its catalogue again even at the same version.
@@ -38,14 +41,14 @@ beforeEach(() => {
 
 describe("HarnessDescriptorRows — refresh models", () => {
   it("shows each harness's version, models, the age of its probe, and a failed probe in red", () => {
-    render(<HarnessDescriptorRows settings={settings()} />);
+    render(<HarnessDescriptorRows section={SECTION} settings={settings()} />);
     const claude = screen.getByTestId("setting-harness-row-claude");
     expect(claude).toHaveTextContent("2.4.1");
     expect(claude).toHaveTextContent("4 models");
     expect(screen.getByTestId("setting-harness-probed-claude")).toHaveTextContent("probed just now");
-    expect(screen.getByTestId("setting-harness-probed-claude")).toHaveClass("text-primary");
+    expect(screen.getByTestId("setting-harness-probed-claude")).toHaveClass("set-ok");
     expect(screen.getByTestId("setting-harness-probed-opencode")).toHaveTextContent("probed 3 days ago");
-    expect(screen.getByTestId("setting-harness-failed-copilot")).toHaveClass("text-st-failed");
+    expect(screen.getByTestId("setting-harness-failed-copilot")).toHaveClass("set-bad");
     expect(screen.getByTestId("setting-harness-row-pi")).toHaveTextContent("not installed");
     expect(screen.getByTestId("setting-harness-refresh-pi")).toBeDisabled();
   });
@@ -56,19 +59,19 @@ describe("HarnessDescriptorRows — refresh models", () => {
     refreshMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
     const heard = vi.fn();
     window.addEventListener(HARNESS_CATALOGUE_CHANGED, heard);
-    render(<HarnessDescriptorRows settings={settings()} />);
+    render(<HarnessDescriptorRows section={SECTION} settings={settings()} />);
 
     const button = screen.getByTestId("setting-harness-refresh-opencode");
     await user.click(button);
     expect(refreshMock).toHaveBeenCalledWith("opencode");
-    expect(button).toHaveTextContent("Probing…");
+    expect(button).toHaveAccessibleName("Probing…");
     expect(button).toBeDisabled();
-    expect(screen.getByTestId("setting-harness-refresh-claude")).toHaveTextContent("Refresh models");
+    expect(screen.getByTestId("setting-harness-refresh-claude")).toHaveAccessibleName("Refresh models");
     await user.click(button);
     expect(refreshMock).toHaveBeenCalledTimes(1);
 
     await act(async () => answer({ name: "opencode" }));
-    expect(button).toHaveTextContent("Refresh models");
+    expect(button).toHaveAccessibleName("Refresh models");
     expect(heard).toHaveBeenCalledTimes(1);
     window.removeEventListener(HARNESS_CATALOGUE_CHANGED, heard);
   });
@@ -76,7 +79,7 @@ describe("HarnessDescriptorRows — refresh models", () => {
   it("a refused refresh is said on its row", async () => {
     const user = userEvent.setup();
     refreshMock.mockRejectedValue(new Error("Refresh models failed: no harness `opencode`"));
-    render(<HarnessDescriptorRows settings={settings()} />);
+    render(<HarnessDescriptorRows section={SECTION} settings={settings()} />);
     await user.click(screen.getByTestId("setting-harness-refresh-opencode"));
     expect(await screen.findByTestId("setting-harness-failed-opencode")).toHaveTextContent("no harness");
   });

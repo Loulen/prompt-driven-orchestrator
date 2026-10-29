@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Download, FileText, RefreshCw, TriangleAlert } from "lucide-react";
+import { Check, Copy, Download, Loader2, RefreshCw, TriangleAlert } from "lucide-react";
 import { checkForUpdateNow, fetchUpdateAttemptLog } from "../api/update";
 import { useUpdateStatus } from "../store/useUpdateStatus";
 import {
@@ -15,17 +15,21 @@ import {
   upToDate,
 } from "../model/updateStatus";
 import { KeyValueRow } from "../../shared/ui/key-value-row";
+import { Button, Chip, EmptyState, IconButton } from "../../shared/ui/kit";
 import { copyToClipboard } from "../../shared/lib/clipboard";
+import type { SettingsSection } from "../../settings/model/settingsCategories";
+import { SwitchRow } from "../../settings/components/settingsSurface/fields";
+import Section, { SectionExtra } from "../../settings/components/settingsSurface/Section";
 
 /**
- * Version & update (#697) — the daemon's cached version check, read from `GET /update`
+ * Settings › General › Version & update (#697) — the daemon's cached version check, read from `GET /update`
  * (once when the surface opens, after « Check now », and on the shared bus), plus two
  * controls with their OWN persistence: « Check now » posts at once, and the check
  * switch writes `update_check` through the host's `onToggleCheck` (`PUT /settings`) at
  * the change — neither joins the form's dirty set (Trap B), and the section renders
  * even when `GET /settings` failed (Trap A), since it does not depend on it.
  *
- * States: newer known → amber latest; up to date → green pill on the installed row;
+ * States: newer known → amber latest; up to date → a green chip on the installed row;
  * unknown (off / unreachable / never / no source) → `—` + the reason. The bar's badge
  * follows via the bus, so disabling the check removes it immediately.
  *
@@ -33,11 +37,13 @@ import { copyToClipboard } from "../../shared/lib/clipboard";
  * offered only when a newer release is known and the daemon would run it.
  */
 export default function VersionUpdateSection({
+  section,
   active,
   onOpenChangelog,
   onRequestUpdate,
   onToggleCheck,
 }: {
+  section: SettingsSection;
   active: boolean;
   onOpenChangelog?: () => void;
   onRequestUpdate?: () => void;
@@ -126,241 +132,210 @@ export default function VersionUpdateSection({
     copiedTimer.current = setTimeout(() => setCopied(false), 1500);
   };
 
+  const tools = (
+    <>
+      {status && (
+        <Button
+          size="sm"
+          tone={newerAvailable(status) ? "primary" : "default"}
+          icon={Download}
+          onClick={() => onRequestUpdate?.()}
+          disabled={!canOfferUpdate(status) || !onRequestUpdate}
+          data-testid="setting-version-update-button"
+          title={updateNotOfferedReason(status) ?? `Update to v${status.latest_version}`}
+        >
+          {newerAvailable(status) && status.latest_version ? `Update to v${status.latest_version}` : "Update"}
+        </Button>
+      )}
+      <IconButton
+        icon={RefreshCw}
+        label={checking ? "Checking…" : "Check now"}
+        size="sm"
+        className={checking ? "[&>svg]:animate-spin" : undefined}
+        onClick={() => void checkNow()}
+        disabled={!status || checking || !status.check_enabled || status.source_url == null}
+        description={
+          status?.source_url == null
+            ? "No release source for this build"
+            : status && !status.check_enabled
+              ? "Turn the update check on first"
+              : undefined
+        }
+        data-testid="setting-version-check-now"
+      />
+    </>
+  );
+
   if (!status) {
     return (
-      <div className="text-text-3" style={{ fontSize: "10.5px" }} data-testid="setting-version-update">
-        Loading the daemon's version state…
-      </div>
+      <Section section={section} tools={tools}>
+        <SectionExtra testId="setting-version-update">
+          <EmptyState icon={Loader2} spin layout="row">
+            Loading
+          </EmptyState>
+        </SectionExtra>
+      </Section>
     );
   }
 
   const newer = newerAvailable(status);
   const current = upToDate(status);
-  const enabled = status.check_enabled;
-  const hasSource = status.source_url != null;
   const unknown = status.install_method === "unknown";
   // A distribution that declares no upgrade command: nothing to run, nothing to copy.
   const noCommand = status.manual_command == null;
-  const offerUpdate = canOfferUpdate(status);
+  const commandTip = noCommand
+    ? `${status.channel_name} declares no update command: update it the way it was installed`
+    : unknown
+      ? "Install method not detected: no update from here; to update, run"
+      : "The Update button runs exactly this, detached from the daemon";
 
   return (
-    <div className="flex flex-col gap-1.5" data-testid="setting-version-update">
-      <KeyValueRow label="Installed version" testId="setting-version-installed">
-        <span className="font-mono">{installedVersionLabel(status)}</span>
-        {current && (
-          <span
-            className="ml-2 rounded-full bg-st-done/14 px-1.5 py-px text-st-done"
-            style={{ fontSize: "9.5px" }}
-            data-testid="setting-version-uptodate"
-          >
-            up to date
+    <Section section={section} tools={tools}>
+      <SwitchRow
+        label="Update check"
+        help="At start, every 6 h and on demand; off, no request ever leaves the daemon"
+        scope="live"
+        testId="setting-row-update-check"
+        checked={status.check_enabled}
+        disabled={toggling}
+        onChange={(on) => void toggle(on)}
+      />
+      <SectionExtra testId="setting-version-update">
+        <KeyValueRow label="Installed" testId="setting-version-installed">
+          <span className="set-mono set-ellipsis">{installedVersionLabel(status)}</span>
+          {current && (
+            <span className="d-chip set-ok" data-testid="setting-version-uptodate">
+              up to date
+            </span>
+          )}
+        </KeyValueRow>
+        <KeyValueRow label="Latest" testId="setting-version-latest">
+          {status.latest_version ? (
+            <>
+              <span className={`set-mono ${newer ? "text-st-await" : ""}`}>v{status.latest_version}</span>
+              {onOpenChangelog && (
+                <button
+                  type="button"
+                  onClick={onOpenChangelog}
+                  className="set-link"
+                  data-testid="setting-version-whats-new"
+                  title={newer ? "What changed since your version" : "The changelog of this build"}
+                >
+                  What's new
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <span className="set-mono">—</span>
+              {status.reason && (
+                <span className="set-faint set-ellipsis" title={status.reason}>
+                  {status.reason}
+                </span>
+              )}
+            </>
+          )}
+        </KeyValueRow>
+        <KeyValueRow label="Checked" testId="setting-version-checked-at">
+          {status.checked_at ? (
+            <span className="set-ellipsis" title={absoluteTime(status.checked_at)}>
+              {relativeTime(status.checked_at)}
+              {status.source && <span className="set-faint"> · {status.source}</span>}
+            </span>
+          ) : (
+            <span className="set-mono">—</span>
+          )}
+        </KeyValueRow>
+        <KeyValueRow label="Method" testId="setting-version-install-method">
+          <span className="set-ellipsis">
+            {INSTALL_METHOD_LABEL[status.install_method]}
+            <span className="set-faint"> · {SUPERVISION_LABEL[status.supervision]}</span>
           </span>
+        </KeyValueRow>
+        <KeyValueRow label="Command" testId="setting-version-manual-command">
+          {status.manual_command != null ? (
+            <>
+              <code className="set-mono set-ellipsis" title={commandTip}>
+                {status.manual_command}
+              </code>
+              {!unknown && (
+                <IconButton
+                  icon={copied ? Check : Copy}
+                  label={copied ? "Copied" : "Copy command"}
+                  size="sm"
+                  onClick={copy}
+                  data-testid="setting-version-copy-command"
+                />
+              )}
+            </>
+          ) : (
+            <span className="set-faint set-ellipsis" title={commandTip}>
+              none
+            </span>
+          )}
+        </KeyValueRow>
+        {(unknown || noCommand) && status.apply_blocked_reason && (
+          <div className="set-warn" title={status.apply_blocked_reason} data-testid="setting-version-apply-blocked">
+            <TriangleAlert size={13} strokeWidth={1.5} aria-hidden />
+            <span className="set-ellipsis">{status.apply_blocked_reason}</span>
+          </div>
         )}
-      </KeyValueRow>
-      <KeyValueRow label="Latest release" testId="setting-version-latest">
-        {status.latest_version ? (
-          <>
-            <span className={`font-mono ${newer ? "text-st-await" : ""}`}>v{status.latest_version}</span>
-            {onOpenChangelog && (
+        {status.last_attempt && (
+          <div data-testid="setting-version-last-attempt">
+            <KeyValueRow
+              label="Last update"
+              tone={status.last_attempt.status === "failed" ? "failed" : undefined}
+              testId="setting-version-last-attempt-row"
+            >
+              <Chip
+                tone={
+                  status.last_attempt.status === "succeeded"
+                    ? "done"
+                    : status.last_attempt.status === "failed"
+                      ? "failed"
+                      : "awaiting"
+                }
+              >
+                <span data-testid="setting-version-last-attempt-status">
+                  {status.last_attempt.status === "failed" && status.last_attempt.exit_code != null
+                    ? `failed (exit ${status.last_attempt.exit_code})`
+                    : status.last_attempt.status}
+                </span>
+              </Chip>
+              <span className="set-ellipsis" title={absoluteTime(status.last_attempt.started_at)}>
+                {relativeTime(status.last_attempt.started_at)}
+                <span className="set-faint">
+                  {" "}
+                  · from v{status.last_attempt.from_version} · {INSTALL_METHOD_LABEL[status.last_attempt.method]}
+                </span>
+              </span>
               <button
                 type="button"
-                onClick={onOpenChangelog}
-                className="ml-2 inline-flex items-center gap-1 text-text-3 underline decoration-text-3 underline-offset-2 hover:text-text"
-                data-testid="setting-version-whats-new"
-                title={newer ? "See what changed since your version" : "See the changelog of this build"}
+                onClick={() => {
+                  setLog(null);
+                  setLogError(null);
+                  setLogOpen((o) => !o);
+                }}
+                className="set-link"
+                data-testid="setting-version-attempt-log-toggle"
+                title={status.last_attempt.log_path}
               >
-                <FileText size={10} />
-                What's new
+                {logOpen ? "Hide log" : "View log"}
               </button>
+            </KeyValueRow>
+            {logOpen && (
+              <pre className="set-log" data-testid="setting-version-attempt-log">
+                {logError ? `Could not load the log: ${logError}` : log ?? "Loading…"}
+              </pre>
             )}
-          </>
-        ) : (
-          <>
-            <span className="font-mono">—</span>
-            {status.reason && <span className="ml-2 text-text-3">{status.reason}</span>}
-          </>
+          </div>
         )}
-      </KeyValueRow>
-      <KeyValueRow label="Last check" testId="setting-version-checked-at">
-        {status.checked_at ? (
-          <>
-            {absoluteTime(status.checked_at)}
-            <span className="text-text-3">
-              {" "}
-              · {relativeTime(status.checked_at)}
-              {status.source && ` · ${status.source}`}
-            </span>
-          </>
-        ) : (
-          <span className="font-mono">—</span>
-        )}
-      </KeyValueRow>
-      <KeyValueRow label="Install method" testId="setting-version-install-method">
-        {INSTALL_METHOD_LABEL[status.install_method]}
-        <span className="text-text-3"> · {SUPERVISION_LABEL[status.supervision]}</span>
-      </KeyValueRow>
-      <div
-        className="flex items-center justify-between gap-3 rounded border border-line bg-surface-1 px-2.5 py-1.5"
-        style={{ fontSize: "10.5px" }}
-        data-testid="setting-version-manual-command"
-      >
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <span className="text-text-3">
-            {noCommand
-              ? `${status.channel_name} declares no update command — PDO will not update it. Update it the way it was installed.`
-              : unknown
-                ? "Install method not detected — PDO will not update itself. To update:"
-                : "To update manually (the Update button runs exactly this, detached from the daemon):"}
-          </span>
-          {status.manual_command != null && (
-            <code className="truncate font-mono text-text-2">{status.manual_command}</code>
-          )}
-        </div>
-        {!unknown && !noCommand && (
-          <button
-            type="button"
-            onClick={copy}
-            className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-surface-2 px-2 py-1 text-text-2 hover:border-primary"
-            style={{ fontSize: 10.5 }}
-            title="Copy command"
-            data-testid="setting-version-copy-command"
-          >
-            {copied ? <Check size={11} /> : <Copy size={11} />}
-            {copied ? "Copied" : "Copy"}
-          </button>
-        )}
-      </div>
-      {(unknown || noCommand) && status.apply_blocked_reason && (
-        <div
-          className="flex items-start gap-1.5 text-text-3"
-          style={{ fontSize: "10.5px" }}
-          data-testid="setting-version-apply-blocked"
-        >
-          <TriangleAlert size={11} className="mt-px shrink-0 text-st-await" />
-          <span>{status.apply_blocked_reason}</span>
-        </div>
-      )}
-      {status.last_attempt && (
-        <div className="flex flex-col gap-1" data-testid="setting-version-last-attempt">
-          <KeyValueRow
-            label="Last update"
-            tone={status.last_attempt.status === "failed" ? "failed" : undefined}
-            testId="setting-version-last-attempt-row"
-          >
-            <span
-              className={`rounded-full px-1.5 py-px ${
-                status.last_attempt.status === "succeeded"
-                  ? "bg-st-done/14 text-st-done"
-                  : status.last_attempt.status === "failed"
-                    ? "bg-st-failed/14 text-st-failed"
-                    : "bg-st-await/14 text-st-await"
-              }`}
-              style={{ fontSize: "9.5px" }}
-              data-testid="setting-version-last-attempt-status"
-            >
-              {status.last_attempt.status === "failed" && status.last_attempt.exit_code != null
-                ? `failed (exit ${status.last_attempt.exit_code})`
-                : status.last_attempt.status}
-            </span>
-            <span className="ml-2">{absoluteTime(status.last_attempt.started_at)}</span>
-            <span className="text-text-3">
-              {" "}
-              · {relativeTime(status.last_attempt.started_at)} · from v{status.last_attempt.from_version} ·{" "}
-              {INSTALL_METHOD_LABEL[status.last_attempt.method]}
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setLog(null);
-                setLogError(null);
-                setLogOpen((o) => !o);
-              }}
-              className="ml-2 inline-flex items-center gap-1 text-text-3 underline decoration-text-3 underline-offset-2 hover:text-text"
-              data-testid="setting-version-attempt-log-toggle"
-              title={status.last_attempt.log_path}
-            >
-              <FileText size={10} />
-              {logOpen ? "Hide log" : "View log"}
-            </button>
+        {checkError && (
+          <KeyValueRow label="Check failed" tone="failed" title={checkError} testId="setting-version-check-error">
+            <span className="set-ellipsis">{checkError}</span>
           </KeyValueRow>
-          {logOpen && (
-            <pre
-              className="max-h-56 overflow-auto rounded border border-line bg-surface-0 px-2.5 py-2 font-mono text-text-2"
-              style={{ fontSize: "10.5px", lineHeight: 1.4 }}
-              data-testid="setting-version-attempt-log"
-            >
-              {logError ? `Could not load the log: ${logError}` : log ?? "Loading…"}
-            </pre>
-          )}
-        </div>
-      )}
-      {checkError && (
-        <KeyValueRow label="Check failed" tone="failed" testId="setting-version-check-error">
-          {checkError}
-        </KeyValueRow>
-      )}
-      <div className="mt-1 flex flex-wrap items-center gap-4">
-        <button
-          type="button"
-          onClick={() => onRequestUpdate?.()}
-          disabled={!offerUpdate || !onRequestUpdate}
-          data-testid="setting-version-update-button"
-          title={updateNotOfferedReason(status) ?? `Update to v${status.latest_version}`}
-          className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 disabled:opacity-40 ${
-            newer
-              ? "border-primary bg-primary text-surface-0 hover:bg-primary/90"
-              : "border-line-strong bg-surface-2 text-text-2 hover:border-primary"
-          }`}
-          style={{ fontSize: 11 }}
-        >
-          <Download size={11} />
-          {newer && status.latest_version ? `Update to v${status.latest_version}` : "Update"}
-        </button>
-        <button
-          type="button"
-          onClick={() => void checkNow()}
-          disabled={checking || !enabled || !hasSource}
-          data-testid="setting-version-check-now"
-          title={
-            !hasSource
-              ? "No release source is declared for this build: nothing to check."
-              : !enabled
-                ? "Turn the update check on to check now."
-                : undefined
-          }
-          className="flex items-center gap-1.5 rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 text-text-2 hover:border-primary disabled:opacity-40"
-          style={{ fontSize: 11 }}
-        >
-          <RefreshCw size={11} className={checking ? "animate-spin" : ""} />
-          {checking ? "Checking…" : "Check now"}
-        </button>
-        <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled}
-            aria-label="Check for updates"
-            disabled={toggling}
-            data-testid="setting-update-check"
-            onClick={() => void toggle(!enabled)}
-            className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-              enabled ? "bg-primary" : "bg-text-3"
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-surface-0 transition-all ${
-                enabled ? "left-3" : "left-0.5"
-              }`}
-            />
-          </button>
-          <span className="font-medium text-text-2" style={{ fontSize: "11.5px" }}>
-            Check for updates
-          </span>
-          <span className="text-text-3" style={{ fontSize: "10.5px" }}>
-            at start, every 6 h and on demand. Off: no request ever leaves the daemon.
-          </span>
-        </div>
-      </div>
-    </div>
+        )}
+      </SectionExtra>
+    </Section>
   );
 }

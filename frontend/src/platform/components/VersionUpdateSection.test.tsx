@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "../model/update";
 
@@ -11,6 +11,9 @@ vi.mock("../api/update", () => ({
 }));
 
 import VersionUpdateSection from "./VersionUpdateSection";
+import { SETTINGS_CATEGORIES } from "../../settings/model/settingsCategories";
+
+const SECTION = SETTINGS_CATEGORIES.flatMap((c) => c.sections).find((s) => s.id === "version-update")!;
 
 /** A distribution (#24): its own name, version, source and command, on core 2.0.0. */
 function distribution(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
@@ -39,7 +42,7 @@ function distribution(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
 
 function renderSection() {
   return render(
-    <VersionUpdateSection active onToggleCheck={async () => {}} onRequestUpdate={() => {}} />,
+    <VersionUpdateSection section={SECTION} active onToggleCheck={async () => {}} onRequestUpdate={() => {}} />,
   );
 }
 
@@ -77,18 +80,18 @@ describe("Settings › Version & update — a distribution's release channel (#2
       distribution({
         manual_command: null,
         can_apply: false,
-        apply_blocked_reason: "acme-pdo declares no update command: PDO will not guess.",
+        apply_blocked_reason: "acme-pdo declares no update command: update it the way it was installed, then restart the daemon.",
       }),
     );
     renderSection();
     const btn = await screen.findByTestId("setting-version-update-button");
     expect(btn).toBeDisabled();
     expect(btn).toHaveAttribute("title", expect.stringContaining("declares no update command"));
-    expect(screen.getByTestId("setting-version-manual-command")).toHaveTextContent(
-      "acme-pdo declares no update command",
-    );
+    expect(
+      within(screen.getByTestId("setting-version-manual-command")).getByTitle(/acme-pdo declares no update command/),
+    ).toHaveTextContent("none");
     expect(screen.queryByTestId("setting-version-copy-command")).not.toBeInTheDocument();
-    expect(screen.getByTestId("setting-version-apply-blocked")).toHaveTextContent("will not guess");
+    expect(screen.getByTestId("setting-version-apply-blocked")).toHaveTextContent("restart the daemon");
   });
 
   it("no newer version known: Update is not offered, even when the daemon would accept it", async () => {
@@ -109,16 +112,15 @@ describe("Settings › Version & update — a distribution's release channel (#2
         checked_at: null,
         source: null,
         source_url: null,
-        reason: "No release source is declared for this build: the version check does not run.",
+        reason: "No release source declared: no version check.",
       }),
     );
     renderSection();
     const latest = await screen.findByTestId("setting-version-latest");
     expect(latest).toHaveTextContent("—");
-    expect(latest).toHaveTextContent("No release source is declared");
+    expect(latest).toHaveTextContent("No release source declared");
     const check = screen.getByTestId("setting-version-check-now");
     expect(check).toBeDisabled();
-    expect(check).toHaveAttribute("title", expect.stringContaining("No release source"));
     expect(screen.getByTestId("setting-version-update-button")).toBeDisabled();
   });
 });

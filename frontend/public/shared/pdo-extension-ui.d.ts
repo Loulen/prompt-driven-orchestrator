@@ -572,8 +572,8 @@ export function useHostedSession(session: string): {
 };
 
 /** Its head: the kind's icon, the name (its key by default), the state, the
- *  harness; in mono its kind, how long in that state and the host's
- *  `context` (where it sits). `actions` at the right of the first line. Its
+ *  harness (the instance's default when none is set); in mono its kind,
+ *  how long in that state and the host's `context` (where it sits). `actions` at the right of the first line. Its
  *  folder, Projet, starter and driver are `SessionInfo`'s. */
 export function SessionHeader(props: { session: string; name?: string; context?: ReactNode; actions?: ReactNode }): ReactNode;
 

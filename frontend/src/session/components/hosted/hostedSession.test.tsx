@@ -16,6 +16,7 @@ import { hostReactMajor } from "../../../shared/extensions/shared";
 import { resetExtensions, setBundleLoader } from "../../../shared/extensions/store";
 import { extensionUiModule } from "../../../shared/extensions/uiModule";
 import { ApiError } from "../../../shared/http/client";
+import { fetchSettings } from "../../../settings/api/settings";
 import type { HostedLiveArtifact, HostedSession, HostedSessionView } from "../../model/hostedSession";
 
 const { subscribers, api, toasts } = vi.hoisted(() => ({
@@ -189,6 +190,15 @@ describe("the live state of a Session hébergée", () => {
     expect(screen.getByTestId("hosted-session-info")).toHaveTextContent("Nobody");
   });
 
+  it("names the harness an agent inherits when its configuration names none", async () => {
+    vi.mocked(fetchSettings).mockResolvedValueOnce({ default_harness: { effective: "codex" }, harness_descriptors: null } as never);
+    api.fetchHostedSession.mockResolvedValue(hosted({ config: {} }));
+    render(<SessionHeader session={ID} />);
+    const harness = await screen.findByTestId("hosted-session-harness");
+    await waitFor(() => expect(harness).toHaveTextContent("codex"));
+    expect(harness).toHaveAttribute("title", "Harness (inherited)");
+  });
+
   it("says when it may not be read, and when it is forgotten", async () => {
     api.fetchHostedSession.mockRejectedValue(new ApiError("the test extension refuses read session", { status: 403 }));
     function Probe() {
@@ -265,6 +275,18 @@ describe("the gestures", () => {
     expect(toasts[0]).toEqual(["the test extension refuses terminate session", "error", { title: "Terminate" }]);
     expect(screen.getByTestId("hosted-session-header")).toHaveAttribute("data-state", "running");
     expect(screen.getByTestId("hosted-session-terminate")).toBeEnabled();
+  });
+
+  it("do not show one session's refusal on the next one the host puts in their place", async () => {
+    api.terminateHostedSession.mockRejectedValue(new ApiError("the test extension refuses terminate session", { status: 403 }));
+    const { rerender } = render(<SessionActions session={ID} />);
+    fireEvent.click(await screen.findByTestId("hosted-session-terminate"));
+    expect(await screen.findByTestId("hosted-session-error")).toBeInTheDocument();
+    api.fetchHostedSession.mockResolvedValue(hosted({ id: "pdo-hosted-other", key: "demo" }));
+    rerender(<SessionActions session="pdo-hosted-other" />);
+    expect(screen.queryByTestId("hosted-session-error")).toBeNull();
+    rerender(<SessionActions session={ID} />);
+    expect(screen.queryByTestId("hosted-session-error")).toBeNull();
   });
 });
 
@@ -365,6 +387,20 @@ describe("what a session is, its configuration, its events", () => {
     render(<SessionConfig session={ID} />);
     expect(await screen.findByText("A shell has no configuration")).toBeInTheDocument();
     expect(screen.queryByTestId("hosted-session-prompt")).toBeNull();
+  });
+
+  it("keeps an unsaved initial prompt when the brick leaves and comes back, until saved or cancelled", async () => {
+    const first = render(<SessionConfig session={ID} />);
+    fireEvent.change(await screen.findByTestId("hosted-session-prompt"), { target: { value: "Fix the flaky test" } });
+    first.unmount();
+    const second = render(<SessionConfig session={ID} />);
+    const prompt = (await screen.findByTestId("hosted-session-prompt")) as HTMLTextAreaElement;
+    expect(prompt.value).toBe("Fix the flaky test");
+    expect(screen.getByTestId("hosted-session-prompt-save")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Cancel"));
+    second.unmount();
+    render(<SessionConfig session={ID} />);
+    expect(((await screen.findByTestId("hosted-session-prompt")) as HTMLTextAreaElement).value).toBe("Fix the tests");
   });
 
   it("reads an agent choice from a configuration and back", () => {

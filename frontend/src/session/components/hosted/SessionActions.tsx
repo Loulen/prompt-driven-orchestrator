@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { RotateCcw, Square } from "lucide-react";
 import { Button, toast } from "../../../shared/ui/kit";
 import type { HostedSession } from "../../model/hostedSession";
@@ -15,13 +15,24 @@ export default function SessionActions({ session: id, children }: { session: str
   const { session, terminate, relaunch } = useHostedSession(id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A refusal is its session's: the host may put another one in its place.
+  const [shown, setShown] = useState(id);
+  if (shown !== id) {
+    setShown(id);
+    setError(null);
+  }
+  const current = useRef(id);
+  useEffect(() => {
+    current.current = id;
+  }, [id]);
   const run = (title: string, gesture: () => Promise<HostedSession>) => {
+    const of = id;
     setBusy(true);
     setError(null);
     gesture()
       .catch((e: unknown) => {
         const message = e instanceof Error ? e.message : String(e);
-        setError(message);
+        if (current.current === of) setError(message);
         toast(message, "error", { title });
       })
       .finally(() => setBusy(false));

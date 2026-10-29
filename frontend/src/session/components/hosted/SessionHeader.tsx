@@ -3,6 +3,7 @@ import { Bot, SquareTerminal } from "lucide-react";
 import { Chip } from "../../../shared/ui/kit";
 import { durationSince, isLive, kindLabel, stateLabel, stateSince, stateTone } from "../../model/hostedSession";
 import { useHostedSession } from "../../store/useHostedSession";
+import { useInstanceAgent } from "../../store/useInstanceAgent";
 import "./hostedSession.css";
 
 /** How often the duration on show moves. */
@@ -19,7 +20,7 @@ function useNow(every: number): number {
 
 /**
  * The head of a Session hébergée's detail (CORE-125): its kind's icon, its
- * name, its state and its harness, then in mono its kind, how long it has
+ * name, its state and its harness (the instance's when it inherits it), then in mono its kind, how long it has
  * been in that state, and what the host adds (`context`: where it sits).
  * `actions` go at the right of the first line (the host's close button).
  */
@@ -37,6 +38,7 @@ export default function SessionHeader({
 }) {
   const { session, events } = useHostedSession(id);
   const now = useNow(TICK_MS);
+  const { inherited } = useInstanceAgent();
   if (!session) {
     return (
       <header className="hs-head" data-testid="hosted-session-header">
@@ -64,10 +66,10 @@ export default function SessionHeader({
             {label}
           </Chip>
         </span>
-        {session.kind === "agent" && session.config.harness && (
-          <Chip mono title="Harness">
-            {session.config.harness}
-          </Chip>
+        {session.kind === "agent" && (
+          <span data-testid="hosted-session-harness" title={session.config.harness ? "Harness" : "Harness (inherited)"}>
+            <Chip mono>{session.config.harness ?? inherited.harness}</Chip>
+          </span>
         )}
         <span className="hs-head__fill" />
         {actions}

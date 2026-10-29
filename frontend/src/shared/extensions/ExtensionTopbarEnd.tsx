@@ -59,7 +59,7 @@ function TopbarEndButton({ element, onClick }: { element: ContributionElement; o
         <ExtensionIcon url={icon} label={label} />
         {count && (
           <span
-            className="sh-tb__count"
+            className="d-icon__badge sh-tb__count"
             data-accent={counter?.accent || undefined}
             data-testid={`extension-topbar-end-count-${element.key}`}
             aria-hidden

@@ -1,40 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { SquareTerminal } from "lucide-react";
 import { Button, EmptyState, TextArea, toast } from "../../../shared/ui/kit";
 import AgentControl from "../../../settings/components/AgentControl";
-import { fetchSettings } from "../../../settings/api/settings";
 import { useAgentProfiles } from "../../../settings/store/useAgentProfiles";
-import type { AgentCombination } from "../../../settings/model/settings";
-import { harnessCatalog, type HarnessCatalog } from "../../../harness/model/catalog";
 import type { HostedConfig } from "../../model/hostedSession";
 import { choiceOf, configOf } from "../../model/hostedConfig";
 import { useHostedSession } from "../../store/useHostedSession";
+import { useInstanceAgent } from "../../store/useInstanceAgent";
 import "./hostedSession.css";
 
-/** The harness an agent runs on when its configuration names none. */
-const HARNESS_FLOOR = "claude";
-
-/** The instance's harness catalogue and default harness. */
-function useInstanceAgent(): { catalog: HarnessCatalog; inherited: AgentCombination } {
-  const [settings, setSettings] = useState<Awaited<ReturnType<typeof fetchSettings>> | null>(null);
-  useEffect(() => {
-    let alive = true;
-    fetchSettings().then(
-      (read) => alive && setSettings(read),
-      () => undefined,
-    );
-    return () => {
-      alive = false;
-    };
-  }, []);
-  return useMemo(
-    () => ({
-      catalog: harnessCatalog(settings?.harness_descriptors ?? null),
-      inherited: { harness: settings?.default_harness.effective || HARNESS_FLOOR, model: null, effort: null },
-    }),
-    [settings],
-  );
-}
+/**
+ * The initial prompts typed and not saved yet, by session: a brick the host
+ * unmounts (another tab, the drawer closed) gets its draft back.
+ */
+const drafts = new Map<string, string>();
 
 /**
  * The configuration of an agent Session hébergée (CORE-125): its agent
@@ -47,7 +26,12 @@ export default function SessionConfig({ session: id }: { session: string }) {
   const { profiles } = useAgentProfiles();
   const { catalog, inherited } = useInstanceAgent();
   const config = session?.config ?? {};
-  const [draft, setDraft] = useState<string | null>(null);
+  const [draft, setDraftState] = useState<string | null>(() => drafts.get(id) ?? null);
+  const setDraft = (next: string | null) => {
+    if (next === null) drafts.delete(id);
+    else drafts.set(id, next);
+    setDraftState(next);
+  };
   const [saving, setSaving] = useState(false);
   if (!session) return null;
   if (session.kind !== "agent") {

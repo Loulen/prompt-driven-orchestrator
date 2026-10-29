@@ -79,6 +79,7 @@
     padding: 0 var(--g-2);
     border-left: 1px solid var(--line-soft);
     color: var(--text-2);
+    font-family: var(--font-code);
     font-size: var(--fs-xs);
     white-space: nowrap;
   }
@@ -111,11 +112,12 @@
     font-family: var(--font-code);
     font-size: var(--fs-xs);
   }
+  /* Several fields per line: a long value is cut, its whole text in the tooltip. */
   .art__fm-item {
     display: flex;
     gap: var(--g-3);
     min-width: 0;
-    max-width: 100%;
+    max-width: min(100%, 48ch);
   }
   .art__fm-item > dt {
     flex: none;

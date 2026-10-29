@@ -95,14 +95,16 @@ export function TourEndCard({
       )}
       <div className="tr-head">
         <CircleCheck size={14} strokeWidth={1.5} className="text-primary" aria-hidden />
-        <h2 className="tr-bcard__title min-w-0 flex-1">{title}</h2>
+        {/* The recap's lead sentence is the title's tooltip: the card itself is the list. */}
+        <h2 className="tr-bcard__title min-w-0 flex-1" title={recapIntroOf(tour, app).replaceAll("`", "") || undefined}>
+          {title}
+        </h2>
         {chainProgress && (
-          <span className="d-meta tnum">
+          <span className="d-meta tnum font-mono">
             {chainProgress.done}/{chainProgress.total}
           </span>
         )}
       </div>
-      <p className="tr-body">{withCode(recapIntroOf(tour, app))}</p>
       <dl className="tr-recap">
         {recap.map((item) => (
           <div key={item.label}>
@@ -189,7 +191,7 @@ export function TourFailedCard({
   const title = failure.title ?? "This step could not be completed";
   const footer = (
     <>
-      <span className="d-meta tnum">
+      <span className="d-meta tnum font-mono">
         Step {failure.stepNumber} of {failure.total}
       </span>
       <span className="d-grow" />

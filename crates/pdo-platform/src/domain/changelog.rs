@@ -6,10 +6,33 @@ use ts_rs::TS;
 
 use super::release::{missed_releases, Release};
 
-/// The `CHANGELOG.md` at the repository root, embedded at compile time: the
-/// fallback body of « What's new » when the release list is unavailable, and the
-/// body shown to an up-to-date daemon. It lists breaking changes only.
+/// The `CHANGELOG.md` at the repository root, embedded at compile time. It lists
+/// breaking changes only; « What's new » shows its [`embedded_excerpt`].
 pub const EMBEDDED_CHANGELOG: &str = include_str!("../../../../CHANGELOG.md");
+
+/// How many versions of the embedded changelog « What's new » shows.
+pub const EMBEDDED_VERSIONS: usize = 5;
+
+/// The newest `versions` sections (`## …`) of a changelog, without its title and
+/// preamble: the fallback body of « What's new » when the release list is
+/// unavailable, and the body shown to an up-to-date daemon. The older history
+/// stays in the file.
+pub fn embedded_excerpt(changelog: &str, versions: usize) -> String {
+    let mut sections: Vec<String> = Vec::new();
+    for line in changelog.lines() {
+        if line.starts_with("## ") {
+            if sections.len() == versions {
+                break;
+            }
+            sections.push(String::new());
+        }
+        if let Some(current) = sections.last_mut() {
+            current.push_str(line);
+            current.push('\n');
+        }
+    }
+    sections.concat().trim_end().to_string()
+}
 
 /// Where the changelog lives, or why it could not come from the releases.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -40,22 +63,21 @@ pub struct Changelog {
     pub markdown: String,
 }
 
-/// One markdown document from the missed releases: `## vX.Y.Z`, then a muted
-/// `Released <date> · [GitHub release](url)` line, then the notes verbatim.
+/// One markdown document from the missed releases: `## vX.Y.Z · <date>` (the
+/// version links to its release page), then the notes verbatim.
 pub fn render_releases_markdown(missed: &[Release]) -> String {
     let mut md = String::new();
     for r in missed {
-        md.push_str(&format!("## v{}\n\n", r.version));
-        let mut meta: Vec<String> = Vec::new();
-        if let Some(at) = r.published_at.as_deref() {
-            let date = at.split('T').next().unwrap_or(at);
-            meta.push(format!("Released {date}"));
-        }
-        if let Some(url) = r.html_url.as_deref() {
-            meta.push(format!("[GitHub release]({url})"));
-        }
-        if !meta.is_empty() {
-            md.push_str(&format!("*{}*\n\n", meta.join(" · ")));
+        let version = match r.html_url.as_deref() {
+            Some(url) => format!("[v{}]({url})", r.version),
+            None => format!("v{}", r.version),
+        };
+        match r.published_at.as_deref() {
+            Some(at) => {
+                let date = at.split('T').next().unwrap_or(at);
+                md.push_str(&format!("## {version} · {date}\n\n"));
+            }
+            None => md.push_str(&format!("## {version}\n\n")),
         }
         let body = r.body.trim();
         if body.is_empty() {
@@ -84,7 +106,7 @@ pub fn assemble_changelog(
             missed_versions: Vec::new(),
             source: ChangelogSource::Embedded,
             fallback_reason: None,
-            markdown: EMBEDDED_CHANGELOG.to_string(),
+            markdown: embedded_excerpt(EMBEDDED_CHANGELOG, EMBEDDED_VERSIONS),
         };
     }
     Changelog {
@@ -105,7 +127,7 @@ pub fn embedded_changelog(installed: &str, latest: Option<&str>, reason: &str) -
         missed_versions: Vec::new(),
         source: ChangelogSource::Embedded,
         fallback_reason: Some(reason.to_string()),
-        markdown: EMBEDDED_CHANGELOG.to_string(),
+        markdown: embedded_excerpt(EMBEDDED_CHANGELOG, EMBEDDED_VERSIONS),
     }
 }
 
@@ -135,12 +157,11 @@ mod tests {
         assert_eq!(c.source, ChangelogSource::Releases);
         assert_eq!(c.fallback_reason, None);
         assert_eq!(c.missed_versions, ["1.60.0", "1.59.0"]);
-        let h60 = c.markdown.find("## v1.60.0").unwrap();
-        let h59 = c.markdown.find("## v1.59.0").unwrap();
+        let h60 = c.markdown.find("## [v1.60.0](").unwrap();
+        let h59 = c.markdown.find("## [v1.59.0](").unwrap();
         assert!(h60 < h59, "newest first:\n{}", c.markdown);
-        assert!(!c.markdown.contains("## v1.58.1"));
-        assert!(c.markdown.contains("*Released 2026-09-"));
-        assert!(c.markdown.contains("[GitHub release](https://github.com/"));
+        assert!(!c.markdown.contains("v1.58.1"));
+        assert!(c.markdown.contains("/releases/tag/v1.60.0) · 2026-09-"));
         assert!(c.markdown.contains("- first"));
         assert!(c.markdown.contains("_No release notes._"));
     }
@@ -155,8 +176,10 @@ mod tests {
             "up to date is nominal, not a fallback"
         );
         assert!(c.missed_versions.is_empty());
-        assert_eq!(c.markdown, EMBEDDED_CHANGELOG);
-        assert!(EMBEDDED_CHANGELOG.starts_with("# Changelog"));
+        assert_eq!(
+            c.markdown,
+            embedded_excerpt(EMBEDDED_CHANGELOG, EMBEDDED_VERSIONS)
+        );
 
         let f = embedded_changelog("1.58.1", None, "The update check is off.");
         assert_eq!(f.source, ChangelogSource::Embedded);
@@ -165,6 +188,42 @@ mod tests {
             Some("The update check is off.")
         );
         assert_eq!(f.latest_version, None);
-        assert_eq!(f.markdown, EMBEDDED_CHANGELOG);
+        assert_eq!(
+            f.markdown,
+            embedded_excerpt(EMBEDDED_CHANGELOG, EMBEDDED_VERSIONS)
+        );
+    }
+
+    #[test]
+    fn the_excerpt_keeps_the_newest_versions_without_the_preamble() {
+        let md =
+            "# Changelog\n\nPreamble.\n\n## 3.0.0\n\n- c\n\n## 2.0.0\n\n- b\n\n## 1.0.0\n\n- a\n";
+        assert_eq!(
+            embedded_excerpt(md, 2),
+            "## 3.0.0\n\n- c\n\n## 2.0.0\n\n- b"
+        );
+        assert_eq!(
+            embedded_excerpt(md, 9),
+            md["# Changelog\n\nPreamble.\n\n".len()..].trim_end()
+        );
+        assert_eq!(embedded_excerpt("# Changelog\n", 5), "");
+    }
+
+    /// The UI names no product but its brand: the excerpt « What's new » shows
+    /// says « PDO » only in identifiers (`PDO_TOKEN`, `pdo-extension-api`).
+    #[test]
+    fn the_shown_excerpt_does_not_name_the_old_product() {
+        let shown = embedded_excerpt(EMBEDDED_CHANGELOG, EMBEDDED_VERSIONS);
+        assert!(shown.starts_with("## "), "{shown}");
+        for (i, _) in shown.match_indices("PDO") {
+            let before = shown[..i].chars().next_back();
+            let after = shown[i + 3..].chars().next();
+            let identifier = |c: Option<char>| matches!(c, Some(c) if c == '_' || c == '-' || c.is_alphanumeric());
+            assert!(
+                identifier(before) || identifier(after),
+                "« PDO » shown in What's new: {}",
+                &shown[i.saturating_sub(40)..(i + 40).min(shown.len())]
+            );
+        }
     }
 }

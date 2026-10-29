@@ -49,7 +49,7 @@ describe("#/pages/<name>", () => {
     render(<Shell />);
     expect(await screen.findByTestId("page-tab-design")).toHaveAttribute("data-active", "true");
     expect(useMountedPages.getState().active).toBe("design");
-    expect(screen.getByTestId("page-copy-link")).toHaveTextContent("Copy link");
+    expect(screen.getByTestId("page-copy-link")).toHaveAccessibleName("Copy link");
     expect(screen.getByTestId("page-open-alone")).toHaveAttribute("href", "/pages/design/");
     expect(window.location.hash).toBe("");
   });

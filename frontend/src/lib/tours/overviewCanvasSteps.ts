@@ -169,7 +169,7 @@ export const CANVAS_STEPS: TourStep[] = [
       }
       return onConfigTab(o)
         ? "Click the Run tab: every node runs in its own terminal, and it is shown there."
-        : "Click Terminal to unfold it. Every node runs in its own terminal; a finished node's is folded to leave room for its outputs.";
+        : "Click the ended session bar to unfold its terminal. Every node runs in its own terminal; a finished node's is folded to leave room for its outputs.";
     },
     target: (o) => {
       if (o.present(TERMINAL)) return [TERMINAL];

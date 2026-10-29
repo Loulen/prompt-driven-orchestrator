@@ -234,7 +234,7 @@ describe("the end card", () => {
       recap: (app) => [{ label: app.latestRun?.name ?? "your Run", text: "on `/tmp/pdo-tutorial`" }],
     };
     render(<TourEndCard tour={tour} app={APP} onFinish={vi.fn()} onFinishHere={vi.fn()} onStartTour={vi.fn()} />);
-    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("You built my-first-run:");
+    expect(screen.getByRole("heading", { name: "First run · done" })).toHaveAttribute("title", "You built my-first-run:");
     expect(screen.getByTestId("tour-end-card")).toHaveTextContent("my-first-run");
     expect(screen.getByTestId("tour-end-card")).toHaveTextContent("/tmp/pdo-tutorial");
   });

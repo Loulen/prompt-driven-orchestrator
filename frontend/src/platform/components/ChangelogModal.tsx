@@ -22,15 +22,15 @@ import { Button, IconButton } from "../../shared/ui/kit";
  *
  * Header: `v<installed> → v<latest> · N version(s) behind` (latest in amber, the pill's
  * token) — or a green `up to date` pill — or the bare version when the latest is unknown.
- * Banner: grey for up to date (« You run the latest release… »), amber when the body is
+ * Banner: grey for up to date (« Latest release… »), amber when the body is
  * the embedded changelog as a FALLBACK (source unreachable / check off), red when the
  * endpoint itself failed. The words « up to date » appear here and in Settings only —
  * never in the bar (#697 rule).
  * Footer: the manual command with its copy icon, the **Update** button (#699 — the
  * host owns the confirm and the waiting flow; disabled with the reason when the daemon
  * refuses: unknown method, attempt running), and a « Version & update » link to
- * Settings. An unknown install method declares its absence: warning + the manual text,
- * no Copy, no Update (ADR-0045).
+ * Settings. An unknown install method declares its absence on one line, the manual text
+ * and the daemon's reason in its tooltip: no Copy, no Update (ADR-0045).
  */
 export default function ChangelogModal({
   update,
@@ -97,7 +97,7 @@ export default function ChangelogModal({
                     v{latest}
                   </span>
                   <span data-testid="changelog-behind">
-                    · {behind} version{behind > 1 ? "s" : ""} behind
+                    · {behind} behind
                   </span>
                 </>
               )}
@@ -115,24 +115,22 @@ export default function ChangelogModal({
         error ? (
           <div className="art__banner" data-tone="failed" data-testid="changelog-error">
             <TriangleAlert size={13} strokeWidth={1.5} aria-hidden />
-            Could not load the changelog: {error}.
+            Changelog unavailable: {error}
           </div>
         ) : changelog?.fallback_reason ? (
           <div
             className="art__banner"
             data-tone="await"
             data-testid="changelog-fallback"
-            title="The changelog embedded in this build lists breaking changes only"
+            title={`Release notes unreachable: ${changelog.fallback_reason}`}
           >
             <WifiOff size={13} strokeWidth={1.5} aria-hidden />
-            <span>
-              Release notes unavailable · {changelog.fallback_reason} Embedded changelog, breaking changes only.
-            </span>
+            <span className="truncate">Release notes offline · embedded changelog, breaking changes only</span>
           </div>
         ) : upToDate ? (
           <div className="art__banner" data-testid="changelog-uptodate-banner">
             <Check size={13} strokeWidth={1.5} aria-hidden />
-            You run the latest release · embedded changelog, breaking changes only
+            Latest release · embedded changelog, breaking changes only
           </div>
         ) : null
       }
@@ -188,22 +186,17 @@ function ChangelogFooter({
         {update == null ? (
           <span>Loading the version state…</span>
         ) : unknown ? (
-          <>
-            <span className="flex items-center gap-1.5">
-              <TriangleAlert size={12} strokeWidth={1.5} className="shrink-0 text-st-await" aria-hidden />
+          // One line: what to do and why the app does not, in its tooltip.
+          <span
+            className="flex min-w-0 items-center gap-1.5"
+            title={[update.manual_command, update.apply_blocked_reason].filter(Boolean).join("\n") || undefined}
+            data-testid="changelog-not-updatable"
+          >
+            <TriangleAlert size={12} strokeWidth={1.5} className="shrink-0 text-st-await" aria-hidden />
+            <span className="truncate">
               {noCommand ? `${channelLabel(update)} declares no update command` : "Install method not detected"}
             </span>
-            {update.manual_command != null && (
-              <span className="truncate" title={update.manual_command} data-testid="changelog-manual-command">
-                {update.manual_command}
-              </span>
-            )}
-            {update.apply_blocked_reason && (
-              <span className="truncate" title={update.apply_blocked_reason} data-testid="changelog-apply-blocked">
-                {update.apply_blocked_reason}
-              </span>
-            )}
-          </>
+          </span>
         ) : (
           <span
             className="flex min-w-0 items-center gap-1"

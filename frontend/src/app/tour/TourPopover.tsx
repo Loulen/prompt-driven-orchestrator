@@ -201,7 +201,7 @@ export default function TourPopover({
             </Button>
           ) : (
             step.advanceHint && (
-              <span className="tr-hint" title={step.advanceHint} data-testid="tour-advance-hint">
+              <span className="tr-hint" data-testid="tour-advance-hint">
                 {step.advanceHint}
               </span>
             )

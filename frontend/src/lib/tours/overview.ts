@@ -35,6 +35,7 @@ import {
   removeExampleTrigger,
 } from "./overviewPreparation";
 import {
+  CLEANUP_ITEM,
   CLEANUP_MODAL,
   NEW_PIPELINE_BUTTON,
   NEW_RUN_BUTTON,
@@ -107,17 +108,22 @@ const APP_STEPS: TourStep[] = [
       if (isArchived(o.app)) {
         return "Archived: the worktree is gone and the dot turned grey. The outputs are still there to read.";
       }
-      return o.present(CLEANUP_MODAL)
-        ? "Cleanup removes the Run's worktree and keeps its history and outputs. Skip leaves the Run as it is."
-        : "Hover your Run's row and click its trash icon, then confirm. Archiving removes the worktree; the Run and its outputs stay.";
+      if (o.present(CLEANUP_MODAL)) {
+        return "Cleanup removes the Run's worktree and keeps its history and outputs. Skip leaves the Run as it is.";
+      }
+      return o.present(CLEANUP_ITEM)
+        ? "Choose Cleanup, then confirm."
+        : "Open the ⋯ menu of your Run's row, choose Cleanup, then confirm. The worktree goes; the Run and its outputs stay.";
     },
-    // Two beats, one card: the row, then the confirmation it opens — re-aimed so
-    // the dialog's buttons are inside the hole rather than under the blocker.
+    // Three beats, one card: the row, the menu its ⋯ opens (a portal, lit as a
+    // zone so it is not under the blocker), then the confirmation.
     target: (o) => {
       if (o.present(CLEANUP_MODAL)) return [CLEANUP_MODAL];
+      if (o.present(CLEANUP_ITEM)) return [CLEANUP_ITEM];
       const id = overviewRunId();
       return id ? [runRow(id)] : [];
     },
+    soft: (o) => !o.present(CLEANUP_MODAL) && o.present(CLEANUP_ITEM),
     waitingFor: "your Run in the list",
     failureHint: "An archived Run moves to the Archived section at the bottom of the list.",
     targetTimeoutMs: READING_TIMEOUT_MS,
@@ -231,19 +237,12 @@ export const OVERVIEW_TOUR: TourDef = {
   ],
   recapIntro: `You toured Acogni Driver on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
   recap: (app) => [
-    { label: "Canvas", text: "a pipeline is nodes linked by edges; the panels around it list and detail" },
-    { label: "Nodes", text: "an input in, outputs out, a terminal of their own; usually agents, scripts here" },
-    { label: "Edges", text: "conditions on the source's outputs, like `verdict eq pass`" },
-    {
-      label: OVERVIEW_RUN_NAME,
-      text: isArchived(app)
-        ? "archived: its worktree is gone, its outputs stay"
-        : "still in your list, with its worktree — archive it when you are done",
-    },
-    { label: EXAMPLE_TRIGGER_NAME, text: "removed now that the tour is over" },
+    { label: "Canvas", text: "nodes linked by edges, listed and detailed around it" },
+    { label: "Edges", text: "conditions on outputs, like `verdict eq pass`" },
+    { label: "Run", text: isArchived(app) ? "archived, its outputs stay" : "still in your list, with its worktree" },
+    { label: "Trigger", text: "the example one is gone" },
   ],
   outro: {
-    closing:
-      "The pipeline and the Run stay yours. First run launches a Run with a real agent; First pipeline builds a pipeline with you.",
+    closing: "The pipeline and the Run stay yours.",
   },
 };

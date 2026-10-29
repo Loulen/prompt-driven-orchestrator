@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { BookOpen, ExternalLink, Link2 } from "lucide-react";
+import { BookOpen, Check, ExternalLink, Link2 } from "lucide-react";
 import { fetchSettings } from "../../settings/api/settings";
 import { fetchPageMounts } from "../api/pages";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 import { toast } from "../../shared/ui/toast";
 import { guidedPageUrl, pageUrl } from "../model/mountedPage";
 import { useMountedPages } from "../store/mountedPages";
-import { Button } from "../../shared/ui/kit";
+import { IconButton, Tooltip } from "../../shared/ui/kit";
 import { DocTab } from "../../shared/ui/DocTab";
 import type { TabDrag } from "../../shared/ui/useTabDrag";
 
@@ -89,19 +89,24 @@ export function PageTabActions({ name }: { name: string }) {
   };
   return (
     <>
-      <Button size="sm" icon={Link2} onClick={() => void copy()} data-testid="page-copy-link">
-        {copied ? "Copied" : "Copy link"}
-      </Button>
-      <a
-        href={pageUrl("", name)}
-        target="_blank"
-        rel="noreferrer"
-        className="d-btn d-btn--sm"
-        data-testid="page-open-alone"
-      >
-        <ExternalLink size={12} strokeWidth={1.5} aria-hidden />
-        Open page alone
-      </a>
+      <IconButton
+        icon={copied ? Check : Link2}
+        label={copied ? "Copied" : "Copy link"}
+        onClick={() => void copy()}
+        data-testid="page-copy-link"
+      />
+      <Tooltip label="Open page alone">
+        <a
+          href={pageUrl("", name)}
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Open page alone"
+          className="d-icon"
+          data-testid="page-open-alone"
+        >
+          <ExternalLink size={14} strokeWidth={1.5} aria-hidden />
+        </a>
+      </Tooltip>
     </>
   );
 }

@@ -412,7 +412,10 @@ describe("the two ways a tour ends", () => {
     await user().click(screen.getByTestId("tour-next"));
 
     expect(screen.getByTestId("tour-end-card")).toHaveTextContent("First pipeline · done");
-    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("tutorial-implement-test");
+    expect(screen.getByRole("heading", { name: "First pipeline · done" })).toHaveAttribute(
+      "title",
+      "You built tutorial-implement-test.",
+    );
     expect(loadToursDone()).toEqual({});
 
     await user().click(screen.getByTestId("tour-finish"));

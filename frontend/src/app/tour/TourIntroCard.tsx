@@ -66,7 +66,7 @@ export function TourIntroCard({
           <Play size={13} strokeWidth={1.5} className="text-primary" aria-hidden />
         )}
         <span className={`d-caps tr-name ${failure ? "tr-name--warn" : ""}`}>{tour.title}</span>
-        <span className="d-meta tnum">
+        <span className="d-meta tnum font-mono">
           {failure ? "could not prepare" : `~${tour.minutes} min · ${tour.steps.length} steps`}
         </span>
       </div>

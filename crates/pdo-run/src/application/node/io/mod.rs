@@ -116,7 +116,7 @@ pub fn resolve(
                 if input.folder {
                     list_port_files(artifacts_dir, p, |_| true)
                 } else {
-                    vec![file_info(artifacts_dir, p)]
+                    vec![file_info_with_frontmatter(artifacts_dir, p)]
                 }
             })
             .collect();
@@ -155,7 +155,7 @@ pub fn resolve(
     // `task` reads the run's `_input` (preserves existing single-entry pipelines).
     if inputs.is_empty() && node.inputs.iter().any(|p| p.name == "task") {
         let path = crate::domain::blackboard::input_path(artifacts_dir);
-        let mut files = vec![file_info(artifacts_dir, &path)];
+        let mut files = vec![file_info_with_frontmatter(artifacts_dir, &path)];
         files.extend(input_attachment_files(artifacts_dir));
         inputs.push(PortIO {
             port: "task".into(),
@@ -495,6 +495,23 @@ mod tests {
         assert_eq!(io.inputs[0].files.len(), 1);
         assert_eq!(io.inputs[0].files[0].path, "planner/iter-1/plan/output.md");
         assert!(!io.inputs[0].files[0].exists);
+    }
+
+    /// An input file shows its frontmatter like the output it was: the viewer
+    /// strips the fence from the body, so a missing strip would hide the fields.
+    #[test]
+    fn input_file_carries_its_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let dir = artifacts.join("planner/iter-1/plan");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("output.md"), "---\nverdict: pass\n---\n\n# Plan").unwrap();
+
+        let pipeline = simple_pipeline();
+        let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
+
+        let fm = io.inputs[0].files[0].frontmatter.as_ref().expect("frontmatter");
+        assert_eq!(fm["verdict"], serde_json::json!("pass"));
     }
 
     #[test]

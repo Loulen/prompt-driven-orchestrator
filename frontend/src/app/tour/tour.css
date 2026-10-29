@@ -345,15 +345,14 @@
   .tr-cfoot > .d-btn--ghost {
     margin-left: -6px;
   }
+  /* Wraps rather than cuts: the hint is the only word on what the step waits for. */
   .tr-hint {
     min-width: 0;
-    overflow: hidden;
     color: var(--text-3);
     font-family: var(--font-code);
     font-size: var(--fs-2xs);
+    line-height: 1.3;
     text-align: right;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   /* An example inside a step: rows of the Runs list, framed as a small panel. */
@@ -484,6 +483,7 @@
   .tr-recap dt {
     min-width: 0;
     overflow: hidden;
+    white-space: nowrap;
     color: var(--text);
     font-family: var(--font-code);
     font-size: var(--fs-xs);

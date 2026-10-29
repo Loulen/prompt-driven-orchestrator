@@ -1,149 +1,70 @@
 /**
- * The palette is a contract, not a mood board (#759).
+ * The palette is a contract, not a mood board (#759, ADR-0091).
  *
- * Two properties, not one:
- *  - the LIGHT theme, which is new, holds the WCAG 2.1 AA floors outright;
- *  - the DARK theme, which shipped long before this ticket, may not regress.
- *    Several of its greys sit below AA today (`fg-4` carries captions at
- *    2.40:1). Raising them restyles hundreds of screens, which is its own
- *    ticket, so the debt is DECLARED here rather than silently accepted: each
- *    entry is the ratio measured today, and the dark theme can only improve.
- *
- * And the light theme must cover EVERY colour the dark one declares — a token
- * left behind would paint a dark island on a light page.
- *
- * The source of truth is `index.css` itself, read here, so the check cannot
- * drift from what actually ships.
+ * The shared token sheet (`public/shared/tokens.css`) defines the palette of
+ * both themes. Read here, so the check cannot drift from what ships:
+ *  - each theme defines every colour of the palette, so no token is left to
+ *    paint a dark island on a light page (or the reverse);
+ *  - every ink that carries text holds the WCAG 2.1 AA floor (4.5:1) on every
+ *    surface, in both themes;
+ *  - the status colours and the ruby, which carry icons and outlines but
+ *    also words (an error line, a status label, a link), hold the same 4.5:1.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
-import { contrastRatio, AA_TEXT, AA_NON_TEXT } from "./lib/contrast";
+import { contrastRatio, AA_TEXT } from "./lib/contrast";
 
-const CSS = readFileSync(join(import.meta.dirname, "index.css"), "utf8");
+const CSS = readFileSync(join(import.meta.dirname, "..", "public", "shared", "tokens.css"), "utf8");
 
-/** Every `--color-*: <value>;` inside the block that starts at `opener`. */
+/** Every `--color-*: <value>;` of the block that opens with `opener`. */
 function paletteOf(opener: string): Record<string, string> {
   const start = CSS.indexOf(opener);
   if (start < 0) throw new Error(`block not found: ${opener}`);
-  let depth = 0;
-  let end = start;
-  for (let i = CSS.indexOf("{", start); i < CSS.length; i++) {
-    if (CSS[i] === "{") depth++;
-    else if (CSS[i] === "}" && --depth === 0) {
-      end = i;
-      break;
-    }
-  }
+  const end = CSS.indexOf("}", start);
   const out: Record<string, string> = {};
-  for (const [, name, value] of CSS.slice(start, end).matchAll(
-    /--color-([a-z0-9-]+)\s*:\s*([^;]+);/gi,
-  )) {
+  for (const [, name, value] of CSS.slice(start, end).matchAll(/--color-([a-z0-9-]+)\s*:\s*([^;]+);/gi)) {
     out[name] = value.trim();
   }
   return out;
 }
 
-const darkOverrides = paletteOf("@theme {");
-const lightOverrides = paletteOf(':root[data-theme="light"] {');
-const dark = darkOverrides;
-const light = { ...darkOverrides, ...lightOverrides };
+const DARK = paletteOf(':root,\n[data-theme="dark"] {');
+const LIGHT = paletteOf('[data-theme="light"] {');
 
-/** Surfaces that carry copy. bg-4 / bg-5 are hover and pressed states. */
-const SURFACES = ["bg-0", "bg-1", "bg-2", "bg-3"];
+const SURFACES = ["paper", "paper-2", "paper-3"];
+const TEXT = ["ink", "ink-2", "muted"];
+const TONES = ["accent", "st-running", "st-await", "st-done", "st-blocked", "st-failed", "st-skipped"];
 
-/** Tokens a component paints TEXT with — `text-<token>` appears in `src/`. */
-const TEXT = [
-  "fg",
-  "fg-2",
-  "fg-3",
-  "fg-4",
-  "acc",
-  "st-running",
-  "st-await",
-  "st-done",
-  "st-blocked",
-  "st-failed",
-  "st-skipped",
-  "st-stopped",
-  "st-stale",
-  "st-interrupted",
-  "st-paused",
-  "edit-tint",
-  "edge-selected",
-  "chart-axis",
-];
-
-/**
- * Tokens that only ever fill or outline — hover fills, status dots — so they owe
- * the 3:1 non-text floor. Promote one to TEXT the day a component prints words
- * in it (`grep -rn "text-<token>" src` finds nothing for any of these today).
- *
- * `fg-5` is in neither list: it IS used as text, at a ratio no five-step grey
- * ramp can hold. A defect of the type scale, not of the palette — out of scope
- * here, and not worth a fake assertion.
- */
-const NON_TEXT = [
-  "acc-dim",
-  "st-archived",
-  "st-pending",
-  "chart-runs",
-  "chart-errors",
-  "chart-fires",
-];
-
-/**
- * The dark theme's pre-existing sub-AA tokens, with the ratio measured the day
- * #759 landed. A floor, not a target: lower this number only by improving the
- * colour, never to make a regression pass.
- */
-const DARK_DEBT: Record<string, number> = {
-  "fg-3": 4.08,
-  "fg-4": 2.4,
-  "st-failed": 4.44,
-  "st-skipped": 3.51,
-  "st-pending": 2.21,
-};
-
-function worstRatio(palette: Record<string, string>, token: string): number {
+function worst(palette: Record<string, string>, token: string): number {
   return Math.min(...SURFACES.map((surface) => contrastRatio(palette[token], palette[surface])));
 }
 
-describe("light palette (#759)", () => {
-  it("holds AA (4.5:1) for every colour that carries text", () => {
-    const failures = TEXT.map((token) => [token, worstRatio(light, token)] as const)
-      .filter(([, ratio]) => ratio < AA_TEXT)
-      .map(([token, ratio]) => `${token}: ${ratio.toFixed(2)}`);
+describe.each([
+  ["dark", DARK],
+  ["light", LIGHT],
+])("%s palette", (_, palette) => {
+  it("holds AA (4.5:1) for every ink that carries text", () => {
+    const failures = TEXT.filter((token) => worst(palette, token) < AA_TEXT).map(
+      (token) => `${token}: ${worst(palette, token).toFixed(2)}`,
+    );
     expect(failures).toEqual([]);
   });
 
-  it("holds the 3:1 non-text floor for every fill-and-outline colour", () => {
-    const failures = NON_TEXT.map((token) => [token, worstRatio(light, token)] as const)
-      .filter(([, ratio]) => ratio < AA_NON_TEXT)
-      .map(([token, ratio]) => `${token}: ${ratio.toFixed(2)}`);
+  it("holds AA (4.5:1) for the ruby and the status colours, which carry words too", () => {
+    const failures = TONES.filter((token) => worst(palette, token) < AA_TEXT).map(
+      (token) => `${token}: ${worst(palette, token).toFixed(2)}`,
+    );
     expect(failures).toEqual([]);
   });
 
-  it("overrides every colour token the base palette declares", () => {
-    const missing = Object.keys(dark).filter((token) => !(token in lightOverrides));
-    expect(missing).toEqual([]);
+  it("writes legible text on the ruby (a primary button)", () => {
+    expect(contrastRatio(palette["accent-ink"], palette.accent)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 });
 
-describe("dark palette — no regression (#759)", () => {
-  it("keeps every colour at AA, or at least at its declared debt floor", () => {
-    const failures = [...TEXT, ...NON_TEXT]
-      .map((token) => {
-        const floor = DARK_DEBT[token] ?? (TEXT.includes(token) ? AA_TEXT : AA_NON_TEXT);
-        return [token, worstRatio(dark, token), floor] as const;
-      })
-      .filter(([, ratio, floor]) => ratio < floor)
-      .map(([token, ratio, floor]) => `${token}: ${ratio.toFixed(2)} < ${floor}`);
-    expect(failures).toEqual([]);
-  });
-
-  it("declares debt only for colours that are actually below AA", () => {
-    const nowFine = Object.keys(DARK_DEBT).filter((token) => worstRatio(dark, token) >= AA_TEXT);
-    expect(nowFine).toEqual([]);
+describe("both themes", () => {
+  it("define the same colours", () => {
+    expect(Object.keys(LIGHT).sort()).toEqual(Object.keys(DARK).sort());
   });
 });

@@ -65,7 +65,7 @@ test.afterAll(async () => {
 
 test("node CSS transform updates during drag, not only at drop (#24)", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Open the test pipeline into the edit canvas
   await openPipelineForEdit(page, PIPELINE_NAME);

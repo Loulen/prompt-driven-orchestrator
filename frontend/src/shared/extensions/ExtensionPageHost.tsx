@@ -75,15 +75,14 @@ export function Breadcrumb({ items }: { items: string[] }) {
   if (items.length === 0) return null;
   return (
     <nav
-      className="flex min-w-0 items-center gap-1 text-fg-3"
-      style={{ fontSize: "12px" }}
+      className="flex min-w-0 items-center gap-1 text-sm text-text-3"
       aria-label="Breadcrumb"
       data-testid="extension-page-breadcrumb"
     >
       {items.map((item, i) => (
         <Fragment key={i}>
-          {i > 0 && <ChevronRight size={12} className="shrink-0 text-fg-5" />}
-          <span className={`truncate ${i === items.length - 1 ? "text-fg-2" : ""}`}>{item}</span>
+          {i > 0 && <ChevronRight size={12} className="shrink-0 text-text-3" />}
+          <span className={`truncate ${i === items.length - 1 ? "text-text-2" : ""}`}>{item}</span>
         </Fragment>
       ))}
     </nav>
@@ -154,7 +153,7 @@ function ExtensionPage({
     <FullWindowShell
       {...common}
       titleIcon={
-        <span className="text-acc">
+        <span className="text-primary">
           <ExtensionIcon url={icon} label={label} />
         </span>
       }

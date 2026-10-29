@@ -17,6 +17,14 @@ const PIPELINE_NAME = `e2e-draft-${process.pid}-${Date.now()}`;
 let PIPELINE_PATH = "";
 let PROMPTS_DIR = "";
 
+/** Whether the pipeline's tab holds unsaved changes: the shell marks the tab, not its title. */
+async function expectDirty(page: Page, dirty: boolean): Promise<void> {
+  const tab = page.getByTestId(`tab-title-${PIPELINE_NAME}`).locator("xpath=ancestor::button[1]");
+  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
+  if (dirty) await expect(tab).toHaveAttribute("data-dirty", "true");
+  else await expect(tab).not.toHaveAttribute("data-dirty", "true");
+}
+
 function yaml(name: string, extraNode = ""): string {
   return `name: ${name}
 version: "1.0"
@@ -70,14 +78,26 @@ async function second(browser: Browser): Promise<Page> {
   const baseURL = test.info().project.use.baseURL!;
   const context = await browser.newContext({
     baseURL,
-    storageState: { cookies: [], origins: [{ origin: baseURL, localStorage: [{ name: "pdo.tour.offered", value: "1" }] }] },
+    // The suite's own storage (playwright.config.ts): no tour, the UI scale at 100 %.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: baseURL,
+          localStorage: [
+            { name: "pdo.tour.offered", value: "1" },
+            { name: "pdo.ui.scale", value: "100" },
+          ],
+        },
+      ],
+    },
   });
   return context.newPage();
 }
 
 async function open(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toBeVisible();
 }
@@ -88,7 +108,7 @@ function node(page: Page, name: string) {
 
 async function promptOf(page: Page, name: string) {
   await node(page, name).click();
-  const prompt = page.getByPlaceholder("Enter the node's role prompt...");
+  const prompt = page.getByTestId("node-prompt-input");
   await expect(prompt).toBeVisible();
   return prompt;
 }
@@ -120,8 +140,8 @@ test("two browsers share the draft, its presence, and their own undo", async ({ 
   // nothing to save.
   await expect(page.getByTestId("draft-presence").getByTestId("draft-participant")).toHaveCount(1);
   await expect(other.getByTestId("draft-presence").getByTestId("draft-participant")).toHaveCount(1);
-  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
-  await expect(other.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expectDirty(page, false);
+  await expectDirty(other, false);
 
   // A types a prompt: B sees the text, and who types, without reloading.
   const mine = await promptOf(page, "alpha");
@@ -146,7 +166,7 @@ test("two browsers share the draft, its presence, and their own undo", async ({ 
   await other.mouse.up();
   await expect(page.locator(".react-flow__node")).toHaveCount(5);
   await expect(other.locator(".react-flow__node")).toHaveCount(5);
-  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expectDirty(page, true);
   await expect(page.getByTestId("draft-changes")).toBeVisible();
 
   // A undoes: only A's added node goes, B's move stays.
@@ -160,8 +180,8 @@ test("two browsers share the draft, its presence, and their own undo", async ({ 
   // reload; the file keeps the order of its inline maps.
   await page.getByTestId("save-button").click();
   await confirmSaveVersion(page);
-  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
-  await expect(other.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expectDirty(page, false);
+  await expectDirty(other, false);
   await expect(page.getByTestId("draft-changes")).toHaveCount(0);
   const listed = (await (await page.request.get("/pipelines")).json()) as { id: string; draft?: { changes: number } }[];
   expect(listed.find((p) => p.id === PIPELINE_NAME)?.draft?.changes ?? 0).toBe(0);
@@ -171,7 +191,7 @@ test("two browsers share the draft, its presence, and their own undo", async ({ 
   expect(written).not.toContain("{ y:");
   await page.reload();
   await openPipelineForEdit(page, PIPELINE_NAME);
-  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expectDirty(page, false);
 
   // B leaves: A sees it.
   await other.context().close();
@@ -182,19 +202,18 @@ test("two browsers share the draft, its presence, and their own undo", async ({ 
   await again.click();
   await again.press("End");
   await again.pressSequentially(" More.");
-  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expectDirty(page, true);
   await page.reload();
   await openPipelineForEdit(page, PIPELINE_NAME);
   await expect(await promptOf(page, "alpha")).toHaveValue("Write the spec. More.");
-  await expect(page.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expectDirty(page, true);
 });
 
 test("a file written outside PDO lands in the draft beside its changes, with no conflict window", async ({ page }) => {
   await open(page);
   const prompt = await promptOf(page, "alpha");
   await prompt.fill("MY_LOCAL_EDIT");
-  const title = page.getByTestId(`tab-title-${PIPELINE_NAME}`);
-  await expect(title).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expectDirty(page, true);
 
   // The watcher can coalesce a write under load: write again until it lands.
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -208,13 +227,13 @@ test("a file written outside PDO lands in the draft beside its changes, with no 
   await expect(node(page, "beta")).toBeVisible();
   await expect(page.getByText("External edit conflict")).toHaveCount(0);
   await expect(prompt).toHaveValue("MY_LOCAL_EDIT");
-  await expect(title).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expectDirty(page, true);
 
   // The notice says it was kept as a version and what merged; « See vN »
   // opens that version, the file as written.
   const notice = page.getByTestId("draft-notice").last();
-  await expect(notice).toContainText(`${PIPELINE_NAME}.yaml was changed outside PDO. Kept as v`);
-  await expect(notice).toContainText("external edit and merged into the draft: new node beta");
+  await expect(notice).toContainText(`${PIPELINE_NAME}.yaml changed outside · kept as v`);
+  await expect(notice).toContainText("external edit · merged: new node beta");
   await notice.getByTestId("draft-notice-see-version").click();
   await expect(page.getByTestId("version-banner")).toContainText("external edit");
   await expect(node(page, "beta")).toBeVisible();
@@ -244,9 +263,9 @@ test("the library assistant saves into the draft, live in two browsers, signed",
     ).toHaveCount(1);
     await expect(node(browserPage, "reviewer").getByTestId("selected-by")).toHaveText("Library");
     await expect(browserPage.getByTestId("draft-notice").last()).toContainText(
-      "library assistant changed the draft: name of gamma and prompt of gamma.",
+      "library assistant · name of gamma and prompt of gamma",
     );
-    await expect(browserPage.getByTestId(`tab-title-${PIPELINE_NAME}`)).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+    await expectDirty(browserPage, true);
   }
   expect(await promptOf(other, "reviewer")).toBeTruthy();
   await expect(await promptOf(other, "reviewer")).toHaveValue("Review the code.");

@@ -121,7 +121,7 @@ export default function PipelineStar({
       <Tooltip content={TOOLTIPS[syncState]}>
         <button
           onClick={handleStarClick}
-          className="grid h-7 w-7 place-items-center rounded-md border border-line bg-bg-2 shadow-sm transition-colors hover:bg-bg-3"
+          className="grid h-7 w-7 place-items-center rounded-md border border-line bg-surface-1 shadow-sm transition-colors hover:bg-hover"
           title={TOOLTIPS[syncState]}
           data-testid="pipeline-star"
           data-sync-state={syncState}
@@ -129,7 +129,7 @@ export default function PipelineStar({
           <span className="relative">
             <Star
               size={14}
-              className={isFilled ? "fill-acc text-acc" : "fill-none text-fg-4"}
+              className={isFilled ? "fill-primary text-primary" : "fill-none text-text-3"}
             />
             {syncState === "diverged" && (
               <span
@@ -143,14 +143,13 @@ export default function PipelineStar({
 
       {popoverOpen && (
         <div
-          className="absolute right-0 top-full z-50 mt-1 w-[200px] rounded-lg border border-line bg-bg-4 py-1 shadow-lg"
-          style={{ fontSize: "11px" }}
+          className="absolute right-0 top-full z-50 mt-1 w-[200px] rounded-lg border border-line bg-surface-2 py-1 shadow-lg text-xs"
           data-testid="pipeline-star-popover"
         >
           {syncState === "synced" && (
             <button
               onClick={handleRemoveFromLibrary}
-              className="w-full cursor-pointer px-3 py-1.5 text-left text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
+              className="w-full cursor-pointer px-3 py-1.5 text-left text-text-3 transition-colors hover:bg-hover hover:text-text"
             >
               Remove from library
             </button>
@@ -159,19 +158,19 @@ export default function PipelineStar({
             <>
               <button
                 onClick={handleUpdateLibrary}
-                className="w-full cursor-pointer px-3 py-1.5 text-left text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
+                className="w-full cursor-pointer px-3 py-1.5 text-left text-text-3 transition-colors hover:bg-hover hover:text-text"
               >
                 Update library entry
               </button>
               <button
                 onClick={handleResetFromLibrary}
-                className="w-full cursor-pointer px-3 py-1.5 text-left text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
+                className="w-full cursor-pointer px-3 py-1.5 text-left text-text-3 transition-colors hover:bg-hover hover:text-text"
               >
                 Reset from library
               </button>
               <button
                 onClick={handleRemoveFromLibrary}
-                className="w-full cursor-pointer px-3 py-1.5 text-left text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
+                className="w-full cursor-pointer px-3 py-1.5 text-left text-text-3 transition-colors hover:bg-hover hover:text-text"
               >
                 Remove from library
               </button>

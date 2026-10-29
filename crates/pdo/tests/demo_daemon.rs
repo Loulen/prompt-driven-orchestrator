@@ -45,7 +45,7 @@
 //!   preamble (`Ligne de fixture`); none by default (`PUT /ext/test/launch
 //!   {"preamble": …}`).
 //!
-//! Its Sessions hébergées (API 0.17): `POST /ext/test/sessions {"key", "kind":
+//! Its Sessions hébergées (API 0.19): `POST /ext/test/sessions {"key", "kind":
 //! "agent"|"shell", "folder"?: {"kind": "path", "path"}|{"kind": "home"}|
 //! {"kind": "project_repo"}, "project"?, "config"?: {"harness", "model",
 //! "effort", "prompt"}}` opens one on behalf of the caller, `GET

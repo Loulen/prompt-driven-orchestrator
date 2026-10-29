@@ -1,83 +1,41 @@
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { NodeCard } from "./NodeCard";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 
+function card(status: NodeStatus | null, selected?: boolean): HTMLElement {
+  const { container } = render(
+    <NodeCard status={status} selected={selected}>
+      <span>child</span>
+    </NodeCard>,
+  );
+  return container.firstElementChild as HTMLElement;
+}
+
 describe("NodeCard", () => {
-  it("renders with 4-side border (no border-l-[3px])", () => {
-    const { container } = render(
-      <NodeCard status="running"><span>child</span></NodeCard>,
-    );
-    const card = container.firstElementChild!;
-    expect(card.className).toContain("border-[1.5px]");
-    expect(card.className).not.toContain("border-l-[3px]");
-  });
-
   it.each<[NodeStatus, string]>([
-    ["pending", "border-line-strong"],
-    ["running", "border-st-running"],
-    ["awaiting_user", "border-st-await"],
-    ["completed", "border-st-done"],
-    // #620: a pruned node wears a greyed "skipped" cadre, distinct from the green
-    // "done" one — a short-circuited branch must not read as a branch that ran.
-    ["skipped", "border-st-skipped"],
-    ["failed", "border-st-failed"],
-    ["stopped", "border-st-stopped"],
-    ["stale", "border-st-stale"],
-  ])("status %s applies border class %s", (status, expectedClass) => {
-    const { container } = render(
-      <NodeCard status={status}><span>child</span></NodeCard>,
-    );
-    expect(container.firstElementChild!.className).toContain(expectedClass);
+    ["running", "running"],
+    ["awaiting_user", "awaiting"],
+    ["completed", "done"],
+    // #620: a pruned node is greyed, distinct from the green "done" — a
+    // short-circuited branch must not read as a branch that ran.
+    ["skipped", "skipped"],
+    ["failed", "failed"],
+    ["stopped", "skipped"],
+    ["stale", "skipped"],
+    ["interrupted", "awaiting"],
+  ])("tints a %s node in the %s tone", (status, tone) => {
+    expect(card(status).getAttribute("data-st")).toBe(tone);
   });
 
-  it("pending renders without a status-colored cadre", () => {
-    const { container } = render(
-      <NodeCard status="pending"><span>child</span></NodeCard>,
-    );
-    const card = container.firstElementChild!;
-    expect(card.className).toContain("border-line-strong");
-    expect(card.className).not.toContain("border-st-pending");
+  it("draws a pending node, and a template's, without a status tint", () => {
+    expect(card("pending").hasAttribute("data-st")).toBe(false);
+    expect(card("waiting").hasAttribute("data-st")).toBe(false);
+    expect(card(null).hasAttribute("data-st")).toBe(false);
   });
 
-  it("failed nodes show the red overlay badge at top-right", () => {
-    render(<NodeCard status="failed"><span>child</span></NodeCard>);
-    const badge = screen.getByTestId("failed-badge");
-    expect(badge).toBeInTheDocument();
-    expect(badge.className).toContain("bg-st-failed");
-    expect(badge.className).toContain("rounded-full");
-    expect(badge.style.top).toBe("-7px");
-    expect(badge.style.right).toBe("-7px");
-  });
-
-  it("non-failed nodes do not show the badge", () => {
-    render(<NodeCard status="running"><span>child</span></NodeCard>);
-    expect(screen.queryByTestId("failed-badge")).not.toBeInTheDocument();
-  });
-
-  it("selected nodes show the gap-offset emerald ring via box-shadow", () => {
-    const { container } = render(
-      <NodeCard status="running" selected><span>child</span></NodeCard>,
-    );
-    const card = container.firstElementChild as HTMLElement;
-    expect(card.style.boxShadow).toContain("var(--color-bg-1)");
-    expect(card.style.boxShadow).toContain("var(--color-acc)");
-  });
-
-  it("selected + failed shows both the ring and the badge", () => {
-    const { container } = render(
-      <NodeCard status="failed" selected><span>child</span></NodeCard>,
-    );
-    const card = container.firstElementChild as HTMLElement;
-    expect(card.style.boxShadow).toContain("var(--color-acc)");
-    expect(screen.getByTestId("failed-badge")).toBeInTheDocument();
-  });
-
-  it("unselected nodes have no box-shadow style", () => {
-    const { container } = render(
-      <NodeCard status="completed"><span>child</span></NodeCard>,
-    );
-    const card = container.firstElementChild as HTMLElement;
-    expect(card.style.boxShadow).toBe("");
+  it("marks the selection, once, whatever the status", () => {
+    expect(card("failed", true).getAttribute("data-selected")).toBe("true");
+    expect(card("completed").hasAttribute("data-selected")).toBe(false);
   });
 });

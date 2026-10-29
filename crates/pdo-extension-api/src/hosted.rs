@@ -1,4 +1,4 @@
-//! The Sessions hébergées (API 0.17, ADR-0091 of the core): a session of an
+//! The Sessions hébergées (API 0.19, ADR-0092 of the core): a session of an
 //! agent, or a shell, an extension has the core hold outside any Run, through
 //! its [`Host`](crate::Host). The core records it, keeps it alive across a
 //! restart of the daemon, publishes each change of its state and never writes

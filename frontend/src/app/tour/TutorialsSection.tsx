@@ -1,7 +1,10 @@
 import { useState } from "react";
-import { CircleCheck, Circle, Play } from "lucide-react";
+import { Check, Play } from "lucide-react";
 import { TOUR_CATALOG, fullTourMinutes, fullTourSequence } from "../../lib/tours";
 import { loadToursDone, resetTourMemory } from "../../lib/tourMemory";
+import { Button } from "../../shared/ui/kit";
+import type { SettingsSection } from "../../settings/model/settingsCategories";
+import Section, { SectionExtra } from "../../settings/components/settingsSurface/Section";
 
 /**
  * Settings › General › **Tutorials** (#823, spec #821 stories 5–6).
@@ -13,6 +16,7 @@ import { loadToursDone, resetTourMemory } from "../../lib/tourMemory";
  */
 
 interface Props {
+  section: SettingsSection;
   /** Close Settings, then run this tour. */
   onStartTour: (tourId: string) => void;
   /** Close Settings, then run the full tour. */
@@ -25,102 +29,92 @@ function shortDate(iso: string): string {
   return at.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export default function TutorialsSection({ onStartTour, onStartFullTour }: Props) {
+export default function TutorialsSection({ section, onStartTour, onStartFullTour }: Props) {
   const [done, setDone] = useState(loadToursDone);
   const full = fullTourMinutes();
   const hasStartableTour = fullTourSequence().length > 0;
 
   return (
-    <div className="flex flex-col gap-3" data-testid="settings-tutorials">
-      <div className="flex items-center gap-2 rounded-md border border-acc-border bg-acc-bg px-3 py-2.5">
-        <span className="min-w-0 flex-1">
-          <span className="block font-semibold text-fg" style={{ fontSize: "12px" }}>
-            Full tour
-          </span>
-          <span className="block text-fg-3" style={{ fontSize: "10.5px" }}>
-            Every tour PDO has, back to back.
-          </span>
-        </span>
-        <span className="shrink-0 font-mono text-fg-3" style={{ fontSize: "10px" }}>
-          ~{full} min
-        </span>
-        <button
-          type="button"
-          onClick={onStartFullTour}
-          disabled={!hasStartableTour}
-          data-testid="tutorials-start-full"
-          className="flex shrink-0 items-center gap-1 rounded bg-acc px-2.5 py-1 font-medium text-on-acc transition-colors enabled:cursor-pointer enabled:hover:bg-acc-dim disabled:opacity-40"
-          style={{ fontSize: "11px" }}
-        >
-          <Play size={11} />
-          Start
-        </button>
-      </div>
-
-      {TOUR_CATALOG.map((entry) => {
-        const finishedAt = done[entry.id];
-        return (
-          <div
-            key={entry.id}
-            data-testid={`tutorials-row-${entry.id}`}
-            data-done={finishedAt ? "true" : "false"}
-            className={`flex items-center gap-2.5 ${entry.def ? "" : "opacity-45"}`}
-          >
-            {finishedAt ? (
-              <CircleCheck
-                size={15}
-                className="shrink-0 text-acc"
-                aria-label={`${entry.title} completed`}
-                data-testid={`tutorials-done-${entry.id}`}
-              />
-            ) : (
-              <Circle size={15} className="shrink-0 text-fg-5" aria-hidden="true" />
-            )}
-            <span className="min-w-0 flex-1">
-              <span className="block font-medium text-fg" style={{ fontSize: "11.5px" }}>
-                {entry.title}
-              </span>
-              <span className="block text-fg-3" style={{ fontSize: "10.5px" }}>
-                {entry.blurb}
-                {entry.def ? ` ${entry.def.steps.length} steps.` : ""}
-              </span>
-            </span>
-            {finishedAt && (
-              <span className="shrink-0 font-mono text-acc" style={{ fontSize: "9.5px" }}>
-                done · {shortDate(finishedAt)}
-              </span>
-            )}
-            <span className="shrink-0 font-mono text-fg-4" style={{ fontSize: "9.5px" }}>
-              {entry.def ? `~${entry.minutes} min` : "soon"}
-            </span>
-            <button
-              type="button"
-              disabled={entry.def == null}
-              onClick={() => onStartTour(entry.id)}
-              data-testid={`tutorials-start-${entry.id}`}
-              className="shrink-0 rounded border border-line-strong bg-bg-3 px-2 py-0.5 font-medium text-fg-2 transition-colors enabled:cursor-pointer enabled:hover:border-acc enabled:hover:text-fg disabled:opacity-40"
-              style={{ fontSize: "10.5px" }}
-            >
-              {finishedAt ? "Replay" : "Start"}
-            </button>
-          </div>
-        );
-      })}
-
-      <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
-        Checkmarks and the welcome prompt are stored in this browser.{" "}
-        <button
-          type="button"
+    <Section
+      section={section}
+      tools={
+        <Button
+          size="sm"
+          tone="ghost"
+          title="Forget the checkmarks and the welcome prompt of this browser"
           data-testid="tutorials-reset"
           onClick={() => {
             resetTourMemory();
             setDone({});
           }}
-          className="cursor-pointer text-fg-3 underline underline-offset-2 transition-colors hover:text-fg"
         >
-          Reset tutorial memory
-        </button>
-      </div>
-    </div>
+          Reset
+        </Button>
+      }
+    >
+      <SectionExtra>
+        <table className="set-table" data-testid="settings-tutorials">
+          <tbody>
+            <tr className="set-tour--full">
+              <td>
+                <b>Full tour</b>
+              </td>
+              <td className="set-faint set-mono">~{full} min</td>
+              <td />
+              <td className="set-table__act">
+                <Button
+                  size="sm"
+                  tone="primary"
+                  icon={Play}
+                  onClick={onStartFullTour}
+                  disabled={!hasStartableTour}
+                  data-testid="tutorials-start-full"
+                >
+                  Start
+                </Button>
+              </td>
+            </tr>
+            {TOUR_CATALOG.map((entry) => {
+              const finishedAt = done[entry.id];
+              return (
+                <tr
+                  key={entry.id}
+                  data-testid={`tutorials-row-${entry.id}`}
+                  data-done={finishedAt ? "true" : "false"}
+                  className={entry.def ? undefined : "set-faint"}
+                >
+                  <td title={entry.def ? `${entry.blurb} ${entry.def.steps.length} steps.` : entry.blurb}>
+                    {entry.title}
+                  </td>
+                  <td className="set-faint set-mono">{entry.def ? `~${entry.minutes} min` : "soon"}</td>
+                  <td>
+                    {finishedAt && (
+                      <span className="set-ok" title={`Completed ${shortDate(finishedAt)}`}>
+                        <Check
+                          size={13}
+                          strokeWidth={1.5}
+                          aria-label={`${entry.title} completed`}
+                          data-testid={`tutorials-done-${entry.id}`}
+                        />
+                      </span>
+                    )}
+                  </td>
+                  <td className="set-table__act">
+                    <Button
+                      size="sm"
+                      disabled={entry.def == null}
+                      onClick={() => onStartTour(entry.id)}
+                      data-testid={`tutorials-start-${entry.id}`}
+                    >
+                      {finishedAt ? "Replay" : "Start"}
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </SectionExtra>
+    </Section>
   );
 }

@@ -87,7 +87,7 @@ and unit tests beside the code.
 - `session` (`crates/pdo-session`, `frontend/src/session/`): tmux behind the one `Tmux` port
   (`application/ports.rs`, adapter `adapters/tmux/`) — every tmux call of the daemon goes through
   it, never through `Command::new("tmux")` —, the PTY bridge, the shared terminal, the declared
-  wait, the reaper, the library assistant, the Sessions hébergées (ADR-0091: `application/hosted/`,
+  wait, the reaper, the library assistant, the Sessions hébergées (ADR-0092: `application/hosted/`,
   their records under `~/.pdo/hosted/` by `adapters/hosted_store.rs`, reached by the extensions'
   Host through `adapters/extension_hosted.rs`; their folder, harness and Cap are ports the
   composition root implements, `crates/pdo/src/ports/session/hosted.rs`). What it reads of the Runs (the declared wait's facts, a

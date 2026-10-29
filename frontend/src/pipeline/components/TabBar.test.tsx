@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import TabBar from "./TabBar";
 import { fetchRunPipelineOverwritePreview } from "../../run/api/runPipeline";
 import type { OverwritePreview } from "../../shared/generated/OverwritePreview";
@@ -43,10 +43,6 @@ function rightClickTab(id: string) {
   fireEvent.contextMenu(btn);
 }
 
-beforeEach(() => {
-  // jsdom doesn't implement scrollIntoView (called by TabBar's active-tab effect).
-  Element.prototype.scrollIntoView = vi.fn();
-});
 
 describe("TabBar context menu (#342)", () => {
   it("renders one tab per open pipeline", () => {
@@ -318,5 +314,91 @@ describe("TabBar Save on a run tab (ADR-0085)", () => {
     await user.click(screen.getByTestId("overwrite-default-confirm"));
     expect(await screen.findByTestId("overwrite-default-error")).toHaveTextContent("no longer exists");
     expect(screen.getByTestId("overwrite-default-modal")).toBeInTheDocument();
+  });
+});
+
+/** The tab button that owns `tab-title-<id>`. */
+const tabButton = (id: string) => screen.getByTestId(`tab-title-${id}`).closest("button")!;
+const order = () => useEditStore.getState().openTabs.map((t) => t.id);
+
+/** Drag the tab `from` onto the `side` half of the tab `onto` (each tab 100 px wide, side by side). */
+function dragTab(from: string, onto: string, side: "before" | "after") {
+  const target = tabButton(onto);
+  const index = order().indexOf(onto);
+  target.getBoundingClientRect = () => DOMRect.fromRect({ x: index * 100, y: 0, width: 100, height: 32 });
+  const clientX = index * 100 + (side === "before" ? 10 : 90);
+  const dataTransfer = { setData: vi.fn(), effectAllowed: "", dropEffect: "" };
+  fireEvent.dragStart(tabButton(from), { dataTransfer });
+  fireEvent.dragOver(target, { dataTransfer, clientX });
+  fireEvent.drop(target, { dataTransfer, clientX });
+}
+
+describe("TabBar — editor tabs (Workbench)", () => {
+  // jsdom has no DragEvent: a mouse event carries the pointer's position.
+  beforeEach(() => {
+    if (!("DragEvent" in window)) {
+      vi.stubGlobal(
+        "DragEvent",
+        class extends MouseEvent {
+          dataTransfer = null;
+        },
+      );
+    }
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("marks the active tab selected, and a dirty one, without changing its name", () => {
+    seed([tab("a", { dirty: true }), tab("b")], "b");
+    render(<TabBar />);
+    expect(tabButton("b")).toHaveAttribute("aria-selected", "true");
+    expect(tabButton("a")).toHaveAttribute("aria-selected", "false");
+    expect(tabButton("a")).toHaveAttribute("data-dirty", "true");
+    expect(screen.getByTestId("tab-title-a")).toHaveTextContent(/^a\.yaml$/);
+    expect(screen.getByRole("img", { name: "Unsaved" })).toBeInTheDocument();
+  });
+
+  it("names a Run's tab after the Run, with its status", () => {
+    seed([tab("__run__r1", { runId: "r1", scope: "run" })], "__run__r1");
+    render(
+      <TabBar
+        runs={[{ run_id: "r1", name: "Add a product search", status: "failed", stalled: false } as never]}
+      />,
+    );
+    expect(screen.getByTestId("tab-title-__run__r1")).toHaveTextContent("Add a product search");
+    expect(screen.getByRole("img", { name: "Failed" })).toBeInTheDocument();
+  });
+
+  it("closes a tab on its cross and on a middle click", () => {
+    seed([tab("a"), tab("b"), tab("c")], "a");
+    render(<TabBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Close b.yaml" }));
+    expect(order()).toEqual(["a", "c"]);
+    fireEvent(tabButton("c"), new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+    expect(order()).toEqual(["a"]);
+  });
+
+  it("reorders a tab dragged onto another, before or after it", () => {
+    seed([tab("a"), tab("b"), tab("c"), tab("d")], "a");
+    render(<TabBar />);
+    dragTab("a", "c", "after");
+    expect(order()).toEqual(["b", "c", "a", "d"]);
+    dragTab("d", "b", "before");
+    expect(order()).toEqual(["d", "b", "c", "a"]);
+    // The active tab stays the active one.
+    expect(useEditStore.getState().activeTabId).toBe("a");
+  });
+
+  it("marks where a dragged tab would land", () => {
+    seed([tab("a"), tab("b")], "a");
+    render(<TabBar />);
+    const target = tabButton("b");
+    target.getBoundingClientRect = () => DOMRect.fromRect({ x: 100, y: 0, width: 100, height: 32 });
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "", dropEffect: "" };
+    fireEvent.dragStart(tabButton("a"), { dataTransfer });
+    expect(tabButton("a")).toHaveAttribute("data-dragging", "true");
+    fireEvent.dragOver(target, { dataTransfer, clientX: 190 });
+    expect(target).toHaveAttribute("data-drop", "after");
+    fireEvent.dragEnd(tabButton("a"));
+    expect(target).not.toHaveAttribute("data-drop");
   });
 });

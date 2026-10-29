@@ -12,8 +12,8 @@ export default function SkillPromptHint({
   testId: string;
 }) {
   return (
-    <p className="flex items-center gap-1 text-fg-4" style={{ fontSize: "10px" }} data-testid={testId}>
-      <Sparkles size={10} className="shrink-0 text-st-await" />
+    <p className="ln-skillhint" data-testid={testId}>
+      <Sparkles size={12} strokeWidth={1.5} className="ln-skillhint__ic" aria-hidden />
       {lastAdded
         ? `/${lastAdded} was added to this ${scope}'s skills.`
         : `Type / to insert a skill; one this ${scope} does not receive is added to its skills.`}

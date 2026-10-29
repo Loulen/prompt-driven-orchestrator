@@ -19,7 +19,6 @@ import { registerTransientOverlay } from "../lib/overlays";
 import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../shared/markdown/plugins";
 import { resetToasts } from "../shared/ui/toast";
 import Toaster from "../shared/ui/Toaster";
-import { TooltipProvider } from "../shared/ui/tooltip";
 
 const contributions: UiContribution[] = [
   { location: "topbar/end", id: "home", label: "Demo", type: "page", component: "DemoPage" },
@@ -70,13 +69,13 @@ function Shell({ onSelect }: { onSelect: (runId: string) => void }) {
     setSelected(runId);
   });
   return (
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={null} runs={[]} projects={[]}>
         <TopBar onOpenSettings={() => {}} onOpenStats={() => {}} />
         <p data-testid="selected-run">{selected}</p>
         <Toaster />
       </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
 }
 

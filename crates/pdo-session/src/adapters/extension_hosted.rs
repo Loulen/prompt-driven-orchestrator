@@ -1,5 +1,5 @@
 //! The Sessions hébergées as the extensions' [`Host`](pdo_extension_api::Host)
-//! reaches them (API 0.17): the kernel's port, over the session context.
+//! reaches them (API 0.19): the kernel's port, over the session context.
 
 use std::sync::Arc;
 

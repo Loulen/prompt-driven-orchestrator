@@ -38,7 +38,7 @@ use crate::cli::{run_docs, run_ext, run_migrate, Cli, Commands};
 /// - `pdo wait-user`: `3` refused, still your turn; `pdo run wait`: `2` timed
 ///   out, not a failure (ADR-0069);
 /// - `pdo complete`, `fail` and `skip` from a Session hébergée: `3`, refused,
-///   nothing changed (ADR-0091);
+///   nothing changed (ADR-0092);
 /// - `pdo ext <id> <args…>`: the extension's own code, relayed as is; `1` the
 ///   daemon cannot be reached or the extension failed; `127` no extension
 ///   `<id>`, or one without a command line (#33);
@@ -123,7 +123,7 @@ where
         // `wait-user` shares the `3` of that contract.
         Commands::WaitUser { message } => run_wait_user(message),
         // A Session hébergée is never completed, failed nor skipped
-        // (ADR-0091): refused with the `3` of that contract.
+        // (ADR-0092): refused with the `3` of that contract.
         Commands::Fail { reason } => {
             refused_in_hosted_session("fail").unwrap_or_else(|| exit(run_fail(reason)))
         }

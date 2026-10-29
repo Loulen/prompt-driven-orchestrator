@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { DEFAULT_UI_SCALE, setUiScale } from "../../lib/uiScale";
 
 globalThis.ResizeObserver = class {
   observe() {}
@@ -336,13 +337,10 @@ describe("TmuxTerminal", () => {
     const { rerender } = render(
       <TmuxTerminal session="pdo-run1-impl-iter-1" onExpand={() => {}} />,
     );
-    const tooltipOf = () => screen.getByTestId("term-expand").parentElement;
-    expect(tooltipOf()).toHaveAttribute("data-tooltip", "Expand terminal");
+    expect(screen.getByTestId("term-expand")).toHaveAccessibleName("Expand terminal");
     rerender(<TmuxTerminal session="pdo-run1-impl-iter-1" expanded onExpand={() => {}} />);
-    expect(tooltipOf()).toHaveAttribute(
-      "data-tooltip",
-      "Collapse terminal · Esc · click outside",
-    );
+    // Its tooltip adds the shortcut: « Collapse terminal (Esc) ».
+    expect(screen.getByTestId("term-expand")).toHaveAccessibleName("Collapse terminal");
   });
 
   // #44: the enlarged node terminal puts the node's identity at the head of
@@ -370,7 +368,9 @@ describe("TmuxTerminal", () => {
   it("keeps the plain toolbar without slots", () => {
     render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     const toolbar = screen.getByTestId("term-toolbar");
-    expect(toolbar.firstElementChild?.className).toMatch(/rounded-full/);
+    // The mode icon leads, then the session and who drives it.
+    expect(toolbar.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+    expect(within(toolbar).getByTestId("term-mode")).toBeInTheDocument();
   });
 
   it("shows detach button", () => {
@@ -443,8 +443,9 @@ describe("TmuxTerminal", () => {
     const config = mockTerminalCalls[0][0] as Record<string, unknown>;
     expect(config.cursorBlink).toBe(true);
     const theme = config.theme as Record<string, string>;
-    expect(theme.background).toBe("#0f1115");
-    expect(theme.cursor).toBe("#10b981");
+    // An always-dark screen, whatever the theme of the interface.
+    expect(theme.background).toBe("#0b0b0d");
+    expect(theme.foreground).toBe("#aeb1b5");
   });
 
   it("wheel event scrolls xterm buffer instead of propagating", () => {
@@ -809,9 +810,7 @@ describe("TmuxTerminal", () => {
           paneSource={paneSource}
         />,
       );
-      await new Promise((r) => setTimeout(r, 10));
-
-      expect(fetchPaneMock).toHaveBeenCalledWith("run-1", "cop", 1);
+      await waitFor(() => expect(fetchPaneMock).toHaveBeenCalledWith("run-1", "cop", 1));
       expect(wsInstances).toHaveLength(0);
     });
 
@@ -844,9 +843,7 @@ describe("TmuxTerminal", () => {
           paneSource={paneSource}
         />,
       );
-      await new Promise((r) => setTimeout(r, 10));
-
-      expect(screen.getByText("snapshot · session reaped")).toBeInTheDocument();
+      expect(await screen.findByText("snapshot · session reaped")).toBeInTheDocument();
       // Attaching an OS terminal to a reaped session can only fail.
       expect(screen.queryByTestId("term-detach")).toBeNull();
     });
@@ -866,9 +863,8 @@ describe("TmuxTerminal", () => {
           paneSource={paneSource}
         />,
       );
-      await new Promise((r) => setTimeout(r, 10));
-
-      expect(screen.getByText("no pane kept")).toBeInTheDocument();
+      // Waits for the read, not a fixed delay: a loaded machine takes longer.
+      expect(await screen.findByText("no pane kept")).toBeInTheDocument();
       expect(wsInstances).toHaveLength(0);
     });
 
@@ -1060,7 +1056,7 @@ describe("TmuxTerminal", () => {
       render(<TmuxTerminal session="test-session" />);
       const config = mockTerminalCalls[0][0] as { theme: { selectionBackground: string } };
       expect(config.theme.selectionBackground).not.toBe("#2a2d35");
-      expect(config.theme.selectionBackground).toMatch(/^#3b82f6/);
+      expect(config.theme.selectionBackground).toMatch(/^rgba\(59, 130, 246,/);
     });
 
     it("Copy button is disabled without a selection and copies the selection when clicked", async () => {
@@ -1116,6 +1112,19 @@ describe("TmuxTerminal", () => {
 
     beforeEach(() => {
       localStorage.clear();
+      // The font sizes below are the 100 % ones; the UI scale multiplies them.
+      setUiScale(100);
+    });
+    afterEach(() => {
+      setUiScale(DEFAULT_UI_SCALE);
+    });
+
+    it("carries the UI scale in its font, drawn out of the app's zoom", async () => {
+      setUiScale(120);
+      const { ws, term } = await mountLive();
+      roleFrame(ws, { role: "solo" });
+      expect(term.options.fontSize).toBeCloseTo(13.2);
+      expect(screen.getByTestId("xterm-container").className).toContain("pdo-unzoom");
     });
 
     it("passes the poste in the socket URL, stable across mounts and shared through localStorage", () => {
@@ -1153,7 +1162,6 @@ describe("TmuxTerminal", () => {
       const eye = screen.getByTestId("term-watchers");
       expect(eye.textContent).toBe("1");
       expect(eye.getAttribute("aria-label")).toBe("Watched from 1 other browser");
-      expect(eye.parentElement?.dataset.tooltip).toBe("Watched from 1 other browser");
 
       roleFrame(ws, { role: "pilot", spectators: 2 });
       expect(screen.getByTestId("term-watchers").getAttribute("aria-label")).toBe(
@@ -1269,7 +1277,6 @@ describe("TmuxTerminal", () => {
       roleFrame(ws, { role: "spectator", pilot: { cols: 120, rows: 30 } });
       const hand = screen.getByTestId("term-take-control");
       expect(hand.getAttribute("aria-label")).toBe("Take control");
-      expect(hand.parentElement?.dataset.tooltip).toBe("Take control");
       // Not the one who lost the hand: no take-over notice.
       expect(screen.queryByTestId("term-taken-over")).toBeNull();
 
@@ -1432,7 +1439,7 @@ describe("TmuxTerminal", () => {
       const onImportFiles = vi.fn();
       render(<TmuxTerminal session="s-import" status="running" onImportFiles={onImportFiles} />);
       const button = screen.getByTestId("term-import");
-      expect(button.parentElement?.dataset.tooltip).toBe("Import files into this node");
+      expect(button).toHaveAccessibleName("Import files into this node");
       fireEvent.click(button);
       expect(onImportFiles).toHaveBeenCalledWith([]);
     });
@@ -1448,7 +1455,7 @@ describe("TmuxTerminal", () => {
         />,
       );
       const button = screen.getByTestId("term-import");
-      expect(button.parentElement?.dataset.tooltip).toBe("This node has no live session");
+      expect(button).toHaveAccessibleName("This node has no live session");
       expect(button).toHaveAttribute("aria-disabled", "true");
       fireEvent.click(button);
       expect(onImportFiles).not.toHaveBeenCalled();

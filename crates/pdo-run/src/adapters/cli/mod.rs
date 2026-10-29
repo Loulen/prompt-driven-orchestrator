@@ -119,7 +119,7 @@ pub fn run_skip(reason: String) -> Result<()> {
     Ok(())
 }
 
-/// The Session hébergée this CLI process runs in (ADR-0091): a
+/// The Session hébergée this CLI process runs in (ADR-0092): a
 /// `PDO_SESSION_ID` that names one, outside any node session.
 pub fn hosted_session_claim() -> Option<String> {
     if session_env_claim().is_some() {

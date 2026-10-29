@@ -8,6 +8,7 @@ import type { ProvisioningRules } from "../../shared/generated/ProvisioningRules
 import type { ProvisioningScope } from "../../shared/generated/ProvisioningScope";
 import type { ScopedProvisioningRules } from "../../shared/generated/ScopedProvisioningRules";
 import { ruleLines as lines, SCOPES, scopePrecedes } from "../model/provisioning";
+import { conflictingPatternsOf, levelRuleCounts, patternPathCounts, provisioningSummary } from "../model/provisioningPlan";
 import {
   LEVEL_LABELS,
   LEVELS_HINT,
@@ -16,6 +17,8 @@ import {
   SUBTITLE,
 } from "../model/provisioningCopy";
 import InfoHint from "./InfoHint";
+import MidPath from "../../shared/ui/MidPath";
+import { tildify } from "../../lib/homePath";
 import ProvisioningResolvedPlan from "./ProvisioningResolvedPlan";
 
 export default function ProvisioningRulesEditor({
@@ -33,6 +36,7 @@ export default function ProvisioningRulesEditor({
   defaultExpanded = false,
   leading,
   trailing,
+  home = null,
 }: {
   level: ProvisioningScope;
   repository: string;
@@ -55,6 +59,8 @@ export default function ProvisioningRulesEditor({
   leading?: ReactNode;
   /** Rendered at the bottom of the expanded body (e.g. a Save row). */
   trailing?: ReactNode;
+  /** The daemon's home, to read the header's repository as `~/code/…`. */
+  home?: string | null;
 }) {
   const [plan, setPlan] = useState<ProvisioningPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -118,34 +124,9 @@ export default function ProvisioningRulesEditor({
     frozenPlan,
   ]);
 
-  const counts = useMemo(() => {
-    const result: Record<ProvisioningMode, Map<string, number>> = {
-      copy: new Map(),
-      hardlink: new Map(),
-      symlink: new Map(),
-    };
-    for (const rule of visiblePlan?.rules ?? []) {
-      result[rule.mode].set(
-        rule.pattern,
-        rule.paths.length + rule.excluded_paths.length,
-      );
-    }
-    return result;
-  }, [visiblePlan]);
+  const counts = useMemo(() => patternPathCounts(visiblePlan), [visiblePlan]);
 
-  const ruleCounts = useMemo(() => {
-    const result = new Map<ProvisioningScope, number>();
-    for (const scope of SCOPES) {
-      result.set(
-        scope,
-        (visiblePlan?.rules ?? []).filter((rule) => rule.scope === scope).length,
-      );
-    }
-    if (!visiblePlan) {
-      result.set(level, rules.copy.length + rules.hardlink.length + rules.symlink.length);
-    }
-    return result;
-  }, [level, visiblePlan, rules]);
+  const ruleCounts = useMemo(() => levelRuleCounts(visiblePlan, level, rules), [level, visiblePlan, rules]);
 
   // The preview keeps running while collapsed, so a conflict or a failed
   // preview is known without opening the block — and holds it open: a launch
@@ -156,55 +137,19 @@ export default function ProvisioningRulesEditor({
   const blocked = (visiblePlan?.conflicts.length ?? 0) > 0 || !!visibleError;
   const open = expanded || blocked;
 
-  // The header marker; dropped when the expanded body carries its own
-  // "Resolve against" field (`leading`), which would repeat it just below.
-  const marker = frozenAt
-    ? `🔒 frozen at ${frozenAt} · reused on restart`
-    : open && leading
-      ? null
-      : `Resolve against ${repository || "a repository"}`;
+  // The header marker: the repository the rules resolve against, cut in its
+  // middle so a deep path never widens the row. Dropped when the expanded body
+  // carries its own "Resolve against" field (`leading`), which would repeat it
+  // just below, and when no repository is known yet.
+  const frozenMarker = frozenAt ? `🔒 frozen at ${frozenAt} · reused on restart` : null;
+  const resolvedAgainst = !frozenAt && !(open && leading) && repository ? repository : null;
 
-  const summary = useMemo(() => {
-    let inheritedCount = 0;
-    if (visiblePlan) {
-      for (const scope of SCOPES) {
-        if (scopePrecedes(scope, level)) inheritedCount += ruleCounts.get(scope) ?? 0;
-      }
-    } else if (level !== "instance") {
-      for (const { scope, rules: scoped } of inherited ?? []) {
-        if (scopePrecedes(scope, level)) {
-          inheritedCount += scoped.copy.length + scoped.hardlink.length + scoped.symlink.length;
-        }
-      }
-    }
-    const ownCount = ruleCounts.get(level) ?? 0;
-    // A failed preview cannot vouch for "none": inherited rules may apply,
-    // they just could not be resolved.
-    if (visibleError) return `${ownCount} at this level · inherited unknown`;
-    if (inheritedCount === 0 && ownCount === 0) return "none";
-    return `${inheritedCount} inherited · ${ownCount} at this level`;
-  }, [visiblePlan, visibleError, level, ruleCounts, inherited]);
+  const summary = useMemo(
+    () => provisioningSummary(visiblePlan, !!visibleError, level, ruleCounts, inherited),
+    [visiblePlan, visibleError, level, ruleCounts, inherited],
+  );
 
-  const conflictingPatterns = useMemo(() => {
-    const result: Record<ProvisioningMode, Set<string>> = {
-      copy: new Set(),
-      hardlink: new Set(),
-      symlink: new Set(),
-    };
-    for (const conflict of visiblePlan?.conflicts ?? []) {
-      if (conflict.scope !== level) continue;
-      for (const rule of visiblePlan?.rules ?? []) {
-        if (
-          rule.scope === level &&
-          conflict.modes.includes(rule.mode) &&
-          rule.paths.includes(conflict.relative_path)
-        ) {
-          result[rule.mode].add(rule.pattern);
-        }
-      }
-    }
-    return result;
-  }, [level, visiblePlan]);
+  const conflictingPatterns = useMemo(() => conflictingPatternsOf(visiblePlan, level), [level, visiblePlan]);
 
   function update(mode: ProvisioningMode, text: string) {
     onChange({ ...rules, [mode]: lines(text) });
@@ -229,51 +174,63 @@ export default function ProvisioningRulesEditor({
   }
 
   return (
-    <section
-      className="@container rounded-md border border-line bg-bg-3"
-      data-testid={`provisioning-${level}`}
-    >
-      <div className={`px-3 py-2 ${open ? "border-b border-line" : ""}`}>
-        <div className="flex items-center justify-between gap-2">
+    <section className="@container ln-prov" data-open={open || undefined} data-testid={`provisioning-${level}`}>
+      {/* A label-left row, like the form around it: the toggle as the label,
+          the summary and the repository it resolves against beside it. */}
+      <div className="ln-row ln-prov__head">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => {
+            if (!blocked) setExpanded(!open);
+          }}
+          title={blocked ? "Fix the provisioning issue to collapse" : SUBTITLE}
+          className="ln-row__label ln-prov__toggle"
+          data-testid="provisioning-toggle"
+        >
+          Provisioning
+        </button>
+        <div className="ln-row__ctl">
           <button
             type="button"
-            aria-expanded={open}
-            aria-controls={bodyId}
+            tabIndex={-1}
+            aria-hidden
+            className="ln-prov__chev"
             onClick={() => {
               if (!blocked) setExpanded(!open);
             }}
-            title={blocked ? "Fix the provisioning issue to collapse" : undefined}
-            className="flex max-w-full shrink-0 cursor-pointer items-center gap-1 text-left font-medium text-fg"
-            data-testid="provisioning-toggle"
           >
-            {open ? (
-              <ChevronDown size={12} aria-hidden="true" className="shrink-0 text-fg-4" />
-            ) : (
-              <ChevronRight size={12} aria-hidden="true" className="shrink-0 text-fg-4" />
-            )}
-            <span className="truncate">
-              Provisioning <span className="font-normal text-fg-4">· {summary}</span>
-            </span>
+            {open ? <ChevronDown size={12} strokeWidth={1.5} /> : <ChevronRight size={12} strokeWidth={1.5} />}
           </button>
-          {marker && (
-            <div className="min-w-0 truncate text-right text-fg-4" style={{ fontSize: 10 }} title={marker}>
-              {marker}
-            </div>
+          <span className="ln-faint ln-ellipsis ln-prov__sum" data-testid="provisioning-summary">
+            {summary}
+          </span>
+          {frozenMarker && (
+            <span className="ln-faint ln-ellipsis ln-prov__marker" title={frozenMarker}>
+              {frozenMarker}
+            </span>
           )}
-        </div>
-        <div className="mt-0.5 text-fg-4" style={{ fontSize: 10 }}>
-          {SUBTITLE}
+          {resolvedAgainst && (
+            <span
+              className="ln-prov__marker"
+              title={`Resolve against ${resolvedAgainst}`}
+              data-testid="provisioning-against"
+            >
+              <MidPath path={tildify(resolvedAgainst, home)} title={false} />
+            </span>
+          )}
         </div>
       </div>
       {open && (
         <div id={bodyId} data-testid="provisioning-body">
           {leading && <div className="border-b border-line px-3 py-2">{leading}</div>}
-          <div className="flex items-center gap-4 border-b border-line px-3 py-1.5 text-fg-4">
+          <div className="flex items-center gap-4 border-b border-line px-3 py-1.5 text-text-3">
             {SCOPES.map(
               (scope) => (
                 <span
                   key={scope}
-                  className={scope === level ? "border-b-2 border-acc pb-1 text-fg" : ""}
+                  className={scope === level ? "border-b-2 border-primary pb-1 text-text" : ""}
                 >
                   {LEVEL_LABELS[scope]} · {ruleCounts.get(scope) ?? 0}
                 </span>
@@ -286,7 +243,7 @@ export default function ProvisioningRulesEditor({
             <div
               key={`${conflict.scope}-${conflict.relative_path}`}
               role="alert"
-              className="m-2 rounded border border-st-failed bg-red-950/30 px-2 py-1.5 text-st-failed"
+              className="m-2 rounded border border-st-failed bg-st-failed/14 px-2 py-1.5 text-st-failed"
             >
               Mode conflict in {LEVEL_LABELS[conflict.scope]} — {conflict.relative_path} is
               declared as {conflict.modes.join(" and ")}. Keep one.{" "}
@@ -317,7 +274,7 @@ export default function ProvisioningRulesEditor({
                   {key}
                   <InfoHint label={`About ${key}`} content={hint} />
                 </div>
-                <div className="space-y-1 border-b border-line bg-bg-2 px-2 py-1.5">
+                <div className="space-y-1 border-b border-line bg-surface-1 px-2 py-1.5">
                   {(visiblePlan?.rules ?? [])
                     .filter(
                       (rule) =>
@@ -331,14 +288,10 @@ export default function ProvisioningRulesEditor({
                       return (
                         <div
                           key={`${rule.scope}-${rule.pattern}`}
-                          className={`flex items-center justify-between font-mono text-fg-4 ${redeclared ? "line-through opacity-60" : ""}`}
-                          style={{
-                            fontSize: 9,
-                            textDecorationLine: redeclared ? "line-through" : "none",
-                          }}
+                          className={`flex items-center justify-between font-mono text-2xs text-text-3 ${redeclared ? "line-through opacity-60" : ""}`}
                         >
                           <span className="truncate">{rule.pattern}</span>
-                          <span className="ml-1 shrink-0 rounded bg-bg-4 px-1">
+                          <span className="ml-1 shrink-0 rounded bg-surface-2 px-1">
                             {LEVEL_LABELS[rule.scope]} · {rule.paths.length + rule.excluded_paths.length}
                           </span>
                         </div>
@@ -349,7 +302,7 @@ export default function ProvisioningRulesEditor({
                       rule.mode === key &&
                       scopePrecedes(rule.scope, level),
                   ) && (
-                    <div className="text-fg-4" style={{ fontSize: 9 }}>No inherited rules</div>
+                    <div className="text-2xs text-text-3">No inherited rules</div>
                   )}
                 </div>
                 <div className="relative">
@@ -364,11 +317,10 @@ export default function ProvisioningRulesEditor({
                     readOnly={readOnly}
                     aria-invalid={conflictingPatterns[key].size > 0}
                     rows={5}
-                    className={`w-full resize-y bg-bg-2 p-2 pr-14 font-mono text-fg outline-none ${conflictingPatterns[key].size ? "ring-1 ring-inset ring-st-failed" : ""}`}
+                    className={`w-full resize-y bg-surface-1 p-2 pr-14 font-mono text-2xs text-text outline-none ${conflictingPatterns[key].size ? "ring-1 ring-inset ring-st-failed" : ""}`}
                     placeholder={"one pattern per line\n!path excludes"}
-                    style={{ fontSize: 10 }}
                   />
-                  <div className="pointer-events-none absolute right-2 top-2 space-y-[2px] text-right font-mono text-fg-4" style={{ fontSize: 10 }}>
+                  <div className="pointer-events-none absolute right-2 top-2 space-y-[2px] text-right font-mono text-2xs text-text-3">
                     {rules[key].map((pattern) => (
                       <div
                         key={pattern}

@@ -1,6 +1,6 @@
-import { useEffect } from "react";
 import type { OpenPipeline } from "../store/editState";
 import { hasUnsavedWork } from "../store/editState";
+import { Button, Modal } from "../../shared/ui/kit";
 
 interface Props {
   open: boolean;
@@ -16,78 +16,66 @@ interface Props {
 
 /**
  * All-or-nothing confirmation shown before a close/replace would throw away
- * unsaved work (#342). Replicated locally rather than sharing `DestroyLoopModal`
- * (same house pattern as #339): the two modals only look alike, coupling them
- * would drag loop-specific copy into the tabs feature.
+ * unsaved work (#342): the title, the consequence, the unsaved tabs in mono
+ * (a long list scrolls in the body, the actions stay in view, #940), Cancel
+ * and Close.
  *
  * Deliberately no Enter→confirm binding (unlike `DestroyLoopModal`): this is a
  * destructive action and the user may have just been typing — an accidental
- * Enter must not discard their work. Escape cancels.
+ * Enter must not discard their work. Escape and the backdrop cancel.
  */
 export default function ConfirmCloseTabsModal({ open, tabs, onCancel, onConfirm }: Props) {
-  useEffect(() => {
-    if (!open) return;
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [open, onCancel]);
-
   if (!open) return null;
 
   const unsaved = tabs.filter(hasUnsavedWork);
+  // ADR-0088: a shared draft holds on the daemon every change that reached it:
+  // closing its tab loses those of none; only the edits made while its socket
+  // was down (still local) and a failed save are lost.
+  const keptByDraft = (t: OpenPipeline) => t.draft != null && t.saveError == null;
+  const lost = unsaved.filter((t) => !keptByDraft(t));
+  const drafts = unsaved.filter(keptByDraft);
   const plural = unsaved.length > 1;
+  const onlyDrafts = lost.length === 0;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    <Modal
+      size="s"
+      title={onlyDrafts ? `Close ${plural ? `${unsaved.length} tabs` : "tab"}?` : "Discard unsaved changes?"}
+      onClose={onCancel}
       data-testid="close-tabs-backdrop"
-      onClick={onCancel}
-    >
-      <div
-        className="flex max-h-[85vh] w-[380px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* #940: bounded to the window like New Run — a long list scrolls, the
-            actions stay visible. */}
-        <h3 className="shrink-0 font-medium text-fg" style={{ fontSize: "13px" }}>
-          Discard unsaved changes?
-        </h3>
-        <div className="min-h-0 overflow-y-auto" data-testid="close-tabs-body">
-        <p className="mt-2 text-fg-2">
-          {plural ? `${unsaved.length} tabs have` : "1 tab has"} unsaved changes:{" "}
-          {unsaved.map((tab, i) => (
-            <span key={tab.id}>
-              {i > 0 && ", "}
-              <code className="rounded bg-bg-4 px-1 py-0.5 font-mono text-fg">
-                {tab.id}.yaml
-              </code>
-            </span>
-          ))}
-          . Closing {plural ? "them" : "it"} throws those changes away.
-        </p>
-        </div>
-        <div className="mt-4 flex shrink-0 justify-end gap-2">
-          <button
-            onClick={onCancel}
-            data-testid="close-tabs-cancel"
-            className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
-          >
+      actions={
+        <>
+          <Button onClick={onCancel} data-testid="close-tabs-cancel" data-autofocus="">
             Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            data-testid="close-tabs-confirm"
-            className="rounded-md bg-st-failed px-3 py-1.5 text-white transition-colors hover:bg-st-failed/80"
-            style={{ fontSize: "11.5px" }}
-          >
-            Close {plural ? "tabs" : "tab"} anyway
-          </button>
-        </div>
+          </Button>
+          <Button tone="danger" onClick={onConfirm} data-testid="close-tabs-confirm">
+            {onlyDrafts ? `Close ${plural ? "tabs" : "tab"}` : `Close ${plural ? "tabs" : "tab"} anyway`}
+          </Button>
+        </>
+      }
+    >
+      <div className="d-confirm" data-testid="close-tabs-body">
+        {lost.length > 0 && (
+          <p className="d-confirm__line">
+            {lost.length > 1 ? `${lost.length} tabs lose their changes` : "Loses its changes"}
+          </p>
+        )}
+        {lost.map((tab) => (
+          <code key={tab.id} className="d-code d-confirm__target" title={`${tab.id}.yaml`}>
+            {tab.id}.yaml
+          </code>
+        ))}
+        {drafts.length > 0 && (
+          <p className="d-confirm__line" data-testid="close-tabs-drafts">
+            {drafts.length > 1 ? "Their drafts keep the sent changes" : "Its draft keeps the sent changes"} · unsent edits are lost
+          </p>
+        )}
+        {drafts.map((tab) => (
+          <code key={tab.id} className="d-code d-confirm__target" title={`${tab.id}.yaml`}>
+            {tab.id}.yaml
+          </code>
+        ))}
       </div>
-    </div>
+    </Modal>
   );
 }

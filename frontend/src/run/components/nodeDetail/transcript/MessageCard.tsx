@@ -36,28 +36,20 @@ export default function MessageCard({
   const shown = long && !open ? `${text.slice(0, MESSAGE_FOLD)}…` : text;
   const Icon = speaker === "prompt" ? User : Bot;
   return (
-    <div
+    <article
       data-testid={`transcript-message-${speaker}`}
       data-entry={index}
       data-focused={focused || undefined}
-      className={`rounded-md border px-2.5 py-2 ${
-        focused
-          ? "border-st-await bg-st-await-bg"
-          : speaker === "prompt"
-            ? "border-line-strong bg-bg-3"
-            : "border-line bg-bg-2"
-      }`}
+      data-speaker={speaker}
+      className="ri-tx__msg"
+      style={focused ? { borderColor: "var(--color-st-await)" } : undefined}
     >
-      <div className="mb-1 flex items-center gap-1.5 text-fg-3" style={{ fontSize: "10.5px" }}>
-        <Icon size={11} className="text-fg-4" />
-        {speaker === "prompt" ? "Prompt" : "Agent"}
-        {at && (
-          <span className="ml-auto font-mono text-fg-4" style={{ fontSize: "10px" }}>
-            {formatTime(at)}
-          </span>
-        )}
-      </div>
-      <div className="artifact-markdown break-words text-fg-2" style={{ fontSize: "11.5px", lineHeight: 1.5 }}>
+      <header className="ri-tx__mhead">
+        <Icon size={12} strokeWidth={1.5} aria-hidden />
+        <span className="ri-tx__who">{speaker === "prompt" ? "Prompt" : "Agent"}</span>
+        {at && <time className="ri-tx__time">{formatTime(at)}</time>}
+      </header>
+      <div className="artifact-markdown ri-tx__md">
         <Markdown
           remarkPlugins={REMARK_PLUGINS}
           rehypePlugins={highlight ? [[rehypeMarkQuery, { query: highlight }]] : undefined}
@@ -67,16 +59,10 @@ export default function MessageCard({
         </Markdown>
       </div>
       {long && (
-        <button
-          type="button"
-          data-testid="transcript-message-more"
-          onClick={() => setOpen((o) => !o)}
-          className="mt-1 cursor-pointer text-fg-4 hover:text-fg-2"
-          style={{ fontSize: "10.5px" }}
-        >
+        <button type="button" data-testid="transcript-message-more" onClick={() => setOpen((o) => !o)} className="ri-tx__more">
           {open ? "Show less" : "Show more"}
         </button>
       )}
-    </div>
+    </article>
   );
 }

@@ -4,7 +4,6 @@ import PipelineStar from "./PipelineStar";
 import { saveLibraryPipeline, deleteLibraryPipeline } from "../api/libraryPipelines";
 import type { LibraryPipelineEntry } from "../api/libraryPipelines";
 import { useEditStore } from "../store/editStore";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 import type { EditorPipelineDef } from "../model/pipeline";
 
 vi.mock("../../settings/api/settings", () => ({
@@ -92,7 +91,7 @@ function renderStar(props: {
   pipeline?: EditorPipelineDef;
 }) {
   return render(
-    <TooltipProvider>
+    <>
       <PipelineStar
         tabId="p1"
         pipeline={props.pipeline ?? PIPELINE}
@@ -100,7 +99,7 @@ function renderStar(props: {
         libraryEntry={props.libraryEntry}
         onLibraryChanged={() => {}}
       />
-    </TooltipProvider>,
+    </>,
   );
 }
 

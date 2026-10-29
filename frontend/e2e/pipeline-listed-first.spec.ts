@@ -69,7 +69,7 @@ test.afterAll(async ({ request, baseURL }) => {
 /** New Run launched in the Projet `projectId` (ADR-0087), on its `repo`. */
 async function openNewRunOn(page: Page, projectId: string, repo: string) {
   await page.getByRole("tab", { name: "Runs" }).click();
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await page.getByTestId("project-combobox").click();
   await page.locator(`[data-testid="project-option"][data-project-id="${projectId}"]`).click();
   await page.getByTestId("target-repo-input").fill(repo);
@@ -81,7 +81,7 @@ async function openNewRunOn(page: Page, projectId: string, repo: string) {
 async function closeNewRun(page: Page) {
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("pipeline-select-menu")).toBeHidden();
-  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByTestId("new-run-modal").getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByTestId("target-repo-input")).toBeHidden();
 }
 
@@ -100,7 +100,7 @@ test("a pipeline validated for all heads the menu of the Projets it is listed fi
   const [listedId, otherId] = projectIds;
 
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // 1. Validate: « All projects », then tick the listed Projet under it.
   await openPipelineForEdit(page, PIPELINE_NAME);
@@ -142,9 +142,9 @@ test("a pipeline validated for all heads the menu of the Projets it is listed fi
   await row.click();
   await page.getByTestId("pipeline-select").click();
   const selected = page.getByTestId(`pipeline-select-option-${PIPELINE_NAME}`);
-  await expect(selected).toHaveText(PIPELINE_NAME);
+  await expect(selected.locator(".ln-pp__name")).toHaveText(PIPELINE_NAME);
   const check = await selected.locator("svg").boundingBox();
-  const name = await selected.locator("span.truncate").boundingBox();
+  const name = await selected.locator(".ln-pp__name").boundingBox();
   expect(check).not.toBeNull();
   expect(name).not.toBeNull();
   expect(Math.round(check!.width)).toBe(13);

@@ -89,9 +89,7 @@ describe("Display section (#845)", () => {
     expect(screen.getByTestId("display-section")).toBeInTheDocument();
     expect(screen.getByTestId("toggle-output-labels")).toBeInTheDocument();
     expect(screen.getByTestId("toggle-under-nodes")).toBeInTheDocument();
-    expect(screen.getByTestId("display-layout-note")).toHaveTextContent(
-      "Layout only — saved in the file, ignored by the semantic diff.",
-    );
+    expect(screen.getByTestId("display-layout-note")).toHaveAttribute("title", "Layout only: saved in the file, ignored by the semantic diff");
   });
 
   it("sits between Routing and Runtime", () => {

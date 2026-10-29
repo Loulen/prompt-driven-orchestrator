@@ -1,63 +1,52 @@
-import { X } from "lucide-react";
+import { CalendarClock, Play } from "lucide-react";
 import type { NewRunForm } from "../../store/newRun/useNewRunForm";
 
-/** The modal header: the title and the [Run now | Trigger] toggle (#160), plus Close. */
-export default function NewRunHeader({ form }: { form: NewRunForm }) {
-  const {
-    mode, setMode, editingTriggerId, setGuardTest, setGuardTestError, requestClose,
-  } = form;
+/**
+ * The [Run | Trigger] switch of the title bar (#160), the kit's segmented
+ * look; absent while a Trigger is edited (it stays a Trigger).
+ */
+export function NewRunModeSwitch({ form }: { form: NewRunForm }) {
+  const { mode, setMode, editingTriggerId, setGuardTest, setGuardTestError } = form;
+  if (editingTriggerId) return null;
+  const choose = (next: "run" | "trigger") => {
+    setMode(next);
+    // Drop any stale guard verdict when switching (#350).
+    setGuardTest(null);
+    setGuardTestError(null);
+  };
+  const items = [
+    { value: "run" as const, label: "Run", Icon: Play },
+    { value: "trigger" as const, label: "Trigger", Icon: CalendarClock },
+  ];
   return (
-    <div className="flex items-center justify-between border-b border-line px-4 py-3">
-      <div className="flex items-center gap-3">
-        <h2 className="font-semibold text-fg" style={{ fontSize: "13.5px" }}>
-          {mode === "run" ? "New Run" : editingTriggerId ? "Edit Trigger" : "New Trigger"}
-        </h2>
-        {/* [Run now | Trigger] toggle (#160) */}
-        <div
-          role="tablist"
-          className="flex rounded-md border border-line-strong bg-bg-3 p-0.5"
-          style={{ fontSize: "11px" }}
+    <div
+      className="d-seg d-seg--sm"
+      role="tablist"
+      aria-label="Mode"
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault();
+          const next = mode === "run" ? "trigger" : "run";
+          choose(next);
+          e.currentTarget.querySelector<HTMLElement>(`[data-testid="mode-${next}"]`)?.focus();
+        }
+      }}
+    >
+      {items.map(({ value, label, Icon }) => (
+        <button
+          key={value}
+          type="button"
+          role="tab"
+          aria-selected={mode === value}
+          tabIndex={mode === value ? 0 : -1}
+          className="d-seg__btn"
+          onClick={() => choose(value)}
+          data-testid={`mode-${value}`}
         >
-          <button
-            role="tab"
-            aria-selected={mode === "run"}
-            onClick={() => {
-              setMode("run");
-              // Drop any stale guard verdict when leaving Trigger mode (#350).
-              setGuardTest(null);
-              setGuardTestError(null);
-            }}
-            className={`rounded px-2 py-0.5 font-medium transition-colors ${
-              mode === "run" ? "bg-acc text-on-acc" : "text-fg-3 hover:text-fg"
-            }`}
-            data-testid="mode-run"
-          >
-            Run now
-          </button>
-          <button
-            role="tab"
-            aria-selected={mode === "trigger"}
-            onClick={() => {
-              setMode("trigger");
-              setGuardTest(null);
-              setGuardTestError(null);
-            }}
-            className={`rounded px-2 py-0.5 font-medium transition-colors ${
-              mode === "trigger" ? "bg-acc text-on-acc" : "text-fg-3 hover:text-fg"
-            }`}
-            data-testid="mode-trigger"
-          >
-            Trigger
-          </button>
-        </div>
-      </div>
-      <button
-        onClick={requestClose}
-        className="grid h-6 w-6 place-items-center rounded text-fg-3 transition-colors hover:bg-bg-5 hover:text-fg"
-        aria-label="Close"
-      >
-        <X size={14} />
-      </button>
+          <Icon size={12} strokeWidth={1.5} aria-hidden />
+          <span>{label}</span>
+        </button>
+      ))}
     </div>
   );
 }

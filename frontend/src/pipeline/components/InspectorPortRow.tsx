@@ -2,10 +2,13 @@ import { useRef, type ReactNode } from "react";
 import type { PortDef } from "../../shared/generated/PortDef";
 import type { RenameImpact } from "../../lib/edgePorts";
 import { usePortNameDraft, type PortNameDraft } from "./usePortNameDraft";
+import { CircleX, Trash2 } from "lucide-react";
+import { IconButton, TextInput } from "../../shared/ui/kit";
 
 interface InspectorPortRowProps {
   port: PortDef;
   highlighted?: boolean;
+  /** @deprecated The rows draw their own hairline. */
   isLast?: boolean;
   onUpdate: (updates: Partial<PortDef>) => void;
   onRemove: () => void;
@@ -32,7 +35,6 @@ interface InspectorPortRowProps {
 export default function InspectorPortRow({
   port,
   highlighted,
-  isLast,
   onUpdate,
   onRemove,
   takenNames = [],
@@ -47,19 +49,20 @@ export default function InspectorPortRow({
   const cancelling = useRef(false);
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col">
+    <div className="ei-port__row">
       <div
         data-port={port.name}
         data-testid={`inspector-port-${port.name}`}
-        className={`port-row flex items-center gap-2 px-1 py-2 transition-colors ${
-          isLast ? "" : "border-b border-line-soft"
-        } ${highlighted ? "bg-acc-bg" : ""}`}
+        data-hl={highlighted || undefined}
+        className="port-row ei-line"
       >
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-fg-4" />
-        <input
+        <TextInput
+          mono
+          small
           value={name.value}
           aria-label="Port name"
-          aria-invalid={name.refusal != null}
+          invalid={name.refusal != null}
+          title={name.value}
           onChange={(e) => name.change(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
@@ -79,20 +82,9 @@ export default function InspectorPortRow({
             if (cancelling.current) return;
             if (!name.commit()) name.reset();
           }}
-          className={`min-w-0 flex-1 rounded bg-transparent text-fg outline-none ${
-            name.refusal ? "ring-1 ring-st-failed" : ""
-          }`}
-          style={{ fontSize: "11px" }}
         />
         {children}
-        <button
-          onClick={onRemove}
-          aria-label="Delete port"
-          className="cursor-pointer text-fg-4 hover:text-st-failed"
-          style={{ fontSize: "10px" }}
-        >
-          ×
-        </button>
+        <IconButton icon={Trash2} size="sm" label="Delete port" onClick={onRemove} />
       </div>
       {!nameDraft && <PortRenameNotices portName={port.name} draft={ownDraft} wiring={wiring} />}
     </div>
@@ -112,36 +104,32 @@ export function PortRenameNotices({
 }) {
   if (draft.refusal) {
     return (
-      <p role="alert" className="px-1 pb-1 text-st-failed" style={{ fontSize: "10px" }} data-testid="port-rename-refusal">
+      <span role="alert" className="d-err ei-pad" data-testid="port-rename-refusal">
+        <CircleX size={12} strokeWidth={1.5} aria-hidden />
         {draft.refusal}
-      </p>
+      </span>
     );
   }
   if (!draft.pending || !wiring || wiring.edges === 0) return null;
+  const consequence = renameConsequence(portName, wiring);
   return (
-    <div
-      className="mx-1 mb-1 rounded border border-line bg-bg-3 px-2 py-1.5 text-fg-3"
-      style={{ fontSize: "10px" }}
-      data-testid="port-rename-pending"
-    >
-      <div className="text-fg-2">
-        Renommage en attente : <span className="font-mono">{portName}</span> →{" "}
-        <span className="font-mono font-medium text-fg">{draft.pending}</span>
-      </div>
-      <div>{renameConsequence(portName, wiring)}</div>
+    <div className="ei-row ei-meta" title={`${consequence} · ↵ applies, Esc cancels`} data-testid="port-rename-pending">
+      <span className="d-mono ei-trunc">
+        {portName} → {draft.pending}
+      </span>
+      <span className="ei-trunc">· {consequence}</span>
     </div>
   );
 }
-/** « À la validation (↵ ou sortie du champ) : 2 edges suivent, l'input spec de
- *  builder et de reviewer est renommé. Échap annule. » */
+
+/** « 2 edges follow, the input spec of builder and reviewer is renamed ». */
 function renameConsequence(name: string, wiring: RenameImpact): string {
-  const edges = wiring.edges === 1 ? "1 edge suit" : `${wiring.edges} edges suivent`;
-  const inputs =
-    wiring.inputsOf.length > 0 ? `, l'input ${name} de ${joinNames(wiring.inputsOf)} est renommé` : "";
-  return `À la validation (↵ ou sortie du champ) : ${edges}${inputs}. Échap annule.`;
+  const edges = wiring.edges === 1 ? "1 edge follows" : `${wiring.edges} edges follow`;
+  const inputs = wiring.inputsOf.length > 0 ? `, the input ${name} of ${joinNames(wiring.inputsOf)} is renamed` : "";
+  return `${edges}${inputs}`;
 }
 
 function joinNames(names: string[]): string {
   if (names.length === 1) return names[0];
-  return `${names.slice(0, -1).join(", de ")} et de ${names[names.length - 1]}`;
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }

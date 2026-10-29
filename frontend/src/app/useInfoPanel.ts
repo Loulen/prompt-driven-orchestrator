@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   infoPanelButtons,
   toggleAssistantTab,
@@ -8,6 +8,7 @@ import {
 } from "../lib/infoPanelReconcile";
 import { useEditStore } from "../pipeline/store/editStore";
 import type { OpenPipeline } from "../pipeline/store/editState";
+import { useInfoRequest } from "../pipeline/store/infoRequest";
 
 /**
  * The pipeline info panel: open or not, the tab it shows (and the YAML line).
@@ -38,6 +39,19 @@ export function useInfoPanel(saveErrorTab: OpenPipeline | undefined, ctx: InfoTa
       setInfoPanelOpen(next.open);
     },
     [infoPanelOpen, infoPanelTab, hasRun, hasAssistant],
+  );
+
+  // A request from another surface (the line under the tab bar opens Versions).
+  useEffect(
+    () =>
+      useInfoRequest.subscribe(({ request }) => {
+        if (!request) return;
+        setInfoPanelTab(request.tab);
+        setInfoPanelScrollToLine(undefined);
+        setInfoPanelOpen(true);
+        useInfoRequest.getState().clear();
+      }),
+    [],
   );
 
   const handleToggleInfo = useCallback(() => applyToggle(toggleInfoTab), [applyToggle]);

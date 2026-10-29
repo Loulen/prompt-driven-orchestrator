@@ -40,41 +40,38 @@ export default function ExpectedContentField({
   }, [expanded]);
 
   return (
-    <div ref={containerRef} className={`exp${expanded ? " expanded" : ""}`}>
+    <div ref={containerRef} className="ei-exp" data-open={expanded || undefined}>
       <button
         type="button"
         aria-label={instructions ? "Edit expected content" : "Add expected content"}
         aria-expanded={expanded}
-        className="exp-trigger"
+        title="Guides the agent, never checked"
+        className="ei-exp__trigger"
         onClick={() => setExpanded((open) => !open)}
       >
-        <FileText aria-hidden="true" size={12} />
-        <span className="exp-label">Expected content</span>
-        <span className={`exp-preview${preview ? "" : " empty"}`}>{preview || "+ add"}</span>
-        <ChevronRight aria-hidden="true" className="exp-chevron" size={12} />
+        <FileText aria-hidden="true" size={12} strokeWidth={1.5} />
+        <span className="ei-exp__label">Expected content</span>
+        <span className="ei-exp__preview">{preview}</span>
+        <ChevronRight aria-hidden="true" className="ei-exp__chev" size={12} strokeWidth={1.5} />
       </button>
       {expanded && (
-        <>
-          <textarea
-            ref={textareaRef}
-            aria-label="Expected content"
-            value={value ?? ""}
-            onChange={(event) => {
-              const next = event.target.value;
-              onChange(next.trim() ? next : undefined);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.stopPropagation();
-                setExpanded(false);
-              }
-            }}
-          />
-          <div className="exp-footer">
-            <span>guide l'agent · non vérifié</span>
-            <span>échap replie</span>
-          </div>
-        </>
+        <textarea
+          ref={textareaRef}
+          aria-label="Expected content"
+          title="Esc folds"
+          className="d-input d-area"
+          value={value ?? ""}
+          onChange={(event) => {
+            const next = event.target.value;
+            onChange(next.trim() ? next : undefined);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              setExpanded(false);
+            }
+          }}
+        />
       )}
     </div>
   );

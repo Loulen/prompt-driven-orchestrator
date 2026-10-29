@@ -123,10 +123,8 @@ describe("NodeDetailHeader duration", () => {
         vi.advanceTimersByTime(15_000);
       });
       expect(label).toHaveTextContent("1m 1s total");
-      expect(screen.getByTestId("iteration-duration-dot")).toHaveClass(
-        "bg-st-running",
-        "animate-pulse",
-      );
+      // The dot pulses in the running tone (inspector.css `.ri-dur__dot`).
+      expect(screen.getByTestId("iteration-duration-dot")).toHaveAttribute("data-st", "running");
     } finally {
       vi.useRealTimers();
     }
@@ -145,8 +143,8 @@ describe("NodeDetailHeader duration", () => {
     expect(screen.queryByTestId("iteration-duration")).toBeNull();
     header(makeNode({ status: "interrupted", started_at: "2026-01-01T00:00:00Z" }));
     expect(screen.queryByTestId("iteration-duration")).toBeNull();
-    for (const line of screen.getAllByText("iter 1")) {
-      expect(line.parentElement).toHaveTextContent(/^iter 1$/);
+    for (const line of screen.getAllByText("i1")) {
+      expect(line.parentElement).toHaveTextContent(/^i1$/);
     }
   });
 
@@ -157,11 +155,11 @@ describe("NodeDetailHeader duration", () => {
     fireEvent.click(label);
     expect(label).toHaveTextContent("8m 31s active");
     expect(label).toHaveAccessibleName("8m 31s active. Click to show total time");
-    // Both units read the same: grey, dotted underline.
-    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-fg-4", "decoration-dotted");
+    // Both units read the same, small and muted (inspector.css `.ri-dur__unit`).
+    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("ri-dur__unit");
     fireEvent.click(label);
     expect(label).toHaveTextContent("12m 4s total");
-    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("text-fg-4", "decoration-dotted");
+    expect(screen.getByTestId("iteration-duration-unit")).toHaveClass("ri-dur__unit");
   });
 
   it("is a native button, so Enter and Space switch it too", () => {
@@ -240,9 +238,8 @@ describe("NodeDetailHeader duration", () => {
         vi.advanceTimersByTime(1000);
       });
       expect(label).toHaveTextContent("12m 12s total");
-      const dot = screen.getByTestId("iteration-duration-dot");
-      expect(dot).toHaveClass("bg-st-await");
-      expect(dot).not.toHaveClass("animate-pulse");
+      // Steady: only a running iteration's dot pulses.
+      expect(screen.getByTestId("iteration-duration-dot")).toHaveAttribute("data-st", "awaiting");
     });
 
     it("the tooltip counts the open wait and says Active is paused", async () => {
@@ -273,7 +270,7 @@ describe("NodeDetailHeader duration", () => {
   describe("in the iteration menu", () => {
     it("lists one duration per iteration, in Total by default", async () => {
       header(looped);
-      fireEvent.click(screen.getByText(/iter 2/));
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
       expect(await screen.findByTestId("iter-option-1")).toHaveTextContent("11m 45s total");
       expect(screen.getByTestId("iter-option-2")).toHaveTextContent("12m 4s total");
       // The time range the menu used to show is gone.
@@ -284,7 +281,7 @@ describe("NodeDetailHeader duration", () => {
 
     it("lists the latest iteration first", async () => {
       header(looped);
-      fireEvent.click(screen.getByText(/iter 2/));
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
       await screen.findByTestId("iter-option-1");
       const options = screen.getAllByTestId(/^iter-option-/);
       expect(options.map((o) => o.dataset.testid)).toEqual(["iter-option-2", "iter-option-1"]);
@@ -293,7 +290,7 @@ describe("NodeDetailHeader duration", () => {
     it("follows the mode on screen", async () => {
       header(looped);
       fireEvent.click(screen.getByTestId("iteration-duration"));
-      fireEvent.click(screen.getByText(/iter 2/));
+      fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
       expect(await screen.findByTestId("iter-option-1")).toHaveTextContent("11m 0s active");
       expect(screen.getByTestId("iter-option-2")).toHaveTextContent("8m 31s active");
     });
@@ -319,7 +316,7 @@ describe("NodeDetailHeader duration", () => {
           }),
         );
         expect(screen.getByTestId("iteration-duration")).toHaveTextContent("12m 4s total");
-        fireEvent.click(screen.getByText(/iter 2/));
+        fireEvent.click(screen.getByRole("button", { name: /^Iteration 2 of/ }));
         expect(await screen.findByTestId("iter-option-1")).toHaveTextContent("3m 21s total");
         expect(screen.getByTestId("iter-option-2")).toHaveTextContent("12m 4s total");
       } finally {

@@ -156,7 +156,7 @@ pub async fn serve_with_config(
         // on orphaned Running nodes and surface git/event-log divergence.
         boot_recovery::run_boot_recovery(&run).await;
     }
-    // ADR-0091: the Sessions hébergées a previous daemon held are taken back
+    // ADR-0092: the Sessions hébergées a previous daemon held are taken back
     // with who started them, or ended if their process is gone. Before the
     // ledger adopts the live sessions, so it knows who started them.
     let hosted = session.hosted().clone();

@@ -28,7 +28,7 @@ pub enum SessionKind {
     LibraryAssistant,
     /// The shell of a Run, opened by hand: no agent.
     Shell,
-    /// A Session hébergée (API 0.17): an agent or a shell an extension has
+    /// A Session hébergée (API 0.19): an agent or a shell an extension has
     /// the core hold outside any Run.
     Hosted,
 }
@@ -48,11 +48,11 @@ pub struct SessionRef {
     /// The iteration of that Node, from 1.
     pub iter: Option<i64>,
     /// For a [`SessionKind::Hosted`], the extension that opened it (API
-    /// 0.17); absent otherwise.
+    /// 0.19); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension: Option<String>,
     /// For a [`SessionKind::Hosted`], the key its extension gave it (API
-    /// 0.17); absent otherwise.
+    /// 0.19); absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
 }

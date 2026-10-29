@@ -10,7 +10,7 @@ use crate::domain::projection;
 use crate::Runs;
 
 /// Count the live NodeRun sessions across *all* runs, plus the live Sessions
-/// hébergées (ADR-0091), for admission control. Pipeline Manager sessions are
+/// hébergées (ADR-0092), for admission control. Pipeline Manager sessions are
 /// not nodes, so they are excluded by construction.
 pub async fn count_global_live_sessions(db: &Runs) -> usize {
     count_global_live_sessions_excluding(db, None).await

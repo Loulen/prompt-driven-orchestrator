@@ -1,5 +1,5 @@
 //! Lay a text in the input of a Session hébergée, and forget an ended one
-//! (ADR-0091).
+//! (ADR-0092).
 
 use pdo_extension_api::{HostedRefusal, HostedSession, HostedSessionForgotten, HostedState};
 use pdo_kernel::Actor;

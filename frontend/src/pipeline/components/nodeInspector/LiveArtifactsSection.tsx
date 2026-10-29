@@ -1,17 +1,15 @@
 import { useState } from "react";
-import { ChevronDown, Info } from "lucide-react";
+import { ChevronDown, ChevronRight, Info, Plus, Radio } from "lucide-react";
 import type { LiveArtifact } from "../../../shared/generated/LiveArtifact";
 import type { PortType } from "../../../shared/generated/PortType";
-import { Tooltip } from "../../../shared/ui/tooltip";
-import { SectionHead } from "../InspectorPrimitives";
+import { EmptyState, IconButton, Section } from "../../../shared/ui/kit";
 import InspectorPortRow, { PortRenameNotices } from "../InspectorPortRow";
 import ExpectedContentField from "../ExpectedContentField";
 import OutputSchemaEditor from "../OutputSchemaEditor";
 import { PORT_TYPE_OPTIONS } from "../portTypeOptions";
 import { usePortNameDraft } from "../usePortNameDraft";
 
-const FREE_HINT =
-  "The agent may also publish files you did not declare, in live/. Shown during the Run, never checked, never wired.";
+const FREE_HINT = "Free live artifacts: undeclared files in live/, shown during the Run";
 
 /**
  * ADR-0089: the node's live artifacts, apart from its Outputs — what it
@@ -50,55 +48,44 @@ export default function LiveArtifactsSection({
     onChange({ live_artifacts: live.filter((_, i) => i !== index) });
   }
 
-  const freeToggle = (
-    <div className="ml-auto mr-2 flex items-center gap-1.5">
-      <span className="text-fg-3" style={{ fontSize: "10px" }}>
-        Free live artifacts
-      </span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={free}
-        aria-label="Free live artifacts"
-        disabled={readOnly}
-        data-testid="free-live-artifacts-toggle"
-        onClick={() => onChange({ free_live_artifacts: !free })}
-        className={`relative h-3.5 w-6 shrink-0 rounded-full transition-colors ${
-          free ? "bg-acc" : "bg-fg-5"
-        }`}
-      >
-        <span
-          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-bg-1 transition-all ${
-            free ? "left-3" : "left-0.5"
-          }`}
-        />
-      </button>
-      <Tooltip content={FREE_HINT} side="bottom">
-        <span
-          role="img"
-          aria-label="About free live artifacts"
-          className="text-fg-4"
-          data-testid="free-live-artifacts-info"
-        >
-          <Info size={11} />
-        </span>
-      </Tooltip>
-    </div>
-  );
-
   return (
-    <>
-      <SectionHead
-        title="Live artifacts"
-        count={live.length}
-        aside={freeToggle}
-        onAdd={readOnly ? undefined : add}
-        addTestId="add-live-artifact"
-      />
-      <p className="-mt-2 px-1 text-fg-4" style={{ fontSize: "10px" }}>
-        Announced to the agent, never checked. Shown in the Run while the node works.
-      </p>
-      <div className="flex flex-col" data-testid="live-artifacts">
+    <Section
+      title="Live artifacts"
+      count={live.length}
+      flush
+      aside={
+        <span className="ei-keep">
+          <span className="d-meta" title={FREE_HINT}>
+            Free
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={free}
+            aria-label="Free live artifacts"
+            title={FREE_HINT}
+            disabled={readOnly}
+            data-testid="free-live-artifacts-toggle"
+            onClick={() => onChange({ free_live_artifacts: !free })}
+            className="d-switch"
+          >
+            <span className="d-switch__knob" aria-hidden />
+          </button>
+          <span role="img" aria-label="About free live artifacts" title={FREE_HINT} className="ei-dim" data-testid="free-live-artifacts-info">
+            <Info size={11} strokeWidth={1.5} aria-hidden />
+          </span>
+          {!readOnly && (
+            <IconButton icon={Plus} size="sm" label="Add live artifact" onClick={add} data-testid="add-live-artifact" />
+          )}
+        </span>
+      }
+    >
+      <div data-testid="live-artifacts" title="Announced to the agent, never checked; shown in the Run while the node works">
+        {live.length === 0 && (
+          <EmptyState icon={Radio} layout="row">
+            None declared
+          </EmptyState>
+        )}
         {live.map((artifact, i) => (
           <LiveArtifactCard
             key={i}
@@ -110,7 +97,7 @@ export default function LiveArtifactsSection({
           />
         ))}
       </div>
-    </>
+    </Section>
   );
 }
 
@@ -135,16 +122,17 @@ function LiveArtifactCard({
     <>
       <div
         data-testid={`live-artifact-card-${artifact.name}`}
-        className={`op-tab${collapsed ? " collapsed" : ""}`}
+        data-collapsed={collapsed || undefined}
+        className="ei-port"
       >
-        <div className="op-head">
-          <button
-            className="op-chev"
-            aria-label="Toggle live artifact body"
+        <div className="ei-port__head">
+          <IconButton
+            icon={collapsed ? ChevronRight : ChevronDown}
+            size="sm"
+            label="Toggle live artifact body"
+            aria-expanded={!collapsed}
             onClick={() => setCollapsed((c) => !c)}
-          >
-            <ChevronDown size={14} />
-          </button>
+          />
           <InspectorPortRow
             port={artifact}
             isLast
@@ -159,8 +147,7 @@ function LiveArtifactCard({
               value={portType}
               onChange={(e) => onUpdate({ port_type: e.target.value as PortType })}
               aria-label="Live artifact type"
-              className="shrink-0 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 font-mono text-fg outline-none focus:border-acc"
-              style={{ fontSize: "10px" }}
+              className="ei-select ei-select--sm ei-select--mono"
               data-testid="live-artifact-type-select"
             >
               {PORT_TYPE_OPTIONS.map((opt) => (
@@ -171,8 +158,8 @@ function LiveArtifactCard({
             </select>
           </InspectorPortRow>
         </div>
-        {!collapsed && (
-          <div className="op-body">
+        {!collapsed && (allowInstructions || portType === "markdown") && (
+          <div className="ei-port__body">
             {allowInstructions && (
               <ExpectedContentField
                 value={artifact.instructions}
@@ -188,7 +175,7 @@ function LiveArtifactCard({
           </div>
         )}
       </div>
-      <div className="-mt-1 mb-3 empty:hidden">
+      <div className="ei-port__notices">
         <PortRenameNotices portName={artifact.name} draft={nameDraft} />
       </div>
     </>

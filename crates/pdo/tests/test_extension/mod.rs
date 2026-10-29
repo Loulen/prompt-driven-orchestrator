@@ -59,6 +59,10 @@
 //! - `review/composer` (0.14): `tags`, a source of completion opened by `#`
 //!   (`suggestTags`: `bug`, `perf`, `review-later` and `run-<the Run's id>`),
 //!   whose inserted `#tag` renders as a chip (`TagChip`).
+//! - `palette` (0.18): `new-note`, a global action calling [`NEW_NOTE`], which
+//!   makes `test/note` × `create` (refuse it to hide the action), and `notes`,
+//!   a Source de recherche (`searchNotes`: the notes whose title holds the
+//!   query, each a deep link to the test page).
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
@@ -87,7 +91,7 @@
 //!   <id>` signs a browser in as that Actor; `PeopleMarks`, at
 //!   `run/item/people`, draws one mark per Presence of the row's Run.
 //! - **`Host::open_session`** and the other gestures of the Sessions
-//!   hébergées (API 0.17, `sessions.rs`): `POST /ext/test/sessions` opens one
+//!   hébergées (API 0.19, `sessions.rs`): `POST /ext/test/sessions` opens one
 //!   on behalf of the caller, `GET` lists or reads them, `DELETE
 //!   /ext/test/sessions/<key>` terminates one, `POST …/<key>/relaunch`, `PUT
 //!   …/<key>/config`, `POST …/<key>/type` and `POST …/<key>/forget` relaunch,
@@ -184,6 +188,11 @@ pub const SHOW_CONTEXT: &str = "test.show-context";
 /// The id of the test extension's command that always throws: its error
 /// reaches a toast, and the menu it sits in keeps working.
 pub const FAIL: &str = "test.fail";
+
+/// The id of the test extension's global action's command (`palette`, 0.18):
+/// it reports its context as [`SHOW_CONTEXT`] does, and makes `test/note` ×
+/// `create`, so a refusal of that Operation hides it.
+pub const NEW_NOTE: &str = "test.new-note";
 
 /// The Action locations (#30) the test extension contributes one action to,
 /// in declaration order.
@@ -849,6 +858,21 @@ impl Extension for TestExtension {
                     "suggestTags",
                 )
                 .rendering("#[a-z][a-z0-9-]*", "TagChip"),
+            );
+        // 0.18: the command field, a global action guarded by the Operation it
+        // makes, and a search source.
+        let new_note = UiCommand::new(NEW_NOTE, "New note", "showContext")
+            .guarded_by(ResourceKind::extension(ID, NOTE), Verb::Create);
+        ui = ui
+            .contribute(UiContribution::action(
+                UiLocation::Palette,
+                "new-note",
+                &new_note,
+            ))
+            .command(new_note)
+            .contribute(
+                UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes")
+                    .with_icon(format!("/ext/{ID}/icon.svg")),
             );
         for &location in ACTION_LOCATIONS {
             let id = action_id(location);

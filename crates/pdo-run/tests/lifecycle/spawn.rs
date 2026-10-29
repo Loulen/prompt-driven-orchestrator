@@ -891,7 +891,18 @@ async fn a_second_dispatch_of_a_started_iteration_is_refused_before_any_side_eff
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     init_test_repo(repo);
-    let state = test_state_with_dir(repo).await;
+    let tmux: Arc<dyn pdo_session::application::ports::Tmux> = Arc::new(
+        pdo_session::adapters::tmux::TmuxCli::for_daemon(next_test_daemon_port()),
+    );
+    let state = build_with(
+        repo.to_path_buf(),
+        None,
+        Build {
+            tmux: Some(tmux.clone()),
+            ..Build::default()
+        },
+    )
+    .await;
 
     let run_id = "dispatch-twice";
     seed_run_for_node_control(&state, run_id, "spawn-unit").await;
@@ -917,6 +928,15 @@ async fn a_second_dispatch_of_a_started_iteration_is_refused_before_any_side_eff
             .count()
     };
     assert_eq!(started(&load_events(&state.db, run_id).await.unwrap()), 1);
+
+    // The window is a started iteration with no session: wait for the first
+    // one (`exec true`) to end, or a loaded machine meets the session probe.
+    let session = format!("pdo-{run_id}-worker-iter-1");
+    let deadline = time::Instant::now() + Duration::from_secs(10);
+    while tmux.session_exists(&session) {
+        assert!(time::Instant::now() < deadline, "{session} never ended");
+        time::sleep(Duration::from_millis(50)).await;
+    }
 
     let outcome = spawn_node(SpawnDeps::from_state(&state.run), &ctx, &node, 1).await;
     match outcome {

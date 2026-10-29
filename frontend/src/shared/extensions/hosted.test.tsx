@@ -220,7 +220,7 @@ describe("the shared module @pdo/extension-ui", () => {
     renderHost();
     const banner = await screen.findByTestId("extension-banner-a");
     expect(banner).toHaveTextContent(
-      `The interface of the extension Extension a was not loaded: it was built for the PDO extension UI module ${UI_MODULE_MAJOR + 1}, and PDO runs version ${UI_MODULE_MAJOR}.`,
+      `The interface of the extension Extension a was not loaded: it was built for the extension UI module ${UI_MODULE_MAJOR + 1}, and the app runs version ${UI_MODULE_MAJOR}.`,
     );
     await waitFor(() => expect(loader).toHaveBeenCalledWith("/ext/b/ui.js"));
     expect(loader).not.toHaveBeenCalledWith("/ext/a/ui.js");

@@ -259,7 +259,7 @@ impl Runs {
     }
 
     /// The admission lock, owned: what a Session hébergée holds from its
-    /// count until it is recorded (ADR-0091).
+    /// count until it is recorded (ADR-0092).
     pub fn admission_lock_owned(&self) -> Arc<tokio::sync::Mutex<()>> {
         self.admission_lock.clone()
     }

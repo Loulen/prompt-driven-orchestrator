@@ -1,28 +1,37 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useScrollSpy } from "../../../hooks/useScrollSpy";
 import {
   findCategory,
   type SettingsCategoryId,
   type SettingsSectionId,
 } from "../../model/settingsCategories";
+import { PageContext } from "./search";
 
 /**
- * One category of the Settings surface: its sub-column listing the sections (scroll-spied,
- * each with its dirty dot) and its scrollable page.
+ * One category of the Settings surface: its scrollable page, and — drawn in the section
+ * column of the surface (`navSlot`) while it is on screen — the list of its sections,
+ * scroll-spied, each with its dirty dot. Under a search every page shows, one after the
+ * other, in the surface's own scroll, and no section column.
  */
 export default function CategoryPage({
   categoryId,
   active,
+  searching = false,
+  navSlot,
   ready,
   initialSection,
   highlight,
   dirtySections,
   onSectionChange,
-  wide = false,
   children,
 }: {
   categoryId: SettingsCategoryId;
   active: boolean;
+  /** The search line looks across every category. */
+  searching?: boolean;
+  /** Where the section column goes. */
+  navSlot: HTMLElement | null;
   /**
    * `GET /settings` has answered (ok or not). Landing waits for it: a section that
    * renders on its own (Version & update, #697) exists before the ones above it, and a
@@ -32,16 +41,15 @@ export default function CategoryPage({
   initialSection?: SettingsSectionId;
   /** Programmatic open (story 18): pulse the landed section so the eye finds it. */
   highlight?: boolean;
-  dirtySections: Set<SettingsSectionId>;
+  dirtySections: ReadonlySet<SettingsSectionId>;
   onSectionChange: (section: SettingsSectionId) => void;
-  /** A page laid out in columns (Settings › Projects) takes more width. */
-  wide?: boolean;
   children: ReactNode;
 }) {
   const category = findCategory(categoryId);
   const sectionIds = useMemo(() => category.sections.map((s) => s.id), [category]);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { active: activeSection, scrollTo } = useScrollSpy(sectionIds, scrollRef, active);
+  const spying = active && !searching;
+  const { active: activeSection, scrollTo } = useScrollSpy(sectionIds, scrollRef, spying);
   const restored = useRef(false);
 
   // Land on the remembered / requested section (stories 17 and 18) — once, instantly,
@@ -53,7 +61,7 @@ export default function CategoryPage({
   const target = useRef(initialSection);
   const landedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useLayoutEffect(() => {
-    if (!active || !ready || restored.current) return;
+    if (!spying || !ready || restored.current) return;
     const wanted = target.current;
     if (!wanted || wanted === sectionIds[0]) {
       restored.current = true;
@@ -67,7 +75,7 @@ export default function CategoryPage({
     el.scrollIntoView?.({ behavior: "auto", block: "start" });
     scrollTo(wanted);
     if (highlight) {
-      // Pulse once (2.2 s, `index.css`): only on a programmatic open, never on a click.
+      // Pulse once (2.2 s, `settings.css`): only on a programmatic open, never on a click.
       el.dataset.landed = "true";
       landedTimer.current = setTimeout(() => {
         delete el.dataset.landed;
@@ -82,68 +90,60 @@ export default function CategoryPage({
   );
 
   useEffect(() => {
-    if (active) onSectionChange(activeSection);
-  }, [active, activeSection, onSectionChange]);
+    if (spying) onSectionChange(activeSection);
+  }, [spying, activeSection, onSectionChange]);
+
+  const page = useMemo(
+    () => ({ dirty: dirtySections as ReadonlySet<string>, category: category.label }),
+    [dirtySections, category.label],
+  );
+  const shown = active || searching;
 
   return (
-    <div
-      hidden={!active}
-      className={active ? "flex min-h-0 min-w-0 flex-1" : undefined}
-      data-testid={`settings-page-${categoryId}`}
-    >
-      <nav
-        className="w-[168px] shrink-0 border-r border-line px-3 py-4"
-        aria-label={`${category.label} sections`}
-        data-testid="settings-subcolumn"
-      >
-        <div
-          className="mb-2 px-2 uppercase tracking-wider text-fg-4"
-          style={{ fontSize: "10px" }}
-        >
-          {category.label}
-        </div>
-        <ul className="flex flex-col gap-0.5">
-          {category.sections.map((section) => {
-            const isActive = activeSection === section.id;
-            const dirty = dirtySections.has(section.id);
-            return (
-              <li key={section.id}>
+    <>
+      {spying &&
+        navSlot &&
+        createPortal(
+          <nav aria-label={`${category.label} sections`} data-testid="settings-subcolumn">
+            {category.sections.map((section) => {
+              const isActive = activeSection === section.id;
+              const dirty = dirtySections.has(section.id);
+              return (
                 <button
+                  key={section.id}
                   type="button"
                   onClick={() => scrollTo(section.id)}
                   aria-current={isActive ? "true" : undefined}
                   data-testid={`settings-section-${section.id}`}
                   data-dirty={dirty ? "true" : undefined}
-                  className={`flex w-full items-center justify-between gap-2 border-l-2 px-2 py-1 text-left ${
-                    isActive
-                      ? "border-acc bg-acc-bg text-fg"
-                      : "border-transparent text-fg-3 hover:text-fg-2"
-                  }`}
-                  style={{ fontSize: "11.5px" }}
+                  className="set-nav__item"
+                  title={section.label}
                 >
-                  <span>{section.label}</span>
+                  <span className="set-nav__label">{section.label}</span>
                   {dirty && (
                     <span
+                      role="img"
                       aria-label="Unsaved changes"
                       data-testid={`settings-section-${section.id}-dirty`}
-                      className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-await"
+                      className="set-dirty"
                     />
                   )}
                 </button>
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
+              );
+            })}
+          </nav>,
+          navSlot,
+        )}
       <div
         ref={scrollRef}
-        className="min-w-0 flex-1 overflow-y-auto px-7 py-5"
-        data-testid={`settings-scroll-${categoryId}`}
+        hidden={!shown}
+        className={shown ? "set-page" : undefined}
+        data-testid={`settings-page-${categoryId}`}
       >
-        <div className={`flex ${wide ? "max-w-[920px]" : "max-w-[640px]"} flex-col gap-7 pb-10`}>
-          {children}
+        <div className="set-page__col" data-testid={`settings-scroll-${categoryId}`}>
+          <PageContext.Provider value={page}>{children}</PageContext.Provider>
         </div>
       </div>
-    </div>
+    </>
   );
 }

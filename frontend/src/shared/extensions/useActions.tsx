@@ -6,19 +6,29 @@
 
 import { useMemo } from "react";
 import type { BulkAction } from "../../pipeline/components/BulkActionBar";
+import { useAllowedActions } from "./actionRights";
 import { useContributions, useLocationContext, type ContributionElement } from "./catalogue";
 import { runCommand } from "./commands";
 import type { ActionContexts, ActionExtra, ActionLocation } from "./contract";
 import ExtensionIcon from "./ExtensionIcon";
 
-/** The actions rendered at `location` for `extra`, and the context their commands receive. */
+/**
+ * The actions rendered at `location` for `extra`, and the context their
+ * commands receive. An action the Autorisation d'opération refuses is absent
+ * (`actionRights.ts`).
+ */
 export function useActions<L extends ActionLocation>(
   location: L,
   extra: ActionExtra<L>,
 ): { actions: ContributionElement[]; context: ActionContexts[L] } {
   const context = useLocationContext<ActionContexts[L]>(location, extra as never);
   const all = useContributions(location, context);
-  const actions = useMemo(() => all.filter((element) => element.command !== null), [all]);
+  const candidates = useMemo(
+    () => all.filter((element) => element.command !== null).map((element) => ({ element, context })),
+    [all, context],
+  );
+  const allowed = useAllowedActions(candidates);
+  const actions = useMemo(() => allowed.map(({ element }) => element), [allowed]);
   return { actions, context };
 }
 
@@ -42,7 +52,7 @@ export function useExtensionBulkActions<L extends ActionLocation>(
       actions.map((element) => ({
         key: element.key,
         label: element.contribution.label,
-        icon: <ExtensionIcon url={iconOf(element)} label={element.contribution.label} size={13} />,
+        icon: <ExtensionIcon url={iconOf(element)} label={element.contribution.label} size={14} />,
         onClick: () => void runCommand(element, context),
       })),
     [actions, context],

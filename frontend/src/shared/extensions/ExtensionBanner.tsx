@@ -20,20 +20,19 @@ export default function ExtensionBanner() {
           key={entry.id}
           role="status"
           data-testid={`extension-banner-${entry.id}`}
-          className="flex items-start gap-2 rounded border border-st-await/30 bg-st-await/5 px-2 py-1.5 text-fg-3"
-          style={{ fontSize: "10.5px" }}
+          className="flex items-start gap-2 rounded border border-st-await/30 bg-st-await/5 px-2 py-1.5 text-xs text-text-3"
         >
           <Info size={12} className="mt-0.5 shrink-0 text-st-await" />
           {incompatibility === "ui-module" ? (
             <span>
-              The interface of the extension {entry.name} was not loaded: it was built for the PDO
-              extension UI module {entry.ui?.ui_module_major ?? "?"}, and PDO runs version{" "}
+              The interface of the extension {entry.name} was not loaded: it was built for the
+              extension UI module {entry.ui?.ui_module_major ?? "?"}, and the app runs version{" "}
               {UI_MODULE_MAJOR}. Rebuild the extension against pdo-extension-api {UI_MODULE_MAJOR}.
             </span>
           ) : (
             <span>
               The interface of the extension {entry.name} was not loaded: it was built for React{" "}
-              {entry.ui?.react_major ?? "?"}, and PDO runs React {host}. Rebuild the extension
+              {entry.ui?.react_major ?? "?"}, and the app runs React {host}. Rebuild the extension
               against React {host}.
             </span>
           )}

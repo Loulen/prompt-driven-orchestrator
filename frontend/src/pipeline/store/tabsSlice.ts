@@ -12,6 +12,7 @@ import type { EditState } from "./editState";
 import { hasUnsavedWork, versionTabId } from "./editState";
 import type { OpenPipeline, Selection } from "./editState";
 import { droppedHistory, replaceWithTab, placeOpenedTab } from "./tabHistory";
+import { moveItem } from "../../lib/moveItem";
 
 type Set = StoreApi<EditState>["setState"];
 type Get = StoreApi<EditState>["getState"];
@@ -176,6 +177,14 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
       // would leak its stack and let a reused id inherit a stale one.
       const history = ids.reduce((h, id) => droppedHistory(h, id), s.history);
       return { openTabs: tabs, activeTabId, selection, history };
+    });
+  },
+
+  moveTab: (id: string, index: number) => {
+    set((s) => {
+      const from = s.openTabs.findIndex((t) => t.id === id);
+      if (from < 0) return {};
+      return { openTabs: moveItem(s.openTabs, from, index) };
     });
   },
 

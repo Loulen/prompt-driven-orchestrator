@@ -1,8 +1,10 @@
 // #723 — unit tests for the shared orchestration read model: the counters the
 // pastilles render and the cost vocabulary they speak.
 import { describe, expect, it } from "vitest";
+import type { RunState } from "../../shared/generated/RunState";
 import {
   childCostKnown,
+  childLandingNode,
   childCostText,
   countChildren,
   totalChildren,
@@ -88,5 +90,26 @@ describe("childCostText / childCostKnown (#723)", () => {
     };
     expect(childCostText(cost)).toBe("$2.00");
     expect(childCostKnown(cost)).toBe(2);
+  });
+});
+
+describe("childLandingNode", () => {
+  const run = (statuses: Record<string, string>) =>
+    ({
+      nodes: Object.fromEntries(Object.entries(statuses).map(([id, status]) => [id, { node_id: id, status }])),
+      node_defs: Object.keys(statuses).map((id) => ({ id })),
+    }) as unknown as RunState;
+
+  it("lands on the node that waits for someone first", () => {
+    expect(childLandingNode(run({ a: "completed", b: "failed", c: "awaiting_user" }))).toBe("c");
+  });
+
+  it("else on a failed node, else on a running one", () => {
+    expect(childLandingNode(run({ a: "running", b: "failed" }))).toBe("b");
+    expect(childLandingNode(run({ a: "completed", b: "running" }))).toBe("b");
+  });
+
+  it("selects nothing when no node needs a look", () => {
+    expect(childLandingNode(run({ a: "completed", b: "pending" }))).toBeNull();
   });
 });

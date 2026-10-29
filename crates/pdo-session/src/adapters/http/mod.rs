@@ -44,7 +44,7 @@ pub fn router(session: Arc<Session>) -> Router {
         .route("/runs/{run_id}/nodes/{node_id}/pane", get(pane::read))
         .route("/sessions/{session_id}/pty", get(terminal::pty))
         .route("/sessions/{session_id}/attach", post(sessions::attach))
-        // ADR-0091: `pdo wait-user` from a Session hébergée.
+        // ADR-0092: `pdo wait-user` from a Session hébergée.
         .route(
             "/sessions/{session_id}/wait-user",
             post(wait::declare_hosted),

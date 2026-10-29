@@ -1,4 +1,6 @@
 import { useCallback } from "react";
+import { Archive } from "lucide-react";
+import { EmptyState } from "../shared/ui/kit";
 import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
 import type { Trigger } from "../shared/generated/Trigger";
@@ -19,6 +21,7 @@ import RegionInspector from "../pipeline/components/RegionInspector";
 import NoteInspector from "../pipeline/components/NoteInspector";
 import InspectorTabs from "../pipeline/components/InspectorTabs";
 import TriggerDetailPanel from "../trigger/components/TriggerDetailPanel";
+import type { Project } from "../workspace/model/project";
 import { resolveNodeInspector } from "../lib/structuralMarkers";
 import { deriveEdgeTrigger } from "../lib/edgeTrigger";
 import { useInspectorTab } from "../hooks/useInspectorTab";
@@ -34,6 +37,11 @@ export interface RightPaneProps {
   selectedTrigger: Trigger | null | undefined;
   triggerPromptRequired: boolean;
   firesRefreshKey: number;
+  /** The selected Trigger's « Run now » and « Edit » (its detail's header). */
+  onRunNowTrigger?: (trigger: Trigger) => void;
+  onEditTrigger?: (trigger: Trigger) => void;
+  /** The Projets, to name the selected Trigger's. */
+  projects?: Project[];
   runNode: NodeState | null | undefined;
   editTab: OpenPipeline | undefined;
   selectedRun: RunState | null;
@@ -67,6 +75,9 @@ export default function RightPane({
   selectedTrigger,
   triggerPromptRequired,
   firesRefreshKey,
+  onRunNowTrigger,
+  onEditTrigger,
+  projects,
   runNode,
   editTab,
   selectedRun,
@@ -217,6 +228,9 @@ export default function RightPane({
             onSelectRun={handleSelectRun}
             refreshKey={firesRefreshKey}
             promptRequired={triggerPromptRequired}
+            onRunNow={onRunNowTrigger ? () => onRunNowTrigger(selectedTrigger) : undefined}
+            onEdit={onEditTrigger ? () => onEditTrigger(selectedTrigger) : undefined}
+            projectName={projects?.find((p) => p.id === selectedTrigger.project_id)?.name ?? null}
           />
         ) : paneOwner === "info" ? (
           <PipelineInfoPanel
@@ -330,11 +344,8 @@ export default function RightPane({
               />
             )}
             {!selectedNode && selectedNodeType !== "start" && isArchived && selectedRun && (
-              <aside className="flex h-full flex-col items-center justify-center bg-bg-2 text-fg-4" style={{ fontSize: "12px" }}>
-                <div className="text-center px-6">
-                  <div className="font-medium text-fg-3">Run archived</div>
-                  <div className="mt-1">No live state available. Select a node to view its final status.</div>
-                </div>
+              <aside className="flex h-full flex-col items-center justify-center bg-surface-1">
+                <EmptyState icon={Archive}>Run archived</EmptyState>
               </aside>
             )}
           </>

@@ -5,7 +5,9 @@ import { gridStep, resolveGridSize, isGridSize } from "../../lib/wiringGrid";
 import type { VariableDef } from "../../shared/generated/VariableDef";
 import type { VariableType } from "../../shared/generated/VariableType";
 import type { EditorPipelineDef } from "../model/pipeline";
-import { SectionHead, Field } from "./InspectorPrimitives";
+import { Plus, Variable, X } from "lucide-react";
+import { EmptyState, Field, IconButton, KeyValue, Section, TextInput } from "../../shared/ui/kit";
+import "./inspect.css";
 import GridSizePicker from "./GridSizePicker";
 
 const VAR_TYPES = ["int", "float", "string", "bool", "list"] as const;
@@ -25,9 +27,12 @@ const VAR_TYPES = ["int", "float", "string", "bool", "list"] as const;
 export default function PipelineMetaSections({
   pipeline,
   readOnly,
+  version = null,
 }: {
   pipeline: EditorPipelineDef;
   readOnly: boolean;
+  /** Read only: the label of the version shown (`v2 · title`), if any. */
+  version?: string | null;
 }) {
   const updateMeta = useEditStore((s) => s.updatePipelineMeta);
   const globalGridSize = useWiringStore((s) => s.defaultGridSize);
@@ -73,157 +78,147 @@ export default function PipelineMetaSections({
   }
 
   return (
-    <div
-      className="flex flex-col gap-3 border-b border-line px-3 py-3"
-      style={{ fontSize: "11.5px" }}
-      data-testid="pipeline-meta"
-      data-readonly={readOnly ? "true" : "false"}
-    >
+    <div data-testid="pipeline-meta" data-readonly={readOnly ? "true" : "false"}>
       {/* Identity */}
-      <div className="flex flex-col gap-2" data-testid="pipeline-meta-identity">
-        <SectionHead title="Identity" />
-        {readOnly ? (
-          <>
-            <ReadOnlyRow label="Name" testid="pipeline-meta-name">{pipeline.name}</ReadOnlyRow>
-            <ReadOnlyRow label="Prompt required" testid="pipeline-meta-prompt-required">
-              {promptRequired ? "Yes" : "No"}
-            </ReadOnlyRow>
-            <ReadOnlyRow label="Wait for started nodes" testid="pipeline-meta-wait-for-started-nodes">
-              {waitForStartedNodes ? "Yes" : "No"}
-            </ReadOnlyRow>
-          </>
-        ) : (
-          <>
-            <Field label="Name">
-              <input
-                value={pipeline.name}
-                onChange={(e) => updateMeta({ name: e.target.value })}
-                className="w-full rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
-                data-testid="pipeline-name-input"
-              />
-            </Field>
-            {/* ADR-0088: no free « Version » field: a Save numbers the versions. */}
-            {/* Prompt-required toggle (#158). Checked by default — unchecking lets a
-                Run launch without a prompt; the entry node sources its own work. */}
-            <label className="flex items-center gap-2 text-fg-2" style={{ fontSize: "11px" }}>
-              <input
-                type="checkbox"
-                className="accent-acc"
-                checked={promptRequired}
-                onChange={(e) => updateMeta({ prompt_required: e.target.checked })}
-                data-testid="prompt-required-checkbox"
-              />
-              Prompt required
-            </label>
-            {/* ADR-0086 « Attente des nœuds lancés ». Off by default: a Run ends
-                at End. On, a Run that reaches End waits until no node it
-                launched is still running, waiting or awaiting you. */}
-            <label
-              className="flex items-center gap-2 text-fg-2"
-              style={{ fontSize: "11px" }}
-              title="A Run that reaches End keeps running until every node it launched is done (none running, waiting or awaiting you). An on-demand node never launched holds nothing."
-            >
-              <input
-                type="checkbox"
-                className="accent-acc"
-                checked={waitForStartedNodes}
-                onChange={(e) => updateMeta({ wait_for_started_nodes: e.target.checked })}
-                data-testid="wait-for-started-nodes-checkbox"
-              />
-              Wait for started nodes
-            </label>
-          </>
-        )}
+      <div data-testid="pipeline-meta-identity">
+        {/* Read only (a Run, a version): one Pipeline section, as the Run's. */}
+        <Section title={readOnly ? "Pipeline" : "Identity"}>
+          {readOnly ? (
+            <KeyValue
+              rows={[
+                { k: "Name", v: <span className="ei-trunc" data-testid="pipeline-meta-name">{pipeline.name}</span>, tip: pipeline.name },
+                ...(version
+                  ? [{ k: "Version", v: <span className="ei-trunc" data-testid="pipeline-meta-version">{version}</span>, mono: true, tip: version }]
+                  : []),
+                {
+                  k: "Prompt",
+                  v: <span data-testid="pipeline-meta-prompt-required">{promptRequired ? "Yes" : "No"}</span>,
+                  tip: "Prompt required",
+                },
+                {
+                  k: "Wait started",
+                  v: <span data-testid="pipeline-meta-wait-for-started-nodes">{waitForStartedNodes ? "Yes" : "No"}</span>,
+                  tip: "Wait for started nodes",
+                },
+                {
+                  k: "Wiring grid",
+                  v: <span data-testid="pipeline-meta-grid-size">{ownGridSize ?? `Global (${globalGridSize})`}</span>,
+                },
+                { k: "Nodes", v: <span data-testid="pipeline-graph-nodes">{pipeline.nodes.length}</span>, mono: true },
+                { k: "Edges", v: <span data-testid="pipeline-graph-edges">{pipeline.edges.length}</span>, mono: true },
+              ]}
+            />
+          ) : (
+            <>
+              <Field label="Name">
+                <TextInput
+                  value={pipeline.name}
+                  onChange={(e) => updateMeta({ name: e.target.value })}
+                  data-testid="pipeline-name-input"
+                />
+              </Field>
+              {/* ADR-0088: no free « Version » field: a Save numbers the versions. */}
+              {/* Prompt-required toggle (#158). Checked by default — unchecking lets a
+                  Run launch without a prompt; the entry node sources its own work. */}
+              <Field label="Prompt" help="Prompt required">
+                <input
+                  type="checkbox"
+                  className="ei-checkbox"
+                  checked={promptRequired}
+                  onChange={(e) => updateMeta({ prompt_required: e.target.checked })}
+                  data-testid="prompt-required-checkbox"
+                />
+              </Field>
+              {/* ADR-0086 « Attente des nœuds lancés ». Off by default: a Run ends
+                  at End. On, a Run that reaches End waits until no node it
+                  launched is still running, waiting or awaiting you. */}
+              <Field label="Wait started" help="Wait for started nodes">
+                <input
+                  type="checkbox"
+                  className="ei-checkbox"
+                  checked={waitForStartedNodes}
+                  onChange={(e) => updateMeta({ wait_for_started_nodes: e.target.checked })}
+                  data-testid="wait-for-started-nodes-checkbox"
+                />
+              </Field>
+            </>
+          )}
+        </Section>
       </div>
 
       {/* Variables */}
-      <div className="flex flex-col gap-1" data-testid="info-panel-variables">
-        <SectionHead
+      <div data-testid="info-panel-variables">
+        <Section
           title="Variables"
           count={variables.length}
-          onAdd={readOnly ? undefined : handleAddVariable}
-          addTestId="pipeline-variable-add"
-        />
-        {variables.length === 0 && (
-          <div className="text-fg-4" style={{ fontSize: "10px" }}>
-            No variables.
-          </div>
-        )}
-        {variables.map(([name, def], index) =>
-          readOnly ? (
-            <div
-              key={name}
-              className="flex items-center justify-between gap-2 rounded bg-bg-3 px-2 py-1"
-              style={{ fontSize: "10.5px" }}
-              data-testid="pipeline-variable-row"
-            >
-              <span className="font-mono text-fg-3">{name}</span>
-              <span className="flex items-center gap-2 font-mono text-fg-4">
-                <span className="text-fg-5">{def.type}</span>
-                {formatVariableValue(def.default)}
-              </span>
+          flush
+          aside={
+            readOnly ? undefined : (
+              <IconButton
+                icon={Plus}
+                size="sm"
+                label="Add variable"
+                onClick={handleAddVariable}
+                data-testid="pipeline-variable-add"
+              />
+            )
+          }
+        >
+          {variables.length === 0 && (
+            <EmptyState icon={Variable} layout="row">
+              None
+            </EmptyState>
+          )}
+          {readOnly && variables.length > 0 && (
+            <div className="ei-pad">
+              <KeyValue
+                rows={variables.map(([name, def]) => ({
+                  k: name,
+                  v: <span data-testid="pipeline-variable-value">{`${def.type} = ${formatVariableValue(def.default)}`}</span>,
+                  mono: true,
+                  tip: `${def.type} = ${formatVariableValue(def.default)}`,
+                }))}
+              />
             </div>
-          ) : (
-            <VariableRow
-              key={index}
-              name={name}
-              isTaken={(candidate) => candidate !== name && candidate in pipeline.variables}
-              def={def}
-              onUpdate={(newName, updates) => handleUpdateVariable(name, newName, updates)}
-              onDelete={() => handleDeleteVariable(name)}
-            />
-          ),
-        )}
+          )}
+          {variables.map(([name, def], index) =>
+            readOnly ? null : (
+              <VariableRow
+                key={index}
+                name={name}
+                isTaken={(candidate) => candidate !== name && candidate in pipeline.variables}
+                def={def}
+                onUpdate={(newName, updates) => handleUpdateVariable(name, newName, updates)}
+                onDelete={() => handleDeleteVariable(name)}
+              />
+            ),
+          )}
+        </Section>
       </div>
 
       {/* Canvas (#877 / ADR-0076): the pipeline's own wiring-grid size. Saved
           in the file — a shared pipeline then draws on the same grid for
           everyone; « Global » stores nothing and follows the reader's default. */}
-      <div className="flex flex-col gap-2" data-testid="pipeline-meta-canvas">
-        <SectionHead title="Canvas" />
-        {readOnly ? (
-          <ReadOnlyRow label="Wiring grid" testid="pipeline-meta-grid-size">
-            {ownGridSize ?? `Global (${globalGridSize})`}
-          </ReadOnlyRow>
-        ) : (
-          <>
-            <Field label="Wiring grid">
-              <GridSizePicker
-                value={ownGridSize}
-                globalSize={globalGridSize}
-                onChange={(v) => updateMeta({ grid_size: v })}
-                ariaLabel="Wiring grid size"
-                testId="pipeline-grid-size"
-              />
+      {!readOnly && (
+        <div data-testid="pipeline-meta-canvas">
+          <Section title="Canvas">
+            <Field label="Wiring grid" help="Existing routes keep their points">
+              <span className="ei-line">
+                <GridSizePicker
+                  value={ownGridSize}
+                  globalSize={globalGridSize}
+                  onChange={(v) => updateMeta({ grid_size: v })}
+                  ariaLabel="Wiring grid size"
+                  testId="pipeline-grid-size"
+                />
+                <span className="ei-meta d-mono" title="Draws on" data-testid="pipeline-grid-size-hint">
+                  {effectiveGridSize} · {gridStep(effectiveGridSize)}px
+                </span>
+              </span>
             </Field>
-            <div className="text-fg-4" style={{ fontSize: "10px" }} data-testid="pipeline-grid-size-hint">
-              Draws on {effectiveGridSize} · {gridStep(effectiveGridSize)}px. Existing routes keep
-              their points.
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ReadOnlyRow({
-  label,
-  children,
-  testid,
-}: {
-  label: string;
-  children: React.ReactNode;
-  testid?: string;
-}) {
-  return (
-    <div
-      className="flex items-center justify-between rounded bg-bg-3 px-2 py-1"
-      style={{ fontSize: "10.5px" }}
-      data-testid={testid}
-    >
-      <span className="text-fg-3">{label}</span>
-      <span className="font-mono text-fg-4">{children}</span>
+          </Section>
+        </div>
+      )}
     </div>
   );
 }
@@ -285,48 +280,42 @@ function VariableRow({
   }
 
   return (
-    <div
-      className="flex items-center gap-1 rounded border border-line-soft bg-bg-3 px-2 py-1"
-      data-testid="pipeline-variable-row"
-    >
+    <div className="pi-var ei-pad" data-testid="pipeline-variable-row">
       <input
+        className="d-input d-input--mono d-input--sm"
         value={draftName}
         onChange={(e) => handleNameChange(e.target.value)}
         onBlur={() => setDraftName(name)}
-        className={`w-20 min-w-0 bg-transparent outline-none ${nameInvalid ? "text-st-failed" : "text-fg"}`}
-        style={{ fontSize: "11px" }}
-        aria-label="Variable name"
         aria-invalid={nameInvalid}
-        title={nameInvalid ? (draftName.trim() === "" ? "A variable needs a name" : "Another variable already has this name") : undefined}
+        aria-label="Variable name"
+        title={nameInvalid ? (draftName.trim() === "" ? "A variable needs a name" : "Another variable already has this name") : name}
         data-testid="pipeline-variable-name"
       />
       <select
         value={def.type}
         onChange={(e) => onUpdate(name, { type: e.target.value as VariableType })}
-        className="rounded border border-line-strong bg-bg-4 px-1 py-0.5 text-fg-3 outline-none"
-        style={{ fontSize: "10px" }}
+        className="ei-select ei-select--sm ei-select--mono"
         aria-label="Variable type"
         data-testid="pipeline-variable-type"
       >
         {VAR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
       </select>
-      <input
+      <TextInput
+        mono
+        small
         value={defaultStr}
         onChange={(e) => handleDefaultChange(e.target.value)}
-        className="min-w-0 flex-1 bg-transparent text-fg outline-none"
-        style={{ fontSize: "11px" }}
         placeholder="default"
         aria-label="Variable default"
         data-testid="pipeline-variable-default"
       />
-      <button
+      <IconButton
+        icon={X}
+        size="sm"
+        label={`Delete variable ${name}`}
         onClick={onDelete}
-        className="cursor-pointer text-fg-4 hover:text-st-failed"
-        aria-label={`Delete variable ${name}`}
         data-testid="pipeline-variable-delete"
-      >
-        ×
-      </button>
+      />
     </div>
   );
 }

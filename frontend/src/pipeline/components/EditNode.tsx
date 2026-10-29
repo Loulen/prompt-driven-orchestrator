@@ -21,8 +21,17 @@ import { NodeTypeIcon, IsolationMarker } from "./NodeTypeIcon";
 import { NodeCard } from "./NodeCard";
 import { useIsDropTarget } from "./DragHighlightContext";
 import { anchorHandleId, landsByDrop } from "../../lib/anchorSide";
-import { WIRE, WIRE_SOFT } from "../../lib/wiringColors";
-import { Bookmark, Play, SlidersHorizontal, TriangleAlert } from "lucide-react";
+import {
+  Bookmark,
+  CircleCheck,
+  Play,
+  SlidersHorizontal,
+  TriangleAlert,
+} from "lucide-react";
+import { StatusIcon } from "../../shared/ui/kit";
+import type { NodeCost } from "../../shared/generated/NodeCost";
+import { InputImages, NodeMeta } from "./NodeMeta";
+import type { NodeAgentLabel } from "../model/nodeAgent";
 // #723 — orchestrator pastilles on the run-view node card.
 import { ChildCountPills } from "../../run/components/OrchestrationTab";
 import { totalChildren } from "../../run/model/orchestration";
@@ -38,7 +47,7 @@ const ANCHOR_HANDLE_SIDES: { side: PortSide; position: Position; style: React.CS
   { side: "bottom", position: Position.Bottom, style: { bottom: 0, left: "50%", transform: "translateX(-50%)" } },
 ];
 
-interface EditNodeData {
+export interface EditNodeData {
   label: string;
   nodeId: string;
   nodeType: NodeType;
@@ -68,6 +77,16 @@ interface EditNodeData {
   /** ADR-0086: what the card's ▶ does, when it has one (run view only). */
   play?: "start" | "retry";
   onPlay?: () => void;
+  /** What runs the node, for the card's meta grid. */
+  agent?: NodeAgentLabel;
+  /** The node in the Run: its iteration, its time and its cost. */
+  run?: {
+    iter: number;
+    iterations: number;
+    startedAt: string | null;
+    completedAt: string | null;
+    cost: NodeCost | null;
+  };
   [key: string]: unknown;
 }
 
@@ -101,16 +120,9 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
     }),
     [data.nodeId, data.label, data.nodeType, data.status],
   );
+  // A reached start/end marker wears the « done » border and, on End, a check,
+  // so the run view signals end-reached like completed work nodes (#105).
   const reached = data.reached ?? false;
-  // A reached start/end marker borrows the green "completed" cadre (border +
-  // faint green fill) so the inline run view signals end-reached the same way
-  // completed work nodes already do (issue #105). Otherwise keep the live status.
-  const cardStatus: NodeStatus = reached ? "completed" : data.status;
-  const iconColor =
-    reached ? "text-st-done"
-    : data.nodeType === "start" ? "text-acc"
-    : data.nodeType === "end" ? "text-st-blocked"
-    : "text-fg-3";
   // Images uploaded with the run's input ride along on the Start marker only
   // (issue #145). The canvas shows a compact, filename-tagged strip; the full
   // thumbnails live in the StartInspector.
@@ -126,36 +138,8 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   // status of its own, it waits for the user's ▶.
   const awaitingPlay = data.onDemand === true && data.inRun === true && data.status === "pending";
 
-  return (
+  const handles = (
     <>
-    <NodeCard
-      status={cardStatus}
-      selected={isSelected}
-      style={{
-        minWidth: 160,
-        fontSize: "12px",
-        // The dashes take a light, thicker stroke: the card's dimming would
-        // otherwise fade them into the canvas.
-        ...(awaitingPlay
-          ? { opacity: 0.6, borderStyle: "dashed", borderWidth: 2, borderColor: "var(--color-fg-2)" }
-          : null),
-        // Amber is the wiring colour throughout (#844): the same family the
-        // selected edge uses. Green is the app's accent and already means
-        // something else on a card. The soft ring arms the gesture on rim hover;
-        // the solid one says « releasing here lands the wire », and wins when
-        // both apply.
-        ...(rimHover
-          ? { boxShadow: `0 0 0 1px var(--color-bg-1), 0 0 0 2.5px ${WIRE_SOFT}` }
-          : null),
-        ...(isWireTarget
-          ? { boxShadow: `0 0 0 1px var(--color-bg-1), 0 0 0 2.5px ${WIRE}` }
-          : null),
-        ...(selectedByColor && !isSelected
-          ? { borderColor: selectedByColor, boxShadow: `0 0 0 1px ${selectedByColor}` }
-          : null),
-      }}
-    >
-      {selectedBy && <SelectedByLabel participant={selectedBy} />}
       {/* Emergent inputs (#149): NO input dots. An incoming arrow lands anywhere
           on the node body. A single invisible target handle covers the card and
           carries the drop highlight. A lands-by-drop node (work nodes, End since
@@ -174,7 +158,7 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           inset: 0,
           width: "100%",
           height: "100%",
-          borderRadius: 6,
+          borderRadius: 2,
           transform: "none",
           border: "none",
           background: "transparent",
@@ -184,9 +168,8 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
       {/* Anchor-by-drop-position (#168): an emergent work node also renders one
           invisible side-centre target handle PER SIDE. An incoming edge binds to
           the handle for its persisted `target_side`, so xyflow anchors the arrow
-          and derives the arrival geometry from that side (no forced left->right).
-          End grows them too (#840): its `result` is the edge's port, not a place
-          on the card. */}
+          and derives the arrival geometry from that side. End grows them too
+          (#840): its `result` is the edge's port, not a place on the card. */}
       {emergent &&
         ANCHOR_HANDLE_SIDES.map(({ side, position, style }) => (
           <Handle
@@ -208,95 +191,128 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
             }}
           />
         ))}
-      {/* Slim card (#149): type icon + name + code/doc marker only. The node id
-          and the amber interactive badge are intentionally dropped from the
-          card. */}
-      <div className="flex items-center gap-2">
-        <span className="relative shrink-0">
-          <NodeTypeIcon type={data.nodeType} size={14} className={iconColor} />
+    </>
+  );
+  // #844: the rim is the drag-source. Rendered LAST and on a higher layer so it
+  // wins the pointer over the body target above; inside the rim the card still
+  // drags. A node that declares no output (the End marker) grows no rim.
+  const rim = data.outputs.length > 0 && (
+    <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} border={1} />
+  );
+  // ADR-0088: another participant of the shared draft selected this node.
+  const presenceStyle =
+    selectedByColor && !isSelected
+      ? { borderColor: selectedByColor, boxShadow: `0 0 0 1px ${selectedByColor}` }
+      : undefined;
+
+  if (data.nodeType === "start" || data.nodeType === "end") {
+    const start = data.nodeType === "start";
+    return (
+      <div
+        data-testid="node-card"
+        data-kind={data.nodeType}
+        data-reached={reached || undefined}
+        data-selected={isSelected || undefined}
+        data-rim={rimHover || undefined}
+        data-wire={isWireTarget || undefined}
+        className="cv-mk"
+        style={presenceStyle}
+        title={start ? "Run start" : reached ? "Run end · reached" : "Run end"}
+      >
+        {selectedBy && <SelectedByLabel participant={selectedBy} />}
+        {handles}
+        <NodeTypeIcon type={data.nodeType} size={11} className="cv-mk__ic" />
+        <span>{data.label}</span>
+        {reached && !start && <CircleCheck size={12} strokeWidth={1.5} className="cv-mk__ok" aria-label="Reached" />}
+        {inputImages.length > 0 && <InputImages names={inputImages} />}
+        {/* ADR-0081 (#31) — the `canvas/node` decorations, under the marker. */}
+        <ExtensionDecorations<CanvasNodeContext>
+          location="canvas/node"
+          extra={decorated}
+          block
+          className="cv-mk__deco"
+        />
+        {rim}
+      </div>
+    );
+  }
+
+  const inRun = data.inRun === true;
+  const run = data.run;
+  const typeIcon = (
+    <NodeTypeIcon
+      type={data.nodeType}
+      interactive={data.interactive}
+      orchestrator={data.orchestrator === true}
+      size={inRun ? 12 : 14}
+      className="cv-n__type"
+    />
+  );
+  return (
+    <>
+    <NodeCard
+      status={inRun ? data.status : null}
+      selected={isSelected}
+      idle={awaitingPlay}
+      rimHover={rimHover != null}
+      wireTarget={isWireTarget}
+      style={presenceStyle}
+    >
+      {selectedBy && <SelectedByLabel participant={selectedBy} />}
+      {handles}
+      <div className="cv-n__head">
+        {/* In a Run the status icon leads; on a template, the type icon. */}
+        <span className="cv-n__lead">
+          {inRun ? <StatusIcon kind="node" status={data.status} /> : typeIcon}
           {data.agentMode === "profile" && (
-            <Bookmark data-testid="agent-mode-profile" size={8} className="absolute -bottom-1 -right-1 text-fg-2" />
+            <Bookmark data-testid="agent-mode-profile" size={8} className="cv-n__mode" aria-label="Agent profile" />
           )}
           {data.agentMode === "custom" && (
-            <SlidersHorizontal data-testid="agent-mode-custom" size={8} className="absolute -bottom-1 -right-1 text-fg-2" />
+            <SlidersHorizontal data-testid="agent-mode-custom" size={8} className="cv-n__mode" aria-label="Custom agent" />
           )}
           {data.agentMode === "broken" && (
-            <TriangleAlert data-testid="agent-mode-broken" size={8} className="absolute -bottom-1 -right-1 text-st-blocked" />
+            <TriangleAlert data-testid="agent-mode-broken" size={8} className="cv-n__mode" data-broken aria-label="Missing agent profile" />
           )}
         </span>
-        <span className="font-medium text-fg">{data.label}</span>
+        <span className="cv-n__name" title={data.label}>
+          {data.label}
+        </span>
         <IsolationMarker isolated={data.isolated === true} />
-        {data.onDemand && !data.inRun && (
-          <span title="On demand — launched by your ▶ in a run" data-testid="on-demand-marker">
-            <Play size={10} className="shrink-0 text-fg-4" />
+        {data.onDemand && !inRun && (
+          <span className="cv-n__flag" title="On demand" data-testid="on-demand-marker">
+            <Play size={10} strokeWidth={1.5} aria-label="On demand" />
           </span>
         )}
         {data.loopBadge && (
           <span
             data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
-            className="ml-auto shrink-0 rounded border border-acc px-1.5 font-mono text-acc"
-            style={{ fontSize: 10, lineHeight: "16px" }}
-            title={
-              data.loopBadge.kind === "collection"
-                ? "collection region — fans out one lap per item"
-                : "bounded loop region — one member"
-            }
+            className="cv-n__loop"
+            title={data.loopBadge.kind === "collection" ? "Collection region" : "Loop region"}
           >
             {data.loopBadge.text}
           </span>
         )}
+        {inRun && typeIcon}
       </div>
-      {/* #723 — orchestrator pastilles: a row under the title (the card grows
-          a line); omitted entirely without children, so a node that never
-          orchestrated stays byte-identical. */}
+      <NodeMeta data={data} run={run} />
+      {/* #723 — orchestrator pastilles: a row under the grid; omitted entirely
+          without children, so a node that never orchestrated stays clean. */}
       {data.childCounts && totalChildren(data.childCounts) > 0 && (
-        <div className="mt-1.5 flex items-center gap-2 pl-[22px]" data-testid="node-child-pills-row">
-          <ChildCountPills counts={data.childCounts} size="xs" testId="node-child-pills" />
+        <div className="cv-n__row" data-testid="node-child-pills-row">
+          <ChildCountPills counts={data.childCounts} size="pill" testId="node-child-pills" />
         </div>
       )}
       {/* ADR-0081 (#31) — the `canvas/node` decorations: a row under the
-          title, omitted entirely without one. */}
+          grid, omitted entirely without one. */}
       <ExtensionDecorations<CanvasNodeContext>
         location="canvas/node"
         extra={decorated}
         block
-        className="mt-1.5 pl-[22px]"
+        className="cv-n__row"
       />
-      {inputImages.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5" data-testid="start-node-images">
-          {inputImages.map((name) => (
-            <div
-              key={name}
-              data-testid="start-node-image-chip"
-              title={name}
-              className="relative h-[34px] w-[46px] overflow-hidden rounded border border-line-strong bg-bg-1"
-            >
-              <div
-                className="absolute inset-0"
-                style={{
-                  backgroundImage:
-                    "repeating-linear-gradient(135deg, rgba(255,255,255,0.05) 0 5px, transparent 5px 10px)",
-                }}
-              />
-              <div
-                className="absolute inset-x-0 bottom-0 truncate bg-bg-0/70 px-1 font-mono text-fg-4"
-                style={{ fontSize: "7.5px" }}
-              >
-                {name}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {/* #844: the rim is the drag-source — no output dot any more. Rendered LAST
-          and on a higher layer so it wins the pointer over the body target above;
-          inside the rim the card still drags. A node that declares no output
-          (the End marker) starts no wire and grows no rim. */}
-      {data.outputs.length > 0 && (
-        <NodeRimHandles onRimHover={setRimHover} isConnectable={isConnectable} border={awaitingPlay ? 2 : 1} />
-      )}
+      {rim}
       {/* While the Run's transcripts are searched: the node's count of hits. */}
-      {data.inRun && <SearchMatchBadge nodeId={data.nodeId} />}
+      {inRun && <SearchMatchBadge nodeId={data.nodeId} />}
     </NodeCard>
     {/* ADR-0086: the ▶ — start an on-demand node, or run a skipped branch as
         if it had been taken. Outside the card so the greyed card does not dim
@@ -307,15 +323,14 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         data-testid="node-play-btn"
         data-play={data.play}
         aria-label={data.play === "start" ? `Start ${data.label}` : `Run ${data.label} again`}
-        title={data.play === "start" ? "Start this node" : "Run this skipped node as if its branch had been taken"}
+        title={data.play === "start" ? "Start" : "Run as if taken"}
         onClick={(e) => {
           e.stopPropagation();
           data.onPlay?.();
         }}
-        className="nodrag nopan absolute z-[4] flex cursor-pointer items-center justify-center rounded-full border border-acc bg-bg-1 text-acc shadow transition-colors hover:bg-acc hover:text-bg-1"
-        style={{ top: -9, right: -9, width: 20, height: 20 }}
+        className="nodrag nopan cv-n__play"
       >
-        <Play size={10} />
+        <Play size={10} strokeWidth={1.75} aria-hidden />
       </button>
     )}
     </>

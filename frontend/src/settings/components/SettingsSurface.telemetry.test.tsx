@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor, within } from "@testing-library/rea
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { InstanceSettings } from "../model/settings";
 import type { TelemetryStatus } from "../../shared/generated/TelemetryStatus";
+import { switchFor, switchOf, tipFor, tipOf } from "./settingsSurface/testing";
 
 // ADR-0090 — Settings › Telemetry: the OTLP export, `/metrics`, « include the Actor ». Every api function the surface (and the panels it
 // mounts) imports must exist in this factory: Vitest 4 wraps the module namespace in a
@@ -177,20 +178,20 @@ describe("Settings › Telemetry (ADR-0090)", () => {
 
   it("is off by default: the switch is off and nothing leaves", async () => {
     renderTelemetry();
-    const toggle = await screen.findByTestId("setting-telemetry-otlp");
+    const toggle =(await switchFor("telemetry-otlp"));
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByTestId("setting-source-telemetry-otlp")).toHaveTextContent(
+    expect(await tipFor("telemetry-otlp")).toMatch(
       "built-in default (off)",
     );
-    expect(await screen.findByTestId("telemetry-export-status")).toHaveTextContent(
-      "Export off: nothing leaves this instance.",
-    );
+    const status = await screen.findByTestId("telemetry-export-status");
+    expect(status).toHaveTextContent("Export off");
+    expect(within(status).getByTitle("Nothing leaves this instance")).toBeInTheDocument();
     expect(screen.getByTestId("telemetry-test-export")).toBeDisabled();
   });
 
   it("saves the switch, the collector and a new header with the form", async () => {
     renderTelemetry();
-    fireEvent.click(await screen.findByTestId("setting-telemetry-otlp"));
+    fireEvent.click(await switchFor("telemetry-otlp"));
     fireEvent.change(screen.getByTestId("setting-telemetry-endpoint"), {
       target: { value: "https://otel.example.org:4318" },
     });
@@ -217,8 +218,8 @@ describe("Settings › Telemetry (ADR-0090)", () => {
     renderTelemetry();
     const value = await screen.findByTestId("telemetry-header-value-0");
     expect(value).toHaveValue("");
-    expect(value).toHaveAttribute("placeholder", "•••••••••••• (set)");
-    expect(screen.getByTestId("settings-save")).toBeDisabled();
+    expect(value).toHaveAttribute("placeholder", "•••••••• set");
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("telemetry-header-remove-0"));
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() =>
@@ -283,12 +284,11 @@ describe("Settings › Telemetry (ADR-0090)", () => {
 
   it("/metrics is off by default and names the address it would answer on", async () => {
     renderTelemetry();
-    const toggle = await screen.findByTestId("setting-telemetry-prometheus");
+    const toggle =(await switchFor("telemetry-prometheus"));
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByTestId("telemetry-metrics-url")).toHaveTextContent(
-      `Off. When on: ${window.location.origin}/metrics, same metrics as OTLP, no traces.`,
-    );
-    expect(screen.getByTestId("setting-source-telemetry-prometheus")).toHaveTextContent(
+    expect(screen.getByTestId("telemetry-metrics-url")).toHaveTextContent(`${window.location.origin}/metrics`);
+    expect(tipOf("telemetry-prometheus")).toMatch("Same metrics as OTLP, no traces");
+    expect(await tipFor("telemetry-prometheus")).toMatch(
       "built-in default (off)",
     );
   });
@@ -307,10 +307,8 @@ describe("Settings › Telemetry (ADR-0090)", () => {
 
   it("saves the /metrics switch on its own", async () => {
     renderTelemetry();
-    fireEvent.click(await screen.findByTestId("setting-telemetry-prometheus"));
-    expect(screen.getByTestId("telemetry-metrics-url")).toHaveTextContent(
-      `On: ${window.location.origin}/metrics, same metrics as OTLP`,
-    );
+    fireEvent.click(await switchFor("telemetry-prometheus"));
+    expect(switchOf("telemetry-prometheus")).toHaveAttribute("aria-checked", "true");
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() =>
       expect(updateSettingsMock).toHaveBeenCalledWith({ telemetry_prometheus: true }),
@@ -319,15 +317,16 @@ describe("Settings › Telemetry (ADR-0090)", () => {
 
   it("« Include the Actor » is off by default; ticked, the warning shows before the save", async () => {
     renderTelemetry();
-    const box = await screen.findByTestId("setting-telemetry-include-actor");
+    const box =(await switchFor("telemetry-include-actor"));
     expect(box).not.toBeChecked();
     expect(screen.queryByTestId("telemetry-actor-warning")).not.toBeInTheDocument();
     fireEvent.click(box);
     const warning = screen.getByTestId("telemetry-actor-warning");
-    expect(warning).toHaveTextContent("This turns the telemetry into a record of each person's activity.");
-    expect(warning).toHaveTextContent("L1222-4");
-    expect(warning).toHaveTextContent("L2312-38");
-    expect(warning).toHaveTextContent("GDPR");
+    expect(warning).toHaveTextContent("Records each person's activity");
+    // The obligations, in full, in its tooltip.
+    expect(warning.getAttribute("title")).toMatch("L1222-4");
+    expect(warning.getAttribute("title")).toMatch("L2312-38");
+    expect(warning.getAttribute("title")).toMatch("GDPR");
     expect(updateSettingsMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId("settings-save"));
     await waitFor(() =>
@@ -340,6 +339,6 @@ describe("Settings › Telemetry (ADR-0090)", () => {
     renderTelemetry();
     const sent = await screen.findByTestId("telemetry-what-is-sent");
     expect(within(sent).getByText("pdo.actor")).toBeInTheDocument();
-    expect(sent).toHaveTextContent("Include the Actor is on");
+    expect(within(sent).getByTitle("Sent: Include the Actor is on")).toHaveTextContent("on");
   });
 });

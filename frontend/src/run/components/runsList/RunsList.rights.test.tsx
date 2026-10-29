@@ -10,7 +10,6 @@ import type { Decision, OperationQuestion } from "../../../shared/authorization/
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import ExtensionContextProvider from "../../../shared/extensions/ExtensionContextProvider";
 import { resetExtensions } from "../../../shared/extensions/store";
-import { TooltipProvider } from "../../../shared/ui/tooltip";
 import { useSelectionStore } from "../../../stores/selectionStore";
 import { useRunsPane } from "../../store/runsList/useRunsPane";
 import { useGestureRightsStore } from "../../store/gestureRightsStore";
@@ -72,11 +71,11 @@ function List() {
 
 function renderList() {
   return render(
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={null} runs={RUNS} projects={[]}>
         <List />
       </ExtensionContextProvider>
-    </TooltipProvider>,
+    </>,
   );
 }
 
@@ -106,11 +105,11 @@ describe("the gestures of the Runs list (CORE-42)", () => {
     const { rerender } = renderList();
     await waitFor(() => expect(asked).toHaveBeenCalledTimes(1));
     rerender(
-      <TooltipProvider>
+      <>
         <ExtensionContextProvider selectedRun={null} runs={RUNS} projects={[]}>
           <List />
         </ExtensionContextProvider>
-      </TooltipProvider>,
+      </>,
     );
     await act(async () => {});
     expect(asked).toHaveBeenCalledTimes(1);
@@ -123,14 +122,11 @@ describe("the gestures of the Runs list (CORE-42)", () => {
     renderList();
     const theirs = screen.getByTestId("row-theirs");
     await waitFor(() => expect(within(theirs).queryByTestId("pause-run-button")).toBeNull());
-    expect(within(theirs).queryByTestId("cleanup-run-button")).toBeNull();
-    expect(within(theirs).queryByTestId("rename-button")).toBeNull();
     expect(await menuItems("theirs")).toEqual(["run-menu-copy-id"]);
     expect(await menuItems("old")).toEqual(["run-menu-copy-id"]);
 
     const mine = screen.getByTestId("row-mine");
     expect(within(mine).getByTestId("pause-run-button")).toBeInTheDocument();
-    expect(within(mine).getByTestId("cleanup-run-button")).toBeInTheDocument();
     expect(await menuItems("mine")).toEqual([
       "run-menu-rename",
       "run-menu-pause",

@@ -1,4 +1,4 @@
-//! The events of the Sessions hébergées (API 0.17): a change of their state,
+//! The events of the Sessions hébergées (API 0.19): a change of their state,
 //! their forgetting, a change of their Artefacts live. Each goes to every
 //! extension's `on_event` and, on `/ws`, to the connections whose Actor may
 //! read the session.
@@ -51,7 +51,7 @@ impl HostedSessionChanged {
     }
 }
 
-/// The event of a Session hébergée its extension forgot (API 0.17): its
+/// The event of a Session hébergée its extension forgot (API 0.19): its
 /// record and its state folder are gone. Published like
 /// [`HostedSessionChanged`].
 ///
@@ -85,7 +85,7 @@ impl HostedSessionForgotten {
 }
 
 /// The event of a change of the Artefacts live of a Session hébergée (API
-/// 0.17): a file of its `PDO_LIVE_DIR` was written, added or removed.
+/// 0.19): a file of its `PDO_LIVE_DIR` was written, added or removed.
 /// Published like [`HostedSessionChanged`], with every Artefact live it now
 /// has.
 ///

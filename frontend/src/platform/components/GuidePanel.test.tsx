@@ -39,9 +39,8 @@ describe("the reading guide", () => {
     render(<GuidePanel page={page} navigation={navigation()} />);
     expect(screen.getByText("Reading guide")).toBeInTheDocument();
     expect(screen.getByTestId("guide-count")).toHaveTextContent("4");
-    expect(screen.getByTestId("guide-panel")).toHaveTextContent(
-      "Written by the agent that mounted the page · node designer of « Add search filter ».",
-    );
+    expect(screen.getByTestId("guide-panel")).toHaveTextContent("designerAdd search filter");
+    expect(screen.getByTitle("Mounted by the agent of node designer of « Add search filter »")).toBeInTheDocument();
     expect(screen.getByTestId("guide-entry-0")).toHaveTextContent("1Start with option AThe chosen snap.");
     expect(screen.getByTestId("guide-link-1")).toHaveTextContent("Run · Add search filter › designer");
     expect(screen.getByTestId("guide-link-1")).toHaveAttribute("data-kind", "pdo");

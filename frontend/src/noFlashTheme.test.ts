@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { resolveTheme, type ThemePreference } from "./lib/theme";
+import { loadUiScale } from "./lib/uiScale";
 
 const HTML = readFileSync(join(import.meta.dirname, "..", "index.html"), "utf8");
 
@@ -19,22 +20,22 @@ function inlineGuard(): string {
 }
 
 /** Run the guard against a stubbed store and OS, return what it stamped. */
-function runGuard(stored: string | null, osDark: boolean): string | null {
+function runGuard(stored: string | null, osDark: boolean, scale: string | null = null) {
   const root: Record<string, unknown> = {};
   const fake = {
     documentElement: {
       setAttribute: (name: string, value: string) => (root[name] = value),
-      style: {} as Record<string, string>,
+      style: { setProperty: (name: string, value: string) => (root[name] = value) },
     },
   };
-  const localStorage = { getItem: () => stored };
+  const localStorage = { getItem: (key: string) => (key === "pdo.ui.scale" ? scale : stored) };
   const matchMedia = (query: string) => ({ matches: query.includes("dark") === osDark });
   new Function("document", "localStorage", "matchMedia", inlineGuard())(
     fake,
     localStorage,
     matchMedia,
   );
-  return (root["data-theme"] as string) ?? null;
+  return root;
 }
 
 describe("index.html theme guard (#759)", () => {
@@ -48,13 +49,25 @@ describe("index.html theme guard (#759)", () => {
         const preference = (
           ["light", "dark", "system"].includes(stored ?? "") ? stored : "dark"
         ) as ThemePreference;
-        expect({ stored, osDark, got: runGuard(stored, osDark) }).toEqual({
+        expect({ stored, osDark, got: runGuard(stored, osDark)["data-theme"] }).toEqual({
           stored,
           osDark,
           got: resolveTheme(preference, osDark),
         });
       }
     }
+  });
+
+  it("stamps the UI scale lib/uiScale would load", () => {
+    for (const scale of ["100", "110", "120", null, "90", "nonsense"]) {
+      window.localStorage.clear();
+      if (scale !== null) window.localStorage.setItem("pdo.ui.scale", scale);
+      expect({ scale, zoom: runGuard("dark", true, scale)["--app-zoom"] }).toEqual({
+        scale,
+        zoom: String(loadUiScale() / 100),
+      });
+    }
+    window.localStorage.clear();
   });
 
   it("survives a store that throws, rather than blanking the page", () => {

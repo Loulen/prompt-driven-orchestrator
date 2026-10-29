@@ -1,4 +1,22 @@
 import type { Trigger } from "../../shared/generated/Trigger";
+import type { StatusTone } from "../../shared/ui/kit";
+
+/** A fire outcome as a status tone; `null` before the first fire. */
+export function outcomeTone(outcome: string | null | undefined): StatusTone | null {
+  switch (outcome) {
+    case "fired":
+      return "done";
+    case "error":
+      return "failed";
+    case "skipped-overlap":
+    case "skipped-suspended":
+    case "guard-exit-nonzero":
+    case "guard-error":
+      return "blocked";
+    default:
+      return null;
+  }
+}
 
 /**
  * Map a fire outcome (a Trigger's `last_outcome`, or one history row's) to a
@@ -14,30 +32,11 @@ export function outcomeDot(outcome: string | null | undefined): string {
     case "skipped-overlap":
     case "skipped-suspended":
     case "guard-exit-nonzero":
-      return "bg-st-paused";
+      return "bg-st-blocked";
     case "guard-error":
       return "bg-st-blocked";
     default:
-      return "bg-st-archived";
-  }
-}
-
-/** The `border-*` sibling of {@link outcomeDot} — the dot "goes hollow" in its
- *  own colour on hover (#577). */
-export function outcomeRing(outcome: string | null | undefined): string {
-  switch (outcome) {
-    case "fired":
-      return "border-st-done";
-    case "error":
-      return "border-st-failed";
-    case "skipped-overlap":
-    case "skipped-suspended":
-    case "guard-exit-nonzero":
-      return "border-st-paused";
-    case "guard-error":
-      return "border-st-blocked";
-    default:
-      return "border-st-archived";
+      return "bg-st-skipped";
   }
 }
 
@@ -69,4 +68,24 @@ export function overlapLabel(t: Pick<Trigger, "overlap_policy" | "max_concurrent
       ? `allow (max ${t.max_concurrent} concurrent)`
       : "allow (unlimited concurrent fires)"
     : "skip (default)";
+}
+
+/** A fire outcome, as a word: `guard-exit-nonzero` → « Guard skip ». */
+export function outcomeWord(outcome: string): string {
+  switch (outcome) {
+    case "fired":
+      return "Fired";
+    case "skipped-overlap":
+      return "Skipped, overlap";
+    case "skipped-suspended":
+      return "Skipped, suspended";
+    case "guard-exit-nonzero":
+      return "Guard skip";
+    case "guard-error":
+      return "Guard error";
+    case "error":
+      return "Error";
+    default:
+      return outcome;
+  }
 }

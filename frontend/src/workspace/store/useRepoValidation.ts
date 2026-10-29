@@ -82,16 +82,11 @@ export function useRepoValidation({
     // then, which is the one the re-selection must judge against.
   }, [targetRepo, open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  let repoBorderClass = "border-line-strong focus:border-acc";
-  if (repoValid === true || isRemoteUrl(targetRepo)) repoBorderClass = "border-acc focus:border-acc";
-  else if (repoValid === false) repoBorderClass = "border-st-failed focus:border-st-failed";
-
   return {
     targetRepo,
     repoValid,
     repoError,
     repoValidating,
-    repoBorderClass,
     handleRepoChange,
     resetRepo,
   };

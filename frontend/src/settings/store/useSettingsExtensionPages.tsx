@@ -3,8 +3,9 @@ import { useSettingsPages } from "../../shared/extensions/catalogue";
 import type { PageShell } from "../../shared/extensions/contract";
 import { leaveSettingsPage, openPage, usePages } from "../../shared/extensions/deepLink";
 import { Breadcrumb } from "../../shared/extensions/ExtensionPageHost";
+import ExtensionIcon from "../../shared/extensions/ExtensionIcon";
 import ExtensionSettingsPage from "../../shared/extensions/ExtensionSettingsPage";
-import type { RailItem } from "../../shared/ui/FullWindowShell";
+import type { SettingsRailEntry } from "../components/settingsSurface/SettingsRail";
 
 /** The page of `settings/page` the address bar names, if any. */
 export function settingsPageOpen() {
@@ -85,7 +86,18 @@ export function useSettingsExtensionPages({
   return {
     active,
     /** Their rail entries, after the core's and Extensions. */
-    rail: pages.map((page): RailItem => ({ id: page.key, label: page.contribution.label, dirty: false })),
+    rail: pages.map(
+      (page): SettingsRailEntry => ({
+        id: page.key,
+        label: page.contribution.label,
+        icon: (
+          <ExtensionIcon
+            url={page.contribution.type === "page" ? page.contribution.icon : null}
+            label={page.contribution.label}
+          />
+        ),
+      }),
+    ),
     select,
     /** The header's crumbs while a page is on screen. */
     headerExtras: active ? <Breadcrumb items={breadcrumb} /> : undefined,

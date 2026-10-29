@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
+import { IconButton, TextInput } from "../../shared/ui/kit";
 import type { FrontmatterFieldDecl } from "../../shared/generated/FrontmatterFieldDecl";
 
 const FIELD_TYPES = ["enum", "int", "string", "bool", "list"] as const;
@@ -75,7 +76,7 @@ export default function OutputSchemaEditor({ schema, onChange }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-2" data-testid="output-schema-editor">
+    <div className="ei-schema" data-testid="output-schema-editor">
       {entries.map((entry, i) => (
         <SchemaFieldRow
           key={i}
@@ -84,12 +85,9 @@ export default function OutputSchemaEditor({ schema, onChange }: Props) {
           onRemove={() => removeField(i)}
         />
       ))}
-      <button
-        onClick={addField}
-        className="fld-add-field"
-        data-testid="add-schema-field"
-      >
-        + field
+      <button type="button" onClick={addField} className="ei-addline" title="Add a frontmatter field" data-testid="add-schema-field">
+        <Plus size={12} strokeWidth={1.5} aria-hidden />
+        field
       </button>
     </div>
   );
@@ -105,18 +103,22 @@ function SchemaFieldRow({
   onRemove: () => void;
 }) {
   return (
-    <div className="fld">
-      <input
+    <div className="ei-field" data-testid="schema-field">
+      <TextInput
+        mono
+        small
         value={entry.name}
         onChange={(e) => onUpdate({ name: e.target.value })}
-        className="fld-name"
         placeholder="field name"
+        aria-label="Field name"
+        title={entry.name}
         data-testid="schema-field-name"
       />
       <select
         value={entry.type}
         onChange={(e) => onUpdate({ type: e.target.value as FieldType })}
-        className="fld-type"
+        className="ei-select ei-select--sm ei-select--mono"
+        aria-label="Field type"
         data-testid="schema-field-type"
       >
         {FIELD_TYPES.map((t) => (
@@ -125,19 +127,9 @@ function SchemaFieldRow({
           </option>
         ))}
       </select>
-      <button
-        onClick={onRemove}
-        className="fld-del"
-        data-testid="schema-field-remove"
-        aria-label="Delete field"
-      >
-        <X size={12} />
-      </button>
+      <IconButton icon={X} size="sm" label="Delete field" onClick={onRemove} data-testid="schema-field-remove" />
       {entry.type === "enum" && (
-        <AllowedChipList
-          values={entry.allowed ?? []}
-          onChange={(allowed) => onUpdate({ allowed })}
-        />
+        <AllowedChipList values={entry.allowed ?? []} onChange={(allowed) => onUpdate({ allowed })} />
       )}
     </div>
   );
@@ -165,46 +157,38 @@ function AllowedChipList({
   }
 
   return (
-    <div className="fld-enum" data-testid="allowed-values">
-      <span className="fld-enum-h">allowed</span>
-      {values.length > 0 && (
-        <div className="fld-chips">
-          {values.map((v, i) => (
-            <span key={i} className="fld-chip" data-testid="allowed-chip">
-              {v}
-              <button
-                onClick={() => removeValue(i)}
-                className="fld-chip-del"
-                data-testid="remove-allowed-chip"
-                aria-label={`Remove ${v}`}
-              >
-                <X size={10} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="fld-add-row">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              addValue();
-            }
-          }}
-          placeholder="add value…"
-          data-testid="allowed-input"
-        />
-        <button
-          className="fld-add-btn"
-          onClick={addValue}
-          data-testid="add-allowed-btn"
-        >
-          Add
-        </button>
-      </div>
+    <div className="ei-field__enum" data-testid="allowed-values" title="Allowed values">
+      {values.map((v, i) => (
+        <span key={i} className="d-chip d-chip--mono" data-testid="allowed-chip">
+          <span className="d-chip__t">{v}</span>
+          <button
+            type="button"
+            onClick={() => removeValue(i)}
+            className="d-chip__x"
+            data-testid="remove-allowed-chip"
+            aria-label={`Remove ${v}`}
+            title={`Remove ${v}`}
+          >
+            <X size={10} strokeWidth={2} aria-hidden />
+          </button>
+        </span>
+      ))}
+      <TextInput
+        mono
+        small
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            addValue();
+          }
+        }}
+        placeholder="value"
+        aria-label="Allowed value"
+        data-testid="allowed-input"
+      />
+      <IconButton icon={Plus} size="sm" label="Add value" onClick={addValue} data-testid="add-allowed-btn" />
     </div>
   );
 }

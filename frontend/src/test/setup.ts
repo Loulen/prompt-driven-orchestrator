@@ -1,4 +1,6 @@
 import "@testing-library/jest-dom/vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -55,3 +57,14 @@ for (const name of ["localStorage", "sessionStorage"] as const) {
 afterEach(() => {
   useSelectionStore.getState().clearAll();
 });
+
+// The tokens read resolved by the surfaces painted out of CSS (`lib/cssColor`):
+// the terminal's palette and the harnesses' series colours. jsdom loads no
+// stylesheet, so their first block is declared on <html>, as the browser does.
+for (const sheet of ["../session/terminal.css", "../harness/harness.css"]) {
+  const css = readFileSync(join(import.meta.dirname, sheet), "utf8");
+  const block = css.slice(css.indexOf("{") + 1, css.indexOf("}"));
+  for (const [, name, value] of block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
+    document.documentElement.style.setProperty(name, value.trim());
+  }
+}

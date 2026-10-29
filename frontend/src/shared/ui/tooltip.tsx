@@ -1,17 +1,8 @@
-import { Children, cloneElement, isValidElement, useState } from "react";
+import { Children, cloneElement, isValidElement } from "react";
 import type { ReactElement, ReactNode } from "react";
-import * as TooltipPrimitive from "@radix-ui/react-tooltip";
+import { TooltipLayer } from "./kit/tip";
 
-export function TooltipProvider({ children }: { children: ReactNode }) {
-  return (
-    <TooltipPrimitive.Provider delayDuration={300}>
-      {children}
-    </TooltipPrimitive.Provider>
-  );
-}
-
-// #397: a Radix tooltip is a *description*, never a *name* — it wires
-// `aria-describedby` on the trigger, and only while the tooltip is open. Every
+// #397: a tooltip is a *description*, never a *name*. Every
 // icon-only button wrapped in `<Tooltip>` was therefore left with an empty
 // accessible name (WCAG 4.1.2): six anonymous `button` entries in the
 // screen-reader element list, and nothing for voice control to say. The name is
@@ -66,6 +57,12 @@ function withAccessibleName(children: ReactNode, content: ReactNode): ReactNode 
   return cloneElement(el, { "aria-label": content });
 }
 
+/**
+ * The core's tooltip, on the shared design system's layer (`kit/primitives`):
+ * the bubble of `kit.tooltip`, placed under the UI scale. `content` is the
+ * name and shortcut as text ("Undo (Ctrl+Z)"), or for a structured tooltip a
+ * node.
+ */
 export function Tooltip({
   content,
   children,
@@ -80,28 +77,12 @@ export function Tooltip({
   side?: "top" | "bottom" | "left" | "right";
   /** Keep the trigger mounted but never open. For a hint that only applies in
    *  some states (#867's read-only hint): unwrapping the child instead would
-   *  remount it. Passing the prop at all makes the tooltip controlled. */
+   *  remount it. */
   disabled?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const control =
-    disabled === undefined ? {} : { open: !disabled && open, onOpenChange: setOpen };
   return (
-    <TooltipPrimitive.Root delayDuration={delay} {...control}>
-      <TooltipPrimitive.Trigger asChild>
-        {withAccessibleName(children, content)}
-      </TooltipPrimitive.Trigger>
-      <TooltipPrimitive.Portal>
-        <TooltipPrimitive.Content
-          side={side}
-          sideOffset={6}
-          className="z-50 whitespace-pre-line rounded border border-line bg-bg-4 px-2 py-1 text-fg shadow-lg"
-          style={{ fontSize: "11px", maxWidth: 260, lineHeight: 1.4 }}
-          data-testid="tooltip-content"
-        >
-          {content}
-        </TooltipPrimitive.Content>
-      </TooltipPrimitive.Portal>
-    </TooltipPrimitive.Root>
+    <TooltipLayer content={content} side={side} delay={delay} disabled={disabled}>
+      {withAccessibleName(children, content)}
+    </TooltipLayer>
   );
 }

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Briefcase, Check, ChevronDown } from "lucide-react";
 import type { Project } from "../../../workspace/model/project";
+import { AnchoredPanel } from "../../../shared/ui/kit/layer";
 import { memberNames, repoCount } from "../../model/launchProject";
 
 interface Props {
@@ -16,136 +17,118 @@ interface Props {
 }
 
 /**
- * The Projet a Run is launched in (ADR-0087), first field of New Run › Where:
- * the look of the repository field, each Projet with its repositories on a
- * second line, « No project » last when the Droits allow it.
+ * The Projet a Run is launched in (ADR-0087), first row of New Run › Where:
+ * the kit's dropdown, the repository count at its end; in the list, each
+ * Projet with its folders as the row's meta, « No project » last when the
+ * Droits allow it.
  */
 export default function ProjectCombobox({ value, onChange, projects, allowNone, note }: Props) {
   const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [hi, setHi] = useState(-1);
+  const btn = useRef<HTMLButtonElement>(null);
   const selected = value ? (projects.find((p) => p.id === value) ?? null) : null;
+  // The rows the keyboard walks: the Projets, then « No project ».
+  const rows: (string | null)[] = [...projects.map((p) => p.id), ...(allowNone ? [null] : [])];
 
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
-    }
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, []);
-
+  const openList = () => {
+    setHi(Math.max(0, rows.indexOf(value)));
+    setOpen(true);
+  };
   const choose = (projectId: string | null) => {
     onChange(projectId);
     setOpen(false);
+    btn.current?.focus({ preventScroll: true });
   };
 
   return (
-    <div ref={containerRef} className="relative">
+    <>
       <button
+        ref={btn}
         type="button"
         id="launch-project"
-        onClick={() => setOpen((o) => !o)}
+        className="d-sel ln-grow"
+        title={selected ? `${selected.name} · ${memberNames(selected)}` : "No project"}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className={`flex w-full items-center gap-2 rounded-md border bg-bg-3 px-2.5 py-1.5 text-left transition-colors focus:outline-none ${
-          open ? "border-acc" : "border-line-strong hover:border-line-strong focus:border-acc"
-        }`}
-        style={{ fontSize: "12px" }}
+        onClick={() => (open ? setOpen(false) : openList())}
+        onKeyDown={(e) => {
+          if (!open) {
+            if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+              e.preventDefault();
+              openList();
+            }
+            return;
+          }
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            const dir = e.key === "ArrowDown" ? 1 : -1;
+            setHi((h) => (h + dir + rows.length) % rows.length);
+          } else if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            if (hi >= 0 && hi < rows.length) choose(rows[hi]);
+          } else if (e.key === "Tab") setOpen(false);
+        }}
         data-testid="project-combobox"
       >
-        <span className={`min-w-0 flex-1 truncate ${selected ? "text-fg" : "text-fg-3"}`}>
-          {selected ? selected.name : "No project"}
-        </span>
-        {selected && (
-          <span className="shrink-0 font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
-            {repoCount(selected)}
-          </span>
-        )}
-        <ChevronDown size={13} className="shrink-0 text-fg-4" />
+        <Briefcase className="d-sel__lead" size={13} strokeWidth={1.5} aria-hidden />
+        <span className={selected ? "d-sel__val" : "d-sel__val d-sel__val--ph"}>{selected ? selected.name : "No project"}</span>
+        {selected && <span className="ln-sel__count">{repoCount(selected)}</span>}
+        <ChevronDown className="d-sel__chev" size={12} strokeWidth={1.5} aria-hidden />
       </button>
-      {open && (
-        <div
-          role="listbox"
-          aria-label="Projects"
-          className="absolute left-0 right-0 z-50 mt-1 max-h-64 overflow-y-auto rounded-md border border-line bg-bg-4 py-1 shadow-lg"
-          data-testid="project-combobox-menu"
-        >
-          {projects.length > 0 && (
+      <AnchoredPanel anchor={btn} open={open} onClose={() => setOpen(false)}>
+        <div role="listbox" aria-label="Projects" className="d-pop__list" data-testid="project-combobox-menu">
+          {projects.length > 0 && <div className="d-caps d-pop__group">Your projects</div>}
+          {projects.map((project, i) => (
             <div
-              className="px-2.5 pb-0.5 pt-1 font-medium uppercase tracking-wider text-fg-4"
-              style={{ fontSize: "9.5px" }}
-            >
-              Your projects
-            </div>
-          )}
-          {projects.map((project) => {
-            const active = project.id === value;
-            return (
-              <button
-                key={project.id}
-                type="button"
-                role="option"
-                aria-selected={active}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  choose(project.id);
-                }}
-                className={`flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left transition-colors hover:bg-bg-5 ${
-                  active ? "bg-bg-5" : ""
-                }`}
-                data-testid="project-option"
-                data-project-id={project.id}
-              >
-                <Briefcase size={12} className="shrink-0 text-fg-4" />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate font-semibold text-fg" style={{ fontSize: "12px" }}>
-                    {project.name}
-                  </span>
-                  <span className="truncate font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
-                    {project.members.length > 0 ? memberNames(project) : "no repository yet"}
-                  </span>
-                </span>
-                {active && <Check size={14} className="shrink-0 text-acc" />}
-              </button>
-            );
-          })}
-          {allowNone && (
-            <button
-              type="button"
+              key={project.id}
               role="option"
-              aria-selected={value === null}
+              aria-selected={project.id === value}
+              className="d-pop__row"
+              data-hi={i === hi || undefined}
+              title={`${project.name} · ${project.members.length > 0 ? memberNames(project) : "no repository"}`}
+              onPointerMove={() => setHi(i)}
               onMouseDown={(e) => {
                 e.preventDefault();
-                choose(null);
+                choose(project.id);
               }}
-              className={`flex w-full items-center gap-2.5 px-2.5 py-1.5 text-left text-fg-3 transition-colors hover:bg-bg-5 ${
-                projects.length > 0 ? "mt-1 border-t border-line" : ""
-              } ${value === null ? "bg-bg-5" : ""}`}
-              style={{ fontSize: "12px" }}
-              data-testid="project-option-none"
+              data-testid="project-option"
+              data-project-id={project.id}
             >
-              <span className="w-3 shrink-0" />
-              <span className="flex-1">No project</span>
-              {value === null && <Check size={14} className="shrink-0 text-acc" />}
-            </button>
+              <span className="d-pop__mark">{project.id === value && <Check size={12} strokeWidth={2} aria-hidden />}</span>
+              <Briefcase size={13} strokeWidth={1.5} className="d-pop__ic" aria-hidden />
+              <span className="d-pop__label">{project.name}</span>
+              <span className="d-pop__hint ln-proj__hint">
+                {project.members.length > 0 ? memberNames(project) : "no repository"}
+              </span>
+            </div>
+          ))}
+          {allowNone && (
+            <>
+              {projects.length > 0 && <div className="d-pop__sep" />}
+              <div
+                role="option"
+                aria-selected={value === null}
+                className="d-pop__row"
+                data-hi={hi === rows.length - 1 || undefined}
+                onPointerMove={() => setHi(rows.length - 1)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  choose(null);
+                }}
+                data-testid="project-option-none"
+              >
+                <span className="d-pop__mark">{value === null && <Check size={12} strokeWidth={2} aria-hidden />}</span>
+                <span className="d-pop__label ln-faint">No project</span>
+              </div>
+            </>
           )}
           {note && (
-            <div
-              className="mt-1 border-t border-line px-2.5 pb-0.5 pt-1.5 text-fg-4"
-              style={{ fontSize: "10.5px" }}
-              data-testid="project-combobox-note"
-            >
+            <div className="d-pop__empty ln-repo__note" data-testid="project-combobox-note">
               {note}
             </div>
           )}
         </div>
-      )}
-    </div>
+      </AnchoredPanel>
+    </>
   );
 }

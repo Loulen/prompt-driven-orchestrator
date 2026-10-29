@@ -32,7 +32,7 @@ export default function RunParentLink({ parent, pane, onSelectRun }: Props) {
       role="button"
       title={`Child of “${label}” (${parent.status === "archived" ? "archived" : "active"}) — click to select it`}
       aria-label={`Go to parent run ${label}`}
-      className="flex min-w-0 shrink cursor-pointer items-center gap-0.5 rounded px-0.5 font-sans text-fg-3 transition-colors hover:bg-bg-4 hover:text-acc"
+      className="lp-parent"
       data-testid="run-parent-link"
       tabIndex={0}
       onClick={(e) => {
@@ -46,8 +46,8 @@ export default function RunParentLink({ parent, pane, onSelectRun }: Props) {
         goToParent();
       }}
     >
-      <CornerLeftUp size={9} className="shrink-0" />
-      <span className="truncate">{parent.name || parent.run_id.slice(0, 20)}</span>
+      <CornerLeftUp size={11} strokeWidth={1.75} aria-hidden />
+      <span>{parent.name || parent.run_id.slice(0, 20)}</span>
     </span>
   );
 }

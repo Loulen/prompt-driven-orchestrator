@@ -12,7 +12,6 @@ import { registerTransientOverlay } from "../../lib/overlays";
 import { MARKDOWN_COMPONENTS, REMARK_PLUGINS } from "../markdown/plugins";
 import { resetToasts } from "../ui/toast";
 import Toaster from "../ui/Toaster";
-import { TooltipProvider } from "../ui/tooltip";
 import type { Project } from "../../workspace/model/project";
 import { projectOfRun } from "./context";
 import ExtensionContextProvider from "./ExtensionContextProvider";
@@ -102,12 +101,12 @@ function runState(id: string, status = "running"): RunState {
 
 function renderShell(selected: RunState | null = runState("r1")) {
   const ui = (run: RunState | null) => (
-    <TooltipProvider>
+    <>
       <ExtensionContextProvider selectedRun={run} runs={runs} projects={projects}>
         <TopBar onOpenSettings={() => {}} onOpenStats={() => {}} />
         <Toaster />
       </ExtensionContextProvider>
-    </TooltipProvider>
+    </>
   );
   const view = render(ui(selected));
   return { ...view, select: (run: RunState | null) => view.rerender(ui(run)) };
@@ -133,7 +132,7 @@ describe("the topbar/end location", () => {
     serve([extension("demo", [page("home", "Demo", "ContextPage")])]);
     const { select } = renderShell();
     const button = await screen.findByTestId("extension-topbar-end-demo:home");
-    const group = button.closest("div.ml-auto") as HTMLElement;
+    const group = button.closest("div.sh-tb__end") as HTMLElement;
     const buttons = within(group).getAllByRole("button");
     expect(buttons.indexOf(button)).toBeLessThan(buttons.indexOf(screen.getByTestId("open-stats")));
     // No icon given: the label's first letter, boxed.
@@ -261,8 +260,9 @@ describe("deep links", () => {
     serve([extension("demo", [page("home", "Demo", "ContextPage")])]);
     renderShell();
     const shell = await screen.findByTestId("extension-page");
-    expect(within(shell).getByText("path note/note-12")).toBeInTheDocument();
-    expect(screen.getByTestId("extension-page-breadcrumb")).toHaveTextContent("notenote-12");
+    // The page and its breadcrumb arrive on their own renders: wait for each.
+    expect(await within(shell).findByText("path note/note-12")).toBeInTheDocument();
+    expect(await screen.findByTestId("extension-page-breadcrumb")).toHaveTextContent("notenote-12");
   });
 
   it("toward an absent extension say so in an error toast, never a blank page", async () => {

@@ -1,5 +1,5 @@
 //! Relaunch an ended Session hébergée, and change the configuration it will
-//! relaunch with (ADR-0091).
+//! relaunch with (ADR-0092).
 
 use std::sync::Arc;
 

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
 import { ExtensionActionButtons } from "../../shared/extensions/ExtensionActions";
 import type { FileEntity, ReviewFileContext } from "../../shared/extensions/contract";
-import { ChevronDown, ChevronRight, Copy, History, SquareArrowOutUpRight } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, History, SquareArrowOutUpRight } from "lucide-react";
 import type { DiffFile } from "../../shared/generated/DiffFile";
 import { baseName, filePath, statusLetter } from "../../run/model/runRefs";
 import type { RefPair } from "../../run/model/runRefs";
@@ -11,31 +11,46 @@ import type { StateCounts } from "../model/commentStatus";
 import { Badge, StateIcon } from "./commentBits";
 import { copyToClipboard } from "../../shared/lib/clipboard";
 
+const STATUS_WORD: Record<"A" | "M" | "D" | "R", string> = {
+  A: "Added",
+  M: "Modified",
+  D: "Deleted",
+  R: "Renamed",
+};
+
 interface Props {
   runId: string;
   file: DiffFile;
   pair: RefPair;
   collapsed: boolean;
   onToggle: () => void;
+  viewed?: boolean;
+  onViewed?: () => void;
   nDrafts: number;
   nOutdated: number;
   sentStates: StateCounts;
 }
 
-const LETTER_CLASS: Record<"A" | "M" | "D" | "R", string> = {
-  A: "text-st-done",
-  M: "text-st-await",
-  D: "text-st-failed",
-  R: "text-edit-tint",
-};
-
 /**
- * The sticky header of a file card of the Review page (#749): chevron, status
- * letter, `dir/` + basename, `+a −d`, comment badges (icon + count per state,
- * proposed first; the history glyph of the outdated ones), copy path, open at
- * the destination ref.
+ * The sticky header bar of a file card of the Review page (#749,
+ * `overlays.reviewFileCard`): chevron, status letter, the path in mono (the
+ * old path before a rename), then the extensions' decorations, the comment
+ * marks (icon + count per state, proposed first; the history glyph of the
+ * outdated ones), `+a −d`, the extensions' actions, copy path, open at the
+ * destination ref, and « Viewed ».
  */
-export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggle, nDrafts, nOutdated, sentStates }: Props) {
+export default function ReviewFileHeader({
+  runId,
+  file,
+  pair,
+  collapsed,
+  onToggle,
+  viewed = false,
+  onViewed,
+  nDrafts,
+  nOutdated,
+  sentStates,
+}: Props) {
   const [copied, setCopied] = useState(false);
   const path = filePath(file);
   const letter = statusLetter(file);
@@ -54,82 +69,62 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
     return { entity, file: { run: runId, path, status: file.status }, review: { from: pair.from, to: pair.to } };
   }, [runId, path, file.status, pair.from, pair.to]);
 
-  const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/") + 1) : "";
   const openHref =
     file.new_path && file.status !== "deleted"
       ? `/runs/${encodeURIComponent(runId)}/file?path=${encodeURIComponent(file.new_path)}&ref=${encodeURIComponent(pair.to)}`
       : null;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-expanded={!collapsed}
-      onClick={onToggle}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onToggle();
-        }
-      }}
-      data-testid="review-file-header"
-      className={`sticky top-0 z-10 flex cursor-pointer select-none items-center gap-2 bg-bg-2 px-2.5 py-[5px] ${
-        collapsed ? "" : "border-b border-line"
-      }`}
-      style={{ fontSize: "11px" }}
-    >
-      <span className="text-fg-4">
-        {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
-      </span>
-      <span className={`w-[14px] text-center font-mono font-semibold ${LETTER_CLASS[letter]}`} style={{ fontSize: "9.5px" }}>
-        {letter}
-      </span>
-      <span className="truncate font-mono" style={{ fontSize: "10.5px" }}>
-        {file.status === "renamed" && file.old_path && (
-          <span className="text-fg-4">{file.old_path} → </span>
-        )}
-        <span className="text-fg-4">{dir}</span>
-        <span className="font-medium text-fg">{baseName(path)}</span>
-      </span>
-      {file.binary ? (
-        <span className="text-fg-4" style={{ fontSize: "10px" }}>
-          binary
+    // The bar folds the card on a click anywhere outside its actions; the
+    // focusable control is the toggle alone, so no button sits inside another.
+    <div onClick={onToggle} data-expanded={!collapsed} data-testid="review-file-header" className="rv-fc__head">
+      <button type="button" aria-expanded={!collapsed} className="rv-fc__toggle" data-testid="review-file-toggle">
+        <span className="rv-fc__chev">
+          {collapsed ? <ChevronRight size={13} strokeWidth={1.5} /> : <ChevronDown size={13} strokeWidth={1.5} />}
         </span>
-      ) : pureRename ? (
-        <span className="text-fg-4" style={{ fontSize: "10px" }}>
-          renamed
+        <span className="rv-fst" data-st={letter} title={STATUS_WORD[letter]}>
+          {letter}
         </span>
-      ) : (
-        <span className="font-mono" style={{ fontSize: "10px" }}>
-          <span className="text-st-done">+{file.additions}</span> <span className="text-st-failed">−{file.deletions}</span>
-        </span>
-      )}
-      <span className="ml-auto flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <FilePath
+          title={file.status === "renamed" && file.old_path ? `${file.old_path} → ${path}` : path}
+          prefix={file.status === "renamed" && file.old_path ? `${file.old_path} → ` : ""}
+          path={path}
+        />
+      </button>
+      <span className="rv-fc__acts" onClick={(e) => e.stopPropagation()}>
         <ExtensionDecorations<ReviewFileContext> location="review/file" extra={extensionExtra} />
         {nDrafts > 0 && <Badge kind="draft">✎ {plural(nDrafts, "draft")}</Badge>}
         {nOutdated > 0 && (
           <span
-            className="inline-flex items-center gap-0.5 text-st-stale"
-            style={{ fontSize: "10px" }}
+            className="text-st-skipped text-xs"
             title={`${plural(nOutdated, "outdated comment")} — the line changed on this destination`}
             data-testid="review-file-outdated"
           >
-            <History size={10} /> {nOutdated}
+            <History size={11} /> {nOutdated}
           </span>
         )}
         {sentStates.proposed > 0 && (
-          <span className="inline-flex items-center gap-0.5 text-st-await" style={{ fontSize: "10px" }} title={`${sentStates.proposed} resolution proposed`} data-testid="review-file-proposed">
-            <StateIcon state="proposed" size={10} /> {sentStates.proposed}
+          <span className="text-st-await text-xs" title={`${sentStates.proposed} resolution proposed`} data-testid="review-file-proposed">
+            <StateIcon state="proposed" size={11} /> {sentStates.proposed}
           </span>
         )}
         {sentStates.open > 0 && (
-          <span className="inline-flex items-center gap-0.5 text-fg-3" style={{ fontSize: "10px" }} title={`${sentStates.open} open`} data-testid="review-file-open">
-            <StateIcon state="open" size={10} /> {sentStates.open}
+          <span className="text-text-3 text-xs" title={`${sentStates.open} open`} data-testid="review-file-open">
+            <StateIcon state="open" size={11} /> {sentStates.open}
           </span>
         )}
         {sentStates.resolved > 0 && (
-          <span className="inline-flex items-center gap-0.5 text-st-done" style={{ fontSize: "10px" }} title={`${sentStates.resolved} resolved`} data-testid="review-file-resolved">
-            <StateIcon state="resolved" size={10} /> {sentStates.resolved}
+          <span className="text-st-done text-xs" title={`${sentStates.resolved} resolved`} data-testid="review-file-resolved">
+            <StateIcon state="resolved" size={11} /> {sentStates.resolved}
+          </span>
+        )}
+        {file.binary ? (
+          <span className="text-text-3 text-xs">binary</span>
+        ) : pureRename ? (
+          <span className="text-text-3 text-xs">renamed</span>
+        ) : (
+          <span className="font-mono text-sm">
+            <span className="rv-add">+{file.additions}</span> <span className="rv-del">−{file.deletions}</span>
           </span>
         )}
         {/* #30 — `review/file`: the extensions' icon buttons, before « Copy path ». */}
@@ -137,17 +132,18 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
           location="review/file"
           extra={extensionExtra}
           className="flex items-center gap-0.5"
-          buttonClassName="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-3 hover:text-fg-2"
-          iconSize={11}
+          buttonClassName="d-icon d-icon--sm"
+          iconSize={12}
         />
         <button
           type="button"
           onClick={copyPath}
           title={copied ? "Copied" : "Copy path"}
+          aria-label="Copy path"
           data-testid="review-copy-path"
-          className="grid h-5 w-[22px] cursor-pointer place-items-center rounded text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+          className="d-icon d-icon--sm"
         >
-          <Copy size={11} />
+          {copied ? <Check size={12} strokeWidth={1.5} /> : <Copy size={12} strokeWidth={1.5} />}
         </button>
         {openHref && (
           <a
@@ -155,13 +151,34 @@ export default function ReviewFileHeader({ runId, file, pair, collapsed, onToggl
             target="_blank"
             rel="noreferrer"
             title="Open file at destination ref"
+            aria-label="Open file at destination ref"
             data-testid="review-open-file"
-            className="grid h-5 w-[22px] place-items-center rounded text-fg-4 hover:bg-bg-3 hover:text-fg-2"
+            className="d-icon d-icon--sm"
           >
-            <SquareArrowOutUpRight size={11} />
+            <SquareArrowOutUpRight size={12} strokeWidth={1.5} />
           </a>
+        )}
+        {onViewed && (
+          <label className="rv-viewed" data-on={viewed} title="Viewed (v)" data-testid="review-file-viewed">
+            <input type="checkbox" checked={viewed} onChange={onViewed} aria-label={`Viewed ${path}`} />
+            Viewed
+          </label>
         )}
       </span>
     </div>
+  );
+}
+
+/** A long path is cut in its folders: the file name stays readable. */
+function FilePath({ path, prefix, title }: { path: string; prefix: string; title: string }) {
+  const cut = path.lastIndexOf("/") + 1;
+  return (
+    <span className="rv-fc__path" title={title}>
+      <span className="rv-fc__dir">
+        {prefix && <span className="text-text-3">{prefix}</span>}
+        {path.slice(0, cut)}
+      </span>
+      <span className="rv-fc__base">{path.slice(cut)}</span>
+    </span>
   );
 }

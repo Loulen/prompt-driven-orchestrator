@@ -1,4 +1,4 @@
-//! The Sessions hébergées (ADR-0091): open, terminate, the exit of their
+//! The Sessions hébergées (ADR-0092): open, terminate, the exit of their
 //! process, a restart of the daemon, the sweep and the Cap, against tmux in
 //! memory.
 

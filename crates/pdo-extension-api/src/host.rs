@@ -136,7 +136,7 @@ pub trait Host: Send + Sync {
     }
 
     /// Have the core open the Session hébergée `open` on behalf of `actor`
-    /// (API 0.17, ADR-0091 of the core): an agent or a shell, outside any
+    /// (API 0.19, ADR-0092 of the core): an agent or a shell, outside any
     /// Run, in the folder it names, which the core never writes into. The
     /// Operation `session` × `open` (in its Projet) is asked first, then the
     /// Cap de sessions concurrentes: a full Cap refuses at once (`409`),
@@ -155,20 +155,20 @@ pub trait Host: Send + Sync {
     }
 
     /// The Session hébergée the calling extension opened under `key` (API
-    /// 0.17), ended ones included; `None` for a key it never gave, and by
+    /// 0.19), ended ones included; `None` for a key it never gave, and by
     /// default. Synchronous and quick.
     fn hosted_session(&self, _key: &str) -> Option<HostedSession> {
         None
     }
 
-    /// Every Session hébergée the calling extension opened (API 0.17), in
+    /// Every Session hébergée the calling extension opened (API 0.19), in
     /// the order they were opened, ended ones included. Empty by default.
     fn hosted_sessions(&self) -> Vec<HostedSession> {
         Vec::new()
     }
 
     /// Terminate the Session hébergée `key` of the calling extension on
-    /// behalf of `actor` (API 0.17): the Operation `session` × `terminate`
+    /// behalf of `actor` (API 0.19): the Operation `session` × `terminate`
     /// (on the session, in its Projet) is asked first, then its process is
     /// killed and it ends (`terminated`). Its record stays. An ended session
     /// is answered as it is; `404` for a key it never gave. By default,
@@ -178,7 +178,7 @@ pub trait Host: Send + Sync {
     }
 
     /// Relaunch the ended Session hébergée `key` of the calling extension on
-    /// behalf of `actor` (API 0.17), who becomes who started it: the
+    /// behalf of `actor` (API 0.19), who becomes who started it: the
     /// Operation `session` × `relaunch` first, then the Cap (a full Cap
     /// refuses at once, `409`), then the Contribution au lancement asked
     /// anew. An agent resumes its conversation when its harness re-enters one
@@ -195,7 +195,7 @@ pub trait Host: Send + Sync {
 
     /// Change the configuration (harness, model, effort, initial prompt) of
     /// the agent session `key` of the calling extension on behalf of `actor`
-    /// (API 0.17): the Operation `session` × `configure` first. `config`
+    /// (API 0.19): the Operation `session` × `configure` first. `config`
     /// replaces the whole configuration. A running agent keeps the one it was
     /// launched with: the new one applies at its next relaunch, its initial
     /// prompt only when that relaunch starts a new conversation. Answers the session with its new configuration; `400`
@@ -211,7 +211,7 @@ pub trait Host: Send + Sync {
     }
 
     /// Lay `text` in the input of the live Session hébergée `key` of the
-    /// calling extension on behalf of `actor` (API 0.17), as a paste,
+    /// calling extension on behalf of `actor` (API 0.19), as a paste,
     /// **without** submitting it: it waits for a person to complete it and
     /// press Enter. The Operation `session` × `type` first. Answers the
     /// session; `400` for an empty text, `409` for a session that is not
@@ -221,7 +221,7 @@ pub trait Host: Send + Sync {
     }
 
     /// Forget the ended Session hébergée `key` of the calling extension on
-    /// behalf of `actor` (API 0.17): the Operation `session` × `forget`
+    /// behalf of `actor` (API 0.19): the Operation `session` × `forget`
     /// first, then its record and its state folder (its Artefacts live
     /// included) are erased, and its key is free again. Answers the session
     /// as it was last recorded; `409` for a session that is not `ended`,
@@ -231,7 +231,7 @@ pub trait Host: Send + Sync {
     }
 
     /// The Artefacts live of the Session hébergée `key` of the calling
-    /// extension (API 0.17): the files its agent wrote in its
+    /// extension (API 0.19): the files its agent wrote in its
     /// `PDO_LIVE_DIR`, by path. Empty for a key it never gave, and by
     /// default. Synchronous and quick.
     fn live_artifacts(&self, _key: &str) -> Vec<LiveArtifact> {
@@ -240,7 +240,7 @@ pub trait Host: Send + Sync {
 
     /// The content of the Artefact live `path` (as
     /// [`Host::live_artifacts`] names it) of the Session hébergée `key` of
-    /// the calling extension (API 0.17). `404` for a key it never gave or a
+    /// the calling extension (API 0.19). `404` for a key it never gave or a
     /// file that is not there, `400` for a path that leaves `PDO_LIVE_DIR`.
     /// By default, `503`. Synchronous.
     fn live_artifact(&self, _key: &str, _path: &str) -> Result<Vec<u8>, HostedRefusal> {

@@ -1,45 +1,35 @@
-import { useMemo } from "react";
 import type { Attributes } from "./attributes";
-import { useContributions, useLocationContext } from "./catalogue";
-import type { ListFilterContext, ListFilterProps } from "./contract";
 import ExtensionBoundary from "./ExtensionBoundary";
-import { LIST_FILTERS, type ListFilterLocation } from "./listFilters";
+import { useListFilters, type ListFilterLocation } from "./listFilters";
 
 /**
- * A list-filter location (`runs/filter`, the 0.1 list-filter slot of the Runs;
- * `triggers/filter`, `pipelines/filter`, `projects/filter`): a row under the
- * list's own filters, one control per element. Nothing without a
- * contribution. The list keeps what carries every attribute of `filter`, as
- * `?attr.<id>/<key>=<value>` does on its endpoint.
+ * A list-filter location above a list (`triggers/filter`, `pipelines/filter`,
+ * `projects/filter`): a row under the list's own filters, one control per
+ * element. Nothing without a contribution. The Runs list puts its own
+ * (`runs/filter`, `projects/filter`) in its filter menu instead.
  *
- * `projects/filter` sits above lists of another resource (the Runs, the
- * Triggers): its row opens on a « Project » tag, so its controls never read as
- * the list's own.
+ * `projects/filter` sits above lists of another resource (the Triggers): its
+ * row opens on a « Project » tag, so its controls never read as the list's own.
  */
 export default function ExtensionListFilters({
-  location = "runs/filter",
+  location,
   filter,
   onChange,
 }: {
-  location?: ListFilterLocation;
+  location: ListFilterLocation;
   filter: Attributes;
   onChange: (next: Attributes) => void;
 }) {
-  const resource = LIST_FILTERS[location];
-  const extra = useMemo(() => ({ resource, filter }), [resource, filter]);
-  const context = useLocationContext<ListFilterContext>(location, extra);
-  const filters = useContributions<ListFilterProps>(location, context);
+  const { resource, context, filters } = useListFilters(location, filter);
   if (filters.length === 0) return null;
   return (
     <div
-      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-2 py-1.5 text-fg-3"
-      style={{ fontSize: "10px" }}
+      className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-2 py-1.5 text-2xs text-text-3"
       data-testid={`extension-filters-${resource}`}
     >
       {location === "projects/filter" && (
         <span
-          className="shrink-0 rounded border border-line-strong px-1 py-px uppercase tracking-wide text-fg-4"
-          style={{ fontSize: "9px" }}
+          className="d-caps shrink-0 rounded border border-line-strong px-1 py-px text-text-3"
           title="These filters apply to the Project the items belong to"
           data-testid="extension-filters-project-tag"
         >

@@ -16,8 +16,7 @@ export function KindBadges({ row }: { row: StatsPerformanceEntity }) {
         <span
           key={kind}
           data-testid={`stats-node-kind-${kind}`}
-          className="shrink-0 rounded border border-line-strong px-1 font-mono text-fg-4"
-          style={{ fontSize: "9px" }}
+          className="shrink-0 rounded border border-line-strong px-1 font-mono text-text-3 text-2xs"
         >
           {kind}
         </span>
@@ -45,7 +44,7 @@ export function NoNodeOfSelectedKinds({
         type="button"
         data-testid="stats-show-all-kinds"
         onClick={onShowAll}
-        className="underline decoration-dotted underline-offset-2 hover:text-fg-2"
+        className="underline decoration-dotted underline-offset-2 hover:text-text-2"
       >
         show all kinds
       </button>
@@ -57,7 +56,7 @@ export function NoNodeOfSelectedKinds({
 export function FilteredValue({ testid }: { testid?: string }) {
   return (
     <Tooltip content={FILTERED_BY_KIND_COPY} side="top">
-      <span className="italic text-fg-4" data-testid={testid}>
+      <span className="italic text-text-3" data-testid={testid}>
         filtered
       </span>
     </Tooltip>

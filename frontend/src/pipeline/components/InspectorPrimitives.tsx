@@ -1,53 +1,76 @@
+import type { ReactNode } from "react";
+import { Lock } from "lucide-react";
 import type { BranchFetchError } from "../../shared/generated/BranchFetchError";
 import type { SourceDrift } from "../../shared/generated/SourceDrift";
 import { driftAxes, driftChip, driftTooltip } from "../../run/model/sourceDrift";
 
-export function SectionHead({
-  title,
-  count,
-  onAdd,
-  addTestId,
+/**
+ * A row of an edit form (`inspector.formRow`): the label in the 96 px column,
+ * the control after it. The help goes in the label's tooltip, never under the
+ * field. For a lone input, the kit's `Field` ties the label to it.
+ */
+export function FormRow({
+  label,
+  help,
   aside,
+  children,
+  testid,
 }: {
-  title: string;
-  count?: number;
-  /** Shown at the right of the title (« Alice is typing »). */
-  aside?: React.ReactNode;
-  onAdd?: () => void;
-  /** #823: gives the `+ Add` a stable target a tour can aim the Projecteur at. */
-  addTestId?: string;
+  label: string;
+  help?: string;
+  /** A mark after the label (a frozen lock). */
+  aside?: ReactNode;
+  children: ReactNode;
+  testid?: string;
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-line-soft pb-1 pt-1">
-      <span className="font-medium text-fg-3" style={{ fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-        {title}
-        {count !== undefined && (
-          <span className="ml-1.5 rounded bg-bg-4 px-1 text-fg-4">{count}</span>
-        )}
+    <div className="d-field" data-testid={testid}>
+      <span className="d-field__label ei-line" title={help ?? label} data-help={help ? "" : undefined}>
+        <span className="ei-trunc">{label}</span>
+        {aside}
       </span>
-      {aside}
-      {onAdd && (
-        <button
-          onClick={onAdd}
-          data-testid={addTestId}
-          className="cursor-pointer text-fg-4 hover:text-acc"
-          style={{ fontSize: "10px" }}
-        >
-          + Add
-        </button>
-      )}
+      <div className="d-field__ctl">{children}</div>
     </div>
   );
 }
 
-export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/** The kit's square switch, with the test id and the tooltip of a form row. */
+export function Toggle({
+  checked,
+  onChange,
+  label,
+  disabled,
+  testid,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  disabled?: boolean;
+  testid?: string;
+}) {
   return (
-    <div>
-      <label className="mb-0.5 block text-fg-3" style={{ fontSize: "10px" }}>
-        {label}
-      </label>
-      {children}
-    </div>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      className="d-switch"
+      onClick={() => onChange(!checked)}
+      data-testid={testid}
+    >
+      <span className="d-switch__knob" aria-hidden />
+    </button>
+  );
+}
+
+/** « Frozen at spawn »: a lock after a label, the rest in its tooltip. */
+export function FrozenMark({ title, testid }: { title: string; testid?: string }) {
+  return (
+    <span className="ei-lock" role="img" aria-label={title} title={title} data-testid={testid}>
+      <Lock size={10} strokeWidth={1.75} aria-hidden />
+    </span>
   );
 }
 
@@ -85,8 +108,7 @@ export function SourceDriftChip({
   if (chip.kind === "unavailable") {
     return (
       <span
-        className="shrink-0 rounded bg-bg-4 px-1 py-0.5 font-medium text-fg-4"
-        style={{ fontSize: "9.5px" }}
+        className="d-chip"
         // Grey, and no error glyph: a cleaned-up Run branch is the expected end of
         // a Run's life, not a fault to raise an eyebrow at.
         title={tooltip}
@@ -101,14 +123,13 @@ export function SourceDriftChip({
   const axes = driftAxes(chip);
   return (
     <span
-      className="flex shrink-0 items-center gap-1 rounded bg-bg-4 px-1 py-0.5 font-mono font-medium"
-      style={{ fontSize: "9.5px" }}
+      className="d-chip d-chip--mono"
       title={tooltip}
       data-testid={testid}
       data-drift={chip.kind}
     >
       <span className="text-st-running">{axes?.ahead}</span>
-      <span className={chip.kind === "unknown" ? "text-fg-4" : "text-st-await"}>
+      <span className={chip.kind === "unknown" ? "text-text-3" : "text-st-await"}>
         {axes?.behind}
       </span>
     </span>

@@ -87,8 +87,8 @@ pub(super) fn recover_response(
             mechanism,
             "frozen_harness_gone",
             &format!(
-                "this node's frozen harness '{harness}' no longer resolves; PDO will not \
-                 relaunch claude in its place"
+                "this node's frozen harness '{harness}' no longer resolves; claude is not \
+                 relaunched in its place"
             ),
         ),
         ReattachOutcome::TraceRefused { error } => {
@@ -139,8 +139,8 @@ pub(super) async fn recover_node(
                             "frozen_harness_gone",
                             &format!(
                                 "this node's frozen harness '{name}' no longer resolves \
-                             (embedded name dropped or disk descriptor removed); PDO will \
-                             not relaunch claude in its place — restore its descriptor, or \
+                             (embedded name dropped or disk descriptor removed); claude is \
+                             not relaunched in its place — restore its descriptor, or \
                              retry the node to start fresh"
                             ),
                         );

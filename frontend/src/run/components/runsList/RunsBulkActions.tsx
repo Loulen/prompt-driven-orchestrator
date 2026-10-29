@@ -19,18 +19,18 @@ export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
   const extensionActions = useExtensionBulkActions("runs/bulk", extra);
   return (
     <>
-      {/* #577 — floating bulk-action bar for the Runs tab. */}
+      {/* #577 — the floating bulk bar of the Runs tab. */}
       {runSelIds.length > 0 && (
         <BulkActionBar
           count={runSelIds.length}
-          note={runningWillStop > 0 ? `${runningWillStop} running will stop` : null}
+          live={runningWillStop > 0 ? { count: runningWillStop, note: `${runningWillStop} running will stop` } : null}
           actions={[
             // CORE-42: an action no selected Run allows the caller is hidden.
             ...[
             {
               key: "cleanup" as const,
               label: "Cleanup",
-              icon: <Trash2 size={13} />,
+              icon: <Trash2 size={14} strokeWidth={1.5} aria-hidden />,
               destructive: true,
               disabled: cleanupItems.length === 0,
               onClick: () => setRunBulkKind("cleanup"),
@@ -38,14 +38,14 @@ export default function RunsBulkActions({ pane }: { pane: RunsPaneState }) {
             {
               key: "retry" as const,
               label: "Retry",
-              icon: <RotateCcw size={13} />,
+              icon: <RotateCcw size={14} strokeWidth={1.5} aria-hidden />,
               disabled: retryItems.length === 0,
               onClick: () => setRunBulkKind("retry"),
             },
             {
               key: "pause" as const,
               label: "Pause",
-              icon: <Pause size={13} />,
+              icon: <Pause size={14} strokeWidth={1.5} aria-hidden />,
               disabled: pauseItems.length === 0,
               onClick: () => setRunBulkKind("pause"),
             },

@@ -1,19 +1,21 @@
 import ProvisioningRulesEditor from "../../workspace/components/ProvisioningRulesEditor";
 import { RUN_INTENT, type OpenIntent } from "../model/openIntent";
 import { useNewRunForm } from "../store/newRun/useNewRunForm";
-import NewRunHeader from "./newRun/NewRunHeader";
+import { NewRunModeSwitch } from "./newRun/NewRunHeader";
 import RunNameSection from "./newRun/RunNameSection";
 import WhereSection from "./newRun/WhereSection";
 import HowSection from "./newRun/HowSection";
 import WhatSection from "./newRun/WhatSection";
-import VariableOverrides from "./newRun/VariableOverrides";
-import NewRunFooter from "./newRun/NewRunFooter";
+import TriggerFields from "./newRun/TriggerFields";
+import NewRunFooter, { NewRunFooterNote } from "./newRun/NewRunFooter";
 import { useEffect, useMemo } from "react";
 import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { RunNewContext } from "../../shared/extensions/contract";
 import { useSectionForm } from "../../shared/extensions/sectionForm";
 import { useRunCreationRightsStore } from "../store/runCreationRightsStore";
 import LaunchDraftModal from "../../pipeline/components/LaunchDraftModal";
+import OverlayDialog from "../../shared/ui/OverlayDialog";
+import { FormSection } from "../../shared/ui/FormRow";
 
 // `OpenIntent` / `RUN_INTENT` live in `newRun/openIntent.ts`; re-exported so the existing
 // importers (`app/App.tsx`) keep importing them from here.
@@ -42,6 +44,11 @@ interface Props {
   repoExplorerStartPath?: string;
 }
 
+/**
+ * New Run / New Trigger / Edit Trigger: one column of label-left rows, a caps
+ * tag and a rule between the sections (When for a Trigger, then Where, How,
+ * What), the extensions' `run/new` sections after the core's.
+ */
 export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved, onManageStagingProfiles, repoExplorerStartPath }: Props) {
   // ADR-0081 (#31): the `run/new` extension sections take part in Launch
   // (or Create) and Cancel.
@@ -51,6 +58,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, handleProvisioningValidity,
     handlePaste, requestClose, triggerInputRejectReason, selectedPipelineId, editingTriggerId,
     input, runName, triggerName, launchProject, pendingDraft, cancelPendingDraft, handleLaunch,
+    handleCreateTrigger, remoteUrl, clone, cloning, submitting, canLaunch, canCreateTrigger,
   } = form;
   // CORE-5: where a Run may be created, asked again at each open (a right may
   // have changed since the Projets were last read).
@@ -79,86 +87,86 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
   if (!open) return null;
 
+  // Ctrl+Enter: the footer's primary action, on the very conditions that
+  // enable its button.
+  const submit = () => {
+    if (submitting) return;
+    if (remoteUrl) {
+      if (!cloning) void clone(mode === "run");
+    } else if (mode === "run") {
+      if (canLaunch) void handleLaunch();
+    } else if (canCreateTrigger) handleCreateTrigger();
+  };
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      onClick={requestClose}
+    <OverlayDialog
+      size="l"
+      className="ln-newrun"
+      title={mode === "run" ? "New Run" : editingTriggerId ? "Edit Trigger" : "New Trigger"}
+      headerExtra={<NewRunModeSwitch form={form} />}
+      onClose={requestClose}
+      onSubmit={submit}
       onPaste={handlePaste}
+      footerNote={<NewRunFooterNote form={form} />}
+      actions={<NewRunFooter form={form} />}
+      testId="new-run-modal"
     >
-      <div
-        className="w-[480px] max-h-[85vh] flex flex-col rounded-lg border border-line bg-bg-4 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <NewRunHeader form={form} />
+      <div className="ln-form">
+        {/* Run name (#184) + auto-naming (#338): the name in run mode only — a
+            Trigger fires many Runs; the box freezes the auto-naming of each. */}
+        {mode === "run" && <RunNameSection form={form} />}
 
-        {/* Body */}
-        <div className="flex flex-col gap-0 overflow-y-auto px-4 py-4">
+        {mode === "trigger" && (
+          <FormSection label="When">
+            <TriggerFields form={form} />
+          </FormSection>
+        )}
 
-          {/* Run name (#184) + auto-naming toggle (#338). The name field only makes sense
-              in run mode — a Trigger fires many Runs, so there is no single name to type;
-              the checkbox, however, IS meaningful for a Trigger (it freezes whether each
-              fired Run is auto-named), so it shows in both modes. */}
-          <RunNameSection form={form} />
-
-          {/* ── WHERE ── */}
+        <FormSection label="Where">
           <WhereSection form={form} repoExplorerStartPath={repoExplorerStartPath} />
+        </FormSection>
 
-          {/* ── HOW ── */}
+        <FormSection label="How">
           <HowSection form={form} onManageStagingProfiles={onManageStagingProfiles} />
+        </FormSection>
 
-          {/* ── WHAT ── */}
+        <FormSection label="What">
           <WhatSection form={form} />
-
-          {/* ── CONFIG ── Variable overrides accordion */}
-          <VariableOverrides form={form} />
-
-          {/* ADR-0081 (#31): the extensions' sections, after the core's fields. */}
-          <div className="mt-3 empty:hidden">
-            <ExtensionSections<RunNewContext>
-              location="run/new"
-              extra={sectionContext}
-              form={sections.form}
-            />
-          </div>
-
-          {mode === "trigger" && triggerInputRejectReason && !error && (
-            <div
-              className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
-              style={{ fontSize: "11.5px" }}
-              data-testid="trigger-reject-reason"
-            >
-              {triggerInputRejectReason}
-            </div>
-          )}
-
           {mode === "run" && (
-            <div className="mt-3">
-              <ProvisioningRulesEditor
-                level="run"
-                repository={targetRepo}
-                rules={provisioning}
-                onChange={setProvisioning}
-                onValidityChange={handleProvisioningValidity}
-                gitRef={sourceBranch || "HEAD"}
-                projectId={launchProject?.id ?? null}
-              />
-            </div>
+            <ProvisioningRulesEditor
+              level="run"
+              // A URL has no worktree to resolve against until it is cloned.
+              repository={remoteUrl ? "" : targetRepo}
+              rules={provisioning}
+              onChange={setProvisioning}
+              onValidityChange={handleProvisioningValidity}
+              gitRef={sourceBranch || "HEAD"}
+              projectId={launchProject?.id ?? null}
+              home={form.settings?.home ?? null}
+            />
           )}
+        </FormSection>
 
-          {error && (
-            <div
-              className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
-              style={{ fontSize: "11.5px" }}
-              data-testid="launch-error"
-            >
-              {error}
-            </div>
-          )}
+        {/* ADR-0081 (#31): the extensions' sections, after the core's fields. */}
+        <div className="ln-ext empty:hidden">
+          <ExtensionSections<RunNewContext>
+            location="run/new"
+            extra={sectionContext}
+            form={sections.form}
+          />
         </div>
 
-        {/* Footer */}
-        <NewRunFooter form={form} />
+        {mode === "trigger" && triggerInputRejectReason && !error && (
+          <div className="ln-alert" role="alert" data-testid="trigger-reject-reason">
+            {triggerInputRejectReason}
+          </div>
+        )}
+
+        {error && (
+          <div className="ln-alert" role="alert" data-testid="launch-error">
+            {error}
+          </div>
+        )}
       </div>
       {/* ADR-0088: a draft that differs from the last version is saved, or left out, on purpose. */}
       {pendingDraft && (
@@ -168,6 +176,6 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           onChoose={(choice) => void handleLaunch(choice)}
         />
       )}
-    </div>
+    </OverlayDialog>
   );
 }

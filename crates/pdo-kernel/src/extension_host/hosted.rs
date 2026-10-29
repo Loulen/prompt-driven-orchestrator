@@ -1,5 +1,5 @@
 //! The port through which an extension's [`Host`](pdo_extension_api::Host)
-//! has the core hold its Sessions hébergées (API 0.17, ADR-0091).
+//! has the core hold its Sessions hébergées (API 0.19, ADR-0092).
 
 use std::sync::Arc;
 

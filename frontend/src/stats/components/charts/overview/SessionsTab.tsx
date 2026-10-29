@@ -5,8 +5,12 @@ import { harnessColor } from "../../../../harness/model/color";
 import type { MasterSelection } from "../../../store/absorptionSelection";
 import { useStatsAbsorption } from "../../../store/useStatsAbsorption";
 import { SESSIONS_COUNT } from "../../../model/rowCounts";
-import { HarnessBars, HarnessLegend } from "../common/ChartPrimitives";
+import type { TabFrame } from "../../StatsCharts";
+import { Breadcrumb } from "../common/Breadcrumb";
+import { HarnessBars, Kpis, Panel } from "../common/ChartPrimitives";
 import { MasterList } from "../common/MasterList";
+import { InBar, SortTh } from "../common/SortHeader";
+import { sortRows, useTableSort } from "../common/tableSort";
 import {
   PipelineName,
   TableCombinedIcon,
@@ -17,11 +21,13 @@ export function SessionsTab({
   overview,
   uncombined,
   onAbsorptionsChanged,
+  frame,
 }: {
   overview: StatsOverview;
   /** « Uncombined » (#891): the raw rows are a comparison, not a place to combine. */
   uncombined: boolean;
   onAbsorptionsChanged: () => void;
+  frame: TabFrame;
 }) {
   const rows = useMemo(
     () =>
@@ -52,35 +58,72 @@ export function SessionsTab({
         count: SESSIONS_COUNT,
       })
     : undefined;
+  const scope = selected ?? null;
+  const total = scope
+    ? scope.executions
+    : rows.reduce((sum, row) => sum + row.executions, 0);
+  const byHarness = overview.session_harnesses.map((harness) => ({
+    harness,
+    executions: (scope?.harnesses ?? rows.flatMap((row) => row.harnesses))
+      .filter((item) => item.harness === harness)
+      .reduce((sum, item) => sum + item.executions, 0),
+  }));
 
   return (
-    <div className="flex flex-col gap-4" data-testid="stats-chart-sessions">
-      <HarnessLegend harnesses={overview.session_harnesses} />
-      <HarnessBars
-        periods={periods}
-        harnesses={overview.session_harnesses}
-        value="executions"
-      />
-      <div className="flex min-h-[220px] gap-4">
-        <div className="min-w-[250px] border-r border-line pr-3">
-          <MasterList
-            rows={rows}
-            selected={selectedId}
-            valueLabel={(row) => String(row.executions)}
-            onSelect={setSelectedId}
-            selection={pipelines}
-          />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="mb-3 text-fg-4" style={{ fontSize: "10.5px" }}>
-            Total{selected ? ` / ${selected.name}` : ""}
+    <div className="sx-tab" data-testid="stats-chart-sessions">
+      {frame.band(
+        <Breadcrumb
+          testid="stats-sessions-breadcrumb"
+          crumbs={
+            selected
+              ? [{ label: "Total", onClick: () => setSelectedId(null) }, { label: selected.name }]
+              : [{ label: "Total" }]
+          }
+        />,
+      )}
+      <div className="sx-page">
+        {frame.cohort}
+        <Kpis
+          items={[
+            { key: "sessions", label: "Sessions", value: total },
+            ...byHarness.map(({ harness, executions }) => ({
+              key: harness,
+              label: harness,
+              value: executions,
+              swatch: harnessColor(harness),
+            })),
+          ]}
+        />
+        <HarnessBars
+          title="Sessions by harness"
+          periods={periods}
+          harnesses={overview.session_harnesses}
+          value="executions"
+        />
+        <div className="sx-split">
+          <Panel title="By pipeline" count={rows.length} flush className="sx-aside">
+            <MasterList
+              rows={rows}
+              selected={selectedId}
+              valueLabel={(row) => String(row.executions)}
+              onSelect={setSelectedId}
+              selection={pipelines}
+            />
+          </Panel>
+          <div className="sx-detail">
+            <Panel
+              title={selected ? `${selected.name} · by node` : "By pipeline"}
+              count={detailRows.length}
+              flush
+            >
+              <SessionTable
+                rows={detailRows}
+                harnesses={overview.session_harnesses}
+                onOpenMembers={selected ? undefined : pipelines?.onOpenMembers}
+                selection={nodes}
+              />
+            </Panel>
           </div>
-          <SessionTable
-            rows={detailRows}
-            harnesses={overview.session_harnesses}
-            onOpenMembers={selected ? undefined : pipelines?.onOpenMembers}
-            selection={nodes}
-          />
         </div>
       </div>
       {absorption.overlay}
@@ -101,52 +144,62 @@ export function SessionTable({
   /** Node rows under one Pipeline (#892): select and combine them. */
   selection?: MasterSelection;
 }) {
-  const order = rows.map((row) => row.id);
+  const [sort, onSort] = useTableSort({ key: "total", dir: "desc" });
+  const sorted = sortRows(rows, sort, (row, key) =>
+    key === "name"
+      ? row.name
+      : key === "total"
+        ? row.executions
+        : (row.harnesses.find((item) => item.harness === key)?.executions ?? null),
+  );
+  const order = sorted.map((row) => row.id);
+  const max = Math.max(0, ...rows.map((row) => row.executions));
+  // The largest share is marked whatever the sort, as on Cost.
+  const top = rows.find((row) => row.executions === max && max > 0)?.id;
   return (
-    <table
-      className="w-full table-fixed text-left"
-      style={{ fontSize: "11px" }}
-    >
-      <thead className="text-fg-4">
+    <table className="sx-table">
+      <thead>
         <tr>
-          <th className="pb-2 font-medium">Name</th>
-          <th className="w-20 pb-2 text-right font-medium">Total</th>
+          <SortTh sort={sort} onSort={onSort} sortKey="name">
+            Name
+          </SortTh>
+          <SortTh sort={sort} onSort={onSort} sortKey="total" className="sx-r w-28">
+            Total
+          </SortTh>
           {harnesses.map((harness) => (
-            <th key={harness} className="w-24 pb-2 text-right font-medium">
-              <span className="inline-flex items-center gap-1">
-                <span
-                  className="h-2 w-2 rounded-full"
-                  style={{ backgroundColor: harnessColor(harness) }}
-                />
-                {harness}
-              </span>
-            </th>
+            <SortTh key={harness} sort={sort} onSort={onSort} sortKey={harness} className="sx-r w-24">
+              <span className="sx-swatch" style={{ backgroundColor: harnessColor(harness) }} aria-hidden />
+              {harness}
+            </SortTh>
           ))}
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => {
+        {sorted.map((row) => {
           const pick = tableSelection(selection, row, order);
           return (
             <tr
               key={row.id}
-              className={`group border-t border-line text-fg-2 ${pick.className}`}
+              className="group"
               tabIndex={0}
               data-testid="stats-session-row"
               {...pick.rowProps}
             >
-              <td className="py-2 pr-2">
-                <span className="inline-flex items-center gap-1.5">
+              <td>
+                <span className="sx-name">
                   {pick.control}
                   <PipelineName row={row} onOpenMembers={onOpenMembers} />
                   <TableCombinedIcon selection={selection} row={row} />
                 </span>
               </td>
-              <td className="py-2 text-right font-mono">{row.executions}</td>
+              <td className="sx-r sx-barcell">
+                <InBar value={row.executions} max={max} top={row.id === top} />
+                <span>{row.executions}</span>
+              </td>
               {harnesses.map((harness) => (
                 <td
                   key={harness}
-                  className="py-2 text-right font-mono"
+                  className="sx-r"
                   data-harness={harness}
                 >
                   {row.harnesses.find((item) => item.harness === harness)

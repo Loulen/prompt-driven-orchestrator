@@ -23,7 +23,6 @@ import { importWorkflow } from "../pipeline/api/library";
 import { openRunShell } from "../session/api/sessions";
 import { useEditStore } from "../pipeline/store/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
-import { useRecentReposStore } from "../stores/recentReposStore";
 import { legacyScope } from "../test/legacy";
 import { resetActorsForTests, useActorsStore } from "../shared/actors/store";
 
@@ -452,18 +451,21 @@ describe("UnifiedLeftPanel run display labels", () => {
     resetActorsForTests();
   });
 
-  it("renders edit icon for renaming", () => {
+  it("offers the rename in the row's menu, after its one hover action", () => {
     const runs: RunListEntry[] = [
       { stalled: false, effective_repo: "", run_id: "run-1", pipeline_name: "review-loop", status: "running", started_at: null, name: "My Run" },
     ];
     renderPanel({ runs });
 
-    expect(screen.getByTestId("rename-button")).toBeInTheDocument();
+    const bar = screen.getByTestId("run-row-actions");
+    expect(within(bar).getByTestId("pause-run-button")).toBeInTheDocument();
+    expect(within(bar).getByTestId("run-row-menu")).toHaveAccessibleName("More actions for My Run");
   });
 
   it("shows empty state when no runs exist", () => {
     renderPanel();
-    expect(screen.getByText("No runs yet")).toBeInTheDocument();
+    expect(screen.getByText("No runs")).toBeInTheDocument();
+    expect(within(screen.getByTestId("runs-empty")).getByRole("button", { name: "New run" })).toBeInTheDocument();
   });
 
   it("shows rename input when edit icon is clicked", () => {
@@ -472,7 +474,7 @@ describe("UnifiedLeftPanel run display labels", () => {
     ];
     renderPanel({ runs });
 
-    fireEvent.click(screen.getByTestId("rename-button"));
+    fireEvent.keyDown(screen.getByTestId("run-display-label").closest("[data-run-row]")!, { key: "F2" });
 
     const input = screen.getByTestId("rename-input") as HTMLInputElement;
     expect(input).toBeInTheDocument();
@@ -485,7 +487,7 @@ describe("UnifiedLeftPanel run display labels", () => {
     ];
     renderPanel({ runs });
 
-    fireEvent.click(screen.getByTestId("rename-button"));
+    fireEvent.keyDown(screen.getByTestId("run-display-label").closest("[data-run-row]")!, { key: "F2" });
     const input = screen.getByTestId("rename-input");
     fireEvent.change(input, { target: { value: "After" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -499,7 +501,7 @@ describe("UnifiedLeftPanel run display labels", () => {
     ];
     renderPanel({ runs });
 
-    fireEvent.click(screen.getByTestId("rename-button"));
+    fireEvent.keyDown(screen.getByTestId("run-display-label").closest("[data-run-row]")!, { key: "F2" });
     fireEvent.keyDown(screen.getByTestId("rename-input"), { key: "Escape" });
 
     expect(mockRenameRun).not.toHaveBeenCalled();
@@ -549,7 +551,7 @@ describe("UnifiedLeftPanel empty Runs list (runs/empty)", () => {
     serveExtension([]);
     renderPanel({ runs: [] });
     await act(async () => {});
-    expect(screen.getByTestId("runs-empty")).toHaveTextContent(/^No runs yet$/);
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent(/^No runsNew run$/);
     expect(screen.queryByTestId("extension-decorations-runs/empty")).toBeNull();
   });
 
@@ -560,7 +562,7 @@ describe("UnifiedLeftPanel empty Runs list (runs/empty)", () => {
     ]);
     const { rerender } = renderPanel({ runs: [] });
     expect(await screen.findByTestId("why-empty")).toHaveTextContent("No Project yet");
-    expect(screen.getByTestId("runs-empty")).toHaveTextContent("No runs yet");
+    expect(screen.getByTestId("runs-empty")).toHaveTextContent("No runs");
     rerender(
       <UnifiedLeftPanel
         runs={[{ stalled: false, effective_repo: "", run_id: "r1", pipeline_name: "p", status: "running", started_at: null }]}
@@ -575,65 +577,120 @@ describe("UnifiedLeftPanel empty Runs list (runs/empty)", () => {
   });
 });
 
+// CORE-110 — the extensions' list filters of the Runs (`runs/filter`) and of
+// their Projet (`projects/filter`) are rows of the funnel's menu.
+describe("UnifiedLeftPanel extension list filters in the funnel's menu", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    resetExtensions();
+  });
+
+  it("lists each contribution under its label, counts it on the funnel, and clears with the rest", async () => {
+    resetExtensions();
+    const entry: ExtensionEntry = {
+      id: "demo",
+      name: "Extension demo",
+      version: "1.0.0",
+      ui: {
+        bundle_url: "/ext/demo/ui.js",
+        react_major: hostReactMajor(),
+        ui_module_major: null,
+        contributions: [
+          { location: "runs/filter", id: "by", label: "Started by", type: "list_filter", component: "StartedBy" },
+          { location: "projects/filter", id: "team", label: "Team", type: "list_filter", component: "Team" },
+        ] as UiContribution[],
+        commands: [],
+        locations: [],
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/ext"
+          ? new Response(JSON.stringify([entry]), { status: 200, headers: { "Content-Type": "application/json" } })
+          : new Response("not found", { status: 404 }),
+      ),
+    );
+    setBundleLoader(async () => ({
+      StartedBy: ({ filter, setFilter }: { filter: Record<string, string>; setFilter: (f: Record<string, string>) => void }) => (
+        <button type="button" onClick={() => setFilter({ ...filter, "demo/started_by": "alice" })}>
+          only alice
+        </button>
+      ),
+      Team: () => <span>any team</span>,
+    }));
+    const user = userEvent.setup();
+    renderPanel({
+      runs: [
+        { stalled: false, run_id: "a", pipeline_name: "p", status: "running", started_at: null, name: "By alice", effective_repo: "/r", attributes: { "demo/started_by": "alice" } },
+        { stalled: false, run_id: "b", pipeline_name: "p", status: "running", started_at: null, name: "By bob", effective_repo: "/r", attributes: { "demo/started_by": "bob" } },
+      ],
+    });
+    // Nothing under the header.
+    await act(async () => {});
+    expect(screen.queryByTestId("extension-filters-run")).toBeNull();
+
+    await user.click(screen.getByTestId("run-filter-funnel"));
+    const row = await screen.findByTestId("run-filter-ext-demo:by");
+    expect(row).toHaveAttribute("title", "Started by · Extension demo");
+    expect(screen.getByTestId("run-filter-ext-demo:team")).toHaveAttribute("title", "Team · Project · Extension demo");
+    await user.click(within(row).getByRole("button", { name: "only alice" }));
+    expect(screen.getAllByTestId("run-display-label").map((el) => el.textContent)).toEqual(["By alice"]);
+    expect(screen.getByTestId("run-filter-funnel")).toHaveAccessibleName("Filters · 1 active");
+
+    await user.click(screen.getByTestId("run-filter-clear-all"));
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
+  });
+});
+
 describe("UnifiedLeftPanel run status dot", () => {
   const run = (over: Partial<RunListEntry>): RunListEntry[] => [
     { run_id: "run-1", pipeline_name: "p", status: "running", started_at: null, stalled: false, effective_repo: "", ...over },
   ];
 
-  it("maps every status to its own dot colour", () => {
+  it("draws every status with its own icon", () => {
     // `archived` excluded: its row lives in the folded Archived section (#136),
     // covered there. Every other status renders inline.
     const expected: Partial<Record<RunListEntry["status"], string>> = {
-      running: "bg-st-running",
-      awaiting_user: "bg-st-await",
-      completed: "bg-st-done",
-      failed: "bg-st-failed",
-      skipped: "bg-st-skipped",
-      halted: "bg-st-blocked",
-      paused: "bg-st-paused",
+      running: "Running",
+      awaiting_user: "Awaiting you",
+      completed: "Completed",
+      failed: "Failed",
+      skipped: "Skipped",
+      halted: "Halted",
+      paused: "Paused",
     };
-    for (const [status, cls] of Object.entries(expected)) {
+    for (const [status, word] of Object.entries(expected)) {
       const { unmount } = renderPanel({
         runs: run({ status: status as RunListEntry["status"] }),
       });
-      expect(screen.getByTestId("run-status-dot").className).toContain(cls);
+      const mark = screen.getByTestId("run-status-dot");
+      expect(mark).toHaveAttribute("data-status", status);
+      expect(within(mark).getByRole("img")).toHaveAccessibleName(word);
       unmount();
     }
   });
 
-  it("renders a skipped (graceful no-op) run with its own slate dot (#245)", () => {
-    renderPanel({ runs: run({ status: "skipped" }) });
-    const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-skipped");
-    // A skipped run is terminal: it must not read as failed/running.
-    expect(dot.className).not.toContain("bg-st-failed");
-    expect(dot.className).not.toContain("bg-st-running");
-  });
-
-  it("renders a stalled run with an amber, steady dot (#180)", () => {
-    // A stalled run keeps status "running" but must surface amber and NOT pulse.
+  it("draws a stalled run with its own steady mark, not the running one (#180)", () => {
+    // A stalled run keeps status "running" but must not read as running.
     // Per ADR-0032 the daemon no longer has a `Stale` producer, so `stalled` only
-    // ever comes back true for a historical Run — which is precisely why the amber
-    // surface stays in place. Do NOT "repair" this dot by rebranching a producer.
+    // ever comes back true for a historical Run — which is precisely why the
+    // surface stays in place. Do NOT "repair" this mark by rebranching a producer.
     renderPanel({ runs: run({ status: "running", stalled: true }) });
-    const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-stale");
-    expect(dot.className).not.toContain("animate-pulse");
-    // It must not fall through to the active-running blue dot.
-    expect(dot.className).not.toContain("bg-st-running");
+    const mark = screen.getByTestId("run-status-dot");
+    expect(mark).toHaveAttribute("data-status", "stalled");
+    expect(within(mark).getByRole("img")).toHaveAccessibleName("Stalled");
+    expect(mark.querySelector(".d-spin")).toBeNull();
   });
 
-  it("renders a genuinely-running (not stalled) run blue and pulsing", () => {
+  it("spins the mark of a genuinely-running run", () => {
     renderPanel({ runs: run({ status: "running", stalled: false }) });
-    const dot = screen.getByTestId("run-status-dot");
-    expect(dot.className).toContain("bg-st-running");
-    expect(dot.className).toContain("animate-pulse");
-    expect(dot.className).not.toContain("bg-st-stale");
+    expect(screen.getByTestId("run-status-dot").querySelector(".d-spin")).not.toBeNull();
   });
 
-  // #503: the dot was the whole failure signal — a Run that had actually shipped
+  // #503: the mark was the whole failure signal — a Run that had actually shipped
   // read the same as one that had not, with no text anywhere behind it.
-  it("hangs the failure reason off the status dot", () => {
+  it("hangs the failure reason off the status mark", () => {
     renderPanel({
       runs: run({
         pipeline_name: "shipped-but-filed-failed",
@@ -641,29 +698,30 @@ describe("UnifiedLeftPanel run status dot", () => {
         failure_reason: "merge conflict on ship: 20 conflicting file(s)",
       }),
     });
-    expect(screen.getByTestId("run-status-dot")).toHaveAttribute(
-      "title",
+    expect(screen.getByTestId("run-select-control").getAttribute("title")).toContain(
+      "Failed: merge conflict on ship: 20 conflicting file(s)",
+    );
+    expect(within(screen.getByTestId("run-status-dot")).getByRole("img")).toHaveAccessibleName(
       "merge conflict on ship: 20 conflicting file(s)",
     );
   });
 
-  // #588: an amber dot says why — the agent's question, or the awaiting child.
-  it("hangs the awaiting reason off an amber dot", () => {
+  // #588: an awaiting mark says why — the agent's question, or the awaiting child.
+  it("hangs the awaiting reason off the status mark", () => {
     renderPanel({
       runs: run({
         status: "awaiting_user",
         awaiting_reason: "child run grill-588 is awaiting you",
       }),
     });
-    expect(screen.getByTestId("run-status-dot")).toHaveAttribute(
-      "title",
-      "child run grill-588 is awaiting you",
+    expect(screen.getByTestId("run-select-control").getAttribute("title")).toContain(
+      "Awaiting you: child run grill-588 is awaiting you",
     );
   });
 
-  it("leaves the dot untitled when there is nothing to explain", () => {
+  it("names only the status when there is nothing to explain", () => {
     renderPanel({ runs: run({ status: "completed" }) });
-    expect(screen.getByTestId("run-status-dot")).not.toHaveAttribute("title");
+    expect(screen.getByTestId("run-select-control").getAttribute("title")).toMatch(/^Completed\n/);
   });
 });
 
@@ -677,13 +735,17 @@ describe("UnifiedLeftPanel three-tab strip", () => {
 
   it("defaults to the Runs tab", () => {
     renderPanel();
-    expect(screen.getByText("No runs yet")).toBeInTheDocument();
+    expect(screen.getByText("No runs")).toBeInTheDocument();
+    expect(within(screen.getByTestId("runs-empty")).getByRole("button", { name: "New run" })).toBeInTheDocument();
   });
 
   it("switches to the Triggers tab and shows its empty state", () => {
     renderPanel();
     fireEvent.click(screen.getByRole("tab", { name: "Triggers" }));
-    expect(screen.getByText(/no triggers yet/i)).toBeInTheDocument();
+    expect(screen.getByText("No triggers")).toBeInTheDocument();
+    expect(within(screen.getByTestId("triggers-empty")).getByRole("button", { name: "New trigger" })).toBeInTheDocument();
+    // An icon, two words, one button: no sentence of explanation.
+    expect(screen.queryByText(/on a schedule/i)).toBeNull();
   });
 
   it("shows a provenance badge on a triggered run row", () => {
@@ -746,25 +808,13 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(2);
   });
 
-  it("opens Settings › Projects to name a Projet for a flat single-repository list", () => {
+  it("has no « Project » button: the Projets are set up in Settings (CORE-110)", () => {
     const runs: RunListEntry[] = [
       { stalled: false, run_id: "r1", pipeline_name: "p", status: "running", started_at: null, effective_repo: "/repos/foo" },
     ];
-    const onOpenProjectSettings = vi.fn();
-    renderPanel({ runs, onOpenProjectSettings });
-
-    fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
-    expect(onOpenProjectSettings).toHaveBeenCalledWith({ draft: { name: "foo", members: ["/repos/foo"] } });
-  });
-
-  it("opens Settings › Projects from a recent repository before the first Run", () => {
-    useRecentReposStore.setState({ recentRepos: ["/repos/fresh"] });
-    const onOpenProjectSettings = vi.fn();
-    renderPanel({ runs: [], onOpenProjectSettings });
-
-    fireEvent.click(screen.getByRole("button", { name: "Configure project" }));
-
-    expect(onOpenProjectSettings).toHaveBeenCalledWith({ draft: { name: "fresh", members: ["/repos/fresh"] } });
+    renderPanel({ runs, onOpenProjectSettings: vi.fn() });
+    expect(screen.queryByRole("button", { name: "Configure project" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Project" })).toBeNull();
   });
 
   it("opens Settings › Projects on the Projet of a group header's pencil (CORE-96)", () => {
@@ -833,7 +883,7 @@ describe("UnifiedLeftPanel runs grouped by repo (#258)", () => {
     expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
     // The archived run is pulled into the Archived section instead.
     expect(screen.getByTestId("run-archived-section")).toBeInTheDocument();
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
   });
 
   it("groups a null-target run (effective_repo resolved server-side) with no catch-all bucket", () => {
@@ -872,8 +922,8 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
   it("collapses the Archived section by default (toggle shown, body hidden)", () => {
     renderPanel({ runs: [active, archived] });
     // Toggle + count are always visible…
-    expect(screen.getByTestId("run-archived-toggle")).toBeInTheDocument();
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-chevron")).toBeInTheDocument();
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
     // …but the archived row's body stays folded: only the active row renders.
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(1);
     expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
@@ -881,9 +931,9 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
 
   it("expands and re-collapses when the toggle is clicked", () => {
     renderPanel({ runs: [active, archived] });
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     expect(screen.getByText("Archived One")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
   });
 
@@ -921,7 +971,7 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
     expect(screen.getByText("Archived One")).toBeInTheDocument();
     // …then a single click must still collapse it. A naive
     // `open = archivedOpen || some(selected)` gate would pin it open forever.
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     expect(screen.queryByText("Archived One")).not.toBeInTheDocument();
   });
 
@@ -930,9 +980,9 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
     expect(screen.queryByTestId("run-archived-section")).not.toBeInTheDocument();
   });
 
-  it("does not show 'No runs yet' for an archived-only list", () => {
+  it("does not show 'No runs' for an archived-only list", () => {
     renderPanel({ runs: [archived] });
-    expect(screen.queryByText("No runs yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("No runs")).not.toBeInTheDocument();
     expect(screen.getByTestId("run-archived-section")).toBeInTheDocument();
   });
 
@@ -945,7 +995,7 @@ describe("UnifiedLeftPanel archived section (#136)", () => {
     renderPanel({ runs });
     // Two active repos ⇒ two groups; the archived third repo adds no phantom group.
     expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
   });
 });
 
@@ -1526,7 +1576,7 @@ describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes re
     await renderStarredRow([]);
     fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
 
-    expect(screen.getByTestId("confirm-delete-backdrop")).toBeInTheDocument();
+    expect(screen.getByTestId("confirm-delete-modal")).toBeInTheDocument();
     expect(screen.queryByTestId("delete-cascade-checkbox")).not.toBeInTheDocument();
   });
 
@@ -1604,7 +1654,7 @@ describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes re
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Delete pipeline" }));
 
-    expect(screen.getByTestId("confirm-delete-backdrop")).toBeInTheDocument();
+    expect(screen.getByTestId("confirm-delete-modal")).toBeInTheDocument();
     expect(screen.queryByTestId("delete-cascade-checkbox")).not.toBeInTheDocument();
   });
 
@@ -1630,7 +1680,7 @@ describe.skip("UnifiedLeftPanel delete cascades to library copy (#227, scopes re
     await waitFor(() =>
       expect(mockDeleteLibraryPipeline).toHaveBeenCalledWith("fixture-lib-slug"),
     );
-    expect(screen.queryByTestId("confirm-delete-backdrop")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("confirm-delete-modal")).not.toBeInTheDocument();
     expect(mockDeletePipeline).not.toHaveBeenCalled();
   });
 });
@@ -1649,24 +1699,34 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
     "archived",
   ];
 
+  /** The row's « ⋯ » menu, open: its entries' test ids. */
+  async function menuEntries(): Promise<string[]> {
+    fireEvent.click(screen.getByTestId("run-row-menu"));
+    const menu = await screen.findByTestId("run-row-menu-content");
+    return [...menu.querySelectorAll("[data-testid]")].map((el) => el.getAttribute("data-testid")!);
+  }
+
   it.each(TERMINAL_NON_ARCHIVED)(
-    "renders the open-session button for a %s run",
-    (status) => {
+    "offers the shell in the menu of a %s run",
+    async (status) => {
       const runs: RunListEntry[] = [
         { stalled: false, effective_repo: "", run_id: "run-term-1", pipeline_name: "p", status, started_at: null, name: "R" },
       ];
       renderPanel({ runs });
-      expect(screen.getByTestId("open-session-button")).toBeInTheDocument();
+      expect(await menuEntries()).toContain("run-menu-open-shell");
     },
   );
 
-  it.each(HIDDEN)("hides the open-session button for a %s run", (status) => {
-    const runs: RunListEntry[] = [
-      { stalled: false, effective_repo: "", run_id: "run-x", pipeline_name: "p", status, started_at: null, name: "R" },
-    ];
-    renderPanel({ runs });
-    expect(screen.queryByTestId("open-session-button")).not.toBeInTheDocument();
-  });
+  it.each(HIDDEN.filter((status) => status !== "archived"))(
+    "offers no shell in the menu of a %s run",
+    async (status) => {
+      const runs: RunListEntry[] = [
+        { stalled: false, effective_repo: "", run_id: "run-x", pipeline_name: "p", status, started_at: null, name: "R" },
+      ];
+      renderPanel({ runs });
+      expect(await menuEntries()).not.toContain("run-menu-open-shell");
+    },
+  );
 
   it("clicking open-session calls openRunShell and mounts the shell modal", async () => {
     mockOpenRunShell.mockResolvedValueOnce({ session: "pdo-shell-run-term-1", created: true });
@@ -1676,7 +1736,8 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
     renderPanel({ runs });
 
     expect(screen.queryByTestId("run-shell-modal")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("open-session-button"));
+    await menuEntries();
+    fireEvent.click(screen.getByTestId("run-menu-open-shell"));
 
     await waitFor(() => expect(mockOpenRunShell).toHaveBeenCalledWith("run-term-1"));
     const modal = await screen.findByTestId("run-shell-modal");
@@ -1690,7 +1751,8 @@ describe("UnifiedLeftPanel — Open session (#316)", () => {
     ];
     renderPanel({ runs });
 
-    fireEvent.click(screen.getByTestId("open-session-button"));
+    await menuEntries();
+    fireEvent.click(screen.getByTestId("run-menu-open-shell"));
     await waitFor(() => expect(mockOpenRunShell).toHaveBeenCalledWith("run-term-2"));
     expect(screen.queryByTestId("run-shell-modal")).not.toBeInTheDocument();
   });
@@ -1799,8 +1861,8 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
     renderPanel({ runs: [runRow("completed")] });
     fireEvent.click(screen.getByTestId("retry-all-button"));
 
-    expect(screen.getByTestId("retry-all-backdrop")).toBeInTheDocument();
-    expect(screen.getByTestId("retry-all-confirm-button")).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Retry all nodes?" });
+    expect(within(dialog).getByRole("button", { name: "Retry all" })).toBeInTheDocument();
     expect(mockRetryAll).not.toHaveBeenCalled();
   });
 
@@ -1819,13 +1881,15 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
     );
 
     fireEvent.click(screen.getByTestId("retry-all-button"));
-    fireEvent.click(screen.getByTestId("retry-all-confirm-button"));
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Retry all nodes?" })).getByRole("button", { name: "Retry all" }),
+    );
 
     await waitFor(() => expect(mockRetryAll).toHaveBeenCalledWith("run-1"));
     await waitFor(() => expect(onSelectRun).toHaveBeenCalledWith("offspring-1"));
     // The modal closes once the flow resolves.
     await waitFor(() =>
-      expect(screen.queryByTestId("retry-all-backdrop")).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Retry all nodes?" })).not.toBeInTheDocument(),
     );
   });
 
@@ -1835,7 +1899,7 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(mockRetryAll).not.toHaveBeenCalled();
-    expect(screen.queryByTestId("retry-all-backdrop")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Retry all nodes?" })).not.toBeInTheDocument();
   });
 });
 
@@ -1844,6 +1908,28 @@ describe("UnifiedLeftPanel — run-level controls (#110)", () => {
 // the runs themselves (deleted pipelines/triggers stay filterable); the filter
 // applies BEFORE the active/archived split so grouping and the Archived count
 // both reflect it.
+/** CORE-110 — open the funnel's menu when it is closed, then the select of `axis`. */
+async function openFilter(user: ReturnType<typeof userEvent.setup>, axis: "project" | "pipeline" | "trigger") {
+  if (!screen.queryByTestId("run-filter-menu")) await user.click(screen.getByTestId("run-filter-funnel"));
+  await user.click(within(screen.getByTestId(`run-filter-${axis}`)).getByRole("button"));
+}
+
+/** The choices of `axis`, its select left open. */
+async function filterOptions(user: ReturnType<typeof userEvent.setup>, axis: "project" | "pipeline" | "trigger") {
+  await openFilter(user, axis);
+  return (await screen.findAllByRole("option")).map((o) => o.textContent);
+}
+
+/** Pick `option` on `axis` from the funnel's menu. */
+async function pickFilter(
+  user: ReturnType<typeof userEvent.setup>,
+  axis: "project" | "pipeline" | "trigger",
+  option: string,
+) {
+  await openFilter(user, axis);
+  await user.click(await screen.findByRole("option", { name: option }));
+}
+
 describe("UnifiedLeftPanel run filters (#336)", () => {
   const trig: TriggerListEntry = {
     effective_repo: "",
@@ -1866,28 +1952,72 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     { stalled: false, run_id: "r4", pipeline_name: "deploy", status: "archived", started_at: null, name: "Zebra archived", effective_repo: "/repos/zebra" },
   ];
 
-  it("hides the filter row entirely when there are no runs", () => {
+  it("has no funnel when there are no runs", () => {
     renderPanel({ runs: [] });
-    expect(screen.queryByTestId("run-filter-project")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("run-filter-pipeline")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("run-filter-trigger")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("run-filter-funnel")).not.toBeInTheDocument();
   });
 
-  it("renders the three dropdowns defaulting to All (placeholder labels)", () => {
+  it("opens one row per filter from the funnel, each on All (CORE-110)", async () => {
+    const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
-    expect(screen.getByTestId("run-filter-project")).toHaveTextContent("Project");
-    expect(screen.getByTestId("run-filter-pipeline")).toHaveTextContent("Pipeline");
-    expect(screen.getByTestId("run-filter-trigger")).toHaveTextContent("Trigger");
+    // Nothing under the header: the filters live behind the funnel.
+    expect(screen.queryByTestId("run-filter-menu")).not.toBeInTheDocument();
+    const funnel = screen.getByTestId("run-filter-funnel");
+    expect(funnel).toHaveAccessibleName("Filter");
+    expect(funnel).not.toHaveAttribute("data-on");
+    await user.click(funnel);
+    for (const axis of ["project", "pipeline", "trigger"]) {
+      expect(within(screen.getByTestId(`run-filter-${axis}`)).getByRole("button")).toHaveTextContent("All");
+    }
+    expect(screen.getByTestId("run-filter-date")).toHaveTextContent("Any time");
+    expect(screen.getByTestId("run-filter-count")).toHaveTextContent("No filter");
+    expect(screen.getByTestId("run-filter-clear-all")).toBeDisabled();
     // No clear control while everything is on "All".
     expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
+  });
+
+  it("fills and counts the funnel while filters are in force; the menu stays open between choices", async () => {
+    const user = userEvent.setup();
+    renderPanel({ runs, triggers: [trig] });
+    await pickFilter(user, "project", "alpha");
+    await pickFilter(user, "pipeline", "auditor");
+    expect(screen.getByTestId("run-filter-menu")).toBeInTheDocument();
+    const funnel = screen.getByTestId("run-filter-funnel");
+    expect(funnel).toHaveAttribute("data-on");
+    expect(funnel).toHaveAccessibleName("Filters · 2 active");
+    expect(funnel).toHaveTextContent("2");
+    expect(screen.getByTestId("run-filter-count")).toHaveTextContent("2 active");
+    await user.click(screen.getByTestId("run-filter-clear-all"));
+    expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
+    expect(screen.getByTestId("run-filter-funnel")).not.toHaveAttribute("data-on");
+  });
+
+  it("filters by date from the menu: a preset, then a custom range", async () => {
+    const user = userEvent.setup();
+    const dated: RunListEntry[] = [
+      { stalled: false, run_id: "d1", pipeline_name: "p", status: "completed", started_at: "2026-10-12T10:00:00Z", name: "Old", effective_repo: "/repos/a" },
+      { stalled: false, run_id: "d2", pipeline_name: "p", status: "completed", started_at: new Date().toISOString(), name: "Fresh", effective_repo: "/repos/a" },
+    ];
+    renderPanel({ runs: dated });
+    await user.click(screen.getByTestId("run-filter-funnel"));
+    await user.click(within(screen.getByTestId("run-filter-date")).getByRole("radio", { name: "Started" }));
+    await user.click(within(screen.getByTestId("run-filter-date")).getByRole("button", { name: "Date" }));
+    await user.click(await screen.findByRole("option", { name: "Today" }));
+    expect(screen.getAllByTestId("run-display-label").map((el) => el.textContent)).toEqual(["Fresh"]);
+
+    await user.click(within(screen.getByTestId("run-filter-date")).getByRole("button", { name: "Date" }));
+    await user.click(await screen.findByRole("option", { name: "Custom range" }));
+    fireEvent.change(screen.getByTestId("run-filter-date-from"), { target: { value: "2026-10-12" } });
+    fireEvent.change(screen.getByTestId("run-filter-date-to"), { target: { value: "2026-10-12" } });
+    expect(screen.getAllByTestId("run-display-label").map((el) => el.textContent)).toEqual(["Old"]);
+    expect(screen.getByTestId("run-filter-funnel")).toHaveAccessibleName("Filters · 1 active");
   });
 
   it("filters by pipeline name", async () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-deploy"));
+    await pickFilter(user, "pipeline", "deploy");
 
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Alpha deploy"]);
@@ -1902,8 +2032,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     // Two active repos ⇒ grouped before filtering.
     expect(screen.getAllByTestId("run-repo-group")).toHaveLength(2);
 
-    await user.click(screen.getByTestId("run-filter-project"));
-    await user.click(await screen.findByTestId("run-filter-option-/repos/alpha"));
+    await pickFilter(user, "project", "alpha");
 
     // One repo left ⇒ groupByRepo's ≥2 threshold fails ⇒ flat list.
     expect(screen.queryByTestId("run-repo-group")).not.toBeInTheDocument();
@@ -1924,12 +2053,9 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     ];
     renderPanel({ runs: shared, projects });
 
-    await user.click(screen.getByTestId("run-filter-project"));
-    expect(await screen.findByTestId("run-filter-option-project:p1")).toHaveTextContent("Checkout");
-    expect(screen.getByTestId("run-filter-option-project:p2")).toHaveTextContent("Mobile");
-    expect(screen.getByTestId("run-filter-option-/code/shop-api")).toHaveTextContent("shop-api");
+    expect(await filterOptions(user, "project")).toEqual(["All", "Checkout", "Mobile", "shop-api"]);
 
-    await user.click(screen.getByTestId("run-filter-option-project:p2"));
+    await user.click(screen.getByRole("option", { name: "Mobile" }));
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["In Mobile"]);
     expect(screen.getByTestId("run-filter-project")).toHaveTextContent("Mobile");
@@ -1939,12 +2065,10 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-trigger"));
     // Known trigger resolves to its name; deleted trigger falls back to the id.
-    expect(await screen.findByTestId("run-filter-option-trg-1")).toHaveTextContent("Nightly audit");
-    expect(screen.getByTestId("run-filter-option-trg-gone")).toHaveTextContent("trg-gone");
+    expect(await filterOptions(user, "trigger")).toEqual(["All", "Manual", "Nightly audit", "trg-gone"]);
 
-    await user.click(screen.getByTestId("run-filter-option-trg-1"));
+    await user.click(screen.getByRole("option", { name: "Nightly audit" }));
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Alpha auditor"]);
   });
@@ -1953,30 +2077,26 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-trigger"));
-    await user.click(await screen.findByTestId("run-filter-option-__manual__"));
+    await pickFilter(user, "trigger", "Manual");
 
     // r2 (active manual) visible; r4 (archived manual) counted in Archived.
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Alpha deploy"]);
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
   });
 
   it("combines the three axes with AND semantics", async () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-project"));
-    await user.click(await screen.findByTestId("run-filter-option-/repos/alpha"));
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-auditor"));
+    await pickFilter(user, "project", "alpha");
+    await pickFilter(user, "pipeline", "auditor");
 
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Alpha auditor"]);
 
     // A trigger choice contradicting the rest empties the list.
-    await user.click(screen.getByTestId("run-filter-trigger"));
-    await user.click(await screen.findByTestId("run-filter-option-trg-gone"));
+    await pickFilter(user, "trigger", "trg-gone");
     expect(screen.queryAllByTestId("run-display-label")).toHaveLength(0);
     expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
   });
@@ -1984,31 +2104,29 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
   it("applies the filter to the Archived section and its count", async () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
 
     // The archived run is a zebra deploy; filter to alpha ⇒ section disappears.
-    await user.click(screen.getByTestId("run-filter-project"));
-    await user.click(await screen.findByTestId("run-filter-option-/repos/alpha"));
+    await pickFilter(user, "project", "alpha");
     expect(screen.queryByTestId("run-archived-section")).not.toBeInTheDocument();
 
     // Filter to zebra ⇒ the section is back with the filtered count.
-    await user.click(screen.getByTestId("run-filter-project"));
-    await user.click(await screen.findByTestId("run-filter-option-/repos/zebra"));
-    expect(screen.getByTestId("run-archived-count").textContent).toBe("(1)");
+    await pickFilter(user, "project", "zebra");
+    expect(screen.getByTestId("run-archived-count").textContent).toBe("1");
   });
 
   it("clears every axis via the clear control", async () => {
     const user = userEvent.setup();
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-deploy"));
+    await pickFilter(user, "pipeline", "deploy");
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(1);
 
     await user.click(screen.getByTestId("run-filter-clear"));
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
-    expect(screen.getByTestId("run-filter-pipeline")).toHaveTextContent("Pipeline");
     expect(screen.queryByTestId("run-filter-clear")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("run-filter-funnel"));
+    expect(within(screen.getByTestId("run-filter-pipeline")).getByRole("button")).toHaveTextContent("All");
   });
 
   it("shows the empty state with a working Clear-filters control on zero matches", async () => {
@@ -2016,13 +2134,11 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     // Single-pipeline list plus a second pipeline elsewhere so both options exist.
     renderPanel({ runs, triggers: [trig] });
 
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-deploy"));
-    await user.click(screen.getByTestId("run-filter-trigger"));
-    await user.click(await screen.findByTestId("run-filter-option-trg-1"));
+    await pickFilter(user, "pipeline", "deploy");
+    await pickFilter(user, "trigger", "Nightly audit");
 
     expect(screen.getByTestId("run-filter-empty")).toBeInTheDocument();
-    await user.click(screen.getByTestId("run-filter-empty-clear"));
+    await user.click(within(screen.getByTestId("run-filter-empty")).getByRole("button", { name: "Clear filters" }));
     expect(screen.queryByTestId("run-filter-empty")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("run-display-label")).toHaveLength(3);
   });
@@ -2035,8 +2151,7 @@ describe("UnifiedLeftPanel run filters (#336)", () => {
     ];
     renderPanel({ runs: weird });
 
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-__none__"));
+    await pickFilter(user, "pipeline", "(unnamed)");
     const labels = screen.getAllByTestId("run-display-label").map((el) => el.textContent);
     expect(labels).toEqual(["Nameless"]);
   });
@@ -2079,7 +2194,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
   const labels = () => screen.getAllByTestId("run-display-label").map((el) => el.textContent);
   const row = (id: string) => document.querySelector(`[data-run-row="${id}"]`) as HTMLElement;
 
-  it("nests children under their parent, in list order, indented 14px per level (expanded by default)", () => {
+  it("nests children under their parent, in list order, indented one step per level (expanded by default)", () => {
     renderPanel({ runs });
     expect(labels()).toEqual([
       "Refonte auth — orchestrateur",
@@ -2092,8 +2207,8 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     expect(row("epic")).toHaveAttribute("data-depth", "0");
     expect(row("kid")).toHaveAttribute("data-depth", "1");
     expect(row("grandkid")).toHaveAttribute("data-depth", "2");
-    expect(row("kid").style.paddingLeft).toBe("26px");
-    expect(row("grandkid").style.paddingLeft).toBe("40px");
+    expect(row("kid").style.getPropertyValue("--depth")).toBe("1");
+    expect(row("grandkid").style.getPropertyValue("--depth")).toBe("2");
     // An orphan (parent forgotten) is a root.
     expect(row("orphan")).toHaveAttribute("data-depth", "0");
   });
@@ -2124,10 +2239,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
   it("the orchestrated badge is gone; the trigger badge stays", () => {
     renderPanel({ runs, triggers: [trig] });
     expect(screen.queryByTestId("run-orchestrated-badge")).not.toBeInTheDocument();
-    expect(screen.getByTestId("run-trigger-badge")).toHaveAttribute(
-      "title",
-      "Created by trigger “Nightly audit” — click to open it in the Triggers tab",
-    );
+    expect(screen.getByTestId("run-trigger-badge")).toHaveAccessibleName("Trigger: Nightly audit");
   });
 
   it("aggregates the child counts over the whole subtree, zero pills hidden, none on a leaf", () => {
@@ -2153,7 +2265,10 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     const pills = within(row("epic")).getByTestId("run-child-pills");
     expect(within(pills).getByTestId("run-child-pills-stale")).toHaveTextContent("1");
     expect(within(pills).queryByTestId("run-child-pills-running")).not.toBeInTheDocument();
-    expect(within(pills).getByTestId("run-child-pills-stale").querySelector(".bg-st-stale")).not.toBeNull();
+    expect(within(within(pills).getByTestId("run-child-pills-stale")).getByRole("img")).toHaveAttribute(
+      "stroke",
+      "var(--color-st-skipped)",
+    );
   });
 
   it("the chevron collapses / expands the subtree without selecting the run", () => {
@@ -2179,7 +2294,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     );
     fireEvent.click(within(row("epic")).getByTestId("run-tree-chevron"));
     const pills = within(row("epic")).getByTestId("run-child-pills");
-    expect(within(pills).getByTestId("run-child-pills-failed")).toHaveAttribute("title", "1 failed child run — click to expand");
+    expect(within(pills).getByTestId("run-child-pills-failed")).toHaveAttribute("title", "1 failed child run, click to expand");
     fireEvent.click(pills);
     expect(onSelectRun).not.toHaveBeenCalled();
     expect(labels()).toHaveLength(6);
@@ -2211,7 +2326,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     const toggle = screen.getByTestId("run-tree-toggle-all");
     expect(toggle).toHaveAttribute("data-state", "expanded");
     expect(toggle).toHaveAttribute("aria-label", "Collapse all child runs");
-    expect(toggle.className).not.toContain("border-acc");
+    expect(toggle.className).not.toContain("border-primary");
 
     fireEvent.click(toggle);
     expect(labels()).toEqual(["Refonte auth — orchestrateur", "#700 spike", "triage nightly"]);
@@ -2245,8 +2360,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     const user = userEvent.setup();
     localStorage.setItem("pdo.ui.childRunsExpanded", "false");
     renderPanel({ runs });
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-code-review"));
+    await pickFilter(user, "pipeline", "code-review");
     // epic → kid → grandkid is the only path; kid-trig (implement-loop) and the
     // roots that don't match are gone. The parents open on the match even
     // though the default is collapsed.
@@ -2264,8 +2378,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
   it("a filter matching only a root shows no chevron path for children", async () => {
     const user = userEvent.setup();
     renderPanel({ runs });
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-triage"));
+    await pickFilter(user, "pipeline", "triage");
     expect(labels()).toEqual(["triage nightly"]);
   });
 
@@ -2317,8 +2430,8 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     expect(within(row("kid-trig")).getByTestId("run-parent-link")).toBeInTheDocument();
     expect(within(row("grandkid")).queryByTestId("run-parent-link")).toBeNull();
     expect(within(row("orphan")).queryByTestId("run-parent-link")).toBeNull();
-    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(1)");
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("1");
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     // The archived parent holds no active child: no chevron, no pills.
     expect(labels().slice(-1)).toEqual(["Refonte auth — orchestrateur"]);
     expect(within(row("epic")).queryByTestId("run-tree-chevron")).toBeNull();
@@ -2335,8 +2448,8 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     renderPanel({ runs: allArchived });
     expect(labels()).toEqual(["#700 spike", "triage nightly"]);
     // The count is the number of archived runs, not of archived roots.
-    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("(4)");
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    expect(screen.getByTestId("run-archived-count")).toHaveTextContent("4");
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     // Collapsed by default (the preference holds for both sections).
     expect(labels().slice(2)).toEqual(["Refonte auth — orchestrateur"]);
     expect(within(row("epic")).getByTestId("run-tree-chevron")).toHaveAttribute("aria-expanded", "false");
@@ -2364,7 +2477,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     render(
       <UnifiedLeftPanel runs={shelved} selectedRunId={null} onSelectRun={onSelectRun} onNewRun={noop} libraryPipelines={[]} onLibraryPipelinesChanged={noop} />,
     );
-    fireEvent.click(screen.getByTestId("run-archived-toggle"));
+    fireEvent.click(screen.getByTestId("run-archived-chevron"));
     expect(row("kid-trig")).toHaveAttribute("data-depth", "0");
     fireEvent.click(within(row("kid-trig")).getByTestId("run-parent-link"));
     expect(onSelectRun).toHaveBeenCalledTimes(1);
@@ -2382,8 +2495,7 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
     };
     render(<Harness />);
     // Keep only the implement-loop runs: the orchestrator is filtered out.
-    await user.click(screen.getByTestId("run-filter-pipeline"));
-    await user.click(await screen.findByTestId("run-filter-option-implement-loop"));
+    await pickFilter(user, "pipeline", "implement-loop");
     expect(screen.getByTestId("run-filter-clear")).toBeInTheDocument();
     const link = within(row("kid")).getByTestId("run-parent-link");
     link.focus();
@@ -2477,7 +2589,7 @@ describe("UnifiedLeftPanel run multi-select (#577)", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Run Two" }));
     expect(screen.getByTestId("bulk-count")).toHaveTextContent("2 selected");
-    expect(screen.getByTestId("bulk-note")).toHaveTextContent("1 running will stop");
+    expect(screen.getByTestId("bulk-note")).toHaveAccessibleName("1 running will stop");
 
     fireEvent.click(screen.getByTestId("bulk-action-cleanup"));
     expect(screen.getByText("Cleanup 2 runs?")).toBeInTheDocument();
@@ -2523,13 +2635,13 @@ describe("UnifiedLeftPanel run multi-select (#577)", () => {
     expect(screen.getByTestId("bulk-count")).toHaveTextContent("1 selected");
   });
 
-  it("leaves a count badge on the Runs tab after switching away", () => {
+  it("leaves a dot naming the count on the Runs tab after switching away", () => {
     renderPanel({ runs: twoRuns, triggers: [] });
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Run One" }));
     // active tab shows no badge (the floating bar carries the count instead)
     expect(screen.queryByTestId("tab-badge-runs")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Pipelines" }));
-    expect(screen.getByTestId("tab-badge-runs")).toHaveTextContent("1");
+    expect(screen.getByTestId("tab-badge-runs")).toHaveAccessibleName("1 selected");
   });
 
   it("Ctrl-A selects every visible run and Escape clears", () => {

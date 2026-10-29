@@ -50,50 +50,41 @@ export default function ArtifactBody({
 }) {
   const frontmatter = file?.frontmatter;
   return (
-    <div className="flex-1 overflow-auto p-4">
+    <div className="art__body">
       {filePreview && filePreview !== "text" ? (
         filesLoading ? (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="art__state">
             Loading...
           </span>
         ) : !file?.exists ? (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="art__state">
             No file yet.
           </span>
         ) : filePreview === "image" ? (
           <img
             src={artifactUrl(runId, file.path)}
             alt={file.path.split("/").pop() ?? ""}
-            className="max-w-full cursor-zoom-in rounded border border-line"
+            className="art__read max-w-full cursor-zoom-in border border-line"
             onClick={() => onZoom([artifactUrl(runId, file.path)], 0)}
             data-testid="files-image"
           />
         ) : (
           <div className="flex flex-col items-start gap-2" data-testid="files-no-preview">
-            <span className="text-fg-3" style={{ fontSize: "11px" }}>
+            <span className="art__state">
               No preview for this format.
             </span>
-            <a
-              href={artifactDownloadUrl(runId, file.path)}
-              download
-              className="rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 hover:border-fg-4 hover:text-fg"
-              style={{ fontSize: "11px" }}
-            >
+            <a href={artifactDownloadUrl(runId, file.path)} download className="d-btn">
               Download {file.path.split("/").pop()}
             </a>
           </div>
         )
       ) : filePreview === "text" && !/\.(md|markdown)$/i.test(file?.path ?? "") ? (
         filesLoading || loading ? (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="art__state">
             Loading...
           </span>
         ) : (
-          <pre
-            className="whitespace-pre-wrap break-words font-mono text-fg-2"
-            style={{ fontSize: "11px" }}
-            data-testid="files-text"
-          >
+          <pre className="art__text" data-testid="files-text">
             {content ?? (file?.exists ? "Could not load content." : "No file yet.")}
           </pre>
         )
@@ -117,11 +108,13 @@ export default function ArtifactBody({
          *  - The HTML is passed via the `srcDoc` PROP, never
          *    `dangerouslySetInnerHTML` and never concatenated into the
          *    parent DOM.
+         *  - The page is white whatever the theme, as a browser shows a
+         *    document that sets no background.
          *  - Uses raw `content` (fetched text), not `bodyContent` (which
          *    strips a leading `---` frontmatter fence html doesn't have).
          */
         filesLoading || loading ? (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="art__state">
             Loading...
           </span>
         ) : file?.exists ? (
@@ -130,10 +123,10 @@ export default function ArtifactBody({
             sandbox=""
             srcDoc={content ?? ""}
             title={portName}
-            className="h-[70vh] w-full rounded border border-line bg-white"
+            className="h-[calc(70vh/var(--app-zoom,1))] w-full border border-line bg-[white]"
           />
         ) : (
-          <span className="text-fg-4" style={{ fontSize: "11px" }}>
+          <span className="art__state">
             File does not exist yet.
           </span>
         )
@@ -142,27 +135,20 @@ export default function ArtifactBody({
           {banner}
           {/* Frontmatter card */}
           {frontmatter && Object.keys(frontmatter).length > 0 && (
-            <div
-              className="mb-3 grid rounded border border-line bg-bg-0 p-2 font-mono"
-              style={{
-                fontSize: "10.5px",
-                gridTemplateColumns: "auto 1fr",
-                gap: "4px 10px",
-              }}
-            >
+            <dl className="art__fm" data-testid="artifact-frontmatter">
               {Object.entries(frontmatter).map(([k, v]) => (
                 <FrontmatterRow key={k} field={k} value={v} />
               ))}
-            </div>
+            </dl>
           )}
 
           {/* Markdown body */}
           {filesLoading || loading ? (
-            <span className="text-fg-4" style={{ fontSize: "11px" }}>
+            <span className="art__state">
               Loading...
             </span>
           ) : bodyContent ? (
-            <div className="artifact-markdown prose-sm">
+            <div className="artifact-markdown art__read">
               <Markdown
                 remarkPlugins={REMARK_PLUGINS}
                 components={markdownComponents}
@@ -171,7 +157,7 @@ export default function ArtifactBody({
               </Markdown>
             </div>
           ) : isInline ? null : (
-            <span className="text-fg-4" style={{ fontSize: "11px" }}>
+            <span className="art__state">
               {file?.exists ? "Could not load content." : "File does not exist yet."}
             </span>
           )}

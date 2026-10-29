@@ -1,4 +1,4 @@
-//! The Artefacts live of the Sessions hébergées (ADR-0089, ADR-0091): the
+//! The Artefacts live of the Sessions hébergées (ADR-0089, ADR-0092): the
 //! files their agent writes in its `PDO_LIVE_DIR`, under their state folder,
 //! listed and read for their extension, and a change published each time the
 //! list differs from the last one published.

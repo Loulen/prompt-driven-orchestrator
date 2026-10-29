@@ -40,7 +40,6 @@ export type SettingsSectionId =
 export interface SettingsSection {
   id: SettingsSectionId;
   label: string;
-  description: string;
   /** Diagnostics: observed state, nothing to PUT. */
   readOnly?: boolean;
   /**
@@ -70,29 +69,23 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
       {
         id: "interface",
         label: "Interface",
-        description: "How this browser talks to PDO. Saved on this device only.",
+        deviceLocal: true,
       },
       {
         id: "public-url",
         label: "Public URL",
-        description:
-          "The address other machines reach this PDO at. Agents and `pdo page mount` print their links with it.",
       },
       {
         id: "runtime-limits",
         label: "Runtime limits",
-        description: "Daemon-wide caps. Env variables override the stored value.",
       },
       {
         id: "runs",
         label: "Runs",
-        description: "Defaults a new Run starts from. New Run and Triggers can override.",
       },
       {
         id: "version-update",
         label: "Version & update",
-        description:
-          "Which PDO this daemon runs, and whether a newer release is published. The daemon does the check, never this browser.",
         // #697: « Check now » acts at once and the check switch is written at the
         // change — the form's Save does not apply here.
         ownPersistence: true,
@@ -104,8 +97,6 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         // to the dirty set and wears the device-local badge rather than the
         // "saves as you go" one (which speaks of a REST resource it has none of).
         label: "Tutorials",
-        description:
-          "Guided tours in the real UI: the tour points, you click. Completion is remembered in this browser only.",
         deviceLocal: true,
       },
       {
@@ -113,8 +104,6 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         // #891 (ADR-0077): every combined row of Stats, the rename-born ones
         // included. Its own REST resource — each ✕ is written at once.
         label: "Stats absorptions",
-        description:
-          "Rows Stats reads as one: the first keeps its name and counts the others. Made from Stats with Combine, or by renaming a pipeline.",
         ownPersistence: true,
       },
     ],
@@ -126,27 +115,19 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
       {
         id: "harness-models",
         label: "Harness & models",
-        description:
-          "What a work node runs on when neither the node nor a coarser tier decides.",
       },
       {
         id: "agent-profiles",
         label: "Agent profiles",
-        description:
-          "Named harness · model · effort presets a node, a Run or the instance can pick by name.",
         ownPersistence: true,
       },
       {
         id: "pipeline-manager",
         label: "Pipeline Manager",
-        description:
-          "The conversational agent attached to each Run — off by default, started on demand from the Manager tab.",
       },
       {
         id: "skills",
         label: "Skills",
-        description:
-          "The skills the instance tier hands to every node (saved with the form), and the bank they come from.",
       },
     ],
   },
@@ -157,21 +138,15 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
       {
         id: "sandbox",
         label: "Default sandbox",
-        description:
-          "Where a Run executes when neither the launch dialog nor a Trigger picks one.",
       },
       {
         id: "staging-profiles",
         label: "Staging profiles",
-        description:
-          "What a Docker sandbox receives from your home: the floor, the default entries, your extras.",
         ownPersistence: true,
       },
       {
         id: "worktree-provisioning",
         label: "Worktree provisioning",
-        description:
-          "Repository paths copied, hard-linked or symlinked into a Run's worktrees when Git leaves them absent.",
         ownPersistence: true,
       },
     ],
@@ -184,16 +159,12 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
       {
         id: "projects",
         label: "Projects",
-        description:
-          "A Project groups repositories. A repository can belong to several Projects; a Run stays in the Project it was launched in.",
         ownPersistence: true,
       },
       {
         // CORE-97: saved with the instance form, unlike the Projets above it.
         id: "clones-folder",
         label: "Clones folder",
-        description:
-          "Where PDO clones a repository given by its URL. A URL already cloned reuses its clone.",
       },
     ],
   },
@@ -205,24 +176,18 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
       {
         id: "otlp-export",
         label: "OTLP export",
-        description:
-          "Pushes this instance's metrics and traces to your organisation's collector. Takes effect without a restart.",
       },
       {
         id: "prometheus-metrics",
         label: "Prometheus /metrics",
-        description: "For instances a Prometheus can reach. Independent of the OTLP export.",
       },
       {
         id: "identity",
         label: "Identity",
-        description: "Who launched a Run never leaves with the metrics, unless you decide it here.",
       },
       {
         id: "what-is-sent",
         label: "What is sent",
-        description:
-          "Every measure is attached to the instance, the project, the repository, git, the pipeline, the harness and the model. Nothing else leaves.",
         readOnly: true,
       },
     ],
@@ -234,15 +199,11 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
       {
         id: "price-table",
         label: "Price table",
-        description:
-          "Where cost prices come from. Nothing here is edited: the paths are fixed, the content lives on disk.",
         readOnly: true,
       },
       {
         id: "harness-descriptors",
         label: "Harness descriptors",
-        description:
-          "Harnesses PDO knows how to launch. A refused descriptor is named here, and only here.",
         readOnly: true,
       },
     ],

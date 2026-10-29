@@ -1,7 +1,7 @@
-import { useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
 import type { NodeStatus } from "../../../shared/generated/NodeStatus";
+import { Section } from "../../../shared/ui/kit";
 
+/** The node's initial prompt, folded at first. */
 export default function PromptSection({
   promptText,
   status,
@@ -11,36 +11,17 @@ export default function PromptSection({
   status: NodeStatus;
   isArchived?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-
   return (
-    <div className="border-t border-line">
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full cursor-pointer items-center gap-1.5 px-3 py-1.5 text-fg-3 transition-colors hover:text-fg-2"
-        style={{ fontSize: "11px" }}
-        data-testid="prompt-toggle"
-      >
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        Initial Prompt
-      </button>
-      {expanded && (
-        <pre
-          className="prompt-block overflow-auto bg-bg-0 p-2 font-mono text-fg-3"
-          style={{ fontSize: "10px", lineHeight: "1.5" }}
-        >
+    <div data-testid="prompt-section">
+      <Section title="Prompt" closed flush>
+        <pre className="prompt-block ri-code">
           {promptText ?? (
-            <span className="text-fg-4">
-              {isArchived
-                ? "Prompt not preserved for archived runs."
-                : status === "pending"
-                  ? "Prompt available after node starts."
-                  : "Loading prompt..."}
+            <span className="text-text-3">
+              {isArchived ? "Not preserved" : status === "pending" ? "After the node starts" : "Loading…"}
             </span>
           )}
         </pre>
-      )}
+      </Section>
     </div>
   );
 }

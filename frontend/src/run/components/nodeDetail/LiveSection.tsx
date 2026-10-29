@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Download, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, Download, FileText, Files, Images, TriangleAlert } from "lucide-react";
+import { IconButton, Section, Tooltip } from "../../../shared/ui/kit";
 import type { LiveArtifactIO } from "../../../shared/generated/LiveArtifactIO";
 import type { SchemaWarning } from "../../../shared/generated/SchemaWarning";
 import type { FileInfo } from "../../api/nodes";
@@ -10,10 +11,11 @@ import { liveDisplayPath, liveUpdatedAgo, newestUpdate } from "../../model/liveA
 
 /**
  * ADR-0089: the live artifacts of the iteration on screen, polled with the I/O
- * while the node works — declared ones first (« not produced » until the agent
- * publishes them), then the ones it published freely. The frontmatter reads as
- * tags; a field that misses the declared schema is an amber tag, its rule on
- * hover. Nothing here is a verdict: a live artifact is never checked.
+ * while the node works, one row each under the Outputs, a live dot before it —
+ * declared ones first (« not produced » until the agent publishes them), then
+ * the ones it published freely. The frontmatter reads as tags; a field that
+ * misses the declared schema is an amber tag, its rule on hover. Nothing here
+ * is a verdict: a live artifact is never checked.
  */
 export default function LiveSection({
   live,
@@ -26,36 +28,30 @@ export default function LiveSection({
 }) {
   const newest = newestUpdate(live);
   return (
-    <div className="border-t border-line" data-testid="live-section">
-      <div
-        className="flex items-center gap-1.5 px-3 py-1.5 text-fg-3"
-        style={{ fontSize: "11px" }}
+    <div data-testid="live-section">
+      <Section
+        title="Live artifacts"
+        count={live.length}
+        flush
+        aside={
+          newest && (
+            <span className="font-mono text-2xs text-text-3" title={newest} data-testid="live-updated">
+              updated {liveUpdatedAgo(newest)}
+            </span>
+          )
+        }
       >
-        Live artifacts
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
-          {live.length}
-        </span>
-        {newest && (
-          <span
-            className="ml-auto text-fg-4"
-            style={{ fontSize: "10px" }}
-            title={newest}
-            data-testid="live-updated"
-          >
-            updated {liveUpdatedAgo(newest)}
-          </span>
-        )}
-      </div>
-      <div className="flex flex-col gap-1 px-3 pb-2">
-        {live.map((artifact) => (
-          <LiveRow
-            key={`${artifact.declared ? "d" : "f"}:${artifact.name}`}
-            artifact={artifact}
-            runId={runId}
-            onOpen={() => onOpen(artifact)}
-          />
-        ))}
-      </div>
+        <div className="ri-ports">
+          {live.map((artifact) => (
+            <LiveRow
+              key={`${artifact.declared ? "d" : "f"}:${artifact.name}`}
+              artifact={artifact}
+              runId={runId}
+              onOpen={() => onOpen(artifact)}
+            />
+          ))}
+        </div>
+      </Section>
     </div>
   );
 }
@@ -96,128 +92,92 @@ function LiveRow({
   if (single) downloadHref = artifactDownloadUrl(runId, single.path);
   else if (isFolder) downloadHref = portZipUrl(runId, artifact.path.replace(/\/$/, ""));
 
-  const gridStyle = { gridTemplateColumns: "8px 1fr auto", fontSize: "11.5px" };
-
   if (!produced) {
     return (
       <div
         data-testid="live-row"
         data-live={artifact.name}
         data-produced="false"
-        className="grid items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 opacity-60"
-        style={gridStyle}
-        title={liveDisplayPath(artifact.path)}
+        data-pending
+        className="ri-port"
+        title={`${artifact.name} · not produced`}
       >
-        <div className="h-2 w-2 rounded-full bg-fg-5" />
-        <div className="min-w-0">
-          <span className="font-mono text-fg-2" style={{ fontSize: "11.5px" }}>
-            {artifact.name}
-          </span>
-          <div
-            className="mt-0.5 font-mono text-fg-4"
-            style={{ fontSize: "10.5px" }}
-            data-testid="live-not-produced"
-          >
+        <div className="ri-port__line">
+          <span className="ri-dot" aria-hidden />
+          <span className="ri-port__name">{artifact.name}</span>
+          <span className="ri-port__where" data-testid="live-not-produced">
             not produced
-          </div>
+          </span>
         </div>
-        <div />
       </div>
     );
   }
 
+  const Icon = isFolder ? (images.length > 0 ? Images : Files) : FileText;
   return (
-    <>
-      <div
-        data-testid="live-row"
-        data-live={artifact.name}
-        data-produced="true"
-        className="port-row group relative grid w-full items-center gap-2 rounded-md border border-line bg-bg-3 px-2.5 py-2 transition-colors hover:bg-bg-4"
-        style={gridStyle}
-      >
+    <div data-testid="live-row" data-live={artifact.name} data-produced="true" className="ri-port">
+      <div className="ri-port__line" data-open onClick={onOpen}>
+        <span className="ri-dot" data-live aria-label="live" role="img" />
+        <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-hidden />
         <button
           type="button"
-          onClick={onOpen}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
           aria-label={`Open ${artifact.name}`}
           data-testid="live-row-open"
-          className="absolute inset-0 cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-acc"
-        />
-        <div className="h-2 w-2 rounded-full bg-st-running" />
-        <div className="min-w-0 text-left">
-          <div className="flex items-center gap-1.5">
-            <span className="font-mono text-fg" style={{ fontSize: "11.5px" }}>
-              {artifact.name}
-            </span>
-            {!artifact.declared && (
-              <span
-                className="rounded border border-line-strong bg-bg-4 px-1 py-px font-mono text-fg-4"
-                style={{ fontSize: "9px" }}
-                title="Published by the node without being declared"
-                data-testid="live-free-badge"
-              >
-                free
-              </span>
-            )}
-          </div>
-          <div className="mt-0.5 truncate font-mono text-fg-3" style={{ fontSize: "10.5px" }}>
-            {subline}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {totalSize > 0 && (
-            <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
-              {formatSize(totalSize)}
-            </span>
-          )}
-          {downloadHref && (
-            <a
-              href={downloadHref}
-              download
-              onClick={(e) => e.stopPropagation()}
-              className="relative text-fg-4 hover:text-fg"
-              aria-label={`Download ${artifact.name}`}
-              title="Download"
-              data-testid="live-download"
-            >
-              <Download size={11} />
-            </a>
-          )}
-          <span className="font-mono text-fg-3" style={{ fontSize: "10.5px" }} aria-hidden="true">
-            ↗
+          className="ri-port__name"
+        >
+          {artifact.name}
+        </button>
+        {!artifact.declared && (
+          <span className="d-chip d-chip--mono" title="Published by the node without being declared" data-testid="live-free-badge">
+            free
           </span>
-        </div>
-
-        <FrontmatterTags frontmatter={frontmatter} warnings={artifact.schema_warnings} />
-
-        {images.length > 0 && (
-          <div className="col-span-3 mt-1 flex gap-1 overflow-x-auto" data-testid="live-thumbnails">
-            {images.slice(0, 4).map((f, i) => (
-              <img
-                key={f.path}
-                src={artifactUrl(runId, f.path)}
-                alt={f.path.split("/").pop() ?? ""}
-                className="relative h-12 w-12 cursor-zoom-in rounded border border-line object-cover transition-opacity hover:opacity-80"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setLightbox({ images: images.map((im) => artifactUrl(runId, im.path)), index: i });
-                }}
-              />
-            ))}
-            {images.length > 4 && (
-              <span
-                className="flex h-12 w-12 items-center justify-center rounded border border-line bg-bg-0 font-mono text-fg-4"
-                style={{ fontSize: "10px" }}
-              >
-                +{images.length - 4}
-              </span>
-            )}
-          </div>
         )}
+        <span className="ri-port__where" title={`${artifact.name} · ${artifact.path}`}>
+          {subline}
+        </span>
+        {totalSize > 0 && <span className="ri-port__size">{formatSize(totalSize)}</span>}
+        <span className="ri-port__tools" onClick={(e) => e.stopPropagation()}>
+          {downloadHref && (
+            <Tooltip label="Download">
+              <a
+                href={downloadHref}
+                download
+                className="d-icon d-icon--sm"
+                aria-label={`Download ${artifact.name}`}
+                data-testid="live-download"
+              >
+                <Download size={12} strokeWidth={1.5} aria-hidden />
+              </a>
+            </Tooltip>
+          )}
+          <IconButton icon={ArrowUpRight} size="sm" label={`Open ${artifact.name}`} onClick={onOpen} />
+        </span>
       </div>
-      {lightbox && (
-        <ImageLightbox images={lightbox.images} index={lightbox.index} onClose={() => setLightbox(null)} />
+
+      <FrontmatterTags frontmatter={frontmatter} warnings={artifact.schema_warnings} />
+
+      {images.length > 0 && (
+        <div className="ri-thumbs" data-testid="live-thumbnails">
+          {images.slice(0, 4).map((f, i) => (
+            <button
+              key={f.path}
+              type="button"
+              className="ri-thumb"
+              title={f.path.split("/").pop() ?? ""}
+              onClick={() => setLightbox({ images: images.map((im) => artifactUrl(runId, im.path)), index: i })}
+            >
+              <img src={artifactUrl(runId, f.path)} alt={f.path.split("/").pop() ?? ""} />
+            </button>
+          ))}
+          {images.length > 4 && <span className="self-center font-mono text-xs text-text-3">+{images.length - 4}</span>}
+        </div>
       )}
-    </>
+      {lightbox && <ImageLightbox images={lightbox.images} index={lightbox.index} onClose={() => setLightbox(null)} />}
+    </div>
   );
 }
 
@@ -235,25 +195,23 @@ function FrontmatterTags({
   const absent = warnings.filter((w) => !(frontmatter && w.field in frontmatter));
   if (entries.length === 0 && absent.length === 0) return null;
   return (
-    <div className="relative col-span-3 mt-1 flex flex-wrap gap-1" data-testid="live-frontmatter">
+    <div className="ri-port__sub" data-testid="live-frontmatter">
       {entries.map(([field, value]) => {
         const reason = byField.get(field);
         return (
           <span
             key={field}
             data-testid={reason ? "live-tag-warning" : "live-tag"}
-            title={reason ? `Schema: ${reason}` : undefined}
-            className={`inline-flex items-center gap-1 rounded border px-1.5 py-px font-mono ${
-              reason
-                ? "border-st-await-border bg-st-await-bg text-st-await"
-                : "border-line bg-bg-0 text-fg-2"
-            }`}
-            style={{ fontSize: "10px" }}
+            data-st={reason ? "awaiting" : undefined}
+            title={reason ? `Schema: ${reason}` : `${field}: ${display(value)}`}
+            className="ri-fm__chip"
           >
-            {reason ? <TriangleAlert size={9} aria-label="Schema not respected" /> : (
-              <span className="text-fg-4">{field}</span>
+            {reason ? (
+              <TriangleAlert size={10} strokeWidth={1.75} aria-label="Schema not respected" />
+            ) : (
+              <span className="ri-fm__k">{field}</span>
             )}
-            {reason ? `${field} ${display(value)}` : display(value)}
+            <span>{reason ? `${field} ${display(value)}` : display(value)}</span>
           </span>
         );
       })}
@@ -261,12 +219,12 @@ function FrontmatterTags({
         <span
           key={`absent:${w.field}`}
           data-testid="live-tag-warning"
+          data-st="awaiting"
           title={`Schema: ${w.reason}`}
-          className="inline-flex items-center gap-1 rounded border border-st-await-border bg-st-await-bg px-1.5 py-px font-mono text-st-await"
-          style={{ fontSize: "10px" }}
+          className="ri-fm__chip"
         >
-          <TriangleAlert size={9} aria-label="Schema not respected" />
-          {w.field === "(frontmatter)" ? "frontmatter" : `${w.field} missing`}
+          <TriangleAlert size={10} strokeWidth={1.75} aria-label="Schema not respected" />
+          <span>{w.field === "(frontmatter)" ? "frontmatter" : `${w.field} missing`}</span>
         </span>
       ))}
     </div>

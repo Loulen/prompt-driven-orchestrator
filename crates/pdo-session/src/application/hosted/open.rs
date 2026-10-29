@@ -1,4 +1,4 @@
-//! Open a Session hébergée for an extension (ADR-0091).
+//! Open a Session hébergée for an extension (ADR-0092).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

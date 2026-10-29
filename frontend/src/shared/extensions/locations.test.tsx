@@ -15,6 +15,8 @@ import type { Trigger } from "../generated/Trigger";
 import type { Project } from "../../workspace/model/project";
 import type { DecorationContext, DecorationProps, ListFilterProps, SectionProps, TabProps } from "./contract";
 import ExtensionDecorations from "./ExtensionDecorations";
+import { ReactFlowProvider } from "@xyflow/react";
+import { EditNode } from "../../pipeline/components/EditNode";
 import ExtensionSections from "./ExtensionSections";
 import { useSectionForm } from "./sectionForm";
 import { hostReactMajor } from "./shared";
@@ -256,7 +258,8 @@ describe("a section location", () => {
     const [demo, rights] = screen.getAllByTestId(/^extension-section-/);
     expect(demo).toHaveAttribute("data-testid", "extension-section-demo:attach");
     expect(rights).toHaveAttribute("data-testid", "extension-section-rights:rights");
-    expect(within(demo).getByText("· Extension demo")).toBeInTheDocument();
+    // The extension that adds it: its icon, named, and in the tag's tooltip.
+    expect(within(demo).getByRole("img", { name: "Extension demo" })).toBeInTheDocument();
 
     fireEvent.change(within(demo).getByLabelText("draft"), { target: { value: "draft-1" } });
     expect(saves).toEqual([]);
@@ -432,7 +435,7 @@ describe("the list filters of the Triggers list", () => {
 });
 
 describe("the trigger/item decorations", () => {
-  it("sit on a line of their own, never on the pipeline's name line", async () => {
+  it("sit at the end of the name's line, never on the pipeline's name line", async () => {
     const t = {
       id: "t1", name: "Nightly", pipeline_id: "p", pipeline_name: "fp-demo", target_repo: "/repos/a",
       effective_repo: "/repos/a", variables: {}, cron: "0 9 * * *", overlap_policy: "skip", auto_name: true,
@@ -457,8 +460,48 @@ describe("the trigger/item decorations", () => {
     const marks = screen.getByTestId("extension-decorations-trigger/item");
     const nameLine = screen.getByText("fp-demo").parentElement!;
     expect(nameLine.contains(marks)).toBe(false);
-    expect(marks.tagName).toBe("DIV");
-    expect(marks.className).toContain("flex-wrap");
+    // On one line at the end of the row's first line: the row keeps its 46 px.
+    expect(marks.closest(".lp-deco")).not.toBeNull();
+    expect(marks.className).toContain("flex-nowrap");
+  });
+});
+
+describe("the canvas/node decorations", () => {
+  function nodeProps(nodeType: "agent" | "start") {
+    return {
+      id: nodeType,
+      data: {
+        label: nodeType,
+        nodeId: nodeType,
+        nodeType,
+        status: "pending",
+        reached: false,
+        inputs: [],
+        outputs: [{ name: "out" }],
+        interactive: false,
+      },
+      selected: false,
+      type: "edit",
+      zIndex: 0,
+      isConnectable: true,
+      positionAbsoluteX: 0,
+      positionAbsoluteY: 0,
+      dragging: false,
+      deletable: true,
+      selectable: true,
+      draggable: true,
+    } as unknown as Parameters<typeof EditNode>[0];
+  }
+
+  it.each(["agent", "start"] as const)("mark the %s card, a marker included", async (nodeType) => {
+    serve([extension("demo", [at("canvas/node", "decoration", "b", "Badge")])]);
+    render(
+      <ReactFlowProvider>
+        <EditNode {...nodeProps(nodeType)} />
+      </ReactFlowProvider>,
+    );
+    expect(await screen.findByTestId("badge")).toHaveTextContent(`canvas/node:${nodeType}`);
+    expect(screen.getByTestId("node-card")).toContainElement(screen.getByTestId("badge"));
   });
 });
 

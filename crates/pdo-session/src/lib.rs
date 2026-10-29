@@ -14,7 +14,7 @@
 //! - **Session ledger**: who started each session, who takes control of its
 //!   terminal, when it ends, as the extensions are told (CORE-61).
 //! - **Sessions hébergées**: an agent or a shell an extension has the core
-//!   hold outside any Run (ADR-0091), recorded across restarts: relaunched,
+//!   hold outside any Run (ADR-0092), recorded across restarts: relaunched,
 //!   configured, typed into, forgotten, their declared wait and their
 //!   Artefacts live.
 //!
@@ -77,7 +77,7 @@ pub struct SessionPorts {
     /// The Projets of a Run, its sessions' Operations are in (CORE-3).
     pub projects: Arc<dyn RunProjects>,
     /// Where the Sessions hébergées are recorded, resolve their folder and
-    /// harness, and take their slot of the Cap (ADR-0091).
+    /// harness, and take their slot of the Cap (ADR-0092).
     pub hosted: HostedPorts,
 }
 
@@ -309,7 +309,7 @@ impl Session {
         &self.save_focused
     }
 
-    /// The Sessions hébergées of the extensions (ADR-0091).
+    /// The Sessions hébergées of the extensions (ADR-0092).
     pub fn hosted(&self) -> &Arc<Hosted> {
         &self.hosted
     }

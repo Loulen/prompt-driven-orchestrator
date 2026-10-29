@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ancestorDirs, allDirs, buildFileTree, dirCount, treeOrder, visibleRows } from "./fileTree";
+import { ancestorDirs, allDirs, buildFileTree, byNumberRuns, dirCount, treeOrder, visibleRows } from "./fileTree";
 import type { TreeNode } from "./fileTree";
 
 const PATHS = [
@@ -49,6 +49,41 @@ describe("buildFileTree (CORE-84)", () => {
 
   it("keeps a folder holding one file and one folder uncompressed", () => {
     expect(shape(buildFileTree(["a/x.ts", "a/b/y.ts"]))).toEqual(["a/", "  b/", "    y.ts", "  x.ts"]);
+  });
+
+  it("orders the files of a folder naturally, a number read as a number", () => {
+    expect(shape(buildFileTree(["d/m1.ts", "d/m10.ts", "d/m11.ts", "d/m2.ts"]))).toEqual([
+      "d/",
+      "  m1.ts",
+      "  m2.ts",
+      "  m10.ts",
+      "  m11.ts",
+    ]);
+  });
+
+  it("orders the folders of a level with a number read as a number", () => {
+    expect(shape(buildFileTree(["m1/a.ts", "m10/a.ts", "m11/a.ts", "m2/a.ts"]))).toEqual([
+      "m1/",
+      "  a.ts",
+      "m2/",
+      "  a.ts",
+      "m10/",
+      "  a.ts",
+      "m11/",
+      "  a.ts",
+    ]);
+  });
+
+  it("reads a run of digits as a number and keeps the diff's order everywhere else", () => {
+    const sorted = (names: string[]) => [...names].sort(byNumberRuns);
+    expect(sorted(["m10", "m2", "m1"])).toEqual(["m1", "m2", "m10"]);
+    expect(sorted(["foo2", "foo.d", "foo-bar"])).toEqual(["foo-bar", "foo.d", "foo2"]);
+    expect(sorted(["a", "B"])).toEqual(["B", "a"]);
+    expect(sorted(["v100000000000000000000", "v99999999999999999999"])).toEqual([
+      "v99999999999999999999",
+      "v100000000000000000000",
+    ]);
+    expect(sorted(["x01", "x1", "x001"])).toEqual(["x001", "x01", "x1"]);
   });
 
   it("never folds a file into its folder's name", () => {

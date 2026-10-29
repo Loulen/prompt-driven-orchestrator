@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import * as os from "node:os";
 import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 
 // Layer 3b — UI witness for Bug E (#17). Without the daemon-side fix, edits
@@ -9,10 +9,10 @@ import { confirmSaveVersion, openPipelineForEdit } from "./helpers";
 // watcher event, the frontend reloads from disk, and any keystrokes typed
 // between the save and the broadcast are erased.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-edit-self-write-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 const PROMPTS_DIR = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.prompts`);
 
@@ -79,12 +79,12 @@ test.afterAll(async () => {
 
 test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.getByText("alpha", { exact: true }).first().click();
 
-  const promptArea = page.getByPlaceholder("Enter the node's role prompt...");
+  const promptArea = page.getByTestId("node-prompt-input");
   await expect(promptArea).toBeVisible();
 
   // First edit + explicit save (auto-save removed in #35).
@@ -108,10 +108,10 @@ test("post-save keystrokes survive the broadcast cycle (#17)", async ({ page }) 
 
   // Persistence: the explicit save flushed MARKER_B to disk.
   await page.reload();
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   await page.getByText("alpha", { exact: true }).first().click();
 
-  const reloaded = page.getByPlaceholder("Enter the node's role prompt...");
+  const reloaded = page.getByTestId("node-prompt-input");
   await expect(reloaded).toHaveValue("MARKER_A_then_MARKER_B");
 });

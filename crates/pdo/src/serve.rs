@@ -236,7 +236,7 @@ fn identify_layer(extensions: Extensions, inner: Option<RouterLayer>) -> RouterL
         // API 0.12: its `Host::presences` and `Host::run_cost` read them.
         started.serve_runs(Arc::new(ExtensionRuns::of(&contexts.run)));
         started.serve_run_views(Arc::new(ExtensionRuns::of(&contexts.run)));
-        // API 0.17: its `Host::open_session` and the other gestures of the
+        // API 0.19: its `Host::open_session` and the other gestures of the
         // Sessions hébergées go to the session context.
         started.serve_hosted_sessions(Arc::new(ExtensionHostedSessions(
             contexts.session.hosted().clone(),

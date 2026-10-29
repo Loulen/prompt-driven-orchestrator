@@ -1,4 +1,4 @@
-//! The Sessions hébergées of the test extension (API 0.17): the core's
+//! The Sessions hébergées of the test extension (API 0.19): the core's
 //! fixture for the Host's `open_session`, `hosted_session`, `hosted_sessions`,
 //! `terminate_session`, `relaunch_session`, `configure_session`,
 //! `type_in_session`, `forget_session`, `live_artifacts` and `live_artifact`.

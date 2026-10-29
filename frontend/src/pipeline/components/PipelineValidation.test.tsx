@@ -31,8 +31,6 @@ const bravo: Project = { id: "prj-bravo", name: "Bravo", members: ["/repos/bravo
 
 beforeEach(() => {
   vi.mocked(api.setPipelineValidation).mockReset();
-  // jsdom doesn't implement scrollIntoView (called by TabBar's active-tab effect).
-  Element.prototype.scrollIntoView = vi.fn();
 });
 
 describe("ValidationIndicator", () => {
@@ -351,12 +349,13 @@ describe("the tab bar of a Pipeline tab", () => {
 });
 
 describe("a row of the Pipelines tab", () => {
-  it("carries the indicator under the hover actions, which keep their line at rest", () => {
+  it("carries the indicator at the end of the name's line, out of the hover bar", () => {
     render(
       <LibraryRow
         name="my pipe"
         nodeCount={2}
         showDuplicate
+        onOpen={() => {}}
         onDuplicate={() => {}}
         onDelete={() => {}}
         deleteTitle="Delete pipeline"
@@ -366,14 +365,10 @@ describe("a row of the Pipelines tab", () => {
     const indicator = screen.getByTestId("validation-indicator");
     expect(indicator).toHaveTextContent("All");
     const actions = screen.getByTestId("library-row-actions");
-    // Line 1: the icons, a fixed height so the indicator never moves on hover.
-    expect(actions.className).toContain("h-4");
+    // The hover bar floats over the row: the indicator is never in it, and stays put.
+    expect(actions).toHaveClass("lp-hover");
     expect(actions).toContainElement(screen.getByTestId("library-duplicate-button"));
     expect(actions).not.toContainElement(indicator);
-    // Line 2: the indicator, in the same right column, after the actions.
-    expect(actions.parentElement).toContainElement(indicator);
-    expect(
-      actions.compareDocumentPosition(indicator) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(screen.getByTestId("library-row-name").parentElement).toContainElement(indicator);
   });
 });

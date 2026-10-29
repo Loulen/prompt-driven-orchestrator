@@ -1,4 +1,18 @@
-import { ArrowLeftRight, ArrowLeft, Columns2, History, ListMinus, Rows3, SquareArrowOutUpRight } from "lucide-react";
+import {
+  ArrowLeftRight,
+  ChevronsDownUp,
+  Columns2,
+  FileDiff,
+  GitBranch,
+  History,
+  MessageSquare,
+  PanelLeft,
+  Rows3,
+  SquareArrowOutUpRight,
+  X,
+} from "lucide-react";
+import { IconButton } from "../../shared/ui/kit";
+import { ReviewIcon } from "../../shared/ui/brand/AccentIcons";
 import { isDefaultPair, reviewUrl } from "../../run/model/runRefs";
 import { useMemo } from "react";
 import { ExtensionActionButtons } from "../../shared/extensions/ExtensionActions";
@@ -32,9 +46,6 @@ interface Props {
   collapseAll: () => void;
   filesCount: number;
   pairDrafts: ReviewDraft[];
-  send: (keys: string[]) => Promise<void>;
-  sendDisabledReason: string | null;
-  sendingKeys: ReadonlySet<string>;
   sentCount: number;
   unreadComments: ReviewComment[];
   jumpUnread: () => void;
@@ -43,14 +54,21 @@ interface Props {
   pairStates: StateCounts;
   toggleShowResolved: () => void;
   showResolved: boolean;
+  /** The file list: shown, and its toggle. */
+  listOpen: boolean;
+  toggleList: () => void;
+  /** Files marked « Viewed » for this pair. */
+  viewedCount: number;
 }
 
 /**
- * The top bar of the Review page (#749): back to the Run, the `source →
- * destination` pair (swap, back to the default), the re-map note (#752), the
- * outdated toggle, the stats, split / unified, collapse all, the comment pills
- * and "open in a new tab". One line whatever the width: the buttons and pills
- * never wrap, the pipeline · run label truncates first.
+ * The top of the Review page (#749), two rows. The header: the Run (back to
+ * it), its source branch, the stats of the pair, the comments open / total,
+ * the comment pills and the close. The bar: the file list toggle, the
+ * `source → destination` pair (swap, back to the default), the re-map note
+ * (#752), the outdated toggle, the files viewed, split / unified, collapse
+ * all, the extensions' actions and "open in a new tab". Neither row wraps:
+ * the Run label and the re-map note truncate first.
  */
 export default function ReviewTopBar({
   runId,
@@ -71,9 +89,6 @@ export default function ReviewTopBar({
   collapseAll,
   filesCount,
   pairDrafts,
-  send,
-  sendDisabledReason,
-  sendingKeys,
   sentCount,
   unreadComments,
   jumpUnread,
@@ -82,180 +97,203 @@ export default function ReviewTopBar({
   pairStates,
   toggleShowResolved,
   showResolved,
+  listOpen,
+  toggleList,
+  viewedCount,
 }: Props) {
   const extensionExtra = useMemo(() => ({ review: { from: pair.from, to: pair.to } }), [pair.from, pair.to]);
   const pairIsDefault = isDefaultPair(pair, defaults);
   const defaultLabel = `${defaults.from} → ${defaults.to}`;
+  const comments = run?.review_comments ?? [];
+  const openComments = pairStates.open + pairStates.proposed;
   return (
-    <div className="relative z-20 flex min-w-0 items-center gap-2 whitespace-nowrap border-b border-line bg-bg-2 px-2.5" style={{ fontSize: "11px" }}>
-      <button
-        type="button"
-        onClick={goBack}
-        data-testid="review-back"
-        title="Back to the Run (canvas stays where you left it)"
-        className="flex min-w-0 cursor-pointer items-center gap-1.5 rounded px-1.5 py-[3px] text-fg-2 hover:bg-bg-3 hover:text-fg"
-      >
-        <ArrowLeft size={12} className="shrink-0" />
-        <span className="truncate text-fg-4">
-          <span className="font-medium text-fg-2">{run?.pipeline_name ?? "…"}</span> · {runId}
-        </span>
-      </button>
-      <span className="h-4 w-px bg-line-strong" />
-      <span className="text-fg-3">Review</span>
-      <span className="h-4 w-px bg-line-strong" />
-
-      <div className="flex items-center gap-1" data-testid="review-refpair">
-        <RefPicker
-          side="from"
-          value={pair.from}
-          other={pair.to}
-          refs={refs}
-          disabled={isArchived}
-          onPick={(id) => setPair({ from: id, to: pair.to })}
-          onPickPair={setPair}
-        />
-        <span className="px-0.5 text-fg-4">→</span>
-        <RefPicker
-          side="to"
-          value={pair.to}
-          other={pair.from}
-          refs={refs}
-          disabled={isArchived}
-          onPick={(id) => setPair({ from: pair.from, to: id })}
-          onPickPair={setPair}
-        />
+    <>
+      <header className="rv-head">
+        <h1 className="rv-head__title">
+          <ReviewIcon size={16} strokeWidth={1.5} aria-hidden />
+          Review
+        </h1>
         <button
           type="button"
-          onClick={() => setPair({ from: pair.to, to: pair.from })}
-          disabled={isArchived}
-          title="Swap source and destination"
-          data-testid="review-swap"
-          className="cursor-pointer rounded p-[3px] text-fg-4 hover:bg-bg-3 hover:text-fg-2 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={goBack}
+          data-testid="review-back"
+          title={`Back to the Run · ${run?.pipeline_name ?? ""} · ${runId}`}
+          className="rv-head__run"
         >
-          <ArrowLeftRight size={11} />
+          {run?.name && <span className="text-text">{run.name}</span>}
+          <span>
+            {run?.pipeline_name ?? "…"} · {runId}
+          </span>
         </button>
-        {!pairIsDefault && (
+        {run?.source_branch && (
+          <span className="rv-fact" title="Source branch">
+            <GitBranch size={12} strokeWidth={1.5} aria-hidden />
+            {run.source_branch}
+          </span>
+        )}
+        {stats && (
+          <span className="rv-fact" data-testid="review-stats">
+            <FileDiff size={12} strokeWidth={1.5} aria-hidden />
+            <span>
+              {stats.files_changed} file{stats.files_changed === 1 ? "" : "s"}
+            </span>
+            <span className="rv-add">+{stats.additions}</span>
+            <span className="rv-del">−{stats.deletions}</span>
+          </span>
+        )}
+        {comments.length > 0 && (
+          <span
+            className="rv-fact"
+            title={`${comments.length} comment${comments.length === 1 ? "" : "s"}, ${openComments} open on this pair`}
+            data-testid="review-comment-total"
+          >
+            <MessageSquare size={12} strokeWidth={1.5} aria-hidden />
+            {openComments}/{comments.length}
+          </span>
+        )}
+        <span className="rv-grow" />
+        <ReviewCommentPills
+          pairDrafts={pairDrafts}
+          sentCount={sentCount}
+          unreadComments={unreadComments}
+          jumpUnread={jumpUnread}
+          jumpComment={jumpComment}
+          cycleEntries={cycleEntries}
+          pairStates={pairStates}
+          toggleShowResolved={toggleShowResolved}
+          showResolved={showResolved}
+        />
+        <span className="rv-vsep" aria-hidden />
+        <IconButton icon={X} label="Back to the app" onClick={goBack} data-testid="review-close" />
+      </header>
+
+      <div className="rv-bar" data-testid="review-bar">
+        <IconButton
+          icon={PanelLeft}
+          label={listOpen ? "Hide file list" : "Show file list"}
+          kbd="["
+          pressed={listOpen}
+          onClick={toggleList}
+          data-testid={listOpen ? "review-list-toggle" : "review-list-open"}
+        />
+        <div className="flex items-center gap-1" data-testid="review-refpair">
+          <RefPicker
+            side="from"
+            value={pair.from}
+            other={pair.to}
+            refs={refs}
+            disabled={isArchived}
+            onPick={(id) => setPair({ from: id, to: pair.to })}
+            onPickPair={setPair}
+          />
+          <IconButton
+            icon={ArrowLeftRight}
+            label="Swap source and destination"
+            onClick={() => setPair({ from: pair.to, to: pair.from })}
+            disabled={isArchived}
+            data-testid="review-swap"
+          />
+          <RefPicker
+            side="to"
+            value={pair.to}
+            other={pair.from}
+            refs={refs}
+            disabled={isArchived}
+            onPick={(id) => setPair({ from: pair.from, to: id })}
+            onPickPair={setPair}
+          />
+          {!pairIsDefault && (
+            <button
+              type="button"
+              onClick={() => setPair(defaults)}
+              title="Back to the default pair"
+              data-testid="review-reset"
+              className="d-btn d-btn--ghost d-btn--sm font-mono"
+            >
+              {defaultLabel}
+            </button>
+          )}
+        </div>
+        {remapNote && (
+          <span className="rv-note" title={remapNote} data-testid="review-remap-note" role="status">
+            {remapNote}
+          </span>
+        )}
+
+        <span className="rv-grow" />
+
+        {anyOutdated && (
           <button
             type="button"
-            onClick={() => setPair(defaults)}
-            title="Back to the default pair"
-            data-testid="review-reset"
-            className="cursor-pointer rounded px-1.5 py-0.5 text-fg-4 hover:bg-bg-3 hover:text-fg-2"
-            style={{ fontSize: "10px" }}
+            onClick={toggleShowOutdated}
+            aria-pressed={showOutdated}
+            title={showOutdated ? "Hide outdated comments (they stay counted)" : "Show outdated comments"}
+            data-testid="review-toggle-outdated"
+            className="rv-pill"
           >
-            {defaultLabel}
+            <History size={12} strokeWidth={1.5} className="text-st-skipped" aria-hidden /> Show outdated
           </button>
         )}
-      </div>
-      {remapNote && (
-        <span className="min-w-0 truncate text-fg-3" style={{ fontSize: "10.5px" }} title={remapNote} data-testid="review-remap-note" role="status">
-          {remapNote}
-        </span>
-      )}
-
-      <span className="flex-1" />
-
-      {anyOutdated && (
-        <button
-          type="button"
-          onClick={toggleShowOutdated}
-          aria-pressed={showOutdated}
-          title={showOutdated ? "Hide outdated comments (they stay counted)" : "Show outdated comments"}
-          data-testid="review-toggle-outdated"
-          className={`flex cursor-pointer items-center gap-1 rounded border border-line-strong px-2 py-0.5 ${
-            showOutdated ? "bg-bg-3 text-fg-3 hover:text-fg-2" : "bg-bg-4 text-fg"
-          }`}
-          style={{ fontSize: "10.5px" }}
-        >
-          <History size={11} className="text-st-stale" /> Show outdated
-        </button>
-      )}
-      {stats && (
-        <span className="flex items-center gap-1.5 text-fg-2" data-testid="review-stats">
-          <span>
-            {stats.files_changed} file{stats.files_changed === 1 ? "" : "s"}
+        {filesCount > 0 && (
+          <span className="rv-bar__meta" title="Files marked Viewed in this browser" data-testid="review-viewed-count">
+            {viewedCount}/{filesCount} viewed
           </span>
-          <span className="font-mono text-st-done">+{stats.additions}</span>
-          <span className="font-mono text-st-failed">−{stats.deletions}</span>
-        </span>
-      )}
-      <span className="h-4 w-px bg-line-strong" />
-      <div
-        className="inline-flex shrink-0 overflow-hidden rounded border border-line-strong"
-        title={narrow ? "Unified on narrow windows; your preference is kept" : "Remembered on this browser"}
-        role="group"
-        data-testid="review-view-toggle"
-        data-view={effectiveView}
-      >
-        <button
-          type="button"
-          onClick={() => changeView("split")}
-          aria-pressed={effectiveView === "split"}
-          data-testid="review-view-split"
-          className={`flex cursor-pointer items-center gap-1 px-2 py-0.5 ${
-            effectiveView === "split" ? "bg-bg-4 text-fg" : "text-fg-3 hover:text-fg-2"
-          }`}
-          style={{ fontSize: "10.5px" }}
+        )}
+        <div
+          className="d-seg d-seg--sm rv-seg"
+          title={narrow ? "Unified on narrow windows; your preference is kept" : "Remembered on this browser"}
+          role="group"
+          aria-label="View"
+          data-testid="review-view-toggle"
+          data-view={effectiveView}
         >
-          <Columns2 size={11} /> Split
-        </button>
-        <button
-          type="button"
-          onClick={() => changeView("unified")}
-          aria-pressed={effectiveView === "unified"}
-          data-testid="review-view-unified"
-          className={`flex cursor-pointer items-center gap-1 border-l border-line-strong px-2 py-0.5 ${
-            effectiveView === "unified" ? "bg-bg-4 text-fg" : "text-fg-3 hover:text-fg-2"
-          }`}
-          style={{ fontSize: "10.5px" }}
+          <button
+            type="button"
+            onClick={() => changeView("split")}
+            aria-pressed={effectiveView === "split"}
+            data-testid="review-view-split"
+            className="d-seg__btn"
+          >
+            <Columns2 size={12} strokeWidth={1.5} aria-hidden /> Split
+          </button>
+          <button
+            type="button"
+            onClick={() => changeView("unified")}
+            aria-pressed={effectiveView === "unified"}
+            data-testid="review-view-unified"
+            className="d-seg__btn"
+          >
+            <Rows3 size={12} strokeWidth={1.5} aria-hidden /> Unified
+          </button>
+        </div>
+        <IconButton
+          icon={ChevronsDownUp}
+          label="Collapse all / expand all"
+          onClick={collapseAll}
+          disabled={filesCount === 0}
+          data-testid="review-collapse-all"
+        />
+        {/* #30 — `review/toolbar`: the extensions' icon buttons, before « open in a new tab ». */}
+        <ExtensionActionButtons
+          location="review/toolbar"
+          extra={extensionExtra}
+          className="flex shrink-0 items-center gap-1"
+          buttonClassName="d-icon"
+          iconSize={14}
+        />
+        <a
+          href={reviewUrl(runId, pair, defaults)}
+          target="_blank"
+          rel="noreferrer"
+          title="Open in a new tab — the URL carries the pair"
+          aria-label="Open in a new tab"
+          data-testid="review-open-new-tab"
+          className="d-icon"
         >
-          <Rows3 size={11} /> Unified
-        </button>
+          <SquareArrowOutUpRight size={14} strokeWidth={1.5} aria-hidden />
+        </a>
       </div>
-      <button
-        type="button"
-        onClick={collapseAll}
-        disabled={filesCount === 0}
-        title="Collapse all / expand all"
-        data-testid="review-collapse-all"
-        className="flex cursor-pointer items-center gap-1 rounded border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-3 hover:text-fg-2 disabled:cursor-not-allowed disabled:opacity-50"
-        style={{ fontSize: "10.5px" }}
-      >
-        <ListMinus size={11} /> Collapse all
-      </button>
-      <ReviewCommentPills
-        pairDrafts={pairDrafts}
-        send={send}
-        sendDisabledReason={sendDisabledReason}
-        sendingKeys={sendingKeys}
-        sentCount={sentCount}
-        unreadComments={unreadComments}
-        jumpUnread={jumpUnread}
-        jumpComment={jumpComment}
-        cycleEntries={cycleEntries}
-        pairStates={pairStates}
-        toggleShowResolved={toggleShowResolved}
-        showResolved={showResolved}
-      />
-      {/* #30 — `review/toolbar`: the extensions' icon buttons, before « open in a new tab ». */}
-      <ExtensionActionButtons
-        location="review/toolbar"
-        extra={extensionExtra}
-        className="flex shrink-0 items-center gap-1"
-        buttonClassName="grid h-5 w-[22px] cursor-pointer place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 hover:text-fg-2"
-        iconSize={11}
-      />
-      <a
-        href={reviewUrl(runId, pair, defaults)}
-        target="_blank"
-        rel="noreferrer"
-        title="Open in a new tab — the URL carries the pair"
-        data-testid="review-open-new-tab"
-        className="grid h-5 w-[22px] place-items-center rounded border border-line-strong bg-bg-3 text-fg-3 hover:text-fg-2"
-      >
-        <SquareArrowOutUpRight size={11} />
-      </a>
-    </div>
+    </>
   );
 }
 

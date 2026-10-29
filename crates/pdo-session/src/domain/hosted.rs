@@ -1,4 +1,4 @@
-//! A Session hébergée as the core records it (ADR-0091): what the extensions
+//! A Session hébergée as the core records it (ADR-0092): what the extensions
 //! read of it ([`HostedSession`]), plus what only the core keeps (the
 //! conversation to resume, the Zoom du terminal), and the transitions of its
 //! state. Pure: the clock is a parameter.

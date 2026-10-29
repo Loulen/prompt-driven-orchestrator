@@ -1,7 +1,6 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { ReactFlowProvider } from "@xyflow/react";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 import { EditNode } from "./EditNode";
 import { deriveEditNodes } from "./editNodeDerivation";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
@@ -10,9 +9,9 @@ import type { EditorPipelineDef } from "../model/pipeline";
 
 function Wrapper({ children }: { children: React.ReactNode }) {
   return (
-    <TooltipProvider>
+    <>
       <ReactFlowProvider>{children}</ReactFlowProvider>
-    </TooltipProvider>
+    </>
   );
 }
 
@@ -59,9 +58,8 @@ describe("the card of an on-demand node (ADR-0086)", () => {
       wrapper: Wrapper,
     });
     const node = screen.getByTestId("node-card");
-    expect(node.style.opacity).toBe("0.6");
-    expect(node.style.borderStyle).toBe("dashed");
-    expect(node.style.borderColor).toBe("var(--color-fg-2)");
+    // Greyed and dashed (canvas.css `.cv-n[data-idle]`).
+    expect(node).toHaveAttribute("data-idle", "true");
     const play = screen.getByTestId("node-play-btn");
     expect(play.dataset.play).toBe("start");
     fireEvent.click(play);
@@ -70,7 +68,7 @@ describe("the card of an on-demand node (ADR-0086)", () => {
 
   it("has no ▶ when the canvas grants none (archived Run, no right)", () => {
     render(<EditNode {...card({ onDemand: true, inRun: true })} />, { wrapper: Wrapper });
-    expect(screen.getByTestId("node-card").style.opacity).toBe("0.6");
+    expect(screen.getByTestId("node-card")).toHaveAttribute("data-idle", "true");
     expect(screen.queryByTestId("node-play-btn")).toBeNull();
   });
 
@@ -78,14 +76,14 @@ describe("the card of an on-demand node (ADR-0086)", () => {
     render(<EditNode {...card({ onDemand: true, inRun: true, status: "running" })} />, {
       wrapper: Wrapper,
     });
-    expect(screen.getByTestId("node-card").style.opacity).toBe("");
+    expect(screen.getByTestId("node-card").hasAttribute("data-idle")).toBe(false);
     expect(screen.queryByTestId("node-play-btn")).toBeNull();
   });
 
   it("carries a discreet marker on a template, not the greyed look", () => {
     render(<EditNode {...card({ onDemand: true, inRun: false })} />, { wrapper: Wrapper });
     expect(screen.getByTestId("on-demand-marker")).toBeTruthy();
-    expect(screen.getByTestId("node-card").style.opacity).toBe("");
+    expect(screen.getByTestId("node-card").hasAttribute("data-idle")).toBe(false);
   });
 
   it("a skipped node carries a ▶ that retries it", () => {

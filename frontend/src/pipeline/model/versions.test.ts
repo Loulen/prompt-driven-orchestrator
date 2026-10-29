@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { OpenPipeline } from "../store/editState";
 import { INITIAL_DRAFT_STATE } from "../store/draftSession";
-import { changesLabel, draftLaunch, lastVersionOf, savedAgo, savedOn, versionLabel } from "./versions";
+import { changesLabel, draftLaunch, lastVersionOf, savedAgo, savedOn, shortSavedAgo, versionLabel } from "./versions";
 
 function entry(id: string, version?: { number: number; title: string }): PipelineListEntry {
   return {
@@ -69,5 +69,17 @@ describe("versions", () => {
     expect(savedAgo("2026-10-14T09:00:00", now)).toBe("Oct 14");
     expect(savedOn("2026-10-14T09:00:00")).toBe("Oct 14");
     expect(savedAgo("nope", now)).toBe("");
+  });
+});
+
+describe("shortSavedAgo", () => {
+  const now = new Date("2026-10-28T12:00:00Z");
+  const ago = (s: number) => new Date(now.getTime() - s * 1000).toISOString();
+  it("says the age in one short unit", () => {
+    expect(shortSavedAgo(ago(20), now)).toBe("now");
+    expect(shortSavedAgo(ago(12 * 60), now)).toBe("12m");
+    expect(shortSavedAgo(ago(2 * 3600 + 5), now)).toBe("2h");
+    expect(shortSavedAgo(ago(4 * 86_400), now)).toBe("4d");
+    expect(shortSavedAgo("not a date", now)).toBe("");
   });
 });

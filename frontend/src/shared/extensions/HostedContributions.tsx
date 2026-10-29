@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Button } from "../ui/button";
+import { Button } from "../ui/kit";
 import ExtensionBoundary from "./ExtensionBoundary";
 import ExtensionIcon from "./ExtensionIcon";
 import { runHostedCommand, sourceOf, useHostedContributions, type HostContext, type HostedElement } from "./hosted";
@@ -23,8 +23,7 @@ export function HostedContribution({
     return (
       <ExtensionBoundary extensionId={element.extension.id}>
         <Button
-          size="xs"
-          variant="outline"
+          size="sm"
           onClick={() => void runHostedCommand(element)}
           data-testid={`hosted-action-${element.key}`}
         >

@@ -10,9 +10,11 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.55.0 — Sessions hébergées : relancer, configurer, déposer du texte, Artefacts live, attente déclarée (CORE-123)
+## 2.66.0 — Sessions hébergées par une extension (CORE-121)
 
-- **`pdo-extension-api` 0.17.0** complétée, sans rupture : `Host::relaunch_session`,
+### Relancer, configurer, déposer du texte, Artefacts live, attente déclarée (CORE-123)
+
+- **`pdo-extension-api` 0.19.0** complétée, sans rupture : `Host::relaunch_session`,
   `configure_session`, `type_in_session`, `forget_session`, `live_artifacts` et
   `live_artifact` ; `HostedSession::wait_message` ; `LiveArtifact` ; les événements
   `hosted_session_forgotten` et `hosted_live_artifacts_changed`, publiés comme
@@ -31,10 +33,10 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   la poser. Au démarrage, les Sessions hébergées vivantes d'une extension absente sont
   terminées, leur enregistrement gardé.
 
-## 2.54.0 — Sessions hébergées : ouvrir, tenir et terminer une session hors Run (CORE-122)
+### Ouvrir, tenir et terminer une session hors Run (CORE-122)
 
-- **`pdo-extension-api` 0.17.0**, sans rupture : une Extension fait tenir par le core une
-  Session hébergée (ADR-0091), agent ou shell, hors de tout Run, par son `Host` :
+- **`pdo-extension-api` 0.19.0**, sans rupture : une Extension fait tenir par le core une
+  Session hébergée (ADR-0092), agent ou shell, hors de tout Run, par son `Host` :
   `open_session`, `hosted_session`, `hosted_sessions`, `terminate_session`. Nouveaux
   `SessionKind::Hosted`, `SessionRef::extension` et `SessionRef::key` (absents pour les autres
   sessions, le JSON de leurs événements ne change pas), et l'événement `hosted_session_changed`,
@@ -49,6 +51,65 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   n'est jamais modifié. Le balayage ne tue jamais une Session hébergée enregistrée vivante, et
   tue tout autre nom au préfixe `pdo-hosted-`.
 - Une extension ne peut plus poser `PDO_SESSION_ID` dans une session : c'est une variable du core.
+
+## 2.58.0 — Champ de commande : palette, Actions et Sources de recherche (CORE-112)
+
+- **`pdo-extension-api` 0.18.0**, sans rupture : l'emplacement `palette` (le Champ de
+  commande, Ctrl+K) accepte les Actions globales et le nouveau type de contribution Source de
+  recherche (`UiContribution::search`, `type: "search"`), dont la fonction répond aux requêtes
+  tapées (au plus 50 résultats gardés, abandonnée après 5 s, isolée dans son groupe en cas
+  d'erreur). Une commande peut déclarer l'Opération qu'elle fait (`UiCommand::guarded_by`,
+  `operation` sur le fil) : le core masque alors, partout, l'Action que l'Autorisation
+  d'opération refuse. Le module partagé `@pdo/extension-ui` passe en 0.18.0 (types
+  `SearchResult`, `SearchFunction`, `PaletteContext`). Détails dans
+  `docs/reference/extension-ui.md`.
+- La palette retient les cinq derniers éléments ouverts (`pdo.palette.recent`, par
+  navigateur) et les propose sur une requête vide.
+
+## 2.57.0 — Save univoque d'un pipeline (CORE-111)
+
+- Le Save d'un pipeline offre trois issues exclusives : nouvelle version, nouvelle version en
+  gardant l'ancienne à part comme pipeline `<nom> (vN)`, ou remplacement de la dernière version
+  (même numéro). La combinaison « remplacer et garder » disparaît.
+- Kit partagé : une touche (`Kbd`) dans un bouton prend la couleur du bouton.
+
+## 2.56.0 — Filtres des Runs dans un entonnoir (CORE-110)
+
+- Les emplacements `runs/filter` et `projects/filter` changent de place, sans changer d'API :
+  leurs contributions sont des lignes du menu de l'entonnoir de l'en-tête des Runs, après les
+  filtres du core. Un attribut posé compte comme un filtre actif et « Clear all » le vide.
+  `runs/header` se place avant l'entonnoir et « New Run ». Détails dans
+  `docs/reference/extension-ui.md`.
+- Le bouton « Project » de l'en-tête des Runs disparaît : les Projets se règlent dans Settings.
+
+## 2.55.0 — Shell Workbench (CORE-109)
+
+- Les emplacements d'extension du shell changent de place, sans changer d'API :
+  `topbar/end` passe avant les icônes du core (New run, Stats, Settings, le thème),
+  `topbar/account` après le thème, `statusbar` tient sur une ligne de 22 px (icône et nombre,
+  le nom en tooltip). Détails dans `docs/reference/extension-ui.md`.
+- Le panneau gauche s'ouvre à 260 px et l'inspecteur à 400 px, quelle que soit la fenêtre. Une
+  disposition déjà enregistrée (`pdo.layout.run`) garde ses pourcentages.
+- L'erreur de « Run now » devient un toast, qui disparaît comme les autres.
+
+## 2.54.0 — Acogni Driver : design system partagé, polices embarquées, échelle d'UI (CORE-107)
+
+- **Cassant pour les extensions** : tous les tokens de style sont renommés, sans alias
+  (ADR-0091). Les couleurs passent par des rôles (`--surface-0/1/2`, `--text`, `--text-2`,
+  `--text-3`, `--line*`, `--primary*`, `--hover`, `--selected`…) et une palette OKLCH des deux
+  thèmes (`--color-paper*`, `--color-ink*`, `--color-st-*`) ; `--color-bg-*`, `--color-fg-*`,
+  `--color-acc*`, les `--color-st-*-bg` et `--font-sans`/`--font-mono` disparaissent. La table de
+  correspondance est dans `docs/reference/extension-ui.md` § *The design system*. Côté core, les
+  utilitaires Tailwind suivent les rôles (`bg-surface-1`, `text-text-3`, `bg-st-failed/14`) et
+  l'échelle typographique remplace celle de Tailwind (`text-2xs` à `text-xl`, 10 à 16 px).
+- **`pdo-extension-api` 0.17.0**, sans rupture de l'API Rust : le module partagé
+  `@pdo/extension-ui` exporte les primitives du design system (`Button`, `IconButton`,
+  `Select`, `Menu`, `Modal`, `ConfirmDialog`, `toast`, `Tabs`, `Section`…), types compris. La
+  feuille de tokens est servie à l'adresse stable `/shared/tokens.css`.
+- Archivo et Geist Mono sont servies par le binaire (`/shared/fonts/`, licences SIL OFL 1.1) :
+  l'interface n'appelle plus aucun CDN.
+- Réglage « UI scale » (Settings › Interface : 100, 110 ou 120 %, 120 par défaut), par
+  navigateur (`pdo.ui.scale`).
 
 ## 2.53.0 — Cloner un dépôt distant depuis Settings › Projects et New Run (CORE-97)
 

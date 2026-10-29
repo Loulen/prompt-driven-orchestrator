@@ -25,7 +25,7 @@ export default function FinishEditingConfirmModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="finish-editing-backdrop"
       onClick={onCancel}
     >
@@ -33,14 +33,13 @@ export default function FinishEditingConfirmModal({
         role="dialog"
         aria-label="Finish editing"
         data-testid="finish-editing-modal"
-        className="flex w-[400px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-2 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className="flex w-[400px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+        <h3 className="font-medium text-text text-md">
           Finish editing with unsaved changes?
         </h3>
-        <p className="mt-2 text-fg-2">
+        <p className="mt-2 text-text-2">
           Your changes to this run are not saved. Finishing without saving throws them away; the run
           keeps its current pipeline.
         </p>
@@ -48,24 +47,21 @@ export default function FinishEditingConfirmModal({
           <button
             onClick={onCancel}
             data-testid="finish-editing-cancel"
-            className="cursor-pointer rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
           >
             Keep editing
           </button>
           <button
             onClick={onDiscard}
             data-testid="finish-editing-discard"
-            className="cursor-pointer rounded-md border border-st-blocked/50 bg-bg-3 px-3 py-1.5 text-st-blocked transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md border border-st-blocked/50 bg-surface-2 px-3 py-1.5 text-st-blocked transition-colors hover:bg-hover text-xs"
           >
             Discard changes
           </button>
           <button
             onClick={onSave}
             data-testid="finish-editing-save"
-            className="cursor-pointer rounded-md bg-acc px-3 py-1.5 font-medium text-on-acc transition-colors hover:bg-acc-dim"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi text-xs"
           >
             Save for this run
           </button>

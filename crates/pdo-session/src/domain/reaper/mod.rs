@@ -55,7 +55,7 @@ pub struct SweepInput {
     /// is what a browser reload leaves behind: it is an idle verdict, not a fresh
     /// one. Same clock as `now`, resolved by the caller in the same pass.
     pub focus_age: Option<Duration>,
-    /// Whether a live Session hébergée of this name is recorded (ADR-0091) —
+    /// Whether a live Session hébergée of this name is recorded (ADR-0092) —
     /// filled for [`ParsedSession::Hosted`] only, `false` elsewhere.
     pub recorded: bool,
 }
@@ -200,7 +200,7 @@ fn decide_one(
                 }),
             }
         }
-        // ADR-0091: a Session hébergée has no TTL and no owner Run; its record
+        // ADR-0092: a Session hébergée has no TTL and no owner Run; its record
         // alone keeps it. The record is written before its tmux session is
         // created, so a live one is never seen here without it.
         ParsedSession::Hosted if input.recorded => SweepVerdict::Keep,
@@ -373,7 +373,7 @@ mod tests {
         }
     }
 
-    /// ADR-0091: a recorded Session hébergée is kept whatever its age or its
+    /// ADR-0092: a recorded Session hébergée is kept whatever its age or its
     /// attachment; one with the prefix and no live record is killed, as an
     /// absence verdict.
     #[test]

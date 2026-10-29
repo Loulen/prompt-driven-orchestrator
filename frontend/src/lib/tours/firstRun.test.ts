@@ -1117,16 +1117,16 @@ describe("the definition holds the copy rules", () => {
   });
 
   /**
-   * The ticket says "Start"; the button says **Launch** (design Q1). The copy
+   * The ticket says "Start"; the button says **Run** (design Q1). The copy
    * names what is on screen — a tour that told someone to press a button that is
    * not there is worse than no tour. Same correction for "the session": the UI
    * calls it the terminal, inside the Run inspector (#825).
    */
-  it("says Launch, because that is what the button says", () => {
+  it("says Run, because that is what the button says", () => {
     const fake = new FakeApp();
     const step = stepById("launch");
     expect(step.title).toContain("Launch");
-    expect(stepBody(step, fake.obs())).toContain("Launch");
+    expect(stepBody(step, fake.obs())).toContain("Click Run.");
     const says = (s: TourStep, re: RegExp) =>
       re.test(stepBody(s, fake.obs())) || re.test(s.title);
     expect(STEPS.some((s) => says(s, /\bStart\b/))).toBe(false);

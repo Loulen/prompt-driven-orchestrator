@@ -220,12 +220,14 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
   });
 
   describe("StatsModal — full-screen Stats window (#638)", () => {
-    it("covers the application and exposes Performance as the fifth side-rail section", async () => {
+    it("covers the application and exposes Performance as the fifth tab of the strip", async () => {
       render(<StatsModal open onClose={() => {}} />);
 
-      expect(await screen.findByTestId("stats-modal")).toHaveClass("h-screen", "w-screen");
+      expect(await screen.findByTestId("stats-modal")).toHaveClass("h-[calc(100dvh/var(--app-zoom,1))]", "w-[calc(100vw/var(--app-zoom,1))]");
       const rail = screen.getByRole("tablist", { name: "Stats sections" });
-      expect(rail).toHaveClass("flex-col");
+      // A strip of tabs under the header, not a side rail.
+      expect(rail).not.toHaveClass("flex-col");
+      expect(rail.closest("[data-testid='stats-modal']")?.querySelector("header")).not.toContainElement(rail);
       expect(screen.getAllByRole("tab")).toHaveLength(5);
       expect(screen.getByTestId("stats-tab-performance")).toHaveTextContent("Performance");
       expect(screen.getByRole("group", { name: "Period" })).toBeInTheDocument();
@@ -588,6 +590,25 @@ describe("StatsModal — per-tab filters, ephemeral (#819)", () => {
   });
 });
 
+describe("StatsModal — a refused or failed request", () => {
+  it("shows the error in the tab's page alone, never under a « Loading… », and stops announcing a computation", async () => {
+    realCharts = true;
+    fetchStatsOverviewMock.mockRejectedValue(new Error("403 Forbidden"));
+    const user = userEvent.setup();
+    render(<StatsModal open onClose={() => {}} />);
+
+    const alert = await screen.findByTestId("stats-error", {}, CHARTS_CHUNK);
+    expect(alert).toHaveTextContent("403 Forbidden");
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    expect(screen.getByTestId("stats-computed-at")).not.toHaveTextContent("Computing…");
+
+    // Cost reads its own endpoint: the overview's refusal does not follow it.
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    await screen.findByTestId("stats-chart-cost");
+    expect(screen.queryByTestId("stats-error")).not.toBeInTheDocument();
+  });
+});
+
 describe("StatsModal — absorptions (#890)", () => {
   it("refetches the tab on screen after a Combine, without forcing Performance past its memo", async () => {
     const user = userEvent.setup();
@@ -761,7 +782,7 @@ describe("StatsModal — Pricing details in the shell's secondary panel (#944)",
     await waitFor(() => expect(fetchStatsCostMock).toHaveBeenCalledTimes(1));
     const panel = screen.getByTestId("stats-pricing-details");
     // Framed by the shell under the header, not over it.
-    expect(panel).toHaveClass("top-14");
+    expect(panel).toHaveClass("top-(--h-topbar)");
     expect(panel).not.toHaveClass("inset-y-0");
 
     await user.click(screen.getByTestId("stats-refresh"));
@@ -798,11 +819,10 @@ describe("StatsModal — Pricing details in the shell's secondary panel (#944)",
   it("shows the trigger's open state, not only aria-expanded", async () => {
     const { user } = await openPricing();
     const trigger = screen.getByTestId("stats-pricing-trigger");
-    expect(trigger).toHaveClass("border-acc", "bg-acc/15");
+    expect(trigger).toHaveAttribute("aria-pressed", "true");
 
     await user.click(trigger);
-    expect(trigger).not.toHaveClass("border-acc");
-    expect(trigger).toHaveClass("border-line", "bg-bg-3");
+    expect(trigger).toHaveAttribute("aria-pressed", "false");
   });
 
   it("returns focus to the trigger on ✕, Escape and the toggle", async () => {

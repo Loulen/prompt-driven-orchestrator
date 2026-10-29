@@ -60,30 +60,28 @@ export default function ExportNodeYamlModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       data-testid="export-node-backdrop"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[80vh] w-[560px] max-w-[90vw] flex-col rounded-lg border border-line bg-bg-2 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className="flex max-h-[calc(80vh/var(--app-zoom,1))] w-[560px] max-w-[calc(90vw/var(--app-zoom,1))] flex-col rounded-lg border border-line bg-surface-1 shadow-lg text-sm"
         data-testid="export-node-modal"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <div className="min-w-0">
-            <h3 className="font-medium text-fg" style={{ fontSize: "13px" }}>
+            <h3 className="font-medium text-text text-md">
               Export as YAML
             </h3>
-            <p className="mt-0.5 truncate text-fg-4" style={{ fontSize: "11px" }}>
+            <p className="mt-0.5 truncate text-text-3 text-xs">
               {node.name ?? node.id}
             </p>
           </div>
         </div>
 
         <pre
-          className="min-h-0 flex-1 overflow-auto border-b border-line bg-bg-1 p-3 font-mono text-fg-3 select-text"
-          style={{ fontSize: "11px", lineHeight: "1.6", tabSize: 2 }}
+          className="min-h-0 flex-1 overflow-auto border-b border-line bg-surface-0 p-3 font-mono text-text-3 select-text text-xs" style={{ lineHeight: "1.6", tabSize: 2 }}
           data-testid="export-node-yaml"
         >
           {highlightYaml(yaml)}
@@ -93,8 +91,7 @@ export default function ExportNodeYamlModal({
           <button
             onClick={handleCopy}
             data-testid="export-node-copy"
-            className="flex items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
+            className="flex items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
           >
             {copied ? <Check size={13} className="text-st-done" /> : <Copy size={13} />}
             {copied ? "Copied!" : "Copy"}
@@ -102,8 +99,7 @@ export default function ExportNodeYamlModal({
           <button
             onClick={handleDownload}
             data-testid="export-node-download"
-            className="flex items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 transition-colors hover:bg-bg-4"
-            style={{ fontSize: "11.5px" }}
+            className="flex items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
           >
             <Download size={13} />
             Download .yaml
@@ -111,8 +107,7 @@ export default function ExportNodeYamlModal({
           <button
             onClick={onClose}
             data-testid="export-node-close"
-            className="rounded-md bg-acc px-3 py-1.5 font-medium text-bg-0 transition-colors hover:bg-acc-dim"
-            style={{ fontSize: "11.5px" }}
+            className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-colors hover:bg-primary-hi text-xs"
           >
             Close
           </button>

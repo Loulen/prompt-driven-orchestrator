@@ -231,7 +231,7 @@ export default function SourceBranchField({
 
   return (
     <div ref={containerRef} className="relative flex flex-col gap-1.5">
-      <div className="flex items-start gap-1.5">
+      <div className="flex items-center gap-1">
         {/* ── The field: what was chosen, and how old its tip is. No écart. ── */}
         <div className="relative flex-1 min-w-0">
           <button
@@ -249,22 +249,16 @@ export default function SourceBranchField({
                 openPicker();
               }
             }}
-            className={`flex w-full items-center gap-2 rounded-md border bg-bg-3 px-2.5 py-1.5 text-left font-mono text-fg transition-colors focus:outline-none disabled:opacity-40 ${
-              pickerOpen ? "border-acc" : "border-line-strong hover:border-fg-4"
-            }`}
-            style={{ fontSize: "12px" }}
+            className="d-sel d-sel--mono ln-branch__field"
+            title={value ? `${value}${selectedAge ? ` · ${selectedAge}` : ""}` : undefined}
             data-testid={`${testIdPrefix}-trigger`}
           >
-            <KindIcon kind={selected?.kind} />
-            <span className="min-w-0 flex-1 truncate">
+            <KindIcon kind={selected?.kind} size={13} />
+            <span className="d-sel__val">
               {value || (triggerDisabled ? "Loading branches…" : "Select a branch")}
             </span>
-            {selectedAge && (
-              <span className="shrink-0 text-fg-4" style={{ fontSize: "11px" }}>
-                {selectedAge}
-              </span>
-            )}
-            <ChevronDown size={12} className="shrink-0 text-fg-4" />
+            {selectedAge && <span className="ln-sel__count">{selectedAge}</span>}
+            <ChevronDown className="d-sel__chev" size={12} strokeWidth={1.5} aria-hidden />
           </button>
 
           {pickerOpen && (
@@ -346,7 +340,7 @@ export default function SourceBranchField({
                 aria-label={localBranchWarning(selected)}
                 data-testid={`${testIdPrefix}-local-warning`}
               >
-                <TriangleAlert size={12} className="text-fg-4" aria-hidden />
+                <TriangleAlert size={12} className="text-text-3" aria-hidden />
               </span>
             )}
           </span>

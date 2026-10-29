@@ -1,37 +1,50 @@
+import { Fragment } from "react";
+import { ArrowUp, Layers } from "lucide-react";
+import { IconButton } from "../../../../shared/ui/kit";
 
-
+/**
+ * The drill path of a tab, on the left of its filter bar
+ * (`overlays.statsFilters`): up a level, then `Total / pipeline / node`, every
+ * crumb but the last a button back to its level.
+ */
 export function Breadcrumb({
   crumbs,
   testid = "stats-cost-breadcrumb",
 }: {
   crumbs: { label: string; onClick?: () => void }[];
-  /** The Performance « By model » axis reuses the same breadcrumb under its own
-   *  test id (#737). */
+  /** The Performance and Sessions tabs reuse it under their own test id. */
   testid?: string;
 }) {
+  const up = crumbs.length > 1 ? crumbs[crumbs.length - 2].onClick : undefined;
   return (
-    <div
-      className="mb-3 text-fg-4"
-      style={{ fontSize: "10.5px" }}
-      data-testid={testid}
-    >
+    <nav className="sx-crumbs" aria-label="Level" data-testid={testid}>
+      <IconButton icon={ArrowUp} label="Up a level" size="sm" disabled={!up} onClick={up} />
       {crumbs.map((crumb, index) => (
-        <span key={`${crumb.label}-${index}`}>
-          {index > 0 ? " / " : ""}
+        <Fragment key={`${crumb.label}-${index}`}>
+          {index > 0 ? (
+            <span className="sx-crumbs__sep" aria-hidden>
+              {" / "}
+            </span>
+          ) : null}
           {crumb.onClick ? (
             <button
               type="button"
               aria-label={`Back to ${crumb.label}`}
+              title={crumb.label}
               onClick={crumb.onClick}
-              className="hover:text-fg-2 underline decoration-dotted underline-offset-2"
+              className="sx-crumb"
             >
-              {crumb.label}
+              {index === 0 && <Layers size={13} strokeWidth={1.5} aria-hidden />}
+              <span>{crumb.label}</span>
             </button>
           ) : (
-            <span className="text-fg-3">{crumb.label}</span>
+            <span className="sx-crumb" aria-current="page" title={crumb.label}>
+              {index === 0 && <Layers size={13} strokeWidth={1.5} aria-hidden />}
+              <span>{crumb.label}</span>
+            </span>
           )}
-        </span>
+        </Fragment>
       ))}
-    </div>
+    </nav>
   );
 }

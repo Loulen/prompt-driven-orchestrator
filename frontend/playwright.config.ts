@@ -35,7 +35,13 @@ export default defineConfig({
       origins: [
         {
           origin: `http://${HOST}:${PORT}`,
-          localStorage: [{ name: "pdo.tour.offered", value: "1" }],
+          // The UI scale at 100 %: the specs measure the interface in CSS
+          // pixels as drawn at 1:1. The design-system spec covers the 120 %
+          // the interface opens at by default (`lib/uiScale.ts`).
+          localStorage: [
+            { name: "pdo.tour.offered", value: "1" },
+            { name: "pdo.ui.scale", value: "100" },
+          ],
         },
       ],
     },

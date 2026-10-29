@@ -214,13 +214,13 @@ function SnapBadge({ at, zoom, text }: { at: Point; zoom: number; text: string }
       data-testid="wiring-snap-badge"
       pointerEvents="none"
     >
-      <rect width={width} height={16} rx={4} fill="var(--color-bg-2)" stroke={WIRE} strokeOpacity={0.6} />
+      <rect width={width} height={16} rx={2} fill="var(--surface-1)" stroke={WIRE} strokeOpacity={0.6} />
       <text
         x={width / 2}
         y={11.5}
         textAnchor="middle"
         fill={WIRE}
-        style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 10 }}
+        className="font-mono text-2xs"
       >
         {text}
       </text>

@@ -260,7 +260,7 @@ fn core_entry(
         ),
         ResourceKind::Update => (
             "Updates",
-            "Check for and apply updates of PDO",
+            "Check for and apply updates",
             &["check", "apply"],
         ),
         ResourceKind::Service => (

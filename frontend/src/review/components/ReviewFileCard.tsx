@@ -62,6 +62,9 @@ interface Props {
   view: ViewMode;
   collapsed: boolean;
   onToggle: () => void;
+  /** Marked « Viewed » in this browser (dims the header). */
+  viewed?: boolean;
+  onViewed?: () => void;
   /** Lets the page track the card for scroll-spy and "click a file → scroll". */
   registerEl: (path: string, el: HTMLDivElement | null) => void;
   /** This file's comments for the current pair (drafts + sent). */
@@ -88,6 +91,8 @@ export default function ReviewFileCard({
   view,
   collapsed,
   onToggle,
+  viewed = false,
+  onViewed,
   registerEl,
   entries = NO_ENTRIES,
   comments,
@@ -224,7 +229,8 @@ export default function ReviewFileCard({
       data-proposed={sentStates.proposed}
       data-resolved={sentStates.resolved}
       data-outdated={nOutdated}
-      className="mx-3 my-2.5 overflow-hidden rounded-md border border-line bg-bg-2"
+      data-viewed={viewed}
+      className="rv-fc"
     >
       {anchorCss && <style>{anchorCss}</style>}
       <ReviewFileHeader
@@ -233,13 +239,15 @@ export default function ReviewFileCard({
         pair={pair}
         collapsed={collapsed}
         onToggle={onToggle}
+        viewed={viewed}
+        onViewed={onViewed}
         nDrafts={nDrafts}
         nOutdated={nOutdated}
         sentStates={sentStates}
       />
 
       {!collapsed && (
-        <div data-testid="review-file-body" className="overflow-x-auto">
+        <div data-testid="review-file-body" className="rv-diff overflow-x-auto">
           {comments && (
             <FileCommentGroups
               runId={runId}
@@ -251,15 +259,15 @@ export default function ReviewFileCard({
             />
           )}
           {file.binary ? (
-            <div className="px-4 py-[18px] text-center text-fg-4" style={{ fontSize: "11px" }}>
+            <div className="px-4 py-[18px] text-center text-text-3 text-xs">
               Binary file, not shown
             </div>
           ) : pureRename ? (
-            <div className="px-4 py-[18px] text-center text-fg-4" style={{ fontSize: "11px" }}>
+            <div className="px-4 py-[18px] text-center text-text-3 text-xs">
               Renamed without changes
             </div>
           ) : file.hunks.length === 0 ? (
-            <div className="px-4 py-[18px] text-center text-fg-4" style={{ fontSize: "11px" }}>
+            <div className="px-4 py-[18px] text-center text-text-3 text-xs">
               No content changes
             </div>
           ) : (
@@ -271,7 +279,7 @@ export default function ReviewFileCard({
               // resolved theme keeps code colours legible. `index.css` then maps the
               // wrapper's surface variables onto PDO tokens for both.
               diffViewTheme={resolved}
-              diffViewFontSize={11}
+              diffViewFontSize={12}
               diffViewHighlight={false}
               diffViewWrap={false}
               diffViewAddWidget
@@ -333,7 +341,7 @@ export default function ReviewFileCard({
             />
           )}
           {contents.kind === "failed" && hasBody && (
-            <div className="border-t border-line px-3 py-1 text-fg-4" style={{ fontSize: "10px" }}>
+            <div className="border-t border-line px-3 py-1 text-text-3 text-2xs">
               Full file content unavailable at these refs — context expansion disabled for this file.
             </div>
           )}

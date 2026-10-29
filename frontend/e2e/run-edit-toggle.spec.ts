@@ -1,17 +1,17 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import * as os from "node:os";
 import { runMultipart } from "./helpers";
 
 // Layer 3b — a run opens on its canvas automatically (issue #57), in
 // « pilotage » (ADR-0085): read-only until the Edit pencil › « Edit for this
 // run », which brings the edit palette back; « Finish editing » locks it again.
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const PIPELINE_NAME = `e2e-unified-edit-${process.pid}-${Date.now()}`;
-const PIPELINE_DIR = path.join(WORKSPACE_ROOT, ".pdo", "pipelines");
+// Instance pipelines live under `$HOME/.pdo/pipelines` (ADR-0059), not in the
+// repo: a file seeded under `<repo>/.pdo/pipelines` never reaches the list.
+const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
 
 const SEED_YAML = `name: ${PIPELINE_NAME}
@@ -67,7 +67,7 @@ async function createRun(
 
 test("unified edit mode: selecting a run opens editor canvas automatically", async ({ page, request }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Create a run via the (multipart) API
   const run_id = await createRun(request);
@@ -91,7 +91,7 @@ test("unified edit mode: selecting a run opens editor canvas automatically", asy
 
 test("Edit for this run unlocks the canvas, Finish editing locks it again", async ({ page, request }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   await createRun(request);
 

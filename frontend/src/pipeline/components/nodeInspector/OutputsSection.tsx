@@ -1,7 +1,8 @@
 import type { PortDef } from "../../../shared/generated/PortDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../../model/pipeline";
 import { outputRenameImpact } from "../../../lib/edgePorts";
-import { SectionHead } from "../InspectorPrimitives";
+import { Inbox, Plus } from "lucide-react";
+import { EmptyState, IconButton, Section } from "../../../shared/ui/kit";
 import OutputPortCard from "../OutputPortCard";
 
 /** The node's declared outputs: its production contract (CONTEXT.md § Node). */
@@ -36,30 +37,32 @@ export default function OutputsSection({
   }
 
   return (
-    <>
-      <SectionHead
-        title="Outputs"
-        count={node.outputs.length}
-        onAdd={add}
-        addTestId="add-output-port"
-      />
-      <div className="flex flex-col">
-        {node.outputs.map((port, i) => (
-          <OutputPortCard
-            key={i}
-            index={i}
-            port={port}
-            highlighted={highlightedPort === port.name}
-            onUpdate={(updates) => update(i, updates)}
-            onRemove={() => remove(i)}
-            schema={port.frontmatter}
-            onSchemaChange={(fm) => update(i, { frontmatter: fm ?? null })}
-            allowInstructions={node.type === "agent"}
-            takenNames={node.outputs.filter((_, j) => j !== i).map((p) => p.name)}
-            wiring={outputRenameImpact(pipeline, node.id, port.name)}
-          />
-        ))}
-      </div>
-    </>
+    <Section
+      title="Outputs"
+      count={node.outputs.length}
+      flush
+      aside={<IconButton icon={Plus} size="sm" label="Add output" onClick={add} data-testid="add-output-port" />}
+    >
+      {node.outputs.length === 0 && (
+        <EmptyState icon={Inbox} layout="row">
+          No output
+        </EmptyState>
+      )}
+      {node.outputs.map((port, i) => (
+        <OutputPortCard
+          key={i}
+          index={i}
+          port={port}
+          highlighted={highlightedPort === port.name}
+          onUpdate={(updates) => update(i, updates)}
+          onRemove={() => remove(i)}
+          schema={port.frontmatter}
+          onSchemaChange={(fm) => update(i, { frontmatter: fm ?? null })}
+          allowInstructions={node.type === "agent"}
+          takenNames={node.outputs.filter((_, j) => j !== i).map((p) => p.name)}
+          wiring={outputRenameImpact(pipeline, node.id, port.name)}
+        />
+      ))}
+    </Section>
   );
 }

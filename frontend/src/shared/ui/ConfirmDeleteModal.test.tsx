@@ -54,23 +54,31 @@ describe("ConfirmDeleteModal", () => {
   it("calls onClose when Escape is pressed", () => {
     const onClose = vi.fn();
     render(<ConfirmDeleteModal {...baseProps} onClose={onClose} />);
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(screen.getByTestId("confirm-delete-modal"), { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("calls onConfirm when Enter is pressed", () => {
+  it("calls onConfirm when Enter is pressed in the body, or Ctrl+Enter anywhere in it", () => {
     const onConfirm = vi.fn();
     render(<ConfirmDeleteModal {...baseProps} onConfirm={onConfirm} />);
-    fireEvent.keyDown(document, { key: "Enter" });
+    fireEvent.keyDown(screen.getByText("my-pipeline"), { key: "Enter" });
     expect(onConfirm).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(screen.getByTestId("confirm-delete-modal"), { key: "Enter", ctrlKey: true });
+    expect(onConfirm).toHaveBeenCalledTimes(2);
   });
 
   it("calls onClose when clicking the backdrop", () => {
     const onClose = vi.fn();
     render(<ConfirmDeleteModal {...baseProps} onClose={onClose} />);
-    const backdrop = screen.getByTestId("confirm-delete-backdrop");
-    fireEvent.click(backdrop);
+    // The backdrop of a modal <dialog> is the dialog itself.
+    fireEvent.click(screen.getByTestId("confirm-delete-modal"));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the consequence in a few words, the target in mono", () => {
+    render(<ConfirmDeleteModal {...baseProps} />);
+    expect(screen.getByText("Removes its YAML and prompts")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Delete this pipeline?" })).toBeInTheDocument();
   });
 
   // #227 — the opt-in cascade checkbox renders only when `cascadeLabel` is set
@@ -114,7 +122,7 @@ describe("ConfirmDeleteModal", () => {
         <ConfirmDeleteModal {...baseProps} onConfirm={onConfirm} cascadeLabel="Also remove the Library copy" />,
       );
       fireEvent.click(screen.getByTestId("delete-cascade-checkbox"));
-      fireEvent.keyDown(document, { key: "Enter" });
+      fireEvent.keyDown(screen.getByTestId("confirm-delete-modal"), { key: "Enter", ctrlKey: true });
       expect(onConfirm).toHaveBeenCalledWith(true);
     });
   });

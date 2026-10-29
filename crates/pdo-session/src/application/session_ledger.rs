@@ -49,7 +49,7 @@ pub struct SessionLedger {
     tmux: Arc<dyn Tmux>,
     host: Arc<dyn ExtensionHost>,
     live: Mutex<Live>,
-    /// The live Sessions hébergées (ADR-0091), as their registry counts
+    /// The live Sessions hébergées (ADR-0092), as their registry counts
     /// them: the Cap de sessions concurrentes counts them with the Nodes.
     hosted_live: AtomicUsize,
 }

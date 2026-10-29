@@ -6,11 +6,12 @@ import { cleanupRuns, E2E_TARGET_REPO, openPipelineForEdit, pickPipeline } from 
 // Layer 3b — ADR-0088: Save freezes the shared draft as a version. The history
 // lists them, shows one read only and restores it into the draft; a launch
 // with a draft that differs from the last version asks first, and the Run
-// keeps the version it launched; « Keep old as new pipeline » lists the
-// version saved until now as a pipeline of its own.
+// keeps the version it launched; « Keep vN apart » lists the version saved
+// until now as a pipeline of its own; Cancel saves nothing.
 
 const PIPELINE_NAME = `e2e-versions-${process.pid}-${Date.now()}`;
 let PIPELINE_PATH = "";
+const LONG_TITLE = "Split the reviewer into a code reviewer and a visual reviewer";
 const runIds: string[] = [];
 
 const YAML = `name: ${PIPELINE_NAME}
@@ -60,12 +61,13 @@ async function versionsTab(page: Page) {
 test("save versions, view and restore one, launch the last, keep the old as a pipeline", async ({ page }) => {
   test.setTimeout(90_000);
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openPipelineForEdit(page, PIPELINE_NAME);
   const tabTitle = page.getByTestId(`tab-title-${PIPELINE_NAME}`);
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).not.toHaveAttribute("data-dirty", "true");
 
-  // 1. Change the draft, Save… offers v2, ticked: save it.
+  // 1. Change the draft, Save… offers v2 first: save it.
   await page.getByTestId("toolbar-info").click();
   // The tab takes no edit until its draft has arrived.
   const promptRequired = page.getByTestId("prompt-required-checkbox");
@@ -73,32 +75,45 @@ test("save versions, view and restore one, launch the last, keep the old as a pi
     await promptRequired.uncheck({ timeout: 1_000 });
     await expect(promptRequired).not.toBeChecked();
   }).toPass({ timeout: 15_000 });
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
   await expect(page.getByTestId("draft-changes")).toContainText("since v1");
   await page.getByTestId("save-button").click();
   const save = page.getByTestId("save-version-modal");
-  await expect(save.getByTestId("save-version-new")).toBeChecked();
+  await expect(save.getByRole("radio", { name: "New version v2" })).toHaveAttribute("aria-checked", "true");
   await expect(save.getByTestId("save-version-title-input")).toHaveValue("v2");
+  await save.getByTestId("save-version-title-input").fill(LONG_TITLE);
   await expect(save.getByTestId("save-version-confirm")).toHaveText(/Save v2/);
   await save.getByTestId("save-version-confirm").click();
   await expect(tabTitle).toHaveText(`${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).not.toHaveAttribute("data-dirty", "true");
 
   // 2. The history has v2 and v1; v1 opens read only and goes back into the draft.
   const history = await versionsTab(page);
   await expect(history.getByTestId("version-row-2")).toContainText("last");
   await expect(history.getByTestId("version-row-1")).toContainText("1.0");
+  // A narrow pane: the columns tighten, « last » gives way, the title keeps the room.
+  await history.evaluate((el) => {
+    el.style.width = "240px";
+  });
+  await expect(history.getByTestId("version-last")).toBeHidden();
+  const title = history.getByTestId("version-row-2").locator(".pi-vrow__title");
+  expect((await title.boundingBox())!.width).toBeGreaterThan(70);
+  await history.evaluate((el) => {
+    el.style.width = "";
+  });
   await history.getByTestId("version-row-1").hover();
   await history.getByTestId("version-view-1").click();
   await expect(page.getByTestId(`tab-title-__version__${PIPELINE_NAME}@1`)).toHaveText(`${PIPELINE_NAME}.yaml @ v1`);
-  await expect(page.getByTestId("version-banner")).toContainText("Viewing v1");
+  await expect(page.getByTestId("version-banner")).toContainText("v1");
+  await expect(page.getByTestId("version-banner")).toContainText("read only");
   await page.getByTestId("version-banner-restore").click();
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
   await page.getByTestId("info-tab-info").click();
   await expect(page.getByTestId("prompt-required-checkbox")).toBeChecked();
 
   // 3. Launch: the window offers « Save as v3 and run »; « Run last version » runs v2.
   await page.getByRole("tab", { name: "Runs" }).click();
-  await page.getByRole("button", { name: "New Run" }).click();
+  await page.getByTestId("new-run-button").click();
   await page.getByTestId("target-repo-input").fill(E2E_TARGET_REPO);
   await pickPipeline(page, PIPELINE_NAME);
   await page.getByPlaceholder(/free-text prompt/i).fill("e2e versions");
@@ -117,14 +132,24 @@ test("save versions, view and restore one, launch the last, keep the old as a pi
   };
   expect(run.pipeline_version?.number).toBe(2);
   // The draft stayed as it was: nothing was saved.
-  await expect(tabTitle).toHaveText(`• ${PIPELINE_NAME}.yaml`);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
 
-  // 4. Save with « Keep old as new pipeline »: « <name> (v2) » is in the library.
+  // 4. Cancel saves nothing: the draft stays changed, v2 the last.
   await page.getByTestId(`tab-title-${PIPELINE_NAME}`).click();
   await page.getByTestId("save-button").click();
-  await save.getByTestId("save-version-keep-old").check();
-  await expect(save.getByTestId("save-version-keep-hint")).toContainText(`${PIPELINE_NAME} (v2)`);
+  await save.getByTestId("save-version-cancel").click();
+  await expect(save).toHaveCount(0);
+  await expect(tabTitle.locator("xpath=ancestor::button[1]")).toHaveAttribute("data-dirty", "true");
+  await expect(page.getByTestId("draft-changes")).toContainText("since v2");
+
+  // 5. Save with « Keep v2 apart »: v3 is saved, « <name> (v2) » is in the library.
+  await page.getByTestId("save-button").click();
+  await save.getByRole("radio", { name: "Keep v2 apart" }).click();
+  await expect(save.getByTestId("save-version-effect")).toContainText(`${PIPELINE_NAME} (v2)`);
+  await expect(save.getByTestId("save-version-confirm")).toHaveText(/Save v3, keep v2/);
   await save.getByTestId("save-version-confirm").click();
+  await expect(save).toHaveCount(0);
+  await expect((await versionsTab(page)).getByTestId("version-row-3")).toContainText("last");
   await page.getByRole("tab", { name: "Pipelines" }).click();
   await expect(page.getByText(`${PIPELINE_NAME} (v2)`, { exact: true })).toBeVisible();
 });

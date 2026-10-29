@@ -1,4 +1,4 @@
-//! The Sessions hébergées (ADR-0091): an agent or a shell an extension has
+//! The Sessions hébergées (ADR-0092): an agent or a shell an extension has
 //! the core hold outside any Run. Opened, relaunched, configured, typed into,
 //! terminated and forgotten on an extension's gesture (each an Opération on
 //! the Ressource `session`), recorded so they survive a restart of the

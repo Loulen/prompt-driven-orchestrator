@@ -32,11 +32,11 @@ export default function PortDownloads({
         href={portZipUrl(runId, folder)}
         download
         onClick={(e) => e.stopPropagation()}
-        className="relative flex items-center gap-1 rounded border border-line-strong bg-bg-2 px-1.5 py-0.5 text-fg-2 transition-colors hover:border-fg-4 hover:text-fg"
-        style={{ fontSize: "10px" }}
+        className="d-btn d-btn--sm"
+        title="Download all"
         data-testid="port-download-all"
       >
-        <Download size={11} aria-hidden="true" />
+        <Download size={12} strokeWidth={1.5} aria-hidden="true" />
         Download all
       </a>
     );
@@ -53,7 +53,6 @@ export default function PortDownloads({
     <DownloadButton
       href={href}
       testId="port-download"
-      className="relative -my-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
     />
   );
 }

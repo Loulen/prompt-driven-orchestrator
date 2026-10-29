@@ -124,13 +124,12 @@ export default function SkillDetailView({
         <DropOverlay count={dragging} hint="A SKILL.md replaces the skill text · folders are refused" />
       )}
       <div className="flex items-baseline gap-2">
-        <h3 className="truncate font-semibold text-fg" style={{ fontSize: "17px" }} data-testid="skill-detail-name">
+        <h3 className="truncate font-semibold text-text text-xl" data-testid="skill-detail-name">
           {skill.name}
         </h3>
         {locked && provider && (
           <span
-            className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3"
-            style={{ fontSize: "9.5px" }}
+            className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 text-text-3 text-2xs"
             data-testid="skill-detail-extension"
             title={`Provided by the extension “${provider.id}”: locked against editing and deletion`}
           >
@@ -140,53 +139,50 @@ export default function SkillDetailView({
         )}
         {locked && provider && (
           <span
-            className="shrink-0 rounded border border-line bg-bg-3 px-1.5 py-0.5 font-mono text-fg-4"
-            style={{ fontSize: "9.5px" }}
+            className="shrink-0 rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-text-3 text-2xs"
             data-testid="skill-detail-version"
-            title="Version of the extension: PDO rewrites the skill at startup when it changes"
+            title="Version of the extension: the skill is rewritten at startup when it changes"
           >
             v{provider.version}
           </span>
         )}
         {locked && !provider && (
           <span
-            className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3"
-            style={{ fontSize: "9.5px" }}
+            className="flex shrink-0 items-center gap-1 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 text-text-3 text-2xs"
             data-testid="skill-detail-locked"
-            title="Seeded by PDO at startup: locked against editing and deletion"
+            title="Seeded at startup: locked against editing and deletion"
           >
             <Lock size={10} />
-            Managed by PDO
+            Built in
           </span>
         )}
         {locked && !provider && frontmatter?.skill_version != null && (
           <span
-            className="shrink-0 rounded border border-line bg-bg-3 px-1.5 py-0.5 font-mono text-fg-4"
-            style={{ fontSize: "9.5px" }}
+            className="shrink-0 rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-text-3 text-2xs"
             data-testid="skill-detail-version"
-            title="Version of the built-in copy: PDO rewrites the skill at startup when it changes"
+            title="Version of the built-in copy: the skill is rewritten at startup when it changes"
           >
             v{String(frontmatter.skill_version)}
           </span>
         )}
-        <span className="flex items-center gap-1 font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+        <span className="flex items-center gap-1 font-mono text-text-3 text-xs">
           id {shortId(skill.id)}
           <button
             type="button"
             aria-label="Copy id"
             title={skill.id}
             onClick={onCopyId}
-            className="grid h-4 w-4 place-items-center rounded text-fg-4 hover:text-fg"
+            className="grid h-4 w-4 place-items-center rounded text-text-3 hover:text-text"
           >
             <Copy size={10} />
           </button>
-          {copied && <span className="text-acc">copied</span>}
+          {copied && <span className="text-primary">copied</span>}
         </span>
       </div>
-      <p className="mt-1.5 text-fg-2" style={{ fontSize: "13px" }} data-testid="skill-detail-description">
+      <p className="mt-1.5 text-text-2 text-md" data-testid="skill-detail-description">
         {skill.description}
       </p>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-fg-4" style={{ fontSize: "10.5px" }}>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-text-3 text-xs">
         <span>
           {fileCount} file{fileCount === 1 ? "" : "s"}
         </span>
@@ -198,14 +194,14 @@ export default function SkillDetailView({
               <button
                 type="button"
                 onClick={() => onOpenSourceFolder(sourceFolder.id)}
-                className="font-mono text-fg-3 hover:text-acc hover:underline"
+                className="font-mono text-text-3 hover:text-primary hover:underline"
                 title={`Open the Source folder “${sourceFolder.name}”`}
               >
                 {tildify(displaySourceUrl(skill.source.url), home)}
                 {skill.source.commit ? `@${shortCommit(skill.source.commit)}` : ""} · {skill.source.path || "."}
               </button>
             ) : (
-              <span className="font-mono text-fg-3" title={skill.source.url}>
+              <span className="font-mono text-text-3" title={skill.source.url}>
                 {tildify(displaySourceUrl(skill.source.url), home)}
                 {skill.source.commit ? `@${shortCommit(skill.source.commit)}` : ""} · {skill.source.path || "."}
               </span>
@@ -221,10 +217,10 @@ export default function SkillDetailView({
 
       <div className="mt-3 flex items-center gap-2">
         {locked ? (
-          <span className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="skill-detail-locked-note">
+          <span className="text-text-3 text-xs" data-testid="skill-detail-locked-note">
             {provider
               ? `Provided by the extension ${provider.id} — it updates with the extension; editing and deletion are refused.`
-              : "Seeded by PDO at startup — it updates itself; editing and deletion are refused."}
+              : "Seeded at startup: it updates itself; editing and deletion are refused."}
           </span>
         ) : (
           <>
@@ -255,7 +251,7 @@ export default function SkillDetailView({
           onClick={() => onTab("files")}
           label={
             <>
-              Files <span className="text-fg-4">· {fileCount}</span>
+              Files <span className="text-text-3">· {fileCount}</span>
             </>
           }
         />

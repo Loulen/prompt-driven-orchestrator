@@ -34,7 +34,10 @@ export function PerformanceFilterBand({
   band,
   onBandChange,
   onResetFilters,
+  crumbs,
 }: {
+  /** The drill path, on the left of the bar. */
+  crumbs?: React.ReactNode;
   performance: StatsPerformance;
   kindCounts: Record<NodeKind, number>;
   completedOnly: boolean;
@@ -58,6 +61,7 @@ export function PerformanceFilterBand({
     <StatsFilterBand
       label="Performance filters"
       testid="stats-performance-filters"
+      crumbs={crumbs}
       onReset={
         performanceBandDeviates(completedOnly, band)
           ? onResetFilters
@@ -69,7 +73,6 @@ export function PerformanceFilterBand({
         <UncombinedChip checked={uncombined} onChange={onUncombinedChange} />
       )}
       <BandDivider />
-      <span className="text-fg-4">Duration</span>
       <DurationModeSegments value={mode} onChange={onDurationModeChange} />
       {mode !== "total" && (
         <WaitCoverage

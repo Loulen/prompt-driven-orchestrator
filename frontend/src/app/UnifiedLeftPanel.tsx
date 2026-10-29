@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CalendarClock, Play, Workflow } from "lucide-react";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
 import type { Trigger } from "../shared/generated/Trigger";
 import type { TriggerListEntry } from "../shared/generated/TriggerListEntry";
@@ -13,6 +14,7 @@ import RunsModals from "../run/components/runsList/RunsModals";
 import { useRunsPane } from "../run/store/runsList/useRunsPane";
 import TriggersListPanel from "../trigger/components/TriggersListPanel";
 import PipelinesPane from "../pipeline/components/PipelinesPane";
+import { LeftTabsProvider, type LeftTab as LeftTabItem } from "../shared/ui/leftTabs";
 
 type LeftTab = "runs" | "triggers" | "library";
 
@@ -91,54 +93,18 @@ export default function UnifiedLeftPanel({
     onOpenProjectSettings,
   });
 
-  const tabs: { id: LeftTab; label: string }[] = [
-    { id: "runs", label: "Runs" },
-    { id: "triggers", label: "Triggers" },
-    { id: "library", label: "Pipelines" },
-  ];
-  // #577 — per-tab selection counts, for the badge left on the tab you switch away
+  // #577 — per-tab selection counts, for the dot left on the tab you switch away
   // from (so an in-flight selection is never silently lost).
-  const selCounts: Record<LeftTab, number> = {
-    runs: runSelIds.length,
-    triggers: triggerSelCount,
-    library: librarySelIds.length,
-  };
+  const tabs: LeftTabItem[] = [
+    { id: "runs", label: "Runs", icon: Play, selected: runSelIds.length },
+    { id: "triggers", label: "Triggers", icon: CalendarClock, selected: triggerSelCount },
+    { id: "library", label: "Pipelines", icon: Workflow, selected: librarySelIds.length },
+  ];
 
   return (
-    <aside className="flex h-full flex-col bg-bg-2">
-      {/* Three-tab strip: Runs · Triggers · Library (#160) */}
-      <div role="tablist" className="flex h-[36px] shrink-0 items-stretch border-b border-line">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            // #823: a tour has to be able to aim at a tab — its first step opens
-            // the one the rest of the tour lives in.
-            data-testid={`left-tab-${tab.id}`}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 border-b-2 font-medium transition-colors ${
-              activeTab === tab.id
-                ? "border-acc text-fg"
-                : "border-transparent text-fg-4 hover:text-fg-2"
-            }`}
-            style={{ fontSize: "11.5px" }}
-          >
-            {tab.label}
-            {/* #577 — count badge left on a NON-active tab with a live selection. */}
-            {activeTab !== tab.id && selCounts[tab.id] > 0 && (
-              <span
-                data-testid={`tab-badge-${tab.id}`}
-                className="rounded-full bg-acc px-1.5 font-semibold text-on-acc"
-                style={{ fontSize: "9px" }}
-              >
-                {selCounts[tab.id]}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
+    <aside className="flex h-full min-w-0 flex-col bg-surface-1">
+      {/* The header of each pane draws the tab strip, its title and its actions. */}
+      <LeftTabsProvider value={{ tabs, active: activeTab, onChange: (id) => setActiveTab(id as LeftTab) }}>
       {/* Runs pane */}
       {activeTab === "runs" && (
         <RunsPane
@@ -155,7 +121,7 @@ export default function UnifiedLeftPanel({
 
       {/* Triggers pane (#160) */}
       {activeTab === "triggers" && (
-        <div className="min-h-0 flex-1" role="tabpanel">
+        <div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
           <TriggersListPanel
             triggers={triggers}
             selectedTriggerId={selectedTriggerId}
@@ -175,6 +141,7 @@ export default function UnifiedLeftPanel({
       {/* Library pane */}
       {activeTab === "library" && <PipelinesPane projects={projects} />}
 
+      </LeftTabsProvider>
       <RunsModals pane={runsPane} runs={runs} />
     </aside>
   );

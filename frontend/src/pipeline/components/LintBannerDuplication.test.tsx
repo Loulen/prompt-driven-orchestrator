@@ -3,7 +3,6 @@ import { render, screen } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
 import PipelineInfoPanel from "./PipelineInfoPanel";
 import { useEditStore } from "../store/editStore";
-import { TooltipProvider } from "../../shared/ui/tooltip";
 
 // jsdom has no ResizeObserver; ReactFlow's container measurement needs it
 // (mirrors NodeDetailPanel.test.tsx).
@@ -124,7 +123,7 @@ describe("LintBanner duplication (#63)", () => {
   // panel co-mounted beside the canvas.
   it("renders exactly one lint banner when EditCanvas and Pipeline info are co-mounted with no node selected", () => {
     render(
-      <TooltipProvider>
+      <>
         <EditCanvas
           libraryEntries={[]}
           libraryPipelines={[]}
@@ -136,7 +135,7 @@ describe("LintBanner duplication (#63)", () => {
           pipeline={useEditStore.getState().openTabs[0].pipeline}
           onClose={() => {}}
         />
-      </TooltipProvider>,
+      </>,
     );
 
     // Both panels mounted: the canvas body (stub) and Pipeline info's settings.

@@ -83,7 +83,7 @@ test.afterAll(async () => {
 
 test("output schema editor round-trips through YAML save", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByText("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // Open the pipeline into the edit canvas (post-refonte: Library tab → entry).
   await openPipelineForEdit(page, PIPELINE_NAME);

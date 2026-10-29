@@ -89,8 +89,9 @@ pub use session::{
 };
 pub use skill::{ExtensionSkill, SkillFile};
 pub use ui::{
-    CompletionRender, ContextKey, HostedLocation, Slot, UiCommand, UiContribution, UiContributions,
-    UiElement, UiElementKind, UiLocation, UiSlot, When, UI_MODULE, UI_MODULE_MAJOR,
+    CommandOperation, CompletionRender, ContextKey, HostedLocation, Slot, UiCommand,
+    UiContribution, UiContributions, UiElement, UiElementKind, UiLocation, UiSlot, When, UI_MODULE,
+    UI_MODULE_MAJOR,
 };
 
 pub use axum;
@@ -113,12 +114,14 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// only added the Presences, `Host::presences`, `Host::run_cost` and the
 /// `run/item/people` location; 0.13 only added the launch hooks of every
 /// session, `session_env` and `session_preamble`, and the session events; 0.16
-/// only added `NewRun::project_id`, the Projet a Run is launched in; 0.17
-/// only added the Sessions hébergées: the Host's `open_session`,
-/// `hosted_session`, `hosted_sessions`, `terminate_session`,
-/// `relaunch_session`, `configure_session`, `type_in_session`,
-/// `forget_session`, `live_artifacts` and `live_artifact`,
-/// `SessionKind::Hosted`, the extension and key of a `SessionRef`, and the
-/// `hosted_session_changed`, `hosted_session_forgotten` and
-/// `hosted_live_artifacts_changed` events).
+/// only added `NewRun::project_id`, the Projet a Run is launched in; 0.17 only
+/// added the primitives of the shared module `@pdo/extension-ui`, ADR-0091;
+/// 0.18 only added the `palette` location, the Sources de recherche and the
+/// Operation a command makes; 0.19 only added the Sessions hébergées: the
+/// Host's `open_session`, `hosted_session`, `hosted_sessions`,
+/// `terminate_session`, `relaunch_session`, `configure_session`,
+/// `type_in_session`, `forget_session`, `live_artifacts` and
+/// `live_artifact`, `SessionKind::Hosted`, the extension and key of a
+/// `SessionRef`, and the `hosted_session_changed`, `hosted_session_forgotten`
+/// and `hosted_live_artifacts_changed` events).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

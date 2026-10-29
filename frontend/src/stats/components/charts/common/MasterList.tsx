@@ -43,7 +43,7 @@ export function MasterList<T extends AbsorbableRow>({
     <div
       role="listbox"
       aria-label={ariaLabel}
-      className="flex flex-col gap-1"
+      className="sx-rank"
       onKeyDown={(event) => {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
@@ -92,42 +92,35 @@ export function MasterList<T extends AbsorbableRow>({
               }
               onSelect(isTotal ? null : row.id);
             }}
-            className={`group flex items-center justify-between gap-3 rounded px-2 py-2 text-left ${
-              checked
-                ? "bg-acc-bg text-fg"
-                : isSelected
-                  ? "bg-bg-5 text-fg"
-                  : "text-fg-3 hover:bg-bg-3"
-            } ${selection?.flashId === row.id ? "ring-1 ring-acc" : ""}`}
-            style={{ fontSize: "11.5px" }}
+            data-flash={selection?.flashId === row.id ? "true" : undefined}
+            title={row.name}
+            className="group sx-rank__row"
           >
-            <span className="flex min-w-0 items-center gap-2">
-              {selection &&
-                (selectable ? (
-                  <SelectControl
-                    selected={checked}
-                    dotClass={null}
-                    label={`Select ${row.name}`}
-                    testId="stats-row-select"
-                    onSelect={(event) =>
-                      selection.toggle(row.id, event.shiftKey, order)
-                    }
-                  />
-                ) : (
-                  <span className="w-4 shrink-0" aria-hidden="true" />
-                ))}
-              <span className={`truncate ${monoName ? "font-mono" : ""}`}>
-                {row.name}
-              </span>
-              {selection && absorbed > 0 && (
-                <CombinedIcon
-                  count={absorbed}
-                  dimension={selection.dimension}
-                  onOpen={() => selection.onOpenMembers(row.id)}
+            {selection &&
+              (selectable ? (
+                <SelectControl
+                  selected={checked}
+                  dotClass={null}
+                  label={`Select ${row.name}`}
+                  testId="stats-row-select"
+                  onSelect={(event) =>
+                    selection.toggle(row.id, event.shiftKey, order)
+                  }
                 />
-              )}
+              ) : (
+                <span className="w-4 shrink-0" aria-hidden="true" />
+              ))}
+            <span className={`sx-rank__name ${monoName ? "font-mono" : ""}`}>
+              {row.name}
             </span>
-            <span className="shrink-0 font-mono text-fg-2">
+            {selection && absorbed > 0 && (
+              <CombinedIcon
+                count={absorbed}
+                dimension={selection.dimension}
+                onOpen={() => selection.onOpenMembers(row.id)}
+              />
+            )}
+            <span className="sx-rank__v">
               {isTotal ? "" : valueLabel(row)}
             </span>
           </button>

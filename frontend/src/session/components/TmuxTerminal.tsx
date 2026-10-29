@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { Tooltip } from "../../shared/ui/tooltip";
+import { Button } from "../../shared/ui/kit";
 import { attachSession } from "../api/sessions";
 import { READ_ONLY_HINT } from "../model/terminalRole";
 import {
@@ -101,7 +102,7 @@ export default function TmuxTerminal({
     }
   }, [session]);
 
-  const { dotClass, statusLabel } = paneIndicator(mode, connected, status, frozen);
+  const { statusLabel } = paneIndicator(mode, connected, status, frozen);
   const spectating = mode === "live" && termRole.role === "spectator";
   const watchers =
     mode === "live" && termRole.role === "pilot" ? termRole.spectators : 0;
@@ -122,8 +123,11 @@ export default function TmuxTerminal({
   const importEnabled = onImportFiles !== undefined;
 
   return (
+    // An always-dark screen, whatever the theme: a lit display, its session
+    // bar inside it (the dark tokens hold under `data-theme`).
     <div
       className="relative flex flex-1 flex-col overflow-hidden"
+      data-theme="dark"
       data-testid="tmux-terminal"
       {...(importEnabled ? dropHandlers : {})}
     >
@@ -136,7 +140,6 @@ export default function TmuxTerminal({
       )}
       <TerminalToolbar
         session={session}
-        dotClass={dotClass}
         statusLabel={statusLabel}
         connected={connected}
         spectating={spectating}
@@ -163,7 +166,8 @@ export default function TmuxTerminal({
         <Tooltip content={READ_ONLY_HINT} disabled={!spectating}>
           <div
             ref={containerRef}
-            className={`min-h-0 flex-1 bg-bg-0${spectating ? " overflow-auto" : ""}`}
+            // Out of the app's zoom (see `useXtermSession`): the font carries the scale.
+            className={`ri-term-screen pdo-unzoom min-h-0 flex-1${spectating ? " overflow-auto" : ""}`}
             style={TERMINAL_TYPOGRAPHY_RESET}
             data-testid="xterm-container"
             data-role={mode === "live" ? termRole.role : undefined}
@@ -173,23 +177,14 @@ export default function TmuxTerminal({
             stays readable underneath, and offer the way back. */}
         {veiled && (
           <div
-            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2.5 bg-bg-0/60 backdrop-blur-sm"
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2.5 bg-surface-0/60 backdrop-blur-sm"
             data-testid="term-veil"
             role="status"
           >
-            <span className="text-fg-2" style={{ fontSize: "12px" }}>
-              {CONNECTION_CLOSED_LABEL}
-            </span>
-            <button
-              type="button"
-              onClick={reconnect}
-              className="flex cursor-pointer items-center gap-1.5 rounded border border-line-strong bg-bg-3 px-2.5 py-1 text-fg-2 transition-colors hover:bg-bg-4 hover:text-fg"
-              style={{ fontSize: "11px" }}
-              data-testid="term-reconnect"
-            >
-              <RefreshCw size={11} />
+            <span className="text-sm text-text-2">{CONNECTION_CLOSED_LABEL}</span>
+            <Button icon={RefreshCw} size="sm" onClick={reconnect} data-testid="term-reconnect">
               {RECONNECT_LABEL}
-            </button>
+            </Button>
           </div>
         )}
       </div>

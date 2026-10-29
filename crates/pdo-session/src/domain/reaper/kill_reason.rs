@@ -52,7 +52,7 @@ pub enum KillReason {
         idle_secs: Option<i64>,
     },
     /// A name with the prefix of the Sessions hébergées that no live record
-    /// holds (ADR-0091): an absence verdict, like an unrecognised name.
+    /// holds (ADR-0092): an absence verdict, like an unrecognised name.
     HostedUnregistered {
         session_name: String,
     },

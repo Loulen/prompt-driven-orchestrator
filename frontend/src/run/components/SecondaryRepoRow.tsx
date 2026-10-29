@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { GitBranch, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { GitBranch, Trash2 } from "lucide-react";
+import { IconButton } from "../../shared/ui/kit";
+import MidPath from "../../shared/ui/MidPath";
 import { tildify } from "../../lib/homePath";
 import { validateRepo } from "../../workspace/api/repos";
 import { pickDefaultBranch } from "../../workspace/model/branchSelect";
@@ -33,6 +35,8 @@ interface Props {
   home?: string | null;
   /** A repository of the Projet (ADR-0087): a checked line, its path fixed. */
   inProject?: boolean;
+  /** After the path of a Projet's line: the other Projets that hold it. */
+  also?: ReactNode;
 }
 
 /**
@@ -55,6 +59,7 @@ export default function SecondaryRepoRow({
   onRemove,
   home,
   inProject = false,
+  also,
 }: Props) {
   const [branchOpen, setBranchOpen] = useState(false);
   // CORE-5: no loupe when the disk may not be browsed.
@@ -137,67 +142,32 @@ export default function SecondaryRepoRow({
     // ADR-0087: one of the Projet's repositories, checked — its path is the
     // Projet's, so it shows as a line: unchecking takes it back out.
     return (
-      <div className="flex flex-col gap-1.5" data-testid={`project-repo-row-${index}`}>
-        <div
-          className={`flex items-center gap-2 rounded-md border bg-bg-3 px-2.5 py-1.5 ${
-            repo.valid === false ? "border-st-failed" : "border-line-strong"
-          }`}
-        >
+      <div className="ln-secrow" data-testid={`project-repo-row-${index}`}>
+        <div className="ln-secrow__line" data-on="" data-invalid={repo.valid === false || undefined}>
           <input
             type="checkbox"
-            className="accent-acc"
             checked
             onChange={() => onRemove(index)}
             aria-label={`Use ${path} as a secondary repository`}
             data-testid={`project-repo-check-${index}`}
           />
-          <span className="min-w-0 flex-1 truncate font-mono text-fg" style={{ fontSize: "12px" }} title={path}>
-            {tildify(path, home)}
-          </span>
-          <div
-            className="flex shrink-0 rounded border border-line-strong p-px"
-            role="radiogroup"
-            aria-label="Access"
-            style={{ fontSize: "10px" }}
-          >
-            {(
-              [
-                [true, "read-only"],
-                [false, "writable"],
-              ] as const
-            ).map(([readOnly, label]) => (
-              <button
-                key={label}
-                type="button"
-                role="radio"
-                aria-checked={repo.readOnly === readOnly}
-                onClick={() => onChange(index, { readOnly })}
-                className={`rounded-sm px-1.5 py-px transition-colors ${
-                  repo.readOnly === readOnly ? "bg-bg-5 text-fg" : "text-fg-4 hover:text-fg-2"
-                }`}
-                data-testid={`project-repo-${readOnly ? "readonly" : "writable"}-${index}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <MidPath path={tildify(path, home)} className="ln-secrow__path" />
+          {also}
+          <span className="ln-grow" />
+          <AccessSeg index={index} readOnly={repo.readOnly} onChange={(readOnly) => onChange(index, { readOnly })} prefix="project-repo" />
           <button
             type="button"
             onClick={() => setBranchOpen((o) => !o)}
-            className="flex shrink-0 items-center gap-1 font-mono text-fg-4 transition-colors hover:text-fg-2"
-            style={{ fontSize: "10.5px" }}
+            className="d-sel d-sel--sm d-sel--mono ln-secrow__branch"
+            aria-expanded={branchOpen}
             title="Base branch"
             data-testid={`project-repo-branch-${index}`}
           >
-            <GitBranch size={10} />
-            {validating ? "…" : repo.baseBranch || "HEAD"}
+            <GitBranch className="d-sel__lead" size={12} strokeWidth={1.5} aria-hidden />
+            <span className="d-sel__val">{validating ? "…" : repo.baseBranch || "HEAD"}</span>
           </button>
         </div>
-        {error && (
-          <span className="text-st-failed" style={{ fontSize: "10.5px" }}>
-            {error}
-          </span>
-        )}
+        {error && <span className="ln-err">{error}</span>}
         {branchOpen && repo.valid && (
           <SourceBranchField
             value={repo.baseBranch}
@@ -218,35 +188,32 @@ export default function SecondaryRepoRow({
     );
   }
 
-  let borderClass = "border-line-strong focus:border-acc";
-  if (repo.valid === true) borderClass = "border-acc focus:border-acc";
-  else if (repo.valid === false)
-    borderClass = "border-st-failed focus:border-st-failed";
-
   return (
-    <div className="flex flex-col gap-1.5" data-testid={`secondary-repo-row-${index}`}>
-      <div className="flex items-center gap-2">
-        <div className="flex-1">
+    <div className="ln-secrow" data-testid={`secondary-repo-row-${index}`}>
+      <div className="ln-secrow__line">
+        <div className="ln-grow">
           <RepoCombobox
+            id={`secondary-repo-${index}`}
+            ariaLabel={`Secondary repository ${index + 1}`}
             value={repo.path}
             onChange={(value) => onChange(index, { path: value })}
             recentRepos={recentRepos}
             repoValid={repo.valid}
             repoValidating={validating}
             repoError={error}
-            borderClass={borderClass}
             canBrowse={canBrowse}
+            home={home}
           />
         </div>
-        <button
-          type="button"
+        {repo.valid && (
+          <AccessSeg index={index} readOnly={repo.readOnly} onChange={(readOnly) => onChange(index, { readOnly })} prefix="secondary" />
+        )}
+        <IconButton
+          icon={Trash2}
+          label="Remove secondary repository"
           onClick={() => onRemove(index)}
-          className="rounded-md border border-line-strong bg-bg-3 p-1.5 text-fg-3 transition-colors hover:border-st-failed hover:text-st-failed"
-          aria-label="Remove secondary repository"
           data-testid={`remove-secondary-repo-${index}`}
-        >
-          <X size={12} />
-        </button>
+        />
       </div>
       {repo.valid && (
         // #802: the same quick pick and the same sync button as the primary, from
@@ -266,34 +233,45 @@ export default function SecondaryRepoRow({
           ariaLabel={`Base branch for secondary repository ${index + 1}`}
         />
       )}
-      {repo.valid && (
-        <label
-          className="flex items-center gap-1.5 text-fg-3"
-          style={{ fontSize: "10.5px" }}
-        >
-          <input
-            type="checkbox"
-            className="accent-acc"
-            checked={repo.readOnly}
-            onChange={(e) => onChange(index, { readOnly: e.target.checked })}
-            data-testid={`secondary-readonly-${index}`}
-          />
-          Read-only (context only; do not modify)
-        </label>
-      )}
     </div>
   );
 }
 
-/** Small labelled icon header reused for the secondary section. */
-export function SecondaryRepoLabel() {
+/**
+ * The access of a secondary repository (ADR-0047): read-only or writable, a
+ * small segmented choice. `<prefix>-readonly-<i>` / `<prefix>-writable-<i>`.
+ */
+function AccessSeg({
+  index,
+  readOnly,
+  onChange,
+  prefix,
+}: {
+  index: number;
+  readOnly: boolean;
+  onChange: (readOnly: boolean) => void;
+  prefix: "secondary" | "project-repo";
+}) {
   return (
-    <span
-      className="font-medium text-fg-2 flex items-center gap-1.5"
-      style={{ fontSize: "11.5px" }}
-    >
-      <GitBranch size={12} className="text-fg-3" />
-      Secondary repositories
-    </span>
+    <div className="d-seg d-seg--sm ln-access" role="radiogroup" aria-label="Access">
+      {(
+        [
+          [true, "read-only"],
+          [false, "writable"],
+        ] as const
+      ).map(([ro, label]) => (
+        <button
+          key={label}
+          type="button"
+          role="radio"
+          aria-checked={readOnly === ro}
+          className="d-seg__btn"
+          onClick={() => onChange(ro)}
+          data-testid={`${prefix}-${ro ? "readonly" : "writable"}-${index}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }

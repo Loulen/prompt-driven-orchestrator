@@ -1,4 +1,4 @@
-//! API 0.17 — **the Sessions hébergées** (ADR-0091), on a real daemon with the
+//! API 0.19 — **the Sessions hébergées** (ADR-0092), on a real daemon with the
 //! test extension and a real tmux: opened and terminated through the
 //! extension's Host, launched with nothing of a Run and nothing written into
 //! their folder, their changes on `/ws` and in `on_event`, refused by the

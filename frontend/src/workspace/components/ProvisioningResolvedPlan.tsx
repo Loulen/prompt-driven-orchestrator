@@ -56,12 +56,16 @@ export default function ProvisioningResolvedPlan({
   );
   return (
     <div className="border-t border-line px-3 py-2">
-      <div className="mb-1 font-medium uppercase tracking-wide text-fg-4" style={{ fontSize: 9 }}>
+      <div className="mb-1 font-medium uppercase tracking-wide text-text-3 text-2xs">
         Resolved plan · {frozen ? "frozen" : "live"}
       </div>
       {(plan?.rules ?? []).filter((rule) => rule.unmatched).map((rule) => (
-        <div key={`${rule.scope}-${rule.mode}-${rule.pattern}`} className="mb-1 rounded bg-amber-950/30 px-2 py-1 text-amber-400">
-          No match: {rule.pattern} · normal, the Run still starts
+        <div
+          key={`${rule.scope}-${rule.mode}-${rule.pattern}`}
+          className="mb-1 rounded bg-st-await/14 px-2 py-1 text-st-await"
+          title="Normal: the Run still starts"
+        >
+          No match: {rule.pattern}
         </div>
       ))}
       {(plan?.rules ?? []).map((rule) => {
@@ -80,7 +84,7 @@ export default function ProvisioningResolvedPlan({
                 ? ` · overridden by ${overriddenBy.join(", ")}`
                 : ""}
             </summary>
-            <div className="pl-4 text-fg-4">
+            <div className="pl-4 text-text-3">
               {rule.paths.map((path) => (
                 <div key={path}>
                   {path}
@@ -97,7 +101,7 @@ export default function ProvisioningResolvedPlan({
           </details>
         );
       })}
-      <div className="mt-1 text-fg-4">
+      <div className="mt-1 text-text-3">
         {plan?.entries.filter((entry) => !entry.provided_by_git).length ?? 0} paths added ·{" "}
         {plan?.entries.filter((entry) => entry.provided_by_git).length ?? 0} Git paths skipped
       </div>

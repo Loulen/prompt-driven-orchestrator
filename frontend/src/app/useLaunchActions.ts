@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { RUN_INTENT, type OpenIntent } from "../run/components/NewRunModal";
 import type { Trigger } from "../shared/generated/Trigger";
 import { useEditStore } from "../pipeline/store/editStore";
+import { showToast } from "../shared/ui/toast";
 
 /** What selecting a Trigger clears and opens. */
 export interface LaunchTargets {
@@ -31,9 +32,6 @@ export function useLaunchActions({
   // reset on every reopen so a dismissed "Edit trigger" can't leak into a fresh
   // "New run" / "New trigger". Defaults to a plain run.
   const [openIntent, setOpenIntent] = useState<OpenIntent>(RUN_INTENT);
-  // #341: manual "Run now" — a refused fire (409: disabled / broken reference)
-  // surfaces here as a dismissible banner.
-  const [runNowError, setRunNowError] = useState<string | null>(null);
 
   const openNewRunModal = useCallback((intent: OpenIntent) => {
     setOpenIntent(intent);
@@ -62,29 +60,40 @@ export function useLaunchActions({
   // prefilled New Run modal. Fire, then open the trigger detail (via
   // handleSelectTrigger — the only path that survives the #320 reconciliation)
   // where the new history row appears. A 409 (disabled / broken reference)
-  // surfaces as a banner.
-  const handleRunNowTrigger = useCallback(
+  // surfaces as an error toast.
+  const fireNow = useCallback(
     async (t: Trigger) => {
-      // #348 (D3-A permissive): a manual fire still works while triggers are
-      // globally paused — but behind a confirmation, so it stays a deliberate
-      // escape hatch rather than a silent bypass of the kill-switch.
-      if (
-        triggersPaused &&
-        !window.confirm(`Triggers are globally paused. Fire "${t.name}" anyway?`)
-      ) {
-        return;
-      }
       try {
         const { fireTrigger } = await import("../trigger/api/triggers");
         await fireTrigger(t.id);
-        setRunNowError(null);
       } catch (e) {
-        setRunNowError(e instanceof Error ? e.message : String(e));
+        showToast({ kind: "error", title: "Run now", message: e instanceof Error ? e.message : String(e) });
       }
       handleSelectTrigger(t.id);
     },
-    [handleSelectTrigger, triggersPaused],
+    [handleSelectTrigger],
   );
+
+  // #348 (D3-A permissive): a manual fire still works while triggers are
+  // globally paused — but behind a confirmation (`pausedFire`), so it stays a
+  // deliberate escape hatch rather than a silent bypass of the kill-switch.
+  const [pausedFire, setPausedFire] = useState<Trigger | null>(null);
+  const handleRunNowTrigger = useCallback(
+    async (t: Trigger) => {
+      if (triggersPaused) {
+        setPausedFire(t);
+        return;
+      }
+      await fireNow(t);
+    },
+    [fireNow, triggersPaused],
+  );
+  const confirmPausedFire = useCallback(() => {
+    const t = pausedFire;
+    setPausedFire(null);
+    if (t) void fireNow(t);
+  }, [pausedFire, fireNow]);
+  const cancelPausedFire = useCallback(() => setPausedFire(null), []);
 
   const handleCloseNewRunModal = useCallback(() => {
     setNewRunModalOpen(false);
@@ -96,11 +105,12 @@ export function useLaunchActions({
   return {
     newRunModalOpen,
     openIntent,
-    runNowError,
-    setRunNowError,
     openNewRunModal,
     handleSelectTrigger,
     handleRunNowTrigger,
+    pausedFire,
+    confirmPausedFire,
+    cancelPausedFire,
     handleCloseNewRunModal,
   };
 }

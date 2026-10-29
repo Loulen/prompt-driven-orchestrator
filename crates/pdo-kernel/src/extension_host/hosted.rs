@@ -39,6 +39,10 @@ pub trait HostedSessions: Send + Sync {
         config: HostedConfig,
     ) -> HostedGesture;
 
+    /// Set the Zoom du terminal of the session `key` of `extension`, on
+    /// behalf of `actor`.
+    fn zoom(&self, extension: &str, actor: Actor, key: &str, zoom: u16) -> HostedGesture;
+
     /// Lay `text` in the input of the session `key` of `extension`, on
     /// behalf of `actor`, without submitting it.
     fn type_text(&self, extension: &str, actor: Actor, key: &str, text: &str) -> HostedGesture;
@@ -134,6 +138,19 @@ mod tests {
                 found.ok_or_else(|| HostedRefusal::new(404, "no such session")),
             ))
         }
+        fn zoom(&self, extension: &str, _actor: Actor, key: &str, zoom: u16) -> HostedGesture {
+            let mut sessions = self.0.lock().unwrap();
+            let found = sessions
+                .iter_mut()
+                .find(|s| s.extension == extension && s.key == key)
+                .map(|s| {
+                    s.terminal_zoom = zoom;
+                    s.clone()
+                });
+            Box::pin(std::future::ready(
+                found.ok_or_else(|| HostedRefusal::new(404, "no such session")),
+            ))
+        }
         fn type_text(
             &self,
             extension: &str,
@@ -221,6 +238,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(configured.config.model.as_deref(), Some("opus"));
+        let zoomed = host.zoom_session(&actor, "s1", 150).await.unwrap();
+        assert_eq!(zoomed.terminal_zoom, 150);
+        assert_eq!(
+            extensions
+                .host_of("other")
+                .zoom_session(&actor, "s1", 150)
+                .await
+                .unwrap_err()
+                .status,
+            404,
+            "an extension zooms only its own"
+        );
         assert_eq!(
             host.type_in_session(&actor, "s1", "hi").await.unwrap().key,
             "s1"

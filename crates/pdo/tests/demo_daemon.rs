@@ -52,10 +52,14 @@
 //! /ext/test/sessions[/<key>]` reads them, `DELETE /ext/test/sessions/<key>`
 //! terminates one, `POST /ext/test/sessions/<key>/relaunch` relaunches an
 //! ended one, `PUT /ext/test/sessions/<key>/config {"harness", "model",
-//! "effort", "prompt"}` configures its next relaunch, `POST
+//! "effort", "prompt"}` configures its next relaunch, `PUT
+//! /ext/test/sessions/<key>/zoom {"zoom"}` sets its Zoom du terminal, `POST
 //! /ext/test/sessions/<key>/type {"text"}` lays a text in its input without
 //! Enter, `POST /ext/test/sessions/<key>/forget` forgets an ended one, `GET
 //! /ext/test/sessions/<key>/live[/<path>]` lists and reads its Artefacts live.
+//! The test page at `#/ext/test/topbar/end/hosted` opens the shell `demo`
+//! (`…/hosted/agent`: the agent `demo-agent`) and shows its terminal and its
+//! Zoom du terminal, the same for every browser.
 //! Their records live under `$HOME/.pdo/hosted/`; a hosted session's `pdo`
 //! acts as who opened it (`pdo wait-user` declares its wait, `pdo complete`
 //! is refused).

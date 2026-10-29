@@ -3,8 +3,8 @@
 // specifier here, and the front puts the module on `globalThis.__PDO_SHARED__`
 // before it renders anything (src/shared/extensions/uiModule.ts). A bundle lists
 // and renders the contributions to the locations it hosts through it, draws its
-// controls with the primitives of the shared design system (ADR-0091), and never
-// ships its own copy.
+// controls with the primitives of the shared design system (ADR-0091), shows a
+// session's terminal with the core's own, and never ships its own copy.
 const ExtensionUi = globalThis.__PDO_SHARED__.extensionUi;
 export default ExtensionUi;
 export const {
@@ -42,4 +42,7 @@ export const {
   TextInput,
   toast,
   Tooltip,
+  SessionTerminal,
+  useTerminalZoom,
+  TerminalZoom,
 } = ExtensionUi;

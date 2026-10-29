@@ -47,6 +47,9 @@ interface Props {
   /** Set when the node cannot receive files right now (no live session): the
    *  Import button is off and says why. */
   importDisabledReason?: string | null;
+  /** CORE-124: what the font is multiplied by (the Zoom du terminal of a
+   *  Session hébergée, times its host's zoom); `1` by default. */
+  fontScale?: number;
 }
 
 /** A session's inline terminal (ADR-0005): the live PTY, or its frozen pane. */
@@ -62,10 +65,11 @@ export default function TmuxTerminal({
   toolbarActions,
   onImportFiles,
   importDisabledReason,
+  fontScale = 1,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { mode, frozen } = usePaneMode(session, status, paneSource);
-  const xterm = useXtermSession(containerRef, session, mode, frozen);
+  const xterm = useXtermSession(containerRef, session, mode, frozen, fontScale);
   const { connected, termRole, reconnect } = xterm;
 
   // ADR-0083 §5: a live terminal whose connection fell is veiled. A node that
@@ -171,6 +175,7 @@ export default function TmuxTerminal({
             style={TERMINAL_TYPOGRAPHY_RESET}
             data-testid="xterm-container"
             data-role={mode === "live" ? termRole.role : undefined}
+            data-font-scale={fontScale}
           />
         </Tooltip>
         {/* Typing into a dead socket goes nowhere: say so over the pane, which

@@ -915,6 +915,7 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `openProbedSocket(path, options?)` | A WebSocket to the daemon, opened through the probe, since 0.10; its delay of silence since 0.11 ([WebSockets](#websockets)) |
 | `copyToClipboard(text)` | Put `text` on the clipboard from a user gesture, as every Copy button of the core does: the Clipboard API, or outside a secure context (an instance served over plain http) `execCommand("copy")` on a hidden textarea. Resolves to whether the text was written, never rejects. Since 0.11 |
 | `Button`, `IconButton`, `Select`, `Menu`, `Modal`, `toast`… | The primitives of the design system, since 0.17 ([The design system](#the-design-system)) |
+| `SessionTerminal`, `TerminalZoom`, `useTerminalZoom(session)` | The core's session terminal and the Zoom du terminal, since 0.19 ([The session terminal](#the-session-terminal)) |
 | `version`, `major` | The version of `pdo-extension-api` the module comes with, and its major |
 
 - **Context**: an element receives the host's `context`, merged over the context every location
@@ -1031,6 +1032,44 @@ taking `size`, `strokeWidth` and `className`.
 
 The test extension `kit` (`crates/pdo/tests/test_extension/kit.js`) is a page drawn with nothing
 else.
+
+## The session terminal
+
+Since 0.19 `@pdo/extension-ui` hands out the core's own session terminal: an extension shows any
+session by its id without shipping xterm or writing the protocol of the shared terminal. Poste,
+Pilote, Spectateur and Prise de main, the resizing of the grid, the veil and the reconnection of
+a fallen connection are the core's, the same as on a Node.
+
+```ts
+import { SessionTerminal, TerminalZoom } from "@pdo/extension-ui";
+
+// The terminal of a Session hébergée (`session.id`, `pdo-hosted-…`), in a parent with a height.
+<div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+  <SessionTerminal session={session.id} zoom={hostZoom} />
+</div>
+// Its Zoom du terminal, for everyone watching.
+<TerminalZoom session={session.id} />
+```
+
+| Export | What it does |
+| --- | --- |
+| `SessionTerminal({ session, zoom?, toolbarIdentity?, toolbarActions?, expanded?, onExpand?, onLiveSocketChange?, onSpectatingChange? })` | The terminal of the session `session` (its tmux session's name: a Session hébergée's `id`, or any session the daemon holds), filling its parent. Its text is the core's size times the session's Zoom du terminal, live, times `zoom`, the factor the host imposes (`1` by default: a surface it scales, a thumbnail). The toolbar slots and callbacks are those of the core's terminal |
+| `TerminalZoom({ session })` | The control of the Zoom du terminal: 50, 75, 100, 125, 150 and 200 % between − and +, « same for everyone watching ». A refused change shows an error toast and goes back. Off for a session that carries none |
+| `useTerminalZoom(session)` | `{ zoom, hosted, setZoom }`: the Zoom du terminal in percent (100 for a session that carries none), followed live; `hosted` is `null` until the daemon answered; `setZoom(zoom)` sets it for every Poste and rejects with the refusal |
+
+The Zoom du terminal belongs to a Session hébergée, recorded with it: the same on every Poste and
+in every place its terminal shows. The control and `setZoom` go through
+`PUT /sessions/<id>/terminal-zoom` (`{"zoom": 150}`, the Operation `session` × `zoom` for the
+browser's Actor; `400` out of 50 to 200, `404` for a session that is not hosted), the reading
+through `GET /sessions/<id>/terminal-zoom` (`{"zoom", "hosted"}`, `session` × `read`; any other
+session answers `{"zoom": 100, "hosted": false}`), and every change reaches the terminals in
+`hosted_session_changed`. An extension sets it from its side with `Host::zoom_session`.
+
+A Session hébergée's declared wait is lifted by a person's answer: at least one character typed in
+its terminal (a laid text counts), then Enter. An Enter alone does not lift it.
+
+The test extension's page at `#/ext/test/topbar/end/hosted` opens a shell (`hosted/agent`: an
+agent) and shows it with these exports.
 
 ## The Actors' names
 

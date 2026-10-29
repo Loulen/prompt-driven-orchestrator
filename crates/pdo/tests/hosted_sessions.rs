@@ -6,7 +6,8 @@
 //! daemon, and their terminal opened like any other; relaunched, configured,
 //! typed into and forgotten, their Artefacts live listed and read, their wait
 //! declared by `pdo wait-user` and lifted by an Enter, `pdo complete` refused
-//! in them, and terminated when their extension is gone.
+//! in them, terminated when their extension is gone, and their Zoom du
+//! terminal set by the API and the Host.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -890,4 +891,143 @@ async fn a_daemon_without_its_extension_terminates_the_session_and_keeps_it() {
     assert_eq!(record["key"], "orphan");
     second.task.abort();
     tmux(&socket, &["kill-server"]);
+}
+
+/// The messages of `ws` until `done` holds of them, or `secs` went by.
+async fn read_messages(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    secs: u64,
+    done: impl Fn(&[Value]) -> bool,
+) -> Vec<Value> {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    let mut seen = Vec::new();
+    while Instant::now() < deadline && !done(&seen) {
+        if let Ok(Some(Ok(msg))) = tokio::time::timeout(Duration::from_millis(200), ws.next()).await
+        {
+            if let Ok(Ok(value)) = msg.to_text().map(serde_json::from_str::<Value>) {
+                seen.push(value);
+            }
+        }
+    }
+    seen
+}
+
+/// The zooms the changes of `id` carried, in order.
+fn zooms_of(messages: &[Value], id: &str) -> Vec<u64> {
+    messages
+        .iter()
+        .filter(|m| m["type"] == "hosted_session_changed" && m["session"]["id"] == id)
+        .filter_map(|m| m["session"]["terminal_zoom"].as_u64())
+        .collect()
+}
+
+/// CORE-124: the Zoom du terminal of a Session hébergée is set by the API
+/// (any Poste) and by the Host, an Operation `session` × `zoom` in its
+/// Projet, out of range refused; its change, and every Operation on the
+/// session, reach on `/ws` only the connections that may read it.
+#[tokio::test]
+async fn the_zoom_of_a_terminal_is_set_by_the_api_and_the_host_and_reaches_who_may_read_it() {
+    let envs = tempfile::tempdir().unwrap();
+    let (daemon, control) = daemon(envs.path()).await;
+    let url = daemon.url();
+    let home = tempfile::tempdir().unwrap();
+    control.set(Refusal::parse("session:read~bob").unwrap());
+    let mut alice_ws = daemon.connect_ws_as("alice").await.unwrap();
+    let mut bob_ws = daemon.connect_ws_as("bob").await.unwrap();
+    let mut body = in_path("z", "shell", home.path());
+    body["project"] = json!("p1");
+    let (status, shell) = open_as(&url, "alice", body).await;
+    assert_eq!(status, 201, "{shell}");
+    assert_eq!(shell["terminal_zoom"], 100);
+    let id = shell["id"].as_str().unwrap().to_string();
+    let zoom_path = format!("/sessions/{id}/terminal-zoom");
+
+    let (status, read) = get_as(&url, &zoom_path, "alice").await;
+    assert_eq!(
+        (status, read),
+        (200, json!({ "zoom": 100, "hosted": true }))
+    );
+    let (status, _) = get_as(&url, &zoom_path, "bob").await;
+    assert_eq!(status, 403, "bob may not read the session");
+    let (status, other) = get_as(&url, "/sessions/pdo-r1-impl-iter-1/terminal-zoom", "bob").await;
+    assert_eq!(
+        (status, other),
+        (200, json!({ "zoom": 100, "hosted": false })),
+        "any other session is at 100 %"
+    );
+
+    let put = |actor: &'static str, path: String, zoom: Value| {
+        let url = url.clone();
+        async move {
+            call_as(
+                &url,
+                reqwest::Method::PUT,
+                &path,
+                actor,
+                Some(json!({ "zoom": zoom })),
+            )
+            .await
+        }
+    };
+    let (status, set) = put("alice", zoom_path.clone(), json!(150)).await;
+    assert_eq!((status, set), (200, json!({ "zoom": 150, "hosted": true })));
+    let zoom = control
+        .asked()
+        .into_iter()
+        .rev()
+        .find(|(_, op)| op.verb == pdo::extension_api::Verb::Action("zoom".into()))
+        .unwrap();
+    assert_eq!(zoom.1.target.as_deref(), Some(id.as_str()));
+    assert_eq!(zoom.1.projects, ["p1"]);
+    let (status, _) = put("alice", zoom_path.clone(), json!(20)).await;
+    assert_eq!(status, 400, "out of range");
+    let (status, _) = put(
+        "alice",
+        "/sessions/pdo-hosted-none/terminal-zoom".into(),
+        json!(100),
+    )
+    .await;
+    assert_eq!(status, 404, "not a hosted session");
+
+    // By the extension's Host.
+    let (status, zoomed) = put("alice", "/ext/test/sessions/z/zoom".into(), json!(75)).await;
+    assert_eq!(status, 200, "{zoomed}");
+    assert_eq!(zoomed["terminal_zoom"], 75);
+    let (_, read) = get_as(&url, &zoom_path, "alice").await;
+    assert_eq!(read["zoom"], 75);
+
+    // Refused: nothing changes.
+    control.set(Refusal::parse("session:zoom,session:read~bob").unwrap());
+    let (status, refused) = put("alice", zoom_path.clone(), json!(200)).await;
+    assert_eq!(status, 403, "{refused}");
+    assert_eq!(refused["error"], "operation_refused");
+    let (_, read) = get_as(&url, &zoom_path, "alice").await;
+    assert_eq!(read["zoom"], 75);
+
+    let seen = read_messages(&mut alice_ws, 10, |seen| zooms_of(seen, &id).contains(&75)).await;
+    assert_eq!(
+        zooms_of(&seen, &id).last(),
+        Some(&75),
+        "every Poste follows"
+    );
+    assert!(
+        seen.iter().any(|m| m["type"] == "operation_applied"
+            && m["operation"]["resource"] == "session"
+            && m["operation"]["verb"]["action"] == "zoom"),
+        "{seen:#?}"
+    );
+    let bob_saw = read_messages(&mut bob_ws, 2, |_| false).await;
+    let about_the_session: Vec<_> = bob_saw
+        .iter()
+        .filter(|m| {
+            m["session"]["id"] == id.as_str()
+                || (m["type"] == "operation_applied" && m["operation"]["resource"] == "session")
+        })
+        .collect();
+    assert!(
+        about_the_session.is_empty(),
+        "who may not read the session hears nothing of it, its opening included: {about_the_session:#?}"
+    );
 }

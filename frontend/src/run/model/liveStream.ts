@@ -34,6 +34,8 @@ export interface WsMessage {
     /** An Actor opened a Run, or no longer has it open anywhere (API 0.12). */
     | "presence_arrived"
     | "presence_left"
+    /** A Session hébergée changed (API 0.19): its state, its Zoom du terminal. */
+    | "hosted_session_changed"
     /** Re-read the whole state (ADR-0083 §6): sent by the daemon to a client
      *  that lost messages, and emitted by the stream itself after each
      *  (re)opening, a return to the tab and a return of the network. */
@@ -61,4 +63,7 @@ export interface WsMessage {
   actor?: Actor;
   /** Set on `presence_*` messages: the Run's Presences once it happened. */
   presences?: Presence[];
+  /** Set on `hosted_session_changed` messages: the session as it now stands
+   *  (the fields the UI reads of it). */
+  session?: { id: string; terminal_zoom?: number };
 }

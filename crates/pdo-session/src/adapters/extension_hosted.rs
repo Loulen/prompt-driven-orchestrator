@@ -52,6 +52,11 @@ impl HostedSessions for ExtensionHostedSessions {
         Box::pin(async move { hosted.configure(&extension, &actor, &key, config).await })
     }
 
+    fn zoom(&self, extension: &str, actor: Actor, key: &str, zoom: u16) -> HostedGesture {
+        let (hosted, extension, key) = (self.0.clone(), extension.to_string(), key.to_string());
+        Box::pin(async move { hosted.zoom(&extension, &actor, &key, zoom).await })
+    }
+
     fn type_text(&self, extension: &str, actor: Actor, key: &str, text: &str) -> HostedGesture {
         let (hosted, extension, key, text) = (
             self.0.clone(),

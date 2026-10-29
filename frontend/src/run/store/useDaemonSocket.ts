@@ -43,6 +43,8 @@ const RELAYED: ReadonlySet<WsMessage["type"]> = new Set<WsMessage["type"]>([
   // API 0.12: who has which Run open.
   "presence_arrived",
   "presence_left",
+  // API 0.19: a Session hébergée changed (its terminal's zoom follows it).
+  "hosted_session_changed",
   // ADR-0083 §6: the daemon lost messages for this client.
   "resync",
 ]);

@@ -185,6 +185,13 @@ impl Host for ExtensionHostOf {
         }
     }
 
+    fn zoom_session(&self, actor: &Actor, key: &str, zoom: u16) -> HostedGesture {
+        match self.hosted() {
+            Some(hosted) => hosted.zoom(&self.id, actor.clone(), key, zoom),
+            None => not_hosted(),
+        }
+    }
+
     fn type_in_session(&self, actor: &Actor, key: &str, text: &str) -> HostedGesture {
         match self.hosted() {
             Some(hosted) => hosted.type_text(&self.id, actor.clone(), key, text),

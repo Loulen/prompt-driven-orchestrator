@@ -12,6 +12,19 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 
 ## 2.66.0 — Sessions hébergées par une extension (CORE-121)
 
+### Terminal de session exporté et Zoom du terminal (CORE-124)
+
+- **`pdo-extension-api` 0.19.0** complétée, sans rupture : `Host::zoom_session`,
+  `HostedSession::terminal_zoom` (100 pour un enregistrement antérieur) et les bornes
+  `MIN_TERMINAL_ZOOM`, `MAX_TERMINAL_ZOOM`, `DEFAULT_TERMINAL_ZOOM`.
+- `@pdo/extension-ui` 0.19.0 exporte le terminal de session du core (`SessionTerminal`), pour
+  toute session par son id, avec un zoom imposé par l'hôte, ainsi que le contrôle du Zoom du
+  terminal (`TerminalZoom`) et son hook (`useTerminalZoom`). Types dans `pdo-extension-ui.d.ts`.
+- Nouvelles routes `GET` et `PUT /sessions/<id>/terminal-zoom` ; le réglage est l'Opération
+  `session` × `zoom`, listée au catalogue avec `session` × `read`.
+- Sur `/ws`, un `operation_applied` sur la Ressource `session` ne part plus qu'aux connexions qui
+  peuvent lire la session, comme `hosted_session_changed`.
+
 ### Relancer, configurer, déposer du texte, Artefacts live, attente déclarée (CORE-123)
 
 - **`pdo-extension-api` 0.19.0** complétée, sans rupture : `Host::relaunch_session`,

@@ -1,7 +1,8 @@
 //! The Sessions hébergées of the test extension (API 0.19): the core's
 //! fixture for the Host's `open_session`, `hosted_session`, `hosted_sessions`,
 //! `terminate_session`, `relaunch_session`, `configure_session`,
-//! `type_in_session`, `forget_session`, `live_artifacts` and `live_artifact`.
+//! `zoom_session`, `type_in_session`, `forget_session`, `live_artifacts` and
+//! `live_artifact`.
 //!
 //! - `POST /ext/test/sessions` opens one on behalf of the caller (the body is
 //!   an [`OpenSession`]: `{"key", "kind": "agent"|"shell", "config"?,
@@ -12,7 +13,8 @@
 //! - `DELETE /ext/test/sessions/<key>` terminates it on behalf of the caller;
 //! - `POST /ext/test/sessions/<key>/relaunch` relaunches it, `PUT
 //!   /ext/test/sessions/<key>/config` (a [`HostedConfig`]) configures it,
-//!   `POST /ext/test/sessions/<key>/type` (`{"text"}`) lays a text in its
+//!   `PUT /ext/test/sessions/<key>/zoom` (`{"zoom"}`, in percent) sets its
+//!   Zoom du terminal, `POST /ext/test/sessions/<key>/type` (`{"text"}`) lays a text in its
 //!   input, `POST /ext/test/sessions/<key>/forget` forgets it, each on behalf
 //!   of the caller, answering the session or the refusal;
 //! - `GET /ext/test/sessions/<key>/live` lists its Artefacts live, `GET
@@ -115,6 +117,15 @@ fn gesture(
 }
 
 pub(super) fn routes(creation: Creation) -> Router {
+    let zoom = gesture(&creation, |host, actor, key, body| {
+        match body["zoom"].as_u64().and_then(|z| u16::try_from(z).ok()) {
+            Some(zoom) => host.zoom_session(actor, key, zoom),
+            None => Box::pin(std::future::ready(Err(HostedRefusal::new(
+                400,
+                "`zoom` is a number of percent",
+            )))),
+        }
+    });
     let (relaunch, configure, typed, forget) = (
         gesture(&creation, |host, actor, key, _| {
             host.relaunch_session(actor, key)
@@ -141,6 +152,7 @@ pub(super) fn routes(creation: Creation) -> Router {
     let gestures = Router::new()
         .route("/sessions/{key}/relaunch", post(relaunch))
         .route("/sessions/{key}/config", put(configure))
+        .route("/sessions/{key}/zoom", put(zoom))
         .route("/sessions/{key}/type", post(typed))
         .route("/sessions/{key}/forget", post(forget))
         .route(

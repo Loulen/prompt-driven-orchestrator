@@ -72,7 +72,8 @@ pub use extension::{Extension, ExtensionContext, RequestParts};
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use hosted::{
     EndReason, HostedConfig, HostedFolder, HostedGesture, HostedKind, HostedRefusal, HostedSession,
-    HostedState, LiveArtifact, OpenSession,
+    HostedState, LiveArtifact, OpenSession, DEFAULT_TERMINAL_ZOOM, MAX_TERMINAL_ZOOM,
+    MIN_TERMINAL_ZOOM,
 };
 pub use hosted_event::{
     HostedLiveArtifactsChanged, HostedSessionChanged, HostedSessionForgotten,
@@ -120,7 +121,7 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Operation a command makes; 0.19 only added the Sessions hébergées: the
 /// Host's `open_session`, `hosted_session`, `hosted_sessions`,
 /// `terminate_session`, `relaunch_session`, `configure_session`,
-/// `type_in_session`, `forget_session`, `live_artifacts` and
+/// `type_in_session`, `forget_session`, `zoom_session`, `live_artifacts` and
 /// `live_artifact`, `SessionKind::Hosted`, the extension and key of a
 /// `SessionRef`, and the `hosted_session_changed`, `hosted_session_forgotten`
 /// and `hosted_live_artifacts_changed` events).

@@ -75,15 +75,21 @@ export function useXtermSession(
   session: string,
   mode: PaneMode,
   frozen: FrozenPane | null,
+  fontScale = 1,
 ): XtermSession {
   const terminalRef = useRef<Terminal | null>(null);
   // The grid's layout (fit, or the spectator's font), run again on a new UI
   // scale: the terminal is drawn out of the app's zoom, its font carries it.
   const layoutRef = useRef<(() => void) | null>(null);
   const scale = useUiScale();
+  // CORE-124: the Zoom du terminal, times the host's: the font carries it too.
+  // A ref, read by the layout the xterm callbacks hold.
+  const fontScaleRef = useRef(fontScale);
+  const fontSize = () => baseFontSize() * fontScaleRef.current;
   useEffect(() => {
+    fontScaleRef.current = fontScale;
     layoutRef.current?.();
-  }, [scale]);
+  }, [scale, fontScale]);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<ProbedSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -153,8 +159,9 @@ export function useXtermSession(
       // `forcedSelectionEvent` relies on it.
       macOptionClickForcesSelection: true,
     });
-    // The grid's size: the type scale's, times the UI scale (`baseFontSize`).
-    term.options.fontSize = baseFontSize();
+    // The grid's size: the type scale's, times the UI scale (`baseFontSize`) and
+    // the zoom (`fontScale`).
+    term.options.fontSize = fontSize();
 
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
@@ -218,7 +225,7 @@ export function useXtermSession(
             term.options.fontSize = candidate;
             return fitAddon.proposeDimensions();
           },
-          baseFontSize(),
+          fontSize(),
           MIN_SPECTATOR_FONT_SIZE * uiZoom(),
         );
         term.options.fontSize = size;
@@ -228,8 +235,8 @@ export function useXtermSession(
         });
         return;
       }
-      if (term.options && term.options.fontSize !== baseFontSize()) {
-        term.options.fontSize = baseFontSize();
+      if (term.options && term.options.fontSize !== fontSize()) {
+        term.options.fontSize = fontSize();
       }
       const apply = () => {
         fitAddon.fit();

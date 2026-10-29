@@ -94,9 +94,12 @@
 //!   hébergées (API 0.19, `sessions.rs`): `POST /ext/test/sessions` opens one
 //!   on behalf of the caller, `GET` lists or reads them, `DELETE
 //!   /ext/test/sessions/<key>` terminates one, `POST …/<key>/relaunch`, `PUT
-//!   …/<key>/config`, `POST …/<key>/type` and `POST …/<key>/forget` relaunch,
-//!   configure, type into and forget it, `GET …/<key>/live[/<path>]` lists
-//!   and reads its Artefacts live. A Session hébergée gets a `PDO_TOKEN`
+//!   …/<key>/config`, `PUT …/<key>/zoom`, `POST …/<key>/type` and `POST
+//!   …/<key>/forget` relaunch, configure, zoom, type into and forget it, `GET
+//!   …/<key>/live[/<path>]` lists and reads its Artefacts live. Its page, at
+//!   the path `hosted` (`#/ext/test/topbar/end/hosted`), opens the shell
+//!   `demo` (`hosted/agent`: the agent `demo-agent`) and shows it with the
+//!   core's exported terminal and its Zoom du terminal (API 0.19). A Session hébergée gets a `PDO_TOKEN`
 //!   naming who started it, which `identify` recognises, so a `pdo` typed in
 //!   a hosted shell acts as that Actor.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at

@@ -10,12 +10,18 @@
  * hands out the shared design system's primitives (ADR-0091): an extension's
  * UI draws its controls with the core's own, in the core's tokens. Since
  * 0.18 its types describe the Sources de recherche of the command field
- * (`SearchResult`, `SearchFunction`); nothing more is exported.
+ * (`SearchResult`, `SearchFunction`); nothing more is exported. Since 0.19 it
+ * hands out the core's session terminal (`SessionTerminal`), for any session
+ * by its id, and the Zoom du terminal of a Session hébergée
+ * (`useTerminalZoom`, `TerminalZoom`).
  */
 
 import { useActorDisplay, useCurrentActor } from "../actors/store";
 import { openProbedSocket } from "../http/probedSocket";
 import { copyToClipboard } from "../lib/clipboard";
+import SessionTerminal from "../../session/components/SessionTerminal";
+import TerminalZoom from "../../session/components/TerminalZoom";
+import { useTerminalZoom } from "../../session/store/useTerminalZoom";
 import * as kit from "../ui/kit";
 import { HostedContribution, HostedContributions } from "./HostedContributions";
 import { runHostedCommand, useHostedContributions } from "./hosted";
@@ -56,6 +62,9 @@ export const extensionUiModule = {
   TextInput: kit.TextInput,
   toast: kit.toast,
   Tooltip: kit.Tooltip,
+  SessionTerminal,
+  useTerminalZoom,
+  TerminalZoom,
 };
 
 export type ExtensionUiModule = typeof extensionUiModule;

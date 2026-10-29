@@ -11,8 +11,8 @@
 //! still reaches the connection, without the `run_id` of a Run it may not
 //! read. A message guarded by a read ([`READ_GUARD`]: what a Trigger
 //! announces, in its Projets; an extension's event its extension guarded)
-//! and an `operation_applied` on a Trigger or on an extension's Ressource
-//! reach a connection only if its Actor may run that read (the read of the
+//! and an `operation_applied` on a Trigger, a session or an extension's
+//! Ressource reach a connection only if its Actor may run that read (the read of the
 //! entity, in the Operation's Projets); the guard never leaves the daemon.
 //! The other messages (pipelines, Projets, the extensions' unguarded
 //! events…) pass as before.
@@ -292,11 +292,14 @@ fn run_of_message(message: &Value) -> Option<(&str, bool)> {
     }
 }
 
-/// The read guarding an `operation_applied` on a Trigger or on an
+/// The read guarding an `operation_applied` on a Trigger, a session or an
 /// extension's Ressource: the read of the entity it is about (its target, or
 /// the entity it created), on the same Ressource, in the Projets of its
-/// Operation. `None` for the other messages, and for a creation whose entity
-/// nobody knows.
+/// Operation. A session's Operation without a target (the opening of a
+/// Session hébergée) is guarded by the read of the sessions of its Projets,
+/// as its `hosted_session_changed` is reached by those who may read it.
+/// `None` for the other messages, and for a creation whose entity nobody
+/// knows.
 fn entity_read_of(message: &Value) -> Option<Value> {
     if message["type"] != "operation_applied" {
         return None;
@@ -304,18 +307,20 @@ fn entity_read_of(message: &Value) -> Option<Value> {
     let operation: Operation = serde_json::from_value(message["operation"].clone()).ok()?;
     if !matches!(
         operation.resource,
-        ResourceKind::Trigger | ResourceKind::Extension { .. }
+        ResourceKind::Trigger | ResourceKind::Session | ResourceKind::Extension { .. }
     ) {
         return None;
     }
-    let target = match operation.target {
-        Some(target) => target,
-        None => message["entity"]["id"].as_str()?.to_string(),
+    let target = operation
+        .target
+        .or_else(|| message["entity"]["id"].as_str().map(str::to_string));
+    let read = Operation::new(operation.resource.clone(), Verb::Read);
+    let read = match target {
+        Some(target) => read.on(target),
+        None if operation.resource == ResourceKind::Session => read,
+        None => return None,
     };
-    let read = Operation::new(operation.resource, Verb::Read)
-        .on(target)
-        .in_projects(operation.projects);
-    serde_json::to_value(read).ok()
+    serde_json::to_value(read.in_projects(operation.projects)).ok()
 }
 
 /// The Run a message about something else names in passing: the Run a
@@ -481,6 +486,31 @@ mod tests {
             entity_read_of(&json!({ "type": "trigger_updated", "trigger_id": "t1" })),
             None
         );
+    }
+
+    #[test]
+    fn an_operation_on_a_session_is_guarded_by_the_read_of_the_session_in_its_projets() {
+        let applied = |verb: &str, target: Value| {
+            json!({
+                "type": "operation_applied",
+                "operation": {
+                    "resource": "session", "verb": { "action": verb }, "target": target,
+                    "projects": ["p2"],
+                },
+            })
+        };
+        assert_eq!(
+            entity_read_of(&applied("terminate", json!("pdo-hosted-1"))),
+            Some(json!({
+                "resource": "session", "verb": "read", "target": "pdo-hosted-1",
+                "projects": ["p2"],
+            }))
+        );
+        let opened = entity_read_of(&applied("open", Value::Null)).unwrap();
+        assert_eq!(opened["resource"], "session");
+        assert_eq!(opened["verb"], "read");
+        assert!(opened["target"].is_null(), "{opened}");
+        assert_eq!(opened["projects"], json!(["p2"]));
     }
 
     #[test]

@@ -464,6 +464,45 @@ export function Avatar(props: {
   off?: boolean;
 }): ReactNode;
 
+// ---------------------------------------------------------------- the session terminal (since 0.19)
+
+/** The core's session terminal, for any session by its id: its tmux session's
+ *  name (a Session hébergée's `id`, `pdo-hosted-…`). Poste, Pilote, Spectateur
+ *  and Prise de main, resizing and reconnection are the core's; no xterm to
+ *  ship, no protocol to write. Its text follows the session's Zoom du terminal
+ *  (live, the same on every Poste) times the `zoom` the host imposes. It fills
+ *  its parent, which needs a height. Since 0.19. */
+export function SessionTerminal(props: {
+  session: string;
+  /** A zoom the host imposes, as a factor (`1`: none). */
+  zoom?: number;
+  /** At the head of the toolbar, in place of the connection dot. */
+  toolbarIdentity?: ReactNode;
+  /** At the right of the toolbar, before Copy. */
+  toolbarActions?: ReactNode;
+  expanded?: boolean;
+  /** Adds the expand button to the toolbar. */
+  onExpand?: () => void;
+  onLiveSocketChange?: (live: boolean) => void;
+  /** Whether this browser only watches (another Poste pilots). */
+  onSpectatingChange?: (spectating: boolean) => void;
+}): ReactNode;
+
+/** The Zoom du terminal of a session, live: in percent (50 to 200; 100 for a
+ *  session that carries none); `hosted` is `null` until the daemon answered.
+ *  `setZoom` sets it for every Poste on a Session hébergée (the Operation
+ *  `session` × `zoom`) and rejects with the refusal. Since 0.19. */
+export function useTerminalZoom(session: string): {
+  zoom: number;
+  hosted: boolean | null;
+  setZoom: (zoom: number) => Promise<void>;
+};
+
+/** The control of the Zoom du terminal of a Session hébergée: 50 to 200 %
+ *  between − and +, « same for everyone watching ». Off for any other
+ *  session. Since 0.19. */
+export function TerminalZoom(props: { session: string }): ReactNode;
+
 declare const ExtensionUi: {
   version: string;
   major: number;
@@ -499,5 +538,8 @@ declare const ExtensionUi: {
   TextInput: typeof TextInput;
   toast: typeof toast;
   Tooltip: typeof Tooltip;
+  SessionTerminal: typeof SessionTerminal;
+  useTerminalZoom: typeof useTerminalZoom;
+  TerminalZoom: typeof TerminalZoom;
 };
 export default ExtensionUi;

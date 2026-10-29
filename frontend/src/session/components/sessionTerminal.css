@@ -1,0 +1,37 @@
+/*
+ * CORE-124 — the Zoom du terminal control: a title and its hint on one line,
+ * then − , the steps, + . Tokens only; the kit's segmented and icon buttons.
+ */
+.ri-term-zoom {
+  display: flex;
+  flex-direction: column;
+  gap: var(--g-2);
+  min-width: 0;
+}
+
+.ri-term-zoom__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--g-3);
+  min-width: 0;
+}
+
+.ri-term-zoom__title {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+
+.ri-term-zoom__hint {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ri-term-zoom__row {
+  display: flex;
+  align-items: center;
+  gap: var(--g-2);
+}

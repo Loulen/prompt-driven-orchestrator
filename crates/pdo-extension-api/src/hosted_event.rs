@@ -148,6 +148,7 @@ mod tests {
             state: HostedState::Ended,
             end_reason: Some(EndReason::Terminated),
             wait_message: None,
+            terminal_zoom: 150,
             created_at: "2026-10-28T10:00:00Z".into(),
             updated_at: "2026-10-28T10:05:00Z".into(),
         }

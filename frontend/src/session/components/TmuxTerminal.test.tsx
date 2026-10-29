@@ -219,7 +219,17 @@ const fetchPaneMock = vi.fn();
 vi.mock("../api/sessions", () => ({
   attachSession: vi.fn(),
   fetchPane: (...args: unknown[]) => fetchPaneMock(...args),
+  // CORE-124: the Zoom du terminal the exported terminal reads.
+  fetchTerminalZoom: async (session: string) =>
+    session.startsWith("pdo-hosted-") ? { zoom: 150, hosted: true } : { zoom: 100, hosted: false },
+  putTerminalZoom: vi.fn(),
 }));
+
+// The exported terminal follows its zoom on the tab's stream; not opened here.
+vi.mock("../../run/store/useDaemonSocket", () => ({
+  useDaemonSocket: () => ({ status: "connected", subscribe: stableSubscribe }),
+}));
+const stableSubscribe = () => () => {};
 
 // Exposes the tooltip text on a wrapper, unless the tooltip is disabled.
 vi.mock("../../shared/ui/tooltip", () => ({
@@ -235,6 +245,7 @@ vi.mock("../../shared/ui/tooltip", () => ({
 }));
 
 import TmuxTerminal from "./TmuxTerminal";
+import SessionTerminal from "./SessionTerminal";
 
 describe("TmuxTerminal", () => {
   beforeEach(() => {
@@ -1125,6 +1136,62 @@ describe("TmuxTerminal", () => {
       roleFrame(ws, { role: "solo" });
       expect(term.options.fontSize).toBeCloseTo(13.2);
       expect(screen.getByTestId("xterm-container").className).toContain("pdo-unzoom");
+    });
+
+    it("multiplies its font by the zoom it is given, and lays out again when it changes (CORE-124)", async () => {
+      const { rerender } = render(
+        <TmuxTerminal session="pdo-hosted-1" status="running" fontScale={1.5} />,
+      );
+      await new Promise((r) => setTimeout(r, 10));
+      const ws = wsInstances[0];
+      const term = mockTerminalInstances[0];
+      roleFrame(ws, { role: "solo" });
+      expect(term.options.fontSize).toBeCloseTo(16.5);
+      expect(screen.getByTestId("xterm-container").dataset.fontScale).toBe("1.5");
+      rerender(<TmuxTerminal session="pdo-hosted-1" status="running" fontScale={0.5} />);
+      expect(term.options.fontSize).toBeCloseTo(5.5);
+      expect(mockTerminalInstances).toHaveLength(1);
+    });
+
+    it("gives a spectator the zoomed font as its largest, then fits the pilot's grid (CORE-124)", async () => {
+      areaOf(1000, 500);
+      render(<TmuxTerminal session="pdo-hosted-1" status="running" fontScale={2} />);
+      await new Promise((r) => setTimeout(r, 10));
+      const ws = wsInstances[0];
+      const term = mockTerminalInstances[0];
+      roleFrame(ws, { role: "spectator", pilot: { cols: 40, rows: 10 } });
+      expect(term.options.fontSize).toBeCloseTo(22);
+      roleFrame(ws, { role: "spectator", pilot: { cols: 200, rows: 50 } });
+      expect(term.options.fontSize).toBeLessThan(22);
+      expect(Math.floor(1000 / (term.options.fontSize * 0.6))).toBeGreaterThanOrEqual(200);
+    });
+
+    it("the exported terminal is the core's: zoomed, a spectator that takes control (CORE-124)", async () => {
+      areaOf(1000, 500);
+      render(<SessionTerminal session="pdo-hosted-1" />);
+      await waitFor(() =>
+        expect(screen.getByTestId("xterm-container").dataset.fontScale).toBe("1.5"),
+      );
+      await new Promise((r) => setTimeout(r, 10));
+      const ws = wsInstances[0];
+      const term = mockTerminalInstances[0];
+      expect(ws.url).toContain("/sessions/pdo-hosted-1/pty");
+      roleFrame(ws, { role: "solo" });
+      expect(term.options.fontSize).toBeCloseTo(16.5);
+
+      roleFrame(ws, { role: "spectator", pilot: { cols: 40, rows: 10 } });
+      const container = screen.getByTestId("xterm-container");
+      expect(container.dataset.role).toBe("spectator");
+      const onData = term.onData.mock.calls[0][0] as (d: string) => void;
+      const before = ws.sent.length;
+      onData("x");
+      expect(ws.sent.length, "a spectator types nothing").toBe(before);
+      fireEvent.click(screen.getByTestId("term-take-control"));
+      expect(ws.sent.at(-1)).toBe(JSON.stringify({ type: "take_control" }));
+      roleFrame(ws, { role: "pilot", spectators: 1 });
+      expect(container.dataset.role).toBe("pilot");
+      onData("y");
+      expect(new TextDecoder().decode(ws.sent.at(-1) as Uint8Array), "the pilot types").toBe("y");
     });
 
     it("passes the poste in the socket URL, stable across mounts and shared through localStorage", () => {

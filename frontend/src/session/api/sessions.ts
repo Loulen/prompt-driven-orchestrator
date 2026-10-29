@@ -1,9 +1,11 @@
 // The session context's routes: the status bar's gauges, a node's pane, the
-// OS terminal pop-outs, the run shell and a text written into a node's input. The terminal itself is the
+// OS terminal pop-outs, the run shell, a text written into a node's input and
+// the Zoom du terminal. The terminal itself is the
 // `WS /sessions/<session>/pty` bridge (see `components/TmuxTerminal`).
 
 import type { DaemonStatus } from "../../platform/model/daemon";
 import type { TerminalTextResponse } from "../../shared/generated/TerminalTextResponse";
+import type { TerminalZoomResponse } from "../../shared/generated/TerminalZoomResponse";
 import { request } from "../../shared/http/client";
 import { posteId } from "../model/poste";
 
@@ -83,5 +85,24 @@ export function sendTextToNodeTerminal(
     "POST",
     `/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/terminal-text`,
     { body: { iter, text, poste: posteId() }, label: "Send to terminal" },
+  );
+}
+
+/** The Zoom du terminal of a session (CORE-124): `hosted` says whether the
+ *  session carries one (a Session hébergée); any other is at 100 %. */
+export function fetchTerminalZoom(session: string): Promise<TerminalZoomResponse> {
+  return request<TerminalZoomResponse>(
+    "GET",
+    `/sessions/${encodeURIComponent(session)}/terminal-zoom`,
+    { label: "terminal zoom" },
+  );
+}
+
+/** Set the Zoom du terminal of a Session hébergée, for every Poste on it. */
+export function putTerminalZoom(session: string, zoom: number): Promise<TerminalZoomResponse> {
+  return request<TerminalZoomResponse>(
+    "PUT",
+    `/sessions/${encodeURIComponent(session)}/terminal-zoom`,
+    { body: { zoom }, label: "Terminal zoom" },
   );
 }

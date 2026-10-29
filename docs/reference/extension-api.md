@@ -193,8 +193,9 @@ core's mechanisms (amendment #34):
   when an Actor's rights change, so that an open view follows without reloading.
 - `open_session(actor, OpenSession)`, `hosted_session(key)`, `hosted_sessions()`,
   `terminate_session(actor, key)`, `relaunch_session(actor, key)`,
-  `configure_session(actor, key, HostedConfig)`, `type_in_session(actor, key, text)`,
-  `forget_session(actor, key)`, `live_artifacts(key)`, `live_artifact(key, path)` (0.19): have
+  `configure_session(actor, key, HostedConfig)`, `zoom_session(actor, key, zoom)`,
+  `type_in_session(actor, key, text)`, `forget_session(actor, key)`, `live_artifacts(key)`,
+  `live_artifact(key, path)` (0.19): have
   the core hold an agent or a shell outside any Run
   ([Sessions hébergées](#sessions-hébergées-019)).
 
@@ -437,7 +438,8 @@ let session = host
   `extension`, `key`, `kind`, `config`, `folder`, `cwd` (the folder resolved), `project`,
   `started_by`, `state` (`starting`, `running`, `awaiting_user`, `ended`), `end_reason`
   (`terminated` or `exited`), `wait_message` (while `awaiting_user`, what its agent said it
-  waits for; absent otherwise), `created_at`, `updated_at`.
+  waits for; absent otherwise), `terminal_zoom` (its Zoom du terminal, in percent, 100 for a new
+  session), `created_at`, `updated_at`.
 - **Reading** (`hosted_session(key)`, `hosted_sessions()`) is synchronous and answers only the
   calling extension's sessions, ended ones included.
 - **Terminating** asks `session` × `terminate` on the session (its id, in its Projet), ends it
@@ -459,6 +461,12 @@ let session = host
   published at once, and applies at its next relaunch: a running agent keeps the one it was
   launched with, and a resumed conversation does not read a new initial prompt. `400` for a
   shell or a harness the core does not know.
+- **Its Zoom du terminal** (`zoom_session`, in percent from `MIN_TERMINAL_ZOOM` 50 to
+  `MAX_TERMINAL_ZOOM` 200) asks `session` × `zoom` on it, then is recorded and published at once:
+  the size of its terminal's text on every Poste, wherever it shows, live or ended, agent or
+  shell. `400` out of range, after the Operation. Any Poste sets it too, through
+  `PUT /sessions/<id>/terminal-zoom` (the same Operation, for the browser's Actor); the
+  terminal `@pdo/extension-ui` exports follows it (see extension-ui.md).
 - **Laying a text** (`type_in_session`) asks `session` × `type` on it, then pastes the text in
   its input as one bracketed paste, **without** Enter: it waits there for a person to complete
   and submit it, as a file dropped on a terminal. `400` for an empty text, `409` for a session
@@ -495,7 +503,10 @@ let session = host
 
 Each change of its state is published as `hosted_session_changed`, to every extension's
 `on_event` and, on `/ws`, to the connections whose Actor may run `session` × `read` on it (in its
-Projet); `HostedSessionChanged::from_event` reads it back. The whole session travels, its
+Projet); `HostedSessionChanged::from_event` reads it back. The Operations on a session reach
+`/ws` the same way: an `operation_applied` on the Ressource `session` only reaches the connections
+that may read that session (an opening, untargeted, those that may read the sessions of its
+Projet). The whole session travels, its
 `config` (the initial prompt included) and its `cwd` too: every extension receives it.
 
 ```json
@@ -504,7 +515,7 @@ Projet); `HostedSessionChanged::from_event` reads it back. The whole session tra
                "kind": "agent", "config": { "model": "opus" },
                "folder": { "kind": "project_repo" }, "cwd": "/repos/app", "project": "p1",
                "started_by": { "kind": "identified", "namespace": "acme", "id": "bob" },
-               "state": "running", "end_reason": null,
+               "state": "running", "end_reason": null, "terminal_zoom": 100,
                "created_at": "…", "updated_at": "…" } }
 ```
 

@@ -210,6 +210,19 @@ pub trait Host: Send + Sync {
         no_hosted_session()
     }
 
+    /// Set the Zoom du terminal of the Session hébergée `key` of the calling
+    /// extension on behalf of `actor` (API 0.19): the Operation `session` ×
+    /// `zoom` first. `zoom` is in percent, from
+    /// [`MIN_TERMINAL_ZOOM`](crate::MIN_TERMINAL_ZOOM) to
+    /// [`MAX_TERMINAL_ZOOM`](crate::MAX_TERMINAL_ZOOM); it is recorded,
+    /// published at once and applies to its terminal on every Poste, live or
+    /// ended, agent or shell. Answers the session with its new zoom; `400`
+    /// for a zoom out of that range, `404` for a key it never gave. By
+    /// default, `503`.
+    fn zoom_session(&self, _actor: &Actor, _key: &str, _zoom: u16) -> HostedGesture {
+        no_hosted_session()
+    }
+
     /// Lay `text` in the input of the live Session hébergée `key` of the
     /// calling extension on behalf of `actor` (API 0.19), as a paste,
     /// **without** submitting it: it waits for a person to complete it and

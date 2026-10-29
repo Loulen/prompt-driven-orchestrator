@@ -60,10 +60,10 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo service install [--port <port>] [--bind <ip>] [--dry-run]` | Install the systemd user service or launchd agent; `--dry-run` prints the definition without changing the host. Keep `PDO_ALLOWED_WS_ORIGINS` in a `pdo.service.d/override.conf` drop-in, which survives unit rewrites including Update. |
 | `pdo service status` | Show the installed service status. |
 | `pdo service uninstall` | Stop, disable, and remove the installed service. |
-| `pdo complete [--auto]` | Complete the current node; `--auto` is reserved for runtime hooks. |
-| `pdo fail --reason <text>` | Fail the current node with a recorded reason. |
-| `pdo skip --reason <text>` | End the current run as skipped when there is legitimately no work. |
-| `pdo wait-user [--message <text>]` | Declare that the current node waits on its user: the node and run turn awaiting-user with the message on the banner (capped at 100 characters). Accepted on any node with a live session; refused (exit 3) on a script node or without a session; a repeat is a no-op. Lifted by the user's Enter in the PDO terminal or by the completion release. |
+| `pdo complete [--auto]` | Complete the current node; `--auto` is reserved for runtime hooks. In a Session hébergée (`PDO_SESSION_ID`, no `PDO_RUN_ID`): refused, exit 3, nothing changes. |
+| `pdo fail --reason <text>` | Fail the current node with a recorded reason. Refused (exit 3) in a Session hébergée. |
+| `pdo skip --reason <text>` | End the current run as skipped when there is legitimately no work. Refused (exit 3) in a Session hébergée. |
+| `pdo wait-user [--message <text>]` | Declare that the current node waits on its user: the node and run turn awaiting-user with the message on the banner (capped at 100 characters). Accepted on any node with a live session; refused (exit 3) on a script node or without a session; a repeat is a no-op. Lifted by the user's Enter in the PDO terminal or by the completion release. In a Session hébergée (`PDO_SESSION_ID`, no `PDO_RUN_ID`), the session turns awaiting-user instead, lifted by an Enter in its terminal; refused (exit 3) when it is not running. |
 | `pdo migrate [--dir <path>] [--dry-run]` | Migrate legacy pipeline YAML files. |
 | `pdo reap [--count] [--dry-run] [--ttl-hours <hours>] [--terminal-ttl-hours <hours>] [--budget-secs <seconds>]` | Report or archive old terminal runs according to the retention policy. |
 | `pdo docs support-table [--check\|--write] [--file <path>]` | Check or regenerate the harness support table in [harnesses.md](harnesses.md) (the default `--file`). |

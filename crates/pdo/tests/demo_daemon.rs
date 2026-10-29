@@ -50,8 +50,15 @@
 //! {"kind": "project_repo"}, "project"?, "config"?: {"harness", "model",
 //! "effort", "prompt"}}` opens one on behalf of the caller, `GET
 //! /ext/test/sessions[/<key>]` reads them, `DELETE /ext/test/sessions/<key>`
-//! terminates one. Their records live under `$HOME/.pdo/hosted/`; a hosted
-//! shell's `pdo` acts as who opened it.
+//! terminates one, `POST /ext/test/sessions/<key>/relaunch` relaunches an
+//! ended one, `PUT /ext/test/sessions/<key>/config {"harness", "model",
+//! "effort", "prompt"}` configures its next relaunch, `POST
+//! /ext/test/sessions/<key>/type {"text"}` lays a text in its input without
+//! Enter, `POST /ext/test/sessions/<key>/forget` forgets an ended one, `GET
+//! /ext/test/sessions/<key>/live[/<path>]` lists and reads its Artefacts live.
+//! Their records live under `$HOME/.pdo/hosted/`; a hosted session's `pdo`
+//! acts as who opened it (`pdo wait-user` declares its wait, `pdo complete`
+//! is refused).
 //!
 //! It suspends a Trigger on `PUT /ext/test/suspensions {"trigger_id", "reason"}`
 //! and lifts it on `DELETE /ext/test/suspensions/<id>`.

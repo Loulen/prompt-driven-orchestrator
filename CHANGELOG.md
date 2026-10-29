@@ -29,6 +29,27 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   tue tout autre nom au préfixe `pdo-hosted-`.
 - Une extension ne peut plus poser `PDO_SESSION_ID` dans une session : c'est une variable du core.
 
+## 2.55.0 — Sessions hébergées : relancer, configurer, déposer du texte, Artefacts live, attente déclarée (CORE-123)
+
+- **`pdo-extension-api` 0.17.0** complétée, sans rupture : `Host::relaunch_session`,
+  `configure_session`, `type_in_session`, `forget_session`, `live_artifacts` et
+  `live_artifact` ; `HostedSession::wait_message` ; `LiveArtifact` ; les événements
+  `hosted_session_forgotten` et `hosted_live_artifacts_changed`, publiés comme
+  `hosted_session_changed`.
+- Nouvelles actions de l'Opération `session`, listées au catalogue : `relaunch`, `configure`,
+  `type`, `forget` et `wait_user`. Une Entrée qui lève l'attente d'une Session hébergée demande
+  `session` × `resume` pour qui la tape.
+- Relancer reprend la conversation d'un agent par l'identité fixée à son lancement, sur le même
+  harnais ; sinon une conversation neuve relit le texte des extensions et le prompt initial. Les
+  modèles de reprise des harnais `claude`, `copilot` et `pi` gagnent un trou `{model}`, vide à
+  la reprise d'un Node : sa commande ne change pas.
+- `pdo wait-user` vise la Session hébergée de `PDO_SESSION_ID` quand `PDO_RUN_ID` est absent
+  (`POST /sessions/<id>/wait-user`) ; `pdo complete`, `pdo fail` et `pdo skip` y sont refusés
+  (code 3).
+- `PDO_LIVE_DIR` est une variable du core dans une Session hébergée : une extension ne peut pas
+  la poser. Au démarrage, les Sessions hébergées vivantes d'une extension absente sont
+  terminées, leur enregistrement gardé.
+
 ## 2.53.0 — Cloner un dépôt distant depuis Settings › Projects et New Run (CORE-97)
 
 - « Add repository » d'un Projet propose « Clone from a URL… » : le dépôt est cloné en entier

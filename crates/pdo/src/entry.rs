@@ -13,8 +13,8 @@ use pdo_kernel::extension_host::Extensions;
 use pdo_platform::adapters::cli::{run_page, run_service, ServiceAction};
 use pdo_review::adapters::cli::run_review;
 use pdo_run::adapters::cli::{
-    run_complete, run_fail, run_reap, run_run_create, run_run_list, run_run_wait, run_skip,
-    run_wait_user, RunAction,
+    refused_in_hosted_session, run_complete, run_fail, run_reap, run_run_create, run_run_list,
+    run_run_wait, run_skip, run_wait_user, RunAction,
 };
 
 use crate::cli::{run_docs, run_ext, run_migrate, Cli, Commands};
@@ -37,6 +37,8 @@ use crate::cli::{run_docs, run_ext, run_migrate, Cli, Commands};
 ///   §4);
 /// - `pdo wait-user`: `3` refused, still your turn; `pdo run wait`: `2` timed
 ///   out, not a failure (ADR-0069);
+/// - `pdo complete`, `fail` and `skip` from a Session hébergée: `3`, refused,
+///   nothing changed (ADR-0091);
 /// - `pdo ext <id> <args…>`: the extension's own code, relayed as is; `1` the
 ///   daemon cannot be reached or the extension failed; `127` no extension
 ///   `<id>`, or one without a command line (#33);
@@ -120,8 +122,14 @@ where
         Commands::Complete { auto } => run_complete(auto),
         // `wait-user` shares the `3` of that contract.
         Commands::WaitUser { message } => run_wait_user(message),
-        Commands::Fail { reason } => exit(run_fail(reason)),
-        Commands::Skip { reason } => exit(run_skip(reason)),
+        // A Session hébergée is never completed, failed nor skipped
+        // (ADR-0091): refused with the `3` of that contract.
+        Commands::Fail { reason } => {
+            refused_in_hosted_session("fail").unwrap_or_else(|| exit(run_fail(reason)))
+        }
+        Commands::Skip { reason } => {
+            refused_in_hosted_session("skip").unwrap_or_else(|| exit(run_skip(reason)))
+        }
         Commands::Service { action } => exit(run_service_with(action, extensions)),
         Commands::Migrate { dir, dry_run } => exit(run_migrate(dir, dry_run)),
         Commands::Reap {

@@ -54,15 +54,29 @@ impl Hosted {
     }
 
     /// At boot, before the router serves: a live record whose session is
-    /// still in tmux is taken back with who started it (`running`); one whose
-    /// session is gone ended while no daemon watched (`exited`). Blocking: it
-    /// asks tmux.
+    /// still in tmux is taken back with who started it (`running`, or still
+    /// `awaiting_user`); one whose session is gone ended while no daemon
+    /// watched (`exited`). The live sessions of an extension this daemon does
+    /// not have are terminated (`terminated`), their record kept: nothing runs
+    /// without the extension that governs it. Blocking: it asks tmux.
     pub fn restore(&self) {
+        let installed = self.host.installed();
         for record in self.registry.all() {
             if !record.is_live() {
                 continue;
             }
             let now = pdo_kernel::clock::now_iso();
+            if !installed.contains(&record.session.extension) {
+                warn!(
+                    "hosted session {} of the absent extension `{}` is terminated",
+                    record.id(),
+                    record.session.extension
+                );
+                self.registry
+                    .update(record.id(), |r| r.end(EndReason::Terminated, &now));
+                self.tmux.kill(record.id());
+                continue;
+            }
             if self.tmux.session_exists(record.id()) {
                 self.registry.update(record.id(), |r| r.run(&now));
                 self.ledger
@@ -78,10 +92,12 @@ impl Hosted {
         }
     }
 
-    /// End (`exited`) every running session whose tmux session is gone: its
-    /// process exited. A session still `starting` is being launched, and is
-    /// left alone. Blocking: it asks tmux.
+    /// Publish the Artefacts live that changed, then end (`exited`) every
+    /// running session whose tmux session is gone: its process exited. A
+    /// session still `starting` is being launched, and is left alone.
+    /// Blocking: it asks tmux and reads the disk.
     pub fn reconcile(&self) {
+        self.scan_live();
         let mut released = false;
         for record in self.registry.all() {
             let running = matches!(

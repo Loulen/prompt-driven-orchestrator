@@ -191,7 +191,10 @@ core's mechanisms (amendment #34):
   again (below). The interface also asks again which gestures on the Runs it may show: call it
   when an Actor's rights change, so that an open view follows without reloading.
 - `open_session(actor, OpenSession)`, `hosted_session(key)`, `hosted_sessions()`,
-  `terminate_session(actor, key)` (0.17): have the core hold an agent or a shell outside any Run
+  `terminate_session(actor, key)`, `relaunch_session(actor, key)`,
+  `configure_session(actor, key, HostedConfig)`, `type_in_session(actor, key, text)`,
+  `forget_session(actor, key)`, `live_artifacts(key)`, `live_artifact(key, path)` (0.17): have
+  the core hold an agent or a shell outside any Run
   ([Sessions hébergées](#sessions-hébergées-017)).
 
 `NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone, creates no
@@ -424,24 +427,70 @@ let session = host
   alike, `session.kind` `hosted`). An agent reads the extensions' text then its `prompt`, and
   **nothing of the core** (no runtime preamble, no Run, no completion); a shell runs `bash -i`,
   respawned if it exits, so only « terminate » ends it. Its environment holds `PDO_SESSION_ID`
-  (its id) and `PDO_DAEMON_URL`, never `PDO_RUN_ID` nor `PDO_NODE_ID`, then the extensions'
-  variables. No skill is delivered. What the agent reads first lives in its state folder under
-  the daemon's `~/.pdo/hosted/<id>/`, beside its record.
+  (its id), `PDO_DAEMON_URL` and `PDO_LIVE_DIR` (its Artefacts live, below), never `PDO_RUN_ID`
+  nor `PDO_NODE_ID`, then the extensions' variables (an extension never sets one of the core's).
+  No skill is delivered. What the agent reads first lives in its state folder under the daemon's
+  `~/.pdo/hosted/<id>/`, beside its record.
 - **`HostedSession`**: `id` (its tmux session's name, `pdo-hosted-<…>`: what its terminal is
   opened by, `/sessions/<id>/pty`, with the same Poste, Pilote and Prise de main as any session),
   `extension`, `key`, `kind`, `config`, `folder`, `cwd` (the folder resolved), `project`,
   `started_by`, `state` (`starting`, `running`, `awaiting_user`, `ended`), `end_reason`
-  (`terminated` or `exited`), `created_at`, `updated_at`.
+  (`terminated` or `exited`), `wait_message` (while `awaiting_user`, what its agent said it
+  waits for; absent otherwise), `created_at`, `updated_at`.
 - **Reading** (`hosted_session(key)`, `hosted_sessions()`) is synchronous and answers only the
   calling extension's sessions, ended ones included.
 - **Terminating** asks `session` × `terminate` on the session (its id, in its Projet), ends it
   (`terminated`), then kills its process. Its record stays. An ended session is answered as it
   is, with the reason it ended for; `404` for a key never given. Terminated while it is still
   being launched, the session never runs: `open_session` answers it ended.
+- **Relaunching** an ended session asks `session` × `relaunch` on it, resolves its folder and
+  harness again, then takes a slot of the Cap (full: `409` at once). The Actor of the gesture
+  now starts it: the Contribution au lancement is asked anew for them. An agent **resumes its
+  conversation** when its harness re-enters one by the identity pinned at its launch (`claude`,
+  `copilot`, `pi`), its harness did not change and the conversation was written (an agent nobody
+  ever spoke to starts anew): it reads nothing again, and its model and
+  effort, as now configured, are re-posed. Otherwise (a harness that pins no identity, another
+  harness) it starts a new conversation and reads the extensions' text and its `prompt` again;
+  never a blind continue. A shell starts anew. Same `id`, same terminal. `409` for a session
+  that is not `ended`.
+- **Configuring** an agent session (`configure_session`, a whole `HostedConfig`) asks `session`
+  × `configure` on it; the configuration replaces the whole previous one, is recorded and
+  published at once, and applies at its next relaunch: a running agent keeps the one it was
+  launched with, and a resumed conversation does not read a new initial prompt. `400` for a
+  shell or a harness the core does not know.
+- **Laying a text** (`type_in_session`) asks `session` × `type` on it, then pastes the text in
+  its input as one bracketed paste, **without** Enter: it waits there for a person to complete
+  and submit it, as a file dropped on a terminal. `400` for an empty text, `409` for a session
+  that is not running (or a paste tmux refused). The Enter that submits it lifts a declared
+  wait.
+- **Forgetting** an ended session asks `session` × `forget` on it, then erases its record and
+  its state folder (its Artefacts live included) and publishes `hosted_session_forgotten`
+  (`HostedSessionForgotten`, the session as last recorded). Its key is free again. `409` for a
+  session that is not `ended`.
 - **Its life**: a session whose process exits ends (`exited`) within a few seconds. A restarted
-  daemon takes back the live ones with who started them, and ends (`exited`) those whose process
-  is gone. The orphan sweep never kills a session recorded live, and kills any other name with
-  its prefix. Attaching its terminal is `session` × `attach` in the Projet of its record.
+  daemon takes back the live ones with who started them (an `awaiting_user` one still waits),
+  and ends (`exited`) those whose process is gone. The live sessions of an extension the
+  restarted daemon does not have are terminated (`terminated`), their record kept. The orphan
+  sweep never kills a session recorded live, and kills any other name with its prefix. Attaching
+  its terminal is `session` × `attach` in the Projet of its record.
+- **Its declared wait**: `pdo wait-user [--message]` typed by its agent (it reads
+  `PDO_SESSION_ID` when there is no `PDO_RUN_ID`) asks `session` × `wait_user` on it for the
+  caller (the Actor its token names) and makes it `awaiting_user`, with its `wait_message`; a
+  repeat with the same message is a no-op. An Enter typed in its terminal after at least one
+  typed character (a laid text counts) asks `session` × `resume` for the typist and makes it
+  `running` again. `pdo wait-user` in a session that is not running exits `3`
+  (`hosted_session_not_running`). The core tells the agent none of it: the extension's text
+  does, if it wants the agent to wait.
+- **Never completed**: `pdo complete`, `pdo fail` and `pdo skip` in a Session hébergée exit `3`
+  with `REFUSED — hosted_session` and change nothing: it ends when someone terminates it.
+- **Its Artefacts live**: the files its agent writes in `PDO_LIVE_DIR`, a folder of its state
+  folder, never in its working folder, kept from one relaunch to the next and erased when it is
+  forgotten. `live_artifacts(key)` lists them (`LiveArtifact`: `path` under the folder,
+  `/`-separated, `size`, `modified_at`), `live_artifact(key, path)` reads one (`404` for a file
+  that is not there, `400` for a path that leaves the folder; a link that leads out of it is
+  not read). Each change of the list (a file added, written or removed) is published within a
+  few seconds as `hosted_live_artifacts_changed` (`HostedLiveArtifactsChanged`), with every
+  Artefact live the session now has.
 
 Each change of its state is published as `hosted_session_changed`, to every extension's
 `on_event` and, on `/ws`, to the connections whose Actor may run `session` × `read` on it (in its
@@ -458,9 +507,18 @@ Projet); `HostedSessionChanged::from_event` reads it back. The whole session tra
                "created_at": "…", "updated_at": "…" } }
 ```
 
-Its start, the take-overs of its terminal and its end are also `session_started`,
-`session_taken_over` and `session_ended` ([Session events](#session-events-013)), to the
-extensions only.
+Its Artefacts live and its forgetting are published the same way, to the same connections:
+
+```json
+{ "type": "hosted_live_artifacts_changed", "id": "pdo-hosted-1a2b3c4d5e6f",
+  "extension": "acme", "key": "note-12",
+  "artifacts": [{ "path": "plan.md", "size": 812, "modified_at": "…" }] }
+{ "type": "hosted_session_forgotten", "session": { "id": "pdo-hosted-1a2b3c4d5e6f", … } }
+```
+
+Its start (and each relaunch), the take-overs of its terminal and its end are also
+`session_started`, `session_taken_over` and `session_ended` ([Session
+events](#session-events-013)), to the extensions only.
 
 ## The creation of a Run (0.9)
 

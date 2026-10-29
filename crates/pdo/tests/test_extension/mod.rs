@@ -89,9 +89,12 @@
 //! - **`Host::open_session`** and the other gestures of the Sessions
 //!   hébergées (API 0.17, `sessions.rs`): `POST /ext/test/sessions` opens one
 //!   on behalf of the caller, `GET` lists or reads them, `DELETE
-//!   /ext/test/sessions/<key>` terminates one. A Session hébergée gets a
-//!   `PDO_TOKEN` naming who started it, which `identify` recognises, so a
-//!   `pdo` typed in a hosted shell acts as that Actor.
+//!   /ext/test/sessions/<key>` terminates one, `POST …/<key>/relaunch`, `PUT
+//!   …/<key>/config`, `POST …/<key>/type` and `POST …/<key>/forget` relaunch,
+//!   configure, type into and forget it, `GET …/<key>/live[/<path>]` lists
+//!   and reads its Artefacts live. A Session hébergée gets a `PDO_TOKEN`
+//!   naming who started it, which `identify` recognises, so a `pdo` typed in
+//!   a hosted shell acts as that Actor.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
 //!   `project/edit`, so two extensions share a location.
 //!

@@ -16,6 +16,14 @@ use crate::Actor;
 /// Session hébergée changes ([`HostedSessionChanged`]).
 pub const HOSTED_SESSION_CHANGED: &str = "hosted_session_changed";
 
+/// The `type` of the event the core publishes when an extension forgot a
+/// Session hébergée ([`HostedSessionForgotten`]).
+pub const HOSTED_SESSION_FORGOTTEN: &str = "hosted_session_forgotten";
+
+/// The `type` of the event the core publishes each time the Artefacts live of
+/// a Session hébergée change ([`HostedLiveArtifactsChanged`]).
+pub const HOSTED_LIVE_ARTIFACTS_CHANGED: &str = "hosted_live_artifacts_changed";
+
 /// What a Session hébergée runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -199,6 +207,10 @@ pub struct HostedSession {
     pub state: HostedState,
     /// Set once it ended.
     pub end_reason: Option<EndReason>,
+    /// What its agent said it waits for (`pdo wait-user --message`), while it
+    /// is `awaiting_user`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_message: Option<String>,
     /// When it was opened, then last changed (RFC 3339).
     pub created_at: String,
     pub updated_at: String,
@@ -227,6 +239,7 @@ impl HostedSession {
             started_by: None,
             state: HostedState::Starting,
             end_reason: None,
+            wait_message: None,
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -269,6 +282,29 @@ impl std::error::Error for HostedRefusal {}
 pub type HostedGesture =
     Pin<Box<dyn Future<Output = Result<HostedSession, HostedRefusal>> + Send + 'static>>;
 
+/// One Artefact live of a Session hébergée: a file its agent wrote in its
+/// `PDO_LIVE_DIR`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct LiveArtifact {
+    /// Its path under `PDO_LIVE_DIR`, `/`-separated (`notes/plan.md`).
+    pub path: String,
+    /// Its size, in bytes.
+    pub size: u64,
+    /// When it was last written (RFC 3339).
+    pub modified_at: String,
+}
+
+impl LiveArtifact {
+    pub fn new(path: impl Into<String>, size: u64, modified_at: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            size,
+            modified_at: modified_at.into(),
+        }
+    }
+}
+
 /// The event of a change of state of a Session hébergée: to every
 /// extension's `on_event` and, on `/ws`, to the connections whose Actor may
 /// read the session (`session` × `read`, in its Projet).
@@ -301,6 +337,82 @@ impl HostedSessionChanged {
     }
 }
 
+/// The event of a Session hébergée its extension forgot (API 0.17): its
+/// record and its state folder are gone. Published like
+/// [`HostedSessionChanged`].
+///
+/// On the wire: `{"type": "hosted_session_forgotten", "session": <HostedSession>}`,
+/// the session as it was last recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HostedSessionForgotten {
+    pub session: HostedSession,
+}
+
+impl HostedSessionForgotten {
+    pub fn new(session: HostedSession) -> Self {
+        Self { session }
+    }
+
+    /// The event as `on_event` receives it.
+    pub fn to_event(&self) -> serde_json::Value {
+        serde_json::json!({ "type": HOSTED_SESSION_FORGOTTEN, "session": self.session })
+    }
+
+    /// The forgetting `event` is, if it is one.
+    pub fn from_event(event: &serde_json::Value) -> Option<Self> {
+        if event.get("type")? != HOSTED_SESSION_FORGOTTEN {
+            return None;
+        }
+        serde_json::from_value(event.get("session")?.clone())
+            .ok()
+            .map(Self::new)
+    }
+}
+
+/// The event of a change of the Artefacts live of a Session hébergée (API
+/// 0.17): a file of its `PDO_LIVE_DIR` was written, added or removed.
+/// Published like [`HostedSessionChanged`], with every Artefact live it now
+/// has.
+///
+/// On the wire: `{"type": "hosted_live_artifacts_changed", "id", "extension",
+/// "key", "artifacts": [<LiveArtifact>…]}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct HostedLiveArtifactsChanged {
+    /// The session's name.
+    pub id: String,
+    pub extension: String,
+    pub key: String,
+    pub artifacts: Vec<LiveArtifact>,
+}
+
+impl HostedLiveArtifactsChanged {
+    pub fn new(session: &HostedSession, artifacts: Vec<LiveArtifact>) -> Self {
+        Self {
+            id: session.id.clone(),
+            extension: session.extension.clone(),
+            key: session.key.clone(),
+            artifacts,
+        }
+    }
+
+    /// The event as `on_event` receives it.
+    pub fn to_event(&self) -> serde_json::Value {
+        let mut event = serde_json::to_value(self).unwrap_or_default();
+        event["type"] = serde_json::json!(HOSTED_LIVE_ARTIFACTS_CHANGED);
+        event
+    }
+
+    /// The change `event` is, if it is one.
+    pub fn from_event(event: &serde_json::Value) -> Option<Self> {
+        if event.get("type")? != HOSTED_LIVE_ARTIFACTS_CHANGED {
+            return None;
+        }
+        serde_json::from_value(event.clone()).ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,6 +432,7 @@ mod tests {
             started_by: Some(Actor::LocalOperator),
             state: HostedState::Ended,
             end_reason: Some(EndReason::Terminated),
+            wait_message: None,
             created_at: "2026-10-28T10:00:00Z".into(),
             updated_at: "2026-10-28T10:05:00Z".into(),
         }
@@ -345,6 +458,65 @@ mod tests {
         assert_eq!(
             HostedSessionChanged::from_event(&serde_json::json!({ "type": "session_ended" })),
             None
+        );
+    }
+
+    #[test]
+    fn a_forgotten_session_and_a_change_of_its_artefacts_live_read_back() {
+        let forgotten = HostedSessionForgotten::new(session());
+        let json = forgotten.to_event();
+        assert_eq!(json["type"], HOSTED_SESSION_FORGOTTEN);
+        assert_eq!(json["session"]["key"], "k1");
+        assert_eq!(HostedSessionForgotten::from_event(&json), Some(forgotten));
+        assert_eq!(
+            HostedSessionChanged::from_event(&json),
+            None,
+            "a forgetting is no change"
+        );
+
+        let live = HostedLiveArtifactsChanged::new(
+            &session(),
+            vec![LiveArtifact::new(
+                "notes/plan.md",
+                12,
+                "2026-10-28T10:06:00Z",
+            )],
+        );
+        let json = live.to_event();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": HOSTED_LIVE_ARTIFACTS_CHANGED, "id": "pdo-hosted-1a2b3c4d5e6f",
+                "extension": "test", "key": "k1",
+                "artifacts": [{
+                    "path": "notes/plan.md", "size": 12, "modified_at": "2026-10-28T10:06:00Z",
+                }],
+            })
+        );
+        assert_eq!(HostedLiveArtifactsChanged::from_event(&json), Some(live));
+        assert_eq!(
+            HostedLiveArtifactsChanged::from_event(
+                &HostedSessionChanged::new(session()).to_event()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_wait_message_travels_only_when_there_is_one() {
+        let mut waiting = session();
+        assert!(serde_json::to_value(&waiting)
+            .unwrap()
+            .get("wait_message")
+            .is_none());
+        waiting.state = HostedState::AwaitingUser;
+        waiting.wait_message = Some("Which DB?".into());
+        let json = serde_json::to_value(&waiting).unwrap();
+        assert_eq!(json["state"], "awaiting_user");
+        assert_eq!(json["wait_message"], "Which DB?");
+        assert_eq!(
+            serde_json::from_value::<HostedSession>(json).unwrap(),
+            waiting
         );
     }
 

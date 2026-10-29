@@ -2,7 +2,7 @@
 //! contexts: the primary repository of a Projet (workspace), the harness an
 //! agent runs on and the Cap de sessions concurrentes (the Runs').
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pdo_harness::registry::HarnessDescriptor;
 use pdo_run::Runs;
@@ -67,6 +67,39 @@ impl HostedHarness for HostedSide {
                 }
             }
         })
+    }
+
+    /// Read where the Runs read a Node's transcript, on the host: a harness
+    /// that declares no transcript tells nothing.
+    fn conversation_written<'a>(
+        &'a self,
+        harness: &'a str,
+        cwd: &'a Path,
+        id: &'a str,
+    ) -> BoxFuture<'a, Option<bool>> {
+        Box::pin(async move {
+            pdo_harness::domain::probes::resolved(harness).transcript_resolution()?;
+            let home = self.harness_home()?;
+            let claude_root = home.join(".claude").join("projects");
+            let stores = pdo_sandbox::adapters::staging::stores::HarnessStores::from_home(&home);
+            let transcript = pdo_harness::adapters::transcripts::resolve_transcript(
+                harness,
+                stores.root_for(harness, &claude_root),
+                cwd,
+                Some(id),
+            );
+            Some(transcript.is_some_and(|path| path.is_file()))
+        })
+    }
+}
+
+impl HostedSide {
+    /// The home the harnesses keep their conversations under.
+    fn harness_home(&self) -> Option<PathBuf> {
+        let runs = self.runs.get().ok()?;
+        pdo_run::application::sandbox::sandbox_home_roots(&runs)
+            .ok()
+            .map(|(home, _)| home)
     }
 }
 

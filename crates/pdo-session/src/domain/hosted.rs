@@ -5,7 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
-use pdo_extension_api::{EndReason, HostedFolder, HostedSession, HostedState, OpenSession};
+use pdo_extension_api::{
+    Actor, EndReason, HostedConfig, HostedFolder, HostedSession, HostedState, OpenSession,
+};
 use serde::{Deserialize, Serialize};
 
 /// The Zoom du terminal of a session nobody changed, in percent.
@@ -23,6 +25,10 @@ pub struct HostedRecord {
     /// The conversation pinned at launch, for a harness that pins one.
     #[serde(default)]
     pub conversation_id: Option<String>,
+    /// The harness that conversation runs on: a relaunch on another one
+    /// starts a new conversation.
+    #[serde(default)]
+    pub harness: Option<String>,
     #[serde(default = "default_zoom")]
     pub terminal_zoom: u16,
 }
@@ -41,6 +47,7 @@ impl HostedRecord {
         Self {
             session,
             conversation_id: None,
+            harness: None,
             terminal_zoom: DEFAULT_TERMINAL_ZOOM,
         }
     }
@@ -80,10 +87,126 @@ impl HostedRecord {
         true
     }
 
+    /// `actor` relaunches it: an ended session is `starting` again, started
+    /// by `actor`. Whether it changed: only an ended session relaunches.
+    pub fn relaunch(&mut self, actor: &Actor, now: &str) -> bool {
+        if self.is_live() {
+            return false;
+        }
+        self.session.started_by = Some(actor.clone());
+        self.set(HostedState::Starting, None, now);
+        true
+    }
+
+    /// Its agent declared it waits for a person, saying `message`: a running
+    /// session is `awaiting_user`. `None` when nothing changed (not running,
+    /// or already waiting on the same message).
+    pub fn await_user(&mut self, message: Option<String>, now: &str) -> Option<WaitDeclared> {
+        let declared = match self.session.state {
+            HostedState::Running => WaitDeclared::Declared,
+            HostedState::AwaitingUser if self.session.wait_message != message => {
+                WaitDeclared::Refreshed
+            }
+            _ => return None,
+        };
+        self.set(HostedState::AwaitingUser, None, now);
+        self.session.wait_message = message;
+        Some(declared)
+    }
+
+    /// A person answered (Enter on its terminal): an `awaiting_user` session
+    /// runs again. Whether it changed.
+    pub fn resume(&mut self, now: &str) -> bool {
+        if self.session.state != HostedState::AwaitingUser {
+            return false;
+        }
+        self.set(HostedState::Running, None, now);
+        true
+    }
+
+    /// Its configuration is now `config`, for its next launch. Whether it
+    /// changed.
+    pub fn configure(&mut self, config: HostedConfig, now: &str) -> bool {
+        if self.session.config == config {
+            return false;
+        }
+        self.session.config = config;
+        self.session.updated_at = now.to_string();
+        true
+    }
+
     fn set(&mut self, state: HostedState, reason: Option<EndReason>, now: &str) {
         self.session.state = state;
         self.session.end_reason = reason;
+        self.session.wait_message = None;
         self.session.updated_at = now.to_string();
+    }
+}
+
+/// What a declared wait did to a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitDeclared {
+    /// It was running: it now waits.
+    Declared,
+    /// It waited already: its message changed.
+    Refreshed,
+}
+
+/// How an agent session relaunches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Relaunch {
+    /// Back into the conversation pinned at its last launch, by its identity.
+    Resume { conversation_id: String },
+    /// A new conversation, pinned to this identity when the harness pins
+    /// one: the extensions' text and the initial prompt are read again.
+    Fresh { conversation_id: Option<String> },
+}
+
+/// What a relaunch knows of the harness it relaunches on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelaunchHarness<'a> {
+    pub name: &'a str,
+    /// It re-enters a conversation by its identity.
+    pub resumes_by_id: bool,
+    /// It pins a conversation's identity at launch.
+    pins: bool,
+}
+
+impl<'a> RelaunchHarness<'a> {
+    pub fn new(name: &'a str, resumes_by_id: bool, pins: bool) -> Self {
+        Self {
+            name,
+            resumes_by_id,
+            pins,
+        }
+    }
+}
+
+/// How the agent session `record` relaunches on `harness`: it resumes its
+/// conversation when one was pinned on that same harness (a record that does
+/// not name its harness was launched on it), the harness re-enters a
+/// conversation by its identity, and that conversation was written
+/// (`written`: `Some(false)` when the core saw it was not, an agent nobody
+/// spoke to; `None` when it cannot tell). Otherwise a new conversation
+/// starts, pinned to `new_id` when the harness pins one. Never a blind
+/// continue: in a folder shared with others, it could pick someone else's
+/// conversation.
+pub fn relaunch_of(
+    record: &HostedRecord,
+    harness: RelaunchHarness<'_>,
+    written: Option<bool>,
+    new_id: impl FnOnce() -> String,
+) -> Relaunch {
+    let same_harness = record.harness.as_deref().is_none_or(|h| h == harness.name);
+    match &record.conversation_id {
+        Some(id) if harness.resumes_by_id && same_harness && written != Some(false) => {
+            Relaunch::Resume {
+                conversation_id: id.clone(),
+            }
+        }
+        _ => Relaunch::Fresh {
+            conversation_id: harness.pins.then(new_id),
+        },
     }
 }
 
@@ -131,6 +254,31 @@ pub fn primer_path(state_dir: &Path) -> PathBuf {
     state_dir.join("primer.md")
 }
 
+/// The `PDO_LIVE_DIR` of a session, in its state folder: its Artefacts live,
+/// kept from one relaunch to the next.
+pub fn live_dir(state_dir: &Path) -> PathBuf {
+    state_dir.join("live")
+}
+
+/// The file the Artefact live `path` names under `live_dir`; `None` for a
+/// path that would leave it (absolute, `..`, empty).
+pub fn live_file(live_dir: &Path, path: &str) -> Option<PathBuf> {
+    let mut file = live_dir.to_path_buf();
+    let mut parts = 0;
+    for part in path.split('/') {
+        match part {
+            "" | "." => continue,
+            ".." => return None,
+            part if part.contains('\\') => return None,
+            part => {
+                file.push(part);
+                parts += 1;
+            }
+        }
+    }
+    (parts > 0 && !path.starts_with('/')).then_some(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +309,163 @@ mod tests {
         assert!(!record.run("t4"), "an ended session never runs again");
         assert_eq!(record.session.end_reason, Some(EndReason::Exited));
         assert_eq!(record.session.updated_at, "t2");
+    }
+
+    fn alice() -> Actor {
+        Actor::Identified {
+            namespace: "test".into(),
+            id: "alice".into(),
+        }
+    }
+
+    #[test]
+    fn an_ended_record_relaunches_starting_with_who_relaunched_it() {
+        let mut record = HostedRecord::opening(
+            "pdo-hosted-1",
+            "test",
+            &OpenSession::agent("k"),
+            Path::new("/w"),
+            "t0",
+        );
+        assert!(!record.relaunch(&alice(), "t1"), "a live session does not");
+        record.run("t1");
+        record.end(EndReason::Terminated, "t2");
+        assert!(record.relaunch(&alice(), "t3"));
+        assert_eq!(record.session.state, HostedState::Starting);
+        assert_eq!(record.session.end_reason, None);
+        assert_eq!(record.session.started_by, Some(alice()));
+        assert_eq!(record.session.updated_at, "t3");
+        assert!(record.run("t4"), "and comes up again");
+    }
+
+    #[test]
+    fn a_running_record_waits_then_resumes_and_a_repeat_changes_nothing() {
+        let mut record = HostedRecord::opening(
+            "pdo-hosted-1",
+            "test",
+            &OpenSession::agent("k"),
+            Path::new("/w"),
+            "t0",
+        );
+        assert_eq!(record.await_user(None, "t1"), None, "not running yet");
+        record.run("t1");
+        assert_eq!(
+            record.await_user(Some("Which DB?".into()), "t2"),
+            Some(WaitDeclared::Declared)
+        );
+        assert_eq!(record.session.state, HostedState::AwaitingUser);
+        assert_eq!(record.session.wait_message.as_deref(), Some("Which DB?"));
+        assert_eq!(record.await_user(Some("Which DB?".into()), "t3"), None);
+        assert_eq!(record.await_user(None, "t3"), Some(WaitDeclared::Refreshed));
+        assert!(record.resume("t4"));
+        assert_eq!(record.session.state, HostedState::Running);
+        assert!(!record.resume("t5"), "it runs already");
+        record.await_user(Some("again".into()), "t6");
+        record.end(EndReason::Exited, "t7");
+        assert_eq!(record.session.wait_message, None, "an end clears the wait");
+    }
+
+    #[test]
+    fn a_configuration_changes_only_when_it_differs() {
+        let mut record = HostedRecord::opening(
+            "pdo-hosted-1",
+            "test",
+            &OpenSession::agent("k"),
+            Path::new("/w"),
+            "t0",
+        );
+        assert!(!record.configure(HostedConfig::default(), "t1"));
+        assert!(record.configure(HostedConfig::default().with_model("opus"), "t2"));
+        assert_eq!(record.session.config.model.as_deref(), Some("opus"));
+        assert_eq!(record.session.updated_at, "t2");
+        assert_eq!(
+            record.session.state,
+            HostedState::Starting,
+            "its state is not touched"
+        );
+    }
+
+    #[test]
+    fn a_relaunch_resumes_the_conversation_of_the_same_harness_by_its_identity_only() {
+        let mut record = HostedRecord::opening(
+            "pdo-hosted-1",
+            "test",
+            &OpenSession::agent("k"),
+            Path::new("/w"),
+            "t0",
+        );
+        record.conversation_id = Some("c1".into());
+        record.harness = Some("claude".into());
+        let new = || "c2".to_string();
+        let claude = RelaunchHarness::new("claude", true, true);
+        let resumed = Relaunch::Resume {
+            conversation_id: "c1".into(),
+        };
+        let fresh = Relaunch::Fresh {
+            conversation_id: Some("c2".into()),
+        };
+        assert_eq!(relaunch_of(&record, claude, Some(true), new), resumed);
+        assert_eq!(
+            relaunch_of(&record, claude, None, new),
+            resumed,
+            "the core cannot tell: it tries"
+        );
+        assert_eq!(
+            relaunch_of(&record, claude, Some(false), new),
+            fresh,
+            "a conversation never written: a new one"
+        );
+        assert_eq!(
+            relaunch_of(
+                &record,
+                RelaunchHarness::new("other", true, true),
+                None,
+                new
+            ),
+            fresh,
+            "another harness: a new conversation"
+        );
+        assert_eq!(
+            relaunch_of(
+                &record,
+                RelaunchHarness::new("claude", false, false),
+                None,
+                new
+            ),
+            Relaunch::Fresh {
+                conversation_id: None
+            },
+            "a harness that cannot re-enter by identity"
+        );
+        record.harness = None;
+        assert_eq!(
+            relaunch_of(&record, claude, None, new),
+            resumed,
+            "a record that does not name its harness was launched on it"
+        );
+        record.conversation_id = None;
+        assert_eq!(
+            relaunch_of(&record, claude, None, new),
+            fresh,
+            "nothing was pinned"
+        );
+    }
+
+    #[test]
+    fn an_artefact_live_never_leaves_its_folder() {
+        let live = live_dir(Path::new("/s"));
+        assert_eq!(live, PathBuf::from("/s/live"));
+        assert_eq!(
+            live_file(&live, "notes/plan.md"),
+            Some(PathBuf::from("/s/live/notes/plan.md"))
+        );
+        assert_eq!(
+            live_file(&live, "./a.md"),
+            Some(PathBuf::from("/s/live/a.md"))
+        );
+        for bad in ["../x", "a/../../x", "/etc/passwd", "", "/", "a\\b"] {
+            assert_eq!(live_file(&live, bad), None, "{bad}");
+        }
     }
 
     #[test]

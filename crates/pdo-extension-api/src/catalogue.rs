@@ -241,7 +241,7 @@ fn core_entry(
         ),
         ResourceKind::Session => (
             "Sessions",
-            "Open, attach and take control of terminals; open and terminate the hosted sessions",
+            "Open, attach and take control of terminals; open, relaunch, configure, type into, terminate and forget the hosted sessions",
             &[
                 CREATE,
                 UPDATE,
@@ -251,6 +251,11 @@ fn core_entry(
                 "resume",
                 "open",
                 "terminate",
+                "relaunch",
+                "configure",
+                "type",
+                "forget",
+                "wait_user",
             ],
         ),
         ResourceKind::Update => (

@@ -2,7 +2,7 @@
 //! records and state folders live, where a folder resolves, which harness an
 //! agent runs on, and the Cap de sessions concurrentes.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pdo_harness::registry::HarnessDescriptor;
 
@@ -41,6 +41,20 @@ pub trait HostedHarness: Send + Sync {
     /// The harness `name`, or the instance's default one for `None`; `None`
     /// for a name the daemon does not know.
     fn resolve<'a>(&'a self, name: Option<&'a str>) -> BoxFuture<'a, Option<HarnessDescriptor>>;
+
+    /// Whether the conversation `id` an agent of `harness` started in `cwd`
+    /// was written, as far as the core sees: `Some(false)` when the harness
+    /// keeps its conversations where the core reads them and this one is not
+    /// there (nobody ever spoke to it); `None` when the core cannot tell, and
+    /// by default.
+    fn conversation_written<'a>(
+        &'a self,
+        _harness: &'a str,
+        _cwd: &'a Path,
+        _id: &'a str,
+    ) -> BoxFuture<'a, Option<bool>> {
+        Box::pin(std::future::ready(None))
+    }
 }
 
 /// Why a session was given no slot.

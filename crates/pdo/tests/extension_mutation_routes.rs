@@ -411,6 +411,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
         ),
         call(
             "POST",
+            "/sessions/{session_id}/wait-user",
+            "/sessions/pdo-hosted-nobody/wait-user".to_string(),
+            Some(json!({ "message": "anyone?" })),
+        ),
+        call(
+            "POST",
             "/sessions/{run_id}/manager/attach",
             format!("/sessions/{RUN}/manager/attach"),
             None,

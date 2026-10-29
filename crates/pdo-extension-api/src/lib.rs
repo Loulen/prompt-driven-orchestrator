@@ -50,6 +50,7 @@ mod event;
 mod extension;
 mod host;
 mod hosted;
+mod hosted_event;
 mod launch;
 mod manifest;
 mod operation;
@@ -70,10 +71,12 @@ pub use event::{OperationApplied, OPERATION_APPLIED};
 pub use extension::{Extension, ExtensionContext, RequestParts};
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
 pub use hosted::{
-    EndReason, HostedConfig, HostedFolder, HostedGesture, HostedKind, HostedLiveArtifactsChanged,
-    HostedRefusal, HostedSession, HostedSessionChanged, HostedSessionForgotten, HostedState,
-    LiveArtifact, OpenSession, HOSTED_LIVE_ARTIFACTS_CHANGED, HOSTED_SESSION_CHANGED,
-    HOSTED_SESSION_FORGOTTEN,
+    EndReason, HostedConfig, HostedFolder, HostedGesture, HostedKind, HostedRefusal, HostedSession,
+    HostedState, LiveArtifact, OpenSession,
+};
+pub use hosted_event::{
+    HostedLiveArtifactsChanged, HostedSessionChanged, HostedSessionForgotten,
+    HOSTED_LIVE_ARTIFACTS_CHANGED, HOSTED_SESSION_CHANGED, HOSTED_SESSION_FORGOTTEN,
 };
 pub use launch::{NodeEnv, NodeKind, NodeLaunch, TriggerProvenance, TriggerRef};
 pub use manifest::Manifest;

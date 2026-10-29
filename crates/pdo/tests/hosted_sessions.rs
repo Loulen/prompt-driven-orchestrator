@@ -831,6 +831,17 @@ async fn wait_user_declares_the_wait_and_complete_is_refused_in_a_hosted_session
     let (code, stderr) = pdo_in_session(&daemon, &id, &["wait-user"]).await;
     assert_eq!(code, Some(3), "an ended session waits for nobody: {stderr}");
     assert!(stderr.contains("hosted_session_not_running"), "{stderr}");
+
+    // The route the CLI calls: a name no session holds is named.
+    let unknown = reqwest::Client::new()
+        .post(format!("{url}/sessions/pdo-hosted-nobody/wait-user"))
+        .json(&json!({ "message": "anyone?" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status().as_u16(), 404);
+    let body: Value = unknown.json().await.unwrap();
+    assert_eq!(body["error"], "hosted_session_not_found");
 }
 
 /// A daemon without the extension of a live Session hébergée terminates it

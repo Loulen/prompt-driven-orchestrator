@@ -60,11 +60,13 @@ impl Hosted {
         id: &str,
         message: Option<&str>,
     ) -> Result<DeclareOutcome, HostedWaitError> {
-        let record = self.registry.by_id(id).ok_or(HostedWaitError::NotFound)?;
+        // Asked before the session is looked up: a refused caller learns
+        // nothing of it.
         let operation = Operation::new(ResourceKind::Session, Verb::Action(WAIT_USER.into()))
             .on(id)
-            .in_projects(record.projects());
+            .in_projects(self.registry.projects_of(id));
         authorize(self.host.as_ref(), actor, &operation).map_err(HostedWaitError::Refused)?;
+        let record = self.registry.by_id(id).ok_or(HostedWaitError::NotFound)?;
         let holds_agent = matches!(
             record.session.state,
             HostedState::Running | HostedState::AwaitingUser

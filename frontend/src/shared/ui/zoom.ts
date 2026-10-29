@@ -47,3 +47,20 @@ export function cssViewport(): { width: number; height: number } {
 export function appRoot(): HTMLElement | undefined {
   return (typeof document !== "undefined" ? document.getElementById("root") : null) ?? undefined;
 }
+
+/**
+ * Where a floating layer opened now is portalled: the last open modal
+ * `<dialog>` (everything outside it is inert), else the app's root.
+ */
+export function layerHost(): HTMLElement | undefined {
+  if (typeof document === "undefined") return undefined;
+  const dialogs = document.querySelectorAll<HTMLDialogElement>("dialog[open]");
+  return dialogs[dialogs.length - 1] ?? appRoot();
+}
+
+/** `layerHost`, read when the layer mounts rather than when its owner renders. */
+export const layerHostRef: { readonly current: HTMLElement | null } = {
+  get current() {
+    return layerHost() ?? null;
+  },
+};

@@ -96,7 +96,7 @@ Features validated while crossing the tour:
    the skills picker — which stays open across the two ticks, the card's checklist ticking as you go,
    and folds back to « 2 active skills » — paste the prompt → each step advances **on the gesture**,
    with no extra confirmation but the ones the card asks for.
-7. **Launch** → the Run appears in the list on the left and the tour points at its row. Launch also
+7. **Run** → the Run appears in the list on the left and the tour points at its row. The launch also
    opens the Run's tab by itself, so the card says so and waits for a `Next` — the step is shown,
    never skipped past.
 8. Open the **node** on the canvas → the inspector shows its live terminal.

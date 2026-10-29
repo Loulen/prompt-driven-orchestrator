@@ -1,62 +1,76 @@
 import { useId } from "react";
-import { Clock, Save, Sparkles } from "lucide-react";
-import { Tooltip } from "../../../shared/ui/tooltip";
+import { CalendarClock, Play, Save } from "lucide-react";
+import { Button, Kbd, Tooltip } from "../../../shared/ui/kit";
+import { baseName } from "../../../lib/homePath";
 import type { NewRunForm } from "../../store/newRun/useNewRunForm";
 
-/** The footer: the close warning, Cancel, and Launch / Create / Save trigger. */
+/**
+ * Left of the footer: the close warning when attachments would be lost, else
+ * what launches, in mono (`4 nodes · claude · shop-api@main`, or the cron and
+ * the pipeline of a Trigger).
+ */
+export function NewRunFooterNote({ form }: { form: NewRunForm }) {
+  const {
+    mode, attachments, closeWarning, attachmentsOverLimit, selectedPipeline, harness,
+    instanceDefaultHarness, targetRepo, sourceBranch, resolvedCron, remoteUrl, cloneReused,
+  } = form;
+  if (closeWarning && attachments.length > 0) {
+    return (
+      <span className="ln-note ln-note--await" data-testid="attachments-close-warning">
+        {attachments.length} attachment{attachments.length > 1 ? "s" : ""} lost on close
+      </span>
+    );
+  }
+  if (mode === "run" && attachmentsOverLimit) {
+    return (
+      <span className="ln-note ln-note--failed" data-testid="attachments-fix-hint">
+        Attachments over the limit
+      </span>
+    );
+  }
+  if (remoteUrl) {
+    return (
+      <span className="ln-note" data-testid="clone-launch-note">
+        {cloneReused ? "Existing clone" : "Clones first"}
+      </span>
+    );
+  }
+  const pipeline = selectedPipeline?.name ?? "no pipeline";
+  const text =
+    mode === "run"
+      ? [
+          selectedPipeline ? `${selectedPipeline.node_count} node${selectedPipeline.node_count === 1 ? "" : "s"}` : null,
+          harness || instanceDefaultHarness || "claude",
+          targetRepo.trim() ? `${baseName(targetRepo.trim())}@${sourceBranch || "HEAD"}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : `${resolvedCron || "no schedule"} · ${pipeline}`;
+  return (
+    <span className="ln-note ln-mono" title={text} data-testid="new-run-summary">
+      {text}
+    </span>
+  );
+}
+
+/** Right of the footer: Cancel, and Run / Create / Save, or the clone of a URL. */
 export default function NewRunFooter({ form }: { form: NewRunForm }) {
   const {
-    mode, editingTriggerId, submitting, attachments, closeWarning, attachmentsOverLimit,
-    requestClose, handleLaunch, canLaunch, launchBlockReason, canCreateTrigger,
-    handleCreateTrigger, remoteUrl, clone, cloning, cloneReused,
+    mode, editingTriggerId, submitting, attachments, requestClose, handleLaunch, canLaunch,
+    launchBlockReason, canCreateTrigger, handleCreateTrigger, remoteUrl, clone, cloning, cloneReused,
   } = form;
   const launchReasonId = useId();
+  const kbd = <Kbd>Ctrl ↵</Kbd>;
   return (
-    <div className="flex items-center justify-end gap-2 border-t border-line px-4 py-3">
-      {closeWarning && attachments.length > 0 && (
-        <span
-          className="mr-auto text-st-await"
-          style={{ fontSize: "10.5px" }}
-          data-testid="attachments-close-warning"
-        >
-          {attachments.length} attachment{attachments.length > 1 ? "s" : ""} will be lost
-          when the dialog closes — Cancel again to confirm.
-        </span>
-      )}
-      {mode === "run" && attachmentsOverLimit && (
-        <span
-          className="text-text-3"
-          style={{ fontSize: "10.5px" }}
-          data-testid="attachments-fix-hint"
-        >
-          Fix attachments to create the run
-        </span>
-      )}
-      {remoteUrl && !closeWarning && (
-        <span className="mr-auto text-text-3" style={{ fontSize: "10.5px" }} data-testid="clone-launch-note">
-          {cloneReused
-            ? mode === "run"
-              ? "Launch starts the Run on the existing clone."
-              : "Use the clone first: a Trigger fires on a repository."
-            : mode === "run"
-              ? "Launch clones first, then starts the Run."
-              : "Clone first: a Trigger fires on a repository."}
-        </span>
-      )}
-      <button
-        onClick={requestClose}
-        data-testid="new-run-cancel"
-        className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
-        style={{ fontSize: "11.5px" }}
-      >
+    <>
+      <Button onClick={requestClose} data-testid="new-run-cancel">
         Cancel
-      </button>
+      </Button>
       {remoteUrl ? (
-        <button
+        <Button
+          tone="primary"
           onClick={() => void clone(mode === "run")}
           disabled={submitting || cloning}
-          className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
-          style={{ fontSize: "11.5px" }}
           data-testid="clone-launch-button"
         >
           {cloning
@@ -68,54 +82,42 @@ export default function NewRunFooter({ form }: { form: NewRunForm }) {
               : cloneReused
                 ? "Use the clone"
                 : "Clone"}
-        </button>
+        </Button>
       ) : mode === "run" ? (
         // A disabled button takes no focus nor hover: the reason hangs on a
         // wrapper, focusable only while provisioning blocks the launch.
-        <>
-          <Tooltip content={launchBlockReason ?? ""} side="top" disabled={!launchBlockReason}>
-            <span
-              tabIndex={launchBlockReason ? 0 : undefined}
-              className="inline-flex rounded-md"
-              data-testid="launch-button-wrapper"
+        <Tooltip label={launchBlockReason ?? "Run"} kbd={launchBlockReason ? undefined : "Ctrl+Enter"} side="top">
+          <span tabIndex={launchBlockReason ? 0 : undefined} className="ln-btnwrap" data-testid="launch-button-wrapper">
+            <Button
+              tone="primary"
+              icon={Play}
+              onClick={() => void handleLaunch()}
+              disabled={submitting || !canLaunch}
+              aria-describedby={launchBlockReason ? launchReasonId : undefined}
+              data-testid="launch-button"
             >
-              <button
-                onClick={() => void handleLaunch()}
-                disabled={submitting || !canLaunch}
-                aria-describedby={launchBlockReason ? launchReasonId : undefined}
-                className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
-                style={{ fontSize: "11.5px" }}
-                data-testid="launch-button"
-              >
-                <Sparkles size={12} />
-                {submitting ? (attachments.length > 0 ? "Uploading…" : "Launching…") : "Launch"}
-              </button>
-              {launchBlockReason && (
-                <span id={launchReasonId} className="sr-only">
-                  {launchBlockReason}
-                </span>
-              )}
-            </span>
-          </Tooltip>
-        </>
+              {submitting ? (attachments.length > 0 ? "Uploading…" : "Launching…") : "Run"}
+              {!submitting && kbd}
+            </Button>
+            {launchBlockReason && (
+              <span id={launchReasonId} className="d-sr">
+                {launchBlockReason}
+              </span>
+            )}
+          </span>
+        </Tooltip>
       ) : (
-        <button
+        <Button
+          tone="primary"
+          icon={editingTriggerId ? Save : CalendarClock}
           onClick={handleCreateTrigger}
           disabled={submitting || !canCreateTrigger}
-          className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
-          style={{ fontSize: "11.5px" }}
           data-testid={editingTriggerId ? "save-trigger-button" : "create-trigger-button"}
         >
-          {editingTriggerId ? <Save size={12} /> : <Clock size={12} />}
-          {editingTriggerId
-            ? submitting
-              ? "Saving…"
-              : "Save trigger"
-            : submitting
-              ? "Creating…"
-              : "Create trigger"}
-        </button>
+          {editingTriggerId ? (submitting ? "Saving…" : "Save") : submitting ? "Creating…" : "Create"}
+          {!submitting && kbd}
+        </Button>
       )}
-    </div>
+    </>
   );
 }

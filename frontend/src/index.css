@@ -22,6 +22,13 @@
 @import "./review/review.css";
 /* The launch forms: New Run, the Triggers, the Project modal. */
 @import "./run/components/newRun/launch.css";
+/* The welcome modal and the guided tours. */
+@import "./app/tour/tour.css";
+/* The artifact viewer and « What's new ». */
+@import "./run/components/artifacts/artifact.css";
+/* The colours painted out of CSS: the terminal's palette, the harnesses' series. */
+@import "./session/terminal.css";
+@import "./harness/harness.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -170,7 +177,7 @@ body {
   border-radius: 9px;
   color: var(--text-2);
   font-family: var(--font-code);
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0.005em;
   white-space: nowrap;
   z-index: 2;
@@ -240,9 +247,11 @@ body {
   color: var(--color-st-await);
 }
 
+/* Markdown in the app: a transcript message, a Review comment, the files of a
+   skill. The long read (an artifact, « What's new ») is larger: `.art__read`. */
 .artifact-markdown {
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   color: var(--text-2);
 }
@@ -250,12 +259,12 @@ body {
 .artifact-markdown h2,
 .artifact-markdown h3 {
   color: var(--text);
-  font-weight: 600;
+  font-weight: var(--w-strong);
   margin: 1em 0 0.5em;
 }
-.artifact-markdown h1 { font-size: 15px; }
-.artifact-markdown h2 { font-size: 13px; }
-.artifact-markdown h3 { font-size: 12px; }
+.artifact-markdown h1 { font-size: var(--fs-lg); }
+.artifact-markdown h2 { font-size: var(--fs-md); }
+.artifact-markdown h3 { font-size: var(--fs-sm); }
 .artifact-markdown p { margin: 0.5em 0; }
 /* Tailwind preflight strips `list-style`; artifacts (and the #698 changelog) are
    bullet-heavy, so restore the markers. */
@@ -268,19 +277,19 @@ body {
 .artifact-markdown li { margin: 0.25em 0; }
 .artifact-markdown code {
   font-family: var(--font-code);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   background: var(--surface-0);
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: var(--radius-ui);
   padding: 1px 4px;
 }
 .artifact-markdown pre {
   background: var(--surface-0);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--radius-ui);
   padding: 8px 10px;
   font-family: var(--font-code);
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   overflow-x: auto;
   margin: 0.5em 0;
 }
@@ -293,7 +302,7 @@ body {
   border-collapse: collapse;
   width: 100%;
   margin: 0.5em 0;
-  font-size: 11px;
+  font-size: var(--fs-xs);
 }
 .artifact-markdown th,
 .artifact-markdown td {
@@ -303,7 +312,7 @@ body {
 }
 .artifact-markdown th {
   background: var(--surface-2);
-  font-weight: 600;
+  font-weight: var(--w-strong);
   color: var(--text);
 }
 .artifact-markdown blockquote {
@@ -321,7 +330,6 @@ body {
   text-align: center;
   background: var(--surface-0);
   border: 1px solid var(--line);
-  border-radius: 5px;
   padding: 10px;
 }
 .artifact-markdown .mermaid-block svg {

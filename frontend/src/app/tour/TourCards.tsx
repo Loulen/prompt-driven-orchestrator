@@ -1,7 +1,8 @@
-import { CircleCheck, TriangleAlert } from "lucide-react";
+import { CircleCheck, Play, TriangleAlert } from "lucide-react";
 import { recapIntroOf, recapOf, type TourFailure } from "../../lib/tour";
 import type { TourAppState, TourDef } from "../../lib/tourDef";
 import { TOUR_CATALOG } from "../../lib/tours";
+import { Button } from "../../shared/ui/kit";
 import { CardShell } from "./TourCardShell";
 import { withCode } from "./tourCardText";
 import TourTidyUpFailure from "./TourTidyUpFailure";
@@ -57,126 +58,88 @@ export function TourEndCard({
   const others = nextTour ? [] : TOUR_CATALOG.filter((entry) => entry.id !== tour.id);
   const recap = recapOf(tour, app);
 
-  return (
-    <CardShell testId="tour-end-card">
-      {chainProgress && (
-        <>
-          <div
-            className="font-semibold uppercase tracking-wide text-text-3"
-            style={{ fontSize: "9.5px", letterSpacing: "0.08em" }}
-            data-testid="tour-chain-progress"
-          >
-            Full tour · {chainProgress.done} of {chainProgress.total} done
-          </div>
-          <div className="mt-2 flex gap-1">
-            {Array.from({ length: chainProgress.total }, (_, i) => (
-              <span
-                key={i}
-                className={`h-1 flex-1 rounded-full ${i < chainProgress.done ? "bg-primary" : "bg-surface-2"}`}
-              />
-            ))}
-          </div>
-        </>
+  const footer = (
+    <>
+      {nextTour && (
+        <span className="d-meta min-w-0 truncate" title={nextTour.blurb} data-testid="tour-end-next-line">
+          Next: {nextTour.title} · ~{nextTour.minutes} min
+        </span>
       )}
-      <div className={`flex items-center gap-2 ${chainProgress ? "mt-3" : ""}`}>
-        <CircleCheck size={18} className="shrink-0 text-primary" />
-        <h2 className="font-semibold text-text" style={{ fontSize: "14px" }}>
-          {tour.outro?.title ?? `${tour.title} — done`}
-        </h2>
-      </div>
-      <p className="mt-2 text-text-2" style={{ fontSize: "11.5px", lineHeight: 1.55 }}>
-        {withCode(recapIntroOf(tour, app))}
-      </p>
-      <ul className="mt-2 flex flex-col gap-1.5">
-        {recap.map((item) => (
-          <li
-            key={item.label}
-            className="flex gap-1.5 text-text-2"
-            style={{ fontSize: "11px", lineHeight: 1.55 }}
-          >
-            <span className="text-text-3">•</span>
-            <span>
-              <span className="font-semibold text-text">{item.label}</span> · {withCode(item.text)}
-            </span>
-          </li>
-        ))}
-      </ul>
+      <span className="d-grow" />
+      {nextTour && (
+        <Button onClick={onFinishHere} data-testid="tour-finish-here">
+          Finish here
+        </Button>
+      )}
+      {/* Either way it is the same click — `onFinish` marks this tour done
+          first, then chains or closes. */}
+      <Button tone="primary" onClick={onFinish} data-testid="tour-finish">
+        {nextTour ? "Continue" : (tour.outro?.primaryLabel ?? "Finish")}
+      </Button>
+    </>
+  );
+  const title = tour.outro?.title ?? `${tour.title} · done`;
 
-      {nextTour ? (
-        <p className="mt-2.5 text-text-3" style={{ fontSize: "11px", lineHeight: 1.55 }} data-testid="tour-end-next-line">
-          Next: <span className="font-semibold text-text">{nextTour.title}</span> (~{nextTour.minutes} min)
-          {" — "}
-          {nextTour.blurb}
-        </p>
-      ) : (
-        tour.outro?.closing && (
-          <p className="mt-2.5 text-text-3" style={{ fontSize: "11px", lineHeight: 1.55 }}>
-            {withCode(tour.outro.closing)}
-          </p>
-        )
+  return (
+    <CardShell testId="tour-end-card" label={title} footer={footer}>
+      {chainProgress && (
+        <div
+          className="tr-chain"
+          title={`Full tour · ${chainProgress.done} of ${chainProgress.total} done`}
+          data-testid="tour-chain-progress"
+        >
+          {Array.from({ length: chainProgress.total }, (_, i) => (
+            <span key={i} data-done={i < chainProgress.done ? "true" : "false"} />
+          ))}
+        </div>
       )}
+      <div className="tr-head">
+        <CircleCheck size={14} strokeWidth={1.5} className="text-primary" aria-hidden />
+        {/* The recap's lead sentence is the title's tooltip: the card itself is the list. */}
+        <h2 className="tr-bcard__title min-w-0 flex-1" title={recapIntroOf(tour, app).replaceAll("`", "") || undefined}>
+          {title}
+        </h2>
+        {chainProgress && (
+          <span className="d-meta tnum font-mono">
+            {chainProgress.done}/{chainProgress.total}
+          </span>
+        )}
+      </div>
+      <dl className="tr-recap">
+        {recap.map((item) => (
+          <div key={item.label}>
+            <dt title={item.label}>{item.label}</dt>
+            <dd>{withCode(item.text)}</dd>
+          </div>
+        ))}
+      </dl>
+      {!nextTour && tour.outro?.closing && <p className="tr-note">{withCode(tour.outro.closing)}</p>}
 
       <TourTidyUpFailure failure={tidyUpFailure} />
 
       {others.length > 0 && (
-        <>
-          <div
-            className="mt-4 font-semibold uppercase tracking-wide text-text-3"
-            style={{ fontSize: "9.5px", letterSpacing: "0.08em" }}
-          >
-            Other tours
-          </div>
-          <div className="mt-1.5 flex flex-col gap-1.5">
-            {others.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                disabled={entry.def == null}
-                data-testid={`tour-end-next-${entry.id}`}
-                onClick={() => entry.def && onStartTour(entry.id)}
-                className="flex items-center gap-2 rounded border border-line bg-surface-2 px-2.5 py-2 text-left transition-colors enabled:cursor-pointer enabled:hover:border-primary/30 disabled:opacity-45"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block font-medium text-text" style={{ fontSize: "11.5px" }}>
-                    {entry.title}
-                  </span>
-                  <span className="block text-text-3" style={{ fontSize: "10.5px" }}>
-                    {entry.blurb}
-                  </span>
-                </span>
-                <span className="shrink-0 font-mono text-text-3" style={{ fontSize: "9.5px" }}>
-                  {entry.def ? `~${entry.minutes} min` : "soon"}
-                </span>
-              </button>
-            ))}
-          </div>
-        </>
+        <div className="flex flex-col gap-1">
+          <div className="d-caps tr-cap">Other tours</div>
+          {others.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              disabled={entry.def == null}
+              data-testid={`tour-end-next-${entry.id}`}
+              onClick={() => entry.def && onStartTour(entry.id)}
+              className="tr-row"
+              title={entry.blurb}
+            >
+              <Play size={13} strokeWidth={1.5} className="tr-row__ic" aria-hidden />
+              <span className="tr-row__text">
+                <span className="tr-row__t">{entry.title}</span>
+                <span className="tr-row__x">{entry.blurb}</span>
+              </span>
+              <span className="tr-min">{entry.def ? `~${entry.minutes} min` : "soon"}</span>
+            </button>
+          ))}
+        </div>
       )}
-
-      <div className="mt-4 flex justify-end gap-2">
-        {nextTour && (
-          <button
-            type="button"
-            onClick={onFinishHere}
-            data-testid="tour-finish-here"
-            className="cursor-pointer rounded border border-line-strong bg-surface-2 px-3 py-1 text-text-3 transition-colors hover:text-text"
-            style={{ fontSize: "11.5px" }}
-          >
-            Finish here
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={onFinish}
-          data-testid="tour-finish"
-          className="cursor-pointer rounded bg-primary px-3 py-1 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
-          style={{ fontSize: "11.5px" }}
-        >
-          {/* Either way it is the same click — `onFinish` marks this tour done
-              first, then chains or closes. */}
-          {nextTour ? `Continue · ${nextTour.title}` : (tour.outro?.primaryLabel ?? "Finish")}
-        </button>
-      </div>
     </CardShell>
   );
 }
@@ -225,98 +188,66 @@ export function TourFailedCard({
   onBackToTours: () => void;
   onContinue: () => void;
 }) {
+  const title = failure.title ?? "This step could not be completed";
+  const footer = (
+    <>
+      <span className="d-meta tnum font-mono">
+        Step {failure.stepNumber} of {failure.total}
+      </span>
+      <span className="d-grow" />
+      <Button onClick={onClose} data-testid="tour-failed-close">
+        Close
+      </Button>
+      <Button tone={nextTour ? "default" : "primary"} onClick={onBackToTours} data-testid="tour-failed-back">
+        Back to tours
+      </Button>
+      {nextTour && (
+        <Button tone="primary" onClick={onContinue} data-testid="tour-failed-continue" title={nextTour.title}>
+          Continue
+        </Button>
+      )}
+    </>
+  );
+
   return (
-    <CardShell testId="tour-failed-card">
-      <div
-        className="flex items-center gap-1.5 font-semibold uppercase tracking-wide text-st-await"
-        style={{ fontSize: "9.5px", letterSpacing: "0.08em" }}
-      >
-        <TriangleAlert size={12} />
-        {tour.title} · step {failure.stepNumber} of {failure.total}
-        {nextTour && <span data-testid="tour-failed-chain"> · Full tour</span>}
+    <CardShell testId="tour-failed-card" label={title} footer={footer}>
+      <div className="tr-head">
+        <TriangleAlert size={13} strokeWidth={1.5} className="text-st-await" aria-hidden />
+        <span className="d-caps tr-name tr-name--warn">{tour.title}</span>
+        {nextTour && (
+          <span className="d-meta" data-testid="tour-failed-chain">
+            Full tour
+          </span>
+        )}
       </div>
-      <h2 className="mt-1.5 font-semibold text-text" style={{ fontSize: "14px" }}>
-        {failure.title ?? "This step could not be completed"}
-      </h2>
+      <h2 className="tr-bcard__title">{title}</h2>
       {failure.kind === "refused" ? (
         // The app said no in its own words (#824). Quoted, never paraphrased: the
         // reason is the only thing that tells the user what to go and fix.
         <>
-          <p className="mt-1.5 text-text-3" style={{ fontSize: "11px" }}>
-            The daemon refused:
-          </p>
-          <pre
-            data-testid="tour-failed-reason"
-            className="mt-1 whitespace-pre-wrap break-words rounded border border-line bg-surface-2 p-2 font-mono text-text-2"
-            style={{ fontSize: "10.5px", lineHeight: 1.5 }}
-          >
+          <pre data-testid="tour-failed-reason" className="tr-reason">
             {failure.reason}
           </pre>
-          {failure.hint && (
-            <p className="mt-2 text-text-2" style={{ fontSize: "11px", lineHeight: 1.55 }}>
-              {failure.hint}
-            </p>
-          )}
+          {failure.hint && <p className="tr-body">{failure.hint}</p>}
         </>
       ) : (
         <>
-          <p className="mt-1.5 text-text-2" style={{ fontSize: "11.5px", lineHeight: 1.55 }}>
-            The tour was waiting for <span className="font-medium text-text">{failure.waitingFor}</span>,
-            but it did not appear.{failure.hint ? ` ${failure.hint}` : ""}
+          <p className="tr-body">
+            Waiting for <span className="font-medium text-text">{failure.waitingFor}</span>, which did not
+            appear.{failure.hint ? ` ${failure.hint}` : ""}
           </p>
-          <p className="mt-1.5 text-text-3" style={{ fontSize: "10.5px", lineHeight: 1.55 }}>
-            {stopFootnote(tour)}
-          </p>
+          <p className="tr-note">{stopFootnote(tour)}</p>
         </>
       )}
       {/* Why Continue is worth pressing, in the next tour's own words: the thing
           that just refused is not what the next leg needs. Only on a refusal —
           a target that failed to appear says nothing about the machine. */}
       {nextTour?.chainNote && failure.kind === "refused" && (
-        <p
-          className="mt-2 text-text-3"
-          style={{ fontSize: "10.5px", lineHeight: 1.55 }}
-          data-testid="tour-failed-chain-note"
-        >
+        <p className="tr-note" data-testid="tour-failed-chain-note">
           {nextTour.chainNote}
         </p>
       )}
       <TourTidyUpFailure failure={tidyUpFailure} />
-      <div className="mt-4 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          data-testid="tour-failed-close"
-          className="cursor-pointer rounded border border-line-strong bg-surface-2 px-3 py-1 text-text-3 transition-colors hover:text-text"
-          style={{ fontSize: "11.5px" }}
-        >
-          Close
-        </button>
-        <button
-          type="button"
-          onClick={onBackToTours}
-          data-testid="tour-failed-back"
-          className={
-            nextTour
-              ? "cursor-pointer rounded border border-line-strong bg-surface-2 px-3 py-1 text-text-3 transition-colors hover:text-text"
-              : "cursor-pointer rounded bg-primary px-3 py-1 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
-          }
-          style={{ fontSize: "11.5px" }}
-        >
-          Back to tours
-        </button>
-        {nextTour && (
-          <button
-            type="button"
-            onClick={onContinue}
-            data-testid="tour-failed-continue"
-            className="cursor-pointer rounded bg-primary px-3 py-1 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
-            style={{ fontSize: "11.5px" }}
-          >
-            Continue · {nextTour.title}
-          </button>
-        )}
-      </div>
     </CardShell>
   );
 }

@@ -36,6 +36,11 @@ export function isDistribution(s: UpdateStatus): boolean {
   return s.channel_name !== VANILLA_CHANNEL_NAME;
 }
 
+/** The product name a sentence uses: the distribution's own, or the app's for the vanilla channel. */
+export function channelLabel(s: UpdateStatus): string {
+  return isDistribution(s) ? s.channel_name : "Acogni Driver";
+}
+
 /**
  * How the installed version reads: `v2.0.0` for the vanilla binary, `acme-pdo 0.3.0
  * (core 2.0.0)` for a distribution, whose version alone says nothing about the core.

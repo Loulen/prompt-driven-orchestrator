@@ -33,8 +33,7 @@ export default function BankDetailPane({
       {error && (
         <div
           role="alert"
-          className="m-4 mb-0 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2"
-          style={{ fontSize: "11px" }}
+          className="m-4 mb-0 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2 text-xs"
           data-testid="skill-bank-error"
         >
           {error}
@@ -119,7 +118,7 @@ export default function BankDetailPane({
       ) : emptyBank ? (
         <EmptyBank onPaste={() => panel.setPasteOpen(true)} onImport={() => panel.setImportOpen(true)} />
       ) : (
-        <div className="flex flex-1 items-center justify-center p-8 text-center text-text-3" style={{ fontSize: "11.5px" }}>
+        <div className="flex flex-1 items-center justify-center p-8 text-center text-text-3 text-xs">
           Select a skill to read it, or a folder to manage it.
         </div>
       )}
@@ -128,8 +127,7 @@ export default function BankDetailPane({
         <div
           role="status"
           data-testid="skill-toast"
-          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-md border border-line bg-surface-2 px-3 py-2 text-text-2 shadow-xl"
-          style={{ fontSize: "11.5px" }}
+          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-md border border-line bg-surface-2 px-3 py-2 text-text-2 shadow-xl text-xs"
         >
           <span>{toast.message}</span>
           {toast.undo && (

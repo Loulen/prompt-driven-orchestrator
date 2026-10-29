@@ -18,13 +18,12 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
           data-testid="import-source-line"
         >
           <GitBranch size={12} className="shrink-0 text-text-3" />
-          <span className="min-w-0 flex-1 truncate text-text" style={{ fontSize: "11.5px" }}>
+          <span className="min-w-0 flex-1 truncate text-text text-xs">
             {text.trim()}
           </span>
           {scan?.commit && (
             <span
-              className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-text-3"
-              style={{ fontSize: "10px" }}
+              className="rounded border border-line bg-surface-2 px-1.5 py-0.5 font-mono text-text-3 text-2xs"
               data-testid="import-commit"
             >
               @ {shortCommit(scan.commit)}
@@ -35,15 +34,14 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
             onClick={changeSource}
             disabled={step === "importing"}
             data-testid="import-change-source"
-            className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary disabled:opacity-40"
-            style={{ fontSize: "11px" }}
+            className="rounded-md border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:border-primary disabled:opacity-40 text-xs"
           >
             Change
           </button>
         </div>
       ) : (
         <section>
-          <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+          <h4 className="mb-2 text-text-3 uppercase tracking-wide text-2xs">
             Source
           </h4>
           <div
@@ -71,16 +69,14 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
               aria-invalid={!!scanError || undefined}
               data-testid="import-source-input"
               spellCheck={false}
-              className="min-w-0 flex-1 bg-transparent text-text outline-none placeholder:text-text-3 disabled:opacity-60"
-              style={{ fontSize: "12px" }}
+              className="min-w-0 flex-1 bg-transparent text-text outline-none placeholder:text-text-3 disabled:opacity-60 text-sm"
             />
             <button
               type="button"
               onClick={() => setBrowsing(true)}
               disabled={step === "scanning"}
               data-testid="import-browse-local"
-              className="flex shrink-0 items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 hover:border-primary disabled:opacity-40"
-              style={{ fontSize: "11px" }}
+              className="flex shrink-0 items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1 text-text-2 hover:border-primary disabled:opacity-40 text-xs"
             >
               <HardDrive size={11} />
               Browse local…
@@ -99,8 +95,7 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
           {scanError && (
             <div
               role="alert"
-              className="mt-2 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2"
-              style={{ fontSize: "11px" }}
+              className="mt-2 rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2 text-xs"
               data-testid="import-scan-error"
             >
               <strong className="text-text">
@@ -114,7 +109,7 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
               {(scanError.code === "clone_failed" || scanError.code === "clone_timeout") && (
                 <>
                   {" "}
-                  PDO uses the git credentials of the user running the daemon: log in with{" "}
+                  The daemon uses the git credentials of the user running the daemon: log in with{" "}
                   <span className="font-mono">gh auth login</span>
                   {parsed && sshHint(parsed.url) && (
                     <>
@@ -138,12 +133,11 @@ export default function ImportSourceField({ imp }: { imp: ImportSkillsState }) {
 
           {step === "source" && !scanError && (
             <p
-              className="mt-2 rounded-md border border-dashed border-line px-3 py-2 text-text-3"
-              style={{ fontSize: "10.5px" }}
+              className="mt-2 rounded-md border border-dashed border-line px-3 py-2 text-text-3 text-xs"
             >
               Accepted: a GitHub repo URL (root, branch, or{" "}
               <span className="font-mono">/tree/&lt;branch&gt;/&lt;path&gt;</span>), an SSH URL, or a local
-              folder. PDO clones shallow with your git credentials and scans every folder holding a{" "}
+              folder. The daemon clones shallow with your git credentials and scans every folder holding a{" "}
               <span className="font-mono">SKILL.md</span>. Nothing is written to the bank until you pick skills.
             </p>
           )}

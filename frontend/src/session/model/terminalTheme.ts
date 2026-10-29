@@ -1,10 +1,13 @@
 /**
  * The PTY terminal's palette (#759).
  *
- * xterm paints on a canvas and takes resolved colours, so it cannot read CSS
- * tokens. And ANSI colours are not app chrome: `red` must stay red. They
- * therefore live here, as one explicit palette, rather than in the tokens.
+ * xterm paints on a canvas and takes resolved colours, so the palette is read
+ * from its tokens (`session/terminal.css`) at the time the terminal opens. ANSI
+ * colours are not app chrome: `red` must stay red, so they are tokens of their
+ * own rather than roles of the theme.
  */
+
+import { cssColor } from "../../lib/cssColor";
 
 export interface TerminalTheme {
   background: string;
@@ -57,35 +60,35 @@ export const TERMINAL_INK = [
  * The terminal is an always-dark screen, whatever the theme of the interface
  * (a lit display): its ground is the paper of the dark theme darkened
  * (`color-mix(in oklab, paper 82%, black)`, `.ri-term-screen`), its text the
- * secondary ink, its cursor the ink.
+ * secondary ink, its cursor the ink. The values are the `--term-*` tokens of
+ * `session/terminal.css`, resolved, since xterm takes no `var()`.
  */
-const DARK: TerminalTheme = {
-  background: "#0b0b0d",
-  foreground: "#aeb1b5",
-  cursor: "#d2d4d7",
-  // #772: a selection the user can see — blue at ~35% alpha keeps the glyphs
-  // readable and the highlight obvious.
-  selectionBackground: "#3b82f659",
-  selectionInactiveBackground: "#3b82f633",
-  black: "#0b0b0d",
-  red: "#ef4444",
-  green: "#10b981",
-  yellow: "#f59e0b",
-  blue: "#3b82f6",
-  magenta: "#8b5cf6",
-  cyan: "#06b6d4",
-  white: "#d2d4d7",
-  brightBlack: "#5a6270",
-  brightRed: "#f87171",
-  brightGreen: "#34d399",
-  brightYellow: "#fbbf24",
-  brightBlue: "#60a5fa",
-  brightMagenta: "#a78bfa",
-  brightCyan: "#22d3ee",
-  brightWhite: "#f8fafc",
-};
-
-/** The terminal's palette: always the dark screen. */
 export function terminalTheme(): TerminalTheme {
-  return DARK;
+  const slot = (name: keyof TerminalTheme) =>
+    cssColor(`--term-${name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`);
+  return {
+    background: slot("background"),
+    foreground: slot("foreground"),
+    cursor: slot("cursor"),
+    // #772: a selection the user can see — blue at ~35% alpha keeps the glyphs
+    // readable and the highlight obvious.
+    selectionBackground: slot("selectionBackground"),
+    selectionInactiveBackground: slot("selectionInactiveBackground"),
+    black: slot("black"),
+    red: slot("red"),
+    green: slot("green"),
+    yellow: slot("yellow"),
+    blue: slot("blue"),
+    magenta: slot("magenta"),
+    cyan: slot("cyan"),
+    white: slot("white"),
+    brightBlack: slot("brightBlack"),
+    brightRed: slot("brightRed"),
+    brightGreen: slot("brightGreen"),
+    brightYellow: slot("brightYellow"),
+    brightBlue: slot("brightBlue"),
+    brightMagenta: slot("brightMagenta"),
+    brightCyan: slot("brightCyan"),
+    brightWhite: slot("brightWhite"),
+  };
 }

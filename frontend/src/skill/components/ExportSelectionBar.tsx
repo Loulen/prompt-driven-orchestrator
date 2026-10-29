@@ -8,8 +8,7 @@ export default function ExportSelectionBar({ bank, panel }: { bank: SkillBank; p
   const n = panel.checkedCount;
   return (
     <div
-      className="flex items-center gap-2 border-t border-line px-3 py-1.5 text-text-2"
-      style={{ fontSize: "10.5px" }}
+      className="flex items-center gap-2 border-t border-line px-3 py-1.5 text-text-2 text-xs"
       data-testid="skill-export-bar"
     >
       <span className="flex-1 whitespace-nowrap" data-testid="skill-export-count">

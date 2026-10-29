@@ -8,8 +8,7 @@ import { folderPathLabel } from "../model/skillTree";
 export function Chip({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <span
-      className={`flex items-center gap-1 rounded border px-1.5 py-0.5 ${accent ? "border-primary/40 bg-primary/10" : "border-line bg-surface-2"}`}
-      style={{ fontSize: "10.5px" }}
+      className={`flex items-center gap-1 rounded border px-1.5 py-0.5 ${accent ? "border-primary/40 bg-primary/10" : "border-line bg-surface-2"} text-xs`}
     >
       <span className="text-text-3">{label}</span>
       <span className="font-mono text-text">{value}</span>
@@ -18,30 +17,29 @@ export function Chip({ label, value, accent }: { label: string; value: string; a
 }
 
 export function StatusBadge({ candidate }: { candidate: SkillCandidate }) {
-  const base = "rounded border px-1.5 py-0.5 whitespace-nowrap";
-  const size = { fontSize: "9.5px" };
+  const base = "rounded border px-1.5 py-0.5 whitespace-nowrap text-2xs";
   switch (candidate.status) {
     case "new":
       return (
-        <span className={`${base} border-primary/40 bg-primary/10 text-primary`} style={size}>
+        <span className={`${base} border-primary/40 bg-primary/10 text-primary`}>
           new
         </span>
       );
     case "name_taken":
       return (
-        <span className={`${base} border-st-blocked/50 bg-st-blocked/14 text-st-blocked`} style={size}>
+        <span className={`${base} border-st-blocked/50 bg-st-blocked/14 text-st-blocked`}>
           name taken{candidate.existing?.folder_name ? ` · in “${candidate.existing.folder_name}”` : ""}
         </span>
       );
     case "same_commit":
       return (
-        <span className={`${base} border-line bg-surface-2 text-text-3`} style={size}>
+        <span className={`${base} border-line bg-surface-2 text-text-3`}>
           same commit{candidate.existing?.folder_name ? ` · already in “${candidate.existing.folder_name}”` : " · already in bank"}
         </span>
       );
     default:
       return (
-        <span className={`${base} border-st-failed/40 bg-st-failed/14 text-st-failed`} style={size}>
+        <span className={`${base} border-st-failed/40 bg-st-failed/14 text-st-failed`}>
           not importable
         </span>
       );
@@ -73,7 +71,7 @@ export function ParentSelect({
   return (
     <label className="flex items-center gap-2 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5">
       {prefix ? (
-        <span className="text-text-3" style={{ fontSize: "10.5px" }}>
+        <span className="text-text-3 text-xs">
           {prefix}
         </span>
       ) : (
@@ -85,8 +83,7 @@ export function ParentSelect({
         disabled={disabled}
         aria-label="Into folder"
         data-testid="import-parent-folder"
-        className="w-full bg-transparent text-text outline-none disabled:opacity-60"
-        style={{ fontSize: "11.5px" }}
+        className="w-full bg-transparent text-text outline-none disabled:opacity-60 text-xs"
       >
         <option value="">Root of the bank</option>
         {folders.map((folder) => (

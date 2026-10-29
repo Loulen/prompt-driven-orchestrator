@@ -144,7 +144,8 @@ describe("running a tour", () => {
     await user().click(screen.getByTestId("start"));
     tick();
     expect(screen.getByTestId("projecteur")).toBeInTheDocument();
-    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First pipeline · 1 / 2");
+    expect(screen.getByTestId("tour-popover")).toHaveTextContent("First pipeline");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("1/2");
   });
 
   it("advances on the real gesture, with no extra click", async () => {
@@ -410,8 +411,11 @@ describe("the two ways a tour ends", () => {
     // Step two is an acknowledge step: its `Next` finishes the tour.
     await user().click(screen.getByTestId("tour-next"));
 
-    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("First pipeline — done");
-    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("tutorial-implement-test");
+    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("First pipeline · done");
+    expect(screen.getByRole("heading", { name: "First pipeline · done" })).toHaveAttribute(
+      "title",
+      "You built tutorial-implement-test.",
+    );
     expect(loadToursDone()).toEqual({});
 
     await user().click(screen.getByTestId("tour-finish"));
@@ -432,7 +436,7 @@ describe("the two ways a tour ends", () => {
     expect(card).toHaveTextContent("This step could not be completed");
     expect(card).toHaveTextContent("the Prompt field of the selected node");
     expect(card).toHaveTextContent("The pane was closed.");
-    expect(card).toHaveTextContent("step 2 of 2");
+    expect(card).toHaveTextContent("Step 2 of 2");
 
     await user().click(screen.getByTestId("tour-failed-back"));
     expect(screen.getByTestId("tutorials-open")).toBeInTheDocument();
@@ -475,7 +479,8 @@ describe("a tour starts on a clear stage", () => {
     tick();
 
     expect(screen.queryByTestId("fake-overlay")).not.toBeInTheDocument();
-    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First run · 1 / 1");
+    expect(screen.getByTestId("tour-popover")).toHaveTextContent("First run");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("1/1");
   });
 });
 
@@ -552,7 +557,8 @@ describe("tidying up when a tour ends", () => {
     await user().click(screen.getByTestId("tour-finish"));
     tick();
     await flush();
-    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First run · 1 / 1");
+    expect(screen.getByTestId("tour-popover")).toHaveTextContent("First run");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("1/1");
     // Quitting the next leg does not tidy the previous one a second time.
     await user().keyboard("{Escape}");
     await flush();

@@ -135,6 +135,7 @@ const START_INPUT = `${START_INSPECTOR} ${t("start-input-text")}`;
 const EDGE_PANEL = t("edge-detail-panel");
 const EDGE_CONDITION = `${EDGE_PANEL} ${t("condition-row")}`;
 const CLEANUP_MODAL = t("cleanup-confirm-modal");
+const CLEANUP_ITEM = `${t("run-menu-cleanup")}[data-run-id="${RUN_ID}"]`;
 const node = (id: string) => `.react-flow__node[data-id="${id}"]`;
 
 /** The canvas document of the Run: the pipeline the preparation wrote. */
@@ -281,7 +282,11 @@ class FakeApp {
     this.hide(EDGE_PANEL);
     this.show(START_INSPECTOR);
   }
+  openRunMenu() {
+    this.show(CLEANUP_ITEM);
+  }
   archive() {
+    this.hide(CLEANUP_ITEM);
     this.show(CLEANUP_MODAL);
   }
   confirmArchive() {
@@ -577,7 +582,7 @@ describe("gestures advance only on the observed state", () => {
     const step = stepById("terminal");
     const run = at("terminal", fake);
     expect(step.target(fake.obs())).toEqual([TERMINAL_RESTORE]);
-    expect(stepBody(step, fake.obs())).toMatch(/^Click Terminal/);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click the ended session bar/);
     expect(needsConfirm(TOUR, run, fake.obs()), "no Next before the click").toBe(false);
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.unfoldTerminal();
@@ -621,8 +626,14 @@ describe("gestures advance only on the observed state", () => {
     const step = stepById("archive-run");
     const run = at("archive-run", fake);
     expect(step.target(fake.obs())).toEqual([RUN_ROW]);
+    fake.show(`${t("run-menu-cleanup")}[data-run-id="another-run"]`);
+    expect(step.target(fake.obs()), "another Run's menu is not the tour's").toEqual([RUN_ROW]);
+    fake.openRunMenu();
+    expect(step.target(fake.obs()), "the menu is a portal: its Cleanup entry is lit").toEqual([CLEANUP_ITEM]);
+    expect(stepSoft(step, fake.obs()), "the whole menu stays clickable").toBe(true);
     fake.archive();
     expect(step.target(fake.obs())).toEqual([CLEANUP_MODAL]);
+    expect(stepSoft(step, fake.obs())).toBe(false);
     expect(observeTour(TOUR, run, fake.obs(), 100).index).toBe(run.index);
     fake.confirmArchive();
     const after = observeTour(TOUR, run, fake.obs(), 200);
@@ -762,9 +773,9 @@ describe("the copy", () => {
 
   it("recaps what happened to the Run", () => {
     const fake = new FakeApp();
-    expect(recapOf(TOUR, fake.app).find((b) => b.label === OVERVIEW_RUN_NAME)?.text).toMatch(/still in your list/);
+    expect(recapOf(TOUR, fake.app).find((b) => b.label === "Run")?.text).toMatch(/still in your list/);
     fake.confirmArchive();
-    expect(recapOf(TOUR, fake.app).find((b) => b.label === OVERVIEW_RUN_NAME)?.text).toMatch(/archived/);
+    expect(recapOf(TOUR, fake.app).find((b) => b.label === "Run")?.text).toMatch(/archived/);
   });
 });
 

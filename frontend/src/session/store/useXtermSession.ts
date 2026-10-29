@@ -19,6 +19,7 @@ import { isHeartbeatFrame, TERMINAL_SILENCE_MS, VEIL_GRACE_MS } from "../model/t
 import { BASE_FONT_SIZE, MIN_SPECTATOR_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
 import { uiZoom, useUiScale } from "../../lib/uiScale";
 import { terminalTheme } from "../model/terminalTheme";
+import { cssToken } from "../../lib/cssColor";
 import {
   sendResize,
   TERMINAL_INSET_PX,
@@ -54,13 +55,14 @@ export interface XtermSession {
 }
 
 /**
- * The terminal's font size at the UI scale. The terminal is drawn out of the
- * app's CSS zoom (`.pdo-unzoom`): xterm maps the pointer to its cells in screen
- * pixels, and under a zoom the selection drifted from the mouse. The scale
- * goes in the font instead.
+ * The terminal's font size at the UI scale: the type scale's `--fs-xs`. The
+ * terminal is drawn out of the app's CSS zoom (`.pdo-unzoom`): xterm maps the
+ * pointer to its cells in screen pixels, and under a zoom the selection drifted
+ * from the mouse. The scale goes in the font instead.
  */
 function baseFontSize(): number {
-  return BASE_FONT_SIZE * uiZoom();
+  const size = Number.parseFloat(cssToken("--fs-xs", `${BASE_FONT_SIZE}px`));
+  return (Number.isFinite(size) ? size : BASE_FONT_SIZE) * uiZoom();
 }
 
 /**
@@ -141,7 +143,6 @@ export function useXtermSession(
       cursorBlink: !isFrozen,
       // Nothing to type into: the socket is not opened at all below.
       disableStdin: isFrozen,
-      fontSize: baseFontSize(),
       fontFamily: "'Geist Mono', monospace",
       // An always-dark screen, whatever the theme of the interface.
       theme: terminalTheme(),
@@ -152,6 +153,8 @@ export function useXtermSession(
       // `forcedSelectionEvent` relies on it.
       macOptionClickForcesSelection: true,
     });
+    // The grid's size: the type scale's, times the UI scale (`baseFontSize`).
+    term.options.fontSize = baseFontSize();
 
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
@@ -211,8 +214,8 @@ export function useXtermSession(
         const pilot = current.pilot;
         const size = spectatorFontSize(
           pilot,
-          (fontSize) => {
-            term.options.fontSize = fontSize;
+          (candidate) => {
+            term.options.fontSize = candidate;
             return fitAddon.proposeDimensions();
           },
           baseFontSize(),

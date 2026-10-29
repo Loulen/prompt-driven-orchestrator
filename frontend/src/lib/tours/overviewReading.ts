@@ -63,6 +63,10 @@ export const EDGE_CONDITION = `${EDGE_PANEL} ${testId("condition-row")}`;
  */
 export const RUN_SELECT = testId("run-select-control");
 export const CLEANUP_MODAL = testId("cleanup-confirm-modal");
+/** A Run's Cleanup entry in its row menu: the menu is a portal, so the step lights it on its own. */
+export function cleanupItem(id: string): string {
+  return `${testId("run-menu-cleanup")}[data-run-id="${cssEscape(id)}"]`;
+}
 export const SETTINGS_BUTTON = testId("open-settings");
 
 /**

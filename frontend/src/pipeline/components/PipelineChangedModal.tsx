@@ -31,11 +31,10 @@ export default function PipelineChangedModal({
       onClick={onKeep}
     >
       <div
-        className="w-[440px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className="w-[440px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg text-sm"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="font-medium text-text" style={{ fontSize: "13px" }}>
+        <h3 className="font-medium text-text text-md">
           Pipeline template updated
         </h3>
         <p className="mt-2 text-text-2">
@@ -45,23 +44,21 @@ export default function PipelineChangedModal({
           </code>{" "}
           has changed since this run was created. Reload changes into this run?
         </p>
-        <p className="mt-2 text-text-3" style={{ fontSize: "11.5px" }}>
+        <p className="mt-2 text-text-3 text-xs">
           Keeping the run version leaves it diverged from the library — the
           pipeline star will show that state.
         </p>
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onKeep}
-            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
             data-testid="pipeline-changed-keep"
           >
             Keep run version
           </button>
           <button
             onClick={onReload}
-            className="cursor-pointer rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi"
-            style={{ fontSize: "11.5px" }}
+            className="cursor-pointer rounded-md bg-primary px-3 py-1.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi text-xs"
             data-testid="pipeline-changed-reload"
           >
             Reload changes

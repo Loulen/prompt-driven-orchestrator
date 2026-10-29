@@ -219,10 +219,9 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
       {quitNotice && (
         <div
           data-testid="tour-quit-notice"
-          className="fixed bottom-8 left-1/2 z-[110] -translate-x-1/2 rounded border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 shadow-lg"
-          style={{ fontSize: "11px" }}
+          className="fixed bottom-8 left-1/2 z-[110] -translate-x-1/2 rounded border border-line bg-surface-2 px-3 py-1.5 text-xs text-text-2 shadow-lg"
         >
-          Tour closed. Start it again from Settings › Tutorials.
+          Tour closed · Settings › Tutorials
         </div>
       )}
     </>

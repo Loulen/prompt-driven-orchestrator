@@ -81,8 +81,8 @@ pub(super) async fn prepare(
                 Ok(false) => {
                     warn_binary_missing_in_image_once(run_id, &d.name, &d.binary);
                     let reason = format!(
-                        "harness `{}` binary `{}` is absent from the sandbox image — PDO does \
-                         not provide the image; add `{}` to the profile's image (ADR-0063)",
+                        "harness `{}` binary `{}` is absent from the sandbox image; add `{}` \
+                         to the profile's image (ADR-0063)",
                         d.name, d.binary, d.binary
                     );
                     interrupt_spawn_before_start_with_code(

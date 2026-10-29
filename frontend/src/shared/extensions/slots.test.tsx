@@ -171,7 +171,7 @@ describe("an incompatible bundle", () => {
     renderTopBar();
     const banner = await screen.findByTestId("extension-banner-test");
     expect(banner).toHaveTextContent(
-      `The interface of the extension Test extension was not loaded: it was built for React ${hostReactMajor() - 1}, and PDO runs React ${hostReactMajor()}.`,
+      `The interface of the extension Test extension was not loaded: it was built for React ${hostReactMajor() - 1}, and the app runs React ${hostReactMajor()}.`,
     );
     expect(loader).not.toHaveBeenCalled();
     expect(screen.queryByTestId("extension-nav")).toBeNull();

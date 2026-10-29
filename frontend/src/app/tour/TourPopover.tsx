@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Check, Circle, Copy, LoaderCircle, X } from "lucide-react";
-import { placePopover, type PopoverSide } from "../../lib/tourPlacement";
+import { placePopover } from "../../lib/tourPlacement";
+import { Button, IconButton } from "../../shared/ui/kit";
 import type { TourRect } from "../../hooks/tour/tourView";
 import type { TourChecklistItem, TourDef, TourStep } from "../../lib/tourDef";
 import type { TourIllustration } from "../../lib/tourPanels";
@@ -16,7 +17,7 @@ import { cssViewport } from "../../shared/ui/zoom";
  * for the rules; this component only measures itself and applies the result.
  *
  * Layout, after the design review of #825: the header carries the tour name, the
- * progress and the way out (`✕ quit`, a small grey label — *reachable*, not
+ * progress and the way out (`✕`, an icon with its tooltip — *reachable*, not
  * prominent); the footer carries `Skip` on the left and, on the right, either
  * `Next` or the one grey line that says what the tour is waiting for.
  */
@@ -43,20 +44,6 @@ interface Props {
 }
 
 const WIDTH = 266;
-
-/** The little triangle pointing back at the hole. */
-function arrowClass(side: PopoverSide): string {
-  switch (side) {
-    case "right":
-      return "left-[-5px] top-1/2 -translate-y-1/2 border-b border-l";
-    case "left":
-      return "right-[-5px] top-1/2 -translate-y-1/2 border-t border-r";
-    case "bottom":
-      return "top-[-5px] left-1/2 -translate-x-1/2 border-t border-l";
-    case "top":
-      return "bottom-[-5px] left-1/2 -translate-x-1/2 border-b border-r";
-  }
-}
 
 export default function TourPopover({
   tour,
@@ -108,41 +95,27 @@ export default function TourPopover({
       data-testid="tour-popover"
       data-step={step.id}
       data-side={placement.side}
-      className="pointer-events-auto absolute flex flex-col gap-2 rounded-lg border border-line-strong bg-surface-1 p-3 shadow-lg"
-      style={{ top: placement.top, left: placement.left, width: WIDTH, fontSize: "11.5px" }}
+      // A group, not a dialog: a dialog on screen owns Escape, and Escape here quits the tour.
+      role="group"
+      aria-label={`${tour.title} · step ${stepNumber} of ${total}`}
+      className="tr-frame tr-card pointer-events-auto"
+      style={{ top: placement.top, left: placement.left, width: WIDTH }}
     >
-      <span
-        aria-hidden="true"
-        className={`absolute h-2.5 w-2.5 rotate-45 border-line-strong bg-surface-1 ${arrowClass(placement.side)}`}
-      />
-      <div className="flex items-center justify-between gap-2">
-        <span
-          className="font-semibold uppercase tracking-wide text-primary"
-          style={{ fontSize: "9.5px", letterSpacing: "0.08em" }}
-          data-testid="tour-progress"
-        >
-          {tour.title} · {stepNumber} / {total}
+      <span aria-hidden="true" className="tr-caret" />
+      <div className="tr-head">
+        <span className="d-caps tr-name">{tour.title}</span>
+        <span className="d-meta tnum" data-testid="tour-progress">
+          {stepNumber}/{total}
         </span>
-        {/* Small and grey on purpose (design review of #825): leaving a tutorial
-            must always be one click away, and never look like the thing to do. */}
-        <button
-          type="button"
-          onClick={onQuit}
-          data-testid="tour-quit"
-          title="Quit tour (Esc)"
-          className="flex shrink-0 cursor-pointer items-center gap-0.5 text-text-3 transition-colors hover:text-text-2"
-          style={{ fontSize: "9.5px" }}
-        >
-          <X size={9} />
-          quit
-        </button>
+        <span className="d-grow" />
+        {/* Leaving a tutorial must always be one click away, and never look
+            like the thing to do (design review of #825). */}
+        <IconButton icon={X} label="Quit tour" kbd="Esc" size="sm" className="tr-quit" onClick={onQuit} data-testid="tour-quit" />
       </div>
 
-      <div className="font-semibold text-text" style={{ fontSize: "13px" }}>
-        {step.title}
-      </div>
+      <div className="tr-title">{step.title}</div>
       {body && (
-        <p className="text-text-2" style={{ fontSize: "11px", lineHeight: 1.5 }} data-testid="tour-body">
+        <p className="tr-body" data-testid="tour-body">
           {body}
         </p>
       )}
@@ -152,36 +125,22 @@ export default function TourPopover({
       {/* A step that asks for two gestures says which one is still missing. The
           honest answer to "I ticked one and nothing happened": something did. */}
       {checklist.length > 0 && (
-        <ul className="flex flex-col gap-1" data-testid="tour-checklist">
+        <ul className="tr-check" data-testid="tour-checklist">
           {checklist.map((item) => (
-            <li
-              key={item.label}
-              data-testid={`tour-checklist-${item.label}`}
-              data-done={item.done ? "true" : "false"}
-              className={`flex items-start gap-1.5 ${item.done ? "text-primary" : "text-text-3"}`}
-              style={{ fontSize: "10.5px" }}
-            >
-              {item.done ? (
-                <Check size={11} className="mt-px shrink-0" />
-              ) : (
-                <Circle size={11} className="mt-px shrink-0" />
-              )}
-              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-                <span className="truncate font-mono">{item.label}</span>
+            <li key={item.label} data-testid={`tour-checklist-${item.label}`} data-done={item.done ? "true" : "false"}>
+              {item.done ? <Check size={11} strokeWidth={2} aria-hidden /> : <Circle size={11} strokeWidth={1.5} aria-hidden />}
+              <span className="tr-check__text">
+                <span className="tr-check__label">{item.label}</span>
                 {item.badge && (
-                  <span
-                    data-testid="tour-checklist-badge"
-                    className="rounded bg-st-failed/14 px-1 font-mono text-st-failed"
-                    style={{ fontSize: "9px" }}
-                  >
+                  <span data-testid="tour-checklist-badge" className="tr-check__badge">
                     {item.badge}
                   </span>
                 )}
                 {/* The engine has no « back »: an item left open says, in place,
                     what to do about it — the control is inside the soft zone. */}
                 {item.note && (
-                  <span data-testid="tour-checklist-note" className="text-st-await">
-                    — {item.note}
+                  <span data-testid="tour-checklist-note" className="tr-check__note">
+                    {item.note}
                   </span>
                 )}
               </span>
@@ -191,88 +150,58 @@ export default function TourPopover({
       )}
 
       {note && (
-        <p className="text-text-3" style={{ fontSize: "10.5px", lineHeight: 1.5 }} data-testid="tour-note">
+        <p className="tr-note" data-testid="tour-note">
           {note}
         </p>
       )}
 
       {step.copyBlock && (
-        <div className="flex items-start gap-1.5 rounded border border-line bg-surface-2 p-1.5">
-          <pre
-            className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-text-2"
-            style={{ fontSize: "10px", lineHeight: 1.5 }}
-            data-testid="tour-copy-block"
-          >
-            {step.copyBlock}
-          </pre>
-          <button
-            type="button"
+        <div className="tr-copy">
+          <pre data-testid="tour-copy-block">{step.copyBlock}</pre>
+          <IconButton
+            icon={copied ? Check : Copy}
+            label={copied ? "Copied" : "Copy the block"}
+            size="sm"
             onClick={copy}
             data-testid="tour-copy"
-            aria-label="Copy the block"
-            className="flex shrink-0 cursor-pointer items-center gap-1 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 text-text-3 transition-colors hover:text-text"
-            style={{ fontSize: "10px" }}
-          >
-            {copied ? <Check size={11} className="text-primary" /> : <Copy size={11} />}
-            {copied ? "Copied" : "Copy"}
-          </button>
+          />
         </div>
       )}
 
       {/* The one step with no time limit has to say so (#825): an unbounded wait
           with nothing turning reads as a freeze. */}
       {waiting && (
-        <div
-          className="flex items-center gap-2 rounded border border-line bg-surface-2 px-2 py-1.5 text-text-3"
-          style={{ fontSize: "10.5px" }}
-          data-testid="tour-waiting"
-        >
-          <LoaderCircle size={11} className="shrink-0 animate-spin text-primary" />
+        <div className="tr-wait" data-testid="tour-waiting">
+          <LoaderCircle size={11} strokeWidth={1.5} className="d-spin" aria-hidden />
           {step.waitingNote}
         </div>
       )}
 
       {/* Progress bar — the same count as the label, for the glance rather than the read. */}
-      <div className="h-0.5 w-full overflow-hidden rounded-full bg-surface-2">
-        <div className="h-full bg-primary" style={{ width: `${(stepNumber / total) * 100}%` }} />
-      </div>
+      <span className="tr-prog" aria-hidden="true">
+        <span style={{ width: `${(stepNumber / total) * 100}%` }} />
+      </span>
 
       {/* Not rendered at all when the step has neither: a step that is simply
           waiting for the right click says so in its title, and an empty row
           under the progress bar would be a control that is not there. */}
       {(step.skippable || awaitingConfirm || step.advanceHint) && (
-        <div className="flex items-center justify-between gap-2">
+        <div className="tr-cfoot">
           {step.skippable ? (
-            <button
-              type="button"
-              onClick={onSkip}
-              data-testid="tour-skip"
-              className="cursor-pointer text-text-3 transition-colors hover:text-text"
-              style={{ fontSize: "10.5px" }}
-            >
+            <Button tone="ghost" size="sm" onClick={onSkip} data-testid="tour-skip">
               Skip
-            </button>
+            </Button>
           ) : (
             <span />
           )}
+          <span className="d-grow" />
           {awaitingConfirm ? (
-            <button
-              type="button"
-              onClick={onNext}
-              disabled={!ready}
-              data-testid="tour-next"
-              className="cursor-pointer rounded bg-primary px-2 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:cursor-not-allowed disabled:opacity-40"
-              style={{ fontSize: "10.5px" }}
-            >
+            <Button tone="primary" size="sm" onClick={onNext} disabled={!ready} data-testid="tour-next" title="Next (Enter)">
               Next
-            </button>
+            </Button>
           ) : (
             step.advanceHint && (
-              <span
-                className="text-right font-mono text-text-3"
-                style={{ fontSize: "9.5px" }}
-                data-testid="tour-advance-hint"
-              >
+              <span className="tr-hint" data-testid="tour-advance-hint">
                 {step.advanceHint}
               </span>
             )
@@ -290,26 +219,15 @@ export default function TourPopover({
  */
 function Illustration({ illustration }: { illustration: TourIllustration }) {
   return (
-    <ul
-      className="flex flex-col overflow-hidden rounded border border-line bg-surface-0"
-      data-testid="tour-illustration"
-      aria-label="Example"
-    >
+    <ul className="tr-illus" data-testid="tour-illustration" aria-label="Example">
       {illustration.rows.map((row) => (
-        <li
-          key={row.label}
-          data-testid="tour-illustration-row"
-          className="flex items-center gap-2 border-b border-line-soft px-2 py-1 last:border-b-0"
-          style={{ fontSize: "10.5px" }}
-        >
+        <li key={row.label} data-testid="tour-illustration-row">
           <span
             data-testid="tour-illustration-dot"
             className={`block h-2 w-2 shrink-0 rounded-full ${row.dotClass} ${row.pulse ? "animate-pulse" : ""}`}
           />
           <span className="min-w-0 flex-1 truncate font-medium text-text-2">{row.label}</span>
-          <span className="shrink-0 text-text-3" style={{ fontSize: "9.5px" }}>
-            {row.detail}
-          </span>
+          <span className="shrink-0 text-text-3">{row.detail}</span>
         </li>
       ))}
     </ul>
@@ -342,13 +260,10 @@ export function TourAside({ rect, text }: { rect: TourRect; text: string }) {
       data-testid="tour-aside"
       data-side={placement.side}
       role="note"
-      className="pointer-events-none absolute rounded-md border border-primary/30 bg-surface-2 px-2 py-1.5 text-text-2 shadow-md"
-      style={{ top: placement.top, left: placement.left, width: ASIDE_WIDTH, fontSize: "10.5px", lineHeight: 1.45 }}
+      className="tr-aside pointer-events-none"
+      style={{ top: placement.top, left: placement.left, width: ASIDE_WIDTH }}
     >
-      <span
-        aria-hidden="true"
-        className={`absolute h-2 w-2 rotate-45 border-primary/30 bg-surface-2 ${arrowClass(placement.side)}`}
-      />
+      <span aria-hidden="true" className="tr-caret" />
       {text}
     </div>
   );

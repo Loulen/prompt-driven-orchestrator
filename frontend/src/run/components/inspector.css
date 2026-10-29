@@ -260,8 +260,9 @@
 .ri-port__line:hover { background: var(--hover); }
 .ri-port__ic { flex: none; color: var(--text-2); }
 .ri-port[data-pending] .ri-port__ic { color: var(--text-3); opacity: 0.6; }
+/* The name gives way to the path and the frontmatter only past 45 % of the row. */
 .ri-port__name {
-  flex: 0 1 auto;
+  flex: none;
   max-width: 45%;
   min-width: 0;
   overflow: hidden;

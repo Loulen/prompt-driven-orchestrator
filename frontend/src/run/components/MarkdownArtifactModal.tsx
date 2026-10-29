@@ -14,6 +14,7 @@ import CopyButton from "./artifacts/CopyButton";
 import DownloadButton from "./artifacts/DownloadButton";
 import { useCopyToClipboard } from "../store/useCopyToClipboard";
 import { useMarkdownComponents } from "./artifacts/markdownComponents";
+import { formatBytes } from "../model/transcript";
 
 export type ArtifactSource =
   | { kind: "static"; files: FileInfo[] }
@@ -39,10 +40,10 @@ interface Props {
   header?: ReactNode;
   /** #698: rendered at the top of the body, above the markdown. */
   banner?: ReactNode;
-  /** #698: a fixed bar under the scrolling body. */
+  /** #698: a fixed bar under the scrolling body, in place of the file's meta line. */
   footer?: ReactNode;
-  /** #698: Tailwind width class; artifacts use the 560px default. */
-  widthClass?: string;
+  /** #698: `l` 900 px for an artifact, `m` 680 px for « What's new ». */
+  size?: "m" | "l";
   /** #825: an artifact modal is a *targetable* surface now — the *First run*
    *  tour ends on "open `out`", and « the file opened » is what says it did. */
   testId?: string;
@@ -57,7 +58,7 @@ export default function MarkdownArtifactModal({
   header,
   banner,
   footer,
-  widthClass = "w-[560px]",
+  size = "l",
   testId = "artifact-modal",
 }: Props) {
   const isInline = source.kind === "inline";
@@ -254,17 +255,26 @@ export default function MarkdownArtifactModal({
   // An inline document is rendered as given (a release note may open on a `---` rule).
   const bodyContent = content ? (isInline ? content : stripFrontmatter(content)) : null;
 
+  // The meta line of the file shown: which node and iteration it comes from,
+  // its kind and its size.
+  const meta = [
+    source.kind === "iter-nav" ? source.nodeId : null,
+    source.kind === "iter-nav" ? `iter ${iter}` : null,
+    portType,
+    file?.size != null ? formatBytes(file.size) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center"
-      style={{ background: "rgba(5,7,10,0.66)", backdropFilter: "blur(4px)" }}
+      className="art-scrim z-50"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className={`flex max-h-[calc(80vh/var(--app-zoom,1))] ${widthClass} max-w-[calc(calc(100vw/var(--app-zoom,1))-32px)] flex-col overflow-hidden rounded-lg border border-line-strong bg-surface-1`}
-        style={{ boxShadow: "0 30px 80px rgba(0,0,0,0.6)" }}
+        className={`art ${size === "m" ? "art--m" : ""}`}
         data-testid={testId}
         data-port={portName}
         // #825: `role="dialog"` is what makes this modal an Escape *owner* while
@@ -278,6 +288,7 @@ export default function MarkdownArtifactModal({
         <ArtifactHeader
           header={header}
           portName={portName}
+          portType={portType}
           path={file?.path}
           hasIterNav={hasIterNav}
           iter={iter}
@@ -294,6 +305,7 @@ export default function MarkdownArtifactModal({
               <DownloadButton
                 href={artifactDownloadUrl(runId, file.path)}
                 testId="artifact-download"
+                size="md"
               />
             ) : undefined
           }
@@ -303,6 +315,7 @@ export default function MarkdownArtifactModal({
                 status={copyStatus}
                 error={copyError}
                 testId="artifact-copy"
+                size="md"
                 disabled={!copyReady}
                 onClick={() => {
                   if (copyReady && fetchedContent != null) void copy(fetchedContent);
@@ -333,8 +346,16 @@ export default function MarkdownArtifactModal({
           onZoom={zoom}
         />
 
-        {footer && (
-          <div className="shrink-0 border-t border-line bg-surface-0 px-4 py-3">{footer}</div>
+        {footer ? (
+          <footer className="art__foot art__foot--bar">{footer}</footer>
+        ) : (
+          meta && (
+            <footer className="art__foot" data-testid="artifact-meta">
+              <span className="art__meta" title={file?.path}>
+                {meta}
+              </span>
+            </footer>
+          )
         )}
       </div>
 

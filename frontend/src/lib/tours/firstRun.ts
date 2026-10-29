@@ -141,8 +141,8 @@ const STEPS: TourStep[] = [
   },
   {
     id: "add-skills",
-    title: "Add the two PDO skills",
-    body: "In the PDO folder, tick both skills. A skill is text added to the agent's prompt: one teaches it to drive PDO, the other to talk with you inside a node.",
+    title: "Add the two built-in skills",
+    body: "In the PDO folder, tick both skills. A skill is text added to the agent's prompt: one teaches it to drive Acogni Driver, the other to talk with you inside a node.",
     // The folder and its two children are lit as one rectangle; ticking the
     // folder's own box satisfies the step too, since it selects both.
     //
@@ -186,7 +186,7 @@ const STEPS: TourStep[] = [
   {
     id: "launch",
     title: "Launch the Run",
-    body: "Click Run. PDO creates a worktree of the training repository, starts the node in its own session, and the Run appears in the list on the left.",
+    body: "Click Run. A worktree of the training repository is created, the node starts in its own session, and the Run appears in the list on the left.",
     target: () => [LAUNCH_BUTTON],
     waitingFor: "the Run button",
     // The whole tour exists for this click, so there is no Skip on it.
@@ -209,7 +209,7 @@ const STEPS: TourStep[] = [
 export const FIRST_RUN_TOUR: TourDef = {
   id: "first-run",
   title: "First run",
-  blurb: "Fill the New Run form step by step and launch a Run on a throwaway repository.",
+  blurb: "Fill New Run step by step, launch on a throwaway repository.",
   minutes: 4,
   steps: STEPS,
   intro: {

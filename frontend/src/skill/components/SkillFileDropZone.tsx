@@ -11,10 +11,10 @@ export function DropOverlay({ count, hint, title }: { count: number; hint: strin
       role="status"
     >
       <div className="flex flex-col gap-2 rounded-lg border border-line bg-surface-2 p-3 shadow-xl">
-        <div className="rounded-md border border-line-strong bg-surface-2 px-8 py-3 text-center font-semibold text-text" style={{ fontSize: "14px" }}>
+        <div className="rounded-md border border-line-strong bg-surface-2 px-8 py-3 text-center font-semibold text-text text-lg">
           {title ?? `Drop to attach ${count} file${count === 1 ? "" : "s"}`}
         </div>
-        <div className="rounded-md border border-primary/40 bg-surface-2 px-4 py-2.5 text-center text-text-3" style={{ fontSize: "11px" }}>
+        <div className="rounded-md border border-primary/40 bg-surface-2 px-4 py-2.5 text-center text-text-3 text-xs">
           {hint}
         </div>
       </div>
@@ -62,8 +62,7 @@ export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabl
       }}
       className={`flex items-center gap-2 rounded-md border border-dashed border-line-strong bg-surface-2 text-text-3 outline-none transition-colors focus-visible:border-primary hover:border-primary/60 ${
         compact ? "px-2.5 py-1.5" : "px-3 py-2"
-      } ${disabled ? "opacity-50" : "cursor-pointer"}`}
-      style={{ fontSize: "10.5px" }}
+      } ${disabled ? "opacity-50" : "cursor-pointer"} text-xs`}
     >
       <Square size={11} className="shrink-0 text-text-3" aria-hidden />
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -75,8 +74,7 @@ export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabl
           event.stopPropagation();
           onBrowse();
         }}
-        className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-text-2 hover:border-primary disabled:opacity-50"
-        style={{ fontSize: "10.5px" }}
+        className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-surface-2 px-2 py-1 text-text-2 hover:border-primary disabled:opacity-50 text-xs"
       >
         <FolderOpen size={10} />
         Browse…

@@ -62,7 +62,7 @@ export default function ImportSkillsModal({
         data-step={step}
       >
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h3 className="flex items-center gap-2 font-semibold text-text" style={{ fontSize: "13.5px" }}>
+          <h3 className="flex items-center gap-2 font-semibold text-text text-lg">
             <Download size={14} className="text-text-3" />
             Import skills from a source
           </h3>
@@ -89,7 +89,7 @@ export default function ImportSkillsModal({
         </div>
 
         <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-3">
-          <span className="text-text-3" style={{ fontSize: "10.5px" }}>
+          <span className="text-text-3 text-xs">
             {step === "scanning"
               ? "Esc cancels the scan"
               : step === "source"
@@ -99,14 +99,13 @@ export default function ImportSkillsModal({
           <div className="flex items-center gap-2">
             {confirmDiscard ? (
               <>
-                <span className="text-text-2" style={{ fontSize: "11px" }} data-testid="import-discard-prompt">
+                <span className="text-text-2 text-xs" data-testid="import-discard-prompt">
                   Leave without importing?
                 </span>
                 <button
                   type="button"
                   onClick={() => setConfirmDiscard(false)}
-                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover text-xs"
                 >
                   Stay
                 </button>
@@ -114,8 +113,7 @@ export default function ImportSkillsModal({
                   type="button"
                   onClick={onClose}
                   data-testid="import-discard"
-                  className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink hover:opacity-90"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md bg-st-failed px-3 py-1.5 font-medium text-primary-ink hover:opacity-90 text-xs"
                 >
                   Leave
                 </button>
@@ -126,8 +124,7 @@ export default function ImportSkillsModal({
                   type="button"
                   onClick={requestClose}
                   data-testid="import-cancel"
-                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover"
-                  style={{ fontSize: "11.5px" }}
+                  className="rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:bg-hover text-xs"
                 >
                   Cancel
                 </button>
@@ -137,8 +134,7 @@ export default function ImportSkillsModal({
                     onClick={startScan}
                     disabled={!parsed || step === "scanning"}
                     data-testid="import-scan"
-                    className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40"
-                    style={{ fontSize: "11.5px" }}
+                    className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40 text-xs"
                   >
                     {step === "scanning" ? "Scanning…" : "Scan source"}
                   </button>
@@ -148,8 +144,7 @@ export default function ImportSkillsModal({
                     onClick={() => void submit()}
                     disabled={!canImport}
                     data-testid="import-submit"
-                    className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40"
-                    style={{ fontSize: "11.5px" }}
+                    className="rounded-md bg-primary px-3 py-1.5 font-medium text-surface-0 transition-opacity hover:opacity-90 disabled:opacity-40 text-xs"
                   >
                     {step === "importing"
                       ? "Importing…"

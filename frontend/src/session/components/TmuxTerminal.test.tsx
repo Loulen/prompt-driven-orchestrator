@@ -1056,7 +1056,7 @@ describe("TmuxTerminal", () => {
       render(<TmuxTerminal session="test-session" />);
       const config = mockTerminalCalls[0][0] as { theme: { selectionBackground: string } };
       expect(config.theme.selectionBackground).not.toBe("#2a2d35");
-      expect(config.theme.selectionBackground).toMatch(/^#3b82f6/);
+      expect(config.theme.selectionBackground).toMatch(/^rgba\(59, 130, 246,/);
     });
 
     it("Copy button is disabled without a selection and copies the selection when clicked", async () => {

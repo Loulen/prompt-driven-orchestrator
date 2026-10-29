@@ -108,19 +108,18 @@ export default function AddNodeFromYamlModal({
       onClick={onClose}
     >
       <div
-        className="w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] rounded-lg border border-line bg-surface-2 p-4"
-        style={{ fontSize: "12px" }}
+        className="w-[440px] max-w-[calc(90vw/var(--app-zoom,1))] rounded-lg border border-line bg-surface-2 p-4 text-sm"
         data-testid="add-node-yaml-modal"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-1 font-medium text-text">Add node from YAML</div>
-        <p className="mb-3 text-text-3" style={{ fontSize: "11px" }}>
+        <p className="mb-3 text-text-3 text-xs">
           Paste a node definition or load a <code>.yaml</code> file. It is
           validated by the daemon, then added to the canvas with a fresh id and
           no edges — like a duplicate.
         </p>
 
-        <label className="mb-1 block text-text-3" style={{ fontSize: "11px" }}>
+        <label className="mb-1 block text-text-3 text-xs">
           Node YAML
         </label>
         <textarea
@@ -133,8 +132,7 @@ export default function AddNodeFromYamlModal({
           disabled={warnings != null}
           placeholder={"name: My node\ntype: agent\nisolated_worktree: false\nprompt: |\n  ..."}
           data-testid="add-node-yaml-textarea"
-          className="mb-2 h-40 w-full resize-y rounded border border-line-strong bg-surface-2 px-2 py-1.5 font-mono text-text outline-none focus:border-primary disabled:opacity-60"
-          style={{ fontSize: "11px", lineHeight: "1.5" }}
+          className="mb-2 h-40 w-full resize-y rounded border border-line-strong bg-surface-2 px-2 py-1.5 font-mono text-text outline-none focus:border-primary disabled:opacity-60 text-xs" style={{ lineHeight: "1.5" }}
         />
 
         <input
@@ -148,8 +146,7 @@ export default function AddNodeFromYamlModal({
 
         {error && (
           <div
-            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed"
-            style={{ fontSize: "11px" }}
+            className="mb-3 rounded border border-st-failed/40 bg-st-failed/10 px-2 py-1.5 text-st-failed text-xs"
             data-testid="add-node-yaml-error"
           >
             {error}
@@ -158,8 +155,7 @@ export default function AddNodeFromYamlModal({
 
         {warnings && (
           <div
-            className="mb-3 max-h-40 overflow-y-auto rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-text-2"
-            style={{ fontSize: "11px" }}
+            className="mb-3 max-h-40 overflow-y-auto rounded border border-st-await/40 bg-st-await/10 px-2 py-1.5 text-text-2 text-xs"
             data-testid="add-node-yaml-warnings"
           >
             <div className="mb-1 font-medium text-st-await">

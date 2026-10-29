@@ -49,6 +49,7 @@ import {
   STATUS_DOTS,
   TRIGGERS_LIST,
   TRIGGERS_TAB,
+  cleanupItem,
   isArchived,
   readStep,
   runRow,
@@ -107,16 +108,26 @@ const APP_STEPS: TourStep[] = [
       if (isArchived(o.app)) {
         return "Archived: the worktree is gone and the dot turned grey. The outputs are still there to read.";
       }
-      return o.present(CLEANUP_MODAL)
-        ? "Cleanup removes the Run's worktree and keeps its history and outputs. Skip leaves the Run as it is."
-        : "Hover your Run's row and click its trash icon, then confirm. Archiving removes the worktree; the Run and its outputs stay.";
+      if (o.present(CLEANUP_MODAL)) {
+        return "Cleanup removes the Run's worktree and keeps its history and outputs. Skip leaves the Run as it is.";
+      }
+      const id = overviewRunId();
+      return id && o.present(cleanupItem(id))
+        ? "Choose Cleanup, then confirm."
+        : "Open the ⋯ menu of your Run's row, choose Cleanup, then confirm. The worktree goes; the Run and its outputs stay.";
     },
-    // Two beats, one card: the row, then the confirmation it opens — re-aimed so
-    // the dialog's buttons are inside the hole rather than under the blocker.
+    // Three beats, one card: the row, the menu its ⋯ opens (a portal, lit as a
+    // zone so it is not under the blocker), then the confirmation.
     target: (o) => {
       if (o.present(CLEANUP_MODAL)) return [CLEANUP_MODAL];
       const id = overviewRunId();
-      return id ? [runRow(id)] : [];
+      if (!id) return [];
+      // Only this Run's menu: another row's Cleanup would archive the wrong Run.
+      return o.present(cleanupItem(id)) ? [cleanupItem(id)] : [runRow(id)];
+    },
+    soft: (o) => {
+      const id = overviewRunId();
+      return !o.present(CLEANUP_MODAL) && id != null && o.present(cleanupItem(id));
     },
     waitingFor: "your Run in the list",
     failureHint: "An archived Run moves to the Archived section at the bottom of the list.",
@@ -183,11 +194,11 @@ const APP_STEPS: TourStep[] = [
 export const OVERVIEW_TOUR: TourDef = {
   id: "overview",
   title: "Overview",
-  blurb: "A walk around the screen on a real finished Run: canvas, panels, nodes, edges, Triggers. No agent needed.",
+  blurb: "Canvas, panels, nodes, edges, Triggers. No agent needed.",
   minutes: 4,
   steps: [...CANVAS_STEPS, ...APP_STEPS],
   intro: {
-    title: "Tour of PDO",
+    title: "Tour of Acogni Driver",
     body: "A walk around the screen on a real Run: the canvas, the panels, a node and its output, an edge, the Runs, Triggers and Pipelines tabs. The tour prepares everything first; nothing needs an agent.",
     footnote:
       "Nothing here touches your own repositories. The example Trigger is removed when the tour ends; the pipeline and the Run stay yours.",
@@ -229,21 +240,14 @@ export const OVERVIEW_TOUR: TourDef = {
       run: removeExampleTrigger,
     },
   ],
-  recapIntro: `You toured PDO on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
+  recapIntro: `You toured Acogni Driver on a real Run of ${TUTORIAL_OVERVIEW_PIPELINE_ID}:`,
   recap: (app) => [
-    { label: "Canvas", text: "a pipeline is nodes linked by edges; the panels around it list and detail" },
-    { label: "Nodes", text: "an input in, outputs out, a terminal of their own; usually agents, scripts here" },
-    { label: "Edges", text: "conditions on the source's outputs, like `verdict eq pass`" },
-    {
-      label: OVERVIEW_RUN_NAME,
-      text: isArchived(app)
-        ? "archived: its worktree is gone, its outputs stay"
-        : "still in your list, with its worktree — archive it when you are done",
-    },
-    { label: EXAMPLE_TRIGGER_NAME, text: "removed now that the tour is over" },
+    { label: "Canvas", text: "nodes linked by edges, listed and detailed around it" },
+    { label: "Edges", text: "conditions on outputs, like `verdict eq pass`" },
+    { label: "Run", text: isArchived(app) ? "archived, its outputs stay" : "still in your list, with its worktree" },
+    { label: "Trigger", text: "the example one is gone" },
   ],
   outro: {
-    closing:
-      "The pipeline and the Run stay yours. First run launches a Run with a real agent; First pipeline builds a pipeline with you.",
+    closing: "The pipeline and the Run stay yours.",
   },
 };

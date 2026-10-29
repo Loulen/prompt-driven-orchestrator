@@ -8,7 +8,7 @@ describe("terminalTheme (#759, an always-dark screen)", () => {
     expect(theme.background).toBe("#0b0b0d");
     expect(theme.black).toBe(theme.background);
     // #772: a selection the user can see.
-    expect(theme.selectionBackground).toMatch(/^#3b82f6/);
+    expect(theme.selectionBackground).toMatch(/^rgba\(59, 130, 246,/);
   });
 
   it("reads its text, in the secondary ink, at AA on the dark ground", () => {

@@ -197,7 +197,7 @@ pub fn check_checkout(
             reason: FastForwardRefusal::DirtyTree,
             message: format!(
                 "'{branch}' is checked out here and {} tracked file(s) are modified; \
-                 PDO will not touch them",
+                 they are left untouched",
                 dirty.len()
             ),
             checkout: Some(repo.to_string()),

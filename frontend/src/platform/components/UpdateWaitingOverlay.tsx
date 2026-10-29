@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Loader2, TriangleAlert } from "lucide-react";
+import { LoaderCircle, TriangleAlert } from "lucide-react";
+import { Button } from "../../shared/ui/kit";
 import {
   UPDATE_SLOW_AFTER_MS,
   isUpdateInProgress,
@@ -37,89 +38,67 @@ export default function UpdateWaitingOverlay({
   const slow = isUpdateInProgress(flow) && tick - flow.startedAt > UPDATE_SLOW_AFTER_MS;
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-surface-0/80 backdrop-blur-sm"
-      data-testid="update-waiting"
-      data-phase={flow.phase}
-    >
-      <div className="w-[400px] rounded-lg border border-line bg-surface-1 p-5 shadow-lg">
+    <div className="tr-scrim z-[60]" data-testid="update-waiting" data-phase={flow.phase}>
+      <div
+        className={`tr-frame tr-bcard ${terminalFailure || slow ? "" : "tr-bcard--open"}`}
+        role="alertdialog"
+        aria-label={terminalFailure ? "Update failed" : "Updating"}
+      >
         {terminalFailure ? (
           <>
-            <h3 className="flex items-center gap-2 font-medium text-st-failed" style={{ fontSize: "13px" }}>
-              <TriangleAlert size={14} />
-              {flow.phase === "same-version" ? "Update did not take effect" : "Update failed"}
-            </h3>
-            <p className="mt-2 text-text-3" style={{ fontSize: "12px" }} data-testid="update-waiting-error">
+            <div className="tr-head">
+              <TriangleAlert size={14} strokeWidth={1.5} className="text-st-failed" aria-hidden />
+              <h2 className="tr-bcard__title">
+                {flow.phase === "same-version" ? "Update did not take effect" : "Update failed"}
+              </h2>
+            </div>
+            <pre className="tr-reason" data-testid="update-waiting-error">
               {flow.error}
-            </p>
+            </pre>
             {flow.attempt && (
-              <p className="mt-1.5 font-mono text-text-3" style={{ fontSize: "11px" }}>
+              <div className="d-meta truncate font-mono" title={flow.attempt.command}>
                 attempt {flow.attempt.attempt_id} · {flow.attempt.command}
-              </p>
+              </div>
             )}
-            <p className="mt-2 text-text-3" style={{ fontSize: "11.5px" }}>
-              The attempt's log is in Settings › Version & update.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
+            <div className="tr-foot">
+              <span className="d-grow" />
+              <Button
                 onClick={onOpenVersionSettings}
-                className="rounded px-3 py-1.5 text-text-3 hover:bg-hover hover:text-text-2"
-                style={{ fontSize: "12px" }}
+                title="Settings › General › Version & update"
                 data-testid="update-waiting-open-settings"
               >
                 Open the log
-              </button>
-              <button
-                type="button"
-                onClick={onDismiss}
-                autoFocus
-                className="rounded border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 hover:border-primary"
-                style={{ fontSize: "12px" }}
-                data-testid="update-waiting-dismiss"
-              >
+              </Button>
+              <Button tone="primary" onClick={onDismiss} autoFocus data-testid="update-waiting-dismiss">
                 Close
-              </button>
+              </Button>
             </div>
           </>
         ) : (
           <>
-            <h3 className="flex items-center gap-2 font-medium text-text" style={{ fontSize: "13px" }}>
-              <Loader2 size={14} className="animate-spin text-primary" />
-              Updating PDO{flow.fromVersion ? ` from v${flow.fromVersion}` : ""}…
-            </h3>
-            <p className="mt-2 text-text-3" style={{ fontSize: "12px" }} data-testid="update-waiting-message">
-              {updateFlowMessage(flow)}
-            </p>
-            <p className="mt-1.5 text-text-3" style={{ fontSize: "11.5px" }}>
-              The page reloads on its own once the daemon answers with the new version. Agent
-              tmux sessions keep running meanwhile.
-            </p>
+            <div className="tr-head">
+              <LoaderCircle size={14} strokeWidth={1.5} className="d-spin text-primary" aria-hidden />
+              <h2 className="tr-bcard__title">
+                Updating{flow.fromVersion ? ` from v${flow.fromVersion}` : ""}…
+              </h2>
+            </div>
+            <div className="tr-facts">
+              <span data-testid="update-waiting-message">{updateFlowMessage(flow)}</span>
+              <span className="d-meta">Reloads by itself · agent sessions keep running</span>
+            </div>
             {slow && (
-              <p
-                className="mt-2 flex items-start gap-1.5 rounded border border-st-await/50 bg-st-await/14 px-2.5 py-1.5 text-st-await"
-                style={{ fontSize: "11.5px" }}
-                data-testid="update-waiting-slow"
-              >
-                <TriangleAlert size={13} className="mt-px shrink-0" />
-                <span>
-                  This is taking longer than expected. If the daemon does not come back, restart
-                  it by hand and read the attempt's log in Settings › Version & update.
-                </span>
-              </p>
-            )}
-            {slow && (
-              <div className="mt-3 flex justify-end">
-                <button
-                  type="button"
-                  onClick={onDismiss}
-                  className="rounded px-3 py-1.5 text-text-3 hover:bg-hover hover:text-text-2"
-                  style={{ fontSize: "12px" }}
-                  data-testid="update-waiting-dismiss"
-                >
-                  Keep using the old version
-                </button>
-              </div>
+              <>
+                <div className="tr-banner" data-testid="update-waiting-slow">
+                  <TriangleAlert size={13} strokeWidth={1.5} aria-hidden />
+                  <span>Taking longer than expected · restart the daemon by hand if it does not come back</span>
+                </div>
+                <div className="tr-foot">
+                  <span className="d-grow" />
+                  <Button onClick={onDismiss} data-testid="update-waiting-dismiss">
+                    Keep using the old version
+                  </Button>
+                </div>
+              </>
             )}
           </>
         )}

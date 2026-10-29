@@ -30,3 +30,13 @@ export function cssColor(token: `--${string}`, fallback = "rgb(128, 128, 128)"):
   const resolved = parseColor(computed);
   return resolved ? formatColor(resolved) : fallback;
 }
+
+/**
+ * Read a non-colour token resolved (a length of the type scale), or `fallback`
+ * when there is no stylesheet. For the surfaces that take numbers rather than
+ * CSS: mermaid's label size, the terminal's grid.
+ */
+export function cssToken(token: `--${string}`, fallback: string): string {
+  if (typeof getComputedStyle !== "function" || typeof document === "undefined") return fallback;
+  return getComputedStyle(document.documentElement).getPropertyValue(token).trim() || fallback;
+}

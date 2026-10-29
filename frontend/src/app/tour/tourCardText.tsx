@@ -11,9 +11,9 @@ import { Fragment, type ReactNode } from "react";
 export function withCode(text: string): ReactNode {
   return text.split(/(`[^`]+`)/g).map((part, i) =>
     part.startsWith("`") && part.endsWith("`") && part.length > 1 ? (
-      <span key={i} className="rounded bg-surface-2 px-1 font-mono text-text-2" style={{ fontSize: "10px" }}>
+      <code key={i} className="d-code">
         {part.slice(1, -1)}
-      </span>
+      </code>
     ) : (
       <Fragment key={i}>{part}</Fragment>
     ),

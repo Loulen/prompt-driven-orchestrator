@@ -203,7 +203,7 @@ describe("the end card", () => {
   it("reads « done » and « Finish » by default", () => {
     const tour: TourDef = { ...BASE, recap: [{ label: "implementer", text: "does the work" }] };
     render(<TourEndCard tour={tour} app={APP} onFinish={vi.fn()} onFinishHere={vi.fn()} onStartTour={vi.fn()} />);
-    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("First run — done");
+    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("First run · done");
     expect(screen.getByTestId("tour-finish")).toHaveTextContent("Finish");
   });
 
@@ -221,7 +221,7 @@ describe("the end card", () => {
     render(<TourEndCard tour={tour} app={APP} onFinish={vi.fn()} onFinishHere={vi.fn()} onStartTour={vi.fn()} />);
     const card = screen.getByTestId("tour-end-card");
     expect(card).toHaveTextContent("Your Run is starting");
-    expect(card).not.toHaveTextContent("— done");
+    expect(card).not.toHaveTextContent("· done");
     expect(screen.getByTestId("tour-finish")).toHaveTextContent("Open the Run");
     expect(card).toHaveTextContent("The node is now a live session.");
   });
@@ -234,7 +234,7 @@ describe("the end card", () => {
       recap: (app) => [{ label: app.latestRun?.name ?? "your Run", text: "on `/tmp/pdo-tutorial`" }],
     };
     render(<TourEndCard tour={tour} app={APP} onFinish={vi.fn()} onFinishHere={vi.fn()} onStartTour={vi.fn()} />);
-    expect(screen.getByTestId("tour-end-card")).toHaveTextContent("You built my-first-run:");
+    expect(screen.getByRole("heading", { name: "First run · done" })).toHaveAttribute("title", "You built my-first-run:");
     expect(screen.getByTestId("tour-end-card")).toHaveTextContent("my-first-run");
     expect(screen.getByTestId("tour-end-card")).toHaveTextContent("/tmp/pdo-tutorial");
   });
@@ -261,7 +261,7 @@ describe("the end card", () => {
         onStartTour={vi.fn()}
       />,
     );
-    expect(screen.getByTestId("tour-finish")).toHaveTextContent("Continue · First pipeline");
+    expect(screen.getByTestId("tour-finish")).toHaveTextContent("Continue");
     expect(screen.queryByTestId("tour-end-next-first-pipeline")).not.toBeInTheDocument();
   });
 
@@ -286,7 +286,7 @@ describe("the end card", () => {
         onStartTour={vi.fn()}
       />,
     );
-    expect(screen.getByTestId("tour-chain-progress")).toHaveTextContent("Full tour · 1 of 2 done");
+    expect(screen.getByTestId("tour-chain-progress")).toHaveAttribute("title", "Full tour · 1 of 2 done");
     await userEvent.click(screen.getByTestId("tour-finish-here"));
     expect(onFinishHere).toHaveBeenCalledTimes(1);
     await userEvent.click(screen.getByTestId("tour-finish"));
@@ -306,7 +306,7 @@ describe("the end card", () => {
       />,
     );
     expect(screen.getByTestId("tour-end-next-line")).toHaveTextContent(
-      "Next: First pipeline (~6 min)",
+      "Next: First pipeline · ~6 min",
     );
     expect(screen.getByTestId("tour-end-card")).not.toHaveTextContent("The Run stays in your list.");
   });

@@ -23,8 +23,7 @@ export default function RunSaveGroup({ tab }: { tab: OpenPipeline & { runId: str
       <button
         onClick={() => save(tab.id)}
         disabled={!tab.dirty}
-        className="flex cursor-pointer items-center gap-1 rounded-l-md bg-primary px-2 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40"
-        style={{ fontSize: "11px" }}
+        className="flex cursor-pointer items-center gap-1 rounded-l-md bg-primary px-2 py-0.5 font-medium text-primary-ink transition-colors hover:bg-primary-hi disabled:opacity-40 text-xs"
         data-testid="save-button"
       >
         <Save size={11} />
@@ -45,8 +44,7 @@ export default function RunSaveGroup({ tab }: { tab: OpenPipeline & { runId: str
         >
           <DropdownMenuItem
             data-testid="save-menu-overwrite"
-            className="flex cursor-pointer items-center rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover"
-            style={{ fontSize: "11.5px" }}
+            className="flex cursor-pointer items-center rounded px-2 py-1.5 text-text-2 transition-colors hover:bg-hover text-xs"
             onClick={() => setOverwriting(true)}
           >
             Overwrite default pipeline…

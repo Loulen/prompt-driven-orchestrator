@@ -35,15 +35,14 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
     <div className="flex w-[330px] shrink-0 flex-col gap-4 overflow-y-auto">
       {showHowItWorks && (
         <section>
-          <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+          <h4 className="mb-2 text-text-3 uppercase tracking-wide text-2xs">
             How it works
           </h4>
           <ol className="flex flex-col gap-1.5" data-testid="import-how-it-works">
             {HOW_IT_WORKS.map((label, index) => (
               <li
                 key={label}
-                className="flex items-center gap-2"
-                style={{ fontSize: "11.5px" }}
+                className="flex items-center gap-2 text-xs"
                 data-active={index === activeHowStep || undefined}
               >
                 <span
@@ -66,11 +65,11 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
 
       {showHowItWorks && (
         <section>
-          <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+          <h4 className="mb-2 text-text-3 uppercase tracking-wide text-2xs">
             Into folder
           </h4>
           <ParentSelect folders={folders} value={parentId} onChange={setParentId} disabled={step === "scanning"} />
-          <p className="mt-1.5 text-text-3" style={{ fontSize: "10.5px" }}>
+          <p className="mt-1.5 text-text-3 text-xs">
             {parsed ? (
               <>
                 A new folder <strong className="text-text-2">{parsed.suggestedFolder}</strong> will be created here; you
@@ -86,24 +85,23 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
       {(step === "results" || step === "importing") && scan && (
         <>
           <section>
-            <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+            <h4 className="mb-2 text-text-3 uppercase tracking-wide text-2xs">
               Destination
             </h4>
             {intoFolder ? (
               <div className="flex items-center gap-2 rounded-md border border-line-strong bg-surface-2 px-2.5 py-1.5" data-testid="import-into-existing">
                 <FolderOpen size={12} className="shrink-0 text-st-await" />
-                <span className="min-w-0 flex-1 truncate font-mono text-text" style={{ fontSize: "11.5px" }} data-testid="import-folder-name">
+                <span className="min-w-0 flex-1 truncate font-mono text-text text-xs" data-testid="import-folder-name">
                   {folderPathLabel(intoFolder.id, folders)}
                 </span>
-                <span className="rounded border border-line bg-surface-0 px-1.5 py-0.5 text-text-3" style={{ fontSize: "9.5px" }}>
+                <span className="rounded border border-line bg-surface-0 px-1.5 py-0.5 text-text-3 text-2xs">
                   existing
                 </span>
                 <button
                   type="button"
                   onClick={() => setIntoFolderId(null)}
                   data-testid="import-into-new"
-                  className="text-primary hover:underline"
-                  style={{ fontSize: "10.5px" }}
+                  className="text-primary hover:underline text-xs"
                 >
                   New folder instead
                 </button>
@@ -126,11 +124,10 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
                   }}
                   aria-label="Folder name"
                   data-testid="import-folder-name-input"
-                  className="min-w-0 flex-1 bg-transparent font-mono text-text outline-none"
-                  style={{ fontSize: "11.5px" }}
+                  className="min-w-0 flex-1 bg-transparent font-mono text-text outline-none text-xs"
                 />
               ) : (
-                <span className="min-w-0 flex-1 truncate font-mono text-text" style={{ fontSize: "11.5px" }} data-testid="import-folder-name">
+                <span className="min-w-0 flex-1 truncate font-mono text-text text-xs" data-testid="import-folder-name">
                   {folderName || <span className="text-st-failed">name required</span>}
                 </span>
               )}
@@ -152,8 +149,7 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
             {homonym ? (
               <div
                 role="alert"
-                className="mt-1.5 rounded-md border border-st-blocked/50 bg-st-blocked/14 px-2.5 py-1.5 text-text-2"
-                style={{ fontSize: "10.5px" }}
+                className="mt-1.5 rounded-md border border-st-blocked/50 bg-st-blocked/14 px-2.5 py-1.5 text-text-2 text-xs"
                 data-testid="import-folder-homonym"
               >
                 A folder named “{homonym.name}” already exists here
@@ -169,7 +165,7 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
                 or rename the destination.
               </div>
             ) : (
-              <p className="mt-1.5 text-text-3" style={{ fontSize: "10.5px" }}>
+              <p className="mt-1.5 text-text-3 text-xs">
                 {intoFolder
                   ? "Existing folder: it takes this source and commit as provenance. Sub-paths are flattened: one skill = one row."
                   : "New folder, tagged with this source and commit. Sub-paths are flattened: one skill = one row."}
@@ -178,10 +174,10 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
           </section>
 
           <section>
-            <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+            <h4 className="mb-2 text-text-3 uppercase tracking-wide text-2xs">
               Will import
             </h4>
-            <div className="overflow-hidden rounded-md border border-line" style={{ fontSize: "11px" }} data-testid="import-summary">
+            <div className="overflow-hidden rounded-md border border-line text-xs" data-testid="import-summary">
               <SummaryRow label={`${summary.willImport.length} skill${summary.willImport.length === 1 ? "" : "s"}`}>
                 {summary.willImport.length === 0 ? (
                   <span className="text-text-3">nothing checked</span>
@@ -213,10 +209,10 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
           </section>
 
           <section>
-            <h4 className="mb-2 text-text-3 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+            <h4 className="mb-2 text-text-3 uppercase tracking-wide text-2xs">
               Not touched
             </h4>
-            <p className="text-text-3" style={{ fontSize: "10.5px" }} data-testid="import-not-touched">
+            <p className="text-text-3 text-xs" data-testid="import-not-touched">
               {summary.unchecked} unchecked · {summary.invalid} invalid · {summary.sameCommit} already present at the
               same commit.
               {candidates
@@ -233,8 +229,7 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
           {summary.unresolved > 0 && (
             <div
               role="alert"
-              className="rounded-md border border-st-blocked/50 bg-st-blocked/14 px-3 py-2 text-text-2"
-              style={{ fontSize: "11px" }}
+              className="rounded-md border border-st-blocked/50 bg-st-blocked/14 px-3 py-2 text-text-2 text-xs"
               data-testid="import-unresolved"
             >
               Resolve the name already in the bank before importing: <strong className="text-text">replace</strong> overwrites the content
@@ -244,12 +239,12 @@ export default function ImportSidebar({ imp, folders }: { imp: ImportSkillsState
           )}
 
           {importError && (
-            <div role="alert" className="rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2" style={{ fontSize: "11px" }} data-testid="import-error">
+            <div role="alert" className="rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2 text-xs" data-testid="import-error">
               {importError}
             </div>
           )}
           {failedRows.size > 0 && !importError && (
-            <div role="alert" className="rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2" style={{ fontSize: "11px" }} data-testid="import-partial">
+            <div role="alert" className="rounded-md border border-st-failed/50 bg-st-failed/14 px-3 py-2 text-text-2 text-xs" data-testid="import-partial">
               {failedRows.size} skill{failedRows.size === 1 ? "" : "s"} could not be imported; the reasons are on the rows. The
               others landed in “{intoFolder?.name ?? folderName}”.
             </div>

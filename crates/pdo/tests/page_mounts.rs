@@ -417,7 +417,8 @@ async fn archiving_a_run_drops_its_mount_and_keeps_the_run_event() {
         .send()
         .await
         .unwrap();
-    assert_eq!(archived.status(), 200);
+    let status = archived.status();
+    assert_eq!(status, 200, "{}", archived.text().await.unwrap_or_default());
     assert_eq!(
         reqwest::get(format!("{}/pages/owned/", daemon.url()))
             .await

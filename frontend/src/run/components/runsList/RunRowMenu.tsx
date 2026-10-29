@@ -79,6 +79,7 @@ export default function RunRowMenu({
         <RowMenuItem
           variant="destructive"
           data-testid="run-menu-cleanup"
+          data-run-id={run.run_id}
           onClick={() => setConfirmCleanup({ runId: run.run_id, status: run.status })}
         >
           <Trash2 /> {isLiveRun(run.status) ? "Stop and archive" : "Cleanup"}

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
 import { Check, Copy, Download, SlidersHorizontal, TriangleAlert, WifiOff } from "lucide-react";
 import MarkdownArtifactModal from "../../run/components/MarkdownArtifactModal";
 import { fetchUpdateChangelog } from "../api/update";
@@ -7,11 +6,13 @@ import type { UpdateChangelog } from "../../shared/generated/UpdateChangelog";
 import type { UpdateStatus } from "../model/update";
 import {
   canOfferUpdate,
+  channelLabel,
   installedVersionLabel,
   isDistribution,
   updateNotOfferedReason,
 } from "../model/updateStatus";
 import { copyToClipboard } from "../../shared/lib/clipboard";
+import { Button, IconButton } from "../../shared/ui/kit";
 
 /**
  * « What's new » (#698): the changelog of the versions missed since the installed one,
@@ -21,15 +22,15 @@ import { copyToClipboard } from "../../shared/lib/clipboard";
  *
  * Header: `v<installed> → v<latest> · N version(s) behind` (latest in amber, the pill's
  * token) — or a green `up to date` pill — or the bare version when the latest is unknown.
- * Banner: grey for up to date (« You run the latest release… »), amber when the body is
+ * Banner: grey for up to date (« Latest release… »), amber when the body is
  * the embedded changelog as a FALLBACK (source unreachable / check off), red when the
  * endpoint itself failed. The words « up to date » appear here and in Settings only —
  * never in the bar (#697 rule).
- * Footer: the manual command with « Copy command », the **Update** button (#699 — the
+ * Footer: the manual command with its copy icon, the **Update** button (#699 — the
  * host owns the confirm and the waiting flow; disabled with the reason when the daemon
  * refuses: unknown method, attempt running), and a « Version & update » link to
- * Settings. An unknown install method declares its absence: warning + the manual text,
- * no Copy, no Update (ADR-0045).
+ * Settings. An unknown install method declares its absence on one line, the manual text
+ * and the daemon's reason in its tooltip: no Copy, no Update (ADR-0045).
  */
 export default function ChangelogModal({
   update,
@@ -79,58 +80,58 @@ export default function ChangelogModal({
       portName="What's new"
       source={{ kind: "inline", content: changelog?.markdown ?? null, loading }}
       onClose={onClose}
-      widthClass="w-[680px]"
+      size="m"
       testId="changelog-modal"
       header={
-        <div className="flex min-w-0 items-center gap-2.5" data-testid="changelog-header">
-          <span className="font-medium text-text" style={{ fontSize: "13px" }}>
-            What's new
-          </span>
+        <span className="art__title" data-testid="changelog-header">
+          <span className="font-medium text-text">What's new</span>
           {installed && (
-            <span className="flex items-center gap-1.5 font-mono text-text-3" style={{ fontSize: "11px" }}>
-              <span>
+            <span className="flex min-w-0 items-center gap-1 font-mono text-xs text-text-3">
+              <span className="truncate">
                 {update != null && isDistribution(update) ? installedVersionLabel(update) : `v${installed}`}
               </span>
               {behind > 0 && latest && (
                 <>
-                  <span>→</span>
+                  <span aria-hidden="true">→</span>
                   <span className="text-st-await" data-testid="changelog-latest">
                     v{latest}
                   </span>
                   <span data-testid="changelog-behind">
-                    · {behind} version{behind > 1 ? "s" : ""} behind
+                    · {behind} behind
                   </span>
                 </>
               )}
               {upToDate && (
-                <span
-                  className="rounded-full border border-st-done/40 bg-st-done/14 px-1.5 leading-[14px] text-st-done"
-                  style={{ fontSize: "9.5px" }}
-                  data-testid="changelog-uptodate"
-                >
+                <span className="d-chip text-st-done" data-testid="changelog-uptodate">
+                  <Check size={11} strokeWidth={2} aria-hidden />
                   up to date
                 </span>
               )}
             </span>
           )}
-        </div>
+        </span>
       }
       banner={
         error ? (
-          <Banner tone="failed" testId="changelog-error">
-            Could not load the changelog: {error}.
-          </Banner>
+          <div className="art__banner" data-tone="failed" data-testid="changelog-error">
+            <TriangleAlert size={13} strokeWidth={1.5} aria-hidden />
+            Changelog unavailable: {error}
+          </div>
         ) : changelog?.fallback_reason ? (
-          <Banner tone="await" icon={<WifiOff size={13} />} testId="changelog-fallback">
-            <span className="font-medium">Release notes unavailable</span> — {changelog.fallback_reason}{" "}
-            Showing the changelog embedded in this build; it lists{" "}
-            <strong>breaking changes only</strong>.
-          </Banner>
+          <div
+            className="art__banner"
+            data-tone="await"
+            data-testid="changelog-fallback"
+            title={`Release notes unreachable: ${changelog.fallback_reason}`}
+          >
+            <WifiOff size={13} strokeWidth={1.5} aria-hidden />
+            <span className="truncate">Release notes offline · embedded changelog, breaking changes only</span>
+          </div>
         ) : upToDate ? (
-          <Banner tone="muted" icon={<Check size={13} />} testId="changelog-uptodate-banner">
-            You run the latest release. Below is the changelog embedded in this build (breaking
-            changes only).
-          </Banner>
+          <div className="art__banner" data-testid="changelog-uptodate-banner">
+            <Check size={13} strokeWidth={1.5} aria-hidden />
+            Latest release · embedded changelog, breaking changes only
+          </div>
         ) : null
       }
       footer={
@@ -142,35 +143,6 @@ export default function ChangelogModal({
         />
       }
     />
-  );
-}
-
-function Banner({
-  tone,
-  icon,
-  children,
-  testId,
-}: {
-  tone: "muted" | "await" | "failed";
-  icon?: ReactNode;
-  children: ReactNode;
-  testId?: string;
-}) {
-  const cls =
-    tone === "await"
-      ? "border-st-await/50 bg-st-await/14 text-st-await"
-      : tone === "failed"
-        ? "border-st-failed/50 bg-st-failed/14 text-st-failed"
-        : "border-line bg-surface-0 text-text-3";
-  return (
-    <div
-      className={`mb-3 flex items-start gap-2 rounded border px-3 py-2 ${cls}`}
-      style={{ fontSize: "11.5px", lineHeight: 1.45 }}
-      data-testid={testId}
-    >
-      {icon && <span className="mt-px shrink-0">{icon}</span>}
-      <span>{children}</span>
-    </div>
   );
 }
 
@@ -209,88 +181,66 @@ function ChangelogFooter({
   const unknown = update?.install_method === "unknown" || noCommand;
 
   return (
-    <div className="flex items-end justify-between gap-4" data-testid="changelog-footer">
-      <div className="flex min-w-0 flex-col gap-0.5" style={{ fontSize: "11px" }}>
+    <div className="flex w-full min-w-0 items-center gap-3" data-testid="changelog-footer">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-xs text-text-3">
         {update == null ? (
-          <span className="text-text-3">Loading the daemon's version state…</span>
+          <span>Loading the version state…</span>
         ) : unknown ? (
-          <>
-            <span className="flex items-center gap-1.5 text-text-3">
-              <TriangleAlert size={12} className="text-st-await" />
-              {noCommand
-                ? `${update.channel_name} declares no update command — PDO will not update it.`
-                : "Install method not detected — PDO will not update itself."}
+          // One line: what to do and why the app does not, in its tooltip.
+          <span
+            className="flex min-w-0 items-center gap-1.5"
+            title={update.manual_command ?? update.apply_blocked_reason ?? undefined}
+            data-testid="changelog-not-updatable"
+          >
+            <TriangleAlert size={12} strokeWidth={1.5} className="shrink-0 text-st-await" aria-hidden />
+            <span className="truncate">
+              {noCommand ? `${channelLabel(update)} declares no update command` : "Install method not detected"}
             </span>
-            {update.manual_command != null && (
-              <span className="text-text-3" data-testid="changelog-manual-command">
-                {update.manual_command}
-              </span>
-            )}
-            {update.apply_blocked_reason && (
-              <span className="text-text-3" data-testid="changelog-apply-blocked">
-                {update.apply_blocked_reason}
-              </span>
-            )}
-          </>
+          </span>
         ) : (
-          <>
-            <span className="text-text-3">
-              {upToDate
-                ? "Nothing to update. To reinstall manually:"
-                : "To update, run in a terminal (the daemon restarts, tmux sessions survive):"}
-            </span>
-            <code
-              className="truncate font-mono text-text-2"
-              style={{ fontSize: "11px" }}
-              data-testid="changelog-manual-command"
-            >
+          <span
+            className="flex min-w-0 items-center gap-1"
+            title={
+              upToDate
+                ? "Nothing to update. Reinstall manually"
+                : "To update, run in a terminal: the daemon restarts, tmux sessions survive"
+            }
+          >
+            <code className="min-w-0 truncate font-mono text-text-2" data-testid="changelog-manual-command">
               {update.manual_command}
             </code>
-          </>
+            <IconButton
+              icon={copied ? Check : Copy}
+              label={copied ? "Copied" : "Copy command"}
+              size="sm"
+              onClick={() => void copy()}
+              data-testid="changelog-copy-command"
+            />
+          </span>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <button
-          type="button"
+        <Button
+          tone="ghost"
+          icon={SlidersHorizontal}
           onClick={onOpenVersionSettings}
-          className="flex items-center gap-1.5 rounded px-2 py-1.5 text-text-3 hover:bg-hover hover:text-text-2"
-          style={{ fontSize: "11px" }}
+          title="Settings › General › Version & update"
           data-testid="changelog-open-settings"
         >
-          <SlidersHorizontal size={12} />
           Version & update
-        </button>
-        {update && !unknown && (
-          <button
-            type="button"
-            onClick={() => void copy()}
-            className="flex items-center gap-1.5 rounded border border-line-strong bg-surface-2 px-2.5 py-1.5 text-text-2 hover:border-primary"
-            style={{ fontSize: "11px" }}
-            title="Copy the manual update command"
-            data-testid="changelog-copy-command"
-          >
-            {copied ? <Check size={12} /> : <Copy size={12} />}
-            {copied ? "Copied" : "Copy command"}
-          </button>
-        )}
+        </Button>
         {update && !unknown && onRequestUpdate && (
-          <button
-            type="button"
+          <Button
+            tone={upToDate ? "default" : "primary"}
+            icon={Download}
             onClick={onRequestUpdate}
             // Offered only when a newer release is known (never a « reinstall » on a guess).
             disabled={!canOfferUpdate(update)}
-            className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 disabled:opacity-40 ${
-              upToDate
-                ? "border-line-strong bg-surface-2 text-text-2 hover:border-primary"
-                : "border-primary bg-primary text-surface-0 hover:bg-primary/90"
-            }`}
-            style={{ fontSize: "11px" }}
-            title={updateNotOfferedReason(update) ?? `Update ${update.channel_name} from the app`}
+            title={updateNotOfferedReason(update) ?? `Update ${channelLabel(update)} from the app`}
             data-testid="changelog-update"
           >
-            <Download size={12} />
             Update
-          </button>
+          </Button>
         )}
       </div>
     </div>

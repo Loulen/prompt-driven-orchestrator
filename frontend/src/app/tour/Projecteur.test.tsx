@@ -217,7 +217,8 @@ describe("the popover", () => {
   it("shows the instruction and the progress", () => {
     renderPopover(step());
     expect(screen.getByTestId("tour-popover")).toHaveTextContent("Create a new pipeline");
-    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First pipeline · 3 / 12");
+    expect(screen.getByTestId("tour-popover")).toHaveTextContent("First pipeline");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("3/12");
   });
 
   it("keeps Quit clickable over the dim", async () => {
@@ -258,7 +259,7 @@ describe("the popover", () => {
     expect(screen.getByTestId("tour-copy-block")).toHaveTextContent("tutorial-implement-test");
     await userEvent.click(screen.getByTestId("tour-copy"));
     expect(writeText).toHaveBeenCalledWith("tutorial-implement-test");
-    expect(screen.getByTestId("tour-copy")).toHaveTextContent("Copied");
+    expect(screen.getByTestId("tour-copy")).toHaveAccessibleName("Copied");
     vi.unstubAllGlobals();
   });
 

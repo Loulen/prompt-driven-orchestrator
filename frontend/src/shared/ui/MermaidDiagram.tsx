@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { cssColor } from "../../lib/cssColor";
+import { cssColor, cssToken } from "../../lib/cssColor";
 import { useTheme } from "../../hooks/useTheme";
 
 // mermaid bakes colours into the generated SVG's own <style>, so a CSS `var()`
@@ -9,7 +9,7 @@ import { useTheme } from "../../hooks/useTheme";
 // re-rendered after a switch comes back in the new palette.
 function themeVars() {
   const c = (token: `--${string}`) => cssColor(token);
-  return {
+  const vars: Record<string, string> = {
     background: c("--surface-1"), // modal body
     primaryColor: c("--surface-2"), // node fill
     primaryBorderColor: c("--line-strong"),
@@ -33,8 +33,10 @@ function themeVars() {
     clusterBorder: c("--line"),
     activeTaskBkgColor: c("--primary"),
     titleColor: c("--text"),
-    fontSize: "12px",
   };
+  // The labels' size: the type scale's secondary text, read live like the colours.
+  vars.fontSize = cssToken("--fs-sm", "12px");
+  return vars;
 }
 
 // Initialize ONCE at module scope. initialize() is synchronous (returns void).

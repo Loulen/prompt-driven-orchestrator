@@ -1,12 +1,22 @@
 import type { ReactNode } from "react";
-import { X, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileCode2, FileImage, FileText, X } from "lucide-react";
+import type { PortType } from "../../../shared/generated/PortType";
+import { IconButton } from "../../../shared/ui/kit";
 
-/** The artifact viewer's header: the port and the file shown (or the caller's
- *  own header), the iteration and file pagers, the download and copy buttons,
- *  the close button. */
+/** The port's kind at a glance: an image, an html page, or text. */
+function TypeIcon({ portType }: { portType?: PortType }) {
+  const Icon =
+    portType === "image" || portType === "image_list" ? FileImage : portType === "html" ? FileCode2 : FileText;
+  return <Icon size={14} strokeWidth={1.5} aria-hidden />;
+}
+
+/** The artifact viewer's header bar: the port and the file shown (or the
+ *  caller's own header), the iteration and file pagers, the download and copy
+ *  buttons, the close button. */
 export default function ArtifactHeader({
   header,
   portName,
+  portType,
   path,
   hasIterNav,
   iter,
@@ -24,6 +34,7 @@ export default function ArtifactHeader({
 }: {
   header?: ReactNode;
   portName: string;
+  portType?: PortType;
   path?: string;
   hasIterNav: boolean;
   iter: number;
@@ -42,97 +53,73 @@ export default function ArtifactHeader({
   onClose: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+    <header className="art__head">
       {header ?? (
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 font-medium text-text" style={{ fontSize: "13px" }}>
+        <span className="art__title">
+          <TypeIcon portType={portType} />
+          <span className="art__port" title={portName}>
             {portName}
           </span>
           {path && (
-            <span
-              className="min-w-0 truncate font-mono text-text-3"
-              style={{ fontSize: "10px" }}
-              title={path}
-            >
+            <span className="art__path" title={path}>
               {path}
             </span>
           )}
-        </div>
+        </span>
       )}
-      <div className="flex shrink-0 items-center gap-2">
-        {hasIterNav && (
-          <div className="flex items-center gap-1" data-testid="iter-nav">
-            <button
-              data-testid="iter-prev"
-              onClick={goPrevIter}
-              disabled={iterIndex <= 0}
-              className="rounded p-0.5 text-text-3 hover:bg-hover hover:text-text disabled:text-text-3"
-              aria-label="Previous iteration"
-            >
-              <ChevronLeft size={14} />
-            </button>
-            <span
-              className="font-mono text-text-3"
-              style={{ fontSize: "11px" }}
-            >
-              iter {iter} of {iterNumbers[iterNumbers.length - 1]}
-            </span>
-            <button
-              data-testid="iter-next"
-              onClick={goNextIter}
-              disabled={iterIndex >= iterNumbers.length - 1}
-              className="rounded p-0.5 text-text-3 hover:bg-hover hover:text-text disabled:text-text-3"
-              aria-label="Next iteration"
-            >
-              <ChevronRight size={14} />
-            </button>
-          </div>
-        )}
-        {isRepeated && (
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setFileIndex(Math.max(0, fileIndex - 1))}
-              disabled={fileIndex === 0}
-              className="rounded p-0.5 text-text-3 hover:bg-hover hover:text-text disabled:text-text-3"
-              aria-label="Previous file"
-            >
-              <ChevronLeft size={14} />
-            </button>
-            <span
-              className="font-mono text-text-3"
-              style={{ fontSize: "11px" }}
-            >
-              file {fileIndex + 1} of {total}
-            </span>
-            <button
-              onClick={() =>
-                setFileIndex(Math.min(total - 1, fileIndex + 1))
-              }
-              disabled={fileIndex === total - 1}
-              className="rounded p-0.5 text-text-3 hover:bg-hover hover:text-text disabled:text-text-3"
-              aria-label="Next file"
-            >
-              <ChevronRight size={14} />
-            </button>
-          </div>
-        )}
-        {(downloadButton || copyButton) && (
-          <>
-            {(hasIterNav || isRepeated) && (
-              <span className="h-4 w-px bg-line-strong" aria-hidden="true" />
-            )}
-            {downloadButton}
-            {copyButton}
-          </>
-        )}
-        <button
-          onClick={onClose}
-          className="rounded p-1 text-text-3 hover:bg-hover hover:text-text"
-          aria-label="Close"
-        >
-          <X size={14} />
-        </button>
-      </div>
-    </div>
+      {hasIterNav && (
+        <span className="art__pager tnum" data-testid="iter-nav">
+          <IconButton
+            icon={ChevronLeft}
+            label="Previous iteration"
+            size="sm"
+            onClick={goPrevIter}
+            disabled={iterIndex <= 0}
+            data-testid="iter-prev"
+          />
+          <span>
+            iter {iter} of {iterNumbers[iterNumbers.length - 1]}
+          </span>
+          <IconButton
+            icon={ChevronRight}
+            label="Next iteration"
+            size="sm"
+            onClick={goNextIter}
+            disabled={iterIndex >= iterNumbers.length - 1}
+            data-testid="iter-next"
+          />
+        </span>
+      )}
+      {isRepeated && (
+        <span className="art__pager tnum" data-testid="file-nav">
+          <IconButton
+            icon={ChevronLeft}
+            label="Previous file"
+            kbd="←"
+            size="sm"
+            onClick={() => setFileIndex(Math.max(0, fileIndex - 1))}
+            disabled={fileIndex === 0}
+            data-testid="file-prev"
+          />
+          <span>
+            file {fileIndex + 1} of {total}
+          </span>
+          <IconButton
+            icon={ChevronRight}
+            label="Next file"
+            kbd="→"
+            size="sm"
+            onClick={() => setFileIndex(Math.min(total - 1, fileIndex + 1))}
+            disabled={fileIndex === total - 1}
+            data-testid="file-next"
+          />
+        </span>
+      )}
+      <span className="d-grow" />
+      {downloadButton}
+      {copyButton}
+      <span className="art__sep" aria-hidden="true" />
+      <IconButton icon={X} label="Close" kbd="Esc" onClick={onClose} data-testid="artifact-close" />
+    </header>
   );
 }

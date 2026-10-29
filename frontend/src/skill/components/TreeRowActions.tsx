@@ -103,12 +103,11 @@ export default function TreeRowActions({ row, panel }: { row: TreeRow; panel: Sk
               {extensions}
               <DropdownMenuSeparator />
               <div
-                className="flex items-center gap-2 px-2 py-1.5 text-text-3"
-                style={{ fontSize: "11px" }}
+                className="flex items-center gap-2 px-2 py-1.5 text-text-3 text-xs"
                 data-testid="tree-menu-locked"
               >
                 <Lock size={12} className="shrink-0" />
-                {row.skill?.extension ? `Provided by the extension ${row.skill.extension.id}` : "Managed by PDO"}
+                {row.skill?.extension ? `Provided by the extension ${row.skill.extension.id}` : "Built in"}
               </div>
             </>
           ) : (
@@ -162,7 +161,7 @@ function TreeMenuItem({
       <span className="shrink-0">{icon}</span>
       <span className="flex-1 whitespace-nowrap">{label}</span>
       {hint && (
-        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+        <span className="font-mono text-text-3 text-2xs">
           {hint}
         </span>
       )}

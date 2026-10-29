@@ -143,8 +143,7 @@ export default function PipelineStar({
 
       {popoverOpen && (
         <div
-          className="absolute right-0 top-full z-50 mt-1 w-[200px] rounded-lg border border-line bg-surface-2 py-1 shadow-lg"
-          style={{ fontSize: "11px" }}
+          className="absolute right-0 top-full z-50 mt-1 w-[200px] rounded-lg border border-line bg-surface-2 py-1 shadow-lg text-xs"
           data-testid="pipeline-star-popover"
         >
           {syncState === "synced" && (

@@ -1,15 +1,15 @@
 /**
  * Settings › Sandbox & worktrees: the default sandbox (instance form), the staging profiles
- * and the instance's worktree provisioning (each with its own persistence).
+ * and the instance's worktree provisioning (each saved at once).
  */
 
 import type { SettingsSection } from "../../model/settingsCategories";
 import { defaultSandboxSourceNote } from "../../model/sourceNotes";
 import StagingProfilesPanel from "../../../sandbox/components/StagingProfilesPanel";
-import PersistedProvisioningEditor from "../../../workspace/components/PersistedProvisioningEditor";
 import { SettingRow } from "./fields";
 import type { FormSectionProps } from "./GeneralSections";
-import Section, { SectionExtra } from "./Section";
+import ProvisioningRows from "./ProvisioningRows";
+import Section from "./Section";
 
 export default function SandboxSections({
   sections,
@@ -72,12 +72,7 @@ export default function SandboxSections({
         // (and a freshly dangling `reason`) without a reopen, and tell New Run the same.
         onChanged={onProfilesChanged}
       />
-      <Section section={sections[2]}>
-        {/* The instance-scope editor IS the section; its own Save provisioning stays. */}
-        <SectionExtra>
-          <PersistedProvisioningEditor scope="instance" defaultExpanded />
-        </SectionExtra>
-      </Section>
+      <ProvisioningRows section={sections[2]} />
     </>
   );
 }

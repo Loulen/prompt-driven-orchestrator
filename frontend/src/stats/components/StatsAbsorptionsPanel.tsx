@@ -107,14 +107,13 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
   }
   if (absorptions.length === 0) {
     return (
+      // The how-to goes in the tooltip: the empty state is two words.
       <div
-        className="rounded-md border border-dashed border-line px-3 py-3 text-text-3"
-        style={{ fontSize: "11px" }}
+        className="px-2 py-1 text-text-3 text-xs"
+        title="In Stats, Ctrl/Cmd-click two rows and choose Combine; renaming a pipeline in the library combines its old and new name by itself"
         data-testid="stats-absorptions-empty"
       >
-        Nothing is combined. In Stats, Ctrl/Cmd-click two rows and choose
-        Combine; renaming a pipeline in the library combines its old and new
-        name by itself.
+        Nothing combined
       </div>
     );
   }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Sparkles, TriangleAlert } from "lucide-react";
 import type { SkillBank } from "../model/skill";
 import type { SkillRef } from "../../shared/generated/SkillRef";
@@ -61,6 +61,7 @@ export default function SkillSelector({
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  const treeHelpId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Dismiss on outside click and Escape (#686, same pattern as AgentControl):
@@ -158,8 +159,8 @@ export default function SkillSelector({
       >
         <Sparkles size={11} className="shrink-0" />
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium" style={{ fontSize: 10.5 }}>{label}</span>
-          <span className="block truncate text-text-3" style={{ fontSize: 9.5 }} data-testid={`${testId}-count`}>
+          <span className="block truncate font-medium text-xs">{label}</span>
+          <span className="block truncate text-text-3 text-2xs" data-testid={`${testId}-count`}>
             {activeCountLabel(resolved.activeCount)}
           </span>
         </span>
@@ -187,8 +188,7 @@ export default function SkillSelector({
             <li
               key={skill.id}
               data-testid={`${testId}-added-${skill.id}`}
-              className="rounded border border-st-await/35 bg-st-await/14 px-1.5 py-0.5 font-mono text-st-await"
-              style={{ fontSize: 10 }}
+              className="rounded border border-st-await/35 bg-st-await/14 px-1.5 py-0.5 font-mono text-st-await text-2xs"
             >
               {bank.skills.find((known) => known.id === skill.id)?.name ?? skill.name} · added
             </li>
@@ -216,8 +216,7 @@ export default function SkillSelector({
                     key={`m-${row.id}`}
                     data-testid={`${testId}-missing-${row.id}`}
                     data-own={isOwn}
-                    className="flex items-center gap-1.5 rounded px-1 py-0.5 text-st-blocked"
-                    style={{ fontSize: 10.5 }}
+                    className="flex items-center gap-1.5 rounded px-1 py-0.5 text-st-blocked text-xs"
                   >
                     <input
                       type="checkbox"
@@ -242,8 +241,7 @@ export default function SkillSelector({
                         <span
                           key={t}
                           data-tier={t}
-                          className="rounded border border-line px-1 uppercase tracking-wider text-text-3"
-                          style={{ fontSize: 8 }}
+                          className="rounded border border-line px-1 uppercase tracking-wider text-text-3 text-2xs"
                         >
                           {SKILL_TIER_LABEL[t]}
                         </span>
@@ -259,15 +257,23 @@ export default function SkillSelector({
             onChange={(event) => setFilter(event.target.value)}
             placeholder="Filter skills…"
             data-testid={`${testId}-filter`}
-            className="mb-1 w-full rounded border border-line bg-surface-2 px-2 py-1 text-text outline-none focus:border-primary"
-            style={{ fontSize: 10.5 }}
+            className="d-input d-input--sm mb-1"
           />
+          <span id={treeHelpId} className="d-sr">
+            {treeHelp(readOnly)}
+          </span>
           {bank.skills.length === 0 ? (
-            <p className="px-1 py-2 text-text-3" style={{ fontSize: 10 }} data-testid={`${testId}-empty`}>
-              The bank is empty. Add skills in Settings → Skills.
+            <p className="px-1 py-2 text-text-3 text-xs" title="Add skills in Settings › Agents › Skills" data-testid={`${testId}-empty`}>
+              Empty bank
             </p>
           ) : (
-            <ul className="max-h-64 overflow-y-auto" data-testid={`${testId}-tree`}>
+            // How the tree reads goes in its tooltip, not under it.
+            <ul
+              className="max-h-64 overflow-y-auto"
+              title={treeHelp(readOnly)}
+              aria-describedby={treeHelpId}
+              data-testid={`${testId}-tree`}
+            >
               {rows.map((row) => {
                 if (row.ref.kind === "folder" && row.folder) {
                   const skills = skillsInFolder(row.folder.id, bank);
@@ -276,8 +282,8 @@ export default function SkillSelector({
                   return (
                     <li
                       key={`f-${row.folder.id}`}
-                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-hover"
-                      style={{ paddingLeft: 4 + row.depth * 12, fontSize: 10.5 }}
+                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-hover text-xs"
+                      style={{ paddingLeft: 4 + row.depth * 12 }}
                       data-testid={`${testId}-folder-${row.folder.id}`}
                     >
                       <input
@@ -303,7 +309,7 @@ export default function SkillSelector({
                         {row.expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
                         {row.expanded ? <FolderOpen size={11} className="text-text-3" /> : <Folder size={11} className="text-text-3" />}
                         <span className="truncate">{row.folder.name}</span>
-                        <span className="text-text-3" style={{ fontSize: 9 }}>{row.count}</span>
+                        <span className="text-text-3 text-2xs">{row.count}</span>
                       </button>
                     </li>
                   );
@@ -316,8 +322,8 @@ export default function SkillSelector({
                   return (
                     <li
                       key={`s-${skill.id}`}
-                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-hover"
-                      style={{ paddingLeft: 4 + row.depth * 12, fontSize: 10.5 }}
+                      className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-hover text-xs"
+                      style={{ paddingLeft: 4 + row.depth * 12 }}
                       data-testid={`${testId}-option-${skill.id}`}
                     >
                       <input
@@ -344,7 +350,7 @@ export default function SkillSelector({
                         {skill.name}
                       </button>
                       {from && !isOwn && (
-                        <span className="rounded border border-line px-1 uppercase tracking-wider text-text-3" style={{ fontSize: 8 }}>
+                        <span className="rounded border border-line px-1 uppercase tracking-wider text-text-3 text-2xs">
                           {from.map((t) => SKILL_TIER_LABEL[t]).join(" · ")}
                         </span>
                       )}
@@ -355,11 +361,6 @@ export default function SkillSelector({
               })}
             </ul>
           )}
-          <p className="mt-1 border-t border-line px-1 pt-1 text-text-3" style={{ fontSize: 9 }}>
-            {readOnly
-              ? "Frozen: this selection is read-only here."
-              : "Inherited skills are greyed and cannot be removed here (additive union). Checking a folder checks its skills now."}
-          </p>
         </div>
       )}
     </div>
@@ -372,4 +373,11 @@ function missingSentence(missing: ActiveRow[]): string {
     return `Skill ${missing[0].name} no longer exists in the bank. It is skipped; runs still start.`;
   }
   return `${missing.length} selected skills no longer exist in the bank. They are skipped; runs still start.`;
+}
+
+/** How the tree reads: its tooltip, and its description for assistive technologies. */
+function treeHelp(readOnly: boolean): string {
+  return readOnly
+    ? "Frozen: this selection is read-only here"
+    : "Inherited skills are greyed and cannot be removed here (additive union); checking a folder checks its skills now";
 }

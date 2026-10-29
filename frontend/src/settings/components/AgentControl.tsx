@@ -203,7 +203,13 @@ export default function AgentControl({
                   }}
                 />
               )}
-              <div className="px-1 py-1 uppercase tracking-wider text-text-3 text-2xs">Profiles</div>
+              <div
+                className="px-1 py-1 uppercase tracking-wider text-text-3 text-2xs"
+                title="— = not set on the profile, so the harness default applies"
+              >
+                Profiles
+                <span className="d-sr">: — = not set on the profile, so the harness default applies</span>
+              </div>
               {profiles.map((profile) => (
                 <ChoiceRow
                   key={profile.id}
@@ -232,9 +238,6 @@ export default function AgentControl({
                   }}
                 />
               </div>
-              <p className="border-t border-line px-1 pt-1 text-text-3 text-2xs">
-                — = not set on the profile, so the harness default applies.
-              </p>
             </>
           )}
         </div>

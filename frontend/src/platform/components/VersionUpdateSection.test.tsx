@@ -80,7 +80,7 @@ describe("Settings › Version & update — a distribution's release channel (#2
       distribution({
         manual_command: null,
         can_apply: false,
-        apply_blocked_reason: "acme-pdo declares no update command: PDO will not guess.",
+        apply_blocked_reason: "acme-pdo declares no update command: update it the way it was installed, then restart the daemon.",
       }),
     );
     renderSection();
@@ -91,7 +91,7 @@ describe("Settings › Version & update — a distribution's release channel (#2
       within(screen.getByTestId("setting-version-manual-command")).getByTitle(/acme-pdo declares no update command/),
     ).toHaveTextContent("none");
     expect(screen.queryByTestId("setting-version-copy-command")).not.toBeInTheDocument();
-    expect(screen.getByTestId("setting-version-apply-blocked")).toHaveTextContent("will not guess");
+    expect(screen.getByTestId("setting-version-apply-blocked")).toHaveTextContent("restart the daemon");
   });
 
   it("no newer version known: Update is not offered, even when the daemon would accept it", async () => {

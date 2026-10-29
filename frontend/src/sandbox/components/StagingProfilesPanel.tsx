@@ -114,7 +114,7 @@ export default function StagingProfilesPanel({ section, home, onChanged }: Panel
             <span data-testid="staging-profiles-loading">Loading</span>
           </EmptyState>
         ) : (
-          <div role="listbox" aria-label="Staging profiles">
+          <div className="set-group" role="listbox" aria-label="Staging profiles">
             {profiles.map((p) => (
               <div key={p.name} className="set-rrow" aria-selected={p.name === selected} role="option">
                 <button
@@ -146,7 +146,7 @@ export default function StagingProfilesPanel({ section, home, onChanged }: Panel
         )}
 
         {creating && (
-          <div className="set-line pt-1">
+          <div className="set-line set-pad pt-1">
             <TextInput
               autoFocus
               mono
@@ -177,7 +177,7 @@ export default function StagingProfilesPanel({ section, home, onChanged }: Panel
         )}
 
         {error && (
-          <div className="set-row__note set-row__note--failed" role="alert" data-testid="staging-profiles-error">
+          <div className="set-row__note set-row__note--failed set-pad" role="alert" data-testid="staging-profiles-error">
             <span className="set-ellipsis" title={error}>
               {error}
             </span>

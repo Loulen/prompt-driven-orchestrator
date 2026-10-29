@@ -190,7 +190,7 @@ describe("Settings › General › Version & update — Update (#699)", () => {
         install_method: "unknown",
         manual_command: "Build from source, then restart the daemon.",
         can_apply: false,
-        apply_blocked_reason: "Install method not detected (neither a Homebrew Cellar path nor a cargo-dist receipt): PDO will not guess.",
+        apply_blocked_reason: "Install method not detected (neither a Homebrew Cellar path nor a cargo-dist receipt): update manually, then restart the daemon.",
       }),
     );
     render(
@@ -204,7 +204,7 @@ describe("Settings › General › Version & update — Update (#699)", () => {
     const btn = await screen.findByTestId("setting-version-update-button");
     expect(btn).toBeDisabled();
     expect(btn).toHaveAttribute("title", expect.stringContaining("Install method not detected"));
-    expect(screen.getByTestId("setting-version-apply-blocked")).toHaveTextContent("will not guess");
+    expect(screen.getByTestId("setting-version-apply-blocked")).toHaveTextContent("restart the daemon");
     expect(screen.getByTestId("setting-version-manual-command")).toHaveTextContent("Build from source");
   });
 

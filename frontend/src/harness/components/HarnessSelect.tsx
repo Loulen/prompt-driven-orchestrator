@@ -42,8 +42,8 @@ export function SelectedMarker() {
  * direction, `frontend/design/harness-picker/picker-simple.png`) styles what a
  * native control cannot: a check + accent bar on the resolved row, letter-spaced
  * **BUILT-IN** / **FROM DESCRIPTORS** section headers, a right-aligned muted
- * "not installed" note, a muted resolved-default hint on the inherit row, and a
- * legend. It is built on the same `@base-ui` menu the model picker uses, so it
+ * "not installed" note, a muted resolved-default hint on the inherit row, and section
+ * headers whose tooltips say what each holds. It is built on the same `@base-ui` menu the model picker uses, so it
  * inherits the app's dropdown behaviour (portal, keyboard nav, click-away).
  *
  * The panel lists harness NAMES only (no capability pills — directions B/C/D were
@@ -54,7 +54,7 @@ export function SelectedMarker() {
  * `""`), whose label each surface supplies — `""` resolves differently per surface.
  *
  * Shared by all four harness surfaces (node inspector, New Run, Projet, Settings
- * default) so the sectioning, greying, check and legend live in one place and can
+ * default) so the sectioning, greying and check live in one place and can
  * never drift between them.
  */
 export default function HarnessSelect({
@@ -161,8 +161,10 @@ export default function HarnessSelect({
             <DropdownMenuLabel
               data-testid={testId ? `${testId}-section-builtin` : undefined}
               className="uppercase tracking-wider text-text-3"
+              title="Embedded harnesses"
             >
               Built-in
+              <span className="d-sr">: embedded harnesses</span>
             </DropdownMenuLabel>
             {catalog.builtin.map(renderOption)}
           </DropdownMenuGroup>
@@ -172,21 +174,15 @@ export default function HarnessSelect({
             <DropdownMenuLabel
               data-testid={testId ? `${testId}-section-descriptors` : undefined}
               className="uppercase tracking-wider text-text-3"
+              title="~/.pdo/harnesses/descriptors.yaml"
             >
               From descriptors
+              <span className="d-sr">: ~/.pdo/harnesses/descriptors.yaml</span>
             </DropdownMenuLabel>
             {catalog.descriptors.map(renderOption)}
           </DropdownMenuGroup>
         )}
 
-        <div
-          className="mt-1 border-t border-line px-1.5 pt-1.5 pb-0.5 leading-snug text-text-3"
-          style={{ fontSize: "10px" }}
-        >
-          <span className="font-medium">Built-in</span> = embedded harnesses.{" "}
-          <span className="font-medium">From descriptors</span> ={" "}
-          <span className="font-mono">~/.pdo/harnesses/descriptors.yaml</span>.
-        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -255,7 +255,7 @@ describe("SkillSelector — unfolded", () => {
     render(<SkillSelector tier="instance" own={[]} bank={{ skills: [], folders: [], root_path: "" }} onChange={vi.fn()} testId="sel" />);
     expect(screen.getByTestId("sel-count")).toHaveTextContent("No skill");
     fireEvent.click(screen.getByTestId("sel"));
-    expect(screen.getByTestId("sel-empty")).toHaveTextContent("The bank is empty");
+    expect(screen.getByTestId("sel-empty")).toHaveTextContent("Empty bank");
   });
 });
 
@@ -342,7 +342,7 @@ describe("SkillSelector — read-only", () => {
     fireEvent.click(screen.getByTestId("sel-folder-check-f-method"));
     expect(onChange).not.toHaveBeenCalled();
     // …and it says why the boxes do not answer.
-    expect(screen.getByTestId("sel-popover")).toHaveTextContent("read-only");
+    expect(screen.getByTestId("sel-tree")).toHaveAttribute("title", expect.stringContaining("read-only"));
   });
 
   it("still reads what is selected", () => {

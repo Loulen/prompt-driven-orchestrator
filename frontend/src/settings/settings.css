@@ -289,8 +289,9 @@
     width: 2px;
     background: var(--color-st-await);
   }
+  /* The name gives way first on a narrow page: the control keeps the width. */
   .set-row--wide {
-    grid-template-columns: minmax(140px, 220px) minmax(0, 1fr) 14px;
+    grid-template-columns: minmax(120px, min(220px, 28%)) minmax(0, 1fr) 14px;
   }
   .set-row--top {
     align-items: start;
@@ -347,6 +348,16 @@
     color: var(--text-3);
     font-size: var(--fs-xs);
   }
+  /* A control that takes the rest of a wide row, the row-end error beside it. */
+  .set-row__ctl > .set-grow {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+  }
+  /* A value read before the row's control (the /metrics address before its switch). */
+  .set-before-ctl {
+    margin-right: var(--g-4);
+  }
   .set-ctl-w {
     width: 280px;
     max-width: 100%;
@@ -387,10 +398,16 @@
     color: var(--color-st-await);
   }
 
+  /* A group (its head, rows, fields) starts where a setting row's name does. */
   .set-group {
     display: flex;
     flex-direction: column;
     min-width: 0;
+    padding: 0 var(--g-3) 0 var(--g-4);
+  }
+  /* A line of a section's content that is not in a group, at the same start. */
+  .set-pad {
+    padding-inline: var(--g-4) var(--g-3);
   }
   .set-group__head {
     display: flex;
@@ -622,6 +639,7 @@
     column-gap: var(--g-5);
     row-gap: var(--g-2);
     margin: 0;
+    padding: 0 var(--g-3) 0 var(--g-4);
     font-size: var(--fs-sm);
   }
   .set-sent dt {

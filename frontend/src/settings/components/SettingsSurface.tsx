@@ -238,11 +238,13 @@ export default function SettingsSurface({
         drawer={shellDrawer}
         mainClassName="set-main"
       >
-        <SettingsRail entries={rail} active={shownCategory} onSelect={selectCategory} />
+        {/* Under a search the rows come from every category: no category is current, and
+            the section column, which lists one category's sections, steps aside. */}
+        <SettingsRail entries={rail} active={inSearch ? null : shownCategory} onSelect={selectCategory} />
         <div
           ref={setNavSlot}
           className="set-nav set-nav--sec"
-          hidden={!!extensionPages.active}
+          hidden={!!extensionPages.active || inSearch}
         />
         <div className="set-right">
           {!extensionPages.active && (

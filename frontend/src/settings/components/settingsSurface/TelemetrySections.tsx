@@ -87,6 +87,7 @@ function OtlpRows({ values, settings, dirty, setField }: Omit<FormSectionProps, 
         <TextInput
           id="setting-telemetry-endpoint"
           data-testid="setting-telemetry-endpoint"
+          className="set-grow"
           mono
           type="url"
           spellCheck={false}

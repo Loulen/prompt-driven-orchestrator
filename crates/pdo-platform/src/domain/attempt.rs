@@ -101,8 +101,7 @@ pub fn apply_gate(
             false,
             Some(
                 "Install method not detected (neither a Homebrew Cellar path nor a cargo-dist \
-                 receipt): PDO will not guess how to replace its own binary. Update manually, \
-                 then restart the daemon."
+                 receipt): update manually, then restart the daemon."
                     .to_string(),
             ),
         );
@@ -135,8 +134,8 @@ pub fn channel_apply_gate(
         return (
             false,
             Some(format!(
-                "{channel_name} declares no update command: PDO will not guess how to replace \
-                 this binary. Update it the way it was installed, then restart the daemon."
+                "{channel_name} declares no update command: update it the way it was installed, \
+                 then restart the daemon."
             )),
         );
     }

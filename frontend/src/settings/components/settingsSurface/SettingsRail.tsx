@@ -32,10 +32,13 @@ export default function SettingsRail({
   onSelect,
 }: {
   entries: SettingsRailEntry[];
-  active: string;
+  /** None under a search, which spans every category. */
+  active: string | null;
   onSelect: (id: string) => void;
 }) {
   const groupAt = entries.findIndex((entry) => entry.group);
+  // The one tab stop: the current category, else the first.
+  const stop = active ?? entries[0]?.id;
   const item = (entry: SettingsRailEntry) => {
     const Icon = CATEGORY_ICONS[entry.id];
     const selected = entry.id === active;
@@ -45,7 +48,7 @@ export default function SettingsRail({
         type="button"
         role="tab"
         aria-selected={selected}
-        tabIndex={selected ? 0 : -1}
+        tabIndex={entry.id === stop ? 0 : -1}
         data-testid={`settings-category-${entry.id}`}
         data-dirty={entry.dirty ? "true" : undefined}
         onClick={() => onSelect(entry.id)}
@@ -75,7 +78,7 @@ export default function SettingsRail({
       onKeyDown={(event) => {
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
         event.preventDefault();
-        const index = entries.findIndex((entry) => entry.id === active);
+        const index = entries.findIndex((entry) => entry.id === stop);
         const delta = event.key === "ArrowDown" ? 1 : -1;
         const next = entries[(index + delta + entries.length) % entries.length];
         onSelect(next.id);

@@ -40,7 +40,7 @@ export function PrometheusRow({ values, settings, dirty, setField }: Omit<FormSe
       dirty={dirty.has("telemetry-prometheus")}
       testId="setting-row-telemetry-prometheus"
     >
-      <span className="set-mono set-faint set-ellipsis" title={url} data-testid="telemetry-metrics-url">
+      <span className="set-mono set-faint set-ellipsis set-before-ctl" title={url} data-testid="telemetry-metrics-url">
         {url}
       </span>
       <Switch label="Expose /metrics" checked={on} onChange={(next) => setField("telemetryPrometheus", next)} />

@@ -4,6 +4,7 @@ import {
   fireEvent,
   waitFor,
   within,
+  act,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -19,6 +20,8 @@ const saveSandboxProfileMock = vi.fn();
 const deleteSandboxProfileMock = vi.fn();
 const fetchSandboxProfileReferentsMock = vi.fn();
 const fetchInstanceProvisioningMock = vi.fn();
+const saveInstanceProvisioningMock = vi.fn();
+const previewProvisioningMock = vi.fn();
 const fetchAgentProfilesMock = vi.fn().mockResolvedValue({ profiles: [] });
 const fetchUpdateStatusMock = vi.fn().mockResolvedValue({
   channel_name: "PDO",
@@ -132,9 +135,8 @@ vi.mock("../../workspace/api/browse", async (importOriginal) => ({
 
 vi.mock("../../workspace/api/provisioning", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../workspace/api/provisioning")>()),
-  saveInstanceProvisioning: vi
-    .fn()
-    .mockResolvedValue({ copy: [], hardlink: [], symlink: [] }),
+  saveInstanceProvisioning: (...args: unknown[]) => saveInstanceProvisioningMock(...args),
+  previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
   fetchInstanceProvisioning: (...args: unknown[]) =>
     fetchInstanceProvisioningMock(...args),
 }));
@@ -449,6 +451,14 @@ function resetProfileMocks() {
   });
 }
 
+// Every block: the provisioning rules are written and previewed by these mocks.
+beforeEach(() => {
+  saveInstanceProvisioningMock.mockReset();
+  saveInstanceProvisioningMock.mockImplementation((rules: unknown) => Promise.resolve(rules));
+  previewProvisioningMock.mockReset();
+  previewProvisioningMock.mockResolvedValue({ entries: [], rules: [], conflicts: [] });
+});
+
 describe("SettingsSurface", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();
@@ -473,6 +483,7 @@ describe("SettingsSurface", () => {
       hardlink: [],
       symlink: [],
     });
+
   });
 
   it("renders nothing when closed", () => {
@@ -489,16 +500,12 @@ describe("SettingsSurface", () => {
       await screen.findByTestId("setting-default-sandbox"),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("settings-category-sandbox"));
-    // #691: the provisioning editor is the Worktree provisioning section, no button to open it.
-    expect(
-      await screen.findByRole("button", { name: "Save provisioning" }),
-    ).toBeInTheDocument();
-    // Notion #7: collapsed elsewhere, the instance section opens expanded here.
-    expect(screen.getByRole("button", { name: /^Provisioning/ })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
-    expect(screen.getByLabelText("Copy patterns")).toBeInTheDocument();
+    // #691: the provisioning rules are the Worktree provisioning section, one row per mode,
+    // with no Save of their own.
+    expect(await screen.findByLabelText("Copy patterns")).toBeInTheDocument();
+    expect(screen.getByLabelText("Hardlink patterns")).toBeInTheDocument();
+    expect(screen.getByLabelText("Symlink patterns")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save provisioning" })).not.toBeInTheDocument();
     // The page scrolls, not the surface: the shell is fixed, each category page owns its
     // scroll container.
     expect(screen.getByTestId("settings-page-sandbox")).toHaveClass("set-page");
@@ -2956,11 +2963,104 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     );
     expect(screen.getByTestId("settings-section-worktree-provisioning-scope")).toBeInTheDocument();
     expect(
-      await within(provisioning).findByRole("button", {
-        name: "Save provisioning",
-      }),
+      await within(provisioning).findByTestId("setting-row-provisioning-copy"),
     ).toBeInTheDocument();
+    // No explanation on screen: what provisioning does is in the row names' tooltips.
+    expect(
+      within(provisioning)
+        .queryAllByText(/Bring files Git ignores/)
+        .filter((el) => !el.closest(".d-sr")),
+    ).toEqual([]);
     expect(screen.queryByTestId("settings-drawer")).not.toBeInTheDocument();
+  });
+
+  it("Worktree provisioning writes the rules at once, after a pause, with no Save of its own", async () => {
+    fetchInstanceProvisioningMock.mockResolvedValue({ copy: [".env"], hardlink: [], symlink: [] });
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    const copy = (await screen.findByLabelText("Copy patterns")) as HTMLTextAreaElement;
+    await waitFor(() => expect(copy.value).toBe(".env"));
+    fireEvent.change(screen.getByLabelText("Symlink patterns"), {
+      target: { value: "node_modules\n\n" },
+    });
+    await waitFor(() =>
+      expect(saveInstanceProvisioningMock).toHaveBeenCalledWith({
+        copy: [".env"],
+        hardlink: [],
+        symlink: ["node_modules"],
+      }),
+    );
+    expect(await screen.findByTestId("provisioning-saved")).toHaveTextContent("Saved");
+    // Never part of the instance form: the Save bar stays away.
+    expect(screen.queryByTestId("settings-save")).not.toBeInTheDocument();
+    // A blank line changes nothing worth writing.
+    saveInstanceProvisioningMock.mockClear();
+    fireEvent.change(screen.getByLabelText("Symlink patterns"), {
+      target: { value: "node_modules" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(saveInstanceProvisioningMock).not.toHaveBeenCalled();
+  });
+
+  it("Worktree provisioning writes an edit still waiting when Settings closes", async () => {
+    const { rerender } = render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    const copy = await screen.findByLabelText("Copy patterns");
+    await waitFor(() => expect(copy).not.toBeDisabled());
+    fireEvent.change(copy, { target: { value: ".env.local" } });
+    rerender(<SettingsSurface open={false} onClose={() => {}} />);
+    await waitFor(() =>
+      expect(saveInstanceProvisioningMock).toHaveBeenCalledWith({
+        copy: [".env.local"],
+        hardlink: [],
+        symlink: [],
+      }),
+    );
+  });
+
+  it("Worktree provisioning holds a write the preview of the same rules has not cleared", async () => {
+    // The preview answers late, then finds a conflict: nothing is written meanwhile.
+    let answer: (plan: unknown) => void = () => {};
+    previewProvisioningMock.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-sandbox"));
+    const copy = await screen.findByLabelText("Copy patterns");
+    await waitFor(() => expect(copy).not.toBeDisabled());
+    fireEvent.change(
+      within(screen.getByTestId("setting-row-provisioning-repository")).getByRole("textbox"),
+      { target: { value: "/repo" } },
+    );
+    fireEvent.change(copy, { target: { value: "node_modules" } });
+    fireEvent.change(screen.getByLabelText("Symlink patterns"), { target: { value: "node_modules" } });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(saveInstanceProvisioningMock).not.toHaveBeenCalled();
+    act(() =>
+      answer({
+        entries: [],
+        rules: [],
+        conflicts: [{ scope: "instance", relative_path: "node_modules", modes: ["copy", "symlink"] }],
+      }),
+    );
+    expect(await screen.findAllByText("conflict")).toHaveLength(2);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(saveInstanceProvisioningMock).not.toHaveBeenCalled();
+  });
+
+  it("under a search, no category is current and the section column steps aside", async () => {
+    render(<SettingsSurface open onClose={() => {}} />);
+    await screen.findByTestId("setting-session-cap");
+    expect(screen.getByTestId("settings-category-general")).toHaveAttribute("aria-selected", "true");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "ttl" } });
+    for (const tab of screen.getAllByRole("tab")) expect(tab).toHaveAttribute("aria-selected", "false");
+    // One tab stop still.
+    expect(screen.getByTestId("settings-category-general")).toHaveAttribute("tabindex", "0");
+    expect(document.querySelector(".set-nav--sec")).toHaveAttribute("hidden");
+    fireEvent.change(screen.getByTestId("settings-search"), { target: { value: "" } });
+    expect(screen.getByTestId("settings-category-general")).toHaveAttribute("aria-selected", "true");
+    expect(document.querySelector(".set-nav--sec")).not.toHaveAttribute("hidden");
   });
 
   it("a dangling default sandbox still shows its reason in the inline layout", async () => {

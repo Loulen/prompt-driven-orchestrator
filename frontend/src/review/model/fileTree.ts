@@ -1,7 +1,7 @@
 // The Review page's file tree (CORE-84): the diff's paths as nested folders,
 // the way a forge's "Files changed" shows them. Folders come before files at
-// each level (first-seen order), files in natural order (`m2` before `m10`,
-// where the diff sorts them as text), and a chain of folders that each hold a
+// each level, both with a number read as a number (`m2` before `m10`, where
+// the diff sorts them as text), and a chain of folders that each hold a
 // single folder reads as one row (`src/a/b`).
 //
 // A folder is keyed by its full path — for a compressed row, the path of its
@@ -37,10 +37,37 @@ export function buildFileTree(paths: string[]): TreeNode[] {
   return toNodes(root, "");
 }
 
-const NATURAL = new Intl.Collator(undefined, { numeric: true });
+/** The diff's own order (code units), except that a run of digits reads as a
+ *  number: `m2` before `m10`, and nothing else moves. */
+export function byNumberRuns(x: string, y: string): number {
+  const digit = (c: string) => c >= "0" && c <= "9";
+  let i = 0;
+  let j = 0;
+  while (i < x.length && j < y.length) {
+    if (digit(x[i]) && digit(y[j])) {
+      let a = i;
+      let b = j;
+      while (a < x.length && digit(x[a])) a++;
+      while (b < y.length && digit(y[b])) b++;
+      // Longer without its leading zeros is larger; same length compares as text.
+      const m = x.slice(i, a).replace(/^0+/, "");
+      const n = y.slice(j, b).replace(/^0+/, "");
+      if (m.length !== n.length) return m.length - n.length;
+      if (m !== n) return m < n ? -1 : 1;
+      i = a;
+      j = b;
+    } else {
+      if (x[i] !== y[j]) return x[i] < y[j] ? -1 : 1;
+      i++;
+      j++;
+    }
+  }
+  if (x.length - i !== y.length - j) return x.length - i - (y.length - j);
+  return x < y ? -1 : x > y ? 1 : 0;
+}
 
 function toNodes(b: Building, prefix: string): TreeNode[] {
-  const dirs: TreeNode[] = [...b.dirs].map(([part, child]) => {
+  const dirs: TreeNode[] = [...b.dirs].sort(([x], [y]) => byNumberRuns(x, y)).map(([part, child]) => {
     let name = part;
     let path = prefix + part;
     let at = child;
@@ -53,7 +80,7 @@ function toNodes(b: Building, prefix: string): TreeNode[] {
     return { kind: "dir", path, name, children: toNodes(at, `${path}/`) };
   });
   const files: TreeNode[] = [...b.files]
-    .sort((x, y) => NATURAL.compare(x.name, y.name))
+    .sort((x, y) => byNumberRuns(x.name, y.name))
     .map((f) => ({ kind: "file", ...f }));
   return [...dirs, ...files];
 }

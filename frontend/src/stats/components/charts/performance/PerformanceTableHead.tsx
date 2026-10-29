@@ -28,7 +28,7 @@ export function PerformanceTableHead({
   return (
     <thead>
       <tr>
-        <th className="w-56">Name</th>
+        <th>Name</th>
         <SortTh sort={tableSort} onSort={onSort} sortKey="context">
           Context (peak tokens)
         </SortTh>

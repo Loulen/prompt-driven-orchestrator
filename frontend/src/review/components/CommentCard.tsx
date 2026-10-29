@@ -126,7 +126,7 @@ export default function CommentCard({
             <Spinner /> Sending
           </Badge>
           <span className="font-medium text-text-2">you</span>
-          <span className="font-mono text-text-3 text-2xs">
+          <span className="rv-ct__fit font-mono text-text-3 text-2xs" title={label}>
             {label}
           </span>
           <span className="text-text-3">· {startingManager ? "starting the manager…" : "handing over…"}</span>
@@ -146,7 +146,7 @@ export default function CommentCard({
       <div className="rv-ct__head rv-ct__head--open">
         <Badge kind="draft">✎ Draft</Badge>
         <span className="font-medium text-text-2">you</span>
-        <span className="font-mono text-text-3 text-2xs">
+        <span className="rv-ct__fit font-mono text-text-3 text-2xs" title={label}>
           {label}
         </span>
         <span className="text-text-3">· {relativeTime(d.updated_at)}</span>
@@ -173,7 +173,7 @@ export default function CommentCard({
       </div>
       {body(d.text)}
       <div className="rv-ct__foot">
-        <span>Only in this browser until sent.</span>
+        <span className="rv-ct__fit" title="Only in this browser until sent.">Only in this browser until sent.</span>
         <span className="ml-auto">
           <button
             type="button"

@@ -30,11 +30,15 @@ export function SortTh({
       aria-sort={on ? (sort.dir === "asc" ? "ascending" : "descending") : undefined}
       data-testid={testid}
     >
-      <button type="button" className="sx-th" data-on={on || undefined} title={title} onClick={() => onSort(sortKey)}>
-        {children}
-        {on && <Icon size={11} strokeWidth={1.75} aria-hidden />}
-      </button>
-      {after}
+      <span className="sx-th__row">
+        <button type="button" className="sx-th" data-on={on || undefined} title={title} onClick={() => onSort(sortKey)}>
+          <span className="sx-th__label" title={typeof children === "string" && !title ? children : undefined}>
+            {children}
+          </span>
+          {on && <Icon size={11} strokeWidth={1.75} aria-hidden />}
+        </button>
+        {after}
+      </span>
     </th>
   );
 }

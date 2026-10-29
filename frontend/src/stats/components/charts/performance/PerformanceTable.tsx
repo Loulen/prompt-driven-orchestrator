@@ -129,7 +129,7 @@ export function PerformanceTable({
   const cellProps = { harnesses, mode, zoom, independentAxis };
 
   return (
-    <>
+    <div className="sx-hscroll">
       <table className="sx-table sx-table--perf">
         <PerformanceTableHead mode={mode} sort={sort} onSortChange={onSortChange} />
         <tbody>
@@ -308,6 +308,6 @@ export function PerformanceTable({
           })}
         </tbody>
       </table>
-    </>
+    </div>
   );
 }

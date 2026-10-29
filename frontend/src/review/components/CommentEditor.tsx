@@ -111,7 +111,7 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
     >
       <div className="rv-ct__head rv-ct__head--open">
         <span className="font-medium text-text-2">{editing ? "Edit draft" : "New comment"}</span>
-        <span className="font-mono text-text-3 text-2xs">
+        <span className="rv-ct__fit font-mono text-text-3 text-2xs" title={`${anchorLabel(anchor)} · ${sideLabel(anchor.side)}`}>
           {anchorLabel(anchor)} · {sideLabel(anchor.side)}
         </span>
         <span className="ml-auto inline-flex overflow-hidden rounded border border-line-strong" role="tablist">
@@ -186,7 +186,7 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
 
       {tab === "write" && <CompletionList completion={completion} textarea={ref} onPick={pickSuggestion} />}
 
-      <div className="rv-ct__foot">
+      <div className="rv-ct__foot rv-ct__foot--wrap">
         <span className="ml-auto inline-flex gap-1.5">
           <button
             type="button"

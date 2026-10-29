@@ -153,7 +153,7 @@ export default function SentCard({
             {c.line} <span className="font-sans text-text-3">on</span> {outdated.writtenOn}
           </span>
         ) : (
-          <span className="font-mono text-text-3 text-2xs">
+          <span className="rv-ct__fit font-mono text-text-3 text-2xs" title={label}>
             {label}
           </span>
         )}
@@ -245,7 +245,7 @@ export default function SentCard({
             <span className="shrink-0 font-mono" data-testid="review-comment-id">
               {c.id}
             </span>
-            <span className="min-w-0 truncate" title={pairLabel}>· {pairLabel}</span>
+            <span className="rv-ct__fit" title={pairLabel}>· {pairLabel}</span>
             {outdated && (
               <span className="inline-flex items-center gap-1 text-st-skipped" title="The line this comment points at changed on the displayed destination">
                 <History size={10} /> line changed

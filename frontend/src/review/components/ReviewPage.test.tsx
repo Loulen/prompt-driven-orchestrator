@@ -195,7 +195,7 @@ function diff(files: DiffFile[], extra: Partial<StructuredDiff> = {}): Structure
   };
 }
 
-const TWO = diff([file({ path: "src/main.tsx" }), file({ path: "docs/adr/0068.md", status: "added", old_path: null, deletions: 0 })]);
+const TWO = diff([file({ path: "src/main.tsx" }), file({ path: "web/adr/0068.md", status: "added", old_path: null, deletions: 0 })]);
 
 function goto(search = "") {
   window.history.replaceState(null, "", `/runs/${RUN_ID}/review${search}`);
@@ -232,7 +232,7 @@ describe("ReviewPage (#749)", () => {
     expect(rows[0]).toHaveTextContent("main.tsx");
     expect(rows[0]).toHaveTextContent("+2");
     expect(rows[0]).toHaveTextContent("−1");
-    expect(screen.getAllByTestId("review-dir-row").map((r) => r.textContent)).toEqual(["src", "docs/adr"]);
+    expect(screen.getAllByTestId("review-dir-row").map((r) => r.textContent)).toEqual(["src", "web/adr"]);
     // Default pair: no reset, no delivery chip.
     expect(screen.queryByTestId("review-reset")).toBeNull();
     expect(screen.queryByTestId("review-delivery-chip")).toBeNull();
@@ -285,7 +285,7 @@ describe("ReviewPage (#749)", () => {
     expect(mockedFile).toHaveBeenCalledWith(RUN_ID, "src/main.tsx", "fork");
     expect(mockedFile).toHaveBeenCalledWith(RUN_ID, "src/main.tsx", "tip");
     // Added file: only the new side.
-    expect(mockedFile).toHaveBeenCalledWith(RUN_ID, "docs/adr/0068.md", "tip");
+    expect(mockedFile).toHaveBeenCalledWith(RUN_ID, "web/adr/0068.md", "tip");
     await waitFor(() =>
       expect(screen.getAllByTestId("mock-diff-view")[0]).toHaveAttribute("data-has-content", "true"),
     );

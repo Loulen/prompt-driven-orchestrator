@@ -591,11 +591,35 @@ span.rv-pill {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Head and foot hold one line in a half-width Split column: their parts never
+ * wrap nor shrink, except the one marked to give way (anchor, hint, label),
+ * which ends in an ellipsis. */
+.rv-ct__head > *,
+.rv-ct__foot > * {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* Folded, the excerpt gives way before the anchor. */
+.rv-ct__head > .rv-ct__peek {
+  flex-shrink: 8;
+}
+.rv-ct__head > .rv-ct__fit,
+.rv-ct__foot > .rv-ct__fit {
+  flex-shrink: 1;
+}
+.rv-ct__head > .rv-ct__peek,
+.rv-ct__head > .rv-ct__fit,
+.rv-ct__foot > .rv-ct__fit {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .rv-ct__body {
   padding: var(--g-3) var(--g-4);
   font-size: var(--fs-md);
   line-height: 1.45;
   color: var(--text);
+  overflow-wrap: anywhere;
 }
 .rv-ct__foot {
   display: flex;
@@ -607,6 +631,20 @@ span.rv-pill {
   color: var(--text-3);
   font-size: var(--fs-xs);
   white-space: nowrap;
+}
+/* The editor's three buttons: too wide for a half column, they go under. */
+.rv-ct__foot--wrap {
+  flex-wrap: wrap;
+  row-gap: var(--g-1);
+  padding-block: var(--g-1);
+}
+.rv-ct__foot--wrap > .ml-auto {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: var(--g-1);
 }
 .rv-ct__thread {
   border-top: 1px solid var(--line-soft);
@@ -655,6 +693,32 @@ span.rv-pill {
   background: var(--surface-1);
   font-size: var(--fs-sm);
   white-space: nowrap;
+}
+/* Narrow, the draft chips scroll and the note ends in an ellipsis: nothing
+ * runs over the button. */
+.rv-sendbar > * {
+  flex: none;
+}
+.rv-sendbar > .flex-1 {
+  flex: 1 1 0;
+}
+.rv-sendbar__chips,
+.rv-sendbar > .rv-sendbar__note {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.rv-sendbar__chips {
+  display: flex;
+  gap: var(--g-1);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.rv-sendbar__chips :focus-visible {
+  outline-offset: -2px;
+}
+.rv-sendbar__note {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .rv-toast {
   position: fixed;

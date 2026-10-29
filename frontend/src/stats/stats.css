@@ -51,6 +51,7 @@
 }
 .sx-filt > .sx-crumbs {
   flex: 0 1 auto;
+  min-width: 120px;
 }
 .sx-grow,
 .sx-filt > .sx-grow {
@@ -69,8 +70,20 @@
   align-items: center;
   gap: var(--g-1);
   min-width: 0;
+  overflow: hidden;
   font-size: var(--fs-sm);
   color: var(--text);
+}
+/* Squeezed, the levels below Total give way; Total itself stays whole. */
+.sx-crumbs > * {
+  flex: none;
+}
+.sx-crumbs > .sx-crumb ~ .sx-crumb {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.sx-crumbs :focus-visible {
+  outline-offset: -2px;
 }
 .sx-crumb {
   display: inline-flex;
@@ -168,7 +181,7 @@ button.sx-crumb:hover {
 }
 .sx-split > .sx-aside {
   flex: none;
-  width: 300px;
+  width: clamp(220px, 32%, 300px);
   position: sticky;
   top: calc(var(--h-bar) + var(--g-4));
 }
@@ -445,14 +458,34 @@ button.sx-crumb:hover {
   padding-left: calc(var(--g-4) + 20px);
 }
 /* A sortable header. */
+/* Narrower than its label, a header ends in an ellipsis; its arrow and « i »
+ * stay. */
+.sx-th__row {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.sx-th__row > * {
+  flex: none;
+}
 .sx-th {
   all: unset;
   display: inline-flex;
   align-items: center;
   gap: 2px;
   max-width: 100%;
+  min-width: 0;
   cursor: pointer;
   white-space: nowrap;
+}
+.sx-th__row > .sx-th {
+  flex: 0 1 auto;
+}
+.sx-th__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sx-th:hover,
 .sx-th[data-on] {
@@ -846,12 +879,30 @@ button.sx-crumb:hover {
   color: var(--text-2);
 }
 
-/* Performance: a row stacks one box-plot per harness. */
+/* Performance: a row stacks one box-plot per harness. Below its minimum
+   width the table scrolls sideways instead of letting a plot's legend run
+   over the next column. */
+.sx-hscroll {
+  overflow-x: auto;
+  min-width: 0;
+}
+.sx-table--perf {
+  min-width: 540px;
+}
+.sx-table--perf th:first-child {
+  width: 28%;
+}
+.sx-table--perf th,
+.sx-table--perf td {
+  padding-left: var(--g-3);
+  padding-right: var(--g-3);
+}
 .sx-table--perf td {
   height: auto;
   padding-top: var(--g-3);
   padding-bottom: var(--g-3);
   vertical-align: top;
+  overflow: hidden;
 }
 .sx-cell2__v {
   position: relative;

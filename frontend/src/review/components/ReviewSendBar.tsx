@@ -25,11 +25,12 @@ interface Props {
 
 export default function ReviewSendBar({ drafts, sentCount, sending, managerRunning, sendDisabledReason, onJump, onSendAll }: Props) {
   if (drafts.length === 0) return null;
+  const note = sendDisabledReason ?? (managerRunning ? "" : "starts the manager first");
   return (
     <div className="rv-sendbar" data-testid="review-send-bar">
       <span className="d-chip font-mono">{plural(drafts.length, "draft")}</span>
       {sentCount > 0 && <span className="d-meta">{sentCount} already sent</span>}
-      <span className="flex min-w-0 flex-wrap gap-1">
+      <span className="rv-sendbar__chips">
         {drafts.map((d) => (
           <button
             key={d.key}
@@ -44,8 +45,8 @@ export default function ReviewSendBar({ drafts, sentCount, sending, managerRunni
         ))}
       </span>
       <span className="flex-1" />
-      <span className="d-meta" data-testid="review-send-bar-note">
-        {sendDisabledReason ?? (managerRunning ? "" : "starts the manager first")}
+      <span className="d-meta rv-sendbar__note" title={note || undefined} data-testid="review-send-bar-note">
+        {note}
       </span>
       <button
         type="button"

@@ -24,6 +24,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const option = (name: string) => screen.getByRole("radio", { name });
+
 describe("ThemeSelect — choosing a theme (#759)", () => {
   it("offers light, dark and system under a named group", () => {
     render(<ThemeSelect />);
@@ -33,24 +35,24 @@ describe("ThemeSelect — choosing a theme (#759)", () => {
 
   it("checks the active preference and only that one (#781: dark by default)", () => {
     render(<ThemeSelect />);
-    expect(screen.getByTestId("theme-option-dark")).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByTestId("theme-option-light")).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByTestId("theme-option-system")).toHaveAttribute("aria-checked", "false");
+    expect(option("Dark")).toHaveAttribute("aria-checked", "true");
+    expect(option("Light")).toHaveAttribute("aria-checked", "false");
+    expect(option("System")).toHaveAttribute("aria-checked", "false");
   });
 
   it("repaints the document and persists the choice on click", async () => {
     const user = userEvent.setup();
     render(<ThemeSelect />);
-    await user.click(screen.getByTestId("theme-option-light"));
+    await user.click(option("Light"));
     expect(document.documentElement.getAttribute("data-theme")).toBe("light");
     expect(localStorage.getItem("pdo.ui.theme")).toBe("light");
-    expect(screen.getByTestId("theme-option-light")).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByTestId("theme-option-system")).toHaveAttribute("aria-checked", "false");
+    expect(option("Light")).toHaveAttribute("aria-checked", "true");
+    expect(option("System")).toHaveAttribute("aria-checked", "false");
   });
 
   it("names the theme system resolves to, so 'System' is not a blind choice", () => {
     render(<ThemeSelect />);
-    expect(screen.getByTestId("theme-option-system")).toHaveTextContent(/dark/i);
+    expect(option("System")).toHaveAttribute("title", "System (dark)");
   });
 
   it("keeps naming the OS theme when another one is pinned", async () => {
@@ -58,31 +60,30 @@ describe("ThemeSelect — choosing a theme (#759)", () => {
     initTheme();
     const user = userEvent.setup();
     render(<ThemeSelect />);
-    await user.click(screen.getByTestId("theme-option-dark"));
+    await user.click(option("Dark"));
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
-    expect(screen.getByTestId("theme-option-system")).toHaveTextContent(/light/i);
-    expect(screen.getByTestId("theme-option-system")).not.toHaveTextContent(/dark/i);
+    expect(option("System")).toHaveAttribute("title", "System (light)");
   });
 });
 
 describe("ThemeSelect — keyboard (#759)", () => {
   it("puts one tab stop on the group: only the checked option is tabbable", () => {
     render(<ThemeSelect />);
-    expect(screen.getByTestId("theme-option-dark")).toHaveAttribute("tabindex", "0");
-    expect(screen.getByTestId("theme-option-light")).toHaveAttribute("tabindex", "-1");
-    expect(screen.getByTestId("theme-option-system")).toHaveAttribute("tabindex", "-1");
+    expect(option("Dark")).toHaveAttribute("tabindex", "0");
+    expect(option("Light")).toHaveAttribute("tabindex", "-1");
+    expect(option("System")).toHaveAttribute("tabindex", "-1");
   });
 
   it("moves and selects with the arrow keys, wrapping around", async () => {
     const user = userEvent.setup();
     render(<ThemeSelect />);
     await user.tab();
-    expect(screen.getByTestId("theme-option-dark")).toHaveFocus();
+    expect(option("Dark")).toHaveFocus();
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByTestId("theme-option-system")).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByTestId("theme-option-system")).toHaveFocus();
+    expect(option("System")).toHaveAttribute("aria-checked", "true");
+    expect(option("System")).toHaveFocus();
     await user.keyboard("{ArrowLeft}");
-    expect(screen.getByTestId("theme-option-dark")).toHaveAttribute("aria-checked", "true");
+    expect(option("Dark")).toHaveAttribute("aria-checked", "true");
   });
 
   it("selects with Home and End", async () => {
@@ -90,8 +91,8 @@ describe("ThemeSelect — keyboard (#759)", () => {
     render(<ThemeSelect />);
     await user.tab();
     await user.keyboard("{Home}");
-    expect(screen.getByTestId("theme-option-light")).toHaveAttribute("aria-checked", "true");
+    expect(option("System")).toHaveAttribute("aria-checked", "true");
     await user.keyboard("{End}");
-    expect(screen.getByTestId("theme-option-system")).toHaveAttribute("aria-checked", "true");
+    expect(option("Dark")).toHaveAttribute("aria-checked", "true");
   });
 });

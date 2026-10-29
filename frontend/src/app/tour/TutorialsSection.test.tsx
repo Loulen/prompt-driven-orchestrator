@@ -4,13 +4,16 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import TutorialsSection from "./TutorialsSection";
 import { loadTourOffered, loadToursDone, markTourDone, markTourOffered } from "../../lib/tourMemory";
+import { SETTINGS_CATEGORIES } from "../../settings/model/settingsCategories";
+
+const SECTION = SETTINGS_CATEGORIES.flatMap((c) => c.sections).find((s) => s.id === "tutorials")!;
 
 beforeEach(() => localStorage.clear());
 
 function setup() {
   const onStartTour = vi.fn();
   const onStartFullTour = vi.fn();
-  render(<TutorialsSection onStartTour={onStartTour} onStartFullTour={onStartFullTour} />);
+  render(<TutorialsSection section={SECTION} onStartTour={onStartTour} onStartFullTour={onStartFullTour} />);
   return { onStartTour, onStartFullTour };
 }
 

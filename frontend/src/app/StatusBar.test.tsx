@@ -17,7 +17,7 @@ function update(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     install_method: "homebrew",
     manual_command: "brew update && brew upgrade Loulen/pdo-v2/pdo-v2",
     supervision: "systemd",
-    reason: "No release source is declared for this build: the version check does not run.",
+    reason: "No release source declared: no version check.",
     last_error: null,
     active_runs: 0,
     can_apply: true,

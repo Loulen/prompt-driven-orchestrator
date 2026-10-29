@@ -12,7 +12,7 @@ import type { SettingsPosition } from "../SettingsSurface";
 import type { SettingsSection } from "../../model/settingsCategories";
 import ClonesFolderSection from "./ClonesFolderSection";
 import type { FormSectionProps } from "./GeneralSections";
-import Section from "./Section";
+import Section, { SectionExtra } from "./Section";
 
 /** What the shell hands Settings › Projects: the live Projets, the Runs it counts. */
 export interface ProjectsSource {
@@ -44,14 +44,18 @@ export default function ProjectsSections({
   return (
     <>
       <Section section={sections[0]}>
-        <ProjectsPanel
-          projects={source?.projects ?? []}
-          runs={source?.runs ?? []}
-          home={home}
-          entry={position?.category === "projects" ? position.project : undefined}
-          active={active}
-          onChanged={() => source?.onChanged()}
-        />
+        <SectionExtra>
+          <ProjectsPanel
+            projects={source?.projects ?? []}
+            runs={source?.runs ?? []}
+            home={home}
+            entry={
+              position?.category === "projects" ? position.project : undefined
+            }
+            active={active}
+            onChanged={() => source?.onChanged()}
+          />
+        </SectionExtra>
       </Section>
       {form ? <ClonesFolderSection section={sections[1]} {...form} /> : loading}
     </>

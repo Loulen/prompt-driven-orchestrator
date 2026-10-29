@@ -47,6 +47,19 @@ export function modelSourceNote(field: StringSettingField): string {
   return `Source: your Claude account default (no --model).`;
 }
 
+/** Which tier the instance default harness comes from (#550). No built-in value: unset,
+ *  a node falls to the `claude` floor. Discloses a shadowed env var too. */
+export function harnessSourceNote(field: StringSettingField): string {
+  const envDisplay = field.env ? `PDO_DEFAULT_HARNESS=${field.env}` : null;
+  if (field.source === "stored") {
+    return envDisplay
+      ? `Source: stored value (wins). Env ${envDisplay} is set but overridden.`
+      : `Source: stored value (overrides env and the claude floor).`;
+  }
+  if (field.source === "env") return `Source: env ${envDisplay ?? "PDO_DEFAULT_HARNESS"}.`;
+  return "Source: unset (the claude floor).";
+}
+
 /** Which tier turn-end auto-completion comes from (#469). Like the enum knobs there IS
  *  a built-in default (`off`), and both directions of a save are a stored decision — so
  *  "stored (off)" is a meaningful state and must read differently from the default. */

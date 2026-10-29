@@ -39,10 +39,10 @@ describe("UI scale", () => {
     const interfaceSection = SETTINGS_CATEGORIES.flatMap((c) => c.sections).find((s) => s.label === "Interface");
     render(<InterfaceSection section={interfaceSection!} />);
     const group = screen.getByRole("radiogroup", { name: "UI scale" });
-    expect(screen.getByRole("radio", { name: "120%" })).toHaveAttribute("aria-checked", "true");
-    await user.click(screen.getByRole("radio", { name: "100%" }));
+    expect(screen.getByRole("radio", { name: "120 %" })).toHaveAttribute("aria-checked", "true");
+    await user.click(screen.getByRole("radio", { name: "100 %" }));
     expect(zoom()).toBe("1");
-    expect(group).toContainElement(screen.getByRole("radio", { name: "100%" }));
-    expect(screen.getByRole("radio", { name: "100%" })).toHaveAttribute("aria-checked", "true");
+    expect(group).toContainElement(screen.getByRole("radio", { name: "100 %" }));
+    expect(screen.getByRole("radio", { name: "100 %" })).toHaveAttribute("aria-checked", "true");
   });
 });

@@ -109,8 +109,8 @@ describe("ChangelogModal (#698)", () => {
     expect(screen.getByText("Loading...")).toBeInTheDocument();
     const body = await screen.findByTestId("markdown-body");
     const md = body.textContent ?? "";
-    expect(md.indexOf("## v1.60.0")).toBeGreaterThanOrEqual(0);
-    expect(md.indexOf("## v1.60.0")).toBeLessThan(md.indexOf("## v1.59.0"));
+    expect(md.indexOf("[v1.60.0](")).toBeGreaterThanOrEqual(0);
+    expect(md.indexOf("[v1.60.0](")).toBeLessThan(md.indexOf("## v1.59.0"));
     expect(md).toContain("- sixty");
 
     const header = screen.getByTestId("changelog-header");

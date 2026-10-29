@@ -510,7 +510,10 @@ mod tests {
         let pipeline = simple_pipeline();
         let io = resolve(&pipeline, &artifacts, "implementer", 1, &empty_run_state());
 
-        let fm = io.inputs[0].files[0].frontmatter.as_ref().expect("frontmatter");
+        let fm = io.inputs[0].files[0]
+            .frontmatter
+            .as_ref()
+            .expect("frontmatter");
         assert_eq!(fm["verdict"], serde_json::json!("pass"));
     }
 

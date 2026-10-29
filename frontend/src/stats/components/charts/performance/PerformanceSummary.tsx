@@ -11,26 +11,22 @@ import {
   steeredPercent,
   ZOOM_CAP_COPY,
 } from "../../../model/performance";
-import { CohortLine } from "../common/ChartPrimitives";
+import { CohortLine, Kpis } from "../common/ChartPrimitives";
 import { FilteredValue } from "./NodeKindMarks";
 import { PerformanceCards } from "./PerformanceCards";
 
-/** What the drill level on screen measured: the headline, one card per
- *  harness, the cohort line and the caption of the plots below. */
+/** What the drill level on screen measured: the headline on one line, one
+ *  card per harness, the cohort line. */
 export function PerformanceSummary({
   aggregate,
   mode,
   partialByKind,
   completedOnly,
-  axisMode,
-  zoom,
 }: {
   aggregate: StatsPerformanceAggregate;
   mode: DurationMode;
   partialByKind: boolean;
   completedOnly: boolean;
-  axisMode: StatsAxis;
-  zoom: StatsZoom;
 }) {
   const durationField = metricField("duration", mode);
   const contexts = aggregate.harnesses.map((item) =>
@@ -51,33 +47,32 @@ export function PerformanceSummary({
 
   return (
     <>
-      <div className="mt-4 text-text" data-testid="stats-performance-headline">
-        {headlineValue(contexts)} median peak context ·{" "}
-        {headlineValue(durations)} median {durationWord(mode)} ·{" "}
-        {headlineValue(steered)} steered
-      </div>
-      <div className="mt-4">
-        <PerformanceCards
-          aggregate={aggregate}
-          mode={mode}
-          partialByKind={partialByKind}
-        />
-      </div>
-      <div className="mt-4">
-        <CohortLine completedOnly={completedOnly} />
-      </div>
-      {/* #819 — the zoom and the scales moved up into the band; what is
-          left here is the caption that says what the plots below draw. */}
-      <div
-        className="mt-5 text-text-3"
-        data-testid="stats-performance-toolbar"
-        style={{ fontSize: "10.5px" }}
-      >
-        Distributions per node ·{" "}
-        {axisMode === "independent"
-          ? "each row on its own axis"
-          : `shared axis per metric, capped at ${ZOOM_CAP_COPY[zoom]}`}
-      </div>
+      <Kpis
+        testid="stats-performance-headline"
+        items={[
+          { key: "context", label: "", value: headlineValue(contexts), sub: "median peak context" },
+          { key: "duration", label: "", value: headlineValue(durations), sub: `median ${durationWord(mode)}` },
+          { key: "steered", label: "", value: headlineValue(steered), sub: "steered" },
+        ]}
+      />
+      <PerformanceCards
+        aggregate={aggregate}
+        mode={mode}
+        partialByKind={partialByKind}
+      />
+      <CohortLine completedOnly={completedOnly} />
     </>
+  );
+}
+
+/** What the plots below draw (#819): the caption of the table's panel. */
+export function PerformanceCaption({ axisMode, zoom }: { axisMode: StatsAxis; zoom: StatsZoom }) {
+  return (
+    <span className="sx-note" data-testid="stats-performance-toolbar">
+      Distributions per node ·{" "}
+      {axisMode === "independent"
+        ? "each row on its own axis"
+        : `shared axis per metric, capped at ${ZOOM_CAP_COPY[zoom]}`}
+    </span>
   );
 }

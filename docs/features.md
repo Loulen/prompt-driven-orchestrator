@@ -119,7 +119,9 @@ Decisions: [ADR-0010](adr/0010-port-output-as-directory.md),
 
 The run's **Diff** tab shows everything the run changed since it forked. **Expand and comment**
 opens the review page: a diff between any two refs of the run (fork point, run tip, each node's
-before/after, the live working tree), side by side, with inline comments on any line.
+before/after, the live working tree), side by side, with inline comments on any line. Tick
+**Viewed** on a file (or press `v`) to fold it once read: the mark stays in your browser, for that
+pair of refs.
 
 **Send to manager** hands your comments to the run's manager agent in one message. It answers each
 one with `pdo review reply`, the answer lands in the thread in real time, and the manager can route

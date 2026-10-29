@@ -22,7 +22,8 @@ const READER_MOVES = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
  * the list shows (a collapsed folder's are skipped), `←` / `→` fold and unfold
  * the folders around the current file.
  */
-export function useReviewLayout(files: DiffFile[]) {
+/** `viewed`: the files marked « Viewed » for the pair — they open folded. */
+export function useReviewLayout(files: DiffFile[], viewed?: ReadonlySet<string>) {
   const [view, setView] = useState<ViewMode>(() => readView());
   const [narrow, setNarrow] = useState<boolean>(() => window.matchMedia?.(NARROW_QUERY).matches ?? false);
   const [listOpen, setListOpen] = useState<boolean>(() => readListOpen());
@@ -53,14 +54,20 @@ export function useReviewLayout(files: DiffFile[]) {
     return () => mq.removeEventListener?.("change", onChange);
   }, []);
 
-  /** A new pair: default collapse, first file, back to the top. */
+  /** A new pair: default collapse (the large diff, the binaries, the files
+   *  viewed), first file, back to the top. */
   const resetForPair = () => {
     setCollapsed(null);
     setCurrentIdx(0);
   };
   const scrollTop = () => mainRef.current?.scrollTo?.({ top: 0 });
 
-  const collapsedSet = useMemo(() => collapsed ?? defaultCollapsed(files), [collapsed, files]);
+  const collapsedSet = useMemo(() => {
+    if (collapsed) return collapsed;
+    const init = defaultCollapsed(files);
+    for (const f of files) if (viewed?.has(filePath(f))) init.add(filePath(f));
+    return init;
+  }, [collapsed, files, viewed]);
   const toggleFile = (path: string) => {
     const next = new Set(collapsedSet);
     if (next.has(path)) next.delete(path);

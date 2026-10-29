@@ -34,16 +34,16 @@ export function PerformanceCards({
     return formatPerformanceValue(value.stats.median, metric);
   };
   return (
-    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="sx-cards">
       {aggregate.harnesses.map((item) => (
         <div
           key={item.harness}
-          className="rounded-md border border-line bg-surface-2 p-3"
+          className="sx-card"
           data-testid={`stats-performance-card-${item.harness}`}
         >
-          <div className="mb-2 flex items-center gap-1.5 text-text-3">
+          <div className="sx-card__head">
             <span
-              className="h-2 w-2 rounded-full"
+              className="sx-swatch"
               style={{ backgroundColor: harnessColor(item.harness) }}
             />
             {item.harness}
@@ -91,11 +91,12 @@ export function SteeredCard({
 }) {
   return (
     <div
-      className="rounded-md border border-line bg-surface-2 p-3 sm:col-span-2"
+      className="sx-card sx-card--wide"
       data-testid="stats-steered-card"
     >
-      <div className="mb-2 flex items-center justify-between gap-2 text-text-3">
+      <div className="sx-card__head">
         <span>Steered executions</span>
+        <span className="sx-grow" />
         <>
           <Tooltip content={STEERING_PROVENANCE_COPY} side="top">
             <span
@@ -124,7 +125,7 @@ export function SteeredCard({
               data-testid={`stats-steered-${item.harness}`}
             >
               <span
-                className="h-2 w-2 shrink-0 rounded-full"
+                className="sx-swatch"
                 style={{ backgroundColor: harnessColor(item.harness) }}
               />
               <span className="w-16 shrink-0 text-text-2">{item.harness}</span>
@@ -134,9 +135,9 @@ export function SteeredCard({
                   <span className="shrink-0 text-text-3">
                     · {item.steered.steered}/{item.steered.readable}
                   </span>
-                  <span className="relative h-1 min-w-10 flex-1 rounded bg-surface-1">
+                  <span className="relative h-1 min-w-10 flex-1 bg-hover">
                     <span
-                      className="absolute inset-y-0 left-0 rounded"
+                      className="absolute inset-y-0 left-0"
                       style={{
                         width: `${ratio}%`,
                         backgroundColor: harnessColor(item.harness),
@@ -156,7 +157,7 @@ export function SteeredCard({
           );
         })}
       </div>
-      <div className="mt-2 text-text-3" style={{ fontSize: "10px" }}>
+      <div className="sx-note mt-2">
         share of successful executions with ≥ 1 steering message · steered /
         readable
       </div>

@@ -1,6 +1,7 @@
 /**
  * The app icons with one ruby part, after the product marks of the brand: an
  * ink line icon whose accent stroke takes `--primary`. Stats, the latest bar;
+ * Review, the two arrows between the commits;
  * Settings, the mark's triangle in the gear. Same props as a `lucide-react`
  * icon, so they fit any `icon={...}` slot.
  */

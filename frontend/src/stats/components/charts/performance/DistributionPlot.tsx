@@ -56,7 +56,7 @@ export function DistributionPlot({
         <button
           type="button"
           aria-label={detail}
-          className="text-left text-text-3 underline decoration-dotted underline-offset-2"
+          className="min-w-0 truncate text-left text-text-3 underline decoration-dotted underline-offset-2"
         >
           — {value.missing_reasons[0] ?? "not measurable"}
         </button>
@@ -64,8 +64,14 @@ export function DistributionPlot({
     );
   }
   const stats = value.stats;
-  const pct = (raw: number) =>
-    `${Math.max(0, Math.min(100, (raw / scaleMax) * 100))}%`;
+  const at = (raw: number) => Math.max(0, Math.min(100, (raw / scaleMax) * 100));
+  const pct = (raw: number) => `${at(raw)}%`;
+  // A span from `from` to `to`, cut at the frame's edge like its ends: a box
+  // past the axis max never runs into the next column.
+  const extent = (from: number, to: number, floor = 0) => ({
+    left: `${Math.min(at(from), 100 - floor)}%`,
+    width: `${Math.max(at(to) - at(from), floor)}%`,
+  });
   const detail = distributionDetail(name, harness, field, value, zoom);
   const partial = value.measured < value.expected;
   const steeredLine = metric === "steering" ? steeredPercent(steered) : null;
@@ -78,9 +84,9 @@ export function DistributionPlot({
   const clippedHigh = zoom !== "full" && stats.max > high;
   const clippedLow = zoom === "fenced" && stats.min < low;
   return (
-    <div className="flex min-w-0 flex-col gap-1">
+    <div className="flex min-w-0 flex-1 flex-col gap-1">
       <div
-        className="relative h-4 min-w-28"
+        className="relative h-4"
         data-testid={`performance-${metric}-boxplot`}
         data-scale-max={scaleMax}
         data-zoom={zoom}
@@ -90,25 +96,21 @@ export function DistributionPlot({
           <span
             className="absolute top-[4px] h-[7px] border border-dashed border-text-3 opacity-40"
             data-testid="performance-wallclock-ghost"
-            style={{
-              left: pct(ghost.q1),
-              width: pct(Math.max(ghost.q3 - ghost.q1, scaleMax * 0.005)),
-            }}
+            style={extent(ghost.q1, ghost.q3, 0.5)}
           />
         )}
         {zoom !== "box" && (
           <span
             className="absolute top-[7px] h-px bg-text-3"
             data-testid={`performance-${metric}-whisker`}
-            style={{ left: pct(low), width: pct(high - low) }}
+            style={extent(low, high)}
           />
         )}
         <span
           className="absolute top-[4px] h-[7px] border border-current opacity-70"
           style={{
             color: harnessColor(harness),
-            left: pct(stats.q1),
-            width: pct(Math.max(stats.q3 - stats.q1, scaleMax * 0.005)),
+            ...extent(stats.q1, stats.q3, 0.5),
           }}
         />
         <span
@@ -117,8 +119,7 @@ export function DistributionPlot({
         />
         {clippedLow && (
           <span
-            className="absolute left-0 top-0 font-mono leading-4 text-text-3"
-            style={{ fontSize: "9px" }}
+            className="absolute left-0 top-0 font-mono leading-4 text-text-3 text-2xs"
             data-testid={`performance-${metric}-clip-low`}
           >
             ‹
@@ -126,8 +127,7 @@ export function DistributionPlot({
         )}
         {clippedHigh && (
           <span
-            className="absolute right-0 top-0 font-mono leading-4 text-text-3"
-            style={{ fontSize: "9px" }}
+            className="absolute right-0 top-0 font-mono leading-4 text-text-3 text-2xs"
             data-testid={`performance-${metric}-clip-high`}
           >
             ›
@@ -138,8 +138,7 @@ export function DistributionPlot({
         <button
           type="button"
           aria-label={detail}
-          className="w-fit text-left font-mono text-text-3 underline decoration-dotted underline-offset-2"
-          style={{ fontSize: "9.5px" }}
+          className="max-w-full truncate text-left font-mono text-text-3 underline decoration-dotted underline-offset-2 text-2xs"
         >
           {formatPerformanceValue(stats.median, metric)} median · n=
           {value.measured}

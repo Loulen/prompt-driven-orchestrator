@@ -21,8 +21,7 @@ export function ProvenanceMark({
         role="img"
         aria-label={copy}
         data-testid={`stats-provenance-${target}`}
-        className="ml-0.5 align-super text-text-3"
-        style={{ fontSize: "8.5px" }}
+        className="ml-0.5 align-super text-text-3 text-2xs"
       >
         ?
       </span>

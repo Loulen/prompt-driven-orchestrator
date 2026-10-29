@@ -4,12 +4,11 @@ import type { SyncCostPricesReport } from "../model/prices";
 
 function PriceRows({ rows }: { rows: PriceRow[] }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col">
       {rows.map((row) => (
         <div
           key={row.key}
-          className="flex items-center justify-between rounded bg-surface-2 px-2 py-1 font-mono text-text-3"
-          style={{ fontSize: "10.5px" }}
+          className="flex items-center justify-between gap-3 border-b border-line-soft px-1 py-1 font-mono text-xs text-text-3"
         >
           <span>{row.key}</span>
           <span>
@@ -33,7 +32,7 @@ function SyncResult({ report }: { report: SyncCostPricesReport | null }) {
   }
   return (
     <div
-      className="rounded-md border border-st-await/40 bg-st-await/10 px-3 py-2 text-text-2"
+      className="border border-st-await/40 px-3 py-2 text-text-2"
       data-testid="stats-sync-report"
     >
       <div>
@@ -69,10 +68,10 @@ export function PricingDetailsContent({
     ? [...cost.total.unpriced_models, ...cost.total.missing_reasons]
     : [];
   return (
-    <div className="flex flex-col gap-3" style={{ fontSize: "10.5px" }}>
+    <div className="flex flex-col gap-3 text-xs">
       {syncError && (
         <div
-          className="rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
+          className="sx-err"
           data-testid="stats-sync-error"
         >
           {syncError}

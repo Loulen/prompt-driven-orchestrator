@@ -27,8 +27,8 @@ export function MetricCell({
 }) {
   const field = metricField(metric, mode);
   return (
-    <td className="py-2 pr-3 align-top">
-      <div className="grid gap-1.5">
+    <td>
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5">
         {harnesses.map((harness) => {
           const item = rowHarnesses?.find(
             (entry) => entry.harness === harness,
@@ -44,7 +44,7 @@ export function MetricCell({
               ? item.duration.stats.median - item.active_duration.stats.median
               : 0;
           return (
-            <div key={harness} className="flex items-start gap-2">
+            <div key={harness} className="flex min-w-0 items-start gap-2">
               <span
                 className="mt-1 h-[7px] w-[7px] shrink-0 rounded-full"
                 style={{ backgroundColor: harnessColor(harness) }}

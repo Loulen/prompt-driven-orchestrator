@@ -89,41 +89,33 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
 
   if (loadError && !absorptions) {
     return (
-      <div
-        className="rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
-        style={{ fontSize: "11px" }}
-        data-testid="stats-absorptions-error"
-      >
+      <div className="sx-err" data-testid="stats-absorptions-error">
         {loadError}
       </div>
     );
   }
   if (!absorptions) {
     return (
-      <div className="text-text-3" style={{ fontSize: "11px" }}>
-        Loading…
-      </div>
+      <div className="d-meta">Loading…</div>
     );
   }
   if (absorptions.length === 0) {
     return (
       <div
-        className="rounded-md border border-dashed border-line px-3 py-3 text-text-3"
-        style={{ fontSize: "11px" }}
+        className="sx-empty flex items-center justify-center gap-2"
         data-testid="stats-absorptions-empty"
+        title="In Stats, Ctrl/Cmd-click two rows and choose Combine; renaming a pipeline in the library combines its old and new name by itself."
       >
-        Nothing is combined. In Stats, Ctrl/Cmd-click two rows and choose
-        Combine; renaming a pipeline in the library combines its old and new
-        name by itself.
+        <Combine size={14} strokeWidth={1.5} aria-hidden="true" />
+        Nothing combined
       </div>
     );
   }
 
   return (
     <div
-      className="flex flex-col gap-4"
+      className="flex flex-col gap-4 text-sm"
       data-testid="stats-absorptions-panel"
-      style={{ fontSize: "12px" }}
     >
       {DIMENSIONS.map(({ id, label }) => {
         const group = absorptions.filter(
@@ -136,27 +128,24 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
             className="flex flex-col gap-2"
             data-testid={`stats-absorptions-${id}`}
           >
-            <div
-              className="uppercase tracking-wide text-text-3"
-              style={{ fontSize: "9.5px" }}
-            >
-              {label}
-            </div>
+            <div className="d-caps">{label}</div>
             {group.map((absorption) => (
               <ul
                 key={`${absorption.scope}\u0000${absorption.absorbent.key}`}
-                className="rounded-md border border-line"
+                className="sx-mlist"
                 data-testid="stats-absorption"
               >
-                <li className="flex items-center justify-between gap-3 px-3 py-2">
-                  <span className="flex min-w-0 items-center gap-2">
+                <li className="sx-mlist__row">
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
                     <Combine
                       size={12}
-                      className="shrink-0 text-primary"
+                      strokeWidth={1.5}
+                      className="sx-acc"
                       aria-hidden="true"
                     />
                     <span
                       className={`truncate text-text ${MONO_DIMENSIONS.has(id) ? "font-mono" : ""}`}
+                      title={absorption.absorbent.name}
                       data-testid="stats-absorption-absorbent"
                     >
                       {absorption.absorbent.name}
@@ -165,36 +154,30 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
                       // A scoped absorption lives in one Pipeline, model or
                       // Node: say which.
                       <span
-                        className="truncate text-text-3"
-                        style={{ fontSize: "10.5px" }}
+                        className="d-meta truncate"
                         data-testid="stats-absorption-scope"
                       >
                         {scopeLabel(absorption)}
                       </span>
                     )}
                   </span>
-                  <span
-                    className="shrink-0 text-text-3"
-                    style={{ fontSize: "10.5px" }}
-                  >
-                    keeps its name
-                  </span>
+                  <span className="d-meta shrink-0">keeps its name</span>
                 </li>
                 {absorption.members.map((member) => (
                   <li
                     key={member.key}
-                    className="flex items-center justify-between gap-3 border-t border-line px-3 py-2"
+                    className="sx-mlist__row"
                     data-testid="stats-absorption-member"
                   >
-                    <span className="min-w-0">
+                    <span className="sx-mlist__two">
                       <span
-                        className={`block truncate text-text ${MONO_DIMENSIONS.has(id) ? "font-mono" : ""}`}
+                        className={`sx-mlist__name ${MONO_DIMENSIONS.has(id) ? "font-mono" : ""}`}
+                        title={member.name}
                       >
                         {member.name}
                       </span>
                       <span
-                        className="block text-text-3"
-                        style={{ fontSize: "10.5px" }}
+                        className="d-meta"
                         data-testid="stats-absorption-origin"
                       >
                         {originNote(member)}
@@ -213,18 +196,10 @@ export default function StatsAbsorptionsPanel({ active }: { active: boolean }) {
         );
       })}
       {error && (
-        <div
-          className="rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
-          style={{ fontSize: "11px" }}
-          data-testid="stats-absorptions-error"
-        >
+        <div className="sx-err" data-testid="stats-absorptions-error">
           {error}
         </div>
       )}
-      <p className="text-text-3" style={{ fontSize: "10.5px" }}>
-        Uncombining a name brings its own row back in Stats. Nothing is
-        rewritten: Stats only reads the rows differently.
-      </p>
     </div>
   );
 }

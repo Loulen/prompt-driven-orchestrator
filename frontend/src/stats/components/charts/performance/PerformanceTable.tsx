@@ -32,6 +32,7 @@ export function PerformanceTable({
   rows,
   harnesses,
   sort,
+  onSortChange,
   mode,
   zoom,
   independentAxis,
@@ -45,6 +46,8 @@ export function PerformanceTable({
   rows: StatsPerformanceEntity[];
   harnesses: string[];
   sort: PerformanceMetric;
+  /** A click on a metric's header sorts by it, like the ranking's select. */
+  onSortChange?: (sort: PerformanceMetric) => void;
   /** Which of the three readings the Duration column shows (#819) — header,
    *  plots, tooltips and the row's « −…s wait » alike. */
   mode: DurationMode;
@@ -126,12 +129,9 @@ export function PerformanceTable({
   const cellProps = { harnesses, mode, zoom, independentAxis };
 
   return (
-    <>
-      <table
-        className="w-full table-fixed text-left"
-        style={{ fontSize: "11px" }}
-      >
-        <PerformanceTableHead mode={mode} />
+    <div className="sx-hscroll">
+      <table className="sx-table sx-table--perf">
+        <PerformanceTableHead mode={mode} sort={sort} onSortChange={onSortChange} />
         <tbody>
           {visible.map(({ row, child, scales }) => {
             const couples = !child && expandablePairs ? (row.models ?? []) : [];
@@ -149,13 +149,13 @@ export function PerformanceTable({
             return (
               <Fragment key={`${child ? "subagent" : "entity"}-${row.id}`}>
                 <tr
-                  className={`group border-t border-line ${pick.className}`}
+                  className={`group ${child ? "sx-sub" : ""}`}
                   data-testid="stats-detail-row"
                   tabIndex={rowSelection ? 0 : undefined}
                   {...pick.rowProps}
                 >
-                  <td className={`py-2 pr-2 text-text-2 ${child ? "pl-7" : ""}`}>
-                    <span className="inline-flex items-center gap-1">
+                  <td>
+                    <span className="sx-name">
                       {pick.control}
                       {couples.length > 0 ? (
                         <button
@@ -170,7 +170,7 @@ export function PerformanceTable({
                               return next;
                             })
                           }
-                          className="shrink-0 hover:text-text"
+                          className="sx-chev"
                         >
                           {couplesExpanded.has(row.id) ? (
                             <ChevronDown size={12} />
@@ -191,7 +191,7 @@ export function PerformanceTable({
                               return next;
                             })
                           }
-                          className="shrink-0 hover:text-text"
+                          className="sx-chev"
                         >
                           {expanded.has(row.id) ? (
                             <ChevronDown size={12} />
@@ -206,13 +206,18 @@ export function PerformanceTable({
                           <button
                             type="button"
                             aria-label={`Open ${row.name}`}
+                            title={row.name}
                             onClick={() => onOpen(row)}
-                            className="text-left hover:text-text"
+                            className="sx-open"
                           >
                             {content}
                           </button>
+                        ) : renderName ? (
+                          content
                         ) : (
-                          <span>{content}</span>
+                          <span className="sx-ellipsis" title={row.name}>
+                            {content}
+                          </span>
                         );
                       })()}
                       <TableCombinedIcon selection={rowSelection} row={row} />
@@ -221,7 +226,7 @@ export function PerformanceTable({
                   </td>
                   {filteredRowIds?.has(row.id)
                     ? PERFORMANCE_METRICS.map((metric) => (
-                        <td key={metric} className="py-2 pr-3 align-top">
+                        <td key={metric}>
                           <FilteredValue testid="stats-performance-filtered-cell" />
                         </td>
                       ))
@@ -243,13 +248,13 @@ export function PerformanceTable({
                       return (
                         <tr
                           key={`${row.id}-${pair.key}`}
-                          className={`group border-t border-line bg-surface-2/40 text-text-3 ${coupled.className}`}
+                          className="group sx-sub"
                           data-testid="stats-performance-model-effort-row"
                           tabIndex={coupled.control ? 0 : undefined}
                           {...coupled.rowProps}
                         >
-                          <td className="py-2 pl-7 pr-2">
-                            <span className="inline-flex items-center gap-1">
+                          <td>
+                            <span className="sx-name">
                               {coupled.control}
                               <span className="inline-flex items-baseline gap-1">
                                 <ProvenanceName
@@ -303,6 +308,6 @@ export function PerformanceTable({
           })}
         </tbody>
       </table>
-    </>
+    </div>
   );
 }

@@ -16,8 +16,7 @@ export function KindBadges({ row }: { row: StatsPerformanceEntity }) {
         <span
           key={kind}
           data-testid={`stats-node-kind-${kind}`}
-          className="shrink-0 rounded border border-line-strong px-1 font-mono text-text-3"
-          style={{ fontSize: "9px" }}
+          className="shrink-0 rounded border border-line-strong px-1 font-mono text-text-3 text-2xs"
         >
           {kind}
         </span>

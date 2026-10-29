@@ -40,7 +40,7 @@ export function AuthorIcon({ author, actor, size = 12 }: { author: string; actor
     <span className="inline-flex items-center gap-1 text-text-3" title={authorLabel(author, display?.name)} data-testid="review-author" data-author-kind={kind}>
       <AuthorGlyph kind={kind} size={size} />
       {kind === "node" && (
-        <span className="font-mono text-text-2" style={{ fontSize: "10px" }}>
+        <span className="font-mono text-text-2 text-2xs">
           {author}
         </span>
       )}
@@ -57,10 +57,9 @@ export function Badge({ kind, children, title }: { kind: "draft" | "sent"; child
   return (
     <span
       title={title}
-      className={`inline-flex h-[14px] items-center gap-[3px] rounded-[7px] px-[5px] font-medium ${
+      className={`text-2xs inline-flex h-[14px] items-center gap-[3px] rounded-[7px] px-[5px] font-medium ${
         kind === "draft" ? "bg-st-await/14 text-st-await" : "bg-st-running/14 text-st-running"
       }`}
-      style={{ fontSize: "9.5px" }}
       data-testid={`review-badge-${kind}`}
     >
       {children}

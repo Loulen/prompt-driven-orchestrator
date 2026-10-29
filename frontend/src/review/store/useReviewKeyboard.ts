@@ -1,14 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { useReviewLayout } from "./useReviewLayout";
 
 /**
  * The Review page's keys (#749, #751, CORE-84): `j` / `k` file, `n` / `p` hunk,
- * `c` / `C` comment, `u` view, `[` list, `/` filter, `←` / `→` fold the folders
- * around the current file. Ignored while typing (Escape leaves the field) and
+ * `c` / `C` comment, `u` view, `[` list, `/` filter, `v` « Viewed » on the
+ * current file, `←` / `→` fold the folders around the current file. Ignored while typing (Escape leaves the field) and
  * with a modifier held.
  */
-export function useReviewKeyboard(layout: ReturnType<typeof useReviewLayout>, jumpComment: (dir: 1 | -1) => void) {
+export function useReviewKeyboard(
+  layout: ReturnType<typeof useReviewLayout>,
+  jumpComment: (dir: 1 | -1) => void,
+  toggleViewedCurrent?: () => void,
+) {
   const { view, listOpen, filter, stepFile, foldCurrent, goHunk, changeView, toggleList, filterRef } = layout;
+  const viewedRef = useRef(toggleViewedCurrent);
+  useEffect(() => {
+    viewedRef.current = toggleViewedCurrent;
+  });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -47,6 +55,9 @@ export function useReviewKeyboard(layout: ReturnType<typeof useReviewLayout>, ju
           break;
         case "[":
           toggleList();
+          break;
+        case "v":
+          viewedRef.current?.();
           break;
         case "/":
           e.preventDefault();

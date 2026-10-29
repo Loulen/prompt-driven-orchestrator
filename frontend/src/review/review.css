@@ -1,0 +1,812 @@
+/*
+ * The Review page, full window: a 36 px header (the Run, its facts, the comment
+ * pills), a 32 px bar (the pair, the view), the file tree on the left and the
+ * file cards on the right. Tokens only (ADR-0091).
+ */
+
+.pdo-review {
+  display: grid;
+  grid-template-rows: var(--h-topbar) var(--h-bar) minmax(0, 1fr);
+  font-size: var(--fs-sm);
+}
+
+/* ------------------------------------------------------------ header */
+.rv-head {
+  position: relative;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  gap: var(--g-4);
+  min-width: 0;
+  padding: 0 var(--g-2) 0 var(--g-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-1);
+  white-space: nowrap;
+}
+.rv-head__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-3);
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--w-strong);
+  color: var(--text);
+  flex: none;
+}
+.rv-head__run {
+  all: unset;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--g-3);
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  font-size: var(--fs-md);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.rv-head__run > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rv-head__run:hover {
+  color: var(--text);
+}
+.rv-head__run:focus-visible {
+  outline: 2px solid var(--focus-ring);
+}
+.rv-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-2);
+  flex: none;
+  font-family: var(--font-code);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+.rv-fact svg {
+  color: var(--text-3);
+}
+.rv-add {
+  color: var(--color-st-done);
+}
+.rv-del {
+  color: var(--color-st-failed);
+}
+.rv-grow {
+  flex: 1 1 auto;
+}
+.rv-vsep {
+  width: 1px;
+  height: 16px;
+  background: var(--line);
+  flex: none;
+}
+
+/* Comment pills of the header. */
+.rv-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-2);
+  height: var(--h-control-sm);
+  padding: 0 var(--g-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-family: var(--font-code);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rv-pill:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.rv-pill:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.rv-pill--draft {
+  border-color: color-mix(in oklch, var(--color-st-await) 45%, transparent);
+  color: var(--color-st-await);
+  font-family: var(--font-ui);
+  cursor: default;
+}
+.rv-pill--unread {
+  border-color: var(--color-st-running);
+  color: var(--color-st-running);
+}
+span.rv-pill {
+  cursor: default;
+}
+
+/* ------------------------------------------------------------ bar */
+.rv-bar {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--g-2);
+  min-width: 0;
+  padding: 0 var(--g-4) 0 var(--g-2);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-0);
+  white-space: nowrap;
+}
+.rv-bar__meta {
+  font-family: var(--font-code);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  flex: none;
+}
+.rv-note {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+.rv-seg .d-seg__btn[aria-pressed="true"] {
+  background: var(--surface-0);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+/* A side of the pair: a select field, mono. */
+.rv-ref {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  width: 240px;
+  height: var(--h-control);
+  padding: 0 var(--g-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  background: var(--surface-1);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.rv-ref:hover:not(:disabled),
+.rv-ref[aria-expanded="true"] {
+  border-color: var(--line-strong);
+}
+.rv-ref:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.rv-ref__label {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-code);
+}
+.rv-ref__sha {
+  font-family: var(--font-code);
+  color: var(--text-3);
+  flex: none;
+}
+.rv-ref__chev {
+  margin-left: auto;
+  color: var(--text-3);
+  flex: none;
+}
+.rv-refpop {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 50;
+  width: 360px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  box-shadow: 0 12px 32px var(--shadow);
+  font-size: var(--fs-sm);
+  white-space: normal;
+}
+
+/* ------------------------------------------------------------ body */
+.rv-body {
+  display: grid;
+  min-height: 0;
+}
+.rv-main {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--g-4) var(--g-5) 0;
+}
+
+/* ------------------------------------------------------------ file tree */
+.rv-tree {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--surface-1);
+}
+.rv-tree__head {
+  display: flex;
+  align-items: center;
+  gap: var(--g-2);
+  height: var(--h-bar);
+  padding: 0 var(--g-3) 0 var(--g-2);
+  border-bottom: 1px solid var(--line-soft);
+  flex: none;
+}
+.rv-search {
+  display: flex;
+  align-items: center;
+  gap: var(--g-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--h-control);
+  padding: 0 var(--g-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  background: var(--surface-0);
+  color: var(--text-3);
+}
+.rv-search:focus-within {
+  border-color: var(--line-strong);
+}
+.rv-search input {
+  all: unset;
+  min-width: 0;
+  flex: 1 1 auto;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.rv-search input::placeholder {
+  color: var(--text-3);
+}
+.rv-tree__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--g-2) 0 var(--g-4);
+}
+.rv-row {
+  display: flex;
+  align-items: center;
+  gap: var(--g-2);
+  width: 100%;
+  height: var(--h-row);
+  padding-right: var(--g-3);
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.rv-row:hover {
+  background: var(--hover);
+}
+.rv-row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.rv-row[data-current="true"] {
+  background: var(--selected);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--selected-edge);
+}
+.rv-row[data-viewed="true"] .rv-row__name {
+  color: var(--text-3);
+}
+.rv-row svg {
+  flex: none;
+}
+.rv-row__name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-code);
+  color: var(--text);
+}
+.rv-row--dir .rv-row__name {
+  color: var(--text-2);
+}
+.rv-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-2);
+  flex: none;
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  color: var(--text-3);
+}
+.rv-marks > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+.rv-mbar {
+  display: inline-flex;
+  gap: 1px;
+  margin-left: 2px;
+}
+.rv-mbar > i {
+  display: block;
+  width: 3px;
+  height: 9px;
+  background: var(--line);
+}
+.rv-mbar > i[data-k="a"] {
+  background: var(--color-st-done);
+}
+.rv-mbar > i[data-k="d"] {
+  background: var(--color-st-failed);
+}
+
+/* The status letter of a file: boxed, in its status colour. */
+.rv-fst {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  font-family: var(--font-code);
+  font-size: var(--fs-2xs);
+  font-weight: var(--w-strong);
+  border-radius: var(--radius-ui);
+  color: var(--st);
+  border: 1px solid color-mix(in oklch, var(--st) 50%, transparent);
+}
+.rv-fst[data-st="M"] {
+  --st: var(--color-st-await);
+}
+.rv-fst[data-st="A"] {
+  --st: var(--color-st-done);
+}
+.rv-fst[data-st="D"] {
+  --st: var(--color-st-failed);
+}
+.rv-fst[data-st="R"] {
+  --st: var(--color-st-running);
+}
+
+/* The Comments section under the files. */
+.rv-csec {
+  margin-top: var(--g-4);
+  border-top: 1px solid var(--line-soft);
+  padding-top: var(--g-2);
+}
+.rv-csec__head {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  height: var(--h-row);
+  padding: 0 var(--g-4);
+}
+.rv-crow {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--g-3);
+  width: 100%;
+  height: 22px;
+  padding: 0 var(--g-4);
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.rv-crow:hover {
+  background: var(--hover);
+}
+.rv-crow[data-dim="true"] {
+  opacity: 0.55;
+}
+.rv-crow__at {
+  font-family: var(--font-code);
+  color: var(--text-2);
+}
+
+/* ------------------------------------------------------------ file card */
+.rv-fc {
+  margin-bottom: var(--g-4);
+  border: 1px solid var(--line);
+  background: var(--surface-0);
+}
+.rv-fc__head {
+  position: sticky;
+  top: calc(-1 * var(--g-4));
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  height: 30px;
+  padding: 0 var(--g-3) 0 var(--g-2);
+  background: var(--surface-1);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+}
+.rv-fc__head[data-expanded="true"] {
+  border-bottom: 1px solid var(--line);
+}
+.rv-fc__toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--g-3);
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.rv-fc__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.rv-fc[data-viewed="true"] .rv-fc__head {
+  background: var(--surface-0);
+}
+.rv-fc[data-viewed="true"] .rv-fc__path,
+.rv-fc[data-viewed="true"] .rv-fc__path * {
+  color: var(--text-3);
+}
+.rv-fc__chev {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--text-3);
+}
+.rv-fc__path {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  white-space: nowrap;
+  font-family: var(--font-code);
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+/* The folders give way first; the file name only once they are gone. */
+.rv-fc__dir {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rv-fc__base {
+  min-width: 0;
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rv-fc__acts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-2);
+  flex: none;
+  cursor: default;
+}
+.rv-fc__acts > span:not(.rv-viewed) {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+.rv-viewed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--g-2);
+  height: var(--h-control-sm);
+  padding: 0 var(--g-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ui);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rv-viewed:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.rv-viewed input {
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.rv-viewed[data-on="true"] {
+  border-color: var(--selected-edge);
+  background: var(--selected);
+  color: var(--text);
+}
+.rv-fc__note {
+  padding: var(--g-5) var(--g-4);
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+
+/* ------------------------------------------------------------ comment threads */
+.rv-ct {
+  max-width: min(720px, calc(100% - 2 * var(--g-4)));
+  margin: var(--g-3) var(--g-4);
+  border: 1px solid var(--line);
+  background: var(--surface-0);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  white-space: normal;
+}
+.rv-ct__head {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  min-height: 26px;
+  padding: 0 var(--g-2) 0 var(--g-3);
+  background: var(--surface-1);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+.rv-ct__head[aria-expanded="true"],
+.rv-ct__head--open {
+  border-bottom: 1px solid var(--line-soft);
+}
+.rv-ct__head[role="button"] {
+  cursor: pointer;
+}
+.rv-ct__head:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.rv-ct__toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--text-3);
+}
+.rv-ct__peek {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Head and foot hold one line in a half-width Split column: their parts never
+ * wrap nor shrink, except the one marked to give way (anchor, hint, label),
+ * which ends in an ellipsis. */
+.rv-ct__head > *,
+.rv-ct__foot > * {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+/* Folded, the excerpt gives way before the anchor. */
+.rv-ct__head > .rv-ct__peek {
+  flex-shrink: 8;
+}
+.rv-ct__head > .rv-ct__fit,
+.rv-ct__foot > .rv-ct__fit {
+  flex-shrink: 1;
+}
+.rv-ct__head > .rv-ct__peek,
+.rv-ct__head > .rv-ct__fit,
+.rv-ct__foot > .rv-ct__fit {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rv-ct__body {
+  padding: var(--g-3) var(--g-4);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.rv-ct__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  min-height: 28px;
+  padding: 0 var(--g-2) 0 var(--g-3);
+  border-top: 1px solid var(--line-soft);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+/* The editor's three buttons: too wide for a half column, they go under. */
+.rv-ct__foot--wrap {
+  flex-wrap: wrap;
+  row-gap: var(--g-1);
+  padding-block: var(--g-1);
+}
+.rv-ct__foot--wrap > .ml-auto {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: var(--g-1);
+}
+.rv-ct__thread {
+  border-top: 1px solid var(--line-soft);
+  background: var(--surface-1);
+}
+.rv-ct--muted {
+  opacity: 0.7;
+}
+.rv-chip-draft {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 var(--g-2);
+  border: 1px solid color-mix(in oklch, var(--color-st-await) 45%, transparent);
+  border-radius: var(--radius-ui);
+  color: var(--color-st-await);
+  font-size: var(--fs-2xs);
+  flex: none;
+}
+.rv-chip-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 var(--g-2);
+  border: 1px solid color-mix(in oklch, var(--color-st-running) 45%, transparent);
+  border-radius: var(--radius-ui);
+  color: var(--color-st-running);
+  font-size: var(--fs-2xs);
+  flex: none;
+}
+
+/* ------------------------------------------------------------ send bar, toast */
+.rv-sendbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  min-height: 40px;
+  margin: 0 calc(-1 * var(--g-5));
+  padding: var(--g-2) var(--g-5);
+  border-top: 1px solid var(--line);
+  background: var(--surface-1);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+/* Narrow, the draft chips scroll and the note ends in an ellipsis: nothing
+ * runs over the button. */
+.rv-sendbar > * {
+  flex: none;
+}
+.rv-sendbar > .flex-1 {
+  flex: 1 1 0;
+}
+.rv-sendbar__chips,
+.rv-sendbar > .rv-sendbar__note {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.rv-sendbar__chips {
+  display: flex;
+  gap: var(--g-1);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.rv-sendbar__chips :focus-visible {
+  outline-offset: -2px;
+}
+.rv-sendbar__note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rv-toast {
+  position: fixed;
+  right: var(--g-5);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: var(--g-3);
+  max-width: 420px;
+  padding: var(--g-3) var(--g-4);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--primary);
+  background: var(--surface-2);
+  box-shadow: 0 8px 24px var(--shadow);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.rv-toast[data-error="true"] {
+  border-left-color: var(--color-st-failed);
+}
+
+/* ---------------------------------------------------------------------------
+ * The diff body (#749): @git-diff-view/react painted with the tokens — two
+ * line-number gutters, the whole row tinted for an addition or a deletion
+ * (`overlays.diffLine`), the hunk header in a running tint.
+ * ------------------------------------------------------------------------- */
+.pdo-review .diff-tailwindcss-wrapper,
+.rv-diff .diff-tailwindcss-wrapper {
+  --diff-border--: var(--line-soft);
+  --diff-plain-content--: var(--surface-0);
+  --diff-plain-lineNumber--: var(--surface-1);
+  --diff-plain-lineNumber-color--: var(--text-3);
+  --diff-expand-content--: var(--surface-1);
+  --diff-expand-lineNumber--: var(--surface-1);
+  --diff-expand-lineNumber-color--: var(--text-3);
+  --diff-add-content--: color-mix(in oklch, var(--color-st-done) 13%, transparent);
+  --diff-add-content-highlight--: color-mix(in oklch, var(--color-st-done) 28%, transparent);
+  --diff-add-lineNumber--: color-mix(in oklch, var(--color-st-done) 20%, var(--surface-1));
+  --diff-del-content--: color-mix(in oklch, var(--color-st-failed) 13%, transparent);
+  --diff-del-content-highlight--: color-mix(in oklch, var(--color-st-failed) 28%, transparent);
+  --diff-del-lineNumber--: color-mix(in oklch, var(--color-st-failed) 20%, var(--surface-1));
+  --diff-empty-content--: var(--surface-1);
+  --diff-hunk-content--: color-mix(in oklch, var(--color-st-running) 7%, var(--surface-1));
+  --diff-hunk-content-color--: var(--text-3);
+  --diff-hunk-lineNumber--: color-mix(in oklch, var(--color-st-running) 7%, var(--surface-1));
+  --diff-hunk-lineNumber-hover--: var(--active);
+  --diff-add-widget--: var(--color-st-running);
+  --diff-add-widget-color--: var(--color-paper);
+  color: var(--text);
+}
+.pdo-review .diff-tailwindcss-wrapper .diff-style-root,
+.rv-diff .diff-tailwindcss-wrapper .diff-style-root {
+  font-family: var(--font-code);
+}
+/* A comment row (a card, or the editor the « + » opens) is pinned to the
+ * visible width of its scroller. The library
+ * sizes it from `getBoundingClientRect`, which already carries the UI scale,
+ * and the zoom then applies a second time: the card overflowed the pane by the
+ * scale factor. The scroller is the query container, so `100cqw` is its width
+ * in local pixels. */
+.pdo-review .diff-table-scroll-container {
+  container-type: inline-size;
+}
+.pdo-review .diff-table-scroll-container .diff-line-extend-wrapper,
+.pdo-review .diff-table-scroll-container .diff-line-widget-wrapper {
+  width: 100cqw !important;
+}
+/* The « + » that opens a comment straddles the gutter's right edge: the
+ * number keeps clear of it. */
+.pdo-review td.diff-line-num,
+.pdo-review td.diff-line-old-num,
+.pdo-review td.diff-line-new-num {
+  padding-right: 18px;
+}
+/* The hunk-separator expanders: the accent on hover. */
+.pdo-review .diff-line-hunk-action button:hover {
+  color: var(--primary);
+}
+
+/* #751: a review reply that just landed over the WebSocket — 2 s outline flash. */
+@keyframes pdo-review-flash {
+  0% {
+    box-shadow: 0 0 0 2px var(--color-st-running);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.pdo-review-flash {
+  animation: pdo-review-flash 2.4s ease-out;
+}

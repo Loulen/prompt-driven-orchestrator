@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Folder, FolderOpen, History, MessageSquare } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleCheck, Folder, FolderOpen, History, MessageSquare } from "lucide-react";
 import type { DiffFile } from "../../shared/generated/DiffFile";
 import { baseName, filePath, miniBar, statusLetter } from "../../run/model/runRefs";
 import type { StateCounts } from "../model/commentStatus";
@@ -9,13 +9,6 @@ import { Badge, StateIcon } from "./commentBits";
 // The rows of the Review page's file tree (CORE-84): a folder (chevron, folder
 // icon, name, unresolved comments it holds) and a file (status letter, name,
 // comment badges, `+a −d`, mini bar), indented by their depth.
-
-const LETTER_CLASS: Record<"A" | "M" | "D" | "R", string> = {
-  A: "text-st-done",
-  M: "text-st-await",
-  D: "text-st-failed",
-  R: "text-st-running",
-};
 
 /** Indent per tree level, in px. */
 const INDENT = 12;
@@ -44,26 +37,23 @@ export function DirRow({
       data-testid="review-dir-row"
       data-path={node.path}
       data-open={open}
-      className="grid w-full cursor-pointer grid-cols-[10px_12px_1fr_auto] items-center gap-1 rounded py-[3px] pr-1.5 text-left text-text-3 hover:bg-hover"
-      style={{ fontSize: "11px", paddingLeft: 6 + depth * INDENT }}
+      className="rv-row rv-row--dir"
+      style={{ paddingLeft: 6 + depth * INDENT }}
     >
-      <Chevron size={10} className="text-text-3" aria-hidden />
-      <Icon size={11} className="text-text-3" aria-hidden />
-      <span className="truncate font-mono" style={{ fontSize: "10.5px" }}>
-        {node.name}
-      </span>
-      {count > 0 ? (
+      <Chevron size={12} strokeWidth={1.5} className="text-text-3" aria-hidden />
+      <Icon size={13} strokeWidth={1.5} className="text-text-3" aria-hidden />
+      <span className="rv-row__name">{node.name}</span>
+      {count > 0 && (
         <span
-          className="inline-flex items-center gap-px font-mono text-text-3"
-          style={{ fontSize: "10px" }}
+          className="rv-marks"
           title={`${plural(count, "unresolved comment")} in this folder`}
           data-testid="review-dir-comments"
         >
-          <MessageSquare size={9} />
-          {count}
+          <span>
+            <MessageSquare size={10} strokeWidth={1.5} />
+            {count}
+          </span>
         </span>
-      ) : (
-        <span />
       )}
     </button>
   );
@@ -78,6 +68,7 @@ export function FileRow({
   sent,
   states: st,
   outdated,
+  viewed = false,
 }: {
   file: DiffFile;
   depth: number;
@@ -87,6 +78,7 @@ export function FileRow({
   sent: number;
   states?: StateCounts;
   outdated: number;
+  viewed?: boolean;
 }) {
   const p = filePath(file);
   const letter = statusLetter(file);
@@ -99,72 +91,65 @@ export function FileRow({
       data-testid="review-file-row"
       data-path={p}
       data-current={cur}
-      className={`grid w-full cursor-pointer grid-cols-[14px_1fr_auto] items-center gap-1.5 rounded py-[3px] pr-1.5 text-left ${
-        cur ? "bg-surface-2 shadow-[inset_2px_0_0_var(--primary)]" : "hover:bg-hover"
-      }`}
-      style={{ fontSize: "11px", paddingLeft: 6 + depth * INDENT }}
+      data-viewed={viewed}
+      className="rv-row"
+      style={{ paddingLeft: 6 + depth * INDENT }}
     >
-      <span
-        className={`w-[14px] text-center font-mono font-semibold ${LETTER_CLASS[letter]}`}
-        style={{ fontSize: "9.5px" }}
-      >
+      <span className="rv-fst" data-st={letter}>
         {letter}
       </span>
-      <span className={`truncate font-mono ${cur ? "text-text" : "text-text-2"}`} style={{ fontSize: "10.5px" }}>
-        {baseName(p)}
-      </span>
-      <span className="flex items-center gap-1 font-mono" style={{ fontSize: "10px" }}>
+      <span className="rv-row__name">{baseName(p)}</span>
+      <span className="rv-marks">
         {drafts > 0 && <Badge kind="draft">{drafts}</Badge>}
         {outdated > 0 && (
           <span
-            className="inline-flex items-center text-st-skipped"
+            className="text-st-skipped"
             title={`${outdated} outdated — the line changed on this destination`}
             data-testid="review-file-row-outdated"
           >
-            <History size={9} />
+            <History size={10} />
           </span>
         )}
         {st ? (
           <>
             {st.proposed > 0 && (
-              <span className="inline-flex items-center gap-px text-st-await" title={`${st.proposed} resolution proposed`}>
-                <StateIcon state="proposed" size={9} />
+              <span className="text-st-await" title={`${st.proposed} resolution proposed`}>
+                <StateIcon state="proposed" size={10} />
                 {st.proposed}
               </span>
             )}
             {st.open > 0 && (
-              <span className="inline-flex items-center gap-px text-text-3" title={`${st.open} open`}>
-                <StateIcon state="open" size={9} />
+              <span title={`${st.open} open`}>
+                <StateIcon state="open" size={10} />
                 {st.open}
               </span>
             )}
             {st.resolved > 0 && (
-              <span className="inline-flex items-center gap-px text-st-done" title={`${st.resolved} resolved`}>
-                <StateIcon state="resolved" size={9} />
+              <span className="text-st-done" title={`${st.resolved} resolved`}>
+                <StateIcon state="resolved" size={10} />
               </span>
             )}
           </>
         ) : (
           sent > 0 && <Badge kind="sent">{sent}</Badge>
         )}
-        {file.binary ? (
-          <span className="text-text-3">bin</span>
-        ) : pureRename ? (
-          <span className="text-text-3">→</span>
-        ) : (
-          <>
-            <span className="text-st-done">+{file.additions}</span>
-            <span className="text-st-failed">−{file.deletions}</span>
-          </>
+        {viewed && (
+          <span title="Viewed" data-testid="review-file-row-viewed">
+            <CircleCheck size={11} strokeWidth={1.5} aria-label="Viewed" />
+          </span>
         )}
-        <span className="ml-0.5 inline-flex gap-px" aria-hidden>
+        {file.binary ? (
+          <span>bin</span>
+        ) : pureRename ? (
+          <span>→</span>
+        ) : (
+          <span>
+            <span className="rv-add">+{file.additions}</span> <span className="rv-del">−{file.deletions}</span>
+          </span>
+        )}
+        <span className="rv-mbar" aria-hidden>
           {miniBar(file).map((b, i) => (
-            <i
-              key={i}
-              className={`block h-2 w-[3px] rounded-[1px] ${
-                b === "a" ? "bg-st-done" : b === "d" ? "bg-st-failed" : "bg-surface-2"
-              }`}
-            />
+            <i key={i} data-k={b} />
           ))}
         </span>
       </span>

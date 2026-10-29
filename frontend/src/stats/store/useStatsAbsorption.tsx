@@ -272,13 +272,10 @@ export function useStatsAbsorption({
   const overlay = (
     <>
       {refused && (
-        <div
-          role="status"
-          data-testid="stats-absorption-refusal"
-          className="fixed bottom-20 left-1/2 z-40 max-w-[440px] -translate-x-1/2 rounded-md border border-st-await/40 bg-surface-2/95 px-3 py-2 text-st-await shadow-lg backdrop-blur"
-          style={{ fontSize: "11.5px" }}
-        >
-          {refused}
+        <div className="sx-bulkpos sx-bulkpos--up">
+          <div role="status" data-testid="stats-absorption-refusal" className="sx-refusal">
+            {refused}
+          </div>
         </div>
       )}
       {selection.length >= 2 && !modalOpen && (

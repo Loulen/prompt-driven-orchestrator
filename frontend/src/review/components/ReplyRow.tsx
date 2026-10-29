@@ -26,14 +26,14 @@ export default function ReplyRow({ reply: r, first, unread }: { reply: ReviewRep
         <AuthorGlyph kind={kind} size={12} />
       </span>
       <div className="min-w-0">
-        <div className="flex items-center gap-1.5 text-text-3" style={{ fontSize: "10.5px" }}>
+        <div className="flex items-center gap-1.5 text-text-3 text-xs">
           {name && (
             <span className="text-text-2" data-testid="review-reply-actor">
               {kind === "user" ? name : `${name} (agent)`}
             </span>
           )}
           {kind === "node" && (
-            <span className="font-mono text-text-2" style={{ fontSize: "10px" }} title={`node ${r.author}`}>
+            <span className="font-mono text-text-2 text-2xs" title={`node ${r.author}`}>
               {r.author}
             </span>
           )}
@@ -48,8 +48,7 @@ export default function ReplyRow({ reply: r, first, unread }: { reply: ReviewRep
           )}
         </div>
         <div
-          className="artifact-markdown text-text [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
-          style={{ fontSize: "11.5px", lineHeight: 1.5 }}
+          className="artifact-markdown text-md leading-[1.45] text-text [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
           data-testid="review-reply-body"
         >
           <ReviewMarkdown text={r.text} />

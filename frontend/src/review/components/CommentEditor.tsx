@@ -105,14 +105,13 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
 
   return (
     <div
-      className="my-2 ml-3 mr-3 max-w-[720px] overflow-hidden rounded-md border border-line-strong bg-surface-1 font-sans"
-      style={{ fontSize: "11px", whiteSpace: "normal" }}
+      className="rv-ct"
       data-testid="review-comment-editor"
       data-anchor={anchorLabel(anchor)}
     >
-      <div className="flex items-center gap-2 border-b border-line bg-surface-2 px-2.5 py-[5px] text-text-3" style={{ fontSize: "10.5px" }}>
+      <div className="rv-ct__head rv-ct__head--open">
         <span className="font-medium text-text-2">{editing ? "Edit draft" : "New comment"}</span>
-        <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+        <span className="rv-ct__fit font-mono text-text-3 text-2xs" title={`${anchorLabel(anchor)} · ${sideLabel(anchor.side)}`}>
           {anchorLabel(anchor)} · {sideLabel(anchor.side)}
         </span>
         <span className="ml-auto inline-flex overflow-hidden rounded border border-line-strong" role="tablist">
@@ -122,8 +121,7 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
             aria-selected={tab === "write"}
             onClick={() => setTab("write")}
             data-testid="review-editor-write"
-            className={`cursor-pointer px-2 py-px ${tab === "write" ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"}`}
-            style={{ fontSize: "10px" }}
+            className={`text-2xs cursor-pointer px-2 py-px ${tab === "write" ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"}`}
           >
             Write
           </button>
@@ -133,8 +131,7 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
             aria-selected={tab === "preview"}
             onClick={() => setTab("preview")}
             data-testid="review-editor-preview"
-            className={`cursor-pointer border-l border-line-strong px-2 py-px ${tab === "preview" ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"}`}
-            style={{ fontSize: "10px" }}
+            className={`text-2xs cursor-pointer border-l border-line-strong px-2 py-px ${tab === "preview" ? "bg-surface-2 text-text" : "text-text-3 hover:text-text-2"}`}
           >
             Preview
           </button>
@@ -170,13 +167,13 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
           }}
           placeholder="Leave a comment for the manager… Markdown supported."
           data-testid="review-editor-text"
-          className="block w-full resize-y border-0 border-b border-line bg-surface-0 px-2.5 py-2 text-text outline-none focus:shadow-[inset_0_-1px_0_var(--primary)]"
-          style={{ minHeight: 72, fontSize: "11.5px", lineHeight: 1.5, fontFamily: "inherit" }}
+          className="block w-full resize-y border-0 border-b border-line bg-surface-0 px-2.5 py-2 text-md leading-[1.45] text-text outline-none focus:shadow-[inset_0_-1px_0_var(--primary)]"
+          style={{ minHeight: 72, fontFamily: "inherit" }}
         />
       ) : (
         <div
-          className="artifact-markdown border-b border-line px-2.5 py-2 text-text [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
-          style={{ minHeight: 72, fontSize: "11.5px", lineHeight: 1.5 }}
+          className="artifact-markdown border-b border-line px-2.5 py-2 text-md leading-[1.45] text-text [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:list-disc [&_ul]:pl-5"
+          style={{ minHeight: 72 }}
           data-testid="review-editor-preview-body"
         >
           {text.trim() ? (
@@ -189,17 +186,14 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
 
       {tab === "write" && <CompletionList completion={completion} textarea={ref} onPick={pickSuggestion} />}
 
-      <div className="flex items-center gap-2 px-2.5 py-[5px] text-text-3" style={{ fontSize: "10px" }}>
-        <span>
-          <Kbd>⌘↵</Kbd> save draft · <Kbd>Esc</Kbd> cancel · markdown
-        </span>
+      <div className="rv-ct__foot rv-ct__foot--wrap">
         <span className="ml-auto inline-flex gap-1.5">
           <button
             type="button"
             onClick={cancel}
+            title="Cancel (Esc)"
             data-testid="review-editor-cancel"
-            className="cursor-pointer rounded border border-transparent px-2 py-0.5 text-text-3 hover:bg-hover hover:text-text"
-            style={{ fontSize: "10.5px" }}
+            className="d-btn d-btn--ghost d-btn--sm"
           >
             Cancel
           </button>
@@ -209,8 +203,7 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
             disabled={!canSubmit || !!sendDisabledReason}
             title={sendDisabledReason ?? "Save as draft and send this one comment now"}
             data-testid="review-editor-send"
-            className="cursor-pointer rounded border border-line-strong bg-surface-2 px-2 py-0.5 text-text-2 hover:bg-hover hover:text-text disabled:cursor-not-allowed disabled:opacity-45"
-            style={{ fontSize: "10.5px" }}
+            className="d-btn d-btn--sm"
           >
             Send now
           </button>
@@ -218,9 +211,9 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
             type="button"
             onClick={save}
             disabled={!canSubmit}
+            title="Save as draft (Ctrl+Enter); Markdown"
             data-testid="review-editor-save"
-            className="cursor-pointer rounded border border-primary bg-primary px-2 py-0.5 font-semibold text-primary-ink hover:bg-primary-hi disabled:cursor-not-allowed disabled:opacity-45"
-            style={{ fontSize: "10.5px" }}
+            className="d-btn d-btn--primary d-btn--sm"
           >
             {editing ? "Update draft" : "Save draft"}
           </button>
@@ -230,10 +223,3 @@ export default function CommentEditor({ anchor, pair, initial, wipKey, sendDisab
   );
 }
 
-function Kbd({ children }: { children: string }) {
-  return (
-    <kbd className="rounded-[3px] border border-line-strong bg-surface-2 px-1 font-mono text-text-3" style={{ fontSize: "9.5px" }}>
-      {children}
-    </kbd>
-  );
-}

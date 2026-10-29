@@ -195,7 +195,7 @@ function diff(files: DiffFile[], extra: Partial<StructuredDiff> = {}): Structure
   };
 }
 
-const TWO = diff([file({ path: "src/main.tsx" }), file({ path: "docs/adr/0068.md", status: "added", old_path: null, deletions: 0 })]);
+const TWO = diff([file({ path: "src/main.tsx" }), file({ path: "web/adr/0068.md", status: "added", old_path: null, deletions: 0 })]);
 
 function goto(search = "") {
   window.history.replaceState(null, "", `/runs/${RUN_ID}/review${search}`);
@@ -232,7 +232,7 @@ describe("ReviewPage (#749)", () => {
     expect(rows[0]).toHaveTextContent("main.tsx");
     expect(rows[0]).toHaveTextContent("+2");
     expect(rows[0]).toHaveTextContent("−1");
-    expect(screen.getAllByTestId("review-dir-row").map((r) => r.textContent)).toEqual(["src", "docs/adr"]);
+    expect(screen.getAllByTestId("review-dir-row").map((r) => r.textContent)).toEqual(["src", "web/adr"]);
     // Default pair: no reset, no delivery chip.
     expect(screen.queryByTestId("review-reset")).toBeNull();
     expect(screen.queryByTestId("review-delivery-chip")).toBeNull();
@@ -285,7 +285,7 @@ describe("ReviewPage (#749)", () => {
     expect(mockedFile).toHaveBeenCalledWith(RUN_ID, "src/main.tsx", "fork");
     expect(mockedFile).toHaveBeenCalledWith(RUN_ID, "src/main.tsx", "tip");
     // Added file: only the new side.
-    expect(mockedFile).toHaveBeenCalledWith(RUN_ID, "docs/adr/0068.md", "tip");
+    expect(mockedFile).toHaveBeenCalledWith(RUN_ID, "web/adr/0068.md", "tip");
     await waitFor(() =>
       expect(screen.getAllByTestId("mock-diff-view")[0]).toHaveAttribute("data-has-content", "true"),
     );
@@ -385,6 +385,54 @@ describe("ReviewPage (#749)", () => {
     for (const c of screen.getAllByTestId("review-file")) expect(c).toHaveAttribute("data-collapsed", "true");
     fireEvent.click(screen.getByTestId("review-collapse-all"));
     for (const c of screen.getAllByTestId("review-file")) expect(c).toHaveAttribute("data-collapsed", "false");
+  });
+
+  it("folds a card from its toggle, a button that holds no other control, the file name apart from its folders", async () => {
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));
+    const card = screen.getAllByTestId("review-file")[0];
+    const toggle = within(card).getByTestId("review-file-toggle");
+    expect(toggle.tagName).toBe("BUTTON");
+    expect(toggle.querySelector("button, a, input, [role='button']")).toBeNull();
+    expect(within(card).getByTestId("review-file-header")).not.toHaveAttribute("role");
+    expect(toggle.querySelector(".rv-fc__base")?.textContent).not.toContain("/");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(toggle);
+    expect(card).toHaveAttribute("data-collapsed", "true");
+    expect(within(card).getByTestId("review-file-toggle")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("marks a file « Viewed »: its card folds, the bar counts it, the tree checks it, and it stays across a reload", async () => {
+    const { unmount } = render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));
+    expect(screen.getByTestId("review-viewed-count")).toHaveTextContent("0/2 viewed");
+    const card = screen.getAllByTestId("review-file")[0];
+    fireEvent.click(within(card).getByRole("checkbox", { name: /^Viewed / }));
+    expect(card).toHaveAttribute("data-viewed", "true");
+    expect(card).toHaveAttribute("data-collapsed", "true");
+    expect(screen.getByTestId("review-viewed-count")).toHaveTextContent("1/2 viewed");
+    expect(within(screen.getAllByTestId("review-file-row")[0]).getByTestId("review-file-row-viewed")).toBeInTheDocument();
+    unmount();
+
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));
+    const again = screen.getAllByTestId("review-file")[0];
+    expect(again).toHaveAttribute("data-viewed", "true");
+    // A viewed file opens folded.
+    expect(again).toHaveAttribute("data-collapsed", "true");
+    // Unmarked, the card unfolds again.
+    fireEvent.click(within(again).getByRole("checkbox", { name: /^Viewed / }));
+    expect(again).toHaveAttribute("data-viewed", "false");
+    expect(again).toHaveAttribute("data-collapsed", "false");
+    expect(screen.getByTestId("review-viewed-count")).toHaveTextContent("0/2 viewed");
+  });
+
+  it("toggles « Viewed » on the current file with v", async () => {
+    render(<ReviewPage runId={RUN_ID} />);
+    await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));
+    fireEvent.keyDown(window, { key: "v" });
+    expect(screen.getAllByTestId("review-file")[0]).toHaveAttribute("data-viewed", "true");
+    expect(screen.getByTestId("review-viewed-count")).toHaveTextContent("1/2 viewed");
   });
 
   it("filters the file list", async () => {
@@ -628,8 +676,8 @@ describe("ReviewPage — review comments (#750)", () => {
     expect(screen.queryByTestId("review-comment-editor")).toBeNull();
     expect(sessionStorage.getItem(`pdo.review.wip.${RUN_ID}|src/main.tsx|new|2|fork|tip`)).toBeNull();
     // Chrome: pill, footer bar with a chip, header + sidebar badges, Comments section.
-    expect(screen.getByTestId("review-send-pill")).toHaveTextContent("Send 1 draft to manager");
-    expect(screen.getByTestId("review-send-bar")).toHaveTextContent("1 draft ready to send");
+    expect(screen.getByTestId("review-drafts-pill")).toHaveTextContent("1 draft");
+    expect(screen.getByTestId("review-send-bar")).toHaveTextContent("1 draft");
     expect(screen.getByTestId("review-send-chip")).toHaveTextContent("main.tsx:R2");
     expect(screen.getAllByTestId("review-file")[0]).toHaveAttribute("data-drafts", "1");
     expect(screen.getAllByTestId("review-comment-row")).toHaveLength(1);
@@ -673,8 +721,8 @@ describe("ReviewPage — review comments (#750)", () => {
     await openEditorAndSave("one");
     await openEditorAndSave("two", "mock-add-old-2");
     expect(screen.getAllByTestId("review-comment")).toHaveLength(2);
-    expect(screen.getByTestId("review-send-bar")).toHaveTextContent("2 drafts ready to send");
-    expect(screen.getByTestId("review-send-bar-note")).toHaveTextContent("starts it first");
+    expect(screen.getByTestId("review-send-bar")).toHaveTextContent("2 drafts");
+    expect(screen.getByTestId("review-send-bar-note")).toHaveTextContent("starts the manager first");
 
     const sent = [sentComment({ id: "rc-001", side: "new", line: 2, text: "one" }), sentComment({ id: "rc-002", side: "old", line: 2, text: "two" })];
     mockedSend.mockResolvedValue({ sent, batch_id: "b1", manager_started: true });
@@ -766,7 +814,6 @@ describe("ReviewPage — review comments (#750)", () => {
     await screen.findByTestId("review-comment");
     expect(screen.getByTestId("review-comment-send")).toBeDisabled();
     expect(screen.getByTestId("review-send-all")).toBeDisabled();
-    expect(screen.getByTestId("review-send-pill")).toBeDisabled();
     expect(screen.getByTestId("review-send-bar-note")).toHaveTextContent("no longer exists");
     expect(mockedSend).not.toHaveBeenCalled();
   });
@@ -915,7 +962,7 @@ describe("ReviewPage — review conversation (#751)", () => {
     // Sidebar order and dimming.
     const rows = screen.getAllByTestId("review-comment-row");
     expect(rows.map((r) => r.dataset.reviewState)).toEqual(["proposed", "open", "resolved"]);
-    expect(rows[2].className).toContain("opacity-55");
+    expect(rows[2]).toHaveAttribute("data-dim", "true");
     expect(screen.getByTestId("review-comments-count")).toHaveTextContent("0 drafts · 3 sent");
     // Eye toggle: the resolved card leaves the diff, the pill stays.
     fireEvent.click(screen.getByTestId("review-toggle-resolved"));

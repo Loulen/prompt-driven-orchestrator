@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, CornerDownRight, History, Lock, MessageSquare, Undo2 } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CornerDownRight, History, Lock, MessageSquare, Undo2 } from "lucide-react";
 import { useActorDisplay } from "../../shared/actors/store";
 import type { CommentState } from "../model/commentStatus";
 import { authorKind, authorLabel, commentState, firstWords, footerStatus, plural, relativeTime } from "../model/commentStatus";
@@ -54,22 +54,27 @@ export default function SentCard({
   const state = commentState(c);
   const replies = c.replies ?? [];
   const footer = footerStatus(c);
-  // Resolved ⇒ collapsed (GitHub-like), until the header is clicked. The
-  // expansion is keyed on the resolution it was opened for, so a comment
-  // resolved again later collapses again without an effect. #752: an outdated
-  // card collapses the same way (keyed on "outdated" while it stays so).
-  const [expandedFor, setExpandedFor] = useState<string | null>(null);
-  const collapsible = state === "resolved" || !!outdated;
-  const resolutionKey = outdated ? `outdated:${c.resolved_at ?? ""}` : (c.resolved_at ?? "resolved");
-  const collapsed = collapsible && expandedFor !== resolutionKey;
-  const setExpanded = (fn: (open: boolean) => boolean) =>
-    setExpandedFor((prev) => (fn(prev === resolutionKey) ? resolutionKey : null));
+  // A boxed thread folds (`overlays.commentThread`): resolved ⇒ collapsed
+  // (GitHub-like), open ⇒ unfolded, until the header is clicked. The click is
+  // keyed on the resolution it was made for, so a comment resolved later
+  // folds again without an effect. #752: an outdated card collapses the same
+  // way (keyed on "outdated" while it stays so).
+  const [toggledFor, setToggledFor] = useState<string | null>(null);
+  const foldedByDefault = state === "resolved" || !!outdated;
+  const resolutionKey = outdated
+    ? `outdated:${c.resolved_at ?? ""}`
+    : state === "resolved"
+      ? (c.resolved_at ?? "resolved")
+      : "open";
+  const collapsed = foldedByDefault !== (toggledFor === resolutionKey);
+  const toggle = () => setToggledFor((prev) => (prev === resolutionKey ? null : resolutionKey));
   const originalHunk = outdated ? parseExcerpt(c.excerpt) : [];
 
   // Seen: hover, or in view for a moment. Only while something is unread.
   const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (unread === 0 || !onSeen) return;
+    // A folded card shows no reply: nothing is seen until it unfolds.
+    if (unread === 0 || !onSeen || collapsed) return;
     const el = rootRef.current;
     if (!el || typeof IntersectionObserver === "undefined") return;
     let timer: number | undefined;
@@ -83,7 +88,7 @@ export default function SentCard({
       window.clearTimeout(timer);
       io.disconnect();
     };
-  }, [unread, onSeen]);
+  }, [unread, onSeen, collapsed]);
 
   const firstUnread = replies.length - unread;
   const resolver = c.resolved_by ?? "user";
@@ -100,11 +105,8 @@ export default function SentCard({
   return (
     <div
       ref={rootRef}
-      onMouseEnter={unread > 0 ? onSeen : undefined}
-      className={`group my-2 ml-3 mr-3 max-w-[720px] overflow-hidden rounded-md border border-line-strong bg-surface-1 font-sans ${
-        flash ? "pdo-review-flash" : ""
-      }`}
-      style={{ fontSize: "11px", whiteSpace: "normal" }}
+      onMouseEnter={unread > 0 && !collapsed ? onSeen : undefined}
+      className={`group rv-ct ${flash ? "pdo-review-flash" : ""}`}
       data-testid="review-comment"
       data-state={c.status}
       data-review-state={state}
@@ -116,24 +118,24 @@ export default function SentCard({
       data-moved-from={movedFrom}
     >
       <div
-        role={collapsible ? "button" : undefined}
-        tabIndex={collapsible ? 0 : undefined}
-        aria-expanded={collapsible ? !collapsed : undefined}
-        onClick={collapsible ? () => setExpanded((e) => !e) : undefined}
-        onKeyDown={
-          collapsible
-            ? (e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  setExpanded((x) => !x);
-                }
-              }
-            : undefined
-        }
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
         data-testid="review-comment-header"
-        className={`flex items-center gap-2 bg-surface-2 px-2.5 py-[5px] text-text-3 ${collapsed ? "cursor-pointer" : "border-b border-line"}`}
-        style={{ fontSize: "10.5px", borderLeft: `2px solid ${outdated ? "var(--color-st-skipped)" : STATE_COLOR[state]}` }}
+        className="rv-ct__head"
+        style={{ boxShadow: `inset 2px 0 0 ${outdated ? "var(--color-st-skipped)" : STATE_COLOR[state]}` }}
       >
+        <span className="rv-ct__toggle" aria-hidden>
+          {collapsed ? <ChevronRight size={12} strokeWidth={1.5} /> : <ChevronDown size={12} strokeWidth={1.5} />}
+        </span>
         {outdated && (
           <span className="inline-flex items-center text-st-skipped" title="Outdated — the line changed since this comment was written" data-testid="review-comment-outdated">
             <History size={11} />
@@ -143,8 +145,7 @@ export default function SentCard({
         <AuthorIcon author={c.author} actor={c.actor} />
         {outdated ? (
           <span
-            className="font-mono text-text-3"
-            style={{ fontSize: "10px" }}
+            className="font-mono text-text-3 text-2xs"
             title={`Written on ${outdated.writtenOn}, at ${label}`}
             data-testid="review-comment-written-on"
           >
@@ -152,14 +153,13 @@ export default function SentCard({
             {c.line} <span className="font-sans text-text-3">on</span> {outdated.writtenOn}
           </span>
         ) : (
-          <span className="font-mono text-text-3" style={{ fontSize: "10px" }}>
+          <span className="rv-ct__fit font-mono text-text-3 text-2xs" title={label}>
             {label}
           </span>
         )}
         {movedFrom !== undefined && !outdated && (
           <span
-            className="inline-flex cursor-help items-center gap-0.5 rounded px-1 font-mono text-text-3 hover:bg-hover hover:text-text-2"
-            style={{ fontSize: "10px" }}
+            className="inline-flex cursor-help items-center gap-0.5 rounded px-1 font-mono text-text-3 hover:bg-hover hover:text-text-2 text-2xs"
             title={`Written at ${c.side === "old" ? "L" : "R"}${movedFrom} on ${pairLabel.split(" → ")[c.side === "old" ? 0 : 1] ?? pairLabel}; the line is unchanged, so it follows it here.`}
             data-testid="review-comment-moved-from"
           >
@@ -168,13 +168,8 @@ export default function SentCard({
           </span>
         )}
         <span className="text-text-3">· {relativeTime(c.sent_at)}</span>
-        {collapsible && (
-          <span className={`text-text-3 transition-transform ${collapsed ? "" : "rotate-90"}`} aria-hidden>
-            <ChevronRight size={10} />
-          </span>
-        )}
         {collapsed && (
-          <span className="flex min-w-0 items-center gap-1.5 truncate text-text-3" style={{ fontSize: "10px" }} data-testid="review-comment-summary">
+          <span className="rv-ct__peek flex min-w-0 items-center gap-1.5" data-testid="review-comment-summary">
             <span className="truncate">“{firstWords(c.text)}”</span>
             {replies.length > 0 && (
               <span className="inline-flex items-center gap-0.5 text-text-3" title={plural(replies.length, "reply").replace("replys", "replies")}>
@@ -205,16 +200,16 @@ export default function SentCard({
         <>
           {outdated && (
             <div className="border-b border-line bg-surface-0" data-testid="review-comment-original-hunk">
-              <div className="flex items-center gap-1.5 border-b border-line bg-surface-2 px-2.5 py-1 text-text-3" style={{ fontSize: "10px" }}>
+              <div className="flex items-center gap-1.5 border-b border-line bg-surface-2 px-2.5 py-1 text-text-3 text-2xs">
                 <History size={10} />
                 Original hunk ·{" "}
-                <span className="rounded border border-line-strong bg-surface-2 px-1.5 font-mono text-text-2" style={{ fontSize: "10px" }}>
+                <span className="rounded border border-line-strong bg-surface-2 px-1.5 font-mono text-text-2 text-2xs">
                   {outdated.writtenOn}
                 </span>{" "}
                 · this is what the comment was written against
               </div>
               {originalHunk.length > 0 ? (
-                <div className="font-mono" style={{ fontSize: "10.5px", lineHeight: "18px" }}>
+                <div className="font-mono text-xs leading-[18px]">
                   {originalHunk.map((l) => (
                     <div
                       key={l.no}
@@ -223,7 +218,7 @@ export default function SentCard({
                       data-marked={l.marked ? "true" : undefined}
                       style={l.marked ? { background: "color-mix(in oklab, var(--color-st-skipped) 14%, transparent)", boxShadow: "inset 3px 0 0 var(--color-st-skipped)" } : undefined}
                     >
-                      <span className="select-none pr-2 text-right text-text-3" style={{ fontSize: "10px" }}>
+                      <span className="select-none pr-2 text-right text-text-3 text-2xs">
                         {l.no}
                       </span>
                       <span className="whitespace-pre pl-2.5 text-text-2">{l.text}</span>
@@ -231,7 +226,7 @@ export default function SentCard({
                   ))}
                 </div>
               ) : (
-                <div className="px-2.5 py-1.5 text-text-3" style={{ fontSize: "10px" }}>
+                <div className="px-2.5 py-1.5 text-text-3 text-2xs">
                   No excerpt was stored with this comment.
                 </div>
               )}
@@ -239,18 +234,18 @@ export default function SentCard({
           )}
           {body(c.text)}
           {replies.length > 0 && (
-            <div className="border-t border-line bg-surface-0" data-testid="review-comment-thread">
+            <div className="rv-ct__thread" data-testid="review-comment-thread">
               {replies.map((r, i) => (
                 <ReplyRow key={`${r.at}-${i}`} reply={r} first={i === 0} unread={i >= firstUnread} />
               ))}
             </div>
           )}
           {/* One line whatever the width: the pair label truncates, the id and the status never wrap. */}
-          <div className="flex items-center gap-2 whitespace-nowrap border-t border-line px-2.5 py-[5px] text-text-3" style={{ fontSize: "10px" }}>
+          <div className="rv-ct__foot">
             <span className="shrink-0 font-mono" data-testid="review-comment-id">
               {c.id}
             </span>
-            <span className="min-w-0 truncate" title={pairLabel}>· {pairLabel}</span>
+            <span className="rv-ct__fit" title={pairLabel}>· {pairLabel}</span>
             {outdated && (
               <span className="inline-flex items-center gap-1 text-st-skipped" title="The line this comment points at changed on the displayed destination">
                 <History size={10} /> line changed

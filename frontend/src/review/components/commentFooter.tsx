@@ -85,8 +85,7 @@ export function DecisionButton({
       disabled={disabled}
       title={title}
       data-testid={testId}
-      className={`inline-flex cursor-pointer items-center gap-1 rounded border px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-45 ${look}`}
-      style={{ fontSize: "10.5px" }}
+      className={`text-xs inline-flex cursor-pointer items-center gap-1 rounded border px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-45 ${look}`}
     >
       {children}
     </button>

@@ -46,10 +46,9 @@ export function CombinedIcon({
         event.stopPropagation();
         onOpen();
       }}
-      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-line-strong bg-surface-2 px-1.5 font-mono text-text-3 transition-colors hover:border-primary hover:text-text-2"
-      style={{ fontSize: "9.5px", lineHeight: "15px" }}
+      className="sx-absmark"
     >
-      <Combine size={10} aria-hidden="true" />
+      <Combine size={11} strokeWidth={1.5} aria-hidden="true" />
       {count}
     </span>
   );
@@ -80,18 +79,17 @@ export function GlobalAbsorptionIcon({
         event.stopPropagation();
         onOpen();
       }}
-      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full border border-dashed border-line bg-surface-1 px-1.5 font-mono text-text-3 opacity-80 transition-colors hover:border-line-strong hover:text-text-3"
-      style={{ fontSize: "9.5px", lineHeight: "15px" }}
+      className="sx-absmark sx-absmark--global"
     >
-      <Combine size={10} aria-hidden="true" />
+      <Combine size={11} strokeWidth={1.5} aria-hidden="true" />
       {count}
     </span>
   );
 }
 
 /** The ✕ that takes one member out of its absorption — in the members list and
- *  in Settings › General › Stats absorptions (#891), the same gesture. Drawn
- *  like Settings' other actions (#906): a readable glyph in a bordered box. */
+ *  in Settings › General › Stats absorptions (#891), the same gesture: a small
+ *  icon button that turns red on hover. */
 export function UncombineButton({
   name,
   disabled,
@@ -109,39 +107,67 @@ export function UncombineButton({
       disabled={disabled}
       onClick={onClick}
       data-testid="stats-uncombine"
-      className="shrink-0 cursor-pointer rounded border border-line-strong bg-surface-2 p-1 text-text-2 transition-colors hover:border-st-failed hover:text-st-failed disabled:opacity-50"
+      className="d-icon d-icon--sm sx-uncombine"
     >
-      <X size={12} strokeWidth={2.5} />
+      <X size={12} strokeWidth={1.5} aria-hidden="true" />
     </button>
   );
 }
 
 // --- Modals ---------------------------------------------------------------------
 
+/**
+ * The frame of the absorption dialogs, drawn like the kit's modal: a title bar
+ * (icon, title, anything after it), the body, a footer with a note on the left
+ * and the buttons on the right. A click on the backdrop dismisses it; Escape is
+ * routed by the host (`useStatsAbsorption`).
+ */
 export function ModalFrame({
   testid,
   onDismiss,
+  icon,
+  title,
+  titleExtra,
+  footerNote,
+  actions,
+  size = "m",
   children,
 }: {
   testid: string;
   onDismiss: () => void;
+  icon?: React.ReactNode;
+  title: React.ReactNode;
+  titleExtra?: React.ReactNode;
+  footerNote?: React.ReactNode;
+  actions?: React.ReactNode;
+  size?: "s" | "m";
   children: React.ReactNode;
 }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
+      className="sx-dlg-backdrop"
       data-testid={`${testid}-backdrop`}
       onClick={onDismiss}
     >
       <div
         role="dialog"
         aria-modal="true"
-        className="w-[400px] rounded-lg border border-line bg-surface-1 p-4 shadow-lg"
-        style={{ fontSize: "12px" }}
+        className={`sx-dlg ${size === "s" ? "sx-dlg--s" : ""}`}
         onClick={(event) => event.stopPropagation()}
         data-testid={testid}
       >
-        {children}
+        <header className="sx-dlg__head">
+          {icon}
+          <h3 className="sx-dlg__title">{title}</h3>
+          {titleExtra}
+        </header>
+        <div className="sx-dlg__body">{children}</div>
+        {(footerNote || actions) && (
+          <footer className="sx-dlg__foot">
+            <span className="sx-dlg__note">{footerNote}</span>
+            {actions}
+          </footer>
+        )}
       </div>
     </div>
   );
@@ -173,45 +199,55 @@ export function MembersModal<T extends AbsorbableRow>({
   onClose: () => void;
 }) {
   return (
-    <ModalFrame testid="stats-members-modal" onDismiss={onClose}>
-      <h3
-        className="flex items-center gap-2 font-medium text-text"
-        style={{ fontSize: "13px" }}
-      >
-        <Combine size={14} className="shrink-0 text-primary" aria-hidden="true" />
-        {absorbent.name}
-      </h3>
-      <p className="mt-1.5 text-text-3" style={{ fontSize: "11.5px" }}>
+    <ModalFrame
+      testid="stats-members-modal"
+      onDismiss={onClose}
+      size="s"
+      icon={<Combine size={14} strokeWidth={1.5} className="sx-acc" aria-hidden="true" />}
+      title={
+        <span className={MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}>
+          {absorbent.name}
+        </span>
+      }
+      actions={
+        <button
+          type="button"
+          onClick={onClose}
+          data-testid="stats-members-close"
+          className="d-btn"
+        >
+          Close
+        </button>
+      }
+    >
+      <p className="d-meta m-0">
         Counts the runs of {plural(members.length, `other ${NOUN[dimension]}`)}{" "}
         too.
       </p>
-      <ul
-        className="mt-3 rounded-md border border-line"
-        data-testid="stats-members-list"
-      >
-        <li className="flex items-center justify-between gap-3 px-3 py-2">
+      <ul className="sx-mlist" data-testid="stats-members-list">
+        <li className="sx-mlist__row">
           <span
-            className={`truncate text-text ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+            className={`sx-mlist__name ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+            title={absorbent.name}
           >
             {absorbent.name}
           </span>
-          <span className="shrink-0 text-text-3" style={{ fontSize: "10.5px" }}>
-            keeps its name
-          </span>
+          <span className="d-meta shrink-0">keeps its name</span>
         </li>
         {members.map((member) => (
           <li
             key={member.key}
-            className="flex items-center justify-between gap-3 border-t border-line px-3 py-2"
+            className="sx-mlist__row"
             data-testid="stats-member-row"
           >
-            <span className="min-w-0">
+            <span className="sx-mlist__two">
               <span
-                className={`block truncate text-text ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+                className={`sx-mlist__name ${MONO_DIMENSIONS.has(dimension) ? "font-mono" : ""}`}
+                title={member.name}
               >
                 {member.name}
               </span>
-              <span className="block text-text-3" style={{ fontSize: "10.5px" }}>
+              <span className="d-meta">
                 {[
                   activity(count.ofMember(member), count.word, member.last_run),
                   provenanceNote(member.provenance),
@@ -228,29 +264,11 @@ export function MembersModal<T extends AbsorbableRow>({
           </li>
         ))}
       </ul>
-      <p className="mt-3 text-text-3" style={{ fontSize: "10.5px" }}>
-        Uncombining the last one brings every row back. All combinations are
-        also listed in Settings › General › Stats absorptions.
-      </p>
       {error && (
-        <div
-          className="mt-3 rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed"
-          data-testid="stats-absorption-error"
-        >
+        <div className="sx-err" data-testid="stats-absorption-error">
           {error}
         </div>
       )}
-      <div className="mt-4 flex justify-end">
-        <button
-          type="button"
-          onClick={onClose}
-          data-testid="stats-members-close"
-          className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
-          style={{ fontSize: "11.5px" }}
-        >
-          Close
-        </button>
-      </div>
     </ModalFrame>
   );
 }
@@ -274,72 +292,63 @@ export function GlobalMembersModal<T extends AbsorbableRow>({
   onClose: () => void;
 }) {
   return (
-    <ModalFrame testid="stats-global-members-modal" onDismiss={onClose}>
-      <h3
-        className="flex items-center gap-2 font-medium text-text"
-        style={{ fontSize: "13px" }}
-      >
-        <Combine size={14} className="shrink-0 text-text-3" aria-hidden="true" />
-        <span className="truncate font-mono">{absorbent.name}</span>
-        <span
-          className="shrink-0 rounded-full border border-dashed border-line px-1.5 text-text-3"
-          style={{ fontSize: "9.5px" }}
+    <ModalFrame
+      testid="stats-global-members-modal"
+      onDismiss={onClose}
+      size="s"
+      icon={<Combine size={14} strokeWidth={1.5} className="text-text-3" aria-hidden="true" />}
+      title={<span className="font-mono">{absorbent.name}</span>}
+      titleExtra={<span className="d-chip shrink-0">Global absorption</span>}
+      footerNote={
+        <button
+          type="button"
+          onClick={onOpenAxis}
+          data-testid="stats-global-open-axis"
+          className="d-btn d-btn--ghost d-btn--sm"
         >
-          Global absorption
-        </span>
-      </h3>
-      <p className="mt-1.5 text-text-3" style={{ fontSize: "11.5px" }}>
+          Open the « By model » axis
+        </button>
+      }
+      actions={
+        <button
+          type="button"
+          onClick={onClose}
+          data-testid="stats-global-members-close"
+          className="d-btn"
+        >
+          Close
+        </button>
+      }
+    >
+      <p className="d-meta m-0">
         Counts the runs of {plural(members.length, "other couple")} too, because
         models or efforts are combined on the « By model » axis. It applies to
         every node, and is undone there, not here.
       </p>
-      <ul
-        className="mt-3 rounded-md border border-line"
-        data-testid="stats-global-members-list"
-      >
-        <li className="flex items-center justify-between gap-3 px-3 py-2">
-          <span className="truncate font-mono text-text">{absorbent.name}</span>
-          <span className="shrink-0 text-text-3" style={{ fontSize: "10.5px" }}>
-            keeps its name
+      <ul className="sx-mlist" data-testid="stats-global-members-list">
+        <li className="sx-mlist__row">
+          <span className="sx-mlist__name font-mono" title={absorbent.name}>
+            {absorbent.name}
           </span>
+          <span className="d-meta shrink-0">keeps its name</span>
         </li>
         {members.map((member) => (
           <li
             key={member.key}
-            className="flex items-center justify-between gap-3 border-t border-line px-3 py-2"
+            className="sx-mlist__row"
             data-testid="stats-global-member-row"
           >
-            <span className="min-w-0">
-              <span className="block truncate font-mono text-text">
+            <span className="sx-mlist__two">
+              <span className="sx-mlist__name font-mono" title={member.name}>
                 {member.name}
               </span>
-              <span className="block text-text-3" style={{ fontSize: "10.5px" }}>
+              <span className="d-meta">
                 {activity(count.ofMember(member), count.word, member.last_run)}
               </span>
             </span>
           </li>
         ))}
       </ul>
-      <div className="mt-4 flex items-center justify-between gap-2">
-        <button
-          type="button"
-          onClick={onOpenAxis}
-          data-testid="stats-global-open-axis"
-          className="cursor-pointer text-primary underline-offset-2 hover:underline"
-          style={{ fontSize: "11.5px" }}
-        >
-          Open the « By model » axis
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          data-testid="stats-global-members-close"
-          className="cursor-pointer rounded-md border border-line-strong bg-surface-2 px-3 py-1.5 text-text-2 transition-colors hover:bg-hover"
-          style={{ fontSize: "11.5px" }}
-        >
-          Close
-        </button>
-      </div>
     </ModalFrame>
   );
 }

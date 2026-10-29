@@ -21,7 +21,7 @@ import {
   partialByKindAt,
 } from "../../../model/nodeKind";
 import { Breadcrumb } from "../common/Breadcrumb";
-import { EmptyNote, HarnessLegend } from "../common/ChartPrimitives";
+import { EmptyNote, HarnessLegend, Panel } from "../common/ChartPrimitives";
 import { NoNodeOfSelectedKinds } from "./NodeKindMarks";
 import { PerformanceAside } from "./PerformanceAside";
 import {
@@ -30,7 +30,7 @@ import {
   type PerformanceLevel,
 } from "./performanceDetail";
 import { PerformanceFilterBand } from "./PerformanceFilterBand";
-import { PerformanceSummary } from "./PerformanceSummary";
+import { PerformanceCaption, PerformanceSummary } from "./PerformanceSummary";
 import { PerformanceTable } from "./PerformanceTable";
 
 export function PerformanceTab({
@@ -93,8 +93,10 @@ export function PerformanceTab({
 
   if (error) {
     return (
-      <div className="rounded-md border border-st-failed/30 bg-st-failed/14 px-3 py-2 text-st-failed">
-        {error}
+      <div className="sx-page">
+        <div className="sx-err" role="alert">
+          {error}
+        </div>
       </div>
     );
   }
@@ -115,8 +117,9 @@ export function PerformanceTab({
     performance.by_pipeline.some((row) => hasHiddenNode(row, nodeKinds));
   const visibleNodes = (rows: StatsPerformanceEntity[]) =>
     rows.filter((row) => matchesKinds(row, nodeKinds));
-  const filterStrip = (
+  const filterStrip = (crumbs?: React.ReactNode) => (
     <PerformanceFilterBand
+      crumbs={crumbs}
       performance={performance}
       kindCounts={kindCounts}
       completedOnly={completedOnly}
@@ -135,9 +138,9 @@ export function PerformanceTab({
   // (a fresh instance with no completed run would otherwise be a dead end).
   const emptyPane = (note: React.ReactNode) => (
     <>
-      <div data-testid="stats-chart-performance">
-        {filterStrip}
-        {note}
+      <div className="sx-tab" data-testid="stats-chart-performance">
+        {filterStrip()}
+        <div className="sx-page">{note}</div>
       </div>
     </>
   );
@@ -249,7 +252,8 @@ export function PerformanceTab({
     anyHidden,
   });
 
-  // The model axis's breadcrumb; « By pipeline » keeps its one-line header.
+  // The drill path, on the left of the bar: Model → Effort → Pipeline on the
+  // « By model » axis, Pipeline on « By pipeline ».
   const crumbs: { label: string; onClick?: () => void }[] = [
     { label: "Total", onClick: toTotal },
   ];
@@ -268,6 +272,8 @@ export function PerformanceTab({
         onClick: () => setSelectedPipelineId(null),
       });
     if (modelPipeline) crumbs.push({ label: modelPipeline.name });
+  } else if (selected) {
+    crumbs.push({ label: selected.name });
   }
   // Every crumb but the last pops the levels it shadows.
   const clickableCrumbs = crumbs.map((crumb, index) =>
@@ -277,16 +283,27 @@ export function PerformanceTab({
   return (
     // #810 — the band, the master-list « filtered » marks and the card « i » all
     // carry tooltips outside `PerformanceTable`'s own provider.
-    <>
-      <div
-        className="relative flex min-h-full flex-col"
-        data-testid="stats-chart-performance"
-      >
-        {/* #819 — the band spans the whole pane, above the ranking AND the
-            detail: it governs both, and a control that governs the master list
-            must not sit beside it. */}
-        {filterStrip}
-        <div className="flex min-h-0 flex-1">
+    <div className="sx-tab" data-testid="stats-chart-performance">
+      {/* #819 — the bar spans the whole pane, above the ranking AND the
+          detail: it governs both. */}
+      {filterStrip(
+        <Breadcrumb
+          testid={
+            axis === "model"
+              ? "stats-performance-breadcrumb"
+              : "stats-performance-pipeline-breadcrumb"
+          }
+          crumbs={clickableCrumbs}
+        />,
+      )}
+      <div className="sx-page">
+        <PerformanceSummary
+          aggregate={aggregate}
+          mode={mode}
+          partialByKind={partialByKind}
+          completedOnly={completedOnly}
+        />
+        <div className="sx-split">
           <PerformanceAside
             axis={axis}
             onAxisChange={(next) => {
@@ -312,27 +329,24 @@ export function PerformanceTab({
               }
             }}
           />
-          <div className="min-w-0 flex-1 pl-5">
-            {axis === "model" ? (
-              <Breadcrumb
-                testid="stats-performance-breadcrumb"
-                crumbs={clickableCrumbs}
-              />
-            ) : (
-              <div className="mb-3 text-text-3" style={{ fontSize: "10.5px" }}>
-                Total{selected ? ` / ${selected.name}` : ""}
-              </div>
-            )}
-            <HarnessLegend harnesses={performance.harnesses} />
-            <PerformanceSummary
-              aggregate={aggregate}
-              mode={mode}
-              partialByKind={partialByKind}
-              completedOnly={completedOnly}
-              axisMode={axisMode}
-              zoom={zoom}
-            />
-            <div className="mt-2 min-h-[240px]">
+          <div className="sx-detail">
+            <Panel
+              title={
+                crumbs.length > 1
+                  ? crumbs[crumbs.length - 1].label
+                  : axis === "model"
+                    ? "By model"
+                    : "By pipeline"
+              }
+              count={detailRows.length}
+              flush
+              aside={
+                <>
+                  <PerformanceCaption axisMode={axisMode} zoom={zoom} />
+                  <HarnessLegend harnesses={performance.harnesses} />
+                </>
+              }
+            >
               {detailEmptiedByKind ? (
                 <NoNodeOfSelectedKinds
                   where="at this level"
@@ -344,6 +358,7 @@ export function PerformanceTab({
                   rows={detailRows}
                   harnesses={performance.harnesses}
                   sort={sort}
+                  onSortChange={setSort}
                   mode={mode}
                   zoom={zoom}
                   independentAxis={axisMode === "independent"}
@@ -361,11 +376,11 @@ export function PerformanceTab({
                   coupleSelection={nodePipeline ? coupleSelection : undefined}
                 />
               )}
-            </div>
+            </Panel>
           </div>
         </div>
-        {absorption.overlay}
       </div>
-    </>
+      {absorption.overlay}
+    </div>
   );
 }

@@ -8,7 +8,8 @@ import { TableCombinedIcon } from "./TableCombinedIcon";
  * The Node rows of a detail table carry the same selection as the master list
  * (#892): the ring before the name, Ctrl/Cmd-click and Shift-click on the row,
  * Space on the focused row, the selected background, the `[⧉ N]` icon. A plain
- * click is left to the row.
+ * click is left to the row. The sheet paints the selected and the flashed row
+ * from `data-checked` and `data-flash`.
  */
 export function tableSelection(
   selection: MasterSelection | undefined,
@@ -18,10 +19,10 @@ export function tableSelection(
   const selectable = selection?.isSelectable(id) ?? false;
   const checked = selectable && (selection?.selected.has(id) ?? false);
   return {
-    className: `${checked ? "bg-selected" : ""} ${selection?.flashId === id ? "ring-1 ring-primary" : ""}`,
     rowProps: selectable
       ? {
           "data-checked": checked,
+          "data-flash": selection?.flashId === id ? "true" : undefined,
           onClick: (event: React.MouseEvent) => {
             if (event.ctrlKey || event.metaKey || event.shiftKey) {
               event.preventDefault();

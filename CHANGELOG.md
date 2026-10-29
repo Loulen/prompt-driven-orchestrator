@@ -10,25 +10,6 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.54.0 — Sessions hébergées : ouvrir, tenir et terminer une session hors Run (CORE-122)
-
-- **`pdo-extension-api` 0.17.0**, sans rupture : une Extension fait tenir par le core une
-  Session hébergée (ADR-0091), agent ou shell, hors de tout Run, par son `Host` :
-  `open_session`, `hosted_session`, `hosted_sessions`, `terminate_session`. Nouveaux
-  `SessionKind::Hosted`, `SessionRef::extension` et `SessionRef::key` (absents pour les autres
-  sessions, le JSON de leurs événements ne change pas), et l'événement `hosted_session_changed`,
-  publié aux extensions et sur `/ws` aux connexions qui peuvent lire la session.
-- Ouvrir et terminer sont les Opérations `session` × `open` et `session` × `terminate`, dans le
-  Projet de la session ; le catalogue des Ressources les liste. Attacher son terminal est
-  `session` × `attach` dans le Projet de son enregistrement.
-- Le Cap de sessions concurrentes compte les Sessions hébergées vivantes avec les Nodes : la
-  jauge `live` de `GET /sessions` les inclut, un Node attend un slot qu'elles occupent, et une
-  ouverture au-delà du Cap est refusée tout de suite (`409`).
-- Leurs enregistrements et leur état vivent sous `~/.pdo/hosted/<id>/` ; le dossier de travail
-  n'est jamais modifié. Le balayage ne tue jamais une Session hébergée enregistrée vivante, et
-  tue tout autre nom au préfixe `pdo-hosted-`.
-- Une extension ne peut plus poser `PDO_SESSION_ID` dans une session : c'est une variable du core.
-
 ## 2.55.0 — Sessions hébergées : relancer, configurer, déposer du texte, Artefacts live, attente déclarée (CORE-123)
 
 - **`pdo-extension-api` 0.17.0** complétée, sans rupture : `Host::relaunch_session`,
@@ -49,6 +30,25 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - `PDO_LIVE_DIR` est une variable du core dans une Session hébergée : une extension ne peut pas
   la poser. Au démarrage, les Sessions hébergées vivantes d'une extension absente sont
   terminées, leur enregistrement gardé.
+
+## 2.54.0 — Sessions hébergées : ouvrir, tenir et terminer une session hors Run (CORE-122)
+
+- **`pdo-extension-api` 0.17.0**, sans rupture : une Extension fait tenir par le core une
+  Session hébergée (ADR-0091), agent ou shell, hors de tout Run, par son `Host` :
+  `open_session`, `hosted_session`, `hosted_sessions`, `terminate_session`. Nouveaux
+  `SessionKind::Hosted`, `SessionRef::extension` et `SessionRef::key` (absents pour les autres
+  sessions, le JSON de leurs événements ne change pas), et l'événement `hosted_session_changed`,
+  publié aux extensions et sur `/ws` aux connexions qui peuvent lire la session.
+- Ouvrir et terminer sont les Opérations `session` × `open` et `session` × `terminate`, dans le
+  Projet de la session ; le catalogue des Ressources les liste. Attacher son terminal est
+  `session` × `attach` dans le Projet de son enregistrement.
+- Le Cap de sessions concurrentes compte les Sessions hébergées vivantes avec les Nodes : la
+  jauge `live` de `GET /sessions` les inclut, un Node attend un slot qu'elles occupent, et une
+  ouverture au-delà du Cap est refusée tout de suite (`409`).
+- Leurs enregistrements et leur état vivent sous `~/.pdo/hosted/<id>/` ; le dossier de travail
+  n'est jamais modifié. Le balayage ne tue jamais une Session hébergée enregistrée vivante, et
+  tue tout autre nom au préfixe `pdo-hosted-`.
+- Une extension ne peut plus poser `PDO_SESSION_ID` dans une session : c'est une variable du core.
 
 ## 2.53.0 — Cloner un dépôt distant depuis Settings › Projects et New Run (CORE-97)
 

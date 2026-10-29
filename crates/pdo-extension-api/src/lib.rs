@@ -9,8 +9,9 @@
 //! (`pdo ext <id> <args…>`), bring skills into the Banque de skills, contribute
 //! to the launch of every agent session (environment variables, a preamble),
 //! observe who starts a session, takes control of its terminal and when it
-//! ends ([`SessionEvent`]), suspend a Trigger, and see a Run as people do: who
-//! has it open ([`Presence`]) and what it cost ([`RunCost`]).
+//! ends ([`SessionEvent`]), suspend a Trigger, see a Run as people do: who
+//! has it open ([`Presence`]) and what it cost ([`RunCost`]), and have the core
+//! hold agents and shells outside any Run ([`HostedSession`]).
 //!
 //! An extension runs its **own** mutations through the same mechanisms, by the
 //! [`Host`] its [`ExtensionContext`] carries: its entities are a
@@ -48,6 +49,7 @@ mod entity;
 mod event;
 mod extension;
 mod host;
+mod hosted;
 mod launch;
 mod manifest;
 mod operation;
@@ -67,6 +69,10 @@ pub use entity::{Attributes, EntityRef};
 pub use event::{OperationApplied, OPERATION_APPLIED};
 pub use extension::{Extension, ExtensionContext, RequestParts};
 pub use host::{ExtensionEvent, Host, NeutralHost, EXTENSION_EVENT};
+pub use hosted::{
+    EndReason, HostedConfig, HostedFolder, HostedGesture, HostedKind, HostedRefusal, HostedSession,
+    HostedSessionChanged, HostedState, OpenSession, HOSTED_SESSION_CHANGED,
+};
 pub use launch::{NodeEnv, NodeKind, NodeLaunch, TriggerProvenance, TriggerRef};
 pub use manifest::Manifest;
 pub use operation::{Operation, ResourceKind, Verb};
@@ -102,5 +108,9 @@ pub const API_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// only added the Presences, `Host::presences`, `Host::run_cost` and the
 /// `run/item/people` location; 0.13 only added the launch hooks of every
 /// session, `session_env` and `session_preamble`, and the session events; 0.16
-/// only added `NewRun::project_id`, the Projet a Run is launched in).
+/// only added `NewRun::project_id`, the Projet a Run is launched in; 0.17
+/// only added the Sessions hébergées: the Host's `open_session`,
+/// `hosted_session`, `hosted_sessions` and `terminate_session`,
+/// `SessionKind::Hosted`, the extension and key of a `SessionRef`, and the
+/// `hosted_session_changed` event).
 pub const OLDEST_COMPATIBLE_API_VERSION: &str = "0.1.0";

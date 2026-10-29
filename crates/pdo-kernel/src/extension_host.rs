@@ -24,6 +24,7 @@ use crate::{Actor, Operation};
 
 mod creation;
 mod host_of;
+mod hosted;
 mod identity;
 mod launch;
 mod neutral;
@@ -32,6 +33,7 @@ mod run_view;
 mod skills;
 pub use creation::{CreationRefusal, RunCreator};
 use host_of::{panic_message, ExtensionHostOf};
+pub use hosted::HostedSessions;
 pub use identity::Identification;
 pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
 pub use neutral::NoExtensions;
@@ -72,6 +74,9 @@ struct Registry {
     /// What shows a Run to [`Host::presences`] and [`Host::run_cost`] (API
     /// 0.12), once the daemon wired its contexts.
     run_views: OnceLock<Arc<dyn RunViews>>,
+    /// What holds the Sessions hébergées for [`Host::open_session`] and the
+    /// other gestures of API 0.17, once the daemon wired its contexts.
+    hosted: OnceLock<Arc<dyn HostedSessions>>,
 }
 
 /// The host of the extensions registered at startup, in registration order.

@@ -1,6 +1,7 @@
 //! The session context's pure rules: no tmux, no filesystem, no HTTP.
 
 pub mod declared_wait;
+pub mod hosted;
 pub mod launch;
 pub mod libassist;
 pub mod names;

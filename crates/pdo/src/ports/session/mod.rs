@@ -5,8 +5,11 @@
 //! pipeline registry on disk.
 
 mod daemon;
+mod hosted;
 mod owners;
 mod runs;
+
+pub(crate) use hosted::HostedSide;
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -86,6 +86,12 @@
 //!   `GET /ext/test/runs/<id>/view` answers them; `GET /ext/test/act-as?actor=
 //!   <id>` signs a browser in as that Actor; `PeopleMarks`, at
 //!   `run/item/people`, draws one mark per Presence of the row's Run.
+//! - **`Host::open_session`** and the other gestures of the Sessions
+//!   hébergées (API 0.17, `sessions.rs`): `POST /ext/test/sessions` opens one
+//!   on behalf of the caller, `GET` lists or reads them, `DELETE
+//!   /ext/test/sessions/<key>` terminates one. A Session hébergée gets a
+//!   `PDO_TOKEN` naming who started it, which `identify` recognises, so a
+//!   `pdo` typed in a hosted shell acts as that Actor.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
 //!   `project/edit`, so two extensions share a location.
 //!
@@ -109,6 +115,7 @@ pub mod launch;
 pub mod projets;
 mod routes;
 pub mod run_view;
+pub mod sessions;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -528,7 +535,9 @@ impl Extension for TestExtension {
                 namespace: ID.to_string(),
                 id: caller,
             });
-        named.or_else(|| gate::identify(&self.control.gate(), request))
+        named
+            .or_else(|| sessions::identify(request))
+            .or_else(|| gate::identify(&self.control.gate(), request))
     }
 
     fn admit(&self, request: &RequestParts) -> Admission {

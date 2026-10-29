@@ -13,6 +13,8 @@
 //!   template its Actor has open through its focus.
 //! - **Session ledger**: who started each session, who takes control of its
 //!   terminal, when it ends, as the extensions are told (CORE-61).
+//! - **Sessions hébergées**: an agent or a shell an extension has the core
+//!   hold outside any Run (ADR-0091), recorded across restarts.
 //!
 //! Hexagonal inside: `domain/` holds the pure rules, `application/` the ports
 //! (tmux behind the one [`Tmux`](application::ports::Tmux) port) and one use case
@@ -36,6 +38,7 @@ use application::assistant::{
 };
 use application::attach::AttachTerminal;
 use application::declared_wait::{DeclareWait, LiftWait, TypedInput};
+use application::hosted::{Hosted, HostedPorts, HostedRegistry};
 use application::open_shell::OpenShell;
 use application::ports::{
     AssistantHarness, DaemonGauges, NodePanes, NodeWaits, RunProjects, RunShells, SessionOwners,
@@ -71,6 +74,9 @@ pub struct SessionPorts {
     pub extensions: Arc<dyn ExtensionHost>,
     /// The Projets of a Run, its sessions' Operations are in (CORE-3).
     pub projects: Arc<dyn RunProjects>,
+    /// Where the Sessions hébergées are recorded, resolve their folder and
+    /// harness, and take their slot of the Cap (ADR-0091).
+    pub hosted: HostedPorts,
 }
 
 /// The daemon's knobs the context reads.
@@ -102,6 +108,7 @@ pub struct Session {
     close_assistant: CloseAssistant,
     declare_focus: DeclareFocus,
     save_focused: SaveFocused,
+    hosted: Arc<Hosted>,
     /// How often the PTY bridge beats a terminal socket, in ms: the
     /// [`TERMINAL_BEAT_INTERVAL`](domain::pty_protocol::TERMINAL_BEAT_INTERVAL),
     /// shortened by tests.
@@ -122,12 +129,26 @@ impl Session {
             terminal_window,
             extensions,
             projects,
+            hosted,
         } = ports;
         let typed = Arc::new(TypedInput::default());
         let shared_terminals = Arc::new(SharedTerminalRegistry::default());
         let focus = Arc::new(FocusCell::default());
         let reaper = Arc::new(ReaperGauge::default());
         let ledger = Arc::new(SessionLedger::new(tmux.clone(), extensions.clone()));
+        let hosted = Arc::new(Hosted::new(
+            hosted,
+            tmux.clone(),
+            extensions.clone(),
+            ledger.clone(),
+            options.daemon_port,
+            options.tmux_cmd_override.clone(),
+        ));
+        // A Session hébergée's Operations are in the Projet of its record.
+        let projects: Arc<dyn RunProjects> = Arc::new(WithHosted {
+            runs: projects,
+            hosted: hosted.registry().clone(),
+        });
         let launch = AssistantLaunch {
             repo_root: options.repo_root.clone(),
             daemon_port: options.daemon_port,
@@ -157,7 +178,8 @@ impl Session {
             .with_projects(projects.clone())
             .with_ledger(ledger.clone())
             .with_registry(shared_terminals),
-            sweep: SweepOrphans::new(tmux.clone(), owners, focus.clone(), reaper.clone()),
+            sweep: SweepOrphans::new(tmux.clone(), owners, focus.clone(), reaper.clone())
+                .with_hosted(hosted.registry().clone()),
             read_status: ReadStatus::new(gauges, reaper),
             read_pane: ReadPane::new(panes, tmux.clone(), extensions.clone())
                 .with_projects(projects.clone()),
@@ -186,6 +208,7 @@ impl Session {
             ),
             declare_focus: DeclareFocus::new(focus.clone(), templates.clone(), extensions.clone()),
             save_focused: SaveFocused::new(focus.clone(), templates, extensions),
+            hosted,
             tmux,
             focus,
             ledger,
@@ -279,5 +302,30 @@ impl Session {
 
     pub fn save_focused(&self) -> &SaveFocused {
         &self.save_focused
+    }
+
+    /// The Sessions hébergées of the extensions (ADR-0091).
+    pub fn hosted(&self) -> &Arc<Hosted> {
+        &self.hosted
+    }
+}
+
+/// The Projets of the Runs, and those of the Sessions hébergées by their
+/// record.
+struct WithHosted {
+    runs: Arc<dyn RunProjects>,
+    hosted: Arc<HostedRegistry>,
+}
+
+impl RunProjects for WithHosted {
+    fn projects_of_run<'a>(
+        &'a self,
+        run_id: &'a str,
+    ) -> application::ports::BoxFuture<'a, Vec<String>> {
+        self.runs.projects_of_run(run_id)
+    }
+
+    fn projects_of_hosted(&self, session: &str) -> Vec<String> {
+        self.hosted.projects_of(session)
     }
 }

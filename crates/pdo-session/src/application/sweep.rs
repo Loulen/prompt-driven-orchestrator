@@ -11,6 +11,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::application::assistant::FocusCell;
+use crate::application::hosted::HostedRegistry;
 use crate::application::ports::{SessionOwners, Tmux};
 use crate::domain::names::{parse_session_name, ParsedSession};
 use crate::domain::reaper::{
@@ -81,6 +82,7 @@ pub struct SweepOrphans {
     owners: Arc<dyn SessionOwners>,
     focus: Arc<FocusCell>,
     gauge: Arc<ReaperGauge>,
+    hosted: Option<Arc<HostedRegistry>>,
 }
 
 impl SweepOrphans {
@@ -95,7 +97,15 @@ impl SweepOrphans {
             owners,
             focus,
             gauge,
+            hosted: None,
         }
+    }
+
+    /// The same sweep, keeping the Sessions hébergées `hosted` records live
+    /// (ADR-0091). Without it, every name with their prefix is killed.
+    pub fn with_hosted(mut self, hosted: Arc<HostedRegistry>) -> Self {
+        self.hosted = Some(hosted);
+        self
     }
 
     /// One pass, on the TTLs read fresh from the settings: a `PUT /settings`
@@ -130,8 +140,16 @@ impl SweepOrphans {
             let parsed = parse_session_name(&session_name);
             let mut attached = false;
             let mut focus_age = None;
+            let mut recorded = false;
             match &parsed {
                 None => {}
+                // A Session hébergée lives by its record alone.
+                Some(ParsedSession::Hosted) => {
+                    recorded = self
+                        .hosted
+                        .as_ref()
+                        .is_some_and(|hosted| hosted.holds_live(&session_name));
+                }
                 // A library assistant owns no Run: it is judged on the presence
                 // of its Actor (its own focus).
                 Some(ParsedSession::LibAssist) => {
@@ -163,6 +181,7 @@ impl SweepOrphans {
                 info: None,
                 attached,
                 focus_age,
+                recorded,
             });
         }
         let facts = self.owners.owners(&owners).await?;

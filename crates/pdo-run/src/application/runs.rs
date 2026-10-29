@@ -122,7 +122,7 @@ pub struct Runs {
     /// spawn holds this from the moment it counts live sessions until it has
     /// appended the reservation event (`NodeStarted` / `NodeWaiting`). Without
     /// it, concurrent spawns all observe the same free slot and overshoot the cap.
-    pub(crate) admission_lock: tokio::sync::Mutex<()>,
+    pub(crate) admission_lock: Arc<tokio::sync::Mutex<()>>,
     /// Epoch-millis of the **start** of the most recent stale-detection sweep, or
     /// `0` if it has never swept. Written at sweep start so a wedged sweep
     /// freezes the value; an isolated panic still advances it. Surfaced by
@@ -204,7 +204,7 @@ impl Runs {
             docker_cmd_override: options.docker_cmd_override.clone(),
             sandbox_home_override: options.sandbox_home_override.clone(),
             merge_lock: tokio::sync::Mutex::new(()),
-            admission_lock: tokio::sync::Mutex::new(()),
+            admission_lock: Arc::new(tokio::sync::Mutex::new(())),
             last_stale_tick_ms: Arc::new(AtomicI64::new(0)),
             blocked_on_limit: Arc::new(AtomicI64::new(0)),
             panic_on_stale_sweep: Arc::new(AtomicBool::new(options.panic_on_stale_sweep)),
@@ -256,6 +256,12 @@ impl Runs {
     /// Serializes admission (see the field): the create path holds it too.
     pub fn admission_lock(&self) -> &tokio::sync::Mutex<()> {
         &self.admission_lock
+    }
+
+    /// The admission lock, owned: what a Session hébergée holds from its
+    /// count until it is recorded (ADR-0091).
+    pub fn admission_lock_owned(&self) -> Arc<tokio::sync::Mutex<()>> {
+        self.admission_lock.clone()
     }
 
     /// Epoch-millis of the start of the last stale sweep, `0` before the first.

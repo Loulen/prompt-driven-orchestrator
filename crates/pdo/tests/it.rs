@@ -92,6 +92,9 @@ mod extension_node_launch;
 #[path = "extension_sessions.rs"]
 mod extension_sessions;
 
+#[path = "hosted_sessions.rs"]
+mod hosted_sessions;
+
 // CORE-43: the delivery of a Node signed by the identity an extension gives it.
 #[path = "delivery_identity.rs"]
 mod delivery_identity;

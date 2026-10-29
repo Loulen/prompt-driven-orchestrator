@@ -4,7 +4,7 @@ What an extension gets from `pdo-extension-api` besides its interface (ADR-0081 
 amendments; the interface is [extension-ui.md](extension-ui.md)). The crate's rustdoc is the
 source of truth for signatures; this page says what each part is for and what goes on the wire.
 
-Version: **0.16.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+Version: **0.17.0**. In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -190,9 +190,13 @@ core's mechanisms (amendment #34):
   `{"type": "trigger_updated"}`, without `trigger_id`, and the list of the Triggers reads them all
   again (below). The interface also asks again which gestures on the Runs it may show: call it
   when an Actor's rights change, so that an open view follows without reloading.
+- `open_session(actor, OpenSession)`, `hosted_session(key)`, `hosted_sessions()`,
+  `terminate_session(actor, key)` (0.17): have the core hold an agent or a shell outside any Run
+  ([Sessions hébergées](#sessions-hébergées-017)).
 
 `NeutralHost` allows everything, publishes nothing, answers the core's catalogue alone, creates no
-Run (`503`), names no Projet, signals nothing, sees nobody on a Run and knows no cost: the host of `ExtensionContext::new`, and a stand-in in an extension's
+Run (`503`), names no Projet, signals nothing, sees nobody on a Run, knows no cost and holds no
+Session hébergée (`503`): the host of `ExtensionContext::new`, and a stand-in in an extension's
 tests.
 
 ## Admission of a request
@@ -291,7 +295,7 @@ the Run and its last editor then), `repository` (the Run's primary repository) a
 - **Variables** (`node_env`): exported before the Node's command on the host, passed as
   `-e NAME=value` on the `docker exec` in a sandbox. A name the core sets is **never
   overwritten**: dropped with a warning (`PATH`, `HOME`, `PDO_RUN_ID`, `PDO_NODE_ID`,
-  `PDO_NODE_ITER`, `PDO_DAEMON_URL`, `PDO_SBX_SESSION`, the harness's variables, a script's
+  `PDO_NODE_ITER`, `PDO_DAEMON_URL`, `PDO_SBX_SESSION`, `PDO_SESSION_ID`, the harness's variables, a script's
   `PDO_INPUT_*`/`PDO_OUTPUT_*`/…, the sandbox profile's env). A name that is no shell identifier
   (`[A-Za-z_][A-Za-z0-9_]*`) is refused. Other `PDO_*` names are allowed (`PDO_TOKEN`).
 - **`CLAUDE_CONFIG_DIR`**: when a Node gets one, it is frozen on its `NodeStarted`
@@ -325,8 +329,9 @@ library assistant do too. `session_env` and `session_preamble` receive a `Sessio
   "node": null }
 ```
 
-- `session.kind`: `node`, `manager`, `library_assistant` (or `shell`, in the events only: a run
-  shell runs no agent and asks no hook). `session.id` is the tmux session's name, the one the
+- `session.kind`: `node`, `manager`, `library_assistant`, `hosted` (0.17, a Session hébergée:
+  `session.extension` and `session.key` name it, absent for the other kinds), or `shell`, in the
+  events only: a run shell runs no agent and asks no hook. `session.id` is the tmux session's name, the one the
   terminals use (`/sessions/<id>/pty`).
 - `started_by`: who starts the session. A Node: the creator of its Run. The Pipeline Manager:
   the creator of the Run when it starts with the Run (`manager_enabled`), otherwise the Actor
@@ -334,8 +339,8 @@ library assistant do too. `session_env` and `session_preamble` receive a `Sessio
   comments, `POST /runs/<id>/review/comments/send`, which starts it on demand). The library
   assistant: the Actor who opens it. `null` for a Run created before the core recorded its
   creator.
-- `projects`: the Projet recorded on the Run (ADR-0087); none for a Run in no Projet and for the
-  library assistant.
+- `projects`: the Projet recorded on the Run (ADR-0087), or the Projet of a Session hébergée;
+  none for a Run in no Projet and for the library assistant.
 - `node`: for a Node, its `NodeLaunch` (above); `null` otherwise.
 
 By default `session_env` answers `node_env(launch.node)` for a Node and nothing for any other
@@ -377,14 +382,85 @@ The core publishes three events about its sessions, `SessionEvent` in the crate:
   refused or changes nothing (the pilot's own). `actor` is who took control.
 - `session_ended`: the session is gone, however it ended (its work is done, it was stopped,
   reaped, its harness exited). Observed within a few seconds of the end. `actor` is who started
-  it; `null` for a session a previous daemon started. Revoke there what `session_env` handed
-  over.
+  it; `null` for a session a previous daemon started (a Session hébergée keeps its starter across
+  a restart). Revoke there what `session_env` handed over.
 
 A session of a Run goes to every extension's `on_event` and on `/ws`, to the connections whose
 Actor may read the Run; the library assistant's, which belongs to no Run, only to the extensions.
 Without an extension, nothing is published. `SessionEvent::from_event` reads one back in
 `on_event`; it answers `None` for a `kind` of session added by a later version of the API, so
 read the JSON yourself if you must see every session.
+
+## Sessions hébergées (0.17)
+
+A Session hébergée (ADR-0091 of the core) is an agent or a shell an extension has the core hold
+**outside any Run**: no Pipeline, no worktree, no place in the list of the Runs. The extension
+names it by a key of its own; the core records it, keeps it across a restart of the daemon,
+publishes every change of its state and **never writes into its folder**.
+
+```rust
+let session = host
+    .open_session(&actor, OpenSession::agent("note-12")
+        .in_project("p1")
+        .in_folder(HostedFolder::ProjectRepo)
+        .with_config(HostedConfig::default().with_model("opus").with_prompt("Read the notes")))
+    .await?;
+```
+
+- **`OpenSession`**: `key` (unique among the extension's sessions), `kind` (`agent` or `shell`),
+  `config` (`harness`, `model`, `effort`, `prompt`, each empty for the instance's default; a
+  shell reads none), `folder` (`{"kind": "path", "path": "/abs"}`, `{"kind": "project_repo"}`
+  for the primary repository of its Projet, `{"kind": "home"}` by default), `project` (its
+  Projet, or none).
+- **Opening** asks the Operation `session` × `open` (untargeted, in its Projet), resolves the
+  folder (`400` when it is relative, missing, or a `project_repo` without a Projet or a
+  repository) and the harness (`400` for one the core does not know), then takes a slot of the
+  **Cap de sessions concurrentes**, shared with the Nodes: a full Cap refuses at once, `409`
+  `session cap reached (<live>/<cap> live sessions)`, nothing waits. A key the extension already
+  gave is `409`, an ended session's included: its record keeps the key. A refused Operation is
+  `403`, and nothing is opened.
+- **Its launch**: the Contribution au lancement of every extension is asked with the Actor of the
+  gesture as `started_by` (`session_env` and `session_preamble`, for an agent and a shell
+  alike, `session.kind` `hosted`). An agent reads the extensions' text then its `prompt`, and
+  **nothing of the core** (no runtime preamble, no Run, no completion); a shell runs `bash -i`,
+  respawned if it exits, so only « terminate » ends it. Its environment holds `PDO_SESSION_ID`
+  (its id) and `PDO_DAEMON_URL`, never `PDO_RUN_ID` nor `PDO_NODE_ID`, then the extensions'
+  variables. No skill is delivered. What the agent reads first lives in its state folder under
+  the daemon's `~/.pdo/hosted/<id>/`, beside its record.
+- **`HostedSession`**: `id` (its tmux session's name, `pdo-hosted-<…>`: what its terminal is
+  opened by, `/sessions/<id>/pty`, with the same Poste, Pilote and Prise de main as any session),
+  `extension`, `key`, `kind`, `config`, `folder`, `cwd` (the folder resolved), `project`,
+  `started_by`, `state` (`starting`, `running`, `awaiting_user`, `ended`), `end_reason`
+  (`terminated` or `exited`), `created_at`, `updated_at`.
+- **Reading** (`hosted_session(key)`, `hosted_sessions()`) is synchronous and answers only the
+  calling extension's sessions, ended ones included.
+- **Terminating** asks `session` × `terminate` on the session (its id, in its Projet), ends it
+  (`terminated`), then kills its process. Its record stays. An ended session is answered as it
+  is, with the reason it ended for; `404` for a key never given. Terminated while it is still
+  being launched, the session never runs: `open_session` answers it ended.
+- **Its life**: a session whose process exits ends (`exited`) within a few seconds. A restarted
+  daemon takes back the live ones with who started them, and ends (`exited`) those whose process
+  is gone. The orphan sweep never kills a session recorded live, and kills any other name with
+  its prefix. Attaching its terminal is `session` × `attach` in the Projet of its record.
+
+Each change of its state is published as `hosted_session_changed`, to every extension's
+`on_event` and, on `/ws`, to the connections whose Actor may run `session` × `read` on it (in its
+Projet); `HostedSessionChanged::from_event` reads it back. The whole session travels, its
+`config` (the initial prompt included) and its `cwd` too: every extension receives it.
+
+```json
+{ "type": "hosted_session_changed",
+  "session": { "id": "pdo-hosted-1a2b3c4d5e6f", "extension": "acme", "key": "note-12",
+               "kind": "agent", "config": { "model": "opus" },
+               "folder": { "kind": "project_repo" }, "cwd": "/repos/app", "project": "p1",
+               "started_by": { "kind": "identified", "namespace": "acme", "id": "bob" },
+               "state": "running", "end_reason": null,
+               "created_at": "…", "updated_at": "…" } }
+```
+
+Its start, the take-overs of its terminal and its end are also `session_started`,
+`session_taken_over` and `session_ended` ([Session events](#session-events-013)), to the
+extensions only.
 
 ## The creation of a Run (0.9)
 

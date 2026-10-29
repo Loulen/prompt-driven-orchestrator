@@ -2,6 +2,8 @@
 //! tmux, the PTY, the OS terminal window and the environment (driven).
 
 pub mod env;
+pub mod extension_hosted;
+pub mod hosted_store;
 pub mod http;
 pub mod instance_defaults;
 pub(crate) mod pty;

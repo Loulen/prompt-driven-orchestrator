@@ -31,6 +31,7 @@ pub(super) struct Loops {
     _trigger: Option<JoinHandle<()>>,
     _run_modified: Option<JoinHandle<()>>,
     _sessions: JoinHandle<()>,
+    _hosted: JoinHandle<()>,
     _telemetry: Vec<JoinHandle<()>>,
 }
 
@@ -56,6 +57,14 @@ impl Loops {
             _sessions: tokio::spawn(
                 session
                     .ledger()
+                    .clone()
+                    .watch(pdo_session::application::session_ledger::RECONCILE_INTERVAL),
+            ),
+            // ADR-0091: a Session hébergée whose process exited ends. An
+            // observation, not a cleanup: a nested daemon runs it too.
+            _hosted: tokio::spawn(
+                session
+                    .hosted()
                     .clone()
                     .watch(pdo_session::application::session_ledger::RECONCILE_INTERVAL),
             ),

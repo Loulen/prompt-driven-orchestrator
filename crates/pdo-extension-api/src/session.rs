@@ -28,6 +28,9 @@ pub enum SessionKind {
     LibraryAssistant,
     /// The shell of a Run, opened by hand: no agent.
     Shell,
+    /// A Session hébergée (API 0.17): an agent or a shell an extension has
+    /// the core hold outside any Run.
+    Hosted,
 }
 
 /// A session of the core (API 0.13): the tmux session an agent, a script or a
@@ -44,6 +47,14 @@ pub struct SessionRef {
     pub node_id: Option<String>,
     /// The iteration of that Node, from 1.
     pub iter: Option<i64>,
+    /// For a [`SessionKind::Hosted`], the extension that opened it (API
+    /// 0.17); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+    /// For a [`SessionKind::Hosted`], the key its extension gave it (API
+    /// 0.17); absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 impl SessionRef {
@@ -55,12 +66,22 @@ impl SessionRef {
             run_id: None,
             node_id: None,
             iter: None,
+            extension: None,
+            key: None,
         }
     }
 
     /// The same session, in the Run `run_id`.
     pub fn in_run(mut self, run_id: impl Into<String>) -> Self {
         self.run_id = Some(run_id.into());
+        self
+    }
+
+    /// The same session, the Session hébergée `key` of the extension
+    /// `extension`.
+    pub fn hosted_by(mut self, extension: impl Into<String>, key: impl Into<String>) -> Self {
+        self.extension = Some(extension.into());
+        self.key = Some(key.into());
         self
     }
 
@@ -84,11 +105,12 @@ pub struct SessionLaunch {
     /// (the Actor of the Run's `run` × `create`); for the Pipeline Manager,
     /// the creator of the Run when it starts with the Run, otherwise the
     /// Actor whose gesture starts it (its Start, the sending of review
-    /// comments); for the library assistant, the Actor who opens it. `None`
+    /// comments); for the library assistant and a Session hébergée, the
+    /// Actor who opens it. `None`
     /// for a Run created before the core recorded its creator.
     pub started_by: Option<Actor>,
-    /// The Projets of the Run (empty: in none, and for the library
-    /// assistant).
+    /// The Projets of the Run, or the Projet of a Session hébergée (empty: in
+    /// none, and for the library assistant).
     pub projects: Vec<String>,
     /// For a Node, its launch as [`Extension::node_env`](crate::Extension::node_env)
     /// sees it; `None` for any other session.
@@ -244,6 +266,21 @@ mod tests {
             serde_json::to_value(SessionChange::TakenOver).unwrap(),
             SESSION_TAKEN_OVER
         );
+    }
+
+    #[test]
+    fn a_hosted_session_names_its_extension_and_key_and_the_others_do_not() {
+        let hosted =
+            SessionRef::new("pdo-hosted-1a2b", SessionKind::Hosted).hosted_by("test", "k1");
+        assert_eq!(
+            serde_json::to_value(&hosted).unwrap(),
+            serde_json::json!({
+                "id": "pdo-hosted-1a2b", "kind": "hosted", "run_id": null, "node_id": null,
+                "iter": null, "extension": "test", "key": "k1",
+            })
+        );
+        let event = SessionEvent::new(SessionChange::Started, None, hosted);
+        assert_eq!(SessionEvent::from_event(&event.to_event()), Some(event));
     }
 
     #[test]

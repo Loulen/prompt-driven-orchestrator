@@ -1,8 +1,9 @@
 use serde::Serialize;
 
 use crate::{
-    Actor, ActorDisplay, Attributes, Authorization, EntityRef, NewRun, OperationApplied, Presence,
-    Resource, RunCostRead, RunCreation, RunNotCreated,
+    Actor, ActorDisplay, Attributes, Authorization, EntityRef, HostedGesture, HostedRefusal,
+    HostedSession, NewRun, OpenSession, OperationApplied, Presence, Resource, RunCostRead,
+    RunCreation, RunNotCreated,
 };
 
 /// The `type` of an event an extension publishes, on `/ws` and in the other
@@ -132,6 +133,52 @@ pub trait Host: Send + Sync {
     /// from a hook.
     fn run_cost(&self, _run_id: &str) -> RunCostRead {
         Box::pin(std::future::ready(None))
+    }
+
+    /// Have the core open the Session hébergée `open` on behalf of `actor`
+    /// (API 0.17, ADR-0091 of the core): an agent or a shell, outside any
+    /// Run, in the folder it names, which the core never writes into. The
+    /// Operation `session` × `open` (in its Projet) is asked first, then the
+    /// Cap de sessions concurrentes: a full Cap refuses at once (`409`),
+    /// nothing waits. The Contribution au lancement of every extension is
+    /// asked with `actor` as who starts it, for an agent and a shell alike;
+    /// the agent reads it, then the initial prompt, and nothing of the core.
+    /// Its environment holds `PDO_SESSION_ID` and `PDO_DAEMON_URL`.
+    ///
+    /// Answers the session, `running`; `409` for a key the extension already
+    /// gave, `400` for a folder that does not resolve or a harness the core
+    /// does not know, `403` for a refused Operation. Each change of its state
+    /// is published ([`HostedSessionChanged`](crate::HostedSessionChanged)).
+    /// By default (and with the [`NeutralHost`]), `503`: nothing is opened.
+    fn open_session(&self, _actor: &Actor, _open: OpenSession) -> HostedGesture {
+        Box::pin(std::future::ready(Err(HostedRefusal::unavailable(
+            "this host holds no hosted session",
+        ))))
+    }
+
+    /// The Session hébergée the calling extension opened under `key` (API
+    /// 0.17), ended ones included; `None` for a key it never gave, and by
+    /// default. Synchronous and quick.
+    fn hosted_session(&self, _key: &str) -> Option<HostedSession> {
+        None
+    }
+
+    /// Every Session hébergée the calling extension opened (API 0.17), in
+    /// the order they were opened, ended ones included. Empty by default.
+    fn hosted_sessions(&self) -> Vec<HostedSession> {
+        Vec::new()
+    }
+
+    /// Terminate the Session hébergée `key` of the calling extension on
+    /// behalf of `actor` (API 0.17): the Operation `session` × `terminate`
+    /// (on the session, in its Projet) is asked first, then its process is
+    /// killed and it ends (`terminated`). Its record stays. An ended session
+    /// is answered as it is; `404` for a key it never gave. By default,
+    /// `503`.
+    fn terminate_session(&self, _actor: &Actor, _key: &str) -> HostedGesture {
+        Box::pin(std::future::ready(Err(HostedRefusal::unavailable(
+            "this host holds no hosted session",
+        ))))
     }
 }
 
@@ -290,6 +337,22 @@ mod tests {
     async fn the_neutral_host_sees_nobody_and_no_cost() {
         assert!(NeutralHost.presences("r1").is_empty());
         assert_eq!(NeutralHost.run_cost("r1").await, None);
+    }
+
+    #[tokio::test]
+    async fn the_neutral_host_holds_no_hosted_session() {
+        let refused = NeutralHost
+            .open_session(&Actor::LocalOperator, crate::OpenSession::shell("s"))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status, 503);
+        assert_eq!(NeutralHost.hosted_session("s"), None);
+        assert!(NeutralHost.hosted_sessions().is_empty());
+        let refused = NeutralHost
+            .terminate_session(&Actor::LocalOperator, "s")
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status, 503);
     }
 
     #[tokio::test]

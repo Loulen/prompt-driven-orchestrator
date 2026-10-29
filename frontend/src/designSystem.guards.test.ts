@@ -3,14 +3,12 @@
  *
  *  - The palette and the roles are defined in both themes.
  *  - The old token names are gone, everywhere: no alias.
- *  - No font size in pixels and no hex colour in the source, except in the
- *    files `designSystem.unmigrated.ts` lists; that list only shrinks.
+ *  - No font size in pixels and no hex colour in the source.
  *  - No font is fetched from a third party: the binary serves them.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { UNMIGRATED } from "./designSystem.unmigrated";
 
 const SRC = import.meta.dirname;
 const FRONT = join(SRC, "..");
@@ -93,14 +91,8 @@ function unmigrated(source: string): boolean {
 }
 
 describe("the type scale and the palette in the source", () => {
-  const offending = SOURCE.filter((file) => unmigrated(readFileSync(file, "utf8"))).map((file) => relative(SRC, file));
-
-  it("hold everywhere but in the files not migrated yet", () => {
-    expect(offending.filter((file) => !UNMIGRATED.includes(file))).toEqual([]);
-  });
-
-  it("list only files still to migrate: a migrated file leaves the list", () => {
-    expect(UNMIGRATED.filter((file) => !existsSync(join(SRC, file)) || !offending.includes(file))).toEqual([]);
+  it("hold in every file: sizes from the scale, colours from the roles", () => {
+    expect(SOURCE.filter((file) => unmigrated(readFileSync(file, "utf8"))).map((file) => relative(SRC, file))).toEqual([]);
   });
 });
 

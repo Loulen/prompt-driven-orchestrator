@@ -17,8 +17,12 @@
 //!   Zoom du terminal, `POST /ext/test/sessions/<key>/type` (`{"text"}`) lays a text in its
 //!   input, `POST /ext/test/sessions/<key>/forget` forgets it, each on behalf
 //!   of the caller, answering the session or the refusal;
-//! - `GET /ext/test/sessions/<key>/live` lists its Artefacts live, `GET
-//!   /ext/test/sessions/<key>/live/<path>` reads one.
+//! - `GET /ext/test/sessions/<key>/live` lists its Artefacts live (`404` for
+//!   a key it never gave), `GET /ext/test/sessions/<key>/live/<path>` reads
+//!   one;
+//! - `GET /ext/test/counter` is the counter of the test page's icon
+//!   ([`counter_of`]): the live sessions the caller started, accented while
+//!   one waits for a person.
 //!
 //! A Session hébergée gets, in its environment, a `PDO_TOKEN` naming who
 //! started it ([`token_of`]), which the test extension identifies
@@ -34,7 +38,8 @@ use std::sync::Arc;
 use pdo::extension_api::axum::routing::{get, post, put};
 use pdo::extension_api::axum::{Extension, Json, Router};
 use pdo::extension_api::{
-    Actor, Host, HostedConfig, HostedGesture, HostedRefusal, OpenSession, RequestParts,
+    Actor, Host, HostedConfig, HostedGesture, HostedRefusal, HostedSession, HostedState,
+    OpenSession, PageCounter, RequestParts,
 };
 use serde_json::{json, Value};
 
@@ -161,8 +166,13 @@ pub(super) fn routes(creation: Creation) -> Router {
                 let artifacts = live
                     .host()
                     .map(|h| h.live_artifacts(&key))
-                    .unwrap_or_default();
-                async move { Json(json!(artifacts)) }
+                    .unwrap_or_else(|| Err(HostedRefusal::unavailable("no host yet")));
+                async move {
+                    match artifacts {
+                        Ok(artifacts) => Json(json!(artifacts)).into_response(),
+                        Err(refusal) => refused(refusal),
+                    }
+                }
             }),
         )
         .route(
@@ -183,14 +193,49 @@ pub(super) fn routes(creation: Creation) -> Router {
     Router::new().merge(gestures).merge(sessions(creation))
 }
 
+/// The counter of the test page's icon (API 0.19): the live sessions the
+/// caller started, in the accent colour while one of them waits for a person.
+pub fn counter_of(sessions: &[HostedSession], actor: &Actor) -> PageCounter {
+    let mine: Vec<&HostedSession> = sessions
+        .iter()
+        .filter(|s| s.state.is_live() && s.started_by.as_ref() == Some(actor))
+        .collect();
+    let waiting = mine
+        .iter()
+        .filter(|s| s.state == HostedState::AwaitingUser)
+        .count();
+    let started = match mine.len() {
+        1 => "1 live session you started".to_string(),
+        n => format!("{n} live sessions you started"),
+    };
+    let detail = match waiting {
+        0 => started,
+        n => format!("{started}, {n} waiting for you"),
+    };
+    PageCounter::new(mine.len() as u32)
+        .accented(waiting > 0)
+        .with_detail(detail)
+}
+
 fn sessions(creation: Creation) -> Router {
-    let (open, list, read, terminate) = (
+    let (open, list, read, terminate, count) = (
+        creation.clone(),
         creation.clone(),
         creation.clone(),
         creation.clone(),
         creation,
     );
     Router::new()
+        .route(
+            "/counter",
+            get(move |Extension(actor): Extension<Actor>| {
+                let sessions = count
+                    .host()
+                    .map(|h| h.hosted_sessions())
+                    .unwrap_or_default();
+                async move { Json(json!(counter_of(&sessions, &actor))) }
+            }),
+        )
         .route(
             "/sessions",
             get(move || {

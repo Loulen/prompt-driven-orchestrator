@@ -15,7 +15,7 @@ publish = false
 
 [dependencies]
 pdo-kernel.workspace = true
-pdo-extension-api.workspace = true
+pdo-extension-api = { workspace = true, features = ["ts"] }
 pdo-harness.workspace = true
 anyhow.workspace = true
 axum.workspace = true
@@ -28,6 +28,7 @@ tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 ts-rs.workspace = true
+mime_guess.workspace = true
 
 [dev-dependencies]
 pretty_assertions.workspace = true

@@ -10,7 +10,29 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
-## 2.66.0 — Sessions hébergées par une extension (CORE-121)
+## 2.67.0 — Sessions hébergées par une extension (CORE-121)
+
+### Briques du détail de session, emplacement `session/detail`, compteur de Page (CORE-125)
+
+- **`pdo-extension-api` 0.19.0** complétée : l'emplacement `session/detail` (Onglet), le
+  compteur d'une Page (`UiContribution::counter`, `with_counter`, `PageCounter`). Pas encore
+  publiée, la 0.19 change aussi `Host::live_artifacts` : il répond
+  `Result<Vec<LiveArtifact>, HostedRefusal>`, `404` pour une clé que l'extension n'a jamais
+  donnée (une liste vide auparavant), `503` sans Session hébergée.
+- `@pdo/extension-ui` 0.19.0 exporte les briques du détail d'une Session hébergée, que
+  l'extension met en page : `SessionHeader`, `SessionActions`, `SessionWaiting`, `SessionTabs`,
+  `LiveArtifacts`, `SessionInfo`, `SessionConfig`, `SessionEvents`, et leur état en direct
+  (`useHostedSession`). Types dans `pdo-extension-ui.d.ts`.
+- Nouvelles routes d'une Session hébergée par son id, chacune l'Opération `session` de son geste
+  (`read`, `terminate`, `relaunch`, `configure`) : `GET /sessions/<id>/hosted` (avec `driving`,
+  qui pilote son terminal), `POST …/terminate`, `POST …/relaunch`, `PUT …/config`, `GET
+  …/events`, `GET …/live[/<chemin>]`.
+- Une Session hébergée garde son journal (ses 50 derniers
+  changements, et qui les a faits) dans son enregistrement (un
+  enregistrement antérieur n'en a aucun).
+- Une Page `topbar/end` qui déclare un compteur l'affiche sur son icône pour l'Acteur courant,
+  relu à chaque événement de son extension sur `/ws` ; `/ws` relaie au front
+  `hosted_session_forgotten`, `hosted_live_artifacts_changed` et `extension_event`.
 
 ### Terminal de session exporté et Zoom du terminal (CORE-124)
 

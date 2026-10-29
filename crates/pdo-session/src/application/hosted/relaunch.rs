@@ -6,7 +6,7 @@ use std::sync::Arc;
 use pdo_extension_api::{
     EndReason, HostedConfig, HostedKind, HostedRefusal, HostedSession, SessionKind, SessionRef,
 };
-use pdo_kernel::authorization::authorize;
+use pdo_kernel::authorization::{authorize, Denied};
 use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
 use tracing::info;
 
@@ -38,6 +38,18 @@ impl Hosted {
     ) -> Result<HostedSession, HostedRefusal> {
         let record = self.recorded(extension, key)?;
         self.authorize(actor, RELAUNCH, &record)?;
+        self.relaunch_record(actor, record).await
+    }
+
+    /// Relaunch `record` on behalf of `actor`, once allowed: see
+    /// [`Self::relaunch`].
+    pub(super) async fn relaunch_record(
+        self: &Arc<Self>,
+        actor: &Actor,
+        record: HostedRecord,
+    ) -> Result<HostedSession, HostedRefusal> {
+        let (extension, key) = (record.session.extension.clone(), record.session.key.clone());
+        let (extension, key) = (extension.as_str(), key.as_str());
         if record.is_live() {
             return Err(HostedRefusal::new(
                 409,
@@ -177,6 +189,18 @@ impl Hosted {
     ) -> Result<HostedSession, HostedRefusal> {
         let record = self.recorded(extension, key)?;
         self.authorize(actor, CONFIGURE, &record)?;
+        self.configure_record(actor, record, config).await
+    }
+
+    /// Change the configuration of `record` on behalf of `actor`, once
+    /// allowed: see [`Self::configure`].
+    pub(super) async fn configure_record(
+        &self,
+        actor: &Actor,
+        record: HostedRecord,
+        config: HostedConfig,
+    ) -> Result<HostedSession, HostedRefusal> {
+        let key = record.session.key.clone();
         if record.session.kind != HostedKind::Agent {
             return Err(HostedRefusal::new(
                 400,
@@ -189,7 +213,7 @@ impl Hosted {
         let now = pdo_kernel::clock::now_iso();
         let (record, _) = self
             .registry
-            .update(record.id(), |r| r.configure(config, &now))
+            .update(record.id(), |r| r.configure(config, actor, &now))
             .unwrap_or((record, false));
         Ok(record.session)
     }
@@ -213,10 +237,16 @@ impl Hosted {
         action: &str,
         record: &HostedRecord,
     ) -> Result<(), HostedRefusal> {
-        let operation = Operation::new(ResourceKind::Session, Verb::Action(action.into()))
-            .on(record.id())
-            .in_projects(record.projects());
-        authorize(self.host.as_ref(), actor, &operation)
+        self.allowed(actor, action, record.id())
             .map_err(|denied| HostedRefusal::new(403, denied.to_string()))
+    }
+
+    /// The Operation `session` × `action` on the session named `id`, in the
+    /// Projet of its record (in none for a name not recorded), for `actor`.
+    pub(super) fn allowed(&self, actor: &Actor, action: &str, id: &str) -> Result<(), Denied> {
+        let operation = Operation::new(ResourceKind::Session, Verb::Action(action.into()))
+            .on(id)
+            .in_projects(self.registry.projects_of(id));
+        authorize(self.host.as_ref(), actor, &operation)
     }
 }

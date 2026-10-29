@@ -4,12 +4,14 @@ import { runCommand } from "./commands";
 import { openPage } from "./deepLink";
 import ExtensionBoundary from "./ExtensionBoundary";
 import ExtensionIcon from "./ExtensionIcon";
+import { usePageCounter } from "./pageCounter";
 
 /**
  * The `topbar/end` location: one icon button per element, in the top bar's
  * right-hand group, before the core's icons, a hairline after them. A page's
  * button opens it full-window; an action's calls its command with the
- * location's context. Nothing without a contribution.
+ * location's context. A page that declares a counter (0.19) shows it on its
+ * icon, for the current Actor, live. Nothing without a contribution.
  */
 export default function ExtensionTopbarEnd() {
   const context = useLocationContext("topbar/end");
@@ -40,19 +42,31 @@ function activate(element: ContributionElement, context: ReturnType<typeof useLo
 }
 
 function TopbarEndButton({ element, onClick }: { element: ContributionElement; onClick: () => void }) {
-  const { contribution, command } = element;
+  const { contribution, command, extension } = element;
   const icon = contribution.type === "page" ? contribution.icon : command?.icon;
   const label = contribution.label;
+  const counter = usePageCounter(extension.id, contribution.type === "page" ? contribution.counter : null);
+  const count = counter && counter.count > 0 ? counter.count : null;
   return (
-    <Tooltip label={label}>
+    <Tooltip label={label} description={count ? (counter?.detail ?? undefined) : undefined}>
       <button
         type="button"
         onClick={onClick}
-        aria-label={label}
+        aria-label={count ? `${label}, ${count}` : label}
         data-testid={`extension-topbar-end-${element.key}`}
         className="d-icon"
       >
         <ExtensionIcon url={icon} label={label} />
+        {count && (
+          <span
+            className="d-icon__badge sh-tb__count"
+            data-accent={counter?.accent || undefined}
+            data-testid={`extension-topbar-end-count-${element.key}`}
+            aria-hidden
+          >
+            {count > 99 ? "99+" : count}
+          </span>
+        )}
       </button>
     </Tooltip>
   );

@@ -9,6 +9,7 @@ import type { DaemonEvent } from "../../shared/generated/DaemonEvent";
 import type { Actor } from "../../shared/generated/Actor";
 import type { Presence } from "../../shared/generated/Presence";
 import type { DraftSummary } from "../../shared/generated/DraftSummary";
+import type { HostedLiveArtifact, HostedSession } from "../../session/model/hostedSession";
 
 export interface WsMessage {
   type:
@@ -36,6 +37,12 @@ export interface WsMessage {
     | "presence_left"
     /** A Session hébergée changed (API 0.19): its state, its Zoom du terminal. */
     | "hosted_session_changed"
+    /** Its extension forgot a Session hébergée (API 0.19). */
+    | "hosted_session_forgotten"
+    /** The Artefacts live of a Session hébergée changed (API 0.19). */
+    | "hosted_live_artifacts_changed"
+    /** An event an extension published (`Host::publish`). */
+    | "extension_event"
     /** Re-read the whole state (ADR-0083 §6): sent by the daemon to a client
      *  that lost messages, and emitted by the stream itself after each
      *  (re)opening, a return to the tab and a return of the network. */
@@ -63,7 +70,15 @@ export interface WsMessage {
   actor?: Actor;
   /** Set on `presence_*` messages: the Run's Presences once it happened. */
   presences?: Presence[];
-  /** Set on `hosted_session_changed` messages: the session as it now stands
-   *  (the fields the UI reads of it). */
-  session?: { id: string; terminal_zoom?: number };
+  /** Set on `hosted_session_changed` and `hosted_session_forgotten`
+   *  messages: the session as it now stands, or as it was last recorded. */
+  session?: Partial<HostedSession> & { id: string };
+  /** Set on `hosted_live_artifacts_changed` messages: the session's name. */
+  id?: string;
+  /** Set on `hosted_live_artifacts_changed` and `extension_event` messages:
+   *  the extension it is about, or that published it. */
+  extension?: string;
+  /** Set on `hosted_live_artifacts_changed` messages: every Artefact live the
+   *  session now has. */
+  artifacts?: HostedLiveArtifact[];
 }

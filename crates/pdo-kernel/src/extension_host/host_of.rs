@@ -206,10 +206,11 @@ impl Host for ExtensionHostOf {
         }
     }
 
-    fn live_artifacts(&self, key: &str) -> Vec<LiveArtifact> {
-        self.hosted()
-            .map(|hosted| hosted.live_artifacts(&self.id, key))
-            .unwrap_or_default()
+    fn live_artifacts(&self, key: &str) -> Result<Vec<LiveArtifact>, HostedRefusal> {
+        match self.hosted() {
+            Some(hosted) => hosted.live_artifacts(&self.id, key),
+            None => Err(HostedRefusal::unavailable(NOT_HOSTED)),
+        }
     }
 
     fn live_artifact(&self, key: &str, path: &str) -> Result<Vec<u8>, HostedRefusal> {

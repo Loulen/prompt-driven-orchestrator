@@ -499,6 +499,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("node/detail", "tab", "node-tab"),
         triple("trigger/detail", "tab", "trigger-tab"),
         triple("skill/detail", "tab", "skill-tab"),
+        triple("session/detail", "tab", "session-tab"),
         triple("project/edit", "section", "project-section"),
         triple("run/new", "section", "new-run-section"),
         triple("node/config", "section", "node-section"),
@@ -542,6 +543,9 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
             .cloned()
             .unwrap()
     };
+    // 0.19: the test page's icon carries the counter its extension serves.
+    assert_eq!(contribution("page")["counter"], "/ext/test/counter");
+    assert!(contribution("show-context").get("counter").is_none());
     let row_menu = contribution("at-run-item-menu");
     assert_eq!(row_menu["label"], "Test run/item/menu");
     assert_eq!(row_menu["command"], "test.at-run-item-menu");
@@ -647,11 +651,29 @@ async fn two_extensions_add_up_at_one_location_in_registration_order() {
             (test_extension::SECOND_ID.to_string(), "rights".to_string())
         ]
     );
+    // 0.19: the detail of a Session hébergée lists both extensions' tabs.
+    let at_session_detail: Vec<_> = (0..2)
+        .flat_map(|at| {
+            contributions(index, at)
+                .into_iter()
+                .filter(|(location, _, _)| location == "session/detail")
+                .map(move |(_, _, id)| (index[at]["id"].as_str().unwrap().to_string(), id))
+        })
+        .collect();
+    assert_eq!(
+        at_session_detail,
+        [
+            ("test".to_string(), "session-tab".to_string()),
+            (test_extension::SECOND_ID.to_string(), "session".to_string())
+        ]
+    );
     let bundle = reqwest::get(format!("{}/ext/test2/ui.js", daemon.url()))
         .await
         .unwrap();
     assert_eq!(bundle.status(), 200);
-    assert!(bundle.text().await.unwrap().contains("SecondSection"));
+    let bundle = bundle.text().await.unwrap();
+    assert!(bundle.contains("SecondSection"));
+    assert!(bundle.contains("SessionTab"));
 
     // The sections' trace records what the bundle posts on its host's Save.
     let saved = json!({ "location": "project/edit", "saved": { "kind": "project", "id": "p1" } });

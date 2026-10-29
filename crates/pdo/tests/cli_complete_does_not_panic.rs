@@ -421,7 +421,25 @@ async fn pdo_complete_exits_4_on_a_terminal_refusal() {
         .await
         .unwrap();
     assert!(resp.status().is_success());
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // The run turns `Failed` asynchronously: under load a fixed sleep raced
+    // it, and the completion met a run mid-transition. Wait until it is dead.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let run = reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        if run["status"] == "failed" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the run never failed: {run}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     let (code, stderr) = run_pdo_complete(&daemon.url(), &run_id).await;
     assert_eq!(code, Some(4), "stderr=\n{stderr}");

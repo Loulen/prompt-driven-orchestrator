@@ -1031,3 +1031,174 @@ async fn the_zoom_of_a_terminal_is_set_by_the_api_and_the_host_and_reaches_who_m
         "who may not read the session hears nothing of it, its opening included: {about_the_session:#?}"
     );
 }
+
+/// CORE-125: the detail of a session reads and drives it by its id, with the
+/// extension's gestures (the same Opérations, the same refusals); its
+/// journal and Artefacts live are read there too; the counter
+/// of the test page counts the live sessions of who asks.
+#[tokio::test]
+async fn the_detail_of_a_session_reads_and_drives_it_by_its_id() {
+    let envs = tempfile::tempdir().unwrap();
+    let (daemon, control) = daemon(envs.path()).await;
+    let url = daemon.url();
+    let folder = tempfile::tempdir().unwrap();
+    let mut body = in_path("d", "agent", folder.path());
+    body["project"] = json!("p1");
+    let (status, session) = open_as(&url, "alice", body).await;
+    assert_eq!(status, 201, "{session}");
+    let id = session["id"].as_str().unwrap().to_string();
+    session_when(&url, "d", |s| s["state"] == "running").await;
+
+    let (status, read) = get_as(&url, &format!("/sessions/{id}/hosted"), "bob").await;
+    assert_eq!(status, 200, "{read}");
+    assert_eq!(read["key"], "d");
+    assert_eq!(read["extension"], "test");
+    assert_eq!(read["project"], "p1");
+    assert_eq!(read["driving"], Value::Null, "no terminal shows it");
+    let (_, counter) = get_as(&url, "/ext/test/counter", "alice").await;
+    assert_eq!(counter["count"], 1, "{counter}");
+    assert_eq!(counter["accent"], false);
+    let (_, counter) = get_as(&url, "/ext/test/counter", "bob").await;
+    assert_eq!(counter["count"], 0, "bob started none: {counter}");
+
+    let (status, configured) = call_as(
+        &url,
+        reqwest::Method::PUT,
+        &format!("/sessions/{id}/config"),
+        "bob",
+        Some(json!({ "model": "opus", "prompt": "Hi" })),
+    )
+    .await;
+    assert_eq!(status, 200, "{configured}");
+    assert_eq!(
+        configured["config"],
+        json!({ "model": "opus", "prompt": "Hi" })
+    );
+
+    let env = env_of(envs.path(), &id).await;
+    let live = PathBuf::from(var(&env, "PDO_LIVE_DIR"));
+    std::fs::write(live.join("plan.md"), "# Plan").unwrap();
+    let (status, listed) = get_as(&url, &format!("/sessions/{id}/live"), "alice").await;
+    assert_eq!(status, 200);
+    assert_eq!(listed[0]["path"], "plan.md", "{listed}");
+    let file = reqwest::Client::new()
+        .get(format!("{url}/sessions/{id}/live/plan.md"))
+        .header(ACTOR_HEADER, "alice")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(file.status().as_u16(), 200);
+    assert_eq!(
+        file.headers()["content-type"].to_str().unwrap(),
+        "text/markdown; charset=utf-8"
+    );
+    assert!(file.headers().get("content-disposition").is_none());
+    assert_eq!(file.text().await.unwrap(), "# Plan");
+    let download = reqwest::get(format!("{url}/sessions/{id}/live/plan.md?download"))
+        .await
+        .unwrap();
+    assert_eq!(
+        download.headers()["content-disposition"].to_str().unwrap(),
+        "attachment; filename=\"plan.md\""
+    );
+    let (status, _) = get_as(&url, &format!("/sessions/{id}/live/nope.md"), "alice").await;
+    assert_eq!(status, 404);
+
+    control.set(Refusal::parse("session:terminate").unwrap());
+    let (status, refused) =
+        post_as(&url, &format!("/sessions/{id}/terminate"), "alice", None).await;
+    assert_eq!(status, 403, "{refused}");
+    assert_eq!(refused["error"], "operation_refused", "{refused}");
+    assert!(
+        refused["message"].as_str().unwrap().contains("terminate"),
+        "{refused}"
+    );
+    control.set(Refusal::Nothing);
+    let (status, ended) = post_as(&url, &format!("/sessions/{id}/terminate"), "alice", None).await;
+    assert_eq!(status, 200, "{ended}");
+    assert_eq!(ended["state"], "ended");
+    assert_eq!(ended["end_reason"], "terminated");
+    let terminate = control
+        .asked()
+        .into_iter()
+        .rev()
+        .find(|(_, op)| op.verb == pdo::extension_api::Verb::Action("terminate".into()))
+        .unwrap();
+    assert_eq!(terminate.1.target.as_deref(), Some(id.as_str()));
+    assert_eq!(terminate.1.projects, ["p1"]);
+    let (_, counter) = get_as(&url, "/ext/test/counter", "alice").await;
+    assert_eq!(counter["count"], 0, "an ended session is not counted");
+
+    let (status, relaunched) =
+        post_as(&url, &format!("/sessions/{id}/relaunch"), "bob", None).await;
+    assert_eq!(status, 200, "{relaunched}");
+    assert_eq!(relaunched["state"], "running");
+    assert_eq!(relaunched["started_by"]["id"], "bob");
+    let (status, refused) = post_as(&url, &format!("/sessions/{id}/relaunch"), "bob", None).await;
+    assert_eq!(
+        status, 409,
+        "a running session does not relaunch: {refused}"
+    );
+
+    let (status, events) = get_as(&url, &format!("/sessions/{id}/events"), "alice").await;
+    assert_eq!(status, 200);
+    let kinds: Vec<&str> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "opened",
+            "running",
+            "configured",
+            "terminated",
+            "relaunched",
+            "running"
+        ]
+    );
+    assert_eq!(events[0]["by"]["id"], "alice");
+    assert_eq!(events[4]["by"]["id"], "bob");
+
+    // `pdo wait-user` from the session: the counter of who started it is
+    // accented.
+    let (code, out) = pdo_in_session(&daemon, &id, &["wait-user", "--message", "Which DB?"]).await;
+    assert_eq!(code, Some(0), "{out}");
+    let (_, counter) = get_as(&url, "/ext/test/counter", "bob").await;
+    assert_eq!(counter["count"], 1, "{counter}");
+    assert_eq!(counter["accent"], true, "{counter}");
+    assert!(
+        counter["detail"].as_str().unwrap().contains("1 waiting"),
+        "{counter}"
+    );
+
+    control.set(Refusal::parse("session:read~bob").unwrap());
+    for tail in ["hosted", "events", "live", "live/plan.md"] {
+        let (status, _) = get_as(&url, &format!("/sessions/{id}/{tail}"), "bob").await;
+        assert_eq!(status, 403, "bob may not read the session: {tail}");
+    }
+    control.set(Refusal::Nothing);
+    for (method, tail) in [
+        (reqwest::Method::GET, "hosted"),
+        (reqwest::Method::GET, "live"),
+        (reqwest::Method::POST, "terminate"),
+        (reqwest::Method::POST, "relaunch"),
+    ] {
+        let (status, _) = call_as(
+            &url,
+            method,
+            &format!("/sessions/pdo-hosted-none/{tail}"),
+            "alice",
+            None,
+        )
+        .await;
+        assert_eq!(status, 404, "{tail}");
+    }
+    let (status, _) = get_as(&url, "/ext/test/sessions/never/live", "alice").await;
+    assert_eq!(
+        status, 404,
+        "a key the extension never gave is not an empty list"
+    );
+}

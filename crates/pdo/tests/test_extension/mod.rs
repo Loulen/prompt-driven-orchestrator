@@ -99,11 +99,15 @@
 //!   …/<key>/live[/<path>]` lists and reads its Artefacts live. Its page, at
 //!   the path `hosted` (`#/ext/test/topbar/end/hosted`), opens the shell
 //!   `demo` (`hosted/agent`: the agent `demo-agent`) and shows it with the
-//!   core's exported terminal and its Zoom du terminal (API 0.19). A Session hébergée gets a `PDO_TOKEN`
+//!   core's exported terminal, and its detail composed of the core's bricks
+//!   in a 400 px drawer (API 0.19). The page's icon carries a counter (`GET
+//!   /ext/test/counter`): the live sessions the caller started, accented
+//!   while one waits. A Session hébergée gets a `PDO_TOKEN`
 //!   naming who started it, which `identify` recognises, so a `pdo` typed in
 //!   a hosted shell acts as that Actor.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
-//!   `project/edit`, so two extensions share a location.
+//!   `project/edit` and a tab at `session/detail`, so two extensions share a
+//!   location.
 //!
 //! Its peers of `interop.rs` run their own mutations through the [`Host`] the
 //! core hands them (amendment #34): the test extension sees their Operations
@@ -682,7 +686,8 @@ impl Extension for TestExtension {
             ))
             .contribute(
                 UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
-                    .with_icon(format!("/ext/{ID}/icon.svg")),
+                    .with_icon(format!("/ext/{ID}/icon.svg"))
+                    .with_counter(format!("/ext/{ID}/counter")),
             )
             .contribute(
                 UiContribution::action(UiLocation::TopbarEnd, "show-context", &show_context)
@@ -710,6 +715,12 @@ impl Extension for TestExtension {
             .contribute(UiContribution::tab(
                 UiLocation::SkillDetail,
                 "skill-tab",
+                "Test",
+                "EntityTab",
+            ))
+            .contribute(UiContribution::tab(
+                UiLocation::SessionDetail,
+                "session-tab",
                 "Test",
                 "EntityTab",
             ))
@@ -962,15 +973,23 @@ impl Extension for TestExtension {
 }
 
 /// A second test extension (`test2`): one section at `project/edit`, so the
-/// location lists two extensions' sections, in registration order.
+/// location lists two extensions' sections, in registration order, and one
+/// tab at `session/detail` (API 0.19), so the detail of a Session hébergée the
+/// test extension composes shows another extension's tab.
 pub struct SecondTestExtension;
 
 impl SecondTestExtension {
-    /// Its bundle: one section, naming the Projet it edits.
+    /// Its bundle: one section, naming the Projet it edits; one tab, naming
+    /// the session it details.
     const BUNDLE: &'static str = r#"import React from "react";
 export function SecondSection({ entity }) {
   return React.createElement("p", { "data-testid": "test2-section" },
     `Second extension · ${entity?.name || "(unnamed)"}`);
+}
+export function SessionTab({ entity, context }) {
+  const session = context.session;
+  return React.createElement("p", { "data-testid": "test2-session-tab" },
+    `Second extension · ${entity.kind} ${session?.key ?? entity.id} of ${session?.extension ?? "?"} · ${session?.state ?? "?"}`);
 }
 "#;
 }
@@ -991,14 +1010,19 @@ impl Extension for SecondTestExtension {
 
     fn ui(&self) -> Option<UiContributions> {
         Some(
-            UiContributions::bundle(format!("/ext/{SECOND_ID}/ui.js"), REACT_MAJOR).contribute(
-                UiContribution::section(
+            UiContributions::bundle(format!("/ext/{SECOND_ID}/ui.js"), REACT_MAJOR)
+                .contribute(UiContribution::section(
                     UiLocation::ProjectEdit,
                     "rights",
                     "Rights",
                     "SecondSection",
-                ),
-            ),
+                ))
+                .contribute(UiContribution::tab(
+                    UiLocation::SessionDetail,
+                    "session",
+                    "Second",
+                    "SessionTab",
+                )),
         )
     }
 }

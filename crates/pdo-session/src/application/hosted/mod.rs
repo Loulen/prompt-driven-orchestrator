@@ -4,8 +4,10 @@
 //! the Ressource `session`), recorded so they survive a restart of the
 //! daemon, never swept while recorded live, counted by the Cap de sessions
 //! concurrentes, and ended when their process exits. Their agent may declare
-//! it waits for a person (`pdo wait-user`) and publish Artefacts live.
+//! it waits for a person (`pdo wait-user`) and publish Artefacts live. The
+//! detail of a session reads and drives it by its id, from any Poste.
 
+mod by_id;
 mod gestures;
 mod lifecycle;
 mod live;
@@ -21,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use pdo_extension_api::LiveArtifact;
 use pdo_kernel::extension_host::ExtensionHost;
 
+pub use by_id::HostedByIdError;
 pub use gestures::{HostedZoomError, FORGET, TYPE, ZOOM};
 pub use lifecycle::TERMINATE;
 pub use open::OPEN;

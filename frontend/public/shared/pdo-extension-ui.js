@@ -4,7 +4,8 @@
 // before it renders anything (src/shared/extensions/uiModule.ts). A bundle lists
 // and renders the contributions to the locations it hosts through it, draws its
 // controls with the primitives of the shared design system (ADR-0091), shows a
-// session's terminal with the core's own, and never ships its own copy.
+// session's terminal with the core's own, composes the detail of a Session
+// hébergée from the core's bricks, and never ships its own copy.
 const ExtensionUi = globalThis.__PDO_SHARED__.extensionUi;
 export default ExtensionUi;
 export const {
@@ -45,4 +46,13 @@ export const {
   SessionTerminal,
   useTerminalZoom,
   TerminalZoom,
+  useHostedSession,
+  SessionHeader,
+  SessionActions,
+  SessionWaiting,
+  SessionTabs,
+  LiveArtifacts,
+  SessionInfo,
+  SessionConfig,
+  SessionEvents,
 } = ExtensionUi;

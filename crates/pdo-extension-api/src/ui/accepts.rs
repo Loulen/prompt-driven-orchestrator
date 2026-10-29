@@ -41,6 +41,7 @@ impl UiLocation {
             | UiLocation::NodeDetail
             | UiLocation::TriggerDetail
             | UiLocation::SkillDetail
+            | UiLocation::SessionDetail
             | UiLocation::StatsTab => matches!(element, UiElement::Tab { .. }),
             UiLocation::RunItem
             | UiLocation::RunItemPeople

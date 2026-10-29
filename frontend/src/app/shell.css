@@ -80,6 +80,20 @@
     min-width: 0;
     overflow: hidden;
   }
+  /* CORE-125: the counter of a Page's icon, the kit's icon badge at 14 px;
+     in the accent when something waits for the Actor. */
+  .d-icon > .sh-tb__count {
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    font-family: var(--font-code);
+    pointer-events: none;
+  }
+  .d-icon > .sh-tb__count[data-accent] {
+    background: var(--primary);
+    color: var(--primary-ink);
+  }
   .sh-tb__sep {
     flex: none;
     width: 1px;

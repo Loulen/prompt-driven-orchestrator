@@ -423,6 +423,24 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
         ),
         call(
             "POST",
+            "/sessions/{session_id}/terminate",
+            "/sessions/pdo-hosted-nobody/terminate".to_string(),
+            None,
+        ),
+        call(
+            "POST",
+            "/sessions/{session_id}/relaunch",
+            "/sessions/pdo-hosted-nobody/relaunch".to_string(),
+            None,
+        ),
+        call(
+            "PUT",
+            "/sessions/{session_id}/config",
+            "/sessions/pdo-hosted-nobody/config".to_string(),
+            Some(json!({ "model": "opus" })),
+        ),
+        call(
+            "POST",
             "/sessions/{run_id}/manager/attach",
             format!("/sessions/{RUN}/manager/attach"),
             None,

@@ -29,7 +29,17 @@ label: string,
 /**
  * The condition under which the element is rendered; always without.
  */
-when?: When, } & ({ "type": "page", component: string, 
+when?: When, 
+/**
+ * Where the counter of a page's icon is read (0.19; a
+ * [`UiElement::Page`] at `topbar/end`): an absolute path the extension
+ * serves, usually under `/ext/<id>/`, answering a [`PageCounter`] for
+ * the Actor of the request. The core reads it when it shows the icon,
+ * and again at each event of the extension on `/ws` (its
+ * `extension_event`s, the events of its Sessions hébergées) and at each
+ * resync. Without one, the icon shows no counter.
+ */
+counter?: string, } & ({ "type": "page", component: string, 
 /**
  * An SVG the extension serves (an absolute path, usually under
  * `/ext/<id>/`), drawn in the colour of the text around it. Without

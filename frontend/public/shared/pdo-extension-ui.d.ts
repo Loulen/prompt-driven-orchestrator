@@ -471,7 +471,8 @@ export function Avatar(props: {
  *  and Prise de main, resizing and reconnection are the core's; no xterm to
  *  ship, no protocol to write. Its text follows the session's Zoom du terminal
  *  (live, the same on every Poste) times the `zoom` the host imposes. It fills
- *  its parent, which needs a height. Since 0.19. */
+ *  its parent, which needs a height. A Session hébergée relaunched after it
+ *  ended is connected to anew. Since 0.19. */
 export function SessionTerminal(props: {
   session: string;
   /** A zoom the host imposes, as a factor (`1`: none). */
@@ -502,6 +503,104 @@ export function useTerminalZoom(session: string): {
  *  between − and +, « same for everyone watching ». Off for any other
  *  session. Since 0.19. */
 export function TerminalZoom(props: { session: string }): ReactNode;
+
+// ---------------------------------------------------------------- the detail of a Session hébergée (since 0.19)
+// The bricks of a session's detail: the extension lays them out (a drawer, a
+// pane) and adds its own around them. Each takes the session's id (its `id`,
+// `pdo-hosted-…`) and follows it live; they share one subscription per session.
+
+export type HostedKind = "agent" | "shell";
+export type HostedState = "starting" | "running" | "awaiting_user" | "ended";
+
+/** How an agent session is launched; a field left out takes the instance's default. */
+export interface HostedConfig {
+  harness?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  prompt?: string | null;
+}
+
+/** A Session hébergée, as the core records it. */
+export interface HostedSession {
+  id: string;
+  extension: string;
+  key: string;
+  kind: HostedKind;
+  config: HostedConfig;
+  folder: { kind: "path"; path: string } | { kind: "project_repo" } | { kind: "home" };
+  cwd: string;
+  project: string | null;
+  started_by: Actor | null;
+  state: HostedState;
+  end_reason: "terminated" | "exited" | null;
+  wait_message?: string | null;
+  terminal_zoom: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One Artefact live: a file its agent wrote in its `PDO_LIVE_DIR`. */
+export interface HostedLiveArtifact {
+  path: string;
+  size: number;
+  modified_at: string;
+}
+
+/** One entry of its journal: what happened to it, when, by whom. */
+export interface HostedSessionEvent {
+  at: string;
+  kind: "opened" | "running" | "awaiting_user" | "resumed" | "terminated" | "exited" | "relaunched" | "configured";
+  by?: Actor;
+  message?: string;
+}
+
+/** A Session hébergée by its id, live: read from the daemon, then followed on
+ *  `/ws`. `session.driving` is who drives its terminal (the Pilote, or the one
+ *  Poste); `error.status` is `403` when the Actor may not read it, `404` when
+ *  there is no such session (or it was forgotten). Each gesture is the
+ *  Opération its extension's would be (`session` × `terminate`, `relaunch`,
+ *  `configure`) and rejects with the refusal. Since 0.19. */
+export function useHostedSession(session: string): {
+  session: (HostedSession & { driving: Actor | null }) | null;
+  live: HostedLiveArtifact[];
+  events: HostedSessionEvent[];
+  loading: boolean;
+  error: { status: number | null; message: string } | null;
+  terminate: () => Promise<HostedSession>;
+  relaunch: () => Promise<HostedSession>;
+  configure: (config: HostedConfig) => Promise<HostedSession>;
+};
+
+/** Its head: the kind's icon, the name (its key by default), the state, the
+ *  harness (the instance's default when none is set); in mono its kind,
+ *  how long in that state and the host's `context` (where it sits). `actions` at the right of the first line. Its
+ *  folder, Projet, starter and driver are `SessionInfo`'s. */
+export function SessionHeader(props: { session: string; name?: string; context?: ReactNode; actions?: ReactNode }): ReactNode;
+
+/** Its gestures: the host's buttons first (`children`: « Full screen »…), then Terminate while
+ *  it lives, Relaunch once ended; a refusal shows under them and in a toast. */
+export function SessionActions(props: { session: string; children?: ReactNode }): ReactNode;
+
+/** « Waiting for you » and what its agent asked, while it waits; nothing otherwise. */
+export function SessionWaiting(props: { session: string }): ReactNode;
+
+/** Its tabs: Details (`details`, what the host composes), Events, then the
+ *  tabs of the `session/detail` location, each handed the session. */
+export function SessionTabs(props: { session: string; details?: ReactNode }): ReactNode;
+
+/** Its Artefacts live, live: Markdown rendered and open, an image or a text
+ *  on its name, each downloadable. */
+export function LiveArtifacts(props: { session: string }): ReactNode;
+
+/** What it is: kind, folder, Projet, who started it, who drives it. */
+export function SessionInfo(props: { session: string }): ReactNode;
+
+/** The configuration of an agent session (agent, initial prompt), applied at
+ *  its next relaunch; a shell says it has none. */
+export function SessionConfig(props: { session: string }): ReactNode;
+
+/** Its journal, newest first. */
+export function SessionEvents(props: { session: string }): ReactNode;
 
 declare const ExtensionUi: {
   version: string;
@@ -541,5 +640,14 @@ declare const ExtensionUi: {
   SessionTerminal: typeof SessionTerminal;
   useTerminalZoom: typeof useTerminalZoom;
   TerminalZoom: typeof TerminalZoom;
+  useHostedSession: typeof useHostedSession;
+  SessionHeader: typeof SessionHeader;
+  SessionActions: typeof SessionActions;
+  SessionWaiting: typeof SessionWaiting;
+  SessionTabs: typeof SessionTabs;
+  LiveArtifacts: typeof LiveArtifacts;
+  SessionInfo: typeof SessionInfo;
+  SessionConfig: typeof SessionConfig;
+  SessionEvents: typeof SessionEvents;
 };
 export default ExtensionUi;

@@ -7,8 +7,7 @@ use std::time::Duration;
 use pdo_extension_api::{
     EndReason, HostedRefusal, HostedSession, HostedState, SessionKind, SessionRef,
 };
-use pdo_kernel::authorization::authorize;
-use pdo_kernel::{Actor, Operation, ResourceKind, Verb};
+use pdo_kernel::Actor;
 use tracing::{info, warn};
 
 use super::Hosted;
@@ -29,20 +28,23 @@ impl Hosted {
         actor: &Actor,
         key: &str,
     ) -> Result<HostedSession, HostedRefusal> {
-        let record = self
-            .registry
-            .find(extension, key)
-            .ok_or_else(|| HostedRefusal::new(404, format!("no hosted session `{key}`")))?;
-        let operation = Operation::new(ResourceKind::Session, Verb::Action(TERMINATE.into()))
-            .on(record.id())
-            .in_projects(record.projects());
-        authorize(self.host.as_ref(), actor, &operation)
-            .map_err(|denied| HostedRefusal::new(403, denied.to_string()))?;
+        let record = self.recorded(extension, key)?;
+        self.authorize(actor, TERMINATE, &record)?;
+        Ok(self.terminate_record(actor, record))
+    }
+
+    /// Terminate `record` on behalf of `actor`, once allowed: see
+    /// [`Self::terminate`].
+    pub(super) fn terminate_record(&self, actor: &Actor, record: HostedRecord) -> HostedSession {
         // Ended in between (its process exited): it keeps its reason.
         let (ended, changed) = self
             .registry
             .update(record.id(), |r| {
-                r.end(EndReason::Terminated, &pdo_kernel::clock::now_iso())
+                r.end_by(
+                    EndReason::Terminated,
+                    Some(actor),
+                    &pdo_kernel::clock::now_iso(),
+                )
             })
             .unwrap_or((record, false));
         if changed {
@@ -50,7 +52,7 @@ impl Hosted {
             info!("Terminated hosted session {}", ended.id());
             self.admission.released();
         }
-        Ok(ended.session)
+        ended.session
     }
 
     /// At boot, before the router serves: a live record whose session is

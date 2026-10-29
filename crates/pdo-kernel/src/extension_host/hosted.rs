@@ -50,8 +50,13 @@ pub trait HostedSessions: Send + Sync {
     /// Forget the ended session `key` of `extension`, on behalf of `actor`.
     fn forget(&self, extension: &str, actor: Actor, key: &str) -> HostedGesture;
 
-    /// The Artefacts live of the session `key` of `extension`.
-    fn live_artifacts(&self, extension: &str, key: &str) -> Vec<LiveArtifact>;
+    /// The Artefacts live of the session `key` of `extension`; `404` for a
+    /// key it never gave.
+    fn live_artifacts(
+        &self,
+        extension: &str,
+        key: &str,
+    ) -> Result<Vec<LiveArtifact>, HostedRefusal>;
 
     /// The content of the Artefact live `path` of the session `key` of
     /// `extension`.
@@ -170,10 +175,14 @@ mod tests {
                 found.ok_or_else(|| HostedRefusal::new(404, "no such session")),
             ))
         }
-        fn live_artifacts(&self, extension: &str, key: &str) -> Vec<LiveArtifact> {
+        fn live_artifacts(
+            &self,
+            extension: &str,
+            key: &str,
+        ) -> Result<Vec<LiveArtifact>, HostedRefusal> {
             self.read(extension, key)
                 .map(|_| vec![LiveArtifact::new("a.md", 1, "t")])
-                .unwrap_or_default()
+                .ok_or_else(|| HostedRefusal::new(404, "no such session"))
         }
         fn live_artifact(
             &self,
@@ -254,10 +263,13 @@ mod tests {
             host.type_in_session(&actor, "s1", "hi").await.unwrap().key,
             "s1"
         );
-        assert_eq!(host.live_artifacts("s1").len(), 1);
+        assert_eq!(host.live_artifacts("s1").unwrap().len(), 1);
         assert_eq!(host.live_artifact("s1", "a.md").unwrap(), b"a");
         assert!(
-            extensions.host_of("other").live_artifacts("s1").is_empty(),
+            extensions
+                .host_of("other")
+                .live_artifacts("s1")
+                .is_err_and(|refusal| refusal.status == 404),
             "an extension reads only its own"
         );
         assert_eq!(host.forget_session(&actor, "s1").await.unwrap().key, "s1");

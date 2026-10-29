@@ -72,7 +72,11 @@ impl HostedSessions for ExtensionHostedSessions {
         Box::pin(async move { hosted.forget(&extension, &actor, &key).await })
     }
 
-    fn live_artifacts(&self, extension: &str, key: &str) -> Vec<LiveArtifact> {
+    fn live_artifacts(
+        &self,
+        extension: &str,
+        key: &str,
+    ) -> Result<Vec<LiveArtifact>, HostedRefusal> {
         self.0.live_artifacts(extension, key)
     }
 

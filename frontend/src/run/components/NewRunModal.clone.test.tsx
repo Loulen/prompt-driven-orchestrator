@@ -13,6 +13,7 @@ import { legacyScope } from "../../test/legacy";
 import type { CloneJob } from "../../shared/generated/CloneJob";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { Project } from "../../workspace/model/project";
+import { fetchPipelines } from "../../pipeline/api/pipelines";
 
 const PIPELINE: PipelineListEntry = {
   id: "solo",
@@ -147,27 +148,48 @@ describe("New Run on a URL (CORE-97)", () => {
     fireEvent.change(repoField(), { target: { value: URL_ } });
     await waitFor(() =>
       expect(screen.getByTestId("remote-repo-hint")).toHaveTextContent(
-        "Remote URL · will be cloned in full to ~/pdo/repos/shop-web",
+        "Clone into~/pdo/repos/shop-web",
       ),
     );
     expect(api.validateRepo).not.toHaveBeenCalledWith(URL_);
-    expect(screen.getByText("Available once the clone is done")).toBeInTheDocument();
+    expect(screen.getByTestId("pipeline-select")).toHaveTextContent("After the clone");
     expect(screen.getByTestId("clone-launch-button")).toHaveTextContent("Clone and launch");
-    expect(screen.getByTestId("clone-launch-note")).toHaveTextContent(
-      "Launch clones first, then starts the Run.",
-    );
+    expect(screen.getByTestId("clone-launch-note")).toHaveTextContent("Clones first");
     expect(screen.queryByTestId("launch-button")).toBeNull();
   });
 
   it("hides the Pipeline chosen on a repository once the field holds a URL", async () => {
     renderModal();
     fireEvent.change(repoField(), { target: { value: CLONE } });
-    expect(
-      await screen.findByText("/home/bob/.pdo/pipelines/solo.yaml", {}, { timeout: 3000 }),
-    ).toBeInTheDocument();
+    // The Pipeline's path is the closed field's tooltip.
+    await waitFor(
+      () =>
+        expect(screen.getByTestId("pipeline-select").getAttribute("title")).toContain(
+          "/home/bob/.pdo/pipelines/solo.yaml",
+        ),
+      { timeout: 3000 },
+    );
     fireEvent.change(repoField(), { target: { value: URL_ } });
     await screen.findByTestId("remote-repo-hint");
-    expect(screen.queryByText("/home/bob/.pdo/pipelines/solo.yaml")).toBeNull();
+    expect(screen.getByTestId("pipeline-select").getAttribute("title")).not.toContain("solo.yaml");
+  });
+
+  it("hides the Vars of the Pipeline chosen on a repository once the field holds a URL", async () => {
+    vi.mocked(fetchPipelines).mockImplementation(async () => [
+      { ...PIPELINE, variables: { test_command: { var_type: "string", default: "pnpm test" } } },
+    ]);
+    try {
+      renderModal();
+      fireEvent.change(repoField(), { target: { value: CLONE } });
+      await waitFor(() => expect(screen.getByTestId("variable-overrides")).toBeInTheDocument(), {
+        timeout: 3000,
+      });
+      fireEvent.change(repoField(), { target: { value: URL_ } });
+      await screen.findByTestId("remote-repo-hint");
+      expect(screen.queryByTestId("variable-overrides")).toBeNull();
+    } finally {
+      vi.mocked(fetchPipelines).mockImplementation(async () => [PIPELINE]);
+    }
   });
 
   it("clones, shows the progress, then launches the Run on the clone", async () => {
@@ -213,13 +235,13 @@ describe("New Run on a URL (CORE-97)", () => {
     fireEvent.change(repoField(), { target: { value: URL_ } });
     await waitFor(() =>
       expect(screen.getByTestId("remote-repo-hint")).toHaveTextContent(
-        "Remote URL · already cloned in ~/pdo/repos/shop-web, reused",
+        "Already cloned ·~/pdo/repos/shop-web",
       ),
     );
     // Nothing will be cloned: the button and its note say so.
     expect(screen.getByTestId("clone-launch-button")).toHaveTextContent(/^Launch$/);
     expect(screen.getByTestId("clone-launch-note")).toHaveTextContent(
-      "Launch starts the Run on the existing clone.",
+      "Existing clone",
     );
     fireEvent.click(screen.getByTestId("clone-launch-button"));
     await waitFor(() => expect(api.createRun).toHaveBeenCalled(), { timeout: 3000 });

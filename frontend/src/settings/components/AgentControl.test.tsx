@@ -52,14 +52,14 @@ describe("AgentControl", () => {
 
   it("closes on a click outside the control (#686)", () => {
     renderOpen();
-    fireEvent.mouseDown(document.body);
+    fireEvent.pointerDown(document.body);
     expect(screen.queryByTestId("agent-control-popover")).not.toBeInTheDocument();
     expect(screen.getByTestId("agent-control")).toHaveAttribute("aria-expanded", "false");
   });
 
   it("stays open on a click inside the popover", () => {
     renderOpen();
-    fireEvent.mouseDown(screen.getByText("Profiles"));
+    fireEvent.pointerDown(screen.getByText("Profiles"));
     expect(screen.getByTestId("agent-control-popover")).toBeInTheDocument();
   });
 

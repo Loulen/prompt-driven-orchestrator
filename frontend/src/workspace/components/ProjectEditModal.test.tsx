@@ -327,7 +327,7 @@ describe("ProjectEditModal", () => {
 
     const toggle = screen.getByRole("button", { name: /^Provisioning/ });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await waitFor(() => expect(toggle).toHaveTextContent("Provisioning · none"));
+    await waitFor(() => expect(screen.getByTestId("provisioning-summary")).toHaveTextContent("none"));
     expect(
       screen.queryByRole("button", { name: /Configure worktree provisioning/ }),
     ).not.toBeInTheDocument();
@@ -349,10 +349,11 @@ describe("ProjectEditModal", () => {
 describe("ProjectEditModal — bounded to the window (#940)", () => {
   it("scrolls only its body: title and Save stay outside it, the member list nests in it", () => {
     renderModal();
+    // The kit's modal: a title bar, the scrolling body (`d-frame__body`), a footer.
     const modal = screen.getByTestId("project-edit-modal");
-    expect(modal).toHaveClass("flex", "flex-col", "max-h-[calc(85vh/var(--app-zoom,1))]");
+    expect(modal).toHaveClass("d-dlg");
     const body = screen.getByTestId("project-edit-body");
-    expect(body).toHaveClass("min-h-0", "overflow-y-auto");
+    expect(body.closest(".d-frame__body")).not.toBeNull();
     expect(body).not.toHaveTextContent("Name project");
     expect(body).not.toContainElement(screen.getByTestId("project-edit-save"));
     expect(body).not.toContainElement(screen.getByTestId("project-edit-cancel"));
@@ -360,14 +361,15 @@ describe("ProjectEditModal — bounded to the window (#940)", () => {
     // The member list keeps its own maximum height inside the scrolling body.
     const members = screen.getByTestId("project-members-list");
     expect(body).toContainElement(members);
-    expect(members).toHaveClass("max-h-48", "overflow-y-auto");
+    expect(members).toHaveClass("ln-mlist");
   });
 
   it("keeps closing on a backdrop click, not on a click in the body", () => {
     const { onClose } = renderModal();
     fireEvent.click(screen.getByTestId("project-edit-body"));
     expect(onClose).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("project-edit-backdrop"));
+    // A click on the dialog itself, outside its frame, is a click on the backdrop.
+    fireEvent.click(screen.getByTestId("project-edit-modal"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

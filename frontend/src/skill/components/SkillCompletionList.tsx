@@ -5,7 +5,7 @@ import { caretOffset } from "../../shared/lib/caretOffset";
 import { placeAtCaret, type CaretPlace } from "../../shared/lib/placeAtCaret";
 import type { SkillOption } from "../model/skillCompletion";
 import type { SkillCompletion } from "../store/useSkillPromptField";
-import { appRoot, cssViewport, toCssRect } from "../../shared/ui/zoom";
+import { cssViewport, layerHost, toCssRect } from "../../shared/ui/zoom";
 
 const WIDTH = 330;
 const MAX_HEIGHT = 280;
@@ -162,7 +162,7 @@ export default function SkillCompletionList({
         ↑↓ choose · ↵ insert · esc close
       </div>
     </div>,
-    appRoot() ?? document.body,
+    layerHost() ?? document.body,
   );
 }
 

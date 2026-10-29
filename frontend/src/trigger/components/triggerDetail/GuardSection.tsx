@@ -1,5 +1,6 @@
-import { Shield } from "lucide-react";
+import { FlaskConical } from "lucide-react";
 import type { Trigger } from "../../../shared/generated/Trigger";
+import { Button, Section } from "../../../shared/ui/kit";
 import { useGuardDryRun } from "../../store/useGuardDryRun";
 import GuardTestResult from "../GuardTestResult";
 
@@ -21,56 +22,49 @@ export default function GuardSection({
   const result = dryRun.result;
 
   return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1.5 text-text-3">
-        <Shield size={12} />
-        <span>Guard</span>
-      </div>
-      <pre
-        className="overflow-x-auto rounded border border-line bg-surface-2 px-2 py-1.5 font-mono text-text-2"
-        style={{ fontSize: "10.5px" }}
-        data-testid="trigger-detail-guard"
-      >
-        {guardCommand}
-      </pre>
-
-      <button
-        type="button"
-        onClick={dryRun.run}
-        disabled={dryRun.testing}
-        className="flex w-fit items-center gap-1.5 rounded-md border border-line-strong bg-surface-2 px-2 py-1 font-medium text-text-2 transition-colors hover:bg-hover disabled:opacity-40"
-        style={{ fontSize: "10.5px" }}
-        data-testid="guard-test-button"
-      >
-        {dryRun.testing ? "Testing…" : "Test guard"}
-      </button>
-
-      {dryRun.error && (
-        <div
-          className="rounded-md border border-st-failed/30 bg-st-failed/14 px-2.5 py-1.5 text-st-failed"
-          style={{ fontSize: "10px" }}
-          data-testid="guard-test-error"
-        >
-          {dryRun.error}
+    <Section title="Guard">
+      <div className="tg-guard">
+        <div className="tg-guard__line">
+          <code className="tg-cmd" title={guardCommand} data-testid="trigger-detail-guard">
+            <span className="tg-faint" aria-hidden>
+              ${" "}
+            </span>
+            {guardCommand}
+          </code>
+          <Button
+            size="sm"
+            icon={FlaskConical}
+            onClick={dryRun.run}
+            disabled={dryRun.testing}
+            title="Test guard (no side effect)"
+            data-testid="guard-test-button"
+          >
+            {dryRun.testing ? "Testing…" : "Test"}
+          </Button>
         </div>
-      )}
 
-      {result && (
-        <GuardTestResult
-          result={result}
-          caveat={
-            result.outcome === "pass" &&
-            result.stdout.trim() === "" &&
-            trigger.input_template.trim() === "" &&
-            promptRequired ? (
-              <span className="text-st-blocked" style={{ fontSize: "10px" }} data-testid="guard-test-caveat">
-                Guard passes, but the resolved input would be empty — a prompt-required
-                pipeline would reject this fire.
-              </span>
-            ) : undefined
-          }
-        />
-      )}
-    </div>
+        {dryRun.error && (
+          <span className="ln-err" role="alert" data-testid="guard-test-error">
+            {dryRun.error}
+          </span>
+        )}
+
+        {result && (
+          <GuardTestResult
+            result={result}
+            caveat={
+              result.outcome === "pass" &&
+              result.stdout.trim() === "" &&
+              trigger.input_template.trim() === "" &&
+              promptRequired ? (
+                <span className="ln-err" data-testid="guard-test-caveat">
+                  Empty input: the fire would be rejected
+                </span>
+              ) : undefined
+            }
+          />
+        )}
+      </div>
+    </Section>
   );
 }

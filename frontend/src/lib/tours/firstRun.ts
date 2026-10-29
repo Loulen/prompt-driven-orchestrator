@@ -12,7 +12,7 @@
  * - Title is an imperative, body is two sentences at most.
  * - Every free input carries the exact block to paste.
  * - Name what is written on the button. The ticket says "Start"; the button says
- *   **Launch**, so the tour says Launch (design Q1).
+ *   **Run**, so the tour says Run (design Q1).
  */
 
 import type { TourDef, TourStep } from "../tourDef";
@@ -141,8 +141,8 @@ const STEPS: TourStep[] = [
   },
   {
     id: "add-skills",
-    title: "Add the two PDO skills",
-    body: "In the PDO folder, tick both skills. A skill is text added to the agent's prompt: one teaches it to drive PDO, the other to talk with you inside a node.",
+    title: "Add the two built-in skills",
+    body: "In the PDO folder, tick both skills. A skill is text added to the agent's prompt: one teaches it to drive Acogni Driver, the other to talk with you inside a node.",
     // The folder and its two children are lit as one rectangle; ticking the
     // folder's own box satisfies the step too, since it selects both.
     //
@@ -186,17 +186,17 @@ const STEPS: TourStep[] = [
   {
     id: "launch",
     title: "Launch the Run",
-    body: "Click Launch. PDO creates a worktree of the training repository, starts the node in its own session, and the Run appears in the list on the left.",
+    body: "Click Run. A worktree of the training repository is created, the node starts in its own session, and the Run appears in the list on the left.",
     target: () => [LAUNCH_BUTTON],
-    waitingFor: "the Launch button",
+    waitingFor: "the Run button",
     // The whole tour exists for this click, so there is no Skip on it.
     // A refused launch (no harness on PATH, a missing key, no sandbox) stops the
     // tour on its own card, quoting the modal's own error line. The form is left
-    // open and filled, so fixing the cause and pressing Launch again is one click.
+    // open and filled, so fixing the cause and pressing Run again is one click.
     refused: (o) => o.text(LAUNCH_ERROR),
     refusalTitle: "The Run could not be launched",
     refusalHint:
-      "Your form is still open with everything filled. Fix the cause, then press Launch again; the tour will not restart.",
+      "Your form is still open with everything filled. Fix the cause, then press Run again; the tour will not restart.",
     // Not "the button was clicked": a new Run in the list. Compared against the
     // count the tour started with, because the instance may well have had Runs.
     done: (o) => o.app.runCount > o.baseline.runCount,
@@ -214,7 +214,7 @@ export const FIRST_RUN_TOUR: TourDef = {
   steps: STEPS,
   intro: {
     title: "Launch your first Run",
-    body: "You will fill the New Run form yourself, step by step: a throwaway repository, a one-node pipeline that talks to you, a profile, two skills and a prompt. Then you press Launch.",
+    body: "You will fill the New Run form yourself, step by step: a throwaway repository, a one-node pipeline that talks to you, a profile, two skills and a prompt. Then you press Run.",
     footnote:
       "Nothing here touches your own repositories or projects. Everything is reused on the next run of the tour.",
     prepare: [

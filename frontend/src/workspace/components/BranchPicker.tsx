@@ -120,9 +120,9 @@ export function BranchPicker({
  */
 export function KindIcon({ kind, size = 12 }: { kind?: "local" | "remote"; size?: number }) {
   const className = "shrink-0 text-text-3";
-  if (kind === "remote") return <Cloud size={size} className={className} aria-hidden />;
-  if (kind === "local") return <Laptop size={size} className={className} aria-hidden />;
-  return <GitBranch size={size} className={className} aria-hidden />;
+  if (kind === "remote") return <Cloud size={size} strokeWidth={1.5} className={className} aria-hidden />;
+  if (kind === "local") return <Laptop size={size} strokeWidth={1.5} className={className} aria-hidden />;
+  return <GitBranch size={size} strokeWidth={1.5} className={className} aria-hidden />;
 }
 
 /** "fetched 12 s ago" · "fetched — failed" · "never fetched". */

@@ -21,6 +21,7 @@ import RegionInspector from "../pipeline/components/RegionInspector";
 import NoteInspector from "../pipeline/components/NoteInspector";
 import InspectorTabs from "../pipeline/components/InspectorTabs";
 import TriggerDetailPanel from "../trigger/components/TriggerDetailPanel";
+import type { Project } from "../workspace/model/project";
 import { resolveNodeInspector } from "../lib/structuralMarkers";
 import { deriveEdgeTrigger } from "../lib/edgeTrigger";
 import { useInspectorTab } from "../hooks/useInspectorTab";
@@ -36,6 +37,11 @@ export interface RightPaneProps {
   selectedTrigger: Trigger | null | undefined;
   triggerPromptRequired: boolean;
   firesRefreshKey: number;
+  /** The selected Trigger's « Run now » and « Edit » (its detail's header). */
+  onRunNowTrigger?: (trigger: Trigger) => void;
+  onEditTrigger?: (trigger: Trigger) => void;
+  /** The Projets, to name the selected Trigger's. */
+  projects?: Project[];
   runNode: NodeState | null | undefined;
   editTab: OpenPipeline | undefined;
   selectedRun: RunState | null;
@@ -69,6 +75,9 @@ export default function RightPane({
   selectedTrigger,
   triggerPromptRequired,
   firesRefreshKey,
+  onRunNowTrigger,
+  onEditTrigger,
+  projects,
   runNode,
   editTab,
   selectedRun,
@@ -219,6 +228,9 @@ export default function RightPane({
             onSelectRun={handleSelectRun}
             refreshKey={firesRefreshKey}
             promptRequired={triggerPromptRequired}
+            onRunNow={onRunNowTrigger ? () => onRunNowTrigger(selectedTrigger) : undefined}
+            onEdit={onEditTrigger ? () => onEditTrigger(selectedTrigger) : undefined}
+            projectName={projects?.find((p) => p.id === selectedTrigger.project_id)?.name ?? null}
           />
         ) : paneOwner === "info" ? (
           <PipelineInfoPanel

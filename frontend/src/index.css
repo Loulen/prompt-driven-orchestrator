@@ -14,6 +14,8 @@
 @import "./app/leftList.css";
 /* The command field's palette. */
 @import "./app/palette/palette.css";
+/* The launch forms: New Run, the Triggers, the Project modal. */
+@import "./run/components/newRun/launch.css";
 /* The welcome modal and the guided tours. */
 @import "./app/tour/tour.css";
 /* The artifact viewer and « What's new ». */

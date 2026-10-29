@@ -61,17 +61,8 @@ export function useLaunchActions({
   // handleSelectTrigger — the only path that survives the #320 reconciliation)
   // where the new history row appears. A 409 (disabled / broken reference)
   // surfaces as an error toast.
-  const handleRunNowTrigger = useCallback(
+  const fireNow = useCallback(
     async (t: Trigger) => {
-      // #348 (D3-A permissive): a manual fire still works while triggers are
-      // globally paused — but behind a confirmation, so it stays a deliberate
-      // escape hatch rather than a silent bypass of the kill-switch.
-      if (
-        triggersPaused &&
-        !window.confirm(`Triggers are globally paused. Fire "${t.name}" anyway?`)
-      ) {
-        return;
-      }
       try {
         const { fireTrigger } = await import("../trigger/api/triggers");
         await fireTrigger(t.id);
@@ -80,8 +71,29 @@ export function useLaunchActions({
       }
       handleSelectTrigger(t.id);
     },
-    [handleSelectTrigger, triggersPaused],
+    [handleSelectTrigger],
   );
+
+  // #348 (D3-A permissive): a manual fire still works while triggers are
+  // globally paused — but behind a confirmation (`pausedFire`), so it stays a
+  // deliberate escape hatch rather than a silent bypass of the kill-switch.
+  const [pausedFire, setPausedFire] = useState<Trigger | null>(null);
+  const handleRunNowTrigger = useCallback(
+    async (t: Trigger) => {
+      if (triggersPaused) {
+        setPausedFire(t);
+        return;
+      }
+      await fireNow(t);
+    },
+    [fireNow, triggersPaused],
+  );
+  const confirmPausedFire = useCallback(() => {
+    const t = pausedFire;
+    setPausedFire(null);
+    if (t) void fireNow(t);
+  }, [pausedFire, fireNow]);
+  const cancelPausedFire = useCallback(() => setPausedFire(null), []);
 
   const handleCloseNewRunModal = useCallback(() => {
     setNewRunModalOpen(false);
@@ -96,6 +108,9 @@ export function useLaunchActions({
     openNewRunModal,
     handleSelectTrigger,
     handleRunNowTrigger,
+    pausedFire,
+    confirmPausedFire,
+    cancelPausedFire,
     handleCloseNewRunModal,
   };
 }

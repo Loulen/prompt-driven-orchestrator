@@ -2,6 +2,8 @@
 
 > Statut : accepted (grilling du 2026-10-27, CORE-104). Vocabulaire : CONTEXT.md § *Design
 > system partagé*, *Densité*.
+>
+> Amendé par ADR-0093 : les couleurs se choisissent par Thème, indépendant du Mode sombre.
 
 ## Contexte
 
@@ -13,7 +15,7 @@ d'une Extension peut même masquer les valeurs du core dans la même couche CSS.
 
 ## Décision
 
-1. Le core sert un **Design system partagé** : ses tokens (couleurs des deux thèmes, échelle
+1. Le core sert un **Design system partagé** : ses tokens (couleurs de chaque Thème, en sombre et en clair, échelle
    typographique, hauteurs, rayons, polices) et un jeu restreint de primitives, par le **module
    partagé** que l'import map fournit déjà à côté de React. Ils entrent dans la surface semver
    du module : retirer ou casser une primitive, c'est une nouvelle majeure.

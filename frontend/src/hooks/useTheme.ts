@@ -1,90 +1,62 @@
 /**
- * The live theme (#759): one module store, read by `useTheme()` and painted on
- * `<html>` by `applyResolvedTheme`.
+ * The live Theme and Dark mode (ADR-0093): one module store, read by
+ * `useTheme()` and painted on `<html>` by `applyAppearance`.
  *
- * Why a store and not per-component state: the resolved theme is a single
- * property of the document. Two mounted consumers (the Settings selector, any
- * future quick toggle) must never disagree, and the OS listener must be bound
- * once, not per consumer.
+ * Why a store and not per-component state: the appearance is a single property
+ * of the document. Its consumers (the Settings rows, the top bar's switch, the
+ * command field, the surfaces painted out of CSS) must never disagree.
  *
- * The OS listener stays bound whatever the preference is, and the snapshot is
- * recomputed through `resolveTheme`. A pinned `light` / `dark` therefore absorbs
- * the OS change without a special case: the resolved value simply does not move.
+ * Another tab of the same daemon that changes a preference writes the store;
+ * its `storage` event repaints this one too.
  */
 import { useSyncExternalStore } from "react";
 import {
-  applyResolvedTheme,
-  loadThemePreference,
-  resolveTheme,
-  saveThemePreference,
-  systemPrefersDark,
-  type ResolvedTheme,
-  type ThemePreference,
+  applyAppearance,
+  DEFAULT_APPEARANCE,
+  loadAppearance,
+  MODE_STORAGE_KEY,
+  saveMode,
+  saveTheme,
+  THEME_STORAGE_KEY,
+  type Appearance,
+  type Mode,
+  type Theme,
 } from "../lib/theme";
 
-export interface ThemeSnapshot {
-  preference: ThemePreference;
-  /** What is painted on `<html>` right now. */
-  resolved: ResolvedTheme;
-  /** What `system` would resolve to — the OS preference, whatever is pinned. */
-  systemResolved: ResolvedTheme;
-}
-
-// Pre-`initTheme()` placeholder. The default preference is `dark` (#781) — the
-// look PDO has always had — and the OS answer defaults to dark too (see
-// `systemPrefersDark`), so the placeholder resolves dark on every axis.
-let snapshot: ThemeSnapshot = { preference: "dark", resolved: "dark", systemResolved: "dark" };
-
-function computeSnapshot(preference: ThemePreference): ThemeSnapshot {
-  const systemDark = systemPrefersDark();
-  return {
-    preference,
-    resolved: resolveTheme(preference, systemDark),
-    systemResolved: systemDark ? "dark" : "light",
-  };
-}
+let snapshot: Appearance = DEFAULT_APPEARANCE;
 const listeners = new Set<() => void>();
-let unbindOs: (() => void) | null = null;
+let unbindStorage: (() => void) | null = null;
 
-function publish(next: ThemeSnapshot): void {
-  if (
-    next.preference === snapshot.preference &&
-    next.resolved === snapshot.resolved &&
-    next.systemResolved === snapshot.systemResolved
-  )
-    return;
+function publish(next: Appearance): void {
+  if (next.theme === snapshot.theme && next.mode === snapshot.mode) return;
   snapshot = next;
-  applyResolvedTheme(snapshot.resolved);
+  applyAppearance(snapshot);
   for (const notify of listeners) notify();
-}
-
-function recompute(preference: ThemePreference): void {
-  publish(computeSnapshot(preference));
 }
 
 /**
- * Read the stored preference, paint it, and start following the OS. Called once
- * at boot from `main.tsx`, before the first render — the inline script in
- * `index.html` has already stamped the same value, so this re-run is a no-op for
- * the eye and there is no flash.
+ * Read the stored preferences, migrating a value written before 2.68, and
+ * paint them. Called once at boot, before the first render: the theme script
+ * (`/shared/theme.js`) has already stamped the same values, so there is no
+ * flash.
  */
-export function initTheme(): ResolvedTheme {
-  unbindOs?.();
-  unbindOs = null;
-
-  const preference = loadThemePreference();
-  snapshot = computeSnapshot(preference);
-  applyResolvedTheme(snapshot.resolved);
+export function initTheme(): Appearance {
+  unbindStorage?.();
+  unbindStorage = null;
+  snapshot = loadAppearance();
+  applyAppearance(snapshot);
   for (const notify of listeners) notify();
 
-  const mq =
-    typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : undefined;
-  if (mq?.addEventListener) {
-    const onOsChange = () => recompute(snapshot.preference);
-    mq.addEventListener("change", onOsChange);
-    unbindOs = () => mq.removeEventListener("change", onOsChange);
+  if (typeof window !== "undefined") {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === THEME_STORAGE_KEY || event.key === MODE_STORAGE_KEY || event.key === null) {
+        publish(loadAppearance());
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    unbindStorage = () => window.removeEventListener("storage", onStorage);
   }
-  return snapshot.resolved;
+  return snapshot;
 }
 
 function subscribe(notify: () => void): () => void {
@@ -92,14 +64,25 @@ function subscribe(notify: () => void): () => void {
   return () => listeners.delete(notify);
 }
 
-export function setThemePreference(preference: ThemePreference): void {
-  saveThemePreference(preference);
-  recompute(preference);
+export function setTheme(theme: Theme): void {
+  saveTheme(theme);
+  publish({ ...snapshot, theme });
 }
 
-export function useTheme(): ThemeSnapshot & {
-  setPreference: (preference: ThemePreference) => void;
+export function setMode(mode: Mode): void {
+  saveMode(mode);
+  publish({ ...snapshot, mode });
+}
+
+export function toggleMode(): void {
+  setMode(snapshot.mode === "dark" ? "light" : "dark");
+}
+
+export function useTheme(): Appearance & {
+  setTheme: (theme: Theme) => void;
+  setMode: (mode: Mode) => void;
+  toggleMode: () => void;
 } {
   const current = useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
-  return { ...current, setPreference: setThemePreference };
+  return { ...current, setTheme, setMode, toggleMode };
 }

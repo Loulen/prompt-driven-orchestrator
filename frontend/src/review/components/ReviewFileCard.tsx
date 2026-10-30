@@ -97,7 +97,7 @@ export default function ReviewFileCard({
   entries = NO_ENTRIES,
   comments,
 }: Props) {
-  const { resolved } = useTheme();
+  const { mode } = useTheme();
   const path = filePath(file);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [contents, setContents] = useState<Contents>({ kind: "idle" });
@@ -276,9 +276,9 @@ export default function ReviewFileCard({
               extendData={extendData}
               diffViewMode={view === "split" ? DiffModeEnum.Split : DiffModeEnum.Unified}
               // #759: the library ships its own light/dark syntax theme; handing it the
-              // resolved theme keeps code colours legible. `index.css` then maps the
+              // mode keeps code colours legible. `index.css` then maps the
               // wrapper's surface variables onto PDO tokens for both.
-              diffViewTheme={resolved}
+              diffViewTheme={mode}
               diffViewFontSize={12}
               diffViewHighlight={false}
               diffViewWrap={false}

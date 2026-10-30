@@ -159,7 +159,7 @@ export type SearchFunction = (
 // ---------------------------------------------------------------- design system (since 0.17)
 // The primitives of the shared design system (ADR-0091): the core draws its
 // controls with them, in its tokens (`/shared/tokens.css`). Dense: 24 px
-// controls and rows, 13 px text, 2 px corners, both themes, the UI scale.
+// controls and rows, 13 px text, 2 px corners, each Theme and mode, the UI scale.
 
 /** An icon component: a `lucide-react` icon, or anything taking the same props. */
 export type Icon = ComponentType<{ size?: number | string; strokeWidth?: number | string; className?: string; "aria-hidden"?: boolean | "true" }>;

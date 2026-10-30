@@ -80,7 +80,7 @@ export default function StatsCharts({
   onUncombinedChange = () => {},
   showUncombined = false,
 }: StatsChartsProps) {
-  // #759: subscribing here re-renders the whole chart subtree on a theme switch,
+  // #759, ADR-0093: subscribing here re-renders the whole chart subtree on a switch of Theme or mode,
   // so every `CHART.*` / `harnessColor()` read below resolves against the new
   // palette. Recharts bakes colours into props; nothing re-themes on its own.
   useTheme();

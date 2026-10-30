@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { configure, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, configure, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import ReviewPage from "./ReviewPage";
 import type { ReviewComment } from "../../shared/generated/ReviewComment";
 import type { RunRefs } from "../../shared/generated/RunRefs";
@@ -81,7 +81,7 @@ vi.mock("@git-diff-view/react", async () => {
     return (
       <div
         data-testid="mock-diff-view"
-        data-mode={props.diffViewMode}
+        data-diff-mode={props.diffViewMode}
         data-hunks={props.data.hunks.length}
         data-has-content={Boolean(props.data.oldFile.content || props.data.newFile.content)}
       >
@@ -238,7 +238,7 @@ describe("ReviewPage (#749)", () => {
     expect(screen.queryByTestId("review-delivery-chip")).toBeNull();
     // Split is the default; the body gets it.
     expect(screen.getByTestId("review-view-toggle")).toHaveAttribute("data-view", "split");
-    expect(screen.getAllByTestId("mock-diff-view")[0]).toHaveAttribute("data-mode", "split");
+    expect(screen.getAllByTestId("mock-diff-view")[0]).toHaveAttribute("data-diff-mode", "split");
     expect(screen.getByTestId("review-back")).toHaveTextContent("implement-loop");
   });
 
@@ -361,14 +361,14 @@ describe("ReviewPage (#749)", () => {
     fireEvent.click(screen.getByTestId("review-view-unified"));
     expect(localStorage.getItem("pdo.review.view")).toBe("unified");
     expect(screen.getByTestId("review-view-toggle")).toHaveAttribute("data-view", "unified");
-    expect(screen.getAllByTestId("mock-diff-view")[0]).toHaveAttribute("data-mode", "unified");
+    expect(screen.getAllByTestId("mock-diff-view")[0]).toHaveAttribute("data-diff-mode", "unified");
   });
 
   it("starts unified when the browser remembers it", async () => {
     localStorage.setItem("pdo.review.view", "unified");
     render(<ReviewPage runId={RUN_ID} />);
     await waitFor(() => expect(screen.getAllByTestId("mock-diff-view")).toHaveLength(2));
-    expect(screen.getAllByTestId("mock-diff-view")[0]).toHaveAttribute("data-mode", "unified");
+    expect(screen.getAllByTestId("mock-diff-view")[0]).toHaveAttribute("data-diff-mode", "unified");
   });
 
   it("collapses and expands a file from its header; the list click scrolls and expands", async () => {
@@ -430,8 +430,12 @@ describe("ReviewPage (#749)", () => {
   it("toggles « Viewed » on the current file with v", async () => {
     render(<ReviewPage runId={RUN_ID} />);
     await waitFor(() => expect(screen.getAllByTestId("review-file")).toHaveLength(2));
+    // The page binds its keys in effects: let the render that showed the files
+    // settle first, so the key is not handled by the listener of an older render
+    // (on a loaded machine, the full suite made this flaky).
+    await act(async () => {});
     fireEvent.keyDown(window, { key: "v" });
-    expect(screen.getAllByTestId("review-file")[0]).toHaveAttribute("data-viewed", "true");
+    await waitFor(() => expect(screen.getAllByTestId("review-file")[0]).toHaveAttribute("data-viewed", "true"));
     expect(screen.getByTestId("review-viewed-count")).toHaveTextContent("1/2 viewed");
   });
 

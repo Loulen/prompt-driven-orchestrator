@@ -1,6 +1,6 @@
 /**
  * The core's rows of the command field: its commands (New run, Stats,
- * Settings, the theme…), its Runs, Pipelines and Triggers, and the gestures
+ * Settings, the Theme and the Dark mode…), its Runs, Pipelines and Triggers, and the gestures
  * on the selected item (a Run's Pause, Resume, Retry all; a node's Mark
  * complete, Retry and Stop) that the caller may make (CORE-42: a refused gesture is absent). And
  * the extensions' Actions, as rows.
@@ -10,15 +10,15 @@ import {
   CircleCheck,
   Copy,
   History,
-  Moon,
   MousePointerClick,
+  Palette,
   Pause,
   Play,
   Plus,
   RotateCcw,
   Square,
   SquareChevronRight,
-  Sun,
+  SunMoon,
   Workflow,
   Zap,
 } from "lucide-react";
@@ -35,6 +35,7 @@ import { retryNode, retryNodePreview, stopNode } from "../../run/api/nodes";
 import { markNodeDone } from "../../run/api/completion";
 import { mayOnNode, mayOnRun, type GestureRights } from "../../run/model/runGestures";
 import type { Icon } from "../../shared/ui/kit";
+import type { Appearance, Theme } from "../../lib/theme";
 import type { BuildInput, Lead, PaletteItem } from "./paletteModel";
 import type { PaletteHost, PaletteSelection } from "./paletteHost";
 import type { PaletteConfirm } from "./paletteStore";
@@ -52,14 +53,15 @@ export interface CoreContext {
   host: PaletteHost;
   pipelines: PipelineListEntry[];
   openPipeline: (id: string) => void;
-  theme: "dark" | "light";
-  setTheme: (theme: "dark" | "light") => void;
+  appearance: Appearance;
+  setTheme: (theme: Theme) => void;
+  toggleMode: () => void;
 }
 
 const icon = (glyph: Icon): Lead => ({ kind: "icon", icon: glyph });
 
 /** The core's commands, Runs, Pipelines and Triggers. */
-export function coreItems({ host, pipelines, openPipeline, theme, setTheme }: CoreContext): PaletteItem[] {
+export function coreItems({ host, pipelines, openPipeline, appearance, setTheme, toggleMode }: CoreContext): PaletteItem[] {
   const items: PaletteItem[] = [];
   const command = (id: string, label: string, glyph: Icon, run: () => void, extra: Partial<PaletteItem> = {}) =>
     items.push({ id: `cmd:${id}`, group: "commands", label, lead: icon(glyph), run, command: true, ...extra });
@@ -67,8 +69,10 @@ export function coreItems({ host, pipelines, openPipeline, theme, setTheme }: Co
   if (host.newTrigger) command("new-trigger", "New trigger", Zap, host.newTrigger);
   if (host.openStats) command("stats", "Stats", StatsIcon, host.openStats);
   if (host.openSettings) command("settings", "Settings", SettingsIcon, host.openSettings);
-  command("theme-dark", "Theme: dark", Moon, () => setTheme("dark"), { checked: theme === "dark" });
-  command("theme-light", "Theme: light", Sun, () => setTheme("light"), { checked: theme === "light" });
+  // ADR-0093: one row per Theme, and the Dark mode switch; each checked while it holds.
+  command("theme-acogni", "Theme: Acogni", Palette, () => setTheme("acogni"), { checked: appearance.theme === "acogni" });
+  command("theme-classic", "Theme: Classic", Palette, () => setTheme("classic"), { checked: appearance.theme === "classic" });
+  command("dark-mode", "Dark mode", SunMoon, toggleMode, { checked: appearance.mode === "dark" });
   for (const run of host.runs) {
     items.push({
       id: `run:${run.run_id}`,

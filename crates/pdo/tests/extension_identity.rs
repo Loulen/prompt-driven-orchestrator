@@ -121,6 +121,11 @@ async fn a_request_nobody_identified_is_refused_with_the_core_s_401() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    // A page outside the interface: in the core's tokens, in the Theme and the
+    // mode the browser chose, through the theme script (ADR-0093).
+    let page = resp.text().await.unwrap();
+    assert!(page.contains(r#"<link rel="stylesheet" href="/shared/tokens.css">"#));
+    assert!(page.contains(r#"<script src="/shared/theme.js"></script>"#));
 }
 
 #[tokio::test]

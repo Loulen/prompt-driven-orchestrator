@@ -128,10 +128,10 @@ export default function TmuxTerminal({
 
   return (
     // An always-dark screen, whatever the theme: a lit display, its session
-    // bar inside it (the dark tokens hold under `data-theme`).
+    // bar inside it (the dark tokens hold under `data-mode`).
     <div
       className="relative flex flex-1 flex-col overflow-hidden"
-      data-theme="dark"
+      data-mode="dark"
       data-testid="tmux-terminal"
       {...(importEnabled ? dropHandlers : {})}
     >

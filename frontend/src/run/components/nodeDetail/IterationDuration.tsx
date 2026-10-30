@@ -109,7 +109,7 @@ export function IterationDurationLabel({
         onClick={onToggle}
         aria-label={`${duration} ${mode}. Click to show ${otherDurationMode(mode)} time`}
         data-testid="iteration-duration"
-        data-mode={mode}
+        data-duration={mode}
         className="ri-dur"
       >
         {tone && (

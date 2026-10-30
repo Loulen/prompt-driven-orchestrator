@@ -5,14 +5,18 @@
  * the same palette, type and sizes.
  *
  * Two layers:
- *  - the palette (`--color-*`): paper, ink, rules, the ruby accent and the six
- *    status colours, redefined by each theme;
+ *  - the palette (`--color-*`): paper, ink, rules, the accent and the six
+ *    status colours, redefined by each Theme in each mode (ADR-0093);
  *  - the roles (`--surface-*`, `--text*`, `--line*`, `--primary*`, `--hover`…),
  *    which components paint with. They read the palette, and are declared again
- *    on every `[data-theme]` element, so a container can carry the other theme.
+ *    on every `[data-theme]` and `[data-mode]` element, so a container can carry
+ *    the other mode.
  *
- * Dark is the default (`:root` without `data-theme`); `data-theme="light"` on
- * `<html>` or on any container switches what is under it. The fonts ship with
+ * Two attributes select the palette: `data-theme` (`acogni`, the default, or
+ * `classic`) on `<html>`, and `data-mode` (`dark`, the default, or `light`) on
+ * `<html>` or on any container, which switches what is under it. The theme
+ * script `/shared/theme.js` stamps both before the first paint. Only the
+ * palette changes with them: type, sizes, corners stay. The fonts ship with
  * the binary under `/shared/fonts/`, with their licence (SIL OFL 1.1).
  */
 
@@ -110,9 +114,9 @@
   --radius-pop: 6px;
 }
 
-/* ------------------------------------------------------------ palette, dark */
+/* ------------------------------------------------------------ Acogni, dark (the default) */
 :root,
-[data-theme="dark"] {
+[data-mode="dark"] {
   color-scheme: dark;
   --color-paper: oklch(18.5% 0.004 265);
   --color-paper-2: oklch(20.5% 0.005 265);
@@ -140,8 +144,8 @@
   --dim-soft: oklch(0% 0 0 / 0.48);
 }
 
-/* ------------------------------------------------------------ palette, light */
-[data-theme="light"] {
+/* ------------------------------------------------------------ Acogni, light */
+[data-mode="light"] {
   color-scheme: light;
   --color-paper: oklch(99.4% 0.005 230);
   --color-paper-2: oklch(96.8% 0.005 230);
@@ -168,9 +172,72 @@
   --dim-soft: oklch(28.2% 0.019 272 / 0.32);
 }
 
+/* ------------------------------------------------------------ Classic, dark
+ * The colours of the interface before 2.65, laid on the palette tokens:
+ * three grounds, three rules, three inks, the emerald accent and the old
+ * status colours. The muted ink, the failed and the skipped colours are a shade
+ * lighter, so they hold 4.5:1 on every surface. */
+[data-theme="classic"],
+[data-theme="classic"] [data-mode="dark"] {
+  color-scheme: dark;
+  --color-paper: oklch(17.7% 0.009 264);
+  --color-paper-2: oklch(20.4% 0.013 264);
+  --color-paper-3: oklch(23.4% 0.015 262);
+  --color-rule: oklch(25.9% 0.017 260);
+  --color-rule-2: oklch(22.5% 0.013 258);
+  --color-rule-strong: oklch(31.1% 0.02 257);
+  --color-ink: oklch(93% 0.005 258);
+  --color-ink-2: oklch(75.9% 0.019 261);
+  --color-muted: oklch(62% 0.023 262);
+  --color-accent: oklch(69.6% 0.149 162);
+  --color-accent-hi: oklch(75.7% 0.161 163);
+  --color-accent-ink: oklch(17.4% 0.028 165);
+  --color-st-running: oklch(62.8% 0.188 260);
+  --color-st-await: oklch(76.9% 0.165 70);
+  --color-st-done: oklch(69.6% 0.149 162);
+  --color-st-blocked: oklch(70.5% 0.187 48);
+  --color-st-failed: oklch(64.8% 0.208 25);
+  --color-st-skipped: oklch(62% 0.041 257);
+  --w-medium: 470;
+  --w-strong: 560;
+  --shadow: oklch(0% 0 0 / 0.45);
+  --dim: oklch(0% 0 0 / 0.62);
+  --dim-soft: oklch(0% 0 0 / 0.48);
+}
+
+/* ------------------------------------------------------------ Classic, light */
+[data-theme="classic"][data-mode="light"],
+[data-theme="classic"] [data-mode="light"] {
+  color-scheme: light;
+  --color-paper: oklch(97.6% 0.003 265);
+  --color-paper-2: oklch(100% 0 0);
+  --color-paper-3: oklch(95.5% 0.006 265);
+  --color-rule: oklch(91.5% 0.009 258);
+  --color-rule-2: oklch(94.8% 0.006 255);
+  --color-rule-strong: oklch(85.3% 0.014 258);
+  --color-ink: oklch(20.8% 0.015 262);
+  --color-ink-2: oklch(38.9% 0.026 262);
+  --color-muted: oklch(50.8% 0.024 262);
+  --color-accent: oklch(48.6% 0.103 164);
+  --color-accent-hi: oklch(60.5% 0.13 163);
+  --color-accent-ink: oklch(98% 0.011 168);
+  --color-st-running: oklch(48.8% 0.217 264);
+  --color-st-await: oklch(47.6% 0.119 52);
+  --color-st-done: oklch(48.6% 0.103 164);
+  --color-st-blocked: oklch(47% 0.143 37);
+  --color-st-failed: oklch(50.5% 0.19 28);
+  --color-st-skipped: oklch(44.6% 0.037 257);
+  --w-medium: 500;
+  --w-strong: 600;
+  --shadow: oklch(20.8% 0.015 262 / 0.16);
+  --dim: oklch(20.8% 0.015 262 / 0.45);
+  --dim-soft: oklch(20.8% 0.015 262 / 0.32);
+}
+
 /* ------------------------------------------------------------ roles */
 :root,
-[data-theme] {
+[data-theme],
+[data-mode] {
   --surface-0: var(--color-paper); /* editor, canvas, dialogs, inputs */
   --surface-1: var(--color-paper-2); /* side bars, panels */
   --surface-2: var(--color-paper-3); /* top bar, popovers, menus */
@@ -184,7 +251,7 @@
   --text: var(--color-ink);
   --text-2: var(--color-ink-2);
   --text-3: var(--color-muted);
-  /* Ruby: the one primary action of a view, the selection and "on" states. */
+  /* The accent: the one primary action of a view, the selection and "on" states. */
   --primary: var(--color-accent);
   --primary-hi: var(--color-accent-hi);
   --primary-ink: var(--color-accent-ink);

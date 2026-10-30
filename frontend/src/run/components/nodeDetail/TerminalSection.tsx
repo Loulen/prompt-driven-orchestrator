@@ -161,7 +161,7 @@ export default function TerminalSection({
           importDisabledReason={importReason}
         />
       ) : (
-        <div className="flex h-full flex-col" data-theme="dark" data-testid="pending-placeholder">
+        <div className="flex h-full flex-col" data-mode="dark" data-testid="pending-placeholder">
           <div className="ri-term-bar">
             <Lock size={12} strokeWidth={1.5} aria-hidden />
             <span className="ri-term-bar__session">no session</span>
@@ -221,7 +221,7 @@ export default function TerminalSection({
         <button
           type="button"
           onClick={() => setTerminalView("split")}
-          data-theme="dark"
+          data-mode="dark"
           data-testid="term-restore"
           className="ri-term-min"
           title="Show the terminal"

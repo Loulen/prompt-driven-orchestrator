@@ -1,6 +1,6 @@
 /**
  * The Acogni Driver lockup: the Acogni wordmark (drawn in the current colour,
- * the triangle of its gear O in the ruby of the theme), a hairline rule, then
+ * the triangle of its gear O in the ruby, under every Theme), a hairline rule, then
  * the product in its round tag. Its styles are in `app/tour/tour.css`.
  */
 const WORDMARK_VIEWBOX = "-60 -1518.6 6970 1998.6";
@@ -10,7 +10,7 @@ export function AcogniLockup() {
   return (
     <p className="tr-lockup" aria-label="Acogni Driver" data-testid="acogni-lockup">
       <svg
-        className="tr-lockup__logo"
+        className="tr-lockup__logo acogni-brand"
         viewBox={WORDMARK_VIEWBOX}
         aria-hidden="true"
         dangerouslySetInnerHTML={{ __html: WORDMARK }}

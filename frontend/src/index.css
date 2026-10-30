@@ -3,7 +3,7 @@
 @import "shadcn/tailwind.css";
 /* The shared design system's tokens (ADR-0091): the very file the daemon serves
    at `/shared/tokens.css` to the pages an extension publishes outside the
-   interface. Palette of both themes, type scale, heights, radii, fonts. */
+   interface. Palette of each Theme in each mode, type scale, heights, radii, fonts. */
 @import "../public/shared/tokens.css";
 /* The primitives of the shared module `@pdo/extension-ui` and their dense
    classes, used by the core and by the extensions' UI. */
@@ -26,6 +26,8 @@
 @import "./app/tour/tour.css";
 /* The artifact viewer and « What's new ». */
 @import "./run/components/artifacts/artifact.css";
+/* The logo, in its own colours whatever the Theme. */
+@import "./shared/ui/brand/brand.css";
 /* The colours painted out of CSS: the terminal's palette, the harnesses' series. */
 @import "./session/terminal.css";
 @import "./harness/harness.css";

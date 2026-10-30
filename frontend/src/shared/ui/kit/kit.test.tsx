@@ -103,10 +103,10 @@ describe("the shared module @pdo/extension-ui", () => {
   });
 });
 
-/** Render `ui` inside a container of each theme. */
+/** Render `ui` inside a container of each mode. */
 function inBothThemes(ui: () => React.ReactElement) {
-  return (["dark", "light"] as const).map((theme) => {
-    const { container, unmount } = render(<div data-theme={theme}>{ui()}</div>);
+  return (["dark", "light"] as const).map((mode) => {
+    const { container, unmount } = render(<div data-mode={mode}>{ui()}</div>);
     const html = container.firstElementChild!.innerHTML;
     unmount();
     return html;

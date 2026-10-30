@@ -20,7 +20,7 @@ const ACCOUNT_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { 
 /**
  * The app's top bar, 36 px: the Acogni mark, the extensions' `topbar/start`
  * entries, the command field in the middle, then the right-hand group: the
- * extensions' `topbar/end` icons, New run, Stats, Settings, the theme, and the
+ * extensions' `topbar/end` icons, New run, Stats, Settings, the Dark mode, and the
  * extensions' `topbar/account` components (an avatar menu, say). Under it, the
  * banner of the extensions whose interface could not be loaded; over
  * everything, the extension page open (by its entry or its deep link) and the
@@ -56,7 +56,7 @@ export default function TopBar({
           {onNewRun && <NewRunButton onNewRun={onNewRun} />}
           <IconButton icon={StatsIcon} label="Stats" onClick={onOpenStats} data-testid="open-stats" />
           <IconButton icon={SettingsIcon} label="Settings" onClick={onOpenSettings} data-testid="open-settings" />
-          <ThemeToggle />
+          <DarkModeToggle />
           {/* 0.8: the `topbar/account` components, at the far right (none without extension). */}
           <ExtensionDecorations<DecorationContext>
             location="topbar/account"
@@ -88,16 +88,16 @@ function NewRunButton({ onNewRun }: { onNewRun: () => void }) {
   );
 }
 
-/** Switches between the dark and the light theme (Settings › Interface also offers System). */
-function ThemeToggle() {
-  const { resolved, setPreference } = useTheme();
-  const dark = resolved === "dark";
+/** Switches the Dark mode (ADR-0093); the Theme is chosen in Settings › Interface. */
+function DarkModeToggle() {
+  const { mode, toggleMode } = useTheme();
+  const dark = mode === "dark";
   return (
     <IconButton
       icon={dark ? Sun : Moon}
-      label={dark ? "Light theme" : "Dark theme"}
-      onClick={() => setPreference(dark ? "light" : "dark")}
-      data-testid="theme-toggle"
+      label={dark ? "Dark mode off" : "Dark mode on"}
+      onClick={toggleMode}
+      data-testid="dark-mode-toggle"
     />
   );
 }

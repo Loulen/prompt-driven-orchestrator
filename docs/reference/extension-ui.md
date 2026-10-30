@@ -107,7 +107,7 @@ selected Run, or when its repository belongs to no Projet.
 
 - **Accepts**: page, action.
 - **Renders**: a 24 px icon button per element in the top bar's right-hand group, **before the
-  core's icons** (New run, Stats, Settings, the theme), a hairline after them, the label as
+  core's icons** (New run, Stats, Settings, the Dark mode), a hairline after them, the label as
   tooltip. With many, the group keeps its icons aligned and is clipped before it overlaps the
   command field. A page's button opens it full-window **without rail**: the page brings its own
   navigation. An action's button calls its command.
@@ -127,7 +127,7 @@ selected Run, or when its repository belongs to no Projet.
 ### `topbar/account`
 
 - **Accepts**: decoration.
-- **Renders**: the component as is, at the far right of the top bar, **after the theme**: an avatar
+- **Renders**: the component as is, at the far right of the top bar, **after the Dark mode**: an avatar
   opening the menu of the signed-in person (Profile, Administration, Sign out), say. The component
   draws its own button and menu (the `DropdownMenu` of its bundle). Nothing without a
   contribution.
@@ -961,13 +961,22 @@ new major.
 
 The tokens are custom properties, defined by `/shared/tokens.css`, a stylesheet at a stable
 address served by the binary. The interface loads it; a page an extension serves outside the
-interface (a sign-in page) links it:
+interface (a sign-in page) links it, with the **theme script** `/shared/theme.js` (since 0.20), a
+classic script in the `<head>`, without `defer` or `async`:
 
 ```html
-<html data-theme="dark">
-  <head><link rel="stylesheet" href="/shared/tokens.css" /></head>
+<html>
+  <head>
+    <link rel="stylesheet" href="/shared/tokens.css" />
+    <script src="/shared/theme.js"></script>
+  </head>
   <body style="margin: 0; background: var(--surface-0); color: var(--text); font-family: var(--font-ui)">
 ```
+
+The script stamps on `<html>`, before the first paint, the Theme and the mode the browser chose in
+the interface (ADR-0093), so the page opens in the same look, without a flash, and repaints when
+the interface changes them in another tab. It is the one the interface itself loads: a page never
+copies it.
 
 | Tokens | What they are |
 | --- | --- |
@@ -975,7 +984,7 @@ interface (a sign-in page) links it:
 | `--hover`, `--active`, `--selected` | Translucent fills of a hovered, pressed and selected row or control |
 | `--text`, `--text-2`, `--text-3` | Primary, secondary and muted ink; every one holds 4.5:1 on every surface |
 | `--line`, `--line-soft`, `--line-strong` | Hairlines |
-| `--primary`, `--primary-hi`, `--primary-ink` | The ruby of the one primary action of a view and of the selection, its hover, the ink on it |
+| `--primary`, `--primary-hi`, `--primary-ink` | The accent of the one primary action of a view and of the selection (ruby under Acogni, emerald under Classic), its hover, the ink on it |
 | `--selected-edge`, `--focus-ring`, `--scrim`, `--shadow`, `--dim`, `--dim-soft` | The selection's edge, the focus ring, a dialog's backdrop, a floating layer's shadow, a tour's dim |
 | `--color-st-running`, `-await`, `-done`, `-blocked`, `-failed`, `-skipped` | The six status colours (a status is shown as colour and icon) |
 | `--fs-2xs` … `--fs-xl`, `--lh-ui`, `--w-regular`, `--w-medium`, `--w-strong` | The type scale, 10 to 16 px, 13 px for the body text; line height; weights |
@@ -984,9 +993,18 @@ interface (a sign-in page) links it:
 | `--radius-ui`, `--radius-pop` | 2 px corners; 6 px for the floating toolbar of a row only |
 | `--font-ui`, `--font-code` | Archivo and Geist Mono, served by the binary under `/shared/fonts/` with their licence (SIL OFL 1.1) |
 
-Dark is the default, `data-theme="light"` switches to the light theme. The attribute applies to
-any element: a container carrying the other theme repaints what is under it. The interface sets
-it on `<html>`; an extension reads nothing, its interface follows a switch at once.
+Two attributes select the palette (since 0.20, ADR-0093):
+
+| Attribute | Values | Where |
+| --- | --- | --- |
+| `data-theme` | `acogni` (the default), `classic` | `<html>` |
+| `data-mode` | `dark` (the default), `light` | `<html>`, or any container: it repaints what is under it in the other mode |
+
+A **Theme** changes the palette only, in each mode: the roles keep their names and their meaning,
+and type, sizes and corners stay. An extension paints with the roles and reads neither attribute:
+its interface follows a switch at once. One that needs to know the mode (a library that takes
+`light` or `dark`) reads `data-mode`. Before 0.20 `data-theme` carried the mode (`dark`, `light`):
+it now carries the Theme, without an alias.
 
 The interface is drawn at the **UI scale** (Settings › Interface, 100, 110 or 120 %, 120 by
 default), a CSS `zoom` on its root. A length in pixels needs nothing. A position computed from
@@ -1021,13 +1039,13 @@ migrates its styles:
 
 ### Primitives
 
-Dense (24 px controls, 13 px text), in both themes, keyboard and screen reader included. Their
+Dense (24 px controls, 13 px text), in each Theme and mode, keyboard and screen reader included. Their
 props are in `pdo-extension-ui.d.ts`; an `icon` prop takes a `lucide-react` icon or any component
 taking `size`, `strokeWidth` and `className`.
 
 | Export | What it draws |
 | --- | --- |
-| `Button` | A text button, hairline: `tone` `primary` (ruby, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon` |
+| `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon` |
 | `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count |
 | `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most |
 | `Kbd` | A key or a chord |
@@ -1035,13 +1053,13 @@ taking `size`, `strokeWidth` and `className`.
 | `Field` | A form row: the label in a 96 px column (`help` in its tooltip), the control, the `error` at the row end |
 | `Select` | A single value out of `options` (icons, hints, groups, a search box past 8) |
 | `Segmented` | Two to four exclusive choices, arrow keys |
-| `Switch`, `Checkbox` | On/off, ruby when on; a box with its text, `mixed` |
+| `Switch`, `Checkbox` | On/off, the accent when on; a box with its text, `mixed` |
 | `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
 | `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger` |
 | `Modal` | A modal dialog: title bar, body, footer (`actions`, `footerNote`); Escape closes, Ctrl+Enter runs `onSubmit` |
 | `ConfirmDialog` | A confirmation: the action and its object, the consequence, the mono target; Enter confirms |
 | `toast(text, kind?, options?)` | A toast in the core's stack: `info`, `success`, `warning`, `error`, a `title`, one action |
-| `Tabs` | A tab strip, the live tab underlined in ruby, a count |
+| `Tabs` | A tab strip, the live tab underlined in the accent, a count |
 | `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
 | `KeyValue` | A read-only property grid |
 | `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions |

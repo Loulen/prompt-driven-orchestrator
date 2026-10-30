@@ -10,6 +10,31 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 2.68.0 — Acogni Driver, recette : Thème Classic et Dark mode
+
+### Thème et Dark mode
+
+- **Cassant pour les extensions** (feuille de tokens et module partagé) : `data-theme` change de
+  sens, sans alias (ADR-0093). Il porte le **Thème** (`acogni` par défaut, `classic`) et ne se
+  pose que sur `<html>` ; le mode passe à **`data-mode`** (`dark` par défaut, `light`), sur
+  `<html>` ou sur tout conteneur. Une UI d'extension qui peint avec les rôles n'a rien à changer ;
+  celle qui lisait `data-theme="light"` ou `data-theme="dark"` lit désormais `data-mode`. La
+  palette est redéfinie par Thème × mode ; rôles, police, densité et rayons ne changent pas, et
+  aucun token n'est ajouté.
+- **Script de thème** servi à l'adresse stable `/shared/theme.js` : il pose `data-theme` et
+  `data-mode` avant le premier affichage. L'interface le charge ; une page qu'une extension sert
+  hors de l'interface le charge à côté de `/shared/tokens.css` (`docs/reference/extension-ui.md`
+  § *Tokens*) et n'en garde aucune copie.
+- **`pdo-extension-api` 0.20.0** et **`@pdo/extension-ui` 0.20.0**, sans rupture de l'API Rust :
+  la nouvelle mineure porte la rupture de la feuille de tokens et le script de thème.
+- Settings › Interface : **Theme** (Acogni, Classic) et l'interrupteur **Dark mode** remplacent
+  « Theme » System / Light / Dark. Classic reprend les couleurs de l'interface d'avant 2.65 ; le
+  logo garde son rubis. Le soleil/lune de la barre du haut ne bascule que le Dark mode ; le Champ
+  de commande propose « Theme: Acogni », « Theme: Classic » et « Dark mode ».
+- Migration par navigateur : une préférence `light` ou `dark` devient le mode, `system` le mode
+  du système au moment de la migration ; le Thème est Acogni. Le mode est stocké sous
+  `pdo.ui.mode`, le Thème sous `pdo.ui.theme`.
+
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 
 ### Briques du détail de session, emplacement `session/detail`, compteur de Page (CORE-125)

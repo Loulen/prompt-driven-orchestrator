@@ -1614,7 +1614,7 @@
 /* One color per participant of a shared draft (the daemon deals the index):
    never a status color, never the ruby. */
 :root,
-[data-theme="dark"] {
+[data-mode="dark"] {
   --presence-0: oklch(72% 0.12 300);
   --presence-1: oklch(74% 0.1 220);
   --presence-2: oklch(78% 0.1 90);
@@ -1624,7 +1624,7 @@
   --presence-6: oklch(74% 0.09 40);
   --presence-7: oklch(70% 0.06 260);
 }
-[data-theme="light"] {
+[data-mode="light"] {
   --presence-0: oklch(52% 0.15 300);
   --presence-1: oklch(52% 0.11 220);
   --presence-2: oklch(52% 0.1 85);

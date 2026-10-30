@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DEFAULT_UI_SCALE, setUiScale } from "../../lib/uiScale";
+import { setTheme } from "../../hooks/useTheme";
 
 globalThis.ResizeObserver = class {
   observe() {}
@@ -1068,6 +1069,21 @@ describe("TmuxTerminal", () => {
       const config = mockTerminalCalls[0][0] as { theme: { selectionBackground: string } };
       expect(config.theme.selectionBackground).not.toBe("#2a2d35");
       expect(config.theme.selectionBackground).toMatch(/^rgba\(59, 130, 246,/);
+    });
+
+    it("reads its palette again on a switch of Theme (ADR-0093)", () => {
+      render(<TmuxTerminal session="test-session" />);
+      const term = mockTerminalInstances[0];
+      const root = document.documentElement.style;
+      const ground = root.getPropertyValue("--term-background");
+      root.setProperty("--term-background", "rgb(1 2 3)");
+      try {
+        act(() => setTheme("classic"));
+        expect((term.options.theme as { background: string }).background).toBe("#010203");
+      } finally {
+        root.setProperty("--term-background", ground);
+        act(() => setTheme("acogni"));
+      }
     });
 
     it("Copy button is disabled without a selection and copies the selection when clicked", async () => {

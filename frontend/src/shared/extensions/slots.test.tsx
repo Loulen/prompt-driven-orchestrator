@@ -189,7 +189,7 @@ describe("without extension", () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/ext", expect.anything()));
     expect(screen.queryByTestId("extension-nav")).toBeNull();
     expect(screen.queryByTestId("extension-banner")).toBeNull();
-    // The core's own: the command field, Stats, Settings, the theme.
+    // The core's own: the command field, Stats, Settings, the Dark mode.
     expect(container.querySelectorAll("header button")).toHaveLength(4);
     expect(screen.queryByTestId("extension-topbar-end")).toBeNull();
     expect(loader).not.toHaveBeenCalled();

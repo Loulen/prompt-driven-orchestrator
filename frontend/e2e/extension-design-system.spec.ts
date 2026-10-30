@@ -13,6 +13,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLE_PATH = path.resolve(__dirname, "..", "..", "crates/pdo/tests/test_extension/kit.js");
+/** The test extension's page outside the interface (`/ext/test/sign-in`). */
+const SIGN_IN_PATH = path.resolve(__dirname, "..", "..", "crates/pdo/tests/test_extension/sign_in.html");
 
 /** `GET /ext` as the daemon would answer it for the design-system test extension. */
 const DECLARATION = [
@@ -114,8 +116,8 @@ test("an extension page made of the primitives only looks native and follows the
   expect(await primaryBackground()).toBe(await role(page, "--primary"));
   const darkSurface = await computed(page, "kit-page", "background-color");
 
-  // The theme switches: the page follows at once, in the light roles.
-  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+  // The mode switches: the page follows at once, in the light roles.
+  await page.evaluate(() => document.documentElement.setAttribute("data-mode", "light"));
   const lightSurface = await computed(page, "kit-page", "background-color");
   expect(lightSurface).not.toBe(darkSurface);
   expect(lightSurface).toBe(await role(page, "--surface-0"));
@@ -127,23 +129,34 @@ test("an extension page made of the primitives only looks native and follows the
   expect(external).toEqual([]);
 });
 
-test("the theme chosen in Settings repaints the extension's page", async ({ page }) => {
+test("the Theme and the Dark mode chosen in Settings repaint the extension's page", async ({ page }) => {
   await playKitExtension(page);
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("extension-nav-kit:deploy").click();
-  const dark = await computed(page, "kit-page", "background-color");
+  const acogniDark = await computed(page, "kit-page", "background-color");
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("kit-page")).toHaveCount(0);
 
   await page.getByTestId("open-settings").click();
-  await page.getByRole("radio", { name: /Light/ }).click();
+  await page.getByRole("radio", { name: "Classic" }).click();
+  await page.getByRole("switch", { name: "Dark mode" }).click();
   await page.keyboard.press("Escape");
   await page.getByTestId("extension-nav-kit:deploy").click();
-  const light = await computed(page, "kit-page", "background-color");
-  expect(light).not.toBe(dark);
-  expect(light).toBe(await role(page, "--surface-0"));
-  expect(await page.evaluate(() => document.documentElement.getAttribute("data-theme"))).toBe("light");
+  const classicLight = await computed(page, "kit-page", "background-color");
+  expect(classicLight).not.toBe(acogniDark);
+  expect(classicLight).toBe(await role(page, "--surface-0"));
+  const root = () =>
+    page.evaluate(() => [document.documentElement.dataset.theme, document.documentElement.dataset.mode]);
+  expect(await root()).toEqual(["classic", "light"]);
+  // The primary button carries the Classic accent, not the ruby.
+  await page.getByTestId("kit-page").getByRole("tab", { name: "Settings" }).click();
+  const primary = page.getByTestId("kit-page").getByRole("button", { name: "Save" });
+  expect(await primary.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(await role(page, "--primary"));
+
+  // A reload opens in Classic light from the first paint: the theme script has stamped it.
+  await page.reload();
+  expect(await root()).toEqual(["classic", "light"]);
 });
 
 test("the token sheet and the fonts are served at their stable address", async ({ request }) => {
@@ -152,7 +165,12 @@ test("the token sheet and the fonts are served at their stable address", async (
   expect(sheet.headers()["content-type"]).toContain("text/css");
   const css = await sheet.text();
   expect(css).toContain("--surface-0:");
-  expect(css).toContain('[data-theme="light"]');
+  expect(css).toContain('[data-mode="light"]');
+  expect(css).toContain('[data-theme="classic"]');
+  const script = await request.get("/shared/theme.js");
+  expect(script.status()).toBe(200);
+  expect(script.headers()["content-type"]).toContain("javascript");
+  expect(await script.text()).toContain('setAttribute("data-mode"');
   for (const [, file] of css.matchAll(/url\("\/shared\/fonts\/([^"]+)"\)/g)) {
     const font = await request.get(`/shared/fonts/${file}`);
     expect(font.status(), file).toBe(200);
@@ -162,19 +180,46 @@ test("the token sheet and the fonts are served at their stable address", async (
   expect(await licence.text()).toContain("SIL Open Font License, Version 1.1");
 });
 
-test("a page outside the interface that links the token sheet paints in the app's palette", async ({ page }) => {
+test("the test extension's page outside the interface opens in the Theme and the mode chosen", async ({ page }) => {
+  const signIn = await fs.readFile(SIGN_IN_PATH, "utf8");
+  // The e2e daemon runs no extension: the page is played on the network, as
+  // the test extension serves it.
+  await page.route("**/ext/test/sign-in", (route) => route.fulfill({ contentType: "text/html", body: signIn }));
   await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.setItem("pdo.ui.theme", "classic");
+    localStorage.setItem("pdo.ui.mode", "light");
+  });
+  await page.reload();
   const appSurface = await role(page, "--surface-0");
-  // An extension's page outside the interface: only the token sheet, no module.
-  await page.route("**/ext/kit/outside", (route) =>
-    route.fulfill({
-      contentType: "text/html",
-      body: `<!doctype html><html data-theme="dark"><head><link rel="stylesheet" href="/shared/tokens.css"></head>
-        <body style="margin:0;background:var(--surface-0);color:var(--text);font-family:var(--font-ui)">
-        <p data-testid="outside">Sign in</p></body></html>`,
-    }),
-  );
-  await page.goto("/ext/kit/outside");
-  await expect(page.getByTestId("outside")).toBeVisible();
+  const appPrimary = await role(page, "--primary");
+
+  await page.goto("/ext/test/sign-in");
+  await expect(page.getByTestId("test-sign-in")).toBeVisible();
+  expect(
+    await page.evaluate(() => [document.documentElement.dataset.theme, document.documentElement.dataset.mode]),
+  ).toEqual(["classic", "light"]);
   expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(appSurface);
+  expect(await computed(page, "test-sign-in-submit", "background-color")).toBe(appPrimary);
+});
+
+test("a preference stored before 2.68 is migrated on the first page, System to the OS's mode", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.removeItem("pdo.ui.mode");
+    localStorage.setItem("pdo.ui.theme", "system");
+  });
+  await page.reload();
+  expect(
+    await page.evaluate(() => [document.documentElement.dataset.theme, document.documentElement.dataset.mode]),
+  ).toEqual(["acogni", "light"]);
+  expect(await page.evaluate(() => [localStorage.getItem("pdo.ui.theme"), localStorage.getItem("pdo.ui.mode")])).toEqual([
+    "acogni",
+    "light",
+  ]);
+  // Migrated once: the OS no longer moves it.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.reload();
+  expect(await page.evaluate(() => document.documentElement.dataset.mode)).toBe("light");
 });

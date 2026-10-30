@@ -24,7 +24,7 @@ function input(extra: Partial<BuildInput> = {}): BuildInput {
   return {
     items: [
       item("commands", "New run", { command: true }),
-      item("commands", "Theme: dark", { command: true, checked: true }),
+      item("commands", "Theme: Acogni", { command: true, checked: true }),
       item("commands", "Settings", { command: true }),
       ...Array.from({ length: 8 }, (_, i) => item("runs", `Add a product search ${i}`)),
       item("pipelines", "search-index"),

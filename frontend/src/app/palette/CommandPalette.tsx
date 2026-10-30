@@ -129,7 +129,7 @@ function PaletteBox() {
   const pipelines = useEditStore((s) => s.pipelines);
   const openPipeline = useEditStore((s) => s.openPipeline);
   const rights = useGestureRightsStore((s) => s.rights);
-  const { resolved, setPreference } = useTheme();
+  const { theme, mode, setTheme, toggleMode } = useTheme();
   const extensions = useExtensions();
 
   const entity = useMemo(() => selectionContext(host.selection), [host.selection]);
@@ -144,10 +144,11 @@ function PaletteBox() {
         host,
         pipelines,
         openPipeline: (id) => void openPipeline(id),
-        theme: resolved,
-        setTheme: setPreference,
+        appearance: { theme, mode },
+        setTheme,
+        toggleMode,
       }),
-    [host, pipelines, openPipeline, resolved, setPreference],
+    [host, pipelines, openPipeline, theme, mode, setTheme, toggleMode],
   );
   const selection = useMemo(
     () => [

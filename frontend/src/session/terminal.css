@@ -1,8 +1,10 @@
 /*
  * The terminal's palette (#759): xterm paints on a canvas, so
  * `session/model/terminalTheme.ts` reads these tokens resolved (`cssColor`).
- * An always-dark screen whatever the theme of the interface, and ANSI colours
- * are not app chrome (`red` stays red): one palette, on `:root` only.
+ * An always-dark screen whatever the mode of the interface, and ANSI colours
+ * are not app chrome (`red` stays red): one palette, on `:root`. The Classic
+ * Theme (ADR-0093) takes back the ground, the ink and the emerald cursor of the
+ * interface before 2.65; the terminal reads them again on a switch.
  */
 :root {
   --term-background: rgb(11 11 13);
@@ -26,4 +28,11 @@
   --term-bright-magenta: rgb(167 139 250);
   --term-bright-cyan: rgb(34 211 238);
   --term-bright-white: rgb(248 250 252);
+}
+
+[data-theme="classic"] {
+  --term-background: oklch(14.5% 0.007 264);
+  --term-foreground: oklch(93% 0.005 258);
+  --term-cursor: oklch(69.6% 0.149 162);
+  --term-black: oklch(14.5% 0.007 264);
 }

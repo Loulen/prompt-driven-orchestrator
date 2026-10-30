@@ -1,7 +1,9 @@
 /**
- * S4 — the guards of the shared design system (ADR-0091).
+ * S4, S5 — the guards of the shared design system (ADR-0091, ADR-0093).
  *
- *  - The palette and the roles are defined in both themes.
+ *  - Each Theme defines the whole palette in each mode, without a hex colour,
+ *    and the roles read it.
+ *  - Nothing reads `data-theme` in its sense before 2.68 (the luminosity).
  *  - The old token names are gone, everywhere: no alias.
  *  - No font size in pixels and no hex colour in the source.
  *  - No font is fetched from a third party: the binary serves them.
@@ -14,6 +16,7 @@ const SRC = import.meta.dirname;
 const FRONT = join(SRC, "..");
 const TOKENS = readFileSync(join(FRONT, "public", "shared", "tokens.css"), "utf8");
 const INDEX_CSS = readFileSync(join(SRC, "index.css"), "utf8");
+const BRAND_CSS = readFileSync(join(SRC, "shared", "ui", "brand", "brand.css"), "utf8");
 
 function walk(dir: string, keep: (path: string) => boolean): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -30,31 +33,91 @@ const EVERYTHING = [
   ...walk(SRC, (p) => /\.(tsx?|css)$/.test(p)),
   ...walk(join(FRONT, "e2e"), (p) => /\.ts$/.test(p)),
   ...walk(join(FRONT, "public", "shared"), (p) => /\.(js|d\.ts|css)$/.test(p)),
-  ...walk(join(FRONT, "..", "crates", "pdo", "tests", "test_extension"), (p) => p.endsWith(".js")),
+  ...walk(join(FRONT, "..", "crates", "pdo", "tests", "test_extension"), (p) => /\.(js|html)$/.test(p)),
 ];
 
-/** The custom properties a CSS block declares. */
-function declared(opener: string): Set<string> {
-  const start = TOKENS.indexOf(opener);
+/** The custom properties a CSS block of `css` declares. */
+function declared(opener: string, css = TOKENS): Set<string> {
+  const start = css.indexOf(opener);
   if (start < 0) throw new Error(`block not found: ${opener}`);
-  const end = TOKENS.indexOf("}", start);
-  return new Set([...TOKENS.slice(start, end).matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+  const end = css.indexOf("}", start);
+  return new Set([...css.slice(start, end).matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
 }
 
+/** The value of `property` in the block that opens with `opener`. */
+function valueIn(css: string, opener: string, property: string): string {
+  const start = css.indexOf(opener);
+  if (start < 0) throw new Error(`block not found: ${opener}`);
+  const block = css.slice(start, css.indexOf("}", start));
+  const match = block.match(new RegExp(`${property}\\s*:\\s*([^;]+);`));
+  if (!match) throw new Error(`${property} not in ${opener}`);
+  return match[1].trim();
+}
+
+/** The palette blocks, one per Theme × mode. */
+const PALETTES = {
+  "acogni dark": ':root,\n[data-mode="dark"] {',
+  "acogni light": '[data-mode="light"] {',
+  "classic dark": '[data-theme="classic"],\n[data-theme="classic"] [data-mode="dark"] {',
+  "classic light": '[data-theme="classic"][data-mode="light"],\n[data-theme="classic"] [data-mode="light"] {',
+} as const;
+const ROLES = ":root,\n[data-theme],\n[data-mode] {";
+
 describe("tokens", () => {
-  it("define the same palette in the dark and the light theme", () => {
-    const dark = declared(':root,\n[data-theme="dark"] {');
-    const light = declared('[data-theme="light"] {');
-    expect([...light].sort()).toEqual([...dark].sort());
+  it.each(Object.entries(PALETTES))("define the whole palette under %s", (_, opener) => {
+    const reference = declared(PALETTES["acogni dark"]);
+    expect(reference.has("--color-paper")).toBe(true);
+    expect([...declared(opener)].sort()).toEqual([...reference].sort());
+  });
+
+  it("add no token of their own to a Theme: the roles are declared once", () => {
+    const roles = declared(ROLES);
+    for (const opener of Object.values(PALETTES)) {
+      expect([...declared(opener)].filter((name) => roles.has(name))).toEqual([]);
+    }
+  });
+
+  it("write no hex colour: the palette is OKLCH", () => {
+    expect(TOKENS.match(HEX) ?? []).toEqual([]);
   });
 
   it("define every role Tailwind's utilities paint with", () => {
-    const roles = declared(":root,\n[data-theme] {");
-    const palette = declared(':root,\n[data-theme="dark"] {');
+    const roles = declared(ROLES);
+    const palette = declared(PALETTES["acogni dark"]);
     const theme = INDEX_CSS.slice(INDEX_CSS.indexOf("@theme inline reference {"));
     const used = [...theme.slice(0, theme.indexOf("\n}")).matchAll(/--color-[\w-]+:\s*var\((--[\w-]+)\)/g)].map((m) => m[1]);
     expect(used.length).toBeGreaterThan(20);
     expect(used.filter((name) => !roles.has(name) && !palette.has(name))).toEqual([]);
+  });
+
+  it("keep the logo in the Acogni ruby of each mode under Classic", () => {
+    expect(valueIn(BRAND_CSS, '[data-theme="classic"] .acogni-brand {', "--primary")).toBe(
+      valueIn(TOKENS, PALETTES["acogni dark"], "--color-accent"),
+    );
+    expect(valueIn(BRAND_CSS, '[data-theme="classic"] [data-mode="light"] .acogni-brand {', "--primary")).toBe(
+      valueIn(TOKENS, PALETTES["acogni light"], "--color-accent"),
+    );
+  });
+});
+
+/** `data-theme` in its sense before 2.68: dark, light or system (now `data-mode`). */
+const OLD_THEME_ATTRIBUTE = /data-theme\W{0,8}(?:dark|light|system)\b/g;
+
+describe("the attribute data-theme (ADR-0093)", () => {
+  it("never carries the mode: source, tests, end-to-end specs, shared module, test extensions, reference", () => {
+    const self = join(SRC, "designSystem.guards.test.ts");
+    const files = [
+      ...EVERYTHING,
+      join(FRONT, "index.html"),
+      join(FRONT, "..", "docs", "reference", "extension-ui.md"),
+      join(FRONT, "..", "docs", "reference", "extension-api.md"),
+    ];
+    const offenders = files
+      .filter((file) => file !== self)
+      .flatMap((file) =>
+        (readFileSync(file, "utf8").match(OLD_THEME_ATTRIBUTE) ?? []).map((hit) => `${relative(FRONT, file)}: ${hit}`),
+      );
+    expect(offenders).toEqual([]);
   });
 });
 

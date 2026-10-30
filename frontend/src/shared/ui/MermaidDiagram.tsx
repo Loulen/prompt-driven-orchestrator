@@ -5,7 +5,7 @@ import { useTheme } from "../../hooks/useTheme";
 // mermaid bakes colours into the generated SVG's own <style>, so a CSS `var()`
 // would not resolve inside it — the values must be RESOLVED colours. #759: they are
 // resolved from the live palette at initialize() time instead of being frozen
-// dark, and `ensureMermaid` re-initializes when the theme changes, so a diagram
+// dark, and `ensureMermaid` re-initializes when the Theme or the mode changes, so a diagram
 // re-rendered after a switch comes back in the new palette.
 function themeVars() {
   const c = (token: `--${string}`) => cssColor(token);
@@ -69,9 +69,10 @@ async function ensureMermaid(theme: string) {
 }
 
 export default function MermaidDiagram({ source }: { source: string }) {
-  // #759: the resolved theme is a render input — switching it re-runs the effect,
+  // #759, ADR-0093: the Theme and the mode are render inputs — switching either re-runs the effect,
   // which re-initializes mermaid and re-renders the diagram in the new palette.
-  const { resolved } = useTheme();
+  const { theme, mode } = useTheme();
+  const look = `${theme}-${mode}`;
   const rawId = useId();
   // useId() emits delimiter chars unsafe in the `#${id}` selector mermaid builds
   // internally: ':' in React 19.0, guillemets '«»' in 19.1+ (we ship 19.2). Strip
@@ -84,7 +85,7 @@ export default function MermaidDiagram({ source }: { source: string }) {
     let cancelled = false; // StrictMode double-invoke + iter-nav races
     (async () => {
       try {
-        const mermaid = await ensureMermaid(resolved);
+        const mermaid = await ensureMermaid(look);
         // parse is ASYNC. With suppressErrors it resolves `false` on bad input or a
         // truthy { diagramType } object on success — gate on truthiness, NOT === true.
         const ok = await mermaid.parse(source, { suppressErrors: true });
@@ -105,7 +106,7 @@ export default function MermaidDiagram({ source }: { source: string }) {
     return () => {
       cancelled = true;
     };
-  }, [source, id, resolved]);
+  }, [source, id, look]);
 
   if (failed) {
     // Graceful degrade: show the raw source as a code block (ADR-0013, surface-don't-mask).

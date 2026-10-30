@@ -18,6 +18,7 @@ import { posteId } from "../model/poste";
 import { isHeartbeatFrame, TERMINAL_SILENCE_MS, VEIL_GRACE_MS } from "../model/terminalConnection";
 import { BASE_FONT_SIZE, MIN_SPECTATOR_FONT_SIZE, spectatorFontSize } from "../model/spectatorFit";
 import { uiZoom, useUiScale } from "../../lib/uiScale";
+import { useTerminalTheme } from "./useTerminalTheme";
 import { terminalTheme } from "../model/terminalTheme";
 import { cssToken } from "../../lib/cssColor";
 import {
@@ -90,6 +91,7 @@ export function useXtermSession(
     fontScaleRef.current = fontScale;
     layoutRef.current?.();
   }, [scale, fontScale]);
+  useTerminalTheme(terminalRef);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<ProbedSocket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -150,7 +152,7 @@ export function useXtermSession(
       // Nothing to type into: the socket is not opened at all below.
       disableStdin: isFrozen,
       fontFamily: "'Geist Mono', monospace",
-      // An always-dark screen, whatever the theme of the interface.
+      // An always-dark screen, whatever the mode of the interface.
       theme: terminalTheme(),
       allowTransparency: false,
       scrollback: 5000,

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sign in · Test extension</title>
+<!-- A page outside the interface: the core's tokens and its theme script, so
+     it opens in the Theme and the mode this browser chose (ADR-0093). -->
+<link rel="stylesheet" href="/shared/tokens.css">
+<script src="/shared/theme.js"></script>
+</head>
+<body style="background:var(--surface-0);color:var(--text);font-family:var(--font-ui);font-size:var(--fs-md);display:grid;place-items:center;height:100vh;margin:0">
+<form id="sign-in" data-testid="test-sign-in" style="display:flex;flex-direction:column;gap:var(--g-4);min-width:280px;padding:var(--g-6);background:var(--surface-1);border:1px solid var(--line)">
+  <h1 style="font-size:var(--fs-xl);font-weight:var(--w-strong);margin:0">Sign in to PDO (test extension)</h1>
+  <p id="next" style="font-size:var(--fs-sm);color:var(--text-3);margin:0"></p>
+  <input name="token" type="password" placeholder="Token" autofocus style="height:var(--h-control);padding:0 var(--pad-x);background:var(--surface-0);color:var(--text);border:1px solid var(--line-strong);border-radius:var(--radius-ui);font:inherit">
+  <button type="submit" data-testid="test-sign-in-submit" style="height:var(--h-control);background:var(--primary);color:var(--primary-ink);border:0;border-radius:var(--radius-ui);font:inherit;font-weight:var(--w-medium);cursor:pointer">Sign in</button>
+</form>
+<script>
+  const next = new URLSearchParams(location.search).get("next") || "/";
+  document.getElementById("next").textContent = "You'll go back to " + next;
+  document.getElementById("sign-in").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const token = new FormData(e.target).get("token");
+    document.cookie = "pdo-test-token=" + encodeURIComponent(token) + "; path=/; SameSite=Lax";
+    // A path of this daemon only: `//host` would leave it.
+    location.assign(next.startsWith("/") && !next.startsWith("//") ? next : "/");
+  });
+</script>
+</body>
+</html>

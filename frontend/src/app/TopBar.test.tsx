@@ -10,7 +10,7 @@ import type { ExtensionEntry } from "../shared/generated/ExtensionEntry";
 import { hostReactMajor } from "../shared/extensions/shared";
 import { resetExtensions, setBundleLoader } from "../shared/extensions/store";
 import { resetPages } from "../shared/extensions/deepLink";
-import { setThemePreference } from "../hooks/useTheme";
+import { setMode, setTheme } from "../hooks/useTheme";
 import { runCreationRights, UNKNOWN_RIGHTS } from "../run/model/runCreationRights";
 import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import type { Project } from "../workspace/model/project";
@@ -73,7 +73,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   resetExtensions();
-  setThemePreference("dark");
+  setMode("dark");
 });
 
 describe("the top bar", () => {
@@ -82,7 +82,7 @@ describe("the top bar", () => {
     expect(await tooltipOf(screen.getByTestId("topbar-new-run"))).toBe("New run");
     expect(await tooltipOf(screen.getByTestId("open-stats"))).toBe("Stats");
     expect(await tooltipOf(screen.getByTestId("open-settings"))).toBe("Settings");
-    expect(await tooltipOf(screen.getByTestId("theme-toggle"))).toBe("Light theme");
+    expect(await tooltipOf(screen.getByTestId("dark-mode-toggle"))).toBe("Dark mode off");
   });
 
   it("opens Stats, Settings and New run", () => {
@@ -112,12 +112,15 @@ describe("the top bar", () => {
     expect(await tooltipOf(button)).toContain("can't create Runs");
   });
 
-  it("switches between the dark and the light theme", () => {
-    setThemePreference("dark");
+  it("switches the Dark mode only, the Theme untouched", () => {
+    setTheme("classic");
+    setMode("dark");
     renderBar();
-    fireEvent.click(screen.getByTestId("theme-toggle"));
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
-    expect(screen.getByTestId("theme-toggle")).toHaveAccessibleName("Dark theme");
+    fireEvent.click(screen.getByTestId("dark-mode-toggle"));
+    expect(document.documentElement.getAttribute("data-mode")).toBe("light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("classic");
+    expect(screen.getByTestId("dark-mode-toggle")).toHaveAccessibleName("Dark mode on");
+    setTheme("acogni");
   });
 
   it("puts the extensions' topbar/end icons before the core's, one tooltip each", async () => {

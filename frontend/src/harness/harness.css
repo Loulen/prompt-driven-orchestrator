@@ -5,11 +5,11 @@
  * darkens it so it carries text against a light ground.
  */
 :root,
-[data-theme="dark"] {
+[data-mode="dark"] {
   --harness-copilot: rgb(88 166 255);
   --harness-claude: rgb(240 136 62);
 }
-[data-theme="light"] {
+[data-mode="light"] {
   --harness-copilot: rgb(11 92 196);
   --harness-claude: rgb(162 68 9);
 }

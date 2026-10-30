@@ -4,8 +4,10 @@ What an extension gets from `pdo-extension-api` besides its interface (ADR-0081 
 amendments; the interface is [extension-ui.md](extension-ui.md)). The crate's rustdoc is the
 source of truth for signatures; this page says what each part is for and what goes on the wire.
 
-Version: **0.19.0** (0.17 added the design system of `@pdo/extension-ui`, see
-[extension-ui.md](extension-ui.md#the-design-system); 0.19 the Sessions hébergées). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+Version: **0.20.0** (0.17 added the design system of `@pdo/extension-ui`, see
+[extension-ui.md](extension-ui.md#the-design-system); 0.19 the Sessions hébergées; 0.20 the
+Theme, independent of the mode, and the theme script, see
+[extension-ui.md](extension-ui.md#tokens)). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks

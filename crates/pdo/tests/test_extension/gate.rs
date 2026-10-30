@@ -132,29 +132,10 @@ pub fn display_name(actor: &Actor) -> Option<ActorDisplay> {
 }
 
 /// The sign-in page: one field, the token, kept in a cookie; then back to
-/// `next`.
-pub const SIGN_IN_PAGE: &str = r#"<!doctype html>
-<html><head><meta charset="utf-8"><title>Sign in · Test extension</title></head>
-<body style="background:#0f1115;color:#e6e8eb;font-family:sans-serif;display:grid;place-items:center;height:100vh;margin:0">
-<form id="sign-in" data-testid="test-sign-in" style="display:flex;flex-direction:column;gap:8px;min-width:280px">
-  <h1 style="font-size:16px">Sign in to PDO (test extension)</h1>
-  <p id="next" style="font-size:12px;opacity:.7"></p>
-  <input name="token" type="password" placeholder="Token" autofocus>
-  <button type="submit">Sign in</button>
-</form>
-<script>
-  const next = new URLSearchParams(location.search).get("next") || "/";
-  document.getElementById("next").textContent = "You'll go back to " + next;
-  document.getElementById("sign-in").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const token = new FormData(e.target).get("token");
-    document.cookie = "pdo-test-token=" + encodeURIComponent(token) + "; path=/; SameSite=Lax";
-    // A path of this daemon only: `//host` would leave it.
-    location.assign(next.startsWith("/") && !next.startsWith("//") ? next : "/");
-  });
-</script>
-</body></html>
-"#;
+/// `next`. A page outside the interface: it links the core's tokens and loads
+/// its theme script (`/shared/theme.js`), so it opens in the Theme and the mode
+/// the browser chose.
+pub const SIGN_IN_PAGE: &str = include_str!("sign_in.html");
 
 /// Its avatar: a disc with an « A ».
 pub const AVATAR_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#f97316"/><text x="12" y="16" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">A</text></svg>"##;

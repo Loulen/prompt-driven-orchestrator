@@ -3,19 +3,20 @@
 // interactive AND orchestrator (`interactiveOrchestratorYaml`: the target
 // `implement-review`, both flags and their skills on for that node, every
 // other byte as drawn). Its REAL agent asks a question and declares its wait
-// (`pdo wait-user`): the node turns « awaiting you », its banner carries the
-// question. The cursor types the answer in its terminal, the Enter lifts the
-// wait, and the agent starts two child runs of `implement-review`
-// (`pdo run create`), which nest under it in the run tree while the counters
-// follow them.
+// with two answers (`pdo wait-user --option …`): the node turns « awaiting
+// you », its banner carries the question, its conversation shows it and the
+// two answers sit as buttons above the reply box — no terminal on screen. The
+// cursor clicks one, the click lifts the wait, and the agent starts two child
+// runs of `implement-review` (`pdo run create`), which nest under it in the
+// run tree while the counters follow them.
 //
-//   awaiting-you  — the banner « The agent is waiting for your answer », the question in the terminal
-//   answer-typed  — the answer typed in the terminal, Enter: the banner lifts
+//   awaiting-you  — the banner « The agent is waiting for your answer », the question in the conversation, its answers as buttons
+//   answer-picked — one answer clicked: the banner lifts
 //   child-created — the two children, nested under their parent in the run tree
 //   counters      — (b) the first child finished: the counters move
 //
 //   a — the whole window: the run tree, the canvas, and `implementer`'s
-//       inspector (the banner above its live terminal). Ends on the two
+//       inspector (the banner above its conversation). Ends on the two
 //       children running.
 //   b — the same story, then a cut until the first child is done: the
 //       counters (the parent row, the node, the Orchestration tab) move.
@@ -45,9 +46,10 @@ export const PARTS = [
 ];
 
 /** The question `implementer` asks (the banner's message, under 100 characters),
- *  and the answer the cursor types in its terminal. */
+ *  the answers it offers as buttons, and the one the cursor clicks. */
 export const QUESTION = "Search and price sort: one child run each, in parallel?";
-export const ANSWER = "Yes, both in parallel.";
+export const ANSWER = "Yes, both in parallel";
+export const OPTIONS = [ANSWER, "One after the other"];
 
 /** The one wait the parent runs once its children are started: a bare command
  *  on camera, not the `while ! pdo run wait …` loop of the orchestrate skill.
@@ -63,9 +65,9 @@ export const INTERACTIVE_TASK = {
     "Add two things to the shop's product list: a search box that filters the products by name as you type, and a select that sorts them by price.",
     "You orchestrate this one: do not write the code yourself, and do not explore the repository.",
     "",
-    "First, ask me before you start anything. Declare your wait, then ask me this exact question in one line, and end your turn:",
+    "First, ask me before you start anything. Declare your wait with this exact command, ask me the same question in one line, and end your turn:",
     "",
-    `pdo wait-user --message "${QUESTION}"`,
+    `pdo wait-user --message "${QUESTION}" ${OPTIONS.map((o) => `--option "${o}"`).join(" ")}`,
     "",
     "Once I answer yes, start one child run of this same pipeline per part, right away, one after the other:",
     "",
@@ -128,7 +130,7 @@ async function waitInteractiveServed(instance, on) {
 
 /** Off camera: the flagged pipeline in, the run started, and — once Claude Code
  *  is up in `implementer` — the plain target back in the library, for the
- *  children. Then the run open, `implementer`'s terminal attached. */
+ *  children. Then the run open on `implementer`'s conversation. */
 async function startInteractiveRun(ctx) {
   const { instance, page } = ctx;
   await installTargetPipeline(instance, DEMO_PIPELINE_ID, { yaml: interactiveOrchestratorYaml() });
@@ -140,9 +142,9 @@ async function startInteractiveRun(ctx) {
   if (!node) throw new Error("implementer never started");
   await restoreDemoPipeline(instance);
   await waitInteractiveServed(instance, false);
-  // Opening the run selects its live node: `implementer`, its terminal attached.
+  // Opening the run selects its live node: `implementer`, on its conversation.
   await openRun(ctx, INTERACTIVE_TASK.name);
-  await page.getByText("attached · live").waitFor({ timeout: 30_000 });
+  await page.getByTestId("conversation-view").waitFor({ timeout: 30_000 });
   await restCursor(ctx);
   return runId;
 }
@@ -156,8 +158,9 @@ async function restCursor(ctx, { filmed = false } = {}) {
 }
 
 /** Film the agent reading its task (×8, capped), then cut until it has
- *  declared its wait and printed its question: the node awaiting, the banner
- *  up, the terminal still for a moment (its turn ended). */
+ *  declared its wait and written its question: the node awaiting, the banner
+ *  up, the question in the conversation and its answers as buttons, the pane
+ *  still for a moment (its turn ended). */
 async function untilQuestion(ctx, runId) {
   const { instance, page } = ctx;
   const awaiting = waitNode(instance, runId, "implementer", { statuses: ["awaiting_user"], timeout: 5 * 60_000 });
@@ -165,6 +168,7 @@ async function untilQuestion(ctx, runId) {
   const node = await awaiting;
   if (node.status !== "awaiting_user") throw new Error(`implementer is ${node.status}, not awaiting its user`);
   await page.getByTestId("awaiting-banner-message").filter({ hasText: QUESTION.slice(0, 30) }).waitFor({ timeout: 15_000 });
+  await page.getByTestId("node-reply-option").filter({ hasText: ANSWER }).waitFor({ timeout: 15_000 });
   // The question in the pane, and the pane settled: Claude Code gave its turn back.
   let last = "";
   let stableSince = Date.now();
@@ -180,52 +184,21 @@ async function untilQuestion(ctx, runId) {
   await sleep(300);
 }
 
-/** How long the typed answer stays on screen before the Enter. */
+/** How long the cursor rests on the chosen answer before the click, so it reads. */
 export const ANSWER_HOLD_MS = 1000;
 
-/** What the browser's terminal paints (xterm's DOM renderer), spaces normalized. */
-export async function screenText(page) {
-  const text = await page.locator('[data-testid="xterm-container"] .xterm-rows').first().innerText();
-  return text.replace(/\u00a0/g, " ");
+/** Filmed: the cursor travels to the answer's button, rests on it, and clicks:
+ *  the answer reaches the agent as the user's message. Then the conversation
+ *  catches up with it (it polls), so the cut lands on the answer shown. */
+async function pickAnswer(ctx) {
+  const { page } = ctx;
+  const option = page.getByTestId("node-reply-option").filter({ hasText: ANSWER });
+  await ctx.hover(option, { duration: 800, pause: ANSWER_HOLD_MS });
+  await ctx.click(option, { duration: 120 });
+  await page.getByTestId("conversation-user").filter({ hasText: ANSWER }).waitFor({ timeout: 15_000 });
 }
 
-/** Wait until the browser's terminal paints `text`: tmux echoes a key a few
- *  hundred ms before the WebSocket bridge brings it to the page. */
-async function untilOnScreen(page, text, timeout = 5_000) {
-  const deadline = Date.now() + timeout;
-  while (!(await screenText(page)).includes(text)) {
-    if (Date.now() > deadline) throw new Error(`« ${text} » never showed in the browser's terminal`);
-    await sleep(40);
-  }
-}
-
-/** Filmed: a click in the terminal, the answer typed a word at a time (a key
- *  per character round-trips through the PTY bridge and drags over seconds).
- *  Each word waits for the pane to echo it and the page to paint it, so the
- *  words land one by one instead of all at once after a lag; the whole answer
- *  stays up `ANSWER_HOLD_MS` on screen before the Enter. */
-async function typeAnswer(ctx, runId) {
-  const { page, instance } = ctx;
-  await ctx.click(page.getByTestId("xterm-container"), { duration: 700 });
-  await sleep(150);
-  let typed = "";
-  for (const word of ANSWER.match(/\S+\s*/g)) {
-    await page.keyboard.insertText(word);
-    typed += word;
-    const echoed = typed.trimEnd();
-    const deadline = Date.now() + 5_000;
-    while (!paneText(instance, runId, "implementer").includes(echoed)) {
-      if (Date.now() > deadline) throw new Error(`« ${echoed} » never reached the implementer's terminal`);
-      await sleep(50);
-    }
-    await untilOnScreen(page, echoed);
-    await sleep(180);
-  }
-  await sleep(ANSWER_HOLD_MS);
-  await page.keyboard.press("Enter");
-}
-
-/** The Enter lifts the wait: the node runs again and its banner goes (×8, the UI polls). */
+/** The click lifts the wait: the node runs again and its banner goes (×8, the UI polls). */
 async function fastUntilLifted(ctx, runId) {
   const { page, instance } = ctx;
   await ctx.fast(async () => {
@@ -253,8 +226,8 @@ async function playStory(ctx, runId) {
   await untilQuestion(ctx, runId);
   ctx.mark("awaiting-you", { before: 300, after: 1600 });
   await sleep(1600);
-  await ctx.keep(() => typeAnswer(ctx, runId));
-  ctx.mark("answer-typed", { before: 0, after: 500 });
+  await ctx.keep(() => pickAnswer(ctx));
+  ctx.mark("answer-picked", { before: 0, after: 500 });
   await sleep(500);
   await fastUntilLifted(ctx, runId);
   await fastUntilChildren(ctx, runId);
@@ -265,16 +238,16 @@ async function playStory(ctx, runId) {
 
 export default {
   name: "interactive-orchestrator",
-  title: "Interactive & orchestrator nodes — a question, the answer typed in the terminal, two child runs",
+  title: "Interactive & orchestrator nodes — a question, the answer picked in the conversation, two child runs",
   needs: ["history"],
   live: ["claude"],
   variants: [
     {
       id: "a",
-      label: "Whole window: the question on the banner, the answer typed in the terminal, two children in the run tree",
+      label: "Whole window: the question on the banner and in the conversation, an answer clicked, two children in the run tree",
       viewport: { width: 1180, height: 680 },
       localStorage: { "pdo.layout.run": { left: 21, center: 31, right: 48 } },
-      markers: ["awaiting-you", "answer-typed", "child-created"],
+      markers: ["awaiting-you", "answer-picked", "child-created"],
       async play(ctx) {
         let runId;
         try {
@@ -294,7 +267,7 @@ export default {
       viewport: { width: 1100, height: 660 },
       // The canvas keeps ~360 px: narrower, the loop edge's labels spill into the inspector.
       localStorage: { "pdo.layout.run": { left: 22, center: 33, right: 45 } },
-      markers: ["awaiting-you", "answer-typed", "child-created", "counters"],
+      markers: ["awaiting-you", "answer-picked", "child-created", "counters"],
       async play(ctx) {
         const { page, instance } = ctx;
         let runId;

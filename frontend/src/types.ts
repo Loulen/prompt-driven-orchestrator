@@ -849,11 +849,22 @@ export interface NodeCost {
  * (`child_run_id` names it). Present only while the node awaits.
  */
 export interface AwaitingInfo {
-  cause: "declared" | "completion_not_released" | "children_pending" | "child_awaiting" | string;
+  cause:
+    | "declared"
+    | "completion_not_released"
+    | "children_pending"
+    | "child_awaiting"
+    | "turn_ended"
+    | string;
   message?: string | null;
   /** When the wait was declared (the banner's « waiting N min »). */
   since: string;
   child_run_id?: string | null;
+  /** The answers the agent offered (`pdo wait-user --option`), shown as choices
+   *  above « Reply ». Absent on every other wait. */
+  options?: string[];
+  /** Several options may be picked together (`--multi`). */
+  multi?: boolean;
 }
 
 export interface NodeState {

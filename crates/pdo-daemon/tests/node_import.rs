@@ -8,12 +8,15 @@
 //!   written;
 //! - a node without a live session: named 409, nothing written;
 //! - « Copy and send to terminal » writes the text into the session's input
-//!   **without** pressing Enter, and refuses without a live session.
+//!   **without** pressing Enter, and refuses without a live session;
+//! - « Reply » writes the text **and** submits it, lifts a declared wait, and
+//!   has the same refusals;
+//! - the Conversation view reads the node's conversation from its transcript.
 
 use std::time::Duration;
 
 use crate::common::TestDaemon;
-use crate::declared_wait::{create_run, seed, wait_node_status, PARENT};
+use crate::declared_wait::{create_run, seed, wait_node_status, wait_user, PARENT};
 
 const NODE: &str = "worker";
 
@@ -63,9 +66,28 @@ async fn send_text(
     node: &str,
     text: &str,
 ) -> (u16, serde_json::Value) {
+    post_text(daemon, run_id, node, "terminal-text", text).await
+}
+
+async fn reply(
+    daemon: &TestDaemon,
+    run_id: &str,
+    node: &str,
+    text: &str,
+) -> (u16, serde_json::Value) {
+    post_text(daemon, run_id, node, "reply", text).await
+}
+
+async fn post_text(
+    daemon: &TestDaemon,
+    run_id: &str,
+    node: &str,
+    gesture: &str,
+    text: &str,
+) -> (u16, serde_json::Value) {
     let resp = reqwest::Client::new()
         .post(format!(
-            "{}/runs/{run_id}/nodes/{node}/terminal-text",
+            "{}/runs/{run_id}/nodes/{node}/{gesture}",
             daemon.url()
         ))
         .json(&serde_json::json!({ "text": text }))
@@ -229,8 +251,11 @@ async fn a_node_without_a_live_session_refuses_the_import_and_writes_nothing() {
     let (status, _) = import(&daemon, &run_id, "ghost", &[("a.pdf", b"x".to_vec())]).await;
     assert_eq!(status, 404);
 
-    // The text gesture has the same precondition.
+    // The text gestures have the same precondition.
     let (status, body) = send_text(&daemon, &run_id, NODE, "hello").await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["error"], "node_session_not_live");
+    let (status, body) = reply(&daemon, &run_id, NODE, "hello").await;
     assert_eq!(status, 409, "{body}");
     assert_eq!(body["error"], "node_session_not_live");
 }
@@ -298,4 +323,121 @@ async fn the_text_is_written_into_the_session_input_without_enter() {
     // Empty text is refused.
     let (status, _) = send_text(&daemon, &run_id, NODE, "   ").await;
     assert_eq!(status, 400);
+}
+
+#[tokio::test]
+async fn a_reply_is_submitted_to_the_agent_and_lifts_its_declared_wait() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, PARENT, None).await;
+    wait_node_status(&daemon, &run_id, NODE, "running").await;
+    let session = format!("pdo-{run_id}-{NODE}-iter-1");
+
+    let (status, body) = wait_user(&daemon, &run_id, NODE, Some("Strip or card?")).await;
+    assert_eq!(status, 200, "{body}");
+    wait_node_status(&daemon, &run_id, NODE, "awaiting_user").await;
+
+    let (status, body) = reply(&daemon, &run_id, NODE, "Card, with the price on top").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["iter"], 1);
+
+    // The pane (a `sleep`, whose tty echoes input) shows the reply verbatim —
+    // no runtime prefix — and the cursor left its line: Enter was sent.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut pane = String::new();
+    while tokio::time::Instant::now() < deadline {
+        pane = tmux(&daemon, &["capture-pane", "-p", "-t", &session]);
+        if pane.contains("price on top") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        pane.contains("Card, with the price on top"),
+        "reply missing: {pane:?}"
+    );
+    assert!(
+        !pane.contains("[pdo-runtime]"),
+        "a reply is the user's turn: {pane:?}"
+    );
+    let cursor = tmux(&daemon, &["display", "-p", "-t", &session, "#{cursor_y}"]);
+    let y: usize = cursor.trim().parse().unwrap();
+    let reply_line = pane
+        .lines()
+        .position(|l| l.contains("price on top"))
+        .unwrap();
+    assert!(
+        y > reply_line,
+        "Enter must follow the reply: y={y} pane={pane:?}"
+    );
+
+    // The reply lifted the declared wait, and says it was the reply.
+    wait_node_status(&daemon, &run_id, NODE, "running").await;
+    let events = daemon.get_json(&format!("/runs/{run_id}/events")).await;
+    let resumed = events
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| e["kind"] == "node_resumed")
+        .unwrap_or_else(|| panic!("no node_resumed: {events}"));
+    assert_eq!(resumed["payload"]["source"], "reply", "{resumed}");
+
+    // Empty and oversized replies are refused.
+    let (status, body) = reply(&daemon, &run_id, NODE, "  ").await;
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"], "empty_text");
+    let (status, body) = reply(&daemon, &run_id, NODE, &"x".repeat(17 * 1024)).await;
+    assert_eq!(status, 413, "{body}");
+    assert_eq!(body["error"], "text_too_long");
+}
+
+/// Plant `worker`'s Claude Code transcript under the daemon's (temp) home, named
+/// by the session id PDO pinned at spawn — the file production resolves.
+async fn plant_transcript(daemon: &TestDaemon, run_id: &str, lines: &[serde_json::Value]) {
+    let sid = daemon.pinned_session_id(run_id, NODE).await;
+    let encoded = pdo_daemon::stale_detector::encode_working_dir(&worktree(daemon, run_id));
+    let dir = daemon.repo_root().join(".claude/projects").join(encoded);
+    std::fs::create_dir_all(&dir).unwrap();
+    let body: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    std::fs::write(dir.join(format!("{sid}.jsonl")), body.join("\n")).unwrap();
+}
+
+#[tokio::test]
+async fn the_conversation_is_read_from_the_agents_transcript() {
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let run_id = create_run(&daemon, PARENT, None).await;
+    wait_node_status(&daemon, &run_id, NODE, "running").await;
+    let path = format!("/runs/{run_id}/nodes/{NODE}/conversation");
+
+    let body = daemon.get_json(&path).await;
+    assert_eq!(body["supported"], true, "{body}");
+    assert_eq!(body["entries"], serde_json::json!([]));
+
+    plant_transcript(
+        &daemon,
+        &run_id,
+        &[
+            serde_json::json!({"message": {"role": "user", "content": "# PDO Runtime Preamble\n\nnode"}}),
+            serde_json::json!({"message": {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "README.md"}}
+            ]}}),
+            serde_json::json!({"message": {"role": "assistant", "content": [
+                {"type": "text", "text": "Strip or card?"}
+            ]}}),
+            serde_json::json!({"message": {"role": "user", "content": "Card"}}),
+        ],
+    )
+    .await;
+    let body = daemon.get_json(&path).await;
+    let kinds: Vec<&str> = body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["brief", "activity", "agent", "user"], "{body}");
+    assert_eq!(body["entries"][1]["steps"][0]["detail"], "README.md");
+    assert_eq!(body["entries"][2]["text"], "Strip or card?");
+    assert_eq!(body["entries"][3]["runtime"], false);
 }

@@ -25,11 +25,12 @@ export interface IterationDurations {
 
 /**
  * Whether an `awaiting.cause` is an Attente déclarée, the same rule as the
- * daemon's: `declared` and `completion_not_released` are; `children_pending`
- * (an orchestrator at work on its children) and `child_awaiting` are not.
+ * daemon's: `declared`, `completion_not_released` and `turn_ended` (an
+ * interactive node's turn handed back, ADR-0081) are; `children_pending` (an
+ * orchestrator at work on its children) and `child_awaiting` are not.
  */
 export function isDeclaredWaitCause(cause: string | null | undefined): boolean {
-  return cause === "declared" || cause === "completion_not_released";
+  return cause === "declared" || cause === "completion_not_released" || cause === "turn_ended";
 }
 
 /**

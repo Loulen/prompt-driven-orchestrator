@@ -30,12 +30,19 @@ export default defineConfig({
     // browser and intercepts every click. Specs start as a reader who already
     // answered it (`lib/tourMemory.ts`); a spec about the welcome itself would
     // clear this key.
+    // The node inspector opens on the conversation by default; these specs
+    // drive the terminal, so they start as a reader who switched to it
+    // (`pdo.nodePanelView`, one choice per browser). A spec about the
+    // conversation view would clear this key.
     storageState: {
       cookies: [],
       origins: [
         {
           origin: `http://${HOST}:${PORT}`,
-          localStorage: [{ name: "pdo.tour.offered", value: "1" }],
+          localStorage: [
+            { name: "pdo.tour.offered", value: "1" },
+            { name: "pdo.nodePanelView", value: "terminal" },
+          ],
         },
       ],
     },

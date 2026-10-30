@@ -1398,7 +1398,11 @@ pub(crate) async fn spawn_node(
         deps.tmux_cmd_override,
         tail,
         sandbox_wrap.as_ref(),
-        inject_hook,
+        tmux_session_manager::TurnEndHooks {
+            autocomplete: inject_hook,
+            // « Reply »: an interactive node declares its wait at every turn end.
+            await_user: !is_script && node.interactive,
+        },
     ) {
         // #785 / ADR-0050 §2: `duplicate session` while the session of this very
         // `(run, node, iter)` is alive means a WINNER already runs this iteration —

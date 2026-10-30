@@ -146,10 +146,23 @@ Which harness reports what: [harnesses.md](reference/harnesses.md).
 Two flags of an agent node, independent of its type (`agent`, `script`): together they
 make its **node kind**, and a node can be both.
 
-Turn **Interactive** on and a human talks to the node. When its agent needs you (a question, a
-choice, a review), it declares the wait with `pdo wait-user --message "<question>"`: the node and its
-run turn **awaiting you**, with the question on the banner. You reply in the node's terminal, and
-your Enter lifts the wait. PDO never infers a wait from a silence. The node's completion is guarded
+Turn **Interactive** on and a human talks to the node — no terminal needed. The node's inspector
+opens on its **Conversation**: your messages and the agent's, its tool calls folded between them,
+and a **Reply** box at the bottom. Whoever does not live in a terminal (product, design,
+architecture, management) follows and answers from there; a developer switches to the
+**Terminal** tab, and the browser remembers the choice.
+
+When its agent needs you (a question, a choice, a review), the node and its run turn **awaiting
+you**:
+
+- the agent declares it with `pdo wait-user --message "<question>"`, optionally with
+  `--option "<choice>"` (repeatable, `--multi` to pick several): the choices show as buttons, and a
+  click is your answer;
+- under `claude`, every end of turn of an interactive node declares it too, so a question the agent
+  forgot to declare is never silent;
+- `claude`'s own multiple-choice questions show as a card in the Conversation, answered from there.
+
+Your reply, a click or your Enter in the terminal lifts the wait. The node's completion is guarded
 until you release it (« Mark ready for completion ») or force it (« Mark complete »).
 
 Turn **Orchestrator** on and its session learns to launch runs itself: `pdo run create` starts a
@@ -161,7 +174,8 @@ waits for you shows on its parent too.
 
 Decisions: [ADR-0064](adr/0064-la-provenance-parent-enfant-est-mecanique-et-la-liaison-orchestrateur-est-forte.md),
 [ADR-0068](adr/0068-la-liberation-de-la-completion-est-une-garde-du-daemon-pas-un-message-dans-le-pane.md),
-[ADR-0069](adr/0069-l-attente-utilisateur-est-declaree-par-l-agent-et-le-suivi-des-enfants-est-un-pull-bloquant.md).
+[ADR-0069](adr/0069-l-attente-utilisateur-est-declaree-par-l-agent-et-le-suivi-des-enfants-est-un-pull-bloquant.md),
+[ADR-0081](adr/0081-la-fin-de-tour-d-un-noeud-interactif-claude-declare-l-attente.md).
 Commands: [`pdo wait-user`, `pdo run create`, `pdo run wait`](reference/cli.md#cli-commands).
 
 ## Agent profiles
@@ -205,7 +219,9 @@ Decisions: [ADR-0036](adr/0036-merge-back-resolved-in-the-node-favour.md),
 ### Live sessions
 
 Every node runs in a tmux session you can watch from the web terminal, type into, or take over. An
-interactive node waits for you, and an agent can declare that it waits on you with `pdo wait-user`.
+agent node opens on its Conversation, read from the agent's transcript (`claude`; a harness PDO
+cannot read, and a `script` node, show the terminal). An interactive node waits for you, and an
+agent can declare that it waits on you with `pdo wait-user`.
 A shell can be opened in any run's worktree. Drop a file on a running node's terminal to import it into the Run (#971). Copy and paste, import: [terminal.md](reference/terminal.md).
 
 Decisions: [ADR-0005](adr/0005-inline-xterm-over-os-spawn.md),

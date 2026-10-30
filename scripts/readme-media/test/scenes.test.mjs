@@ -83,8 +83,8 @@ test("the live row scenes: outputs, review and interactive-orchestrator, two var
   ]);
   // The story in order: the question and its banner, the answer typed, the children.
   assert.deepEqual(markers("interactive-orchestrator"), [
-    ["a", ["awaiting-you", "answer-typed", "child-created"]],
-    ["b", ["awaiting-you", "answer-typed", "child-created", "counters"]],
+    ["a", ["awaiting-you", "answer-picked", "child-created"]],
+    ["b", ["awaiting-you", "answer-picked", "child-created", "counters"]],
   ]);
   assert.equal(scenes.has("orchestration"), false, "the scene was renamed with its row");
   // All three are played by real agents: the claude auth is staged for them.
@@ -122,7 +122,7 @@ test("review: the manager answers in one line (the demo HOME's CLAUDE.md)", asyn
 });
 
 test("interactive-orchestrator: its target, implementer interactive and orchestrator with their skills, nothing else", async () => {
-  const { interactiveOrchestratorYaml, INTERACTIVE_TASK, PARTS, QUESTION, ANSWER } = await import("../scenes/interactive-orchestrator.mjs");
+  const { interactiveOrchestratorYaml, INTERACTIVE_TASK, PARTS, QUESTION, ANSWER, OPTIONS } = await import("../scenes/interactive-orchestrator.mjs");
   const target = fs.readFileSync(path.join(here, "..", "fixture", "targets", "implement-review.yaml"), "utf8");
   const yaml = interactiveOrchestratorYaml();
   const added = yaml.split("\n").filter((line) => !target.split("\n").includes(line));
@@ -138,7 +138,9 @@ test("interactive-orchestrator: its target, implementer interactive and orchestr
   assert.deepEqual(implementer.skills.map((s) => s.id), ["pdo-interactive", "pdo-orchestrate"]);
   // The agent declares its wait with the question (the banner caps it at 100 characters), then starts the children.
   assert.ok(QUESTION.length < 100);
-  assert.ok(INTERACTIVE_TASK.input.includes(`pdo wait-user --message "${QUESTION}"`));
+  assert.ok(INTERACTIVE_TASK.input.includes(`pdo wait-user --message "${QUESTION}" --option "${OPTIONS[0]}"`));
+  // The answer the cursor clicks is one the agent offers as a button.
+  assert.ok(OPTIONS.includes(ANSWER) && OPTIONS.length >= 2);
   assert.ok(INTERACTIVE_TASK.input.indexOf("pdo wait-user") < INTERACTIVE_TASK.input.indexOf("pdo run create"), "it asks before it orchestrates");
   assert.ok(ANSWER.length > 0 && !ANSWER.includes("\n"));
   // Every child is a run of the same pipeline, told not to orchestrate in turn.
@@ -154,7 +156,7 @@ test("interactive-orchestrator: its target, implementer interactive and orchestr
   assert.match(WAIT_COMMAND, /^pdo run wait --all --timeout \d+$/);
   assert.ok(INTERACTIVE_TASK.input.indexOf(WAIT_COMMAND) > INTERACTIVE_TASK.input.lastIndexOf("pdo run create"), "it waits once both are started");
   assert.match(INTERACTIVE_TASK.input, /no loop/);
-  // The typed answer stays readable before the Enter.
+  // The cursor rests on the answer long enough to read it before the click.
   assert.ok(ANSWER_HOLD_MS >= 800);
 });
 

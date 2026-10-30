@@ -107,6 +107,7 @@ const INSPECTOR_CONFIG = t("inspector-pane-edit");
 const TAB_CONFIG = t("inspector-tab-config");
 const TAB_RUN = t("inspector-tab-run");
 const TERMINAL = t("tmux-terminal");
+const VIEW_TERMINAL = t("node-view-terminal");
 const TERMINAL_RESTORE = t("term-restore");
 const RUNS_TAB_OPEN = `${RUNS_TAB}[aria-selected="true"]`;
 const CODE_ROW = `${t("port-row")}[data-kind="output"][data-port="code"]`;
@@ -540,6 +541,18 @@ describe("gestures advance only on the observed state", () => {
     fake.openRunTab();
     expect(stepById("outputs").target(fake.obs())).toEqual([CODE_ROW]);
     expect(stepById("terminal").target(fake.obs())).toEqual([TERMINAL_RESTORE]);
+  });
+
+  it("re-aims at the Terminal tab when an agent node opens on its conversation", () => {
+    const fake = new FakeApp();
+    fake.openRun();
+    fake.clickImplementer();
+    fake.show(VIEW_TERMINAL);
+    const step = stepById("terminal");
+    expect(step.target(fake.obs())).toEqual([VIEW_TERMINAL]);
+    expect(stepBody(step, fake.obs())).toMatch(/^Click Terminal: an agent node opens on its conversation/);
+    fake.show(TERMINAL);
+    expect(step.target(fake.obs())).toEqual([TERMINAL]);
   });
 
   it("does not let the tour walk on to the terminal behind an open viewer", () => {

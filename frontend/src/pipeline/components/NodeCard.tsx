@@ -11,6 +11,8 @@ interface NodeCardProps {
   rimHover?: boolean;
   /** Releasing the wire here would land it (#844). */
   wireTarget?: boolean;
+  /** An orchestrator (ADR-0064): a second sheet behind the card. */
+  orchestrator?: boolean;
   className?: string;
   style?: React.CSSProperties;
   children: React.ReactNode;
@@ -21,9 +23,10 @@ const UNSTARTED: ReadonlySet<NodeStatus> = new Set(["pending", "waiting"]);
 
 /**
  * The frame of a node on the canvas: its status as a light tint, a border and
- * (inside) an icon; the selection as one ruby ring outside the border.
+ * (inside) an icon; the selection as one ruby ring outside the border; an
+ * orchestrator as a second sheet behind it.
  */
-export function NodeCard({ status, selected, idle, rimHover, wireTarget, className, style, children }: NodeCardProps) {
+export function NodeCard({ status, selected, idle, rimHover, wireTarget, orchestrator, className, style, children }: NodeCardProps) {
   const tone = status && !UNSTARTED.has(status) ? nodeStatusTone(status) : undefined;
   return (
     <div
@@ -34,6 +37,7 @@ export function NodeCard({ status, selected, idle, rimHover, wireTarget, classNa
       data-idle={idle || undefined}
       data-rim={rimHover || undefined}
       data-wire={wireTarget || undefined}
+      data-orch={orchestrator || undefined}
       className={`cv-n${className ? ` ${className}` : ""}`}
       style={style}
     >

@@ -26,6 +26,7 @@ import { isMarkCompletable, nodeSessionEnded } from "../model/nodeStatus";
 import type { ModalState, NodeGestureRights, TerminalView } from "./nodeDetail/types";
 import { useMayOnNode } from "../store/gestureRightsStore";
 import { useFocusTab } from "../store/runSearchStore";
+import { useOrchestrationFocusTab } from "../store/orchestrationFocus";
 
 interface Props {
   node: NodeState;
@@ -121,6 +122,9 @@ export default function NodeDetailPanel({
     [setSelectedIter],
   );
   useFocusTab(runId, node.node_id, focusTranscript);
+  // The « N runs » row of the card opens the Orchestration tab.
+  const focusOrchestration = useCallback(() => setDetailTab("orchestration"), []);
+  useOrchestrationFocusTab(runId, node.node_id, focusOrchestration);
 
   // The retry handlers used to call `setTerminalView("split")` inline. The mode
   // stays presentational state here; it travels into `useNodeRun` as a *stable*

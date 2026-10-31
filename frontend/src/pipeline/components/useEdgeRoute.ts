@@ -1,26 +1,13 @@
 import { useCallback, useMemo } from "react";
 import { useStore } from "@xyflow/react";
-import { routeOrthogonal, type Point, type Rect } from "../../lib/orthogonalRouter";
+import type { Point, Rect } from "../../lib/orthogonalRouter";
+import { autoEdgeRoute } from "../../lib/edgeAutoRoute";
 import { segmentHandles } from "../../lib/edgePath";
 import { anchorPoint } from "../../lib/anchorSide";
 import { enforcePerpendicularEnds, landingLeg } from "../../lib/anchorLanding";
-import { snapPolyline } from "../../lib/wiringGrid";
 import { useWiringGridStep } from "../../hooks/useWiringGrid";
 import type { PortSide } from "../../shared/generated/PortSide";
 import type { OrthogonalEdgeData } from "./OrthogonalEdge";
-
-/**
- * The lattice an AUTO route snaps to: the canvas's own, through the origin —
- * deliberately NOT the wiring session's current origin.
- *
- * A gesture re-origins the lattice on its own tip when Shift is released
- * (ADR-0072), which is right for the wire being drawn and wrong for every other
- * edge on the canvas: reading the session origin here made every auto route on
- * screen jump a few pixels the moment someone started drawing a wire somewhere
- * else. An auto route belongs to no gesture, so it snaps to the shared lattice
- * and stays put.
- */
-const CANVAS_LATTICE: Point = { x: 0, y: 0 };
 
 /** Where an edge runs: its endpoints, the sides it leaves and lands on, and the
  *  polyline between them, with the segment handles a selected edge shows. */
@@ -159,36 +146,21 @@ export function useEdgeRoute(
         tgtSide,
         leg,
         tgtRect ?? undefined,
+        { sourceRect: srcRect ?? undefined },
       );
     }
-    // « Re-route automatically » produces a grid-ALIGNED auto path (#844): the
-    // router's bends are snapped onto the wiring lattice so an auto edge and a
-    // hand-drawn one line up instead of missing by a few pixels. It lands
-    // perpendicular too, so the reset does not undo the arrowhead's orientation.
-    const auto = routeOrthogonal({
+    return autoEdgeRoute({
       source: sourcePt,
       target: targetPt,
-      obstacles,
-      targetSide: data?.targetSide,
       sourceSide: srcSide,
+      targetSide: tgtSide,
       sourceRect: srcRect ?? undefined,
-      // Half a cell past the leg, so the lattice snap below never rounds the
-      // router's first bend back inside the source leg.
-      sourceStub: leg + step / 2,
+      targetRect: tgtRect ?? undefined,
+      obstacles,
+      step,
     });
-    // `manual: false`: the router's bends are not the user's pins, so a wire that
-    // has to go around its target is re-laid from its last real corner, and one
-    // that runs back through its own source card goes around it.
-    return enforcePerpendicularEnds(
-      snapPolyline(auto, CANVAS_LATTICE, step),
-      srcSide,
-      tgtSide,
-      leg,
-      tgtRect ?? undefined,
-      { manual: false, sourceRect: srcRect ?? undefined },
-    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, data?.targetSide, srcSide, tgtSide, step, leg, tgtRect, srcRect]);
+  }, [mode, waypoints, sourcePt.x, sourcePt.y, targetPt.x, targetPt.y, obstacles, srcSide, tgtSide, step, leg, tgtRect, srcRect]);
 
   // The first and last segments are the perpendicular legs into the two anchors:
   // structural, not user-shapable. They carry no drag handle.

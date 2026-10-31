@@ -158,6 +158,13 @@ export function resolveSourceSide(edge: EditorPipelineDef["edges"][number]): Por
   return edge.source_anchor?.side ?? "right";
 }
 
+/** The condition pill's text: `else`, the formatted `when`, or none. */
+function conditionLabel(e: EditorPipelineDef["edges"][number]): string | undefined {
+  if (e.else === true) return "else";
+  if (e.when != null && Object.keys(e.when).length > 0) return formatWhenPill(e.when as Record<string, unknown>);
+  return undefined;
+}
+
 export function deriveEditEdges(pipeline: EditorPipelineDef): Edge<EditEdgeData>[] {
   const endNodeId = pipeline.nodes.find((n) => n.type === "end")?.id;
 
@@ -171,6 +178,13 @@ export function deriveEditEdges(pipeline: EditorPipelineDef): Edge<EditEdgeData>
         : 0,
     })),
   );
+
+  // Pinned condition pills (#845), so an edge's unpinned pill keeps off the
+  // ones the author placed on other edges.
+  const pinnedPills = pipeline.edges.flatMap((e, i) => {
+    const label = conditionLabel(e);
+    return label && e.condition_label_pos ? [{ edgeIndex: i, x: e.condition_label_pos.x, y: e.condition_label_pos.y, label }] : [];
+  });
 
   return pipeline.edges.map((e, i) => {
     const isEndEdge = endNodeId != null && e.target.node === endNodeId;
@@ -204,11 +218,7 @@ export function deriveEditEdges(pipeline: EditorPipelineDef): Edge<EditEdgeData>
     // signal carried by `isDashed`, untouched here.
     const strokeColor = "var(--text-3)";
 
-    const label = isElse
-      ? "else"
-      : hasWhen
-        ? formatWhenPill(e.when as Record<string, unknown>)
-        : undefined;
+    const label = conditionLabel(e);
 
     // Orthogonal routing (#154): the custom edge computes its own right-angle
     // path (auto: pathfind around nodes; manual: through persisted waypoints)
@@ -258,6 +268,7 @@ export function deriveEditEdges(pipeline: EditorPipelineDef): Edge<EditEdgeData>
         showOutputLabels,
         outputLabelPos: e.output_label_pos ?? null,
         conditionLabelPos: e.condition_label_pos ?? null,
+        otherPinnedPills: pinnedPills.filter((p) => p.edgeIndex !== i).map(({ x, y, label }) => ({ x, y, label })),
         outputLabelSlot: labelSlots[i],
         belowNodes: e.below_nodes === true,
         // CORE-88: drawn « cassé » rather than as a wire that looks sound.

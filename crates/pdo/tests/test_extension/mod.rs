@@ -803,12 +803,6 @@ impl Extension for TestExtension {
                 "EntityBadge",
             ))
             .contribute(UiContribution::decoration(
-                UiLocation::CanvasNode,
-                "node-badge",
-                "Test",
-                "EntityBadge",
-            ))
-            .contribute(UiContribution::decoration(
                 UiLocation::PortItem,
                 "port-badge",
                 "Test",

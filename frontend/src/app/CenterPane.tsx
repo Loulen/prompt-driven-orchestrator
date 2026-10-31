@@ -1,4 +1,4 @@
-import { ArrowLeft, Play, Workflow } from "lucide-react";
+import { Play, Workflow } from "lucide-react";
 import EditCanvas from "../pipeline/components/EditCanvas";
 import TabBar from "../pipeline/components/TabBar";
 import MountedPageView from "../platform/components/MountedPageView";
@@ -6,11 +6,12 @@ import { useActivePage, useMountedPages } from "../platform/store/mountedPages";
 import type { LibraryEntry } from "../pipeline/model/library";
 import type { RunState } from "../shared/generated/RunState";
 import type { RunListEntry } from "../shared/generated/RunListEntry";
-import { Button, EmptyState, IconButton } from "../shared/ui/kit";
+import { Button, EmptyState } from "../shared/ui/kit";
 import { canCreateSomeRun } from "../run/model/runCreationRights";
 import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
 import type { Project } from "../workspace/model/project";
 import type { useRunNavigation } from "./useRunNavigation";
+import ChildRunBar from "./ChildRunBar";
 
 /**
  * The center of the shell: the tab bar, the way back to an orchestrator node
@@ -86,21 +87,11 @@ export default function CenterPane({
       {hasEditTab && (
         <div hidden={activePage != null} className="flex min-h-0 flex-1 flex-col">
           {orchestratorReturn && selectedRun?.run_id === orchestratorReturn.childRunId && (
-            <div className="cv-child" data-testid="orchestrator-back-bar">
-              <IconButton
-                icon={ArrowLeft}
-                size="sm"
-                label="Back to parent run"
-                data-testid="orchestrator-back"
-                onClick={handleBackToOrchestrator}
-              />
-              <span className="cv-child__parent" title={orchestratorReturn.parentRunName}>
-                {orchestratorReturn.parentRunName}
-              </span>
-              <span className="cv-child__node" title={orchestratorReturn.nodeName}>
-                {orchestratorReturn.nodeName}
-              </span>
-            </div>
+            <ChildRunBar
+              parentRunName={orchestratorReturn.parentRunName}
+              nodeName={orchestratorReturn.nodeName}
+              onBack={handleBackToOrchestrator}
+            />
           )}
           <EditCanvas
             libraryEntries={libraryEntries}

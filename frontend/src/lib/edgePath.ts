@@ -87,6 +87,14 @@ export function connectionPreviewPath(source: Point, target: Point): string {
  * caller can pick its own fallback.
  */
 export function pathMidpoint(points: Point[]): Point | null {
+  return pathPointAt(points, 0.5);
+}
+
+/**
+ * The point at `fraction` (0 to 1) of the polyline's total arc length, or null
+ * for a degenerate path (< 2 points).
+ */
+export function pathPointAt(points: Point[], fraction: number): Point | null {
   if (points.length < 2) return null;
 
   let totalLength = 0;
@@ -98,14 +106,14 @@ export function pathMidpoint(points: Point[]): Point | null {
   // All segments zero-length (endpoints coincide): any vertex is the midpoint.
   if (totalLength === 0) return { ...points[0] };
 
-  let remaining = totalLength / 2;
+  let remaining = totalLength * fraction;
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i];
     const b = points[i + 1];
     // Orthogonal segments: length is the Manhattan distance (one axis is 0).
     const segLength = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
     if (remaining <= segLength) {
-      const t = remaining / segLength;
+      const t = segLength === 0 ? 0 : remaining / segLength;
       return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
     }
     remaining -= segLength;

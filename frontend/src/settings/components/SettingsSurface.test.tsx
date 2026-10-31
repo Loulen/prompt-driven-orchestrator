@@ -3002,7 +3002,8 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
     });
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(saveInstanceProvisioningMock).not.toHaveBeenCalled();
-  });
+    // Two debounced writes and a full Settings render: near 20 s on a loaded machine.
+  }, 60_000);
 
   it("Worktree provisioning writes an edit still waiting when Settings closes", async () => {
     const { rerender } = render(<SettingsSurface open onClose={() => {}} />);

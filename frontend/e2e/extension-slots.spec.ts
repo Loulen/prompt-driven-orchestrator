@@ -21,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const BUNDLE_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/ui.js");
 const ICON_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/icon.svg");
-const INBOX_ICON_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/inbox.svg");
+const MESSAGES_ICON_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/messages.svg");
 const PIPELINE_NAME = `e2e-extension-slots-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
@@ -123,10 +123,10 @@ function declaration(reactMajor: number) {
           { location: "run/detail", id: "run-tab", label: "Test", type: "tab", component: "RunTab" },
           // Its 0.2 contributions to `topbar/end`.
           { location: "topbar/end", id: "page", label: "Test page", type: "page", component: "TestPage", icon },
-          // 0.20: a panel under its icon, which counts the inbox's items.
+          // 0.20: a panel under its icon, which counts the messages.
           {
-            location: "topbar/end", id: "inbox", label: "Test inbox", type: "panel", component: "InboxPanel",
-            icon: "/ext/test/inbox.svg", counter: "/ext/test/inbox/counter",
+            location: "topbar/end", id: "messages", label: "Test messages", type: "panel", component: "MessagesPanel",
+            icon: "/ext/test/messages.svg", counter: "/ext/test/messages/counter",
           },
           {
             location: "topbar/end", id: "show-context", label: "Show context", type: "action",
@@ -187,24 +187,24 @@ async function playTestExtension(page: Page, reactMajor = REACT_MAJOR) {
   await page.route("**/ext/test/icon.svg", (route) =>
     route.fulfill({ body: icon, contentType: "image/svg+xml" }),
   );
-  const inboxIcon = await fs.readFile(INBOX_ICON_PATH, "utf8");
-  await page.route("**/ext/test/inbox.svg", (route) =>
-    route.fulfill({ body: inboxIcon, contentType: "image/svg+xml" }),
+  const messagesIcon = await fs.readFile(MESSAGES_ICON_PATH, "utf8");
+  await page.route("**/ext/test/messages.svg", (route) =>
+    route.fulfill({ body: messagesIcon, contentType: "image/svg+xml" }),
   );
-  // The inbox of `inbox.rs`, played the same way: three items, deleted and restored.
-  const inbox = [
+  // The messages of `messages.rs`, played the same way: three items, deleted and restored.
+  const messages = [
     { id: "item-1", title: "Review the release notes", deleted: false },
     { id: "item-2", title: "Answer the question", deleted: false },
     { id: "item-3", title: "Plan the demo", deleted: false },
   ];
-  const live = () => inbox.filter((item) => !item.deleted).map(({ id, title }) => ({ id, title }));
-  await page.route("**/ext/test/inbox/counter", (route) =>
+  const live = () => messages.filter((item) => !item.deleted).map(({ id, title }) => ({ id, title }));
+  await page.route("**/ext/test/messages/counter", (route) =>
     route.fulfill({ json: { count: live().length, accent: false, detail: `${live().length} items` } }),
   );
-  await page.route(/\/ext\/test\/inbox(\/[^/]+(\/restore)?)?$/, (route) => {
+  await page.route(/\/ext\/test\/messages(\/[^/]+(\/restore)?)?$/, (route) => {
     if (route.request().url().endsWith("/counter")) return route.fallback();
-    const match = /\/inbox\/([^/]+)/.exec(route.request().url());
-    const item = inbox.find((i) => i.id === match?.[1]);
+    const match = /\/messages\/([^/]+)/.exec(route.request().url());
+    const item = messages.find((i) => i.id === match?.[1]);
     if (item) item.deleted = route.request().method() === "DELETE";
     return route.fulfill({ json: live() });
   });
@@ -355,11 +355,11 @@ test("topbar/end: a panel under its counted icon, Undo in a toast keeps it open"
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
   // The icon counts the three items, and opens the panel right under it.
-  const icon = page.getByTestId("extension-topbar-end-test:inbox");
-  await expect(page.getByTestId("extension-topbar-end-count-test:inbox")).toHaveText("3");
-  await expect(icon).toHaveAccessibleName("Test inbox, 3");
+  const icon = page.getByTestId("extension-topbar-end-test:messages");
+  await expect(page.getByTestId("extension-topbar-end-count-test:messages")).toHaveText("3");
+  await expect(icon).toHaveAccessibleName("Test messages, 3");
   await icon.click();
-  const panel = page.getByRole("dialog", { name: "Test inbox" });
+  const panel = page.getByRole("dialog", { name: "Test messages" });
   await expect(panel).toBeVisible();
   const [iconBox, panelBox] = [await icon.boundingBox(), await panel.boundingBox()];
   expect(panelBox!.y).toBeGreaterThanOrEqual(iconBox!.y + iconBox!.height);
@@ -367,10 +367,10 @@ test("topbar/end: a panel under its counted icon, Undo in a toast keeps it open"
 
   // Delete an item, then Undo in the toast: the panel stays open, the item comes back.
   await panel.getByRole("button", { name: "Delete Answer the question" }).click();
-  await expect(panel.getByTestId("test-inbox-item-2")).toHaveCount(0);
+  await expect(panel.getByTestId("test-messages-item-2")).toHaveCount(0);
   await page.getByTestId("toast-info").getByRole("button", { name: "Undo" }).click();
   await expect(panel).toBeVisible();
-  await expect(panel.getByTestId("test-inbox-item-2")).toBeVisible();
+  await expect(panel.getByTestId("test-messages-item-2")).toBeVisible();
 
   // Escape closes it, the focus back on the icon; a click outside too.
   await page.keyboard.press("Escape");

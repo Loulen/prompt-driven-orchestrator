@@ -1,17 +1,17 @@
-//! The inbox of the test extension (API 0.20): the panel of its `topbar/end`
+//! The messages of the test extension (API 0.20): the panel of its `topbar/end`
 //! icon lists it, and the icon's counter counts it.
 //!
-//! - `GET /ext/test/inbox`: the items, in order (`[{"id", "title"}]`);
-//! - `DELETE /ext/test/inbox/<id>`: deletes one (`404` for an unknown or
-//!   already deleted one), `POST /ext/test/inbox/<id>/restore` brings it back
+//! - `GET /ext/test/messages`: the items, in order (`[{"id", "title"}]`);
+//! - `DELETE /ext/test/messages/<id>`: deletes one (`404` for an unknown or
+//!   already deleted one), `POST /ext/test/messages/<id>/restore` brings it back
 //!   at its place (what the toast's « Undo » calls);
-//! - `GET /ext/test/inbox/counter`: the [`PageCounter`] of the icon, the
+//! - `GET /ext/test/messages/counter`: the [`PageCounter`] of the icon, the
 //!   count of the items;
-//! - `PUT /ext/test/inbox {"count": n, "title"?: …}`: replaces the items by
+//! - `PUT /ext/test/messages {"count": n, "title"?: …}`: replaces the items by
 //!   `n` items (`Item 1`…, or `title` followed by the number), to try many
 //!   items or a long title. Three to start with.
 //!
-//! Each change publishes [`INBOX_CHANGED`], so the core reads the counter
+//! Each change publishes [`MESSAGES_CHANGED`], so the core reads the counter
 //! again.
 
 use std::sync::{Arc, Mutex};
@@ -25,10 +25,10 @@ use serde_json::{json, Value};
 
 use super::creation::Creation;
 
-/// The event a change of the inbox publishes.
-pub const INBOX_CHANGED: &str = "inbox_changed";
+/// The event a change of the messages publishes.
+pub const MESSAGES_CHANGED: &str = "messages_changed";
 
-/// The items the inbox starts with.
+/// The messages it starts with.
 const SEED: [&str; 3] = [
     "Review the release notes",
     "Answer the question",
@@ -43,19 +43,19 @@ struct Item {
 }
 
 #[derive(Clone)]
-struct Inbox {
+struct Messages {
     items: Arc<Mutex<Vec<Item>>>,
     creation: Creation,
 }
 
-impl Inbox {
+impl Messages {
     fn new(creation: Creation) -> Self {
-        let inbox = Self {
+        let messages = Self {
             items: Arc::default(),
             creation,
         };
-        inbox.fill(SEED.iter().map(|t| t.to_string()).collect());
-        inbox
+        messages.fill(SEED.iter().map(|t| t.to_string()).collect());
+        messages
     }
 
     fn fill(&self, titles: Vec<String>) {
@@ -95,7 +95,7 @@ impl Inbox {
     fn changed(&self) {
         if let Some(host) = self.creation.host() {
             host.publish(ExtensionEvent::new(
-                INBOX_CHANGED,
+                MESSAGES_CHANGED,
                 json!({ "count": self.live().len() }),
             ));
         }
@@ -113,17 +113,17 @@ impl Inbox {
 }
 
 pub(super) fn routes(creation: Creation) -> Router {
-    let inbox = Inbox::new(creation);
+    let messages = Messages::new(creation);
     let (list, fill, remove, restore, counter) = (
-        inbox.clone(),
-        inbox.clone(),
-        inbox.clone(),
-        inbox.clone(),
-        inbox,
+        messages.clone(),
+        messages.clone(),
+        messages.clone(),
+        messages.clone(),
+        messages,
     );
     Router::new()
         .route(
-            "/inbox",
+            "/messages",
             get(move || {
                 let items = list.live();
                 async move { Json(Value::Array(items)) }
@@ -143,21 +143,21 @@ pub(super) fn routes(creation: Creation) -> Router {
             }),
         )
         .route(
-            "/inbox/counter",
+            "/messages/counter",
             get(move || {
                 let counter = counter.counter();
                 async move { Json(json!(counter)) }
             }),
         )
         .route(
-            "/inbox/{id}",
+            "/messages/{id}",
             delete(move |Path(id): Path<String>| {
                 let answer = toggled(&remove, &id, true);
                 async move { answer }
             }),
         )
         .route(
-            "/inbox/{id}/restore",
+            "/messages/{id}/restore",
             post(move |Path(id): Path<String>| {
                 let answer = toggled(&restore, &id, false);
                 async move { answer }
@@ -166,13 +166,13 @@ pub(super) fn routes(creation: Creation) -> Router {
 }
 
 /// Delete or restore `id`: `200` and the items, `404` when nothing changed.
-fn toggled(inbox: &Inbox, id: &str, deleted: bool) -> (StatusCode, Json<Value>) {
-    if !inbox.mark(id, deleted) {
+fn toggled(messages: &Messages, id: &str, deleted: bool) -> (StatusCode, Json<Value>) {
+    if !messages.mark(id, deleted) {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": format!("no item {id} to change") })),
         );
     }
-    inbox.changed();
-    (StatusCode::OK, Json(Value::Array(inbox.live())))
+    messages.changed();
+    (StatusCode::OK, Json(Value::Array(messages.live())))
 }

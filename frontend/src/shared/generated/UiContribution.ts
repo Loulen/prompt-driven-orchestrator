@@ -38,9 +38,19 @@ when?: When,
  * request. The core reads it when it shows the icon,
  * and again at each event of the extension on `/ws` (its
  * `extension_event`s, the events of its Sessions hébergées) and at each
- * resync. Without one, the icon shows no counter.
+ * resync. Without one, the icon shows no counter. Since 0.20, a global
+ * [`UiElement::Action`] of `palette` reads its count the same way, shown
+ * at the end of its row.
  */
-counter?: string, } & ({ "type": "page", component: string, 
+counter?: string, 
+/**
+ * The rank of the extension's group in the command field (0.20; a
+ * contribution at `palette`): the groups of the extensions follow their
+ * rank, lowest first, then those without one, each in registration
+ * order. An extension's group takes the lowest rank of its `palette`
+ * contributions.
+ */
+rank?: number, } & ({ "type": "page", component: string, 
 /**
  * An SVG the extension serves (an absolute path, usually under
  * `/ext/<id>/`), drawn in the colour of the text around it. Without

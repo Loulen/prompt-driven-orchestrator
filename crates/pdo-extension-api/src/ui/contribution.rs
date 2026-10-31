@@ -30,14 +30,24 @@ pub struct UiContribution {
     /// Where the counter of an icon of `topbar/end` is read (0.19 for a
     /// [`UiElement::Page`], 0.20 for a [`UiElement::Panel`] and a
     /// [`UiElement::Action`]): an absolute path the extension serves, usually
-    /// under `/ext/<id>/`, answering a [`PageCounter`] for the Actor of the
+    /// under `/ext/<id>/`, answering a [`PageCounter`](super::PageCounter) for the Actor of the
     /// request. The core reads it when it shows the icon,
     /// and again at each event of the extension on `/ws` (its
     /// `extension_event`s, the events of its Sessions hébergées) and at each
-    /// resync. Without one, the icon shows no counter.
+    /// resync. Without one, the icon shows no counter. Since 0.20, a global
+    /// [`UiElement::Action`] of `palette` reads its count the same way, shown
+    /// at the end of its row.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub counter: Option<String>,
+    /// The rank of the extension's group in the command field (0.20; a
+    /// contribution at `palette`): the groups of the extensions follow their
+    /// rank, lowest first, then those without one, each in registration
+    /// order. An extension's group takes the lowest rank of its `palette`
+    /// contributions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub rank: Option<i32>,
 }
 
 /// The kinds of contribution: few kinds, many locations.
@@ -115,47 +125,6 @@ pub enum UiElement {
     },
 }
 
-/// What the counter of an icon says to one Actor (0.19): what its
-/// contribution's `counter` path answers. A count of `0` shows nothing.
-///
-/// On the wire: `{"count": 3, "accent": true, "detail": "3 sessions, 1 waiting"}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-#[non_exhaustive]
-pub struct PageCounter {
-    pub count: u32,
-    /// Drawn in the accent colour: something waits for the Actor.
-    #[serde(default)]
-    pub accent: bool,
-    /// One line for the icon's tooltip, after the page's label.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "ts", ts(optional))]
-    pub detail: Option<String>,
-}
-
-impl PageCounter {
-    /// `count`, neutral, without detail.
-    pub fn new(count: u32) -> Self {
-        Self {
-            count,
-            accent: false,
-            detail: None,
-        }
-    }
-
-    /// The same counter, in the accent colour when `accent`.
-    pub fn accented(mut self, accent: bool) -> Self {
-        self.accent = accent;
-        self
-    }
-
-    /// The same counter, with `detail` in the tooltip.
-    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
-        self
-    }
-}
-
 /// How the text a [`UiElement::Completion`] inserted shows once the text is
 /// rendered: each match of `pattern` (a JavaScript regular expression) in its
 /// plain text is drawn by the exported `component` instead.
@@ -212,6 +181,7 @@ impl UiContribution {
             element,
             when: None,
             counter: None,
+            rank: None,
         }
     }
 
@@ -363,15 +333,30 @@ impl UiContribution {
         self
     }
 
-    /// The same page, panel or action, its icon showing the counter `path`
-    /// answers (0.19, panel and action 0.20): see [`UiContribution::counter`].
-    /// Ignored on any other element; only the icons of `topbar/end` show it.
+    /// The same page or panel, its icon showing the counter `path` answers
+    /// (0.19, a panel 0.20); the same Action of `topbar/end`, its icon showing
+    /// it, or global Action of `palette`, its row showing it (0.20): see
+    /// [`UiContribution::counter`]. Ignored on any other element.
     pub fn with_counter(mut self, path: impl Into<String>) -> Self {
-        if matches!(
-            self.element,
-            UiElement::Page { .. } | UiElement::Panel { .. } | UiElement::Action { .. }
-        ) {
+        let counted = match self.element {
+            UiElement::Page { .. } | UiElement::Panel { .. } => true,
+            UiElement::Action { .. } => {
+                matches!(self.location, UiLocation::Palette | UiLocation::TopbarEnd)
+            }
+            _ => false,
+        };
+        if counted {
             self.counter = Some(path.into());
+        }
+        self
+    }
+
+    /// The same contribution of `palette`, its extension's group ranked
+    /// `rank` in the command field (0.20): see [`UiContribution::rank`].
+    /// Ignored at any other location.
+    pub fn with_rank(mut self, rank: i32) -> Self {
+        if self.location == UiLocation::Palette {
+            self.rank = Some(rank);
         }
         self
     }
@@ -386,6 +371,7 @@ impl UiContribution {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::PageCounter;
     use serde_json::json;
 
     #[test]
@@ -458,6 +444,42 @@ mod tests {
             serde_json::to_value(&action).unwrap()["counter"],
             "/ext/test/pending"
         );
+    }
+
+    #[test]
+    fn a_global_action_of_the_palette_may_name_its_counter() {
+        let command = UiCommand::new("test.inbox", "Inbox", "openInbox");
+        let inbox =
+            UiContribution::action(UiLocation::Palette, "inbox", &command).with_counter("/ext/t/n");
+        assert_eq!(
+            serde_json::to_value(&inbox).unwrap(),
+            json!({
+                "location": "palette", "id": "inbox", "label": "Inbox",
+                "type": "action", "command": "test.inbox", "counter": "/ext/t/n",
+            })
+        );
+        let elsewhere =
+            UiContribution::action(UiLocation::RunsHeader, "inbox", &command).with_counter("/x");
+        assert!(serde_json::to_value(&elsewhere)
+            .unwrap()
+            .get("counter")
+            .is_none());
+        let source = UiContribution::search(UiLocation::Palette, "n", "N", "s").with_counter("/x");
+        assert!(serde_json::to_value(&source)
+            .unwrap()
+            .get("counter")
+            .is_none());
+    }
+
+    #[test]
+    fn a_palette_contribution_may_rank_its_group() {
+        let source = UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes")
+            .with_rank(-2);
+        assert_eq!(serde_json::to_value(&source).unwrap()["rank"], -2);
+        let plain = UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes");
+        assert!(serde_json::to_value(&plain).unwrap().get("rank").is_none());
+        let page = UiContribution::page(UiLocation::TopbarEnd, "p", "P", "P").with_rank(1);
+        assert!(serde_json::to_value(&page).unwrap().get("rank").is_none());
     }
 
     #[test]

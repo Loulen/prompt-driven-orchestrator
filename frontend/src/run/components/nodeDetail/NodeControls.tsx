@@ -18,7 +18,7 @@ const RETRYABLE: ReadonlySet<NodeStatus> = new Set([
   "skipped",
 ]);
 
-/** The statuses « Mark complete » applies to: take the artifacts as they are. */
+/** The statuses a completion may be released on, or a node marked complete. */
 const COMPLETABLE: ReadonlySet<NodeStatus> = new Set(["awaiting_user", "running", "failed", "stale", "interrupted"]);
 
 export interface NodeCompletionControls {
@@ -29,7 +29,7 @@ export interface NodeCompletionControls {
   /** #588 (A3): a refused unreleased completion makes « Mark ready » the call to action. */
   releaseIsPrimary: boolean;
   release: () => void;
-  /** CORE-42: « Mark complete » is allowed to the caller (else hidden). */
+  /** CORE-42: « Mark complete » is allowed to the caller, and the daemon would complete the node (else hidden). */
   canMarkComplete: boolean;
   markComplete: () => void;
 }

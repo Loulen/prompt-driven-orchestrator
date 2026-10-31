@@ -34,6 +34,7 @@ import { pauseRun, resumeRun, retryAll } from "../../run/api/commands";
 import { retryNode, retryNodePreview, stopNode } from "../../run/api/nodes";
 import { markNodeDone } from "../../run/api/completion";
 import { mayOnNode, mayOnRun, type GestureRights } from "../../run/model/runGestures";
+import { isMarkCompletable } from "../../run/model/nodeStatus";
 import type { Icon } from "../../shared/ui/kit";
 import type { Appearance, Theme } from "../../lib/theme";
 import type { BuildInput, Lead, PaletteItem } from "./paletteModel";
@@ -111,8 +112,6 @@ export function coreItems({ host, pipelines, openPipeline, appearance, setTheme,
 const LIVE = new Set(["running", "awaiting_user"]);
 const NODE_RETRYABLE = new Set(["failed", "stale", "stopped", "interrupted", "completed"]);
 const NODE_STOPPABLE = new Set(["running", "stale", "awaiting_user"]);
-/** A node waiting for a person: Mark complete approves it. */
-const NODE_AWAITING = new Set(["awaiting_user", "interrupted"]);
 
 /** What a contextual row shows of the selected item. */
 export function selectionEntity(selection: PaletteSelection): PaletteItem["entity"] {
@@ -130,9 +129,8 @@ export function selectionEntity(selection: PaletteSelection): PaletteItem["entit
 
 /**
  * The core's gestures on the selected item the caller may make: on a node,
- * Mark complete (the approval of a node waiting for a person), Retry and
- * Stop; on its Run (or a selected Run), Pause, Resume, Retry all
- * and Copy run id.
+ * Mark complete (exactly where the Inspector offers it), Retry and Stop; on
+ * its Run (or a selected Run), Pause, Resume, Retry all and Copy run id.
  */
 export function selectionItems(
   selection: PaletteSelection | null,
@@ -150,7 +148,7 @@ export function selectionItems(
 
   if (selection.kind === "node") {
     const { node } = selection;
-    if (NODE_AWAITING.has(node.status) && runStatus !== "archived" && mayOnNode(rights, runId, node.id, "mark_node_done")) {
+    if (isMarkCompletable(node.status, runStatus) && mayOnNode(rights, runId, node.id, "mark_node_done")) {
       add("node-done", "Mark complete", CircleCheck, () => void markComplete(runId, node.id, node.iter));
     }
     if (NODE_RETRYABLE.has(node.status) && runStatus !== "paused" && runStatus !== "halted" && runStatus !== "archived" && mayOnNode(rights, runId, node.id, "retry")) {
@@ -236,6 +234,7 @@ export function actionItem(action: PaletteAction, selection: PaletteSelection | 
     lead: { kind: "extension", url: iconOf(element) ?? null, label: contribution.label },
     entity: contextual && selection ? selectionEntity(selection) : undefined,
     extension: { id: extension.id, name: extension.name },
+    counter: (!contextual && contribution.counter) || undefined,
     command: true,
     run: () => void runCommand(element, context),
   };

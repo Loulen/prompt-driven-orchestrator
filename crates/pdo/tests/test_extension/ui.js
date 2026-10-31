@@ -209,7 +209,7 @@ export function TestPage({ context, navigate, shell }) {
 // and its icon in the shell's header, a component for one, an SVG for the other.
 const SCREENS = {
   "screens/alpha": { title: "Alpha screen", icon: Star },
-  "screens/beta": { title: "Beta screen", icon: "/ext/test/inbox.svg" },
+  "screens/beta": { title: "Beta screen", icon: "/ext/test/messages.svg" },
 };
 
 function TestScreen({ path, navigate }) {
@@ -274,16 +274,16 @@ function TestPageBody({ context, navigate, path }) {
   );
 }
 
-// The panel of the test inbox's icon (`topbar/end`, API 0.20): its items, each
+// The panel of the test messages' icon (`topbar/end`, API 0.20): its items, each
 // deleted at once with an « Undo » in the core's toast, which brings it back
 // while the panel stays open. Empty: « All caught up ».
-export function InboxPanel({ close }) {
+export function MessagesPanel({ close }) {
   const [items, setItems] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [attempt, setAttempt] = React.useState(0);
   React.useEffect(() => {
     let alive = true;
-    callDemo("GET", "/ext/test/inbox").then(
+    callDemo("GET", "/ext/test/messages").then(
       (list) => alive && (setItems(list), setError(null)),
       (e) => alive && setError(e.message),
     );
@@ -292,13 +292,13 @@ export function InboxPanel({ close }) {
     };
   }, [attempt]);
   const remove = (item) =>
-    callDemo("DELETE", `/ext/test/inbox/${item.id}`).then(
+    callDemo("DELETE", `/ext/test/messages/${item.id}`).then(
       (list) => {
         setItems(list);
         toast("Item deleted", "info", {
           actionLabel: "Undo",
           onAction: () =>
-            callDemo("POST", `/ext/test/inbox/${item.id}/restore`).then(setItems, (e) => toast(e.message, "error")),
+            callDemo("POST", `/ext/test/messages/${item.id}/restore`).then(setItems, (e) => toast(e.message, "error")),
         });
       },
       (e) => setError(e.message),
@@ -306,7 +306,7 @@ export function InboxPanel({ close }) {
   const head = h(
     "div",
     { className: "d-bar", style: { gap: "var(--g-3)" } },
-    h("strong", null, "Inbox"),
+    h("strong", null, "Messages"),
     items && items.length > 0 && h(Chip, { mono: true, title: `${items.length} items` }, String(items.length)),
   );
   let body;
@@ -314,7 +314,7 @@ export function InboxPanel({ close }) {
     body = h(EmptyState, {
       icon: Alert,
       action: h(Button, { size: "sm", onClick: () => setAttempt((n) => n + 1) }, "Retry"),
-    }, "Inbox unavailable");
+    }, "Messages unavailable");
   } else if (!items) {
     body = h(EmptyState, { icon: Check, spin: true }, "Loading");
   } else if (items.length === 0) {
@@ -322,13 +322,13 @@ export function InboxPanel({ close }) {
   } else {
     body = h(
       "ul",
-      { style: { listStyle: "none", margin: 0, padding: "2px", minWidth: 0 }, "data-testid": "test-inbox-items" },
+      { style: { listStyle: "none", margin: 0, padding: "2px", minWidth: 0 }, "data-testid": "test-messages-items" },
       items.map((item) =>
         h(
           "li",
           {
             key: item.id,
-            "data-testid": `test-inbox-${item.id}`,
+            "data-testid": `test-messages-${item.id}`,
             style: { display: "flex", alignItems: "center", gap: "var(--g-3)", minWidth: 0, padding: "2px var(--g-2) 2px var(--pad-x)" },
           },
           // Following an item closes the panel, as a link out of it does.
@@ -363,7 +363,7 @@ export function InboxPanel({ close }) {
       ),
     );
   }
-  return h("div", { style: { display: "flex", flexDirection: "column", minHeight: 0 }, "data-testid": "test-inbox" }, head, body);
+  return h("div", { style: { display: "flex", flexDirection: "column", minHeight: 0 }, "data-testid": "test-messages" }, head, body);
 }
 
 // The demonstration of a Session hébergée (API 0.19): one shell (`demo`), or
@@ -795,10 +795,22 @@ export function TagChip({ text }) {
 // 0.18: the Source de recherche of the command field. Its notes, already
 // filtered as the test extension's rights would; each opens the test page on
 // its path. `query` is the text typed, `context.selected` the item selected.
+// 0.20: each status carries its fixed shape (`todo`, `doing`, `review`,
+// `done`), and one note has a 200-character title without a space.
 const NOTES = [
-  { id: "1", ref: "N-1", title: "Release checklist", meta: "Ops", tone: "done", status: "Done" },
-  { id: "2", ref: "N-2", title: "Search index rebuild", meta: "Platform", tone: "running", status: "In progress" },
-  { id: "3", ref: "N-3", title: "Retry budget for flaky searches", meta: "Platform", tone: "skipped", status: "To do" },
+  { id: "1", ref: "N-1", title: "Release checklist", meta: "Ops", tone: "done", shape: "done", status: "Done" },
+  { id: "2", ref: "N-2", title: "Search index rebuild", meta: "Platform", tone: "running", shape: "doing", status: "In progress" },
+  { id: "3", ref: "N-3", title: "Retry budget for flaky searches", meta: "Platform", tone: "skipped", shape: "todo", status: "To do" },
+  { id: "4", ref: "N-4", title: "Upgrade notes for the next release", meta: "Ops", tone: "awaiting", shape: "review", status: "In review" },
+  {
+    id: "5",
+    ref: "N-5",
+    title: `Unbroken-${"segment-without-any-space-".repeat(8)}`.slice(0, 200),
+    meta: "Platform › Long titles",
+    tone: "skipped",
+    shape: "todo",
+    status: "To do",
+  },
 ];
 
 function noteResult(note) {
@@ -807,7 +819,7 @@ function noteResult(note) {
     ref: note.ref,
     title: note.title,
     meta: note.meta,
-    status: { tone: note.tone, label: note.status },
+    status: { tone: note.tone, shape: note.shape, label: note.status },
     link: `#/ext/test/topbar/end/notes/${note.id}`,
   };
 }

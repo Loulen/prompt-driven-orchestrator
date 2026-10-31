@@ -567,6 +567,12 @@ describe("deriveLoopRegions — bounded region rendering (ADR-0011 / #148)", () 
     expect(r.box!.height).toBeGreaterThan(0);
   });
 
+  it("wraps the drawn cards when they are compact", () => {
+    const cards = { impl: { x: 300, y: 200, w: 168, h: 30 }, rev: { x: 580, y: 200, w: 168, h: 30 } };
+    const box = deriveLoopRegions(regionPipeline(3), null, cards)[0].box!;
+    expect(box).toEqual({ x: 280, y: 174, width: 488, height: 76 });
+  });
+
   it("advances the counter to `i/N` on a live run, taking the max member iter", () => {
     const run = makeRunState({ impl: "running", rev: "pending" });
     run.nodes.impl.iter = 2;

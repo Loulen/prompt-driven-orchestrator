@@ -8,6 +8,7 @@ import { ConfirmDialog } from "../../shared/ui/kit";
 import { FOCUSABLE } from "../../shared/ui/kit/layer";
 import { toCss } from "../../shared/ui/zoom";
 import { useTheme } from "../../hooks/useTheme";
+import { useCompactNodes } from "../../hooks/useCompactNodes";
 import { useEditStore } from "../../pipeline/store/editStore";
 import { useGestureRightsStore } from "../../run/store/gestureRightsStore";
 import { usePaletteHost, type PaletteSelection } from "./paletteHost";
@@ -130,6 +131,7 @@ function PaletteBox() {
   const openPipeline = useEditStore((s) => s.openPipeline);
   const rights = useGestureRightsStore((s) => s.rights);
   const { theme, mode, setTheme, toggleMode } = useTheme();
+  const { compactNodes, toggleCompactNodes } = useCompactNodes();
   const extensions = useExtensions();
 
   const entity = useMemo(() => selectionContext(host.selection), [host.selection]);
@@ -147,8 +149,10 @@ function PaletteBox() {
         appearance: { theme, mode },
         setTheme,
         toggleMode,
+        compactNodes,
+        toggleCompactNodes,
       }),
-    [host, pipelines, openPipeline, theme, mode, setTheme, toggleMode],
+    [host, pipelines, openPipeline, theme, mode, setTheme, toggleMode, compactNodes, toggleCompactNodes],
   );
   const selection = useMemo(
     () => [

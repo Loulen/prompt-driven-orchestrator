@@ -13,6 +13,8 @@ interface NodeCardProps {
   wireTarget?: boolean;
   /** An orchestrator (ADR-0064): a second sheet behind the card. */
   orchestrator?: boolean;
+  /** One line on a compact Run canvas (« Compact nodes »). */
+  compact?: boolean;
   className?: string;
   style?: React.CSSProperties;
   children: React.ReactNode;
@@ -26,7 +28,7 @@ const UNSTARTED: ReadonlySet<NodeStatus> = new Set(["pending", "waiting"]);
  * (inside) an icon; the selection as one ruby ring outside the border; an
  * orchestrator as a second sheet behind it.
  */
-export function NodeCard({ status, selected, idle, rimHover, wireTarget, orchestrator, className, style, children }: NodeCardProps) {
+export function NodeCard({ status, selected, idle, rimHover, wireTarget, orchestrator, compact, className, style, children }: NodeCardProps) {
   const tone = status && !UNSTARTED.has(status) ? nodeStatusTone(status) : undefined;
   return (
     <div
@@ -38,6 +40,7 @@ export function NodeCard({ status, selected, idle, rimHover, wireTarget, orchest
       data-rim={rimHover || undefined}
       data-wire={wireTarget || undefined}
       data-orch={orchestrator || undefined}
+      data-compact={compact || undefined}
       className={`cv-n${className ? ` ${className}` : ""}`}
       style={style}
     >

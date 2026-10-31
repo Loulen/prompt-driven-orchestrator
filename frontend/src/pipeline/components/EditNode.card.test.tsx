@@ -157,3 +157,43 @@ describe("the cost on a Run's card", () => {
     expect(cost.textContent).not.toMatch(/tok/i);
   });
 });
+
+describe("the compact card (Compact nodes)", () => {
+  it("is one line: the harness icon in the accent, the name, the status at the end", () => {
+    draw({ compact: true, inRun: true, status: "completed", run: RUN, isolated: true, agentMode: "profile" });
+    const card = screen.getByTestId("node-card");
+    expect(card).toHaveAttribute("data-compact", "true");
+    const head = screen.getByTestId("node-card-head");
+    const icons = [...head.querySelectorAll("svg[role='img']")];
+    expect(icons[0]).toHaveClass("cv-n__type");
+    expect(head.lastElementChild).toHaveAccessibleName("Completed");
+    expect(within(head).getByTitle("Dispatch fixes")).toHaveTextContent("Dispatch fixes");
+    // No meta grid, no iteration, no worktree or profile marker.
+    expect(card.querySelector(".cv-n__grid")).toBeNull();
+    expect(screen.queryByTestId("isolation-marker")).toBeNull();
+    expect(screen.queryByTestId("agent-mode-profile")).toBeNull();
+  });
+
+  it("keeps the rim's source handles, which every outgoing edge binds to", () => {
+    const compact = draw({ compact: true, inRun: true, status: "completed", run: RUN }).container;
+    const handles = (root: Element) => [...root.querySelectorAll(".react-flow__handle.source")].map((h) => h.getAttribute("data-handleid")).sort();
+    const compactHandles = handles(compact);
+    expect(compactHandles.length).toBeGreaterThan(0);
+    const detailed = draw({ inRun: true, status: "completed", run: RUN }).container;
+    expect(compactHandles).toEqual(handles(detailed));
+  });
+
+  it("keeps an orchestrator's « N runs » and pastilles on a second line", () => {
+    draw({ compact: true, orchestrator: true, inRun: true, status: "running", run: RUN, childCounts: { finished: 7, failed: 2, stale: 0, running: 6 } });
+    expect(screen.getByTestId("node-card")).toHaveAttribute("data-orch", "true");
+    expect(screen.getByTestId("node-child-runs")).toHaveTextContent(/^15 runs/);
+    expect(screen.getByTestId("node-child-pills-failed")).toHaveTextContent("2");
+  });
+
+  it("keeps the whole name in its tooltip, so a long one can ellipsize", () => {
+    const name = "x".repeat(200);
+    draw({ compact: true, inRun: true, status: "failed", run: RUN, label: name });
+    expect(screen.getByTitle(name)).toHaveClass("cv-n__name");
+    expect(within(screen.getByTestId("node-card-head")).getByRole("img", { name: "Failed" })).toBeInTheDocument();
+  });
+});

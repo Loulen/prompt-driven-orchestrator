@@ -50,6 +50,17 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   towards a card beyond the next, and a condition label slides along its edge instead of shrinking.
   An unplaced condition label keeps off the labels placed by hand on other edges, and off the cards.
 
+### Compact nodes
+
+- Settings › Interface: **Compact nodes**, a switch of this browser (`pdo.ui.compactNodes`), off
+  by default, right under Dark mode; the command field offers "Compact nodes" too. On, every Run
+  canvas, child runs included, draws its cards on one line: the harness icon, the name, the
+  status, and on an orchestrator a second line with "N runs" and its pills. The rest of the
+  pipeline rises by as much, computed in the browser: nothing is written to the pipeline, no edge
+  gains a bend, side ports fold onto the first line, and output and condition labels stay
+  visible. The editor, and a Run edited for itself, keep the detailed cards. A Start, an End or a
+  note beside a row of cards holds that row where it is.
+
 ### One avatar for a person
 
 - **Breaking for extensions** (shared module): the kit's `Avatar` is round, tinted with the
@@ -126,7 +137,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   duplicated, imported or deleted (a new pipeline is born a test pipeline): a client that keeps
   the pipeline list reads it again, and an open New Run offers the new pipeline at once.
 - Triggers name the time zone their cron is read in (UTC): beside the expression in New
-  Trigger, in the schedule (« daily at 03:00 UTC ») and in the next fire of the Trigger's
+  Trigger, in the schedule ("daily at 03:00 UTC") and in the next fire of the Trigger's
   detail, whose tooltip gives the same instant in the browser's time zone.
 - New Run says why a repository cannot be used once, under the field: a path that does not
   exist, a folder that is not a repository, a repository without a commit, or one outside the

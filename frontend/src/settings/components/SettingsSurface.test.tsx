@@ -159,6 +159,7 @@ import {
 } from "../../shared/extensions/store";
 import { useEditStore } from "../../pipeline/store/editStore";
 import { useWiringStore } from "../../stores/wiringStore";
+import { resetCompactNodes } from "../../hooks/useCompactNodes";
 import type { InstanceSettings } from "../model/settings";
 import type { SandboxProfile } from "../../sandbox/model/sandbox";
 
@@ -1520,6 +1521,31 @@ describe("SettingsSurface — Interface / child runs default (#783)", () => {
     render(<SettingsSurface open onClose={() => {}} />);
     const row = await screen.findByTestId("setting-row-child-runs");
     expect(within(row).getByRole("radio", { name: "Collapsed" })).toHaveAttribute("aria-checked", "true");
+  });
+});
+
+describe("SettingsSurface — Interface / Compact nodes", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    localStorage.clear();
+    resetCompactNodes();
+  });
+
+  it("is the third row, off by default, and saved in this browser at the change", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const row = await screen.findByTestId("setting-row-compact-nodes");
+    const rows = Array.from(document.querySelectorAll('[data-testid^="setting-row-"]')).map((r) => r.getAttribute("data-testid"));
+    const at = rows.indexOf("setting-row-compact-nodes");
+    expect(rows.slice(at - 2, at + 1)).toEqual(["setting-row-theme", "setting-row-dark-mode", "setting-row-compact-nodes"]);
+    expect(row.querySelector('[data-scope="device"]')).not.toBeNull();
+    const toggle = within(row).getByRole("switch", { name: "Compact nodes" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    expect(localStorage.getItem("pdo.ui.compactNodes")).toBe("true");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(updateSettingsMock).not.toHaveBeenCalled();
   });
 });
 

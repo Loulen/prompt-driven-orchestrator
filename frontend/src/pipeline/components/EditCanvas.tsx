@@ -14,6 +14,7 @@ import RunShellModal from "../../session/components/RunShellModal";
 import RetryAllConfirmModal from "../../run/components/runsList/RetryAllConfirmModal";
 import { useCanvasNodePlay } from "../store/useCanvasNodePlay";
 import { useCanvasChildRuns } from "../store/useCanvasChildRuns";
+import { useCanvasCompaction } from "../store/useCanvasCompaction";
 import { buildNoteNodes, deriveEditNodes } from "./editNodeDerivation";
 import { buildLoopRegionNodes } from "./loopRegionDerivation";
 import { deriveEditEdges, edgeIndexFromId } from "./editEdgeDerivation";
@@ -172,9 +173,16 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const { visibleItems, dismiss } = useCanvasLint(tab, agentProfileIds, skillIds, skillBankLoaded);
   const withChildren = useCanvasChildRuns(activeRunState, onCloseInfo);
   const { withPlay, nodePlay } = useCanvasNodePlay(pipeline, activeRunState);
+  const cards = useMemo(
+    () =>
+      pipeline
+        ? deriveEditNodes(pipeline, activeRunState, agentProfileIds, agentProfiles).map(withPlay).map(withChildren)
+        : [],
+    [pipeline, activeRunState, agentProfileIds, agentProfiles, withPlay, withChildren],
+  );
+  const { shown, cards: compactCards, placed } = useCanvasCompaction(tab, pipeline, cards);
   const derivedNodes = useMemo(() => {
-    if (!pipeline) return [];
-    const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds, agentProfiles).map(withPlay).map(withChildren);
+    if (!shown) return [];
     // Bounded loop regions (ADR-0011 / #148) render as translucent boxes BEHIND
     // their member cards. Each multi-member region is backed by a decorative,
     // non-interactive `loopRegion` node so it tracks pan/zoom with the graph;
@@ -182,16 +190,16 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     // region nodes are prepended, pinned to a low zIndex behind the member
     // cards, and given `pointer-events: none` so edges crossing the box stay
     // clickable (#167).
-    const regionNodes: Node[] = buildLoopRegionNodes(pipeline, activeRunState);
+    const regionNodes: Node[] = buildLoopRegionNodes(shown, activeRunState, compactCards);
     // Inert canvas notes (#307 / ADR-0018) render as draggable/selectable cards
     // with no handle. They carry no run status, so they're derived from the
     // pipeline alone (independent of run state).
-    const noteNodes: Node[] = buildNoteNodes(pipeline);
-    return [...regionNodes, ...cards, ...noteNodes];
-  }, [pipeline, activeRunState, agentProfileIds, agentProfiles, withPlay, withChildren]);
+    const noteNodes: Node[] = buildNoteNodes(shown);
+    return [...regionNodes, ...placed, ...noteNodes];
+  }, [shown, compactCards, placed, activeRunState]);
   const derivedEdges = useMemo(
-    () => (pipeline ? deriveEditEdges(pipeline) : []),
-    [pipeline],
+    () => (shown ? deriveEditEdges(shown) : []),
+    [shown],
   );
 
   useEffect(() => {

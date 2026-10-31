@@ -28,6 +28,26 @@ make test         # daemon and frontend tests
 Commit messages follow Conventional Commits with a French or English body, as the rest of
 the history does. Reference the issue in the title.
 
+### Versions, CHANGELOG and ADRs
+
+A contribution bumps **no version**: not the workspace, not `pdo-extension-api`, not the front's
+shared module, not `Cargo.lock`. Write what it changes under `## Unreleased`, the first entry of
+[CHANGELOG.md](CHANGELOG.md), in English and without ticket ids; "What's new" hides that entry. A
+new ADR is born `docs/adr/draft-<slug>.md`, without a number, and is cited `ADR draft-<slug>`.
+
+The version is set when a story merges into `main`, by one command
+([docs/agents/git-flow.md](docs/agents/git-flow.md) § *integration/\* -> main*):
+
+```bash
+make e2e                     # the frontend's Playwright suite (installs Chromium if missing)
+make release-bump DRY_RUN=1  # the proposed semver level and the plan, nothing written
+make release-bump            # LEVEL=patch|minor|major forces the level
+```
+
+`make release-bump` proposes the level from the conventional commits since the last tag (`feat` a
+minor, `fix` a patch, `!` a major), bumps the four versions and `Cargo.lock`, turns `## Unreleased`
+into the version's entry and numbers the draft ADRs, rewriting their citations.
+
 ## Development
 
 ### Prerequisites
@@ -114,7 +134,8 @@ Every command is documented in [docs/reference/cli.md](docs/reference/cli.md).
 | Test frontend | `cd frontend && pnpm run test` |
 | Lint frontend | `cd frontend && pnpm run lint` |
 | Build frontend | `cd frontend && pnpm run build` |
-| Test the README media tooling | `node --test 'scripts/readme-media/test/*.test.mjs'` |
+| Test the scripts (README media, release) | `node --test 'scripts/*/test/*.test.mjs'` |
+| Run the frontend's E2E | `make e2e` |
 
 ### TypeScript types of the daemon's DTOs
 

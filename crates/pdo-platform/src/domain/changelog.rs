@@ -14,18 +14,26 @@ pub const EMBEDDED_CHANGELOG: &str = include_str!("../../../../CHANGELOG.md");
 /// How many versions of the embedded changelog « What's new » shows.
 pub const EMBEDDED_VERSIONS: usize = 10;
 
-/// The newest `versions` sections (`## …`) of a changelog, without its title and
-/// preamble: the fallback body of « What's new » when the release list is
-/// unavailable, and the body shown to an up-to-date daemon. The older history
-/// stays in the file.
+/// The newest `versions` sections (`## …`) of a changelog, without its title,
+/// its preamble and its `## Unreleased` entry: the fallback body of « What's
+/// new » when the release list is unavailable, and the body shown to an
+/// up-to-date daemon. The older history stays in the file.
 pub fn embedded_excerpt(changelog: &str, versions: usize) -> String {
     let mut sections: Vec<String> = Vec::new();
+    let mut unreleased = false;
     for line in changelog.lines() {
-        if line.starts_with("## ") {
+        if let Some(heading) = line.strip_prefix("## ") {
+            unreleased = is_unreleased(heading);
+            if unreleased {
+                continue;
+            }
             if sections.len() == versions {
                 break;
             }
             sections.push(String::new());
+        }
+        if unreleased {
+            continue;
         }
         if let Some(current) = sections.last_mut() {
             current.push_str(line);
@@ -33,6 +41,12 @@ pub fn embedded_excerpt(changelog: &str, versions: usize) -> String {
         }
     }
     sections.concat().trim_end().to_string()
+}
+
+/// `Unreleased` or `Unreleased · <title>`: the entry the changes not released
+/// yet are written under, renamed to their version by `make release-bump`.
+fn is_unreleased(heading: &str) -> bool {
+    heading == "Unreleased" || heading.starts_with("Unreleased · ")
 }
 
 /// Where the changelog lives, or why it could not come from the releases.
@@ -207,10 +221,58 @@ mod tests {
         assert_eq!(embedded_excerpt("# Changelog\n", 5), "");
     }
 
-    /// « What's new » reads one entry per version, the newest being this build's,
-    /// and the changelog has an entry for every minor since 2.59.
+    #[test]
+    fn the_excerpt_hides_the_unreleased_entry() {
+        let md = "# Changelog\n\n## Unreleased · Next\n\n- soon\n\n## 2.0.0\n\n- b\n\n## 1.0.0\n\n- a\n";
+        assert_eq!(
+            embedded_excerpt(md, 2),
+            "## 2.0.0\n\n- b\n\n## 1.0.0\n\n- a"
+        );
+        assert_eq!(embedded_excerpt(md, 1), "## 2.0.0\n\n- b");
+        assert_eq!(
+            embedded_excerpt("# Changelog\n\n## Unreleased\n\n- soon\n", 5),
+            ""
+        );
+    }
+
+    /// The headings of a changelog: `Unreleased` first if present, then one
+    /// entry per version, the newest being `version`. The fault, if any.
+    fn head_fault(changelog: &str, version: &str) -> Option<String> {
+        let headings: Vec<&str> = changelog
+            .lines()
+            .filter_map(|l| l.strip_prefix("## "))
+            .collect();
+        let versions = match headings.split_first() {
+            Some((first, rest)) if is_unreleased(first) => rest,
+            _ => &headings[..],
+        };
+        if let Some(stray) = versions.iter().find(|h| is_unreleased(h)) {
+            return Some(format!("`## {stray}` is not the first entry"));
+        }
+        let newest = versions.first().map(|h| h.split(' ').next().unwrap_or(h));
+        (newest != Some(version)).then(|| format!("newest entry {newest:?}, build {version}"))
+    }
+
+    #[test]
+    fn an_unreleased_entry_may_open_the_changelog_above_the_current_version() {
+        let without = "# Changelog\n\n## 2.1.0 · Title\n\n- b\n\n## 2.0.0\n";
+        let with = "# Changelog\n\n## Unreleased\n\n- c\n\n## 2.1.0 · Title\n\n- b\n";
+        assert_eq!(head_fault(without, "2.1.0"), None);
+        assert_eq!(head_fault(with, "2.1.0"), None);
+        assert!(head_fault(with, "2.2.0").is_some());
+        let below = "## 2.1.0\n\n- b\n\n## Unreleased\n\n- c\n";
+        assert!(head_fault(below, "2.1.0").unwrap().contains("not the first"));
+    }
+
+    /// « What's new » reads one entry per version, the newest being this build's
+    /// (an `Unreleased` entry may sit above it), and the changelog has an entry
+    /// for every minor since 2.59.
     #[test]
     fn the_changelog_has_one_entry_per_version_up_to_this_build() {
+        assert_eq!(
+            head_fault(EMBEDDED_CHANGELOG, env!("CARGO_PKG_VERSION")),
+            None
+        );
         let shown = embedded_excerpt(EMBEDDED_CHANGELOG, EMBEDDED_VERSIONS);
         assert_eq!(
             shown
@@ -239,11 +301,11 @@ mod tests {
         }
     }
 
-    /// The changelog is read in the UI: in English, and in the user's terms
-    /// rather than the backlog's (no ticket id).
-    #[test]
-    fn the_changelog_is_in_english_and_cites_no_ticket() {
-        for (n, line) in EMBEDDED_CHANGELOG.lines().enumerate() {
+    /// The lines of a changelog that cite a ticket or an issue, or are not in
+    /// English, `Unreleased` included.
+    fn language_faults(changelog: &str) -> Vec<String> {
+        let mut faults = Vec::new();
+        for (n, line) in changelog.lines().enumerate() {
             let ticket = line
                 .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
                 .any(|word| {
@@ -256,7 +318,9 @@ mod tests {
                         && !number.is_empty()
                         && number.chars().all(|c| c.is_ascii_digit())
                 });
-            assert!(!ticket, "line {}: ticket id: {line}", n + 1);
+            if ticket {
+                faults.push(format!("line {}: ticket id: {line}", n + 1));
+            }
             let issue = line.match_indices('#').any(|(i, _)| {
                 line[i + 1..]
                     .chars()
@@ -264,13 +328,35 @@ mod tests {
                     .is_some_and(|c| c.is_ascii_digit())
                     && !line[..i].ends_with('&')
             });
-            assert!(!issue, "line {}: issue number: {line}", n + 1);
-            assert!(
-                !line.contains(['é', 'è', 'ê', 'à', 'â', 'ç', '«', '»']),
-                "line {}: not English: {line}",
-                n + 1
-            );
+            if issue {
+                faults.push(format!("line {}: issue number: {line}", n + 1));
+            }
+            if line.contains(['é', 'è', 'ê', 'à', 'â', 'ç', '«', '»']) {
+                faults.push(format!("line {}: not English: {line}", n + 1));
+            }
         }
+        faults
+    }
+
+    /// The changelog is read in the UI: in English, and in the user's terms
+    /// rather than the backlog's (no ticket id).
+    #[test]
+    fn the_changelog_is_in_english_and_cites_no_ticket() {
+        assert_eq!(language_faults(EMBEDDED_CHANGELOG), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_unreleased_entry_follows_the_same_rules() {
+        let md = "## Unreleased\n\n- Faster gates (CORE-158)\n- Fixed #12\n- Plus rapide, déjà\n\n## 2.0.0\n";
+        let faults = language_faults(md);
+        assert_eq!(faults.len(), 3, "{faults:?}");
+        assert!(faults[0].starts_with("line 3: ticket id"));
+        assert!(faults[1].starts_with("line 4: issue number"));
+        assert!(faults[2].starts_with("line 5: not English"));
+        assert_eq!(
+            language_faults("## Unreleased\n\n- Faster gates, UTF-8 names\n"),
+            Vec::<String>::new()
+        );
     }
 
     /// The UI names no product but its brand: the excerpt « What's new » shows

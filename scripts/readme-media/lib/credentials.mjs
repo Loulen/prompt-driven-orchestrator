@@ -4,7 +4,8 @@
 // built from the user's (e.g. the account block of `~/.claude.json`, never the
 // whole file, which carries the user's projects and MCP servers). Every file
 // either step writes is recorded BEFORE it is written, so the exit guard knows
-// what to wipe even after an interruption in the middle.
+// what to wipe even after an interruption in the middle. The demo daemon of
+// the agentic tests (scripts/demo-daemon) stages every harness of this table.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -45,6 +46,8 @@ export const HARNESS_AUTH = {
       fs.writeFileSync(settings, `${JSON.stringify({ skipDangerousModePermissionPrompt: true, statusLine: MODEL_STATUS_LINE }, null, 2)}\n`);
     },
   },
+  pi: { copy: [".pi/agent/auth.json"] },
+  opencode: { copy: [".local/share/opencode/auth.json"] },
 };
 
 function writePrivate(target, content) {

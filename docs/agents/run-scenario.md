@@ -16,16 +16,55 @@ generic concept and format are elsewhere:
 > not); the agent qualifies severity, and a blocking finding fails the gate (see `SCENARIO-FORMAT.md`
 > and `git-flow`).
 
-## 1. Confirm the app is running
+## 1. Start a demo daemon
 
-No running stack ⇒ no execution. Discover the daemon, don't assume a port:
+Never drive the user's daemon (its port, `~/.pdo`, its tmux sessions): a journey runs on a **demo
+daemon** it starts itself, from the branch under test, and stops at the end. No daemon is assumed
+to be running.
 
-- Find the daemon's port (e.g. `ss -ltnp | grep pdo`, or ask the user). The default is commonly
-  `http://127.0.0.1:5172`, but a local dev daemon may differ.
-- Daemon reachable: `curl -fs http://127.0.0.1:<port>/runs` returns JSON.
-- Frontend reachable in a browser; the status bar shows the daemon **connected**.
+```bash
+make demo-daemon PORT=6491             # this branch's `pdo daemon`
+make demo-daemon PORT=6491 TEST_EXT=1  # the demo daemon of the test extension instead
+```
 
-If a precondition the journey lists isn't met, that's a **finding** — report it, don't try to "fix"
+Pick a free port between 6400 and 6999 (another agent may be testing at the same time); the
+user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused. The command:
+
+- builds the branch's `pdo` if `target/debug/pdo` is missing;
+- creates a fresh `HOME` under `/tmp/pdo-demo-<port>/home` (any previous one on that port is wiped)
+  and runs the daemon from `~/.pdo/app` there, so its event log, pipelines, profiles and skill bank
+  start empty;
+- builds its environment from yours, minus every `PDO_*` (a node's `PDO_PORT`, `PDO_TOKEN`,
+  `PDO_NODE_ID`: the demo daemon is never in nested mode), `TMUX` and `TMUX_PANE`; it sets `PDO_PORT`,
+  `PDO_BIND=127.0.0.1`, `PDO_UPDATE_CHECK=off`, `PDO_PRICE_SYNC=off`, and keeps `RUSTUP_HOME`,
+  `CARGO_HOME` and `COREPACK_HOME` on the real toolchains;
+- **copies** the harnesses' auth files (`~/.claude/.credentials.json` and the account block of
+  `~/.claude.json`, `~/.pi/agent/auth.json`, `~/.local/share/opencode/auth.json`) into the demo
+  `HOME`; your own config folders are never linked nor written;
+- writes the pidfile `/tmp/pdo-demo-<port>/daemon.pid`, waits for the daemon to answer, then prints
+  `PDO_DAEMON_URL=…`, `PDO=…` (the branch's `pdo`, not the one on your `PATH`) and a ready command.
+
+`TEST_EXT=1` starts `crates/pdo/tests/demo_daemon.rs` (the test extension, its routes under
+`/ext/test/…`, `pdo ext test echo`); its knobs are `PDO_*` variables, so they are never inherited:
+pass them explicitly with `DEMO_ENV='PDO_TEST_INTEROP=1 PDO_TEST_EXTENSION_REFUSE=none'`.
+`DEMO_ENV` works for the bare daemon too; it may not set `HOME`, `PATH`, `PDO_PORT`, `PDO_BIND`,
+`PDO_TOKEN`, `PDO_NODE_ID`, `PDO_DAEMON_NO_CLEANUP`, `TMUX` or `TMUX_PANE`.
+
+Drive it with the printed `PDO=` binary and `PDO_DAEMON_URL=`. Inside a PDO node, drop the node's
+own variables so the CLI does not act as the node of another daemon (the printed « Drive it » line
+already does):
+
+```bash
+env -u PDO_TOKEN -u PDO_RUN_ID -u PDO_NODE_ID PDO_DAEMON_URL=http://127.0.0.1:6491 \
+  <PDO> run list
+curl -fs http://127.0.0.1:6491/runs          # the daemon answers JSON
+```
+
+The Runs it launches open their tmux sessions on the socket `pdo-<port>`
+(`tmux -L pdo-6491 ls`), never on your default tmux server. Open `http://127.0.0.1:<port>` in the
+browser for a UI journey; the status bar shows the daemon **connected**.
+
+If a precondition the journey lists isn't met, that's a **finding**: report it, don't try to "fix"
 the setup.
 
 ## 2. Drive the browser
@@ -34,7 +73,7 @@ UI-first. Use the **Chrome DevTools MCP** server when available
 (`mcp__plugin_chrome-devtools-mcp_chrome-devtools__*`); fall back to **Playwright MCP**
 (`mcp__plugin_playwright_playwright__browser_*`) — both expose roughly the same primitives:
 
-- `navigate_page` — open `http://127.0.0.1:<port>`
+- `navigate_page` — open `http://127.0.0.1:<port>` (the demo daemon's)
 - `take_snapshot` (semantic DOM) and `take_screenshot` (visual evidence)
 - `click`, `fill`, `type_text`, `press_key` — interaction
 - `wait_for` — for specific text or selectors
@@ -51,20 +90,21 @@ Before raising a *data* finding, retry on another instance of the same kind.
 The point of this layer is that the UI alone doesn't tell the full story — verify what the user
 *thinks happened*:
 
-- **tmux sessions**: `tmux capture-pane -p -t pdo-<run_id>-<node_id>-iter-<n>`. The session-name
+- **tmux sessions**: `tmux -L pdo-<port> capture-pane -p -t pdo-<run_id>-<node_id>-iter-<n>`. The session-name
   pattern is fixed; confirm it shows the expected program (e.g. `claude` running, not a bare shell
   that exited). A first `claude` launch in a fresh worktree lands on the "Quick safety check" trust
-  dialog — confirm it with `tmux send-keys -t <session> Enter`. `copilot`'s equivalent is **not** a
+  dialog — confirm it with `tmux -L pdo-<port> send-keys -t <session> Enter`. `copilot`'s equivalent is **not** a
   step to drive: approve the target repository's root once, outside the journey, and it cascades to
   every node sub-worktree (`docs/reference/harnesses.md` § Prerequisites). A `copilot` pane parked on it means the
   prerequisite was never met.
 - **Filesystem** (read with `cat` / Read):
-  - Pipelines: `.pdo/pipelines/<name>.yaml` and the sidecar `.pdo/pipelines/<name>.prompts/<node>.md`
+  - Pipelines: `.pdo/pipelines/<name>.yaml` of the target repo, or the demo library
+    `/tmp/pdo-demo-<port>/home/.pdo/pipelines/`, with the sidecar `<name>.prompts/<node>.md`
   - Run artifacts: `.pdo/runs/<run_id>/worktree/.pdo/artifacts/...`
 - **Daemon state**: `curl http://127.0.0.1:<port>/runs/<run_id>` for the projected run state (incl.
   `sessions_spawned`, `started_at`/`completed_at`, `loc`), and `/runs/<run_id>/events` for the full
   event log.
-- **Event log DB** (rare, forensic): `sqlite3 .pdo/pdo.db "SELECT * FROM events WHERE run_id =
+- **Event log DB** (rare, forensic): `sqlite3 /tmp/pdo-demo-<port>/home/.pdo/app/.pdo/pdo.db "SELECT * FROM events WHERE run_id =
   '<run_id>' ORDER BY id"`.
 
 ## 4. Report findings
@@ -83,15 +123,29 @@ blocking or not, qualifying severity.
 
 ## 5. Cleanup
 
-If the journey started a Run, archive it before reporting (`cleanup_run` reaps sessions + worktree):
+If the journey started a Run, archive it first (`cleanup_run` reaps its sessions and its worktree,
+which live in the target repo, not under `/tmp/pdo-demo-<port>`), and delete any pipeline the agent
+seeded in a repo:
 
 ```bash
 curl -X POST http://127.0.0.1:<port>/runs/<run_id>/commands \
   -H 'content-type: application/json' -d '{"kind":"cleanup_run"}'
 ```
 
-Delete any pipeline the agent seeded. Skip cleanup only if the journey explicitly asks to leave state
-behind for human inspection.
+Then stop the demo daemon you started, whatever the outcome of the journey:
+
+```bash
+make demo-daemon-stop PORT=6491          # KEEP=1 keeps /tmp/pdo-demo-6491 (its daemon.log)
+```
+
+It kills the pid of the pidfile, runs
+`tmux -L pdo-<port> kill-server` without `TMUX`, stops what still runs under the demo `HOME`,
+wipes the copied auth files and removes `/tmp/pdo-demo-<port>`. It refuses, and stops nothing, on a
+port without a pidfile, one of the user's ports, or a pidfile whose live pid does not run under the
+demo `HOME` (a recycled pid). Never `pkill`, `killall` or `tmux kill-server` without `-L`: they
+reach the user's daemon and sessions.
+
+Skip the stop only if the journey explicitly asks to leave state behind for human inspection.
 
 ## Reference paths
 

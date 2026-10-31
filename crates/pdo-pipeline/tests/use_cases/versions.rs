@@ -128,6 +128,25 @@ async fn a_replacement_keeps_the_number() {
 }
 
 #[tokio::test]
+async fn a_replacement_is_dated_by_its_save() {
+    let world = world_with("flow", &pipeline_yaml("flow"));
+    save(&world, "flow", &pipeline_yaml("flow"), titled("First pass")).await;
+    let first = world.pipelines.versions("flow").await.unwrap()[0]
+        .meta
+        .saved_at
+        .clone();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    save(&world, "flow", &pipeline_with_worker("flow"), replacing()).await;
+    let listed = world.pipelines.versions("flow").await.unwrap();
+    assert_eq!(listed[0].meta.number, 2);
+    assert!(
+        listed[0].meta.saved_at > first,
+        "{} after {first}",
+        listed[0].meta.saved_at
+    );
+}
+
+#[tokio::test]
 async fn keep_old_makes_the_saved_version_a_pipeline_of_its_own() {
     let world = world_with("flow", &pipeline_yaml("flow"));
     world.registry.put_prompt("flow", "start", "Kept prompt.");

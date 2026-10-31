@@ -11,7 +11,7 @@ import { loadTabsDisabled, saveTabsDisabled } from "../../lib/uiPrefs";
 import type { EditState } from "./editState";
 import { hasUnsavedWork, versionTabId } from "./editState";
 import type { OpenPipeline, Selection } from "./editState";
-import { droppedHistory, replaceWithTab, placeOpenedTab } from "./tabHistory";
+import { afterClose, droppedHistory, replaceWithTab, placeOpenedTab, switchedTab } from "./tabHistory";
 import { moveItem } from "../../lib/moveItem";
 
 type Set = StoreApi<EditState>["setState"];
@@ -24,6 +24,7 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
   openTabs: [],
   activeTabId: null,
   selection: { kind: "none", id: null },
+  tabSelections: {},
   scrollToPort: null,
   lastSavedAt: {},
   history: {},
@@ -47,7 +48,7 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
   openPipeline: async (id: string, scope?: PipelineScope) => {
     const existing = get().openTabs.find((t) => t.id === id);
     if (existing) {
-      set({ activeTabId: id, selection: { kind: "none", id: null } });
+      set((s) => switchedTab(s, id));
       return;
     }
     try {
@@ -77,7 +78,7 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
     const tabId = `__run__${runId}`;
     const existing = get().openTabs.find((t) => t.id === tabId);
     if (existing) {
-      set({ activeTabId: tabId, selection: { kind: "none", id: null } });
+      set((s) => switchedTab(s, tabId));
       return;
     }
     try {
@@ -105,7 +106,7 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
   openPipelineVersion: async (pipelineId: string, number: number) => {
     const tabId = versionTabId(pipelineId, number);
     if (get().openTabs.some((t) => t.id === tabId)) {
-      set({ activeTabId: tabId, selection: { kind: "none", id: null } });
+      set((s) => switchedTab(s, tabId));
       return;
     }
     try {
@@ -152,6 +153,7 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
         openTabs: tabs,
         activeTabId,
         selection: { kind: "none", id: null },
+        ...afterClose(s, [id], tabs, activeTabId),
         history: droppedHistory(s.history, id),
       };
     });
@@ -176,7 +178,7 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
       // DROP each closed tab's undo history by id (ADR-0014). Missing an id
       // would leak its stack and let a reused id inherit a stale one.
       const history = ids.reduce((h, id) => droppedHistory(h, id), s.history);
-      return { openTabs: tabs, activeTabId, selection, history };
+      return { openTabs: tabs, activeTabId, selection, ...afterClose(s, ids, tabs, activeTabId), history };
     });
   },
 
@@ -224,7 +226,7 @@ export function tabsSlice(set: Set, get: Get): Partial<EditState> {
   cancelPendingSingleTab: () => set({ pendingSingleTab: null }),
 
   setActiveTab: (id: string) => {
-    set({ activeTabId: id, selection: { kind: "none", id: null } });
+    set((s) => switchedTab(s, id));
   },
 
   setSelection: (sel: Selection) => {

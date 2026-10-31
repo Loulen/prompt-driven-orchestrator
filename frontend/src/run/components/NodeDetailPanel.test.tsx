@@ -2667,7 +2667,7 @@ describe("NodeDetailPanel", () => {
       renderEnlarged(makeNode({ status: "running", iter: 3 }));
       const identity = within(screen.getByTestId("mock-toolbar")).getByTestId("term-identity");
       expect(within(identity).getByTestId("term-identity-name")).toHaveTextContent("design");
-      expect(identity).toHaveTextContent("iter 3");
+      expect(within(identity).getByTestId("iter-mark")).toHaveTextContent("Iteration 3");
       expect(screen.getByTestId("term-identity-status")).toHaveTextContent("Running");
       const frame = screen.getByTestId("terminal-fullsize");
       expect(frame.style.borderColor).toContain("--color-st-running");

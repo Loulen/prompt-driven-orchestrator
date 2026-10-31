@@ -50,6 +50,12 @@ pub struct RunState {
     #[ts(optional)]
     pub name: Option<String>,
     pub input: Option<String>,
+    /// The values the Run was launched with for the pipeline's variables, as
+    /// its `run_started` froze them: only the ones the launch set, a variable
+    /// left out runs on its default. Empty for a Run launched without any.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[ts(type = "{ [key in string]: unknown }", optional)]
+    pub variables: HashMap<String, serde_json::Value>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     /// Why the Run reached a non-green terminal state — the `reason` of its

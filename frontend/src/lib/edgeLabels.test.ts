@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   conditionLabelOffset,
   conditionPillPlacement,
+  conditionPillRect,
+  conditionPillSpot,
   conditionPillWidth,
   departureHeading,
   firstSegmentHeading,
@@ -12,6 +14,8 @@ import {
   resolveOutputLabels,
   segmentAxis,
 } from "./edgeLabels";
+import { autoEdgeRoute } from "./edgeAutoRoute";
+import type { Rect } from "./orthogonalRouter";
 
 describe("outputLabelPlacement (#845)", () => {
   it("alternates around the base of a rightward arrow, 1st above and 2nd below", () => {
@@ -145,6 +149,80 @@ describe("conditionPillPlacement", () => {
   it("never goes under a floor that still shows a few characters", () => {
     expect(conditionPillPlacement({ x: 210, y: 15 }, [card(0, 0), card(212, 0)], "verdict").maxWidth).toBe(40);
   });
+});
+
+describe("conditionPillSpot", () => {
+  const overlaps = (a: Rect, b: Rect) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+  it("sits at the midpoint, nudged off the stroke, when nothing is in the way", () => {
+    const points = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+    ];
+    const spot = conditionPillSpot(points, [], "Verdict = Pass", []);
+    expect(spot.at).toEqual({ x: 100, y: -15 });
+    expect(spot.wire).toEqual({ x: 100, y: 0 });
+  });
+
+  it("moves to the other side of the stroke when another pill holds the default spot", () => {
+    const points = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+    ];
+    const taken = conditionPillRect({ x: 100, y: -15 }, [], "Verdict = Fail");
+    const spot = conditionPillSpot(points, [], "Verdict = Pass", [taken]);
+    expect(spot.at).toEqual({ x: 100, y: 15 });
+  });
+
+  it("slides along the wire when both sides of the midpoint are held", () => {
+    const points = [
+      { x: 0, y: 0 },
+      { x: 400, y: 0 },
+    ];
+    const taken = [
+      conditionPillRect({ x: 200, y: -15 }, [], "Verdict = Fail"),
+      conditionPillRect({ x: 200, y: 15 }, [], "Verdict = Fail"),
+    ];
+    const spot = conditionPillSpot(points, [], "ok", taken);
+    const box = conditionPillRect(spot.at, [], "ok");
+    expect(taken.some((t) => overlaps(t, box))).toBe(false);
+    expect(spot.wire.y).toBe(0);
+  });
+
+  // A column (implementer, tester, Ship It) with End below, the first two in a
+  // loop. The tester's `Pass` edge to Ship It carries a pill pinned under the
+  // tester; its automatic edge to End skips Ship It, and its first run passes
+  // right under that pinned pill.
+  const implementer = { x: 320, y: 173, width: 208, height: 65 };
+  const tester = { x: 327, y: 265, width: 208, height: 65 };
+  const shipIt = { x: 327, y: 385, width: 208, height: 65 };
+  const end = { x: 330, y: 476, width: 55, height: 24 };
+  const loop = { x: 296, y: 140, width: 264, height: 215, region: true };
+  const cards = [implementer, tester, shipIt, end];
+  const label = "Verdict = minor_changes_left";
+
+  for (const step of [20, 30, 40]) {
+    it(`keeps an automatic pill off a pinned one and off the cards (step ${step})`, () => {
+      const points = autoEdgeRoute({
+        source: { x: 431, y: 330 },
+        target: { x: 330, y: 488 },
+        sourceSide: "bottom",
+        targetSide: "left",
+        sourceRect: tester,
+        targetRect: end,
+        obstacles: [implementer, shipIt, loop],
+        step,
+      });
+      const pinned = conditionPillRect({ x: 399, y: 346 }, cards, "Verdict = Pass");
+      const spot = conditionPillSpot(points, cards, label, [pinned]);
+      const box = conditionPillRect(spot.at, cards, label);
+      expect(overlaps(box, pinned)).toBe(false);
+      for (const c of cards) expect(overlaps(box, c)).toBe(false);
+      // The pill still names this wire: it sits beside it.
+      expect(Math.abs(spot.at.x - spot.wire.x) + Math.abs(spot.at.y - spot.wire.y)).toBe(15);
+    });
+  }
 });
 
 describe("segmentAxis / firstSegmentHeading", () => {

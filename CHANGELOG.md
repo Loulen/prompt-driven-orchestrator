@@ -49,6 +49,7 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - The whole bar over a child run leads back to the parent run, not only its arrow.
 - Edges: an automatic edge goes around the cards between its ends, including one leaving a loop
   towards a card beyond the next, and a condition label slides along its edge instead of shrinking.
+  An unplaced condition label keeps off the labels placed by hand on other edges, and off the cards.
 
 ### Command field
 

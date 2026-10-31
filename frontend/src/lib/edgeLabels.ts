@@ -12,6 +12,7 @@
 
 import type { PortSide } from "../shared/generated/PortSide";
 import type { Point, Rect } from "./orthogonalRouter";
+import { pathPointAt } from "./edgePath";
 
 export type LabelAxis = "horizontal" | "vertical";
 
@@ -210,4 +211,54 @@ export function conditionPillPlacement(center: Point, cards: Rect[], label: stri
   if (right - left <= width) return { x: Number.isFinite(left) ? (left + right) / 2 : center.x, maxWidth };
   const x = Math.min(Math.max(center.x, left + width / 2), right - width / 2);
   return { x, maxWidth };
+}
+
+/** The box a condition pill meant to sit at `center` takes once placed. */
+export function conditionPillRect(center: Point, cards: Rect[], label: string): Rect {
+  const HALF_HEIGHT = 8; // half the `.cv-pill` height
+  const { x, maxWidth } = conditionPillPlacement(center, cards, label);
+  const width = Math.min(maxWidth, conditionPillWidth(label));
+  return { x: x - width / 2, y: center.y - HALF_HEIGHT, width, height: 2 * HALF_HEIGHT };
+}
+
+/** Where along the wire a condition pill is tried, in order: the midpoint
+ *  first, then walking outwards towards both ends. */
+const PILL_STOPS = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8];
+
+/**
+ * Where an unpinned condition pill sits (#176, #845): beside the wire at its
+ * midpoint, unless that spot covers another edge's pill or a card. It then
+ * tries the other side of the wire, then spots further along it, and takes the
+ * first one clear of both; failing that, the first clear of the other pills.
+ * Two pills on one line hid each other: a wire that skips a card runs right
+ * under the pill of the edge to that card.
+ *
+ * `at` is the pill's anchor, `wire` the point of the path it sits beside.
+ */
+export function conditionPillSpot(
+  points: Point[],
+  cards: Rect[],
+  label: string,
+  taken: Rect[],
+): { at: Point; wire: Point } {
+  const overlaps = (a: Rect, b: Rect) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  const spots: { at: Point; wire: Point }[] = [];
+  for (const stop of PILL_STOPS) {
+    const wire = pathPointAt(points, stop);
+    if (!wire) break;
+    const offset = conditionLabelOffset(midpointAxis(points, wire));
+    for (const side of [1, -1]) {
+      spots.push({ at: { x: wire.x + side * offset.x, y: wire.y + side * offset.y }, wire });
+    }
+  }
+  if (spots.length === 0) return { at: points[0] ?? { x: 0, y: 0 }, wire: points[0] ?? { x: 0, y: 0 } };
+  const box = (s: { at: Point }) => conditionPillRect(s.at, cards, label);
+  const clearOfPills = (s: { at: Point }) => !taken.some((t) => overlaps(box(s), t));
+  const clearOfCards = (s: { at: Point }) => !cards.some((c) => overlaps(box(s), c));
+  return (
+    spots.find((s) => clearOfPills(s) && clearOfCards(s)) ??
+    spots.find(clearOfPills) ??
+    spots[0]
+  );
 }

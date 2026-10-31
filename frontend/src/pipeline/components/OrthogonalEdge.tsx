@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -9,10 +9,10 @@ import {
 import type { Point } from "../../lib/orthogonalRouter";
 import { arrowChevron, pathMidpoint, pathToSvg, roundedPathToSvg, segHandleStyle } from "../../lib/edgePath";
 import {
-  conditionLabelOffset,
   conditionPillPlacement,
+  conditionPillRect,
+  conditionPillSpot,
   departureHeading,
-  midpointAxis,
   outputLabelPlacement,
 } from "../../lib/edgeLabels";
 import { useEditStore } from "../store/editStore";
@@ -61,6 +61,9 @@ export interface OrthogonalEdgeData extends Record<string, unknown> {
   outputLabelPos?: Record<string, EdgeWaypoint> | null;
   /** Pinned absolute position of the condition pill (#845). */
   conditionLabelPos?: EdgeWaypoint | null;
+  /** The pinned condition pills of the other edges: this edge's unpinned pill
+   *  keeps off them. */
+  otherPinnedPills?: { x: number; y: number; label: string }[];
   /** First placement slot of this edge's output labels (#845): non-zero when
    *  an earlier edge leaves from the same point, so the two sets don't stack. */
   outputLabelSlot?: number;
@@ -187,23 +190,28 @@ export default function OrthogonalEdge({
   // median vertex drifts off-center on unbalanced routes and stacks sibling
   // pills on shared bends — nudged clear of the stroke (#845), because a pill
   // straddling a straight edge sits exactly on the midpoint segment handle and
-  // eats the pointer events that handle needs. A dragged pill overrides both.
+  // eats the pointer events that handle needs. A spot that covers another
+  // edge's pinned pill or a card moves along the wire. A dragged pill
+  // overrides all of it.
   const mid = pathMidpoint(points) ?? targetPt;
-  const midOffset = conditionLabelOffset(midpointAxis(points, mid));
   const pinnedCondition = data?.conditionLabelPos ?? null;
-  const labelPoint: Point = pinnedCondition ?? {
-    x: mid.x + midOffset.x,
-    y: mid.y + midOffset.y,
-  };
+  const conditionText = data?.label ?? "";
+  const otherPinnedPills = data?.otherPinnedPills;
+  const spot = useMemo(() => {
+    if (!conditionText) return null;
+    const taken = (otherPinnedPills ?? []).map((p) => conditionPillRect(p, route.cards, p.label));
+    return conditionPillSpot(points, route.cards, conditionText, taken);
+  }, [conditionText, otherPinnedPills, points, route.cards]);
+  const labelPoint: Point = pinnedCondition ?? spot?.at ?? mid;
   // Never wider than the room between the cards on its line: a long condition
   // on a short edge ellipsizes instead of covering a card's title; one dropped
   // against a card slides into that room instead of shrinking.
-  const pill = conditionPillPlacement(labelPoint, route.cards, data?.label ?? "");
+  const pill = conditionPillPlacement(labelPoint, route.cards, conditionText);
 
   // On the wire, as in the design; pushed to the other side of it when a
-  // condition pill sits at `mid + midOffset`, so neither hides the other.
-  const brokenAt: Point = data?.label
-    ? { x: mid.x - 2 * midOffset.x, y: mid.y - 2 * midOffset.y }
+  // condition pill sits beside it, so neither hides the other.
+  const brokenAt: Point = spot
+    ? { x: 3 * spot.wire.x - 2 * spot.at.x, y: 3 * spot.wire.y - 2 * spot.at.y }
     : mid;
 
   // Output labels (#845): one per carried port, near the departure, alternating

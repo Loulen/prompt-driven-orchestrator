@@ -591,30 +591,6 @@ mod tests {
         assert_eq!(entries[0].ui.as_ref().unwrap().commands.len(), 1);
     }
 
-    /// The version of the shared module the front declares.
-    const FRONT_MODULE: &str =
-        include_str!("../../../frontend/src/shared/extensions/uiModuleVersion.ts");
-
-    #[test]
-    fn the_front_s_shared_module_is_versioned_with_the_api() {
-        let version = format!(
-            "export const UI_MODULE_VERSION = \"{}\";",
-            pdo_extension_api::API_VERSION
-        );
-        assert!(
-            FRONT_MODULE.lines().any(|line| line == version),
-            "uiModuleVersion.ts must declare `{version}`"
-        );
-        let major = format!(
-            "export const UI_MODULE_MAJOR = {};",
-            pdo_extension_api::UI_MODULE_MAJOR
-        );
-        assert!(
-            FRONT_MODULE.lines().any(|line| line == major),
-            "uiModuleVersion.ts must declare `{major}`"
-        );
-    }
-
     /// The reference page of the catalogue, which extension authors read.
     const REFERENCE: &str = include_str!("../../../docs/reference/extension-ui.md");
 

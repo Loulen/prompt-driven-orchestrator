@@ -1,0 +1,15 @@
+[package]
+# The structural checks of the repository (ADR draft « les contrôles structurels
+# tournent dans un crate tidy avant toute suite longue »): tests that read the
+# repository as text. The standard library only, so `make fast` compiles it in
+# seconds on a cold target/; `tests/std_only.rs` keeps it that way.
+name = "tidy"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "PDO's structural checks: file size, route coverage, hexagonal rule, doc links, shared front module version"
+publish = false
+
+[dependencies]

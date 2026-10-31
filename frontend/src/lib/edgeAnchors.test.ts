@@ -707,3 +707,60 @@ describe("approachPoint", () => {
     expect(landingLeg(8)).toBe(16);
   });
 });
+
+describe("enforcePerpendicularEnds — two cards closer than two legs", () => {
+  // A column of cards 20 to 30 px apart on the M grid (legs of 30 px): the two
+  // legs overlapped, and the wire ran down past the target's top, back up into
+  // the source card and down again — a vertical line through both cards.
+  const leg = landingLeg(30);
+  const ship = { x: 327, y: 385, width: 208, height: 65 };
+  const end = { x: 330, y: 476, width: 55, height: 24 };
+  const cuts = (points: Point[], r: { x: number; y: number; width: number; height: number }) =>
+    points.some((p, i) => {
+      if (i === 0) return false;
+      const a = points[i - 1];
+      return (
+        Math.max(a.x, p.x) > r.x + 0.5 &&
+        Math.min(a.x, p.x) < r.x + r.width - 0.5 &&
+        Math.max(a.y, p.y) > r.y + 0.5 &&
+        Math.min(a.y, p.y) < r.y + r.height - 0.5
+      );
+    });
+
+  it("shortens both legs to meet halfway and drops a waypoint left inside a card", () => {
+    const route = [
+      { x: 400, y: 450 },
+      { x: 400, y: 436 }, // a stored waypoint the resized card now covers
+      { x: 375, y: 476 },
+    ];
+    const out = enforcePerpendicularEnds(route, "bottom", "top", leg, end, { manual: true, sourceRect: ship });
+    expect(out.every((p, i) => i === 0 || isAxisAligned(out[i - 1], p))).toBe(true);
+    expect(cuts(out.slice(1), ship)).toBe(false);
+    expect(cuts(out.slice(0, -1), end)).toBe(false);
+    // Down, across, down: never back up.
+    for (let i = 1; i < out.length; i++) expect(out[i].y).toBeGreaterThanOrEqual(out[i - 1].y);
+  });
+
+  it("draws a straight wire between two aligned anchors, whatever waypoint sat on the leg", () => {
+    const tester = { x: 327, y: 265, width: 208, height: 65 };
+    const route = [
+      { x: 400, y: 330 },
+      { x: 400, y: 345 },
+      { x: 400, y: 385 },
+    ];
+    const out = enforcePerpendicularEnds(route, "bottom", "top", leg, ship, { manual: true, sourceRect: tester });
+    expect(out.every((p) => p.x === 400)).toBe(true);
+    for (let i = 1; i < out.length; i++) expect(out[i].y).toBeGreaterThan(out[i - 1].y);
+  });
+
+  it("is a fixed point", () => {
+    const route = [
+      { x: 400, y: 450 },
+      { x: 400, y: 436 },
+      { x: 375, y: 476 },
+    ];
+    const once = enforcePerpendicularEnds(route, "bottom", "top", leg, end, { manual: true, sourceRect: ship });
+    const twice = enforcePerpendicularEnds(once, "bottom", "top", leg, end, { manual: true, sourceRect: ship });
+    expect(twice).toEqual(once);
+  });
+});

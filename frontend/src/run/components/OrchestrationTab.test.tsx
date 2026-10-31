@@ -62,6 +62,14 @@ describe("OrchestrationTab with a stalled child (#783)", () => {
     expect(screen.getByTestId("tab-child-pills-stale")).toHaveTextContent("1");
     expect(screen.getAllByTestId("orchestration-child")).toHaveLength(3);
   });
+
+  it("lists the children under no line of explanation, live children included", () => {
+    const children = [child("a"), child("b", { stalled: true })];
+    render(
+      <OrchestrationTab childRuns={children} counts={countChildren(children)} nodeLive nodeAwaiting={false} onOpenChild={() => {}} />,
+    );
+    expect(screen.queryByText(/completes when/i)).toBeNull();
+  });
 });
 
 describe("OrchestrationTab with an awaiting child (#588)", () => {

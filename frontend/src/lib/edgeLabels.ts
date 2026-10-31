@@ -12,6 +12,7 @@
 
 import type { PortSide } from "../shared/generated/PortSide";
 import type { Point, Rect } from "./orthogonalRouter";
+import { pathPointAt } from "./edgePath";
 
 export type LabelAxis = "horizontal" | "vertical";
 
@@ -174,22 +175,90 @@ export function midpointAxis(points: Point[], mid: Point): LabelAxis {
   return "horizontal";
 }
 
+/** The `.cv-pill` box in canvas.css: its cap, its padding and border, and the
+ *  advance of one character of its mono 10 px text. */
+const PILL_CAP = 220;
+const PILL_CHROME = 10;
+const PILL_CHAR = 6;
+
+/** The width a condition pill takes for `label`, before any cap. */
+export function conditionPillWidth(label: string): number {
+  return label.length * PILL_CHAR + PILL_CHROME;
+}
+
 /**
- * The widest a condition pill centred on `center` may grow without running
- * over a card: twice the distance to the nearest card on its line, less a
+ * Where a condition pill meant to sit at `center` goes, and the widest it may
+ * grow: between the nearest cards left and right of it on its line, less a
  * margin, between a floor that still shows a few characters and the pill's own
- * cap. The pill is a 16 px line; a card counts when it overlaps that line.
+ * cap. Rather than shrinking against a card it was dropped beside, the pill
+ * slides into the free room on its line. The pill is a 16 px line; a
+ * card counts when it overlaps that line, and a card under the pill's centre
+ * bounds neither side.
  */
-export function conditionPillMaxWidth(center: Point, cards: Rect[]): number {
-  const CAP = 220; // `.cv-pill` max-width in canvas.css
+export function conditionPillPlacement(center: Point, cards: Rect[], label: string): { x: number; maxWidth: number } {
   const FLOOR = 40;
   const MARGIN = 4;
   const HALF_HEIGHT = 8; // half the `.cv-pill` height
-  let half = CAP / 2;
+  let left = -Infinity;
+  let right = Infinity;
   for (const c of cards) {
     if (c.y > center.y + HALF_HEIGHT || c.y + c.height < center.y - HALF_HEIGHT) continue;
-    const gap = c.x >= center.x ? c.x - center.x : center.x - (c.x + c.width);
-    half = Math.min(half, gap - MARGIN);
+    if (c.x + c.width <= center.x) left = Math.max(left, c.x + c.width + MARGIN);
+    else if (c.x >= center.x) right = Math.min(right, c.x - MARGIN);
   }
-  return Math.max(FLOOR, Math.min(CAP, 2 * half));
+  const maxWidth = Math.max(FLOOR, Math.min(PILL_CAP, right - left));
+  const width = Math.min(maxWidth, conditionPillWidth(label));
+  if (right - left <= width) return { x: Number.isFinite(left) ? (left + right) / 2 : center.x, maxWidth };
+  const x = Math.min(Math.max(center.x, left + width / 2), right - width / 2);
+  return { x, maxWidth };
+}
+
+/** The box a condition pill meant to sit at `center` takes once placed. */
+export function conditionPillRect(center: Point, cards: Rect[], label: string): Rect {
+  const HALF_HEIGHT = 8; // half the `.cv-pill` height
+  const { x, maxWidth } = conditionPillPlacement(center, cards, label);
+  const width = Math.min(maxWidth, conditionPillWidth(label));
+  return { x: x - width / 2, y: center.y - HALF_HEIGHT, width, height: 2 * HALF_HEIGHT };
+}
+
+/** Where along the wire a condition pill is tried, in order: the midpoint
+ *  first, then walking outwards towards both ends. */
+const PILL_STOPS = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8];
+
+/**
+ * Where an unpinned condition pill sits (#176, #845): beside the wire at its
+ * midpoint, unless that spot covers another edge's pill or a card. It then
+ * tries the other side of the wire, then spots further along it, and takes the
+ * first one clear of both; failing that, the first clear of the other pills.
+ * Two pills on one line hid each other: a wire that skips a card runs right
+ * under the pill of the edge to that card.
+ *
+ * `at` is the pill's anchor, `wire` the point of the path it sits beside.
+ */
+export function conditionPillSpot(
+  points: Point[],
+  cards: Rect[],
+  label: string,
+  taken: Rect[],
+): { at: Point; wire: Point } {
+  const overlaps = (a: Rect, b: Rect) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  const spots: { at: Point; wire: Point }[] = [];
+  for (const stop of PILL_STOPS) {
+    const wire = pathPointAt(points, stop);
+    if (!wire) break;
+    const offset = conditionLabelOffset(midpointAxis(points, wire));
+    for (const side of [1, -1]) {
+      spots.push({ at: { x: wire.x + side * offset.x, y: wire.y + side * offset.y }, wire });
+    }
+  }
+  if (spots.length === 0) return { at: points[0] ?? { x: 0, y: 0 }, wire: points[0] ?? { x: 0, y: 0 } };
+  const box = (s: { at: Point }) => conditionPillRect(s.at, cards, label);
+  const clearOfPills = (s: { at: Point }) => !taken.some((t) => overlaps(box(s), t));
+  const clearOfCards = (s: { at: Point }) => !cards.some((c) => overlaps(box(s), c));
+  return (
+    spots.find((s) => clearOfPills(s) && clearOfCards(s)) ??
+    spots.find(clearOfPills) ??
+    spots[0]
+  );
 }

@@ -415,7 +415,8 @@ extension a quelque chose à montrer. On étend le catalogue, sans nouveau type 
   Trigger existe déjà, c'est un toast d'erreur. `onCancel` est appelé à l'annulation.
 - **Décorations** (badge ou pastille) : `run/item` (colonne de droite de la ligne, ligne 2, celle
   des compteurs d'enfants, pour ne pas tronquer le nom de la pipeline), `trigger/item`,
-  `pipeline/item` (fin de la ligne 2), `canvas/node` (une ligne sous le titre de la carte),
+  `pipeline/item` (fin de la ligne 2), `canvas/node` (une ligne sous le titre de la carte ; retiré
+  par l'amendement CORE-145),
   `port/item` (à côté du nom du port), `review/file` (avant les compteurs de commentaires ;
   cet emplacement d'Action de l'amendement #30 accepte aussi des Décorations),
   `statusbar`. Le contexte porte l'entité et ses Attributs, que voit la clause `when`. **Sans
@@ -777,3 +778,16 @@ pour agréger des coûts, elle devait relire les transcripts.
 Écartés : une Présence déduite des requêtes HTTP (aucun départ observable) ; un emplacement
 « créateur » réservé (une seule extension y aurait dessiné, et le core aurait gardé un dessin par
 défaut).
+
+## Amendement CORE-145 : la carte de node ne porte plus de Décoration
+
+La carte de node du canvas (éditeur et vue de Run) se resserre sur ce qui dit la node : en-tête
+(type, nom, marqueurs, statut), grille de méta, Runs enfants d'une orchestratrice. Une marque
+d'extension y ajoutait une ligne de hauteur variable, que les routes des arêtes et la compaction des
+cartes devaient suivre.
+
+- **Emplacement `canvas/node` retiré** : la variante de `UiLocation` disparaît, avec
+  `CanvasNodeContext`. Ce qu'une extension rattache à une node se montre dans le détail de la node
+  (`node/detail`, `node/toolbar`, `port/item`) et dans le menu de la carte (`canvas/node/menu`).
+- **Version** : `pdo-extension-api` **0.20.0**, rupture : une extension qui contribuait à
+  `canvas/node` ne compile plus et retire cette contribution.

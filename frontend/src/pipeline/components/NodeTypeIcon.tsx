@@ -1,5 +1,6 @@
-import { Bot, GitFork, Network, Play, Square, SquareTerminal, UserRound } from "lucide-react";
+import { GitFork, Play, Square } from "lucide-react";
 import type { NodeType } from "../../shared/generated/NodeType";
+import { nodeTypeGlyph } from "../model/nodeTypeGlyph";
 
 interface IconProps {
   type: NodeType;
@@ -19,12 +20,10 @@ export function NodeTypeIcon({ type, interactive, orchestrator, size = 14, class
       return <Play data-testid="node-icon-start" {...props} />;
     case "end":
       return <Square data-testid="node-icon-end" {...props} />;
-    case "script":
-      // #248: a script node runs deterministic bash, not an agent.
-      return <SquareTerminal data-testid="node-icon-script" aria-label="Script" role="img" {...props} />;
     default: {
-      const [Icon, label] = orchestrator ? [Network, "Orchestrator"] : interactive ? [UserRound, "Interactive agent"] : [Bot, "Agent"];
-      return <Icon data-testid="node-icon-agent" aria-label={label} role="img" {...props} />;
+      const { icon: Icon, label } = nodeTypeGlyph(type, interactive, orchestrator);
+      const testId = type === "script" ? "node-icon-script" : "node-icon-agent";
+      return <Icon data-testid={testId} aria-label={label} role="img" {...props} />;
     }
   }
 }

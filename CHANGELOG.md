@@ -24,8 +24,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   `data-mode` before the first paint. The interface loads it; a page an extension serves outside
   the interface loads it beside `/shared/tokens.css` (`docs/reference/extension-ui.md`
   § *Tokens*) and keeps no copy of it.
-- **`pdo-extension-api` 0.20.0** and **`@pdo/extension-ui` 0.20.0**, with no break of the Rust
-  API: the new minor carries the break of the token stylesheet and the theme script.
+- **`pdo-extension-api` 0.20.0** and **`@pdo/extension-ui` 0.20.0**: the new minor carries the
+  break of the token stylesheet, the theme script and the removal of a location from the Rust API
+  (see *Node cards*).
 - Settings › Interface: **Theme** (Acogni, Classic) and the **Dark mode** switch replace "Theme"
   System / Light / Dark. Classic brings back the colors of the interface before 2.65; the logo
   keeps its ruby. The sun/moon of the top bar only toggles Dark mode; the command field offers
@@ -33,6 +34,21 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - Migration per browser: a `light` or `dark` preference becomes the mode, `system` the system's
   mode at the time of the migration; the Theme is Acogni. The mode is stored under `pdo.ui.mode`,
   the Theme under `pdo.ui.theme`.
+
+### Node cards
+
+- **Breaking for extensions** (`pdo-extension-api` 0.20.0, Rust API): the `canvas/node`
+  location is removed, with `UiLocation::CanvasNode` and `CanvasNodeContext`. A node card carries
+  no extension decoration any more; show what belongs to a node in its detail (`node/detail`,
+  `node/toolbar`, `port/item`) or in the card's menu (`canvas/node/menu`).
+- Node cards, in the editor and on a Run: a header tinted by the node's status, with the type
+  icon first, in the Theme's accent, and the status icon at the end. An orchestrator shows a
+  second sheet behind its card and, on a Run, "N runs" with the Orchestration tab's pills; the
+  row opens that tab.
+- The whole bar over a child run leads back to the parent run, not only its arrow.
+- Edges: an automatic edge goes around the cards between its ends, including one leaving a loop
+  towards a card beyond the next, and a condition label slides along its edge instead of shrinking.
+  An unplaced condition label keeps off the labels placed by hand on other edges, and off the cards.
 
 ### One avatar for a person
 

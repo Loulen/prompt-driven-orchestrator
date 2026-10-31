@@ -622,7 +622,6 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("run/item", "decoration", "run-badge"),
         triple("trigger/item", "decoration", "trigger-badge"),
         triple("pipeline/item", "decoration", "pipeline-badge"),
-        triple("canvas/node", "decoration", "node-badge"),
         triple("port/item", "decoration", "port-badge"),
         triple("review/file", "decoration", "file-badge"),
         triple("statusbar", "decoration", "status-badge"),

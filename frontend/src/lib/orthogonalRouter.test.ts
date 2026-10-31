@@ -271,3 +271,34 @@ describe("routeOrthogonal — never crosses its own source card", () => {
     );
   });
 });
+
+describe("routeOrthogonal — never crosses its target card", () => {
+  // A fan-out seen on a Run: the source above, its target below and to the left,
+  // both wider than the gap between them; the wire leaves by the right.
+  const source = { x: 468, y: 133 };
+  const sourceRect = { x: 260, y: 100, width: 208, height: 65 };
+  const target = { x: 301, y: 283 };
+  const targetRect = { x: 300, y: 240, width: 208, height: 87 };
+  const others = [
+    { x: 40, y: 240, width: 208, height: 87 },
+    { x: 560, y: 240, width: 208, height: 65 },
+  ];
+
+  it("goes around the target to land on its left side, not through it", () => {
+    const path = routeOrthogonal({
+      source,
+      target,
+      obstacles: others,
+      targetSide: "left",
+      sourceSide: "right",
+      sourceRect,
+      targetRect,
+    });
+    expect(isOrthogonal(path)).toBe(true);
+    // Everything but the landing leg stays out of the target card.
+    expect(pathCrosses(path.slice(0, -1), targetRect)).toBe(false);
+    expect(pathCrosses(path.slice(1), sourceRect)).toBe(false);
+    for (const o of others) expect(pathCrosses(path, o)).toBe(false);
+    expect(path[path.length - 2].x).toBeLessThan(targetRect.x);
+  });
+});

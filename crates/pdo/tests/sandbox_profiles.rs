@@ -315,11 +315,24 @@ async fn get_run(daemon: &TestDaemon, run_id: &str) -> serde_json::Value {
         .unwrap()
 }
 
+/// The run while it is polled: `None` when the daemon does not answer it as
+/// JSON yet (a run not projected yet, a loaded machine), so a wait keeps
+/// polling instead of panicking.
+async fn try_get_run(daemon: &TestDaemon, run_id: &str) -> Option<serde_json::Value> {
+    let resp = reqwest::get(format!("{}/runs/{run_id}", daemon.url()))
+        .await
+        .ok()?;
+    resp.json::<serde_json::Value>().await.ok()
+}
+
 async fn wait_node_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last = serde_json::Value::Null;
     while Instant::now() < deadline {
-        let run = get_run(daemon, run_id).await;
+        let Some(run) = try_get_run(daemon, run_id).await else {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            continue;
+        };
         if run["nodes"][NODE_ID]["status"] == expected {
             return run;
         }
@@ -333,7 +346,10 @@ async fn wait_run_status(daemon: &TestDaemon, run_id: &str, expected: &str) -> s
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last = serde_json::Value::Null;
     while Instant::now() < deadline {
-        let run = get_run(daemon, run_id).await;
+        let Some(run) = try_get_run(daemon, run_id).await else {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            continue;
+        };
         if run["status"] == expected {
             return run;
         }
@@ -581,7 +597,10 @@ async fn wait_node_status_for(
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last = serde_json::Value::Null;
     while Instant::now() < deadline {
-        let run = get_run(daemon, run_id).await;
+        let Some(run) = try_get_run(daemon, run_id).await else {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            continue;
+        };
         if run["nodes"][node_id]["status"] == expected {
             return run;
         }

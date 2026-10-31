@@ -1,6 +1,6 @@
 // #723 — Orchestration tab of the NodeRun detail panel + the shared count pastilles.
 import { useEffect, useState } from "react";
-import { ArrowRight, ExternalLink, GitFork, Hourglass } from "lucide-react";
+import { ArrowRight, ExternalLink, GitFork } from "lucide-react";
 import { Button, EmptyState, StatusIcon } from "../../shared/ui/kit";
 import NodeBanner from "./nodeDetail/NodeBanner";
 import { isLiveRun } from "../model/runStatus";
@@ -234,12 +234,6 @@ export function OrchestrationTab({
             )
           }
         />
-      )}
-      {nodeLive && counts.running + counts.stale > 0 && (
-        <div className="ri-orch__hint" title="The node completes once every child is terminal">
-          <Hourglass size={12} strokeWidth={1.5} aria-hidden />
-          completes when every child ends
-        </div>
       )}
       <ul className="m-0 list-none p-0">
         {childRuns.map((child) => (

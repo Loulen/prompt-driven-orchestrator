@@ -5,7 +5,7 @@ import type { DecorationContext, DecorationProps, LocationContext } from "./cont
 import ExtensionBoundary from "./ExtensionBoundary";
 
 /**
- * A decoration location (`run/item`, `canvas/node`, `statusbar`…): the marks
+ * A decoration location (`run/item`, `port/item`, `statusbar`…): the marks
  * the extensions put on one item, side by side, each behind its own error
  * boundary. **Nothing at all without a contribution**, so an item without
  * decoration keeps its layout; with several, they wrap rather than push the

@@ -17,6 +17,9 @@ const BUNDLE: &str = include_str!("ui.js");
 /// The icon of its page and its command: a plain SVG drawn in `currentColor`.
 const ICON: &str = include_str!("icon.svg");
 
+/// The icon of its inbox panel (API 0.20), drawn the same way.
+const INBOX_ICON: &str = include_str!("inbox.svg");
+
 pub(super) fn router(control: Control) -> Router {
     let events = control.clone();
     let operations = control.clone();
@@ -36,6 +39,7 @@ pub(super) fn router(control: Control) -> Router {
         .merge(super::projets::routes(control.creation.clone()))
         .merge(super::run_view::routes(control.creation.clone()))
         .merge(super::sessions::routes(control.creation.clone()))
+        .merge(super::inbox::routes(control.creation.clone()))
         // A sub-router with a fallback of its own: what the admission must
         // guard as well as a route (`/ext/test/nested/<anything>`).
         .nest(
@@ -122,6 +126,12 @@ pub(super) fn router(control: Control) -> Router {
         .route(
             "/icon.svg",
             get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], ICON).into_response() }),
+        )
+        .route(
+            "/inbox.svg",
+            get(|| async {
+                ([(header::CONTENT_TYPE, "image/svg+xml")], INBOX_ICON).into_response()
+            }),
         )
         .route(
             "/commands",

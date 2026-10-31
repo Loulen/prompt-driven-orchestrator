@@ -31,10 +31,11 @@ label: string,
  */
 when?: When, 
 /**
- * Where the counter of a page's icon is read (0.19; a
- * [`UiElement::Page`] at `topbar/end`): an absolute path the extension
- * serves, usually under `/ext/<id>/`, answering a [`PageCounter`] for
- * the Actor of the request. The core reads it when it shows the icon,
+ * Where the counter of an icon of `topbar/end` is read (0.19 for a
+ * [`UiElement::Page`], 0.20 for a [`UiElement::Panel`] and a
+ * [`UiElement::Action`]): an absolute path the extension serves, usually
+ * under `/ext/<id>/`, answering a [`PageCounter`] for the Actor of the
+ * request. The core reads it when it shows the icon,
  * and again at each event of the extension on `/ws` (its
  * `extension_event`s, the events of its Sessions hébergées) and at each
  * resync. Without one, the icon shows no counter.
@@ -45,7 +46,11 @@ counter?: string, } & ({ "type": "page", component: string,
  * `/ext/<id>/`), drawn in the colour of the text around it. Without
  * one, an icon location shows the label's first letter, boxed.
  */
-icon?: string, } | { "type": "action", command: string, } | { "type": "tab", component: string, } | { "type": "section", component: string, } | { "type": "decoration", component: string, } | { "type": "list_filter", component: string, } | { "type": "completion", 
+icon?: string, } | { "type": "action", command: string, } | { "type": "panel", component: string, 
+/**
+ * An SVG the extension serves, drawn as a [`UiElement::Page`]'s.
+ */
+icon?: string, } | { "type": "tab", component: string, } | { "type": "section", component: string, } | { "type": "decoration", component: string, } | { "type": "list_filter", component: string, } | { "type": "completion", 
 /**
  * The one character that opens the list, typed at the start of the
  * text or after a space.

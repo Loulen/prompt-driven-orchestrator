@@ -37,8 +37,13 @@
 //!   `SettingsPanel`, `ListFilter`/`DetailTab` of the Runs), so they prove the
 //!   0.1 form still renders; `topbar/end` through 0.2 contributions: a page with
 //!   its icon (which opens `/ws` through `openProbedSocket` of
-//!   `@pdo/extension-ui`, 0.10, and shows the socket's state), an action calling [`SHOW_CONTEXT`] while a Run is selected, and
-//!   an action whose `when` never holds. Every Action location (#30) through
+//!   `@pdo/extension-ui`, 0.10, and shows the socket's state), a panel under
+//!   its icon (`InboxPanel`, 0.20: the items of `inbox.rs`, each deleted with
+//!   an « Undo » in a toast; the icon counts them), an action calling [`SHOW_CONTEXT`] while a Run is selected, and
+//!   an action whose `when` never holds. The page, at `screens/alpha` and
+//!   `screens/beta`, sets the title and the icon of the shell's header per
+//!   route; `screens/beta` shows a read-only Banner with a lock (0.20); its
+//!   body shows a text kept in a yjs document, the front's own yjs (0.20). Every Action location (#30) through
 //!   one action each ([`ACTION_LOCATIONS`]), titled `Test <location>`, calling
 //!   the same function; the one of `run/item/menu` only while the row's Run is
 //!   not archived, and that menu also offers [`FAIL`], a command that throws.
@@ -124,6 +129,7 @@
 pub mod creation;
 pub mod gate;
 pub mod hosted;
+pub mod inbox;
 pub mod interop;
 pub mod launch;
 pub mod projets;
@@ -688,6 +694,12 @@ impl Extension for TestExtension {
                 UiContribution::page(UiLocation::TopbarEnd, "page", "Test page", "TestPage")
                     .with_icon(format!("/ext/{ID}/icon.svg"))
                     .with_counter(format!("/ext/{ID}/counter")),
+            )
+            // 0.20: a panel under its icon, its counter the inbox's items.
+            .contribute(
+                UiContribution::panel(UiLocation::TopbarEnd, "inbox", "Test inbox", "InboxPanel")
+                    .with_icon(format!("/ext/{ID}/inbox.svg"))
+                    .with_counter(format!("/ext/{ID}/inbox/counter")),
             )
             .contribute(
                 UiContribution::action(UiLocation::TopbarEnd, "show-context", &show_context)

@@ -27,10 +27,11 @@ pub struct UiContribution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub when: Option<When>,
-    /// Where the counter of a page's icon is read (0.19; a
-    /// [`UiElement::Page`] at `topbar/end`): an absolute path the extension
-    /// serves, usually under `/ext/<id>/`, answering a [`PageCounter`] for
-    /// the Actor of the request. The core reads it when it shows the icon,
+    /// Where the counter of an icon of `topbar/end` is read (0.19 for a
+    /// [`UiElement::Page`], 0.20 for a [`UiElement::Panel`] and a
+    /// [`UiElement::Action`]): an absolute path the extension serves, usually
+    /// under `/ext/<id>/`, answering a [`PageCounter`] for the Actor of the
+    /// request. The core reads it when it shows the icon,
     /// and again at each event of the extension on `/ws` (its
     /// `extension_event`s, the events of its Sessions hébergées) and at each
     /// resync. Without one, the icon shows no counter.
@@ -64,6 +65,16 @@ pub enum UiElement {
     },
     /// An entry that calls a command of the extension.
     Action { command: String },
+    /// A panel anchored under its icon (0.20, `topbar/end`): the icon opens
+    /// it, the exported component fills it; Escape and a click outside close
+    /// it, a click in a toast does not.
+    Panel {
+        component: String,
+        /// An SVG the extension serves, drawn as a [`UiElement::Page`]'s.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        icon: Option<String>,
+    },
     /// A tab of a detail.
     Tab { component: String },
     /// A section of a page or a form.
@@ -104,8 +115,8 @@ pub enum UiElement {
     },
 }
 
-/// What the counter of a page's icon says to one Actor (0.19): what its
-/// [`UiElement::Page`]'s `counter` path answers. A count of `0` shows nothing.
+/// What the counter of an icon says to one Actor (0.19): what its
+/// contribution's `counter` path answers. A count of `0` shows nothing.
 ///
 /// On the wire: `{"count": 3, "accent": true, "detail": "3 sessions, 1 waiting"}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -166,6 +177,7 @@ pub struct CompletionRender {
 pub enum UiElementKind {
     Page,
     Action,
+    Panel,
     Tab,
     Section,
     Decoration,
@@ -180,6 +192,7 @@ impl UiElement {
         match self {
             UiElement::Page { .. } => UiElementKind::Page,
             UiElement::Action { .. } => UiElementKind::Action,
+            UiElement::Panel { .. } => UiElementKind::Panel,
             UiElement::Tab { .. } => UiElementKind::Tab,
             UiElement::Section { .. } => UiElementKind::Section,
             UiElement::Decoration { .. } => UiElementKind::Decoration,
@@ -210,6 +223,21 @@ impl UiContribution {
         component: impl Into<String>,
     ) -> Self {
         let element = UiElement::Page {
+            component: component.into(),
+            icon: None,
+        };
+        Self::new(location, id.as_ref(), label.as_ref(), element)
+    }
+
+    /// A panel at `location`, anchored under its icon and filled by the
+    /// exported `component` (0.20).
+    pub fn panel(
+        location: UiLocation,
+        id: impl AsRef<str>,
+        label: impl AsRef<str>,
+        component: impl Into<String>,
+    ) -> Self {
+        let element = UiElement::Panel {
             component: component.into(),
             icon: None,
         };
@@ -322,20 +350,27 @@ impl UiContribution {
         self
     }
 
-    /// The same page or Source de recherche, with the SVG served at `url` as
-    /// its icon. Only those have their own icon (an action shows its
+    /// The same page, panel or Source de recherche, with the SVG served at
+    /// `url` as its icon. Only those have their own icon (an action shows its
     /// command's): elsewhere, unchanged.
     pub fn with_icon(mut self, url: impl Into<String>) -> Self {
-        if let UiElement::Page { icon, .. } | UiElement::Search { icon, .. } = &mut self.element {
+        if let UiElement::Page { icon, .. }
+        | UiElement::Panel { icon, .. }
+        | UiElement::Search { icon, .. } = &mut self.element
+        {
             *icon = Some(url.into());
         }
         self
     }
 
-    /// The same page, its icon showing the counter `path` answers (0.19): see
-    /// [`UiContribution::counter`]. Ignored on any other element.
+    /// The same page, panel or action, its icon showing the counter `path`
+    /// answers (0.19, panel and action 0.20): see [`UiContribution::counter`].
+    /// Ignored on any other element; only the icons of `topbar/end` show it.
     pub fn with_counter(mut self, path: impl Into<String>) -> Self {
-        if matches!(self.element, UiElement::Page { .. }) {
+        if matches!(
+            self.element,
+            UiElement::Page { .. } | UiElement::Panel { .. } | UiElement::Action { .. }
+        ) {
             self.counter = Some(path.into());
         }
         self
@@ -391,6 +426,37 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<PageCounter>(json!({ "count": 2 })).unwrap(),
             PageCounter::new(2)
+        );
+    }
+
+    #[test]
+    fn a_panel_declares_its_component_its_icon_and_its_counter() {
+        let panel = UiContribution::panel(UiLocation::TopbarEnd, "inbox", "Inbox", "InboxPanel")
+            .with_icon("/ext/test/inbox.svg")
+            .with_counter("/ext/test/inbox/counter");
+        assert_eq!(panel.element.kind(), UiElementKind::Panel);
+        assert_eq!(
+            serde_json::to_value(&panel).unwrap(),
+            json!({
+                "location": "topbar/end", "id": "inbox", "label": "Inbox",
+                "type": "panel", "component": "InboxPanel", "icon": "/ext/test/inbox.svg",
+                "counter": "/ext/test/inbox/counter",
+            })
+        );
+        let bare = UiContribution::panel(UiLocation::TopbarEnd, "p", "P", "P");
+        let wire = serde_json::to_value(&bare).unwrap();
+        assert!(wire.get("icon").is_none());
+        assert!(wire.get("counter").is_none());
+    }
+
+    #[test]
+    fn an_action_may_name_the_counter_of_its_icon() {
+        let command = UiCommand::new("test.sync", "Sync", "sync");
+        let action = UiContribution::action(UiLocation::TopbarEnd, "sync", &command)
+            .with_counter("/ext/test/pending");
+        assert_eq!(
+            serde_json::to_value(&action).unwrap()["counter"],
+            "/ext/test/pending"
         );
     }
 

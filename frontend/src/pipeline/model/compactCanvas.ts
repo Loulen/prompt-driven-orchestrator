@@ -17,7 +17,7 @@
 import type { EdgeAnchor } from "../../shared/generated/EdgeAnchor";
 import type { EdgeWaypoint } from "../../shared/generated/EdgeWaypoint";
 import type { PortSide } from "../../shared/generated/PortSide";
-import { anchorPoint } from "../../lib/anchorSide";
+import { anchorPoint, landsByDrop } from "../../lib/anchorSide";
 import { boxesOverlap, compactLayout, type Box, type CompactPoint, type CompactRect } from "../../lib/compactLayout";
 import { fallbackNodeSpot } from "../../lib/nodePlacement";
 import type { EditorPipelineDef } from "./pipeline";
@@ -61,10 +61,11 @@ export interface CompactCanvas {
  * The height of a note card (`.cv-note`: 164 px of 12 px text, 1.4 line
  * height, 14 px of padding and border), on the high side: a note is never
  * taller than its estimate, so one that clears the cards by its estimate
- * clears them for real.
+ * clears them for real. A wide character (CJK, emoji) counts twice.
  */
 export function estimateNoteHeight(content: string): number {
-  const lines = content.split("\n").reduce((n, line) => n + Math.max(1, Math.ceil((line.length * 7.5) / 164)), 0);
+  const width = (line: string) => [...line].reduce((w, ch) => w + ((ch.codePointAt(0) ?? 0) >= 0x2e80 ? 15 : 7.5), 0);
+  const lines = content.split("\n").reduce((n, line) => n + Math.max(1, Math.ceil(width(line) / 164)), 0);
   return Math.ceil(lines * 17 + 16);
 }
 
@@ -72,6 +73,7 @@ const isMarker = (type: string) => type === "start" || type === "end";
 
 export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasInput = {}): CompactCanvas {
   const withRuns = input.withRuns ?? new Set<string>();
+  const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
   const nodeRects: CompactRect[] = [];
   const detailed = new Map<string, { x: number; y: number; width: number; height: number }>();
   pipeline.nodes.forEach((n, i) => {
@@ -112,7 +114,7 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
     const rects = [...nodeRects, ...notes.filter((n) => holding.has(n.id)).map((n) => ({ id: `n:${n.id}`, x: n.x, y: n.y, w: COMPACT_CARD.noteWidth, h: n.h, hCompact: n.h }))];
     const riders = notes.filter((n) => !holding.has(n.id)).map((n) => ({ id: `n:${n.id}`, x: n.x, y: n.y + n.h }));
     layout = compactLayout(rects, [...points, ...riders]);
-    const boxes = nodeRects.map((r) => cardBox(layout.rects[r.id], isMarker(typeOf(pipeline, r.id))));
+    const boxes = nodeRects.map((r) => cardBox(layout.rects[r.id], isMarker(byId.get(r.id)!.type)));
     const blocked = notes.filter((n) => {
       if (holding.has(n.id)) return false;
       const at = layout.points[`n:${n.id}`];
@@ -135,36 +137,39 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
     const source = detailed.get(e.source.node);
     const target = detailed.get(e.target.node);
     const sourceSide: PortSide = e.source_anchor?.side ?? "right";
-    const targetSide: PortSide = e.target_anchor?.side ?? e.target_side ?? "left";
+    // The side the arrow lands on: a target that keeps a declared handle lands on the left, whatever the file says.
+    const targetSide: PortSide = landsByDrop(byId.get(e.target.node)?.type ?? "agent")
+      ? (e.target_anchor?.side ?? e.target_side ?? "left")
+      : "left";
+    const from = foldedPort(source, sourceSide, e.source_anchor, cards[e.source.node]);
+    const to = foldedPort(target, targetSide, e.target_anchor, cards[e.target.node]);
     let waypoints: EdgeWaypoint[] | null | undefined = e.waypoints?.map((_, j) => ({ ...shifted(`w:${i}:${j}`) }));
     if (waypoints && e.waypoints) {
-      waypoints = followFoldedPort(waypoints, e.waypoints, source, sourceSide, e.source_anchor, cards[e.source.node]);
-      waypoints = followFoldedPort([...waypoints].reverse(), [...e.waypoints].reverse(), target, targetSide, e.target_anchor, cards[e.target.node]).reverse();
+      waypoints = followFoldedPort(waypoints, e.waypoints, from);
+      waypoints = followFoldedPort([...waypoints].reverse(), [...e.waypoints].reverse(), to).reverse();
     }
+    // A pinned label rides the shift too, unless it sits level with a folded port: it then stays on the leg.
+    const label = (id: string, at: EdgeWaypoint) => ({ x: at.x, y: levelWith(at, from) ?? levelWith(at, to) ?? shifted(id).y });
     const outputLabels = e.output_label_pos
-      ? Object.fromEntries(Object.keys(e.output_label_pos).map((port) => [port, { ...shifted(`o:${i}:${port}`) }]))
+      ? Object.fromEntries(Object.entries(e.output_label_pos).map(([port, at]) => [port, label(`o:${i}:${port}`, at)]))
       : e.output_label_pos;
     return {
       ...e,
       source_anchor: source ? foldAnchor(e.source_anchor, sourceSide) : e.source_anchor,
       target_anchor: target ? foldAnchor(e.target_anchor, targetSide) : e.target_anchor,
       waypoints,
-      condition_label_pos: e.condition_label_pos ? { ...shifted(`c:${i}`) } : e.condition_label_pos,
+      condition_label_pos: e.condition_label_pos ? label(`c:${i}`, e.condition_label_pos) : e.condition_label_pos,
       output_label_pos: outputLabels,
     };
   });
 
-  const compactNotes = pipeline.notes?.map((note) => {
-    const n = notes.find((m) => m.id === note.id)!;
+  const compactNotes = pipeline.notes?.map((note, i) => {
+    const n = notes[i];
     const y = holding.has(n.id) ? layout.rects[`n:${n.id}`].y : shifted(`n:${n.id}`).y - n.h;
     return { ...note, view: { ...(note.view ?? {}), x: n.x, y } };
   });
 
   return { pipeline: { ...pipeline, nodes, edges, ...(compactNotes ? { notes: compactNotes } : {}) }, cards };
-}
-
-function typeOf(pipeline: EditorPipelineDef, id: string): string {
-  return pipeline.nodes.find((n) => n.id === id)?.type ?? "";
 }
 
 /** The drawn box: a work card narrows around its axis, a marker keeps its size. */
@@ -176,7 +181,8 @@ function cardBox(r: Box, marker: boolean): Box {
  * The anchor of a compacted card's port: a side port folds onto the first
  * line (written even where the edge had no anchor: the middle of a two-line
  * card is not on its first line), a top or bottom one keeps its abscissa on
- * the narrower card.
+ * the narrower card. Within 20 px of a corner of the detailed card there is
+ * no such abscissa on the compact one: the port is clamped, and its wire jogs.
  */
 function foldAnchor(anchor: EdgeAnchor | null | undefined, side: PortSide): EdgeAnchor | null | undefined {
   if (side === "left" || side === "right") return { side, offset: COMPACT_PORT_Y };
@@ -184,23 +190,34 @@ function foldAnchor(anchor: EdgeAnchor | null | undefined, side: PortSide): Edge
   return { ...anchor, offset: anchor.offset - INSET };
 }
 
-/**
- * The waypoints that run level with a side port, from the port on, follow the
- * port onto the compact card's first line: the leg into it stays straight.
- */
-function followFoldedPort(
-  moved: EdgeWaypoint[],
-  original: EdgeWaypoint[],
+/** A side port of a compacted card: its ordinate on the detailed card, and on the compact one. */
+interface FoldedPort {
+  before: number;
+  after: number;
+}
+
+function foldedPort(
   rect: { x: number; y: number; width: number; height: number } | undefined,
   side: PortSide,
   anchor: EdgeAnchor | null | undefined,
   card: Box | undefined,
-): EdgeWaypoint[] {
-  if (!rect || !card || (side !== "left" && side !== "right")) return moved;
-  const portY = Math.round(anchorPoint(rect, anchor, side).y);
+): FoldedPort | null {
+  if (!rect || !card || (side !== "left" && side !== "right")) return null;
+  return { before: Math.round(anchorPoint(rect, anchor, side).y), after: card.y + COMPACT_PORT_Y };
+}
+
+/** The folded port's new ordinate when `at` ran level with it, else null. */
+function levelWith(at: EdgeWaypoint, port: FoldedPort | null): number | null {
+  return port && Math.abs(at.y - port.before) <= LEVEL ? port.after : null;
+}
+
+/**
+ * The waypoints that run level with a side port, from the port on, follow the
+ * port onto the compact card's first line: the leg into it stays straight.
+ */
+function followFoldedPort(moved: EdgeWaypoint[], original: EdgeWaypoint[], port: FoldedPort | null): EdgeWaypoint[] {
+  if (!port) return moved;
   const out = [...moved];
-  for (let j = 0; j < original.length && Math.abs(original[j].y - portY) <= LEVEL; j++) {
-    out[j] = { x: out[j].x, y: card.y + COMPACT_PORT_Y };
-  }
+  for (let j = 0; j < original.length && levelWith(original[j], port) != null; j++) out[j] = { x: out[j].x, y: port.after };
   return out;
 }

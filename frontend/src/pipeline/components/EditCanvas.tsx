@@ -201,10 +201,11 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const shown = compaction?.pipeline ?? pipeline;
   const derivedNodes = useMemo(() => {
     if (!shown) return [];
+    const views = new Map(compaction?.pipeline.nodes.map((n) => [n.id, n.view]));
     const placed = compaction
       ? cards.map((card) => {
           const box = compaction.cards[card.id];
-          const view = compaction.pipeline.nodes.find((n) => n.id === card.id)?.view;
+          const view = views.get(card.id);
           if (box) return { ...card, position: { x: box.x, y: box.y }, data: { ...card.data, compact: true } };
           return view ? { ...card, position: { x: view.x, y: view.y } } : card;
         })

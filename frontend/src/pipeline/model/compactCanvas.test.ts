@@ -195,6 +195,42 @@ describe("compactCanvas", () => {
     expect(covered).toEqual([]);
   });
 
+  it("keeps a label pinned on the leg of a folded side port on that leg", () => {
+    const pipeline: EditorPipelineDef = {
+      name: "p",
+      version: "1.0",
+      variables: {},
+      nodes: [node("a", 0, 0), node("b", 400, 0)],
+      edges: [
+        {
+          source: { node: "a", port: "out" },
+          target: { node: "b", port: "in" },
+          when: { ok: { eq: true } },
+          condition_label_pos: { x: 300, y: 33 },
+          output_label_pos: { out: { x: 230, y: 33 } },
+        },
+      ],
+    };
+    const e = compactCanvas(pipeline).pipeline.edges[0];
+    expect(e.condition_label_pos).toEqual({ x: 300, y: 15 });
+    expect(e.output_label_pos).toEqual({ out: { x: 230, y: 15 } });
+  });
+
+  it("folds the arrival of a target that keeps a declared handle onto its left side, whatever the file says", () => {
+    const pipeline: EditorPipelineDef = {
+      name: "p",
+      version: "1.0",
+      variables: {},
+      nodes: [node("a", 0, 0), { ...node("sw", 400, 0), type: "switch" }],
+      edges: [{ source: { node: "a", port: "out" }, target: { node: "sw", port: "in" }, target_side: "right" }],
+    };
+    expect(compactCanvas(pipeline).pipeline.edges[0].target_anchor).toEqual({ side: "left", offset: 15 });
+  });
+
+  it("counts a wide character twice in a note's height", () => {
+    expect(estimateNoteHeight("界".repeat(20))).toBeGreaterThan(estimateNoteHeight("a".repeat(20)));
+  });
+
   it("lets a note that would land on a card hold its band", () => {
     // A tall note beside two rows: riding its bottom would lift it onto the card above it.
     const pipeline: EditorPipelineDef = {

@@ -76,7 +76,7 @@ export function useNewRunSubmit(
   // hidden one): sending none would take the Run or the Trigger out of it.
   const { projectId } = s;
   const {
-    selectedPipeline, sourceBranch, targetRepo, repoValid, runName, setRunName, autoName,
+    selectedPipeline, sourceBranch, targetRepo, repoValid, repoError, runName, setRunName, autoName,
     setAutoName, input, setInput, overrides, setOverrides, mode, setMode, editingTriggerId,
     setEditingTriggerId, triggerName, setTriggerName, cronPresetId, dailyHour, dailyMinute,
     rawCron, guardCommand, setGuardCommand, setGuardTest, setGuardTesting, setGuardTestError,
@@ -231,7 +231,10 @@ export function useNewRunSubmit(
       ? `${targetRepo.trim()} is not a repository of ${launchProject.name}.`
       : undefined;
   // Notion #7: the provisioning reason is the one the disabled Launch spells out.
-  const launchBlockReason = outsideProjectReason ?? (provisioningValid ? undefined : provisioningBlockReason);
+  // A path refused on its own gives its own reason, the field's.
+  const launchBlockReason =
+    (repoValid === false && repoError ? repoError : outsideProjectReason) ??
+    (provisioningValid ? undefined : provisioningBlockReason);
 
   // The cron the Trigger will be created with: a compiled preset, or the raw escape hatch.
   // Memoized (like `selectedPipeline`/`overrideCount` above) so the compiler can

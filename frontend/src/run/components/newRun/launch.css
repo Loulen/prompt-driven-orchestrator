@@ -131,12 +131,16 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* A message naming a long path wraps inside the form, a word without a
+     space included. */
   .ln-err {
     display: inline-flex;
     align-items: center;
     gap: 3px;
     min-width: 0;
+    max-width: 100%;
     color: var(--color-st-failed);
+    overflow-wrap: anywhere;
     font-size: var(--fs-xs);
   }
   .ln-help {
@@ -269,9 +273,11 @@
     font-size: var(--fs-sm);
     white-space: nowrap;
   }
+  /* The folders give way first, down to two characters and their ellipsis;
+     only then is the last segment cut, with its own ellipsis. */
   .ln-path__head {
     flex: 0 1 auto;
-    min-width: 1ch;
+    min-width: 3ch;
     overflow: hidden;
     color: var(--text-2);
     text-overflow: ellipsis;
@@ -282,6 +288,9 @@
     overflow: hidden;
     color: var(--text);
     text-overflow: ellipsis;
+  }
+  .ln-path__head + .ln-path__tail {
+    max-width: calc(100% - 3ch);
   }
 
   /* ---------------------------------------------------------------- the repository field */

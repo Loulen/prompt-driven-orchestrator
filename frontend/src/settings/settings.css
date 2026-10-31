@@ -667,6 +667,9 @@
   }
 
   /* ---------------------------------------------------------------- Settings › Projects */
+  .set-projects {
+    container: set-projects / inline-size;
+  }
   .set-md {
     display: flex;
     align-items: flex-start;
@@ -683,6 +686,19 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-ui);
     background: var(--surface-1);
+  }
+  /* Too narrow for the list beside the detail (a large UI scale): the list goes
+     above it, and the repositories get the full width. */
+  @container set-projects (max-width: 600px) {
+    .set-md {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .set-md__list {
+      flex: none;
+      max-height: calc(6 * var(--h-row) + 4px);
+      overflow-y: auto;
+    }
   }
   .set-md__item {
     display: flex;
@@ -764,6 +780,7 @@
     container: set-repos / inline-size;
   }
   .set-rrow {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--g-3);
@@ -807,6 +824,18 @@
   .set-rrow:hover .set-hover,
   .set-rrow:focus-within .set-hover {
     opacity: 1;
+  }
+  /* Hidden, a row's actions take no width from the repository's name; they
+     stay reachable by Tab, and show once the row holds the focus. */
+  .set-rrow:not(:hover, :focus-within) .set-hover {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
   .set-cform {
     display: flex;

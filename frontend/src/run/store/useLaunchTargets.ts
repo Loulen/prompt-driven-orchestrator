@@ -70,7 +70,7 @@ export function useLaunchTargets(open: boolean) {
   const loadBranches = useCallback(
     async (repoPath: string) => {
       const list = await load(repoPath);
-      if (!list) return;
+      if (!list) return list;
       // #454: re-select whenever the held branch is not one THIS repo has.
       // The old `!sourceBranch` guard only ever seeded an empty field, so
       // switching repos kept a branch the new one lacks — and a `<select>`
@@ -91,6 +91,7 @@ export function useLaunchTargets(open: boolean) {
         const def = pickDefaultBranch(list);
         if (def) setSourceBranch(def);
       }
+      return list;
     },
     [load, sourceBranch],
   );

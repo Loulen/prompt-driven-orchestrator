@@ -740,6 +740,19 @@ describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
     expect(screen.queryByTestId("primary-outside-project")).toBeNull();
   });
 
+  it("does not preview the provisioning of a path the field refuses", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    vi.mocked(validateRepo).mockResolvedValueOnce({ valid: false, error: "/code/gone does not exist or is not a directory" });
+    vi.mocked(previewProvisioning).mockClear();
+    fireEvent.change(screen.getByLabelText(/target repository/i), { target: { value: "/code/gone" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(screen.getByTestId("repo-error")).toHaveTextContent("/code/gone does not exist"));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(previewProvisioning).not.toHaveBeenCalledWith("/code/gone", expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything());
+    expect(screen.getByTestId("provisioning-run")).not.toHaveTextContent("/code/gone");
+  });
+
   it("shows an edited Trigger's Projet repository once, among the Projet's, and keeps its Projet", async () => {
     const trigger: Trigger = {
       id: "trg-shop",
@@ -1048,7 +1061,7 @@ describe("NewRunModal — multi-repo form flow", () => {
       expect(validateRepo).toHaveBeenCalledWith("/tmp/not-a-repo");
     });
     await waitFor(() => {
-      expect(screen.getByText(/not a git repository/i)).toBeInTheDocument();
+      expect(screen.getByTestId("repo-error")).toHaveTextContent(/not a git repository/i);
     });
   });
 
@@ -1999,12 +2012,14 @@ describe("NewRunModal — Trigger mode (#160)", () => {
     fireEvent.change(screen.getByTestId("daily-hour"), { target: { value: "3" } });
     expect(screen.getByTestId("resolved-cron")).toHaveTextContent("0 3 * * *");
     expect(screen.getByTestId("cron-time-zone")).toHaveTextContent("UTC");
+    expect(screen.getByTestId("new-run-summary")).toHaveTextContent(/^0 3 \* \* \* UTC · /);
     fireEvent.click(screen.getByTestId("preset-custom"));
     fireEvent.change(screen.getByTestId("raw-cron-input"), { target: { value: "17 3 * * 1" } });
     expect(screen.getByTestId("cron-time-zone")).toHaveTextContent("UTC");
     // A schedule on minutes alone fires alike in every time zone.
     fireEvent.click(screen.getByTestId("preset-every_15_min"));
     expect(screen.queryByTestId("cron-time-zone")).toBeNull();
+    expect(screen.getByTestId("new-run-summary")).toHaveTextContent(/^\*\/15 \* \* \* \* · /);
   });
 
   it("relabels the prompt field as an optional input template in Trigger mode", async () => {

@@ -28,7 +28,7 @@ afterEach(() => {
 
 function setup(
   open = true,
-  loadBranches = vi.fn<(repoPath: string) => Promise<void>>(async () => {}),
+  loadBranches = vi.fn<(repoPath: string) => Promise<readonly unknown[] | null | void>>(async () => {}),
 ) {
   const clearBranches = vi.fn<() => void>();
   const rendered = renderHook(
@@ -80,6 +80,37 @@ describe("useRepoValidation — the debounced verdict", () => {
     await settle();
     expect(api.validateRepo).toHaveBeenCalledTimes(1);
     expect(api.validateRepo).toHaveBeenCalledWith(REPO);
+  });
+
+  it("refuses a repository without a commit, naming it, once its branches are read", async () => {
+    const { result, clearBranches } = setup(true, vi.fn(async () => []));
+    act(() => result.current.handleRepoChange(REPO));
+    await settle();
+    expect(result.current.repoValid).toBe(false);
+    expect(result.current.repoError).toBe(`${REPO} has no commit yet`);
+    expect(result.current.validatedRepo).toBeNull();
+    expect(clearBranches).toHaveBeenCalled();
+  });
+
+  it("names the path its verdict is about, and forgets it while a new one waits", async () => {
+    const { result } = setup();
+    act(() => result.current.handleRepoChange(REPO));
+    await settle();
+    expect(result.current.validatedRepo).toBe(REPO);
+    act(() => result.current.handleRepoChange("/home/user/other"));
+    await settle(DEBOUNCE_MS - 1);
+    expect(result.current.repoValid).toBe(true);
+    expect(result.current.validatedRepo).toBe(REPO);
+    await settle(1);
+    expect(result.current.validatedRepo).toBe("/home/user/other");
+  });
+
+  it("keeps a repository whose branches did not land valid", async () => {
+    const { result } = setup(true, vi.fn(async () => null));
+    act(() => result.current.handleRepoChange(REPO));
+    await settle();
+    expect(result.current.repoValid).toBe(true);
+    expect(result.current.repoError).toBeNull();
   });
 
   it("validates the trimmed path", async () => {

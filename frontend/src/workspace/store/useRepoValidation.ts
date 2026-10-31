@@ -6,7 +6,8 @@ import { isRemoteUrl } from "../model/clone";
  * The target-repo field and its verdict (#359), lifted out of `NewRunModal.tsx`.
  *
  * Typing debounces a `GET /repos/validate`; a valid path then hands over to the branch
- * loader, and an invalid one (or a failed request) clears the branch list, because a
+ * loader (a repository with no branch at all has no commit yet, and is refused here),
+ * and an invalid one (or a failed request) clears the branch list, because a
  * branch belonging to the previous repo is worse than none — see #454.
  *
  * `loadBranches` / `clearBranches` come from `useLaunchTargets`, which owns that list.
@@ -19,13 +20,17 @@ export function useRepoValidation({
   clearBranches,
 }: {
   open: boolean;
-  loadBranches: (repoPath: string) => Promise<void>;
+  /** Resolves with the repo's branches, `null` when the list did not land. */
+  loadBranches: (repoPath: string) => Promise<readonly unknown[] | null | void>;
   clearBranches: () => void;
 }) {
   const [targetRepo, setTargetRepo] = useState("");
   const [repoValid, setRepoValid] = useState<boolean | null>(null);
   const [repoError, setRepoError] = useState<string | null>(null);
   const [repoValidating, setRepoValidating] = useState(false);
+  // The path the verdict is about: while a new value waits out the debounce,
+  // `repoValid` still speaks of the previous one.
+  const [validatedRepo, setValidatedRepo] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -35,6 +40,7 @@ export function useRepoValidation({
     if (!value.trim() || isRemoteUrl(value)) {
       setRepoValid(null);
       setRepoError(null);
+      setValidatedRepo(null);
       clearBranches();
     }
   }, [clearBranches]);
@@ -48,6 +54,7 @@ export function useRepoValidation({
     setTargetRepo(value);
     setRepoValid(null);
     setRepoError(null);
+    setValidatedRepo(null);
   }, []);
 
   useEffect(() => {
@@ -57,6 +64,7 @@ export function useRepoValidation({
     debounceRef.current = setTimeout(async () => {
       setRepoValidating(true);
       setRepoError(null);
+      setValidatedRepo(null);
       try {
         const result = await validateRepo(targetRepo.trim());
         setRepoValid(result.valid);
@@ -64,7 +72,16 @@ export function useRepoValidation({
           setRepoError(result.error ?? "Not a valid git repository");
           clearBranches();
         } else {
-          await loadBranches(targetRepo.trim());
+          const branches = await loadBranches(targetRepo.trim());
+          // A repository without a commit has no branch to cut a Run from:
+          // the field says so, once, rather than a git error further down.
+          if (branches && branches.length === 0) {
+            setRepoValid(false);
+            setRepoError(`${targetRepo.trim()} has no commit yet`);
+            clearBranches();
+          } else {
+            setValidatedRepo(targetRepo.trim());
+          }
         }
       } catch {
         setRepoValid(false);
@@ -87,6 +104,7 @@ export function useRepoValidation({
     repoValid,
     repoError,
     repoValidating,
+    validatedRepo,
     handleRepoChange,
     resetRepo,
   };

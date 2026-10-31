@@ -54,6 +54,7 @@ function renderBar(onNewRun = vi.fn()) {
 /** The tooltip a hover on `el` shows. */
 async function tooltipOf(el: HTMLElement): Promise<string> {
   fireEvent.pointerEnter(el);
+  fireEvent.pointerMove(el);
   const tip = await screen.findByTestId("tooltip-content");
   const text = tip.textContent ?? "";
   fireEvent.pointerLeave(el);
@@ -119,8 +120,18 @@ describe("the top bar", () => {
     fireEvent.click(screen.getByTestId("dark-mode-toggle"));
     expect(document.documentElement.getAttribute("data-mode")).toBe("light");
     expect(document.documentElement.getAttribute("data-theme")).toBe("classic");
-    expect(screen.getByTestId("dark-mode-toggle")).toHaveAccessibleName("Dark mode on");
     setTheme("acogni");
+  });
+
+  it("exposes the Dark mode as a toggle under a stable name, its tooltip naming the action", async () => {
+    setMode("dark");
+    renderBar();
+    const toggle = screen.getByRole("button", { name: "Dark mode" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveAccessibleName("Dark mode");
+    expect(await tooltipOf(toggle)).toBe("Dark mode on");
   });
 
   it("puts the extensions' topbar/end icons before the core's, one tooltip each", async () => {

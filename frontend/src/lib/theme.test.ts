@@ -43,6 +43,21 @@ describe("Theme and Dark mode: persistence (ADR-0093)", () => {
     expect(loadAppearance()).toEqual({ theme: "classic", mode: "dark" });
   });
 
+  it("rewrite an unknown stored value as the default, as a migrated one is", () => {
+    localStorage.setItem("pdo.ui.theme", "garbage");
+    localStorage.setItem("pdo.ui.mode", "light");
+    expect(loadAppearance()).toEqual({ theme: "acogni", mode: "light" });
+    expect([localStorage.getItem("pdo.ui.theme"), localStorage.getItem("pdo.ui.mode")]).toEqual(["acogni", "light"]);
+    localStorage.setItem("pdo.ui.mode", "dim");
+    loadAppearance();
+    expect(localStorage.getItem("pdo.ui.mode")).toBe("dark");
+  });
+
+  it("write nothing when nothing is stored", () => {
+    loadAppearance();
+    expect([localStorage.getItem("pdo.ui.theme"), localStorage.getItem("pdo.ui.mode")]).toEqual([null, null]);
+  });
+
   it("degrade to the defaults when the store throws (private mode)", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("SecurityError");

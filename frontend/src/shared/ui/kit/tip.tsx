@@ -29,6 +29,35 @@ const TOOLTIP_DELAY = 300;
 /** Within this time after a tooltip closed, the next shows at once (along a toolbar). */
 const TOOLTIP_SKIP = 300;
 let lastTipClose = 0;
+/**
+ * A focus given back by code within this time after Escape, or after Enter,
+ * Space or a pointer-down in an open layer (a menu closed or picked from
+ * returns to its trigger), opens no tooltip; Tab and the arrows do.
+ */
+const GIVEN_BACK = 500;
+const LAYER = '.d-pop, [role="menu"], [role="listbox"]';
+let lastGiving: number | null = null;
+const inLayer = (t: EventTarget | null) => t instanceof Element && !!t.closest(LAYER);
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "keydown",
+    (e) => (lastGiving = e.key === "Escape" || ((e.key === "Enter" || e.key === " ") && inLayer(e.target)) ? Date.now() : null),
+    true,
+  );
+  window.addEventListener(
+    "pointerdown",
+    (e) => {
+      if (inLayer(e.target)) lastGiving = Date.now();
+    },
+    true,
+  );
+}
+/** Whether a focus now is one given back by code. A clock set back (a test's fake timers) counts as long ago. */
+function givenBack(): boolean {
+  if (lastGiving === null) return false;
+  const since = Date.now() - lastGiving;
+  return since >= 0 && since <= GIVEN_BACK;
+}
 
 /** First element with a box under `el` (the wrapper is `display: contents`). */
 function firstBox(el: Element | null): HTMLElement | null {
@@ -38,9 +67,10 @@ function firstBox(el: Element | null): HTMLElement | null {
 }
 
 /**
- * The bubble next to one control. Shows after `delay` on hover or on keyboard
- * focus, at once when another closed less than 300 ms ago; hides on leave,
- * blur, pointer-down and Escape.
+ * The bubble next to one control. Shows after `delay` once the pointer moves
+ * on it (not when a layout brings it under a still pointer) or on keyboard
+ * focus (not on a focus given back by code), at once when another closed less
+ * than 300 ms ago; hides on leave, blur, pointer-down and Escape.
  */
 export function TooltipLayer({
   content,
@@ -61,6 +91,8 @@ export function TooltipLayer({
   const wrap = React.useRef<HTMLSpanElement>(null);
   const timer = React.useRef(0);
   const pressed = React.useRef(false);
+  /** Entered, the pointer not moved yet: a layout that brings the control under a still pointer opens nothing. */
+  const entered = React.useRef(false);
   const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
   const show = () => {
     if (disabled) return;
@@ -88,15 +120,24 @@ export function TooltipLayer({
     <span
       ref={wrap}
       style={{ display: "contents" }}
-      onPointerEnter={show}
-      onPointerLeave={hide}
+      onPointerEnter={() => (entered.current = true)}
+      onPointerMove={() => {
+        if (!entered.current) return;
+        entered.current = false;
+        show();
+      }}
+      onPointerLeave={() => {
+        entered.current = false;
+        hide();
+      }}
       onPointerDown={() => {
+        entered.current = false;
         pressed.current = true;
         hide();
       }}
       onFocus={() => {
-        // A click focuses too: only a keyboard focus opens it.
-        if (!pressed.current) show();
+        // A click focuses too, and a menu gives the focus back: only a keyboard focus opens it.
+        if (!pressed.current && !givenBack()) show();
         pressed.current = false;
       }}
       onBlur={hide}

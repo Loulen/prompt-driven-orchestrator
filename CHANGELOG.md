@@ -51,6 +51,20 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   longer offered on an interrupted or stale node, nor in a paused Run, which the daemon refused
   to complete.
 
+### Design system and Workbench
+
+- **`Segmented` takes `fill`** (`@pdo/extension-ui` 0.20): the control takes its row's width,
+  its items share it equally and a long label ends in an ellipsis. Without it, nothing changes.
+- **A tooltip waits for the pointer to move**: a surface that opens under a still pointer no
+  longer shows the tooltip of the control that lands there, and a focus given back by code (a
+  menu closed with Escape or picked from) no longer reopens one. Tab and the arrows still do.
+- The top bar's Dark mode toggle exposes its state (`aria-pressed`) under the stable name
+  « Dark mode ».
+- An unknown value stored under `pdo.ui.theme` or `pdo.ui.mode` is rewritten as the default,
+  as a migrated one is.
+- A Workbench layout whose side panels were dragged to their maximum is restored as dragged,
+  the canvas keeping its pixels instead of growing back to a third of the window.
+
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 
 ### Briques du détail de session, emplacement `session/detail`, compteur de Page (CORE-125)

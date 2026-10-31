@@ -18,6 +18,13 @@
     background: var(--surface-2);
     font-size: var(--fs-sm);
   }
+  /* the Dark mode toggle carries its state for assistive technologies only:
+     its icon shows the mode, it keeps the rest look of an icon button (undoes
+     `.d-icon[aria-pressed="true"]` of kit.css) */
+  .sh-tb__mode.d-icon[aria-pressed="true"]:not(:hover):not(:active) {
+    background: transparent;
+    color: var(--text-2);
+  }
   .sh-tb__mark {
     display: grid;
     flex: none;

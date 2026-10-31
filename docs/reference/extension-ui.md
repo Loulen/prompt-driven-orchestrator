@@ -1064,12 +1064,12 @@ taking `size`, `strokeWidth` and `className`.
 | --- | --- |
 | `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon` |
 | `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count |
-| `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most |
+| `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most. Shows once the pointer moves on the control (not when a surface opens under a still pointer) or on a keyboard focus (not on the focus a menu gives back after Escape or a pick) |
 | `Kbd` | A key or a chord |
 | `TextInput`, `TextArea` | Inputs; `invalid`, `mono`, `small` |
 | `Field` | A form row: the label in a 96 px column (`help` in its tooltip), the control, the `error` at the row end |
 | `Select` | A single value out of `options` (icons, hints, groups, a search box past 8) |
-| `Segmented` | Two to four exclusive choices, arrow keys |
+| `Segmented` | Two to four exclusive choices, arrow keys; `fill` (0.20) takes the row's width, the items sharing it, a long label ending in an ellipsis |
 | `Switch`, `Checkbox` | On/off, the accent when on; a box with its text, `mixed` |
 | `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
 | `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger` |

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultPaneSizes, PANE_BOUNDS, restorePaneSizes } from "./paneSizes";
+import { CANVAS_MIN_PCT, defaultPaneSizes, PANE_BOUNDS, restorePaneSizes } from "./paneSizes";
 
 describe("defaultPaneSizes", () => {
   it("gives the left panel 260 px and the inspector 400 px of the window, the canvas the rest", () => {
@@ -48,6 +48,30 @@ describe("restorePaneSizes", () => {
     const sizes = restorePaneSizes({ left: 5, center: 55, right: 40 }, 2000, 2000);
     expect(px(sizes.left, 2000)).toBeCloseTo(200, 0);
     expect(px(sizes.right, 2000)).toBeCloseTo(720, 0);
+  });
+
+  it("restores side panels dragged to their maximum as dragged, the canvas under a third", () => {
+    // 1440 px: 480 + 720 px of side panels leave the canvas 240 px, 16.67 %.
+    const dragged = { left: (480 / 1440) * 100, center: (240 / 1440) * 100, right: (720 / 1440) * 100 };
+    const sizes = restorePaneSizes(dragged, 1440, 1440);
+    expect(px(sizes.left, 1440)).toBeCloseTo(480, 0);
+    expect(px(sizes.right, 1440)).toBeCloseTo(720, 0);
+    expect(sizes.center).toBeCloseTo(16.67, 1);
+  });
+
+  it("keeps the canvas its saved pixels in a narrower window, the side panels giving way", () => {
+    const dragged = { left: (480 / 1440) * 100, center: (240 / 1440) * 100, right: (720 / 1440) * 100 };
+    const sizes = restorePaneSizes(dragged, 1440, 1200);
+    expect(px(sizes.center, 1200)).toBeCloseTo(240, 0);
+    expect(sizes.left / sizes.right).toBeCloseTo(480 / 720, 2);
+    expect(sizes.left + sizes.center + sizes.right).toBeCloseTo(100, 5);
+  });
+
+  it("never gives the canvas less than its minimum, the floor a drag stops at", () => {
+    // 1200 px: 480 + 720 px of side panels would leave the canvas nothing.
+    const sizes = restorePaneSizes({ left: 40, center: 0, right: 60 }, 1200, 1200);
+    expect(sizes.center).toBeCloseTo(CANVAS_MIN_PCT, 1);
+    expect(sizes.left + sizes.center + sizes.right).toBeCloseTo(100, 5);
   });
 
   it("gives an older layout, saved without its width, the defaults", () => {

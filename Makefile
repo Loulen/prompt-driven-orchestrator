@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build fast scoped gate test e2e release-bump bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
+.PHONY: help dev build fast scoped gate test e2e release-bump bench-gates run-costs bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -54,6 +54,8 @@ help:
 	@echo "  make test    cargo nextest (every failure, no fail-fast) + doctests + vitest + the scripts' node tests"
 	@echo "  make e2e [E2E_PORT=5273]  The frontend's Playwright suite on a real daemon (installs Chromium if missing)"
 	@echo "  make release-bump [LEVEL=…] [API_LEVEL=…] [DRY_RUN=1]  At integration -> main: bump the versions, release ## Unreleased, number the draft ADRs"
+	@echo "  make bench-gates REF=\"<ref> [<ref> …]\"  Measure the dev loop at each ref in a throwaway worktree (cold/warm build, gates); one markdown table"
+	@echo "  make run-costs RUN=<run-id> [URL=…]  Cost and duration per ticket of a Run and its child Runs (read only)"
 	@echo "  make bench-transcript-search [RELEASE=1]  Bench 15 concurrent searches over a Run's transcripts"
 	@echo "  make check   cargo check + generated TS types current + tsc --noEmit + the harness support table (docs/reference/harnesses.md) is current"
 	@echo "  make types   Regenerate the TS types of the daemon's DTOs into $(GENERATED_TS)"
@@ -149,6 +151,19 @@ e2e:
 # a level, DRY_RUN=1 prints the plan only.
 release-bump:
 	LEVEL=$(LEVEL) API_LEVEL=$(API_LEVEL) DRY_RUN=$(DRY_RUN) node scripts/release/release-bump.mjs
+
+# The dev loop measured before/after (docs/agents/measure-dev-loop.md): for each
+# ref of REF, a throwaway worktree (removed even on failure), then the cold build,
+# the build with a warm sccache, the time to the first structural failure, the
+# scoped gate on a front-only diff and the full suite; a gate the ref lacks is
+# « n/a ». Needs ~25 GB free per cold build (MIN_FREE_GB=). OUT= names the table.
+bench-gates:
+	@REF='$(REF)' OUT='$(OUT)' MIN_FREE_GB='$(MIN_FREE_GB)' node scripts/bench/bench-gates.mjs
+
+# The cost and duration per ticket of a story: a Run and its child Runs, read on
+# the daemon of URL= (else PDO_DAEMON_URL, PDO_TOKEN as the bearer). Read only.
+run-costs:
+	@RUN='$(RUN)' URL='$(URL)' OUT='$(OUT)' node scripts/bench/run-costs.mjs
 
 # The bench of the search over a Run's transcripts (CORE-82): 15 searches at once
 # on a realistic Run, against the list of the Runs and the opening of a node.

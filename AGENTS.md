@@ -28,6 +28,7 @@ sits **above end-to-end tests**: the QA pass, performed by an agent instead of a
 
 Runner: `/agentic-tests`. Format & inventory: the `agentic-tests` skill's `SCENARIO-FORMAT.md`.
 Driving PDO during a journey: `docs/agents/run-scenario.md`.
+Measuring the dev loop before/after (time and cost per ticket): `docs/agents/measure-dev-loop.md`.
 
 ## Dev workflow
 

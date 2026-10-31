@@ -10,7 +10,7 @@ what each accepts and the context each hands over are part of the semver of
 The Rust types are in `pdo-extension-api` (`UiLocation`, `UiContribution`, `UiElement`,
 `UiCommand`, `When`, `UiContributions`). Their TypeScript is generated into
 `frontend/src/shared/generated/` (`UiLocation.ts`, `UiContribution.ts`…); the props and contexts
-below are `frontend/src/shared/extensions/contract.ts` (`runPeople.ts` for `run/item/people`).
+below are `frontend/src/shared/extensions/contract.ts` (`runPeople.ts` for `run/item/people`, `pageContract.ts` for the pages and the panels).
 
 ## Declaring contributions
 
@@ -70,6 +70,7 @@ orders its groups by rank first, since 0.20: [`palette`](#palette)). No contribu
 | --- | --- | --- |
 | Page (`page`) | `UiContribution::page(location, id, label, component)`, `.with_icon(url)` | the exported component, full-window |
 | Action (`action`) | `UiContribution::action(location, id, &command)` | the core: an entry that calls the command; its label is the command's title |
+| Panel (`panel`, 0.20) | `UiContribution::panel(location, id, label, component)`, `.with_icon(url)` | the exported component, in a panel anchored under its icon |
 | Tab (`tab`) | `UiContribution::tab(…)` | the exported component, in a detail's tab |
 | Section (`section`) | `UiContribution::section(…)` | the exported component, under a heading |
 | Decoration (`decoration`) | `UiContribution::decoration(…)` | the exported component, a small mark on an item (a row, a card, the status bar) |
@@ -105,24 +106,41 @@ selected Run, or when its repository belongs to no Projet.
 
 ### `topbar/end`
 
-- **Accepts**: page, action.
+- **Accepts**: page, panel (since 0.20), action.
 - **Renders**: a 24 px icon button per element in the top bar's right-hand group, **before the
   core's icons** (New run, Stats, Settings, the Dark mode), a hairline after them, the label as
   tooltip. With many, the group keeps its icons aligned and is clipped before it overlaps the
   command field. A page's button opens it full-window **without rail**: the page brings its own
-  navigation. An action's button calls its command.
-- **Icon**: a page's `icon`, or an action's command `icon`, is an SVG the extension serves. It is
-  drawn as a mask in the colour of the text around it (hover and accent states apply). Without one,
-  or while it loads, the button shows the label's first letter, boxed.
-- **Counter** (since 0.19): a page may declare where the counter of its icon is read
+  navigation. A panel's button opens the panel under it (below). An action's button calls its
+  command.
+- **Icon**: a page's or a panel's `icon`, or an action's command `icon`, is an SVG the extension
+  serves. It is drawn as a mask in the colour of the text around it (hover and accent states
+  apply). Without one, or while it loads, the button shows the label's first letter, boxed.
+- **Panel** (since 0.20): the panel opens under its icon, right-aligned on it, 400 px wide (less
+  in a narrow window), at most 640 px high; the component fills it and scrolls inside it. It
+  flips above the icon when there is no room below. Escape (the focus goes back to the icon), a
+  click outside, a scroll that moves the icon, a resize and the icon itself close it; **a click
+  in a toast does not**, so the « Undo » of a toast the panel showed acts while the panel stays
+  open. It stops above the toasts' corner, so that « Undo » stays clickable. Opening focuses its
+  first control, or the panel itself while its content loads. The icon is `aria-expanded` while
+  it is open. The component receives `PanelProps`:
+
+  ```ts
+  interface PanelProps { extension: ExtensionRef; context: LocationContext; close(): void }
+  ```
+
+  `close()` closes it, before following a link it offers, say.
+- **Counter** (since 0.19, on a panel and an action since 0.20): a page, a panel or an action
+  may declare where the counter of its icon is read
   (`UiContribution::with_counter("/ext/<id>/counter")`, on the wire `counter`). The core reads it
   for the current Actor when it shows the icon, again at each event of the extension on `/ws` (its
   `extension_event`s, the events of its Sessions hébergées) and at each resync, a burst of events
   read once. The path answers a `PageCounter`: `{"count": 3, "accent": true, "detail": "1
   waiting"}`. A count above 0 shows as a 14 px pill at the top right of the icon, neutral, or in
-  the accent colour when `accent` is set; `detail` joins the label in the tooltip. A count of 0, a
-  page without counter, or a read that fails, shows nothing.
-- **Context**: `PageContext` for a page, `LocationContext` for an action.
+  the accent colour when `accent` is set, `99+` past 99; `detail` joins the label in the tooltip,
+  the count its accessible name (« Inbox, 3 »). A count of 0, an element without counter, or a
+  read that fails, shows nothing.
+- **Context**: `PageContext` for a page, `LocationContext` for a panel and an action.
 
 ### `topbar/account`
 
@@ -782,9 +800,11 @@ interface CompletionRenderProps { extension: ExtensionRef; context: LocationCont
 
 ```ts
 interface PageContext extends LocationContext { path: string }
+type PageIcon = string | Icon;           // an SVG URL the extension serves, or an icon component
 interface PageShell {
   setBreadcrumb(items: string[]): void; // crumbs after the page's title, in the shell's header
   setActions(node: ReactNode): void;    // right-aligned header content, before ✕
+  setTitle(title: string | null, icon?: PageIcon): void; // the header's title and icon (0.20)
   close(): void;
 }
 interface PageProps { extension: ExtensionRef; context: PageContext; navigate(path: string): void; shell: PageShell }
@@ -794,6 +814,15 @@ A page of `topbar/start` or `topbar/end` shows in the full-window shell Settings
 (a page of `settings/page` shows inside the Settings, [above](#settingspage)): its header (icon, title, breadcrumb,
 actions, ✕) and its Escape handling. `shell` keeps its identity for the page's lifetime, so it can
 sit in an effect's dependencies.
+
+**Title and icon per route** (since 0.20): a page that serves several screens (a profile and an
+administration, say) names the header after the route on screen with `shell.setTitle(title,
+icon?)`, typically in an effect on `context.path`. The title replaces the page's label (✕ reads
+« Close <title> »); `icon` replaces the page's icon, an SVG URL drawn as a contribution's icon or
+an icon component (a `lucide-react` icon) drawn at 14 px in the accent; without `icon`, the page's
+own. It holds for the path it was set on: a route that sets none shows the page's label and icon,
+and so does the page once closed and reopened. `setTitle(null)` restores them at once. In the
+Settings (`settings/page`) the header keeps the Settings' title: `setTitle` does nothing there.
 
 **Escape** closes the page. A page that handles Escape itself (a dialog, a drawer) listens on
 `document` or on its own elements and calls `event.preventDefault()`: the shell listens on
@@ -931,7 +960,8 @@ UiContributions::bundle("/ext/audit/ui.js", 19)
 
 The front declares the shared module in its import map next to React (`/shared/pdo-extension-ui.js`).
 A bundle imports it as a bare specifier and never embeds it: with Vite, list it in
-`build.rollupOptions.external` with `react`, `react/jsx-runtime` and `react-dom`. Its types are
+`build.rollupOptions.external` with `react`, `react/jsx-runtime` and `react-dom`, and `yjs` when
+the bundle uses it (below). Its types are
 `frontend/public/shared/pdo-extension-ui.d.ts` (served as `/shared/pdo-extension-ui.d.ts`).
 
 ```ts
@@ -970,6 +1000,16 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 - **Version**: a bundle that imports the module declares it (`importing_ui_module()`, on the wire
   `ui.ui_module_major`). A bundle built against another major than the front's is never loaded,
   and a banner says so, as for React. The module's version is `pdo-extension-api`'s.
+
+### yjs, shared
+
+Since 0.20 the import map also resolves `yjs` to the front's own copy (`/shared/yjs.js`, every
+export of yjs, no default export). A bundle that edits a shared document lists `yjs` in
+`build.rollupOptions.external` and keeps the package in its dependencies for its types only:
+the page then loads one yjs, whose documents and types the front and every extension share. A
+bundle that embeds its own copy makes yjs warn « Yjs was already imported » and breaks the
+`instanceof` checks between the copies. The front's yjs is the one its `frontend/package.json`
+pins (13.6).
 
 ## The design system
 
@@ -1084,7 +1124,7 @@ taking `size`, `strokeWidth` and `className`.
 | `Tabs` | A tab strip, the live tab underlined in the accent, a count |
 | `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
 | `KeyValue` | A read-only property grid |
-| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions |
+| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions; an `icon` in the tone's colour instead of the status icon (a lock on a read-only state, since 0.20) |
 | `EmptyState` | An icon, two to four words, one action; loading and error alike |
 | `Chip` | A neutral chip, a status `tone` as its icon; removable |
 | `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name (and, since 0.20, a fixed `shape`: `todo`, `doing`, `review`, `done`) |

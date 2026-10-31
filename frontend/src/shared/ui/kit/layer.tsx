@@ -102,7 +102,8 @@ export function Floating({
  * A panel under its anchor (a dropdown, a menu, a popover). Flips up when
  * there is no room below, stays inside the window. Closes on Escape (focus
  * back on the anchor), on a pointer-down outside, on resize and on a scroll
- * that moves the anchor.
+ * that moves the anchor. A toast counts as inside: its action (« Undo » of
+ * what the panel just did) leaves the panel open.
  */
 export function AnchoredPanel({
   anchor,
@@ -160,12 +161,13 @@ export function AnchoredPanel({
 
   React.useEffect(() => {
     if (!open) return;
-    // A pointer-down in another open panel, or in a menu, is one nested in this one.
+    // A pointer-down in another open panel, or in a menu, is one nested in
+    // this one; one in the toasts acts on what the panel did.
     const inside = (t: EventTarget | null) =>
       t instanceof Element &&
       (!!ref.current?.contains(t) ||
         !!anchor.current?.contains(t) ||
-        !!t.closest('.d-pop, [data-slot="dropdown-menu-content"]'));
+        !!t.closest('.d-pop, [data-slot="dropdown-menu-content"], .d-toasts'));
     const topmost = () => {
       const all = document.querySelectorAll(".d-pop");
       return all[all.length - 1] === ref.current;

@@ -172,7 +172,8 @@
     color: var(--text);
   }
   .d-icon:active:not(:disabled),
-  .d-icon[aria-pressed="true"] {
+  .d-icon[aria-pressed="true"],
+  .d-icon[aria-expanded="true"] {
     background: var(--active);
     color: var(--text);
   }
@@ -1011,6 +1012,9 @@
   }
   .d-banner svg {
     flex: none;
+  }
+  .d-banner__icon {
+    color: var(--st);
   }
   .d-banner__title {
     flex: none;

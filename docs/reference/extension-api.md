@@ -545,8 +545,9 @@ above as the browser's Actor: `GET /sessions/<id>/hosted`, `POST …/terminate`,
 …/relaunch`, `PUT …/config`, `GET …/events`, `GET …/live[/<path>]`
 ([extension-ui.md](extension-ui.md#the-detail-of-a-session-hébergée)). Other extensions add tabs to
 that detail at `session/detail`; a page of `topbar/end` may show a counter on its icon
-(`UiContribution::with_counter`, answering a `PageCounter` for the Actor of the request), and since
-0.20 a global Action of `palette` the same counter on its row.
+(`UiContribution::with_counter`, answering a `PageCounter` for the Actor of the request); since
+0.20 so may a panel or an action of `topbar/end`, and a global Action of `palette` shows the same
+counter on its row.
 
 ## The creation of a Run (0.9)
 

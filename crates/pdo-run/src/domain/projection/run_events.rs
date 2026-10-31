@@ -136,6 +136,9 @@ pub(super) fn apply_run_event(state: &mut RunState, event: &Event) {
         }
         EventKind::RunArchived => {
             state.status = RunStatus::Archived;
+            // A Run archived while it ran ends there: its duration stops at
+            // the archive, not at its last activity.
+            state.completed_at.get_or_insert_with(|| event.ts.clone());
             state.start_node = None;
             state.end_node = None;
         }

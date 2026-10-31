@@ -18,7 +18,7 @@ export function SavedBy({ actor }: { actor: Actor | null }) {
   const name = display?.name ?? actorLabel(actor);
   return (
     <span className="pi-by" title={name}>
-      <Avatar name={name} src={display?.avatar_url} size={16} />
+      <Avatar name={name} actor={actor} src={display?.avatar_url} size={16} />
       <span className="ei-trunc">{name}</span>
     </span>
   );

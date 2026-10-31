@@ -67,7 +67,8 @@
 //! - `palette` (0.18): `new-note`, a global action calling [`NEW_NOTE`], which
 //!   makes `test/note` × `create` (refuse it to hide the action), and `notes`,
 //!   a Source de recherche (`searchNotes`: the notes whose title holds the
-//!   query, each a deep link to the test page).
+//!   query, each a deep link to the test page); `members` (0.20), another
+//!   (`searchPeople`), whose results carry an avatar.
 //! - `palette` (0.20, `palette.rs`): its two contributions rank its group 2;
 //!   its Source answers a note per status shape (`todo`, `doing`, `review`,
 //!   `done`) and one with a 200-character title without a space; `inbox`, a
@@ -100,7 +101,7 @@
 //! - **`Host::presences`** / **`Host::run_cost`** (API 0.12, `run_view.rs`):
 //!   `GET /ext/test/runs/<id>/view` answers them; `GET /ext/test/act-as?actor=
 //!   <id>` signs a browser in as that Actor; `PeopleMarks`, at
-//!   `run/item/people`, draws one mark per Presence of the row's Run.
+//!   `run/item/people`, stacks the avatars of the Presences of the row's Run.
 //! - **`Host::open_session`** and the other gestures of the Sessions
 //!   hébergées (API 0.19, `sessions.rs`): `POST /ext/test/sessions` opens one
 //!   on behalf of the caller, `GET` lists or reads them, `DELETE
@@ -918,6 +919,13 @@ impl Extension for TestExtension {
                     .with_icon(format!("/ext/{ID}/icon.svg"))
                     .with_rank(2),
             )
+            // 0.20: results carrying an avatar.
+            .contribute(UiContribution::search(
+                UiLocation::Palette,
+                "members",
+                "Members",
+                "searchPeople",
+            ))
             .contribute(
                 UiContribution::action(UiLocation::Palette, "inbox", &inbox)
                     .with_counter(format!("/ext/{ID}/inbox")),

@@ -185,6 +185,19 @@ describe("the Sources de recherche", () => {
     expect(readResults([hit("1", "a"), hit("1", "b"), hit("2")]).results.map((r) => r.title)).toEqual(["a", "Result 2"]);
   });
 
+  it("keeps an avatar it can draw: a name, an Actor, an image; drops the rest of it", () => {
+    const alice = { kind: "identified", namespace: "test", id: "alice" };
+    const [named, odd, nameless] = readResults([
+      { ...hit("1"), avatar: { name: "Alice Martin", actor: alice, avatar_url: "/a.svg" } },
+      { ...hit("2"), avatar: { name: "Bob", actor: "bob", avatar_url: 3 } },
+      { ...hit("3"), avatar: { actor: alice } },
+    ]).results;
+    expect(named.avatar).toEqual({ name: "Alice Martin", actor: alice, avatar_url: "/a.svg" });
+    expect(odd.avatar).toEqual({ name: "Bob", actor: null, avatar_url: null });
+    expect(nameless.avatar).toBeNull();
+    expect(nameless.title).toBe("Result 3");
+  });
+
   it("asks each source on its own: a fast one shows at once, a slow one later, a failing one in its group", async () => {
     const list = await sources("fast", "slow", "failing", "hanging", "many");
     vi.useFakeTimers();

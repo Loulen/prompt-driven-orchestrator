@@ -28,7 +28,6 @@ describe("draftNotice", () => {
       connection: "4",
       actor: me,
       display: null,
-      color: 0,
       can_write: true,
       assistant: false,
       selection: null,

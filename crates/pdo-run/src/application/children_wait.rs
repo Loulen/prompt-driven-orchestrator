@@ -252,10 +252,16 @@ mod tests {
                 Some("parent"),
                 Some((event_log::EventKind::RunCompleted, "")),
             ),
+            // Archived while it ran: it ended at its archive, after the wait began.
+            run(
+                "archived-child",
+                Some("parent"),
+                Some((event_log::EventKind::RunArchived, "")),
+            ),
         ];
         let snapshot = children_wait_snapshot(&runs, "parent", "worker", "2026-09-12T10:00:00Z");
         assert_eq!(snapshot.active, 0);
-        assert_eq!(snapshot.total, 3);
+        assert_eq!(snapshot.total, 4);
         let by_id: HashMap<&str, serde_json::Value> = snapshot
             .settled_after
             .iter()
@@ -266,6 +272,7 @@ mod tests {
         assert_eq!(by_id["skipped-child"]["status"], "skipped");
         assert_eq!(by_id["skipped-child"]["reason"], "nothing to do");
         assert_eq!(by_id["completed-child"]["status"], "completed");
+        assert_eq!(by_id["archived-child"]["status"], "archived");
         assert!(
             by_id["completed-child"].get("reason").is_none(),
             "no reason ⇒ key omitted: {}",

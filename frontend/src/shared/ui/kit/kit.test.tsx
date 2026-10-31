@@ -46,6 +46,8 @@ const PUBLIC = join(import.meta.dirname, "..", "..", "..", "..", "public", "shar
 /** The primitives of the design system, as the module hands them out. */
 const PRIMITIVES = [
   "Avatar",
+  "AvatarStack",
+  "personColor",
   "Banner",
   "Button",
   "Checkbox",
@@ -259,6 +261,23 @@ describe("primitives", () => {
     const error = screen.getByRole("alert");
     expect(error).toHaveTextContent("Must be 1 to 20");
     expect(input).toHaveAttribute("aria-describedby", error.id);
+  });
+
+  it("Select shows its whole value in its tooltip, and tints a filter in force", () => {
+    const long = `feature/${"a-very-long-pipeline-name-".repeat(8)}`;
+    const options = [
+      { value: "", label: "All" },
+      { value: "long", label: long },
+    ];
+    const { rerender } = render(<Select label="Pipeline" value="" onChange={() => {}} options={options} />);
+    const trigger = screen.getByRole("button", { name: "Pipeline" });
+    expect(trigger).toHaveAttribute("title", "All");
+    expect(trigger).not.toHaveAttribute("data-active");
+    rerender(<Select label="Pipeline" value="long" active onChange={() => {}} options={options} />);
+    expect(trigger).toHaveAttribute("title", long);
+    expect(trigger).toHaveAttribute("data-active");
+    rerender(<Select label="Pipeline" value={null} onChange={() => {}} options={options} />);
+    expect(trigger).toHaveAttribute("title", "Pipeline");
   });
 
   it("Select opens a listbox from the keyboard and picks the highlighted option", async () => {

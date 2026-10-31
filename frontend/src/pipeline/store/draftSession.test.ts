@@ -59,12 +59,11 @@ function serverDoc(): Y.Doc {
   return doc;
 }
 
-function participant(connection: string, color: number): DraftParticipant {
+function participant(connection: string): DraftParticipant {
   return {
     connection,
     actor: { kind: "local_operator" },
     display: null,
-    color,
     can_write: true,
     assistant: false,
     selection: null,
@@ -80,8 +79,8 @@ function join(server: Y.Doc, canWrite = true) {
   const socket = sockets.get("flow")!;
   socket.handlers.onState("ouvert");
   socket.handlers.onOpen();
-  socket.handlers.onMessage({ type: "welcome", connection: "1", generation: "g1", can_write: canWrite, color: 0 });
-  socket.handlers.onMessage({ type: "participants", participants: [participant("1", 0), participant("2", 1)] });
+  socket.handlers.onMessage({ type: "welcome", connection: "1", generation: "g1", can_write: canWrite });
+  socket.handlers.onMessage({ type: "participants", participants: [participant("1"), participant("2")] });
   socket.handlers.onBinary(SYNC_REPLY, Y.encodeStateAsUpdate(server));
   socket.sent.length = 0;
   return socket;

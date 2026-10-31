@@ -55,9 +55,10 @@ export function useSettingsExtensionPages({
     requestCloseRef.current = requestClose;
   });
   // What a page may do with the Settings header; the same object for the page's
-  // lifetime, so it can sit in an effect's dependencies.
+  // lifetime, so it can sit in an effect's dependencies. The header keeps the
+  // Settings' title: `setTitle` changes nothing there.
   const shell = useMemo<PageShell>(
-    () => ({ setBreadcrumb, setActions, close: () => requestCloseRef.current() }),
+    () => ({ setBreadcrumb, setActions, setTitle: () => {}, close: () => requestCloseRef.current() }),
     [],
   );
 

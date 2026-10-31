@@ -208,10 +208,12 @@ export interface BannerProps {
   /** One line; the full text in the tooltip. */
   text?: string;
   actions?: React.ReactNode;
+  /** Drawn instead of the tone's status icon, in the tone's colour (a lock on a read-only state). */
+  icon?: Icon;
 }
 
-/** A tinted line at the top of a pane: the status icon, a short fact, the detail, actions. */
-export function Banner({ tone, title, text, actions }: BannerProps) {
+/** A tinted line at the top of a pane: the status icon (or `icon`), a short fact, the detail, actions. */
+export function Banner({ tone, title, text, actions, icon: BannerIcon }: BannerProps) {
   return (
     <div
       className="d-banner"
@@ -219,7 +221,11 @@ export function Banner({ tone, title, text, actions }: BannerProps) {
       role={tone === "failed" ? "alert" : "status"}
       title={text}
     >
-      <ToneIcon tone={tone} size={14} />
+      {BannerIcon ? (
+        <BannerIcon size={14} strokeWidth={1.5} className="d-banner__icon" aria-hidden />
+      ) : (
+        <ToneIcon tone={tone} size={14} />
+      )}
       <strong className="d-banner__title">{title}</strong>
       {text && <span className="d-banner__text">{text}</span>}
       {actions && <span className="d-banner__actions">{actions}</span>}

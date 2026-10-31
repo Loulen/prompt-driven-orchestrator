@@ -3,9 +3,14 @@
 // A plain ES module, no build step: `react` is the front's own, shared through
 // its import map.
 import React from "react";
+import * as Y from "yjs";
 import {
+  Banner,
   Button,
+  Chip,
   copyToClipboard,
+  EmptyState,
+  IconButton,
   LiveArtifacts,
   openProbedSocket,
   Segmented,
@@ -17,11 +22,39 @@ import {
   SessionTerminal,
   SessionWaiting,
   TerminalZoom,
+  toast,
   useActorDisplay,
   useCurrentActor,
 } from "@pdo/extension-ui";
 
 const h = React.createElement;
+
+// Line icons in the current colour, the shape of the design system's.
+function icon(...shapes) {
+  return function Icon({ size = 14, strokeWidth = 1.5, className }) {
+    return h(
+      "svg",
+      {
+        width: size,
+        height: size,
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        strokeWidth,
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+        className,
+        "aria-hidden": true,
+      },
+      ...shapes.map((d, i) => h("path", { key: i, d })),
+    );
+  };
+}
+const Lock = icon("M6 11h12v9H6z", "M8 11V7a4 4 0 0 1 8 0v4");
+const Star = icon("M12 3l2.8 5.7 6.2.9-4.5 4.4 1 6.2-5.5-2.9-5.5 2.9 1-6.2L3 9.6l6.2-.9z");
+const Trash = icon("M4 7h16", "M10 11v6", "M14 11v6", "M6 7l1 13h10l1-13", "M9 7V4h6v3");
+const Check = icon("M5 12l5 5 9-10");
+const Alert = icon("M12 3l10 18H2z", "M12 10v4", "M12 17h.01");
 
 const box = { display: "flex", flexDirection: "column", gap: "6px", fontSize: "13px" };
 const muted = { opacity: 0.7 };
@@ -160,19 +193,61 @@ export function TestPage({ context, navigate, shell }) {
   React.useEffect(() => {
     shell?.setBreadcrumb(path ? path.split("/") : []);
   }, [shell, path]);
+  // 0.20: each of the two screens names the header its own way.
+  const screen = SCREENS[path];
+  React.useEffect(() => {
+    if (screen) shell?.setTitle?.(screen.title, screen.icon);
+  }, [shell, screen]);
   if (path === "hosted" || path.startsWith("hosted/")) {
     return h(HostedSessionDemo, { agent: path === "hosted/agent" });
   }
+  if (screen) return h(TestScreen, { path, navigate });
   return h(TestPageBody, { context, navigate, path });
+}
+
+// Two routes of the test page, each a screen of its own (API 0.20): its title
+// and its icon in the shell's header, a component for one, an SVG for the other.
+const SCREENS = {
+  "screens/alpha": { title: "Alpha screen", icon: Star },
+  "screens/beta": { title: "Beta screen", icon: "/ext/test/messages.svg" },
+};
+
+function TestScreen({ path, navigate }) {
+  const other = path === "screens/alpha" ? "screens/beta" : "screens/alpha";
+  return h(
+    "div",
+    { style: { display: "flex", flexDirection: "column", flex: "1 1 auto", minWidth: 0 }, "data-testid": "test-screen" },
+    // The read-only state: a lock, in every Theme.
+    path === "screens/beta" &&
+      h(Banner, { tone: "skipped", icon: Lock, title: "Read-only", text: "Only the owner of this screen edits it" }),
+    h(
+      "div",
+      { style: { ...box, padding: "var(--g-5) var(--g-6)" } },
+      h("p", { "data-testid": "test-screen-path" }, `Screen: ${path}`),
+      h("span", { style: { alignSelf: "flex-start" } }, h(Button, { size: "sm", onClick: () => navigate(other) }, `Go to ${SCREENS[other].title}`)),
+    ),
+  );
+}
+
+// A text kept in a yjs document (API 0.20): `yjs` is the front's own copy,
+// through its import map, so loading this bundle loads no second one.
+function useYjsText() {
+  return React.useMemo(() => {
+    const doc = new Y.Doc();
+    doc.getText("note").insert(0, "shared");
+    return doc.getText("note").toString();
+  }, []);
 }
 
 function TestPageBody({ context, navigate, path }) {
   const run = context?.run ?? null;
   const project = context?.project ?? null;
   const stream = useProbedStream();
+  const yjs = useYjsText();
   return h(
     "div",
     { style: { ...box, padding: "20px 28px" }, "data-testid": "test-extension-page" },
+    h("p", { "data-testid": "test-page-yjs" }, `Yjs: ${yjs}`),
     h("p", { "data-testid": "test-page-run" }, run ? `Run ${run.id} (${run.status})` : "No Run selected"),
     h("p", { "data-testid": "test-page-project" }, project ? `Project ${project.name}` : "No Project"),
     h("p", { "data-testid": "test-page-path" }, `Path: ${path || "(none)"}`),
@@ -191,7 +266,104 @@ function TestPageBody({ context, navigate, path }) {
       { type: "button", onClick: () => navigate("hosted"), style: { alignSelf: "flex-start", textDecoration: "underline" } },
       "Hosted session demo",
     ),
+    h(
+      "button",
+      { type: "button", onClick: () => navigate("screens/alpha"), style: { alignSelf: "flex-start", textDecoration: "underline" } },
+      "Screens",
+    ),
   );
+}
+
+// The panel of the test messages' icon (`topbar/end`, API 0.20): its items, each
+// deleted at once with an « Undo » in the core's toast, which brings it back
+// while the panel stays open. Empty: « All caught up ».
+export function MessagesPanel({ close }) {
+  const [items, setItems] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [attempt, setAttempt] = React.useState(0);
+  React.useEffect(() => {
+    let alive = true;
+    callDemo("GET", "/ext/test/messages").then(
+      (list) => alive && (setItems(list), setError(null)),
+      (e) => alive && setError(e.message),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [attempt]);
+  const remove = (item) =>
+    callDemo("DELETE", `/ext/test/messages/${item.id}`).then(
+      (list) => {
+        setItems(list);
+        toast("Item deleted", "info", {
+          actionLabel: "Undo",
+          onAction: () =>
+            callDemo("POST", `/ext/test/messages/${item.id}/restore`).then(setItems, (e) => toast(e.message, "error")),
+        });
+      },
+      (e) => setError(e.message),
+    );
+  const head = h(
+    "div",
+    { className: "d-bar", style: { gap: "var(--g-3)" } },
+    h("strong", null, "Messages"),
+    items && items.length > 0 && h(Chip, { mono: true, title: `${items.length} items` }, String(items.length)),
+  );
+  let body;
+  if (error && !items) {
+    body = h(EmptyState, {
+      icon: Alert,
+      action: h(Button, { size: "sm", onClick: () => setAttempt((n) => n + 1) }, "Retry"),
+    }, "Messages unavailable");
+  } else if (!items) {
+    body = h(EmptyState, { icon: Check, spin: true }, "Loading");
+  } else if (items.length === 0) {
+    body = h(EmptyState, { icon: Check }, "All caught up");
+  } else {
+    body = h(
+      "ul",
+      { style: { listStyle: "none", margin: 0, padding: "2px", minWidth: 0 }, "data-testid": "test-messages-items" },
+      items.map((item) =>
+        h(
+          "li",
+          {
+            key: item.id,
+            "data-testid": `test-messages-${item.id}`,
+            style: { display: "flex", alignItems: "center", gap: "var(--g-3)", minWidth: 0, padding: "2px var(--g-2) 2px var(--pad-x)" },
+          },
+          // Following an item closes the panel, as a link out of it does.
+          h(
+            "button",
+            {
+              type: "button",
+              title: item.title,
+              onClick: () => {
+                close();
+                window.location.hash = "#/ext/test/topbar/end/screens/alpha";
+              },
+              style: {
+                flex: "1 1 auto",
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                textAlign: "left",
+                background: "none",
+                border: 0,
+                padding: 0,
+                color: "inherit",
+                font: "inherit",
+                cursor: "pointer",
+              },
+            },
+            item.title,
+          ),
+          h(IconButton, { icon: Trash, label: `Delete ${item.title}`, size: "sm", tone: "danger", onClick: () => remove(item) }),
+        ),
+      ),
+    );
+  }
+  return h("div", { style: { display: "flex", flexDirection: "column", minHeight: 0 }, "data-testid": "test-messages" }, head, body);
 }
 
 // The demonstration of a Session hébergée (API 0.19): one shell (`demo`), or

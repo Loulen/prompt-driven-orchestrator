@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
+import { Star } from "lucide-react";
 import Markdown from "react-markdown";
 import TopBar from "../../app/TopBar";
 import type { ExtensionEntry } from "../generated/ExtensionEntry";
@@ -62,6 +63,24 @@ const bundle: BundleModule = {
     );
   },
   OtherPage: () => <p>the other page</p>,
+  // Two routes, two screens: each names the header its own way (API 0.20).
+  ScreensPage: ({ context, navigate, shell }: PageProps) => {
+    useEffect(() => {
+      if (context.path === "alpha") shell.setTitle("Alpha", Star);
+      if (context.path === "beta") shell.setTitle("Beta", "/ext/demo/beta.svg");
+    }, [shell, context.path]);
+    return (
+      <div>
+        <p>screen {context.path || "(root)"}</p>
+        <button type="button" onClick={() => navigate("beta")}>
+          to beta
+        </button>
+        <button type="button" onClick={() => navigate("plain")}>
+          to plain
+        </button>
+      </div>
+    );
+  },
   record: (context: CommandContext, host: CommandHost) => {
     calls.push({ context, host });
     host.notify(`called on ${context.run?.id}`);
@@ -251,6 +270,46 @@ describe("actions and commands", () => {
     renderShell();
     await screen.findByTestId("extension-topbar-end-demo:home");
     expect(screen.queryByTestId("extension-topbar-end-demo:missing")).toBeNull();
+  });
+});
+
+describe("the header of a page", () => {
+  /** What the shell's header shows: its title, and its icon's kind. */
+  function header() {
+    const head = screen.getByTestId("extension-page-header");
+    const icon = within(head).getByTestId("extension-page-icon");
+    return {
+      title: [...(head.querySelector("h2")?.childNodes ?? [])]
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent)
+        .join(""),
+      icon: icon.querySelector(".lucide-star") ? "star" : (within(icon).queryByTestId("extension-icon-fallback")?.textContent ?? "svg"),
+    };
+  }
+
+  it("takes the title and the icon each route sets, and the page's own elsewhere and once reopened", async () => {
+    window.history.replaceState(null, "", "/#/ext/demo/topbar/end/alpha");
+    serve([extension("demo", [page("home", "Screens", "ScreensPage")])]);
+    renderShell();
+    await screen.findByText("screen alpha");
+    await waitFor(() => expect(header()).toEqual({ title: "Alpha", icon: "star" }));
+    expect(screen.getByRole("button", { name: "Close Alpha" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("to beta"));
+    await waitFor(() => expect(header().title).toBe("Beta"));
+    // An SVG: its first letter until it loads.
+    expect(header().icon).toBe("B");
+
+    // A route that sets nothing shows the page's label and icon.
+    fireEvent.click(screen.getByText("to plain"));
+    await waitFor(() => expect(header()).toEqual({ title: "Screens", icon: "S" }));
+
+    // Closed then reopened from its icon: the page's own.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("extension-page")).toBeNull();
+    fireEvent.click(screen.getByTestId("extension-topbar-end-demo:home"));
+    await screen.findByText("screen (root)");
+    expect(header()).toEqual({ title: "Screens", icon: "S" });
   });
 });
 

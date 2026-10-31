@@ -61,7 +61,22 @@ export function parseDailyTime(cron: string): DailyTime | null {
   return { hour: Number(m[2]), minute: Number(m[1]) };
 }
 
-/** A short human-readable label for a cron expression (UI rows). */
+/** The time zone the daemon reads every cron in (`pdo-trigger`'s schedule runs on UTC). */
+export const CRON_TIME_ZONE = "UTC";
+
+/**
+ * Whether the time zone changes when `cron` fires: it names an hour or a day
+ * (`0 3 * * *`, `0 * * * 1`). One on minutes only fires alike everywhere.
+ */
+export function cronDependsOnZone(cron: string): boolean {
+  const fields = cron.trim().split(/\s+/);
+  return fields.length === 5 && fields.slice(1).some((field) => field !== "*");
+}
+
+/**
+ * A short human-readable label for a cron expression (UI rows). A schedule
+ * the time zone changes names the one it is read in.
+ */
 export function humanizeCron(cron: string): string {
   const norm = cron.trim().replace(/\s+/g, " ");
   if (norm === "*/15 * * * *") return "every 15 min";
@@ -70,7 +85,7 @@ export function humanizeCron(cron: string): string {
   if (daily) {
     const hour = String(daily.hour).padStart(2, "0");
     const minute = String(daily.minute).padStart(2, "0");
-    return `daily at ${hour}:${minute}`;
+    return `daily at ${hour}:${minute} ${CRON_TIME_ZONE}`;
   }
-  return norm;
+  return cronDependsOnZone(norm) ? `${norm} ${CRON_TIME_ZONE}` : norm;
 }

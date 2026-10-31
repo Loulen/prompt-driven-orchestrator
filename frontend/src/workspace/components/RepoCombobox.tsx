@@ -51,6 +51,12 @@ interface Props {
   leading?: ReactNode;
   /** Replaces the verdict under the field (a URL has none: it is cloned first). */
   hint?: ReactNode;
+  /**
+   * The form's own refusal of a valid repository (New Run's « not a repository
+   * of the Projet »): the field reads invalid, shows no valid verdict, and says
+   * this unless the repository's own error already speaks.
+   */
+  refusal?: ReactNode;
   /** Accessible name of the field (a secondary row has no visible label). */
   ariaLabel?: string;
   /** `id` of the input, for an outer `<label htmlFor>`. */
@@ -82,6 +88,7 @@ export default function RepoCombobox({
   rowBadge,
   leading,
   hint,
+  refusal,
   ariaLabel,
   id = "target-repo",
 }: Props) {
@@ -111,7 +118,7 @@ export default function RepoCombobox({
   const showList = dropdownOpen && !explorerOpen && (shownGroups.length > 0 || (grouped && !!groupsNote));
 
   const showPath = !focused && value.trim() !== "";
-  const invalid = !hint && (repoValid === false || !!repoError);
+  const invalid = !hint && (repoValid === false || !!repoError || !!refusal);
 
   const handleSelect = useCallback(
     (repo: string) => {
@@ -129,7 +136,7 @@ export default function RepoCombobox({
 
   const verdict = hint ? null : repoValidating ? (
     <LoaderCircle size={12} strokeWidth={2} className="d-spin ln-field__verdict" aria-label="Validating" role="img" />
-  ) : repoValid && !repoError ? (
+  ) : repoValid && !repoError && !refusal ? (
     <span className="ln-field__verdict ln-field__verdict--ok" role="img" aria-label="Valid git repository" title="Valid git repository" data-testid="repo-valid">
       <CircleCheck size={12} strokeWidth={2} aria-hidden />
     </span>
@@ -211,11 +218,14 @@ export default function RepoCombobox({
         )}
       </div>
       {hint}
-      {invalid && repoError && (
-        <span className="ln-err" data-testid="repo-error">
-          {repoError}
-        </span>
-      )}
+      {invalid &&
+        (repoError ? (
+          <span className="ln-err" data-testid="repo-error">
+            {repoError}
+          </span>
+        ) : (
+          refusal
+        ))}
       {help && (
         <span className="ln-faint ln-help" data-testid="repo-help">
           {help}

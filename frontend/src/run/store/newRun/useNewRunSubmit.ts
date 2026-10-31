@@ -76,7 +76,7 @@ export function useNewRunSubmit(
   // hidden one): sending none would take the Run or the Trigger out of it.
   const { projectId } = s;
   const {
-    selectedPipeline, sourceBranch, targetRepo, repoValid, runName, setRunName, autoName,
+    selectedPipeline, sourceBranch, targetRepo, repoValid, repoError, runName, setRunName, autoName,
     setAutoName, input, setInput, overrides, setOverrides, mode, setMode, editingTriggerId,
     setEditingTriggerId, triggerName, setTriggerName, cronPresetId, dailyHour, dailyMinute,
     rawCron, guardCommand, setGuardCommand, setGuardTest, setGuardTesting, setGuardTestError,
@@ -224,13 +224,15 @@ export function useNewRunSubmit(
     // #465: every non-empty secondary must have resolved before Launch.
     secondariesReady,
   }) && primaryInProject;
-  // ADR-0087: a Run launched in a Projet works in one of its repositories.
+  // ADR-0087: a Run launched in a Projet works in one of its repositories. An
+  // empty field names no repository: it is not outside the Projet.
   const outsideProjectReason =
-    launchProject && !primaryInProject
+    launchProject && !primaryInProject && targetRepo.trim() !== ""
       ? `${targetRepo.trim()} is not a repository of ${launchProject.name}.`
       : undefined;
-  // Notion #7: the provisioning reason is the one the disabled Launch spells out.
-  const launchBlockReason = outsideProjectReason ?? (provisioningValid ? undefined : provisioningBlockReason);
+  // Notion #7: the reason the disabled Launch spells out; a path refused on its own gives the field's.
+  const repoReason = repoValid === false && repoError ? repoError : outsideProjectReason;
+  const launchBlockReason = repoReason ?? (provisioningValid ? undefined : provisioningBlockReason);
 
   // The cron the Trigger will be created with: a compiled preset, or the raw escape hatch.
   // Memoized (like `selectedPipeline`/`overrideCount` above) so the compiler can

@@ -73,6 +73,27 @@ describe("useDaemonEvents", () => {
     }
   });
 
+  it("tells the open launch forms when a Pipeline file is written or numbered, and on a resync", async () => {
+    const { LAUNCH_OFFER_CHANGED } = await import("../run/store/useLaunchTargets");
+    const original = useEditStore.getState();
+    useEditStore.setState({ loadPipelines: vi.fn(async () => {}), reloadPipeline: vi.fn(async () => {}) });
+    const heard = vi.fn();
+    window.addEventListener(LAUNCH_OFFER_CHANGED, heard);
+    try {
+      const { emit } = mount();
+      emit({ type: "pipeline_changed", pipeline_id: "nightly" });
+      emit({ type: "pipeline_changed" });
+      emit({ type: "pipeline_version_changed", pipeline_id: "nightly" });
+      expect(heard).toHaveBeenCalledTimes(3);
+      emit({ type: "resync" });
+      vi.advanceTimersByTime(1_000);
+      expect(heard).toHaveBeenCalledTimes(4);
+    } finally {
+      window.removeEventListener(LAUNCH_OFFER_CHANGED, heard);
+      useEditStore.setState({ loadPipelines: original.loadPipelines, reloadPipeline: original.reloadPipeline });
+    }
+  });
+
   it("tells the model pickers on a harness_catalogue_changed", async () => {
     const { HARNESS_CATALOGUE_CHANGED } = await import("../harness/store/useHarnessCatalog");
     const heard = vi.fn();

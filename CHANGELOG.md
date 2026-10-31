@@ -120,6 +120,21 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - The import map resolves `yjs` to the front's own copy (`/shared/yjs.js`): a bundle that lists
   `yjs` as external loads no second copy.
 
+### Launch forms and Triggers
+
+- `pipeline_validation_changed` now also goes out on `/ws` when a pipeline is created,
+  duplicated, imported or deleted (a new pipeline is born a test pipeline): a client that keeps
+  the pipeline list reads it again, and an open New Run offers the new pipeline at once.
+- Triggers name the time zone their cron is read in (UTC): beside the expression in New
+  Trigger, in the schedule (« daily at 03:00 UTC ») and in the next fire of the Trigger's
+  detail, whose tooltip gives the same instant in the browser's time zone.
+- New Run says why a repository cannot be used once, under the field: a path that does not
+  exist, a folder that is not a repository, a repository without a commit, or one outside the
+  Projet. Provisioning is previewed only for a repository the field has accepted.
+- Settings: the hover actions of a repository or staging profile row take no room while hidden
+  (they always show without a hovering pointer), and under a narrow width the Projects list goes
+  above the selected Projet. A path cut in its middle shows an ellipsis in its folders.
+
 ### Design system and Workbench
 
 - **`Segmented` takes `fill`** (`@pdo/extension-ui` 0.20): the control takes its row's width,

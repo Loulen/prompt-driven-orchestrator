@@ -119,6 +119,7 @@ describe("ProvisioningRulesEditor", () => {
     expect(screen.getByText("Instance · 2")).toBeInTheDocument();
     expect(screen.getByText(/frozen at 09:12 · reused on restart/)).toBeInTheDocument();
     expect(screen.getByText("Resolved plan · frozen")).toBeInTheDocument();
+    expect(screen.getByTestId("provisioning-plan-count")).toHaveTextContent("1 path added · 0 Git paths skipped");
     expect(screen.queryByText("Resolved plan · live")).not.toBeInTheDocument();
     expect(previewProvisioning).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Copy patterns")).toHaveAttribute("readonly");

@@ -191,7 +191,7 @@ describe("useLaunchTargets — the branches", () => {
       }),
     );
     const { result } = setup();
-    let pending!: Promise<void>;
+    let pending!: Promise<unknown>;
     act(() => {
       pending = result.current.loadBranches("/home/user/project");
     });
@@ -447,7 +447,7 @@ describe("useLaunchTargets — the fetch on open and on repo change (#802)", () 
     );
 
     const { result } = setup();
-    let pending!: Promise<void>;
+    let pending!: Promise<unknown>;
     act(() => {
       pending = result.current.loadBranches("/a");
     });

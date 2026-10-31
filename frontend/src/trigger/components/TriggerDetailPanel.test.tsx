@@ -68,6 +68,12 @@ describe("TriggerDetailPanel", () => {
     fetchSettings.mockResolvedValue({ home: "/home/me" });
   });
 
+  it("says the time zone of the schedule and of the next fire", () => {
+    render(<TriggerDetailPanel trigger={trigger({ cron: "0 3 * * *", next_fire_at: "2026-11-01T03:00:00.000Z" })} onSelectRun={noop} />);
+    expect(screen.getByTestId("trigger-detail-schedule")).toHaveTextContent("daily at 03:00 UTC");
+    expect(screen.getByTestId("trigger-detail-next")).toHaveTextContent(/03:00 UTC$/);
+  });
+
   it("reads a repo under the daemon's home as ~/…, the full path in its title", async () => {
     render(<TriggerDetailPanel trigger={trigger({ target_repo: "/home/me/code/shop-app" })} onSelectRun={noop} />);
     const repo = screen.getByTestId("trigger-detail-repo");
@@ -87,7 +93,7 @@ describe("TriggerDetailPanel", () => {
     expect(screen.getByText("Nightly audit")).toBeInTheDocument();
     expect(screen.getByText("Auditor")).toBeInTheDocument();
     // Human schedule, repo basename, input template, overlap policy.
-    expect(screen.getByText("daily at 09:00")).toBeInTheDocument();
+    expect(screen.getByText("daily at 09:00 UTC")).toBeInTheDocument();
     expect(screen.getByText("audit the codebase")).toBeInTheDocument();
     expect(screen.getByText(/skip/i)).toBeInTheDocument();
     await waitFor(() => expect(fetchTriggerFires).toHaveBeenCalledWith("trg-1"));

@@ -65,6 +65,20 @@ async fn created_duplicated_and_imported_pipelines_are_born_test_pipelines() {
         None,
         "the source keeps its own"
     );
+    // Born a test pipeline is a validation that changed: an open launch form
+    // and the other clients read the list again.
+    assert_eq!(
+        world.events.validations_changed(),
+        [created.id.clone(), copy.id.clone(), imported.id.clone()]
+    );
+}
+
+#[tokio::test]
+async fn a_deleted_pipeline_announces_its_validation_gone() {
+    let world = World::new();
+    world.registry.put("old", &pipeline_yaml("old"));
+    world.pipelines.delete(&operator(), "old").await.unwrap();
+    assert_eq!(world.events.validations_changed(), ["old"]);
 }
 
 #[tokio::test]

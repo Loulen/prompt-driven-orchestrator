@@ -29,7 +29,7 @@ export default function ProjectRepositoryRow({
   onRemove: () => void;
 }) {
   return (
-    <div className="set-rrow" data-testid="project-repo-row" data-path={path} title={path}>
+    <div className="set-rrow" data-testid="project-repo-row" data-path={path} title={remote ? `${path}\n${remote}` : path}>
       <FolderGit2 size={13} strokeWidth={1.5} aria-hidden />
       <MidPath path={tildify(path, home)} title={false} className="set-rrow__path" testId="project-repo-path" />
       {primary && (

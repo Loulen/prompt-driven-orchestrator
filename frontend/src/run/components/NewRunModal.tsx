@@ -58,7 +58,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     sourceBranch, targetRepo, mode, error, provisioning, setProvisioning, handleProvisioningValidity,
     handlePaste, requestClose, triggerInputRejectReason, selectedPipelineId, editingTriggerId,
     input, runName, triggerName, launchProject, pendingDraft, cancelPendingDraft, handleLaunch,
-    handleCreateTrigger, remoteUrl, clone, cloning, submitting, canLaunch, canCreateTrigger,
+    handleCreateTrigger, remoteUrl, clone, cloning, submitting, canLaunch, canCreateTrigger, validatedRepo,
   } = form;
   // CORE-5: where a Run may be created, asked again at each open (a right may
   // have changed since the Projets were last read).
@@ -135,8 +135,10 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           {mode === "run" && (
             <ProvisioningRulesEditor
               level="run"
-              // A URL has no worktree to resolve against until it is cloned.
-              repository={remoteUrl ? "" : targetRepo}
+              // A URL has no worktree to resolve against until it is cloned; a
+              // path the field has not accepted (yet) is not previewed: the
+              // field says why, once.
+              repository={remoteUrl || validatedRepo !== targetRepo.trim() ? "" : targetRepo}
               rules={provisioning}
               onChange={setProvisioning}
               onValidityChange={handleProvisioningValidity}

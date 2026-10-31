@@ -28,11 +28,13 @@ describe("cronPresets", () => {
   it("humanizes common schedules", () => {
     expect(humanizeCron("*/15 * * * *")).toBe("every 15 min");
     expect(humanizeCron("0 * * * *")).toBe("hourly");
-    expect(humanizeCron("0 9 * * *")).toBe("daily at 09:00");
+    expect(humanizeCron("0 9 * * *")).toBe("daily at 09:00 UTC");
   });
 
   it("falls back to the raw expression for unknown schedules", () => {
-    expect(humanizeCron("17 3 * * 1")).toBe("17 3 * * 1");
+    expect(humanizeCron("17 3 * * 1")).toBe("17 3 * * 1 UTC");
+    expect(humanizeCron("*/5 * * * *")).toBe("*/5 * * * *");
+    expect(humanizeCron("*/5 * * * 1")).toBe("*/5 * * * 1 UTC");
   });
 
   it("parses a daily cron's time-of-day, tolerating irregular whitespace", () => {

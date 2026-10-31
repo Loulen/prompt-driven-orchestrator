@@ -1,7 +1,6 @@
 ---
 name: to-tickets
 description: Break a plan, spec, or the current conversation into vertical-slice tickets on the technical backlog, each declaring its blocking edges — text in one file per ticket locally, or native blocking links on GitHub/GitLab.
-disable-model-invocation: true
 ---
 
 # To Tickets

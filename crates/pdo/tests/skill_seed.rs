@@ -69,8 +69,9 @@ async fn startup_seeds_the_skill_in_the_pdo_folder_and_flags_it_locked() {
     let detail = get_json(&daemon, &format!("/settings/skills/{SEEDED_ID}")).await;
     assert_eq!(detail["name"], "pdo-orchestrate");
     assert_eq!(detail["locked"], true);
-    // #588 bumped the seeded guidance (`pdo run wait`, binding contract).
-    assert_eq!(detail["frontmatter"]["skill_version"], 3);
+    // v4: `pdo run wait` without a timeout, in the background, and
+    // `pdo run status` to read a run's state.
+    assert_eq!(detail["frontmatter"]["skill_version"], 4);
     assert!(detail["content"]
         .as_str()
         .unwrap()

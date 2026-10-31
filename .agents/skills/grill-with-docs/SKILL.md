@@ -1,7 +1,6 @@
 ---
 name: grill-with-docs
 description: Per-story grilling that stress-tests your plan against the project's domain model, sharpens terminology, and writes CONTEXT.md/ADRs inline as decisions crystallise. Run it when designing a business user story before slicing it into work.
-disable-model-invocation: true
 ---
 
 Call the Skill tool twice, for **grilling** (the interview method) and **domain-modeling** (the glossary + ADR discipline). Together they are the session: grill one decision at a time down the design tree, and write `CONTEXT.md`/ADRs inline as terms and decisions land. Everything about *how* to grill and *what* to write lives in those two skills — this skill only adds where the session runs and what comes next.

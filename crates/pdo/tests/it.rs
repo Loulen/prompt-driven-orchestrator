@@ -29,6 +29,9 @@ mod extension_identity;
 #[path = "cli_run_create.rs"]
 mod cli_run_create;
 
+#[path = "cli_run_status.rs"]
+mod cli_run_status;
+
 #[path = "cli_wait_exit_codes.rs"]
 mod cli_wait_exit_codes;
 

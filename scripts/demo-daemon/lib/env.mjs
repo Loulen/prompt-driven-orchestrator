@@ -48,7 +48,7 @@ export function parsePort(text, env) {
   const port = Number(text);
   const callerPort = env.PDO_PORT ?? portOf(env.PDO_DAEMON_URL);
   if (RESERVED_PORTS.has(port) || String(port) === String(callerPort)) {
-    throw new Error(`port ${port} is one of the user's daemon ports: pick another (6400 to 6999)`);
+    throw new Error(`port ${port} is one of the user's daemon ports: a demo daemon never runs there`);
   }
   return port;
 }

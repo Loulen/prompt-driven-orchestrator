@@ -129,4 +129,8 @@ describe("the port", () => {
     assert.throws(() => parsePort("5172", {}), /user's/);
     assert.throws(() => parsePort("6555", { PDO_PORT: "6555" }), /user's/);
   });
+
+  test("the refusal suits both start and stop: it never asks to pick a free port", () => {
+    assert.throws(() => parsePort("5272", {}), (err) => /never runs there/.test(err.message) && !/pick another/.test(err.message));
+  });
 });

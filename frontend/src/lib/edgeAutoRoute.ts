@@ -4,6 +4,7 @@
 import { routeOrthogonal, type Point, type Rect } from "./orthogonalRouter";
 import { snapPolyline } from "./wiringGrid";
 import { enforcePerpendicularEnds, landingLeg } from "./anchorLanding";
+import { dedupeCollinear } from "./polylineCleanup";
 import type { PortSide } from "../shared/generated/PortSide";
 
 /**
@@ -26,8 +27,8 @@ export interface AutoEdgeRouteInput {
   targetSide: PortSide;
   sourceRect?: Rect;
   targetRect?: Rect;
-  /** Every other card on the canvas. */
-  obstacles: Rect[];
+  /** Every other card on the canvas, and the loop regions (`region`). */
+  obstacles: (Rect & { region?: boolean })[];
   /** The wiring grid's step: it sets the legs and the snap. */
   step: number;
 }
@@ -43,11 +44,17 @@ function segmentEnters(a: Point, b: Point, rect: Rect): boolean {
   );
 }
 
+/** Inside `rect` or on its border. */
+function holds(rect: Rect, p: Point): boolean {
+  return p.x >= rect.x && p.x <= rect.x + rect.width && p.y >= rect.y && p.y <= rect.y + rect.height;
+}
+
 /** True when the route cuts a card, or hugs its border: any other card, its
- *  source card past the departure leg, its target card before the landing leg. */
+ *  source card past the departure leg, its target card before the landing leg.
+ *  A loop region is no card: the wires of its members run inside it. */
 function cutsACard(points: Point[], input: AutoEdgeRouteInput): boolean {
   const cuts = (pts: Point[], rect: Rect) => pts.some((p, i) => i > 0 && segmentEnters(pts[i - 1], p, rect));
-  if (input.obstacles.some((o) => cuts(points, o))) return true;
+  if (input.obstacles.some((o) => !o.region && cuts(points, o))) return true;
   if (input.sourceRect && cuts(points.slice(1), input.sourceRect)) return true;
   return input.targetRect != null && cuts(points.slice(0, -1), input.targetRect);
 }
@@ -63,8 +70,12 @@ function cutsACard(points: Point[], input: AutoEdgeRouteInput): boolean {
  * router's own bends.
  */
 export function autoEdgeRoute(input: AutoEdgeRouteInput): Point[] {
-  const { source, target, sourceSide, targetSide, sourceRect, targetRect, obstacles, step } = input;
+  const { source, target, sourceSide, targetSide, sourceRect, targetRect, step } = input;
   const leg = landingLeg(step);
+  // A loop region holding one end of the wire is the room it leaves or enters,
+  // not an obstacle: as one, it boxed the endpoint in, the router found no way
+  // out and the fallback ran the wire through the next card down.
+  const obstacles = input.obstacles.filter((o) => !o.region || !(holds(o, source) || holds(o, target)));
   const auto = routeOrthogonal({
     source,
     target,
@@ -83,7 +94,41 @@ export function autoEdgeRoute(input: AutoEdgeRouteInput): Point[] {
   const enforce = (points: Point[]) =>
     enforcePerpendicularEnds(points, sourceSide, targetSide, leg, targetRect, { manual: false, sourceRect });
   const snapped = enforce(snapPolyline(auto, CANVAS_LATTICE, step));
-  if (!cutsACard(snapped, input)) return snapped;
+  if (!cutsACard(snapped, input)) return withoutLegSpurs(snapped, input);
   const unsnapped = enforce(auto);
-  return cutsACard(unsnapped, input) ? snapped : unsnapped;
+  return cutsACard(unsnapped, input) ? snapped : withoutLegSpurs(unsnapped, input);
+}
+
+/** `a → b → c` on one line, `c` back towards `a`. */
+function reverses(a: Point, b: Point, c: Point): boolean {
+  if (a.y === b.y && b.y === c.y) return (b.x - a.x) * (c.x - b.x) < 0;
+  if (a.x === b.x && b.x === c.x) return (b.y - a.y) * (c.y - b.y) < 0;
+  return false;
+}
+
+/**
+ * Folds the spur a snapped bend leaves beside a leg. The router's lead-in and
+ * the enforced leg differ by a few pixels once rounded onto the lattice, so the
+ * wire overshot the approach point and came back to it: `… 320 → 310 → 330`
+ * into a left side, a stub drawn over the leg. The run before the overshoot is
+ * slid onto the approach point instead, and the leg keeps its full length. A
+ * slide that would cut a card keeps the route as it was.
+ */
+function withoutLegSpurs(points: Point[], input: AutoEdgeRouteInput): Point[] {
+  let out = points;
+  const n = out.length;
+  // The run before the overshoot is perpendicular to the leg: it slides along it.
+  const onto = (p: Point, approach: Point, legHorizontal: boolean): Point =>
+    legHorizontal ? { x: approach.x, y: p.y } : { x: p.x, y: approach.y };
+  if (n >= 5 && reverses(out[n - 3], out[n - 2], out[n - 1])) {
+    const approach = out[n - 2];
+    out = [...out.slice(0, n - 4), onto(out[n - 4], approach, approach.y === out[n - 1].y), ...out.slice(n - 2)];
+  }
+  if (out.length >= 5 && reverses(out[0], out[1], out[2])) {
+    const approach = out[1];
+    out = [out[0], approach, onto(out[3], approach, approach.y === out[0].y), ...out.slice(4)];
+  }
+  if (out === points) return points;
+  const tidy = [out[0], ...dedupeCollinear(out.slice(1, -1)), out[out.length - 1]];
+  return cutsACard(tidy, input) ? points : tidy;
 }

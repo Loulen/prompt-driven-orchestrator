@@ -84,3 +84,54 @@ describe("autoEdgeRoute: the snap never lays a wire on a card's border", () => {
     expect(orthogonal(points)).toBe(true);
   });
 });
+
+describe("autoEdgeRoute: a wire leaving a loop skips the cards beyond it", () => {
+  // A column (implementer, tester, Ship It) with End below, the first two in a
+  // loop: the tester's conditional output skips Ship It and lands on End.
+  const implementer = { x: 320, y: 173, width: 208, height: 65 };
+  const tester = { x: 327, y: 265, width: 208, height: 65 };
+  const shipIt = { x: 327, y: 385, width: 208, height: 65 };
+  const end = { x: 330, y: 476, width: 55, height: 24 };
+  const loop = { x: 296, y: 140, width: 264, height: 215, region: true };
+
+  for (const step of [20, 30, 40]) {
+    it(`goes around the card in between, not through it (step ${step})`, () => {
+      const points = autoEdgeRoute({
+        source: { x: 431, y: 330 },
+        target: { x: 330, y: 488 },
+        sourceSide: "bottom",
+        targetSide: "left",
+        sourceRect: tester,
+        targetRect: end,
+        obstacles: [implementer, shipIt, loop],
+        step,
+      });
+      expect(orthogonal(points)).toBe(true);
+      expect(crosses(points, shipIt)).toBe(false);
+      expect(crosses(points, implementer)).toBe(false);
+      expect(crosses(points.slice(1), tester)).toBe(false);
+      expect(crosses(points.slice(0, -1), end)).toBe(false);
+    });
+
+    it(`never doubles back on itself (step ${step})`, () => {
+      const points = autoEdgeRoute({
+        source: { x: 431, y: 330 },
+        target: { x: 330, y: 488 },
+        sourceSide: "bottom",
+        targetSide: "left",
+        sourceRect: tester,
+        targetRect: end,
+        obstacles: [implementer, shipIt, loop],
+        step,
+      });
+      const reverses = points.some((b, i) => {
+        if (i === 0 || i === points.length - 1) return false;
+        const [a, c] = [points[i - 1], points[i + 1]];
+        if (a.y === b.y && b.y === c.y) return (b.x - a.x) * (c.x - b.x) < 0;
+        if (a.x === b.x && b.x === c.x) return (b.y - a.y) * (c.y - b.y) < 0;
+        return false;
+      });
+      expect(reverses).toBe(false);
+    });
+  }
+});

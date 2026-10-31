@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import type { ScopedProvisioningRules } from "../../shared/generated/ScopedProvisioningRules";
 import type { NodeState } from "../../shared/generated/NodeState";
+import type { RunStatus } from "../../shared/generated/RunStatus";
 import { useNodeRun } from "../store/useNodeRun";
 import MarkdownArtifactModal from "./MarkdownArtifactModal";
 import type { ArtifactSource } from "./MarkdownArtifactModal";
@@ -21,7 +22,7 @@ import "./inspector.css";
 import DetailsPane from "./nodeDetail/DetailsPane";
 import TerminalSection from "./nodeDetail/TerminalSection";
 import RetryConfirmDialog from "./nodeDetail/RetryConfirmDialog";
-import { nodeSessionEnded } from "../model/nodeStatus";
+import { isMarkCompletable, nodeSessionEnded } from "../model/nodeStatus";
 import type { ModalState, NodeGestureRights, TerminalView } from "./nodeDetail/types";
 import { useMayOnNode } from "../store/gestureRightsStore";
 import { useFocusTab } from "../store/runSearchStore";
@@ -31,6 +32,8 @@ interface Props {
   node: NodeState;
   runId: string;
   isArchived?: boolean;
+  /** The Run's status: a paused Run takes no completion until resumed. */
+  runStatus?: RunStatus;
   nodeName?: string | null;
   initialTerminalExpanded?: boolean;
   provisioningRepository?: string;
@@ -52,6 +55,7 @@ export default function NodeDetailPanel({
   node,
   runId,
   isArchived,
+  runStatus,
   nodeName,
   initialTerminalExpanded,
   provisioningRepository = "",
@@ -162,12 +166,14 @@ export default function NodeDetailPanel({
       stop: mayOnNode("stop"),
       retry: mayOnNode("retry"),
       start: mayOnNode("start"),
-      markComplete: mayOnNode("mark_node_done"),
+      // The command field offers it on the same condition (paletteItems.ts).
+      markComplete:
+        mayOnNode("mark_node_done") && isMarkCompletable(node.status, runStatus ?? (isArchived ? "archived" : "running")),
       release: mayOnNode("release_completion"),
       kill: mayOnNode("kill_node"),
       restart: mayOnNode("restart_node"),
     }),
-    [mayOnNode],
+    [mayOnNode, node.status, runStatus, isArchived],
   );
 
   const sessionName = `pdo-${runId}-${node.node_id}-iter-${selectedIter}`;

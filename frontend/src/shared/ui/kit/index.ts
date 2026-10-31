@@ -37,6 +37,6 @@ export { ConfirmDialog, Modal } from "./Modal";
 export type { ConfirmDialogProps, ModalProps } from "./Modal";
 export { StatusIcon } from "./tone";
 export type { StatusIconProps } from "./tone";
-export type { Icon, StatusTone, Tone } from "./tones";
+export type { Icon, StatusShape, StatusTone, Tone } from "./tones";
 export { toast } from "./toast";
 export type { ToastKind, ToastOptions } from "./toast";

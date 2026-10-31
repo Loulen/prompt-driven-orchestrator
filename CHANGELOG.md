@@ -47,6 +47,24 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   second sheet behind its card and, on a Run, "N runs" with the Orchestration tab's pills; the
   row opens that tab.
 - The whole bar over a child run leads back to the parent run, not only its arrow.
+- Edges: an automatic edge goes around the cards between its ends, including one leaving a loop
+  towards a card beyond the next, and a condition label slides along its edge instead of shrinking.
+
+### Command field
+
+- **Search results with a fixed status shape**: a Source de recherche result's `status` takes an
+  optional `shape` (`todo`, `doing`, `review`, `done`), drawn in the tone's colour and never
+  spinning, so an entity that is no Run no longer spins like a running Run. `StatusIcon` of
+  `@pdo/extension-ui` takes the same `shape`.
+- **Counter on a global Action**: `UiContribution::with_counter` now also applies to an Action of
+  `palette`; its row shows the `PageCounter` the path answers, nothing at 0.
+- **Group rank**: `UiContribution::with_rank(n)` on a `palette` contribution orders the extensions'
+  groups by rank, lowest first, then those without one, each in registration order.
+- A long result title ends in an ellipsis and its facts stay visible.
+- **Mark complete** is offered in the command field exactly where the node inspector offers it:
+  on a running, awaiting or failed node of a Run that is neither paused nor archived. It is no
+  longer offered on an interrupted or stale node, nor in a paused Run, which the daemon refused
+  to complete.
 
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 

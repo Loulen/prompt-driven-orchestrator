@@ -130,15 +130,24 @@
     flex: 1 1 0;
     min-width: 4px;
   }
+  /* The facts stay whole beside a long title: the title gives way first. */
   .sh-pal__meta {
-    flex: 0 1000 auto;
-    min-width: 0;
+    flex: none;
+    max-width: 45%;
     overflow: hidden;
     color: var(--text-3);
     font-size: var(--fs-sm);
     text-align: right;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* A global Action's counter: a mono chip, tinted while something waits. */
+  .sh-pal__count {
+    height: 16px;
+  }
+  .sh-pal__count[data-accent] {
+    background: color-mix(in oklab, var(--color-st-await) 16%, transparent);
+    color: var(--color-st-await);
   }
   .sh-pal__check {
     flex: none;

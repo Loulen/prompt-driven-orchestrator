@@ -15,6 +15,12 @@ export type StatusTone = "running" | "awaiting" | "done" | "blocked" | "failed" 
 /** A status tone, or none. */
 export type Tone = "neutral" | StatusTone;
 
+/**
+ * The fixed shape of a status that is no Run's (API 0.20): to do, in progress,
+ * in review, done. Drawn in its tone's colour, it never spins.
+ */
+export type StatusShape = "todo" | "doing" | "review" | "done";
+
 export const TONE_VAR: Record<StatusTone, string> = {
   running: "var(--color-st-running)",
   awaiting: "var(--color-st-await)",

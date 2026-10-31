@@ -17,7 +17,21 @@ const labels = (selection: PaletteSelection | null, refused: string[] = []) =>
 describe("the selection's gestures", () => {
   it("offers a node waiting for a person Mark complete and Stop, then its Run's", () => {
     expect(labels(node("awaiting_user"))).toEqual(["Mark complete", "Stop", "Pause", "Copy run id"]);
-    expect(labels(node("failed"))).toEqual(["Retry", "Pause", "Copy run id"]);
+    expect(labels(node("failed"))).toEqual(["Mark complete", "Retry", "Pause", "Copy run id"]);
+  });
+
+  it("offers Mark complete exactly where the Inspector does: on what the daemon completes", () => {
+    const marks = (status: string) => labels(node(status)).includes("Mark complete");
+    expect(["awaiting_user", "running", "failed"].filter(marks)).toEqual(["awaiting_user", "running", "failed"]);
+    // An interrupted node re-drives on Reopen, a stale one on Retry: the daemon refuses to complete them.
+    const never = ["interrupted", "stale", "stopped", "completed", "skipped", "pending", "waiting"];
+    expect(never.filter(marks)).toEqual([]);
+    // A settled Run is reopened to complete the node; a paused or archived one is not.
+    const inRun = (status: string) => ({ ...node("failed"), run: { id: "r1", status } }) as PaletteSelection;
+    expect(labels(inRun("failed"))).toContain("Mark complete");
+    expect(labels(inRun("halted"))).toContain("Mark complete");
+    expect(labels(inRun("paused"))).not.toContain("Mark complete");
+    expect(labels(inRun("archived"))).not.toContain("Mark complete");
   });
 
   it("leaves out what the caller may not do", () => {

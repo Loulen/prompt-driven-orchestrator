@@ -1,6 +1,24 @@
 import type { NodeState } from "../../shared/generated/NodeState";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
+import type { RunStatus } from "../../shared/generated/RunStatus";
 import type { MarkVerdict } from "../store/useNodeRun";
+
+/**
+ * The statuses « Mark complete » is offered on, in the Inspector as in the
+ * command field: those the daemon completes (its transition guard takes a
+ * `running`, `awaiting_user` or `failed` iteration). An `interrupted` node
+ * re-drives on Reopen, a `stale` one (historical Runs) on Retry: the daemon
+ * refuses to complete either.
+ */
+const MARK_COMPLETABLE: ReadonlySet<NodeStatus> = new Set(["awaiting_user", "running", "failed"]);
+
+/**
+ * Whether « Mark complete » is offered on a node of this status, in a Run of
+ * this status: the daemon reopens a settled Run to complete it, never a
+ * paused one (resumed first) nor an archived one.
+ */
+export const isMarkCompletable = (status: NodeStatus, run: RunStatus): boolean =>
+  MARK_COMPLETABLE.has(status) && run !== "paused" && run !== "archived";
 
 /**
  * Three tones, because the three answers demand three different reactions:

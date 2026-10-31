@@ -14,13 +14,11 @@ import RunShellModal from "../../session/components/RunShellModal";
 import RetryAllConfirmModal from "../../run/components/runsList/RetryAllConfirmModal";
 import { useCanvasNodePlay } from "../store/useCanvasNodePlay";
 import { useCanvasChildRuns } from "../store/useCanvasChildRuns";
+import { useCanvasCompaction } from "../store/useCanvasCompaction";
 import { buildNoteNodes, deriveEditNodes } from "./editNodeDerivation";
 import { buildLoopRegionNodes } from "./loopRegionDerivation";
 import { deriveEditEdges, edgeIndexFromId } from "./editEdgeDerivation";
 import { useEditStore } from "../store/editStore";
-import { isRunTabLocked } from "../store/editState";
-import { compactCanvas } from "../model/compactCanvas";
-import { useCompactNodes } from "../../hooks/useCompactNodes";
 import { ViewportWiringGridOverlay } from "./WiringGridOverlay";
 import { LoopRegionNode } from "./LoopRegionNode";
 import { NoteNode } from "./NoteNode";
@@ -182,34 +180,9 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         : [],
     [pipeline, activeRunState, agentProfileIds, agentProfiles, withPlay, withChildren],
   );
-  // « Compact nodes »: every Run canvas that is not being edited draws its
-  // cards on one line, from a shifted copy of the pipeline; nothing is written.
-  // A Run edited for itself, like the editor, keeps the detailed cards: a drag
-  // there writes positions.
-  const { compactNodes } = useCompactNodes();
-  const compactOn = compactNodes && isRunTabLocked(tab);
-  // The orchestrators with child runs carry « N runs » on both sizes: their
-  // ids as one string, so a new array with the same content changes nothing.
-  const withRuns = useMemo(
-    () => JSON.stringify(cards.filter((c) => (c.data as { childCounts?: unknown }).childCounts != null).map((c) => c.id)),
-    [cards],
-  );
-  const compaction = useMemo(
-    () => (compactOn && pipeline ? compactCanvas(pipeline, { withRuns: new Set(JSON.parse(withRuns) as string[]) }) : null),
-    [compactOn, pipeline, withRuns],
-  );
-  const shown = compaction?.pipeline ?? pipeline;
+  const { shown, cards: compactCards, placed } = useCanvasCompaction(tab, pipeline, cards);
   const derivedNodes = useMemo(() => {
     if (!shown) return [];
-    const views = new Map(compaction?.pipeline.nodes.map((n) => [n.id, n.view]));
-    const placed = compaction
-      ? cards.map((card) => {
-          const box = compaction.cards[card.id];
-          const view = views.get(card.id);
-          if (box) return { ...card, position: { x: box.x, y: box.y }, data: { ...card.data, compact: true } };
-          return view ? { ...card, position: { x: view.x, y: view.y } } : card;
-        })
-      : cards;
     // Bounded loop regions (ADR-0011 / #148) render as translucent boxes BEHIND
     // their member cards. Each multi-member region is backed by a decorative,
     // non-interactive `loopRegion` node so it tracks pan/zoom with the graph;
@@ -217,13 +190,13 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     // region nodes are prepended, pinned to a low zIndex behind the member
     // cards, and given `pointer-events: none` so edges crossing the box stay
     // clickable (#167).
-    const regionNodes: Node[] = buildLoopRegionNodes(shown, activeRunState, compaction?.cards);
+    const regionNodes: Node[] = buildLoopRegionNodes(shown, activeRunState, compactCards);
     // Inert canvas notes (#307 / ADR-0018) render as draggable/selectable cards
     // with no handle. They carry no run status, so they're derived from the
     // pipeline alone (independent of run state).
     const noteNodes: Node[] = buildNoteNodes(shown);
     return [...regionNodes, ...placed, ...noteNodes];
-  }, [shown, compaction, cards, activeRunState]);
+  }, [shown, compactCards, placed, activeRunState]);
   const derivedEdges = useMemo(
     () => (shown ? deriveEditEdges(shown) : []),
     [shown],

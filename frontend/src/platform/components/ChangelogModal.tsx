@@ -22,8 +22,9 @@ import { Button, IconButton } from "../../shared/ui/kit";
  *
  * Header: `v<installed> → v<latest> · N version(s) behind` (latest in amber, the pill's
  * token) — or a green `up to date` pill — or the bare version when the latest is unknown.
- * Banner: grey for up to date (« Latest release… ») and for an update check that is
- * off or has no release source (the embedded changelog is then all there is), amber
+ * Banner: grey for up to date (« Latest release… »), for an update check that is off
+ * (« Update check off ») and for a build with no release source (« No release
+ * source »): the embedded changelog is then all there is. Amber
  * when the body is the embedded changelog as a FALLBACK (source unreachable), red
  * when the endpoint itself failed. The words « up to date » appear here and in Settings only —
  * never in the bar (#697 rule).
@@ -78,6 +79,8 @@ export default function ChangelogModal({
   // the check off, or no release source declared, the embedded changelog is all
   // there is to show.
   const checkActive = update == null || (update.check_enabled && update.source_url != null);
+  // Which of the two: Settings shows the check as on even when the build has no source.
+  const checkIdle = update != null && update.check_enabled ? "No release source" : "Update check off";
 
   return (
     <MarkdownArtifactModal
@@ -125,7 +128,7 @@ export default function ChangelogModal({
         ) : changelog?.fallback_reason && !checkActive ? (
           <div className="art__banner" data-testid="changelog-check-off" title={changelog.fallback_reason}>
             <BellOff size={13} strokeWidth={1.5} aria-hidden />
-            <span className="truncate">Update check off · embedded changelog</span>
+            <span className="truncate">{checkIdle} · embedded changelog</span>
           </div>
         ) : changelog?.fallback_reason ? (
           <div

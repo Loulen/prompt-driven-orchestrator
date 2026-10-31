@@ -205,7 +205,9 @@ describe("ChangelogModal (#698)", () => {
         onOpenVersionSettings={() => {}}
       />,
     );
-    expect(await screen.findByTestId("changelog-check-off")).toHaveTextContent("embedded changelog");
+    // The check itself is on (Settings says so): the banner names the missing source.
+    expect(await screen.findByTestId("changelog-check-off")).toHaveTextContent("No release source · embedded changelog");
+    expect(screen.queryByText(/Update check off/)).not.toBeInTheDocument();
     expect(screen.queryByTestId("changelog-fallback")).not.toBeInTheDocument();
   });
 

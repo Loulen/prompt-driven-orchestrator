@@ -98,4 +98,15 @@ test("Stats › Cost at 1024 px and 120 %: the Name column stays readable, the m
   expect(await scroller.evaluate((el) => getComputedStyle(el).overflowX)).toBe("auto");
   expect(await scroller.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
   await expect(page.getByTestId("stats-detail-row").first()).toContainText("implementer-with-a-long-node-name");
+  // Columns remain to the right: the edge fades until the table is scrolled to its end.
+  const wrap = page.getByTestId("stats-cost-scroll");
+  await expect(wrap).toHaveAttribute("data-more", "true");
+  // Scrolled to the last harness, the Name column is still where it was.
+  const before = await name.evaluate((el) => el.getBoundingClientRect().left);
+  await scroller.evaluate((el) => el.scrollTo({ left: el.scrollWidth }));
+  await expect.poll(() => scroller.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+  await expect(wrap).toHaveAttribute("data-more", "false");
+  expect(await name.evaluate((el) => el.getBoundingClientRect().left)).toBeCloseTo(before, 0);
+  const firstCell = page.getByTestId("stats-detail-row").first().locator("td").first();
+  expect(await firstCell.evaluate((el) => el.getBoundingClientRect().left)).toBeCloseTo(before, 0);
 });

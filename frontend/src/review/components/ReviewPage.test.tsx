@@ -1076,6 +1076,10 @@ describe("ReviewPage — reported / outdated comments (#752)", () => {
     const row = await screen.findByTestId("review-comment-row");
     expect(row).toHaveAttribute("data-other-pair", "true");
     expect(row).toHaveTextContent("implement · iter 1 · before → implement · iter 1 · after");
+    // The anchor splits like a folded thread: the file name truncates, the line stays.
+    const anchor = within(row).getByTestId("review-comment-row-anchor");
+    expect(anchor).toHaveAttribute("title", "elsewhere.ts:R1");
+    expect(Array.from(anchor.children).map((c) => c.textContent)).toEqual(["elsewhere.ts", ":R1"]);
     // Switching the destination asks the daemon again for that pair.
     fireEvent.click(row);
     await waitFor(() => expect(mockedList).toHaveBeenCalledWith(RUN_ID, { from: "node:impl:1:before", to: "node:impl:1:after" }));

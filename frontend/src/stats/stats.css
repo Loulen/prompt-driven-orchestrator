@@ -895,6 +895,56 @@ button.sx-crumb:hover {
 .sx-table--cost {
   min-width: calc(12rem + 8rem + var(--sx-cols, 0) * 7rem);
 }
+/* Scrolled sideways, the Name column stays put; the row states paint over
+   an opaque surface so the columns sliding under it do not show through. */
+.sx-table--cost th:first-child,
+.sx-table--cost td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background-color: var(--surface-0);
+}
+.sx-table--cost tbody tr.sx-sub td:first-child {
+  background: linear-gradient(
+      color-mix(in oklab, var(--surface-1) 60%, transparent),
+      color-mix(in oklab, var(--surface-1) 60%, transparent)
+    )
+    var(--surface-0);
+}
+.sx-table--cost tbody tr:hover td:first-child {
+  background: linear-gradient(var(--hover), var(--hover)) var(--surface-0);
+}
+.sx-table--cost tbody tr[data-checked="true"] td:first-child {
+  background: linear-gradient(var(--selected), var(--selected)) var(--surface-0);
+}
+.sx-table--cost tbody tr[data-flash="true"] td:first-child {
+  animation-name: sx-flash-sticky;
+}
+@keyframes sx-flash-sticky {
+  from {
+    background: linear-gradient(
+        color-mix(in oklab, var(--primary) 22%, transparent),
+        color-mix(in oklab, var(--primary) 22%, transparent)
+      )
+      var(--surface-0);
+  }
+}
+/* Columns left to the right: a fade over the right edge until the table is
+   scrolled to its end. */
+.sx-hscroll-wrap {
+  position: relative;
+  min-width: 0;
+}
+.sx-hscroll-wrap[data-more="true"]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 2.5rem;
+  background: linear-gradient(to left, var(--surface-0), transparent);
+  pointer-events: none;
+}
 .sx-table--perf th:first-child {
   width: 28%;
 }

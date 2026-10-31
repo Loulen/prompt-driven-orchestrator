@@ -75,12 +75,18 @@ test("doc only adds nothing beyond the fast gate", () => {
   assert.deepEqual(p.uncovered, []);
 });
 
-test("a file a crate embeds tests that crate, even when it looks like doc", () => {
+test("a file a crate embeds runs that crate's tests alone, even when it looks like doc", () => {
   const p = plan(["CHANGELOG.md"], { embeds: { "CHANGELOG.md": ["pdo-platform"] } });
-  assert.deepEqual(names(p), ["nextest", "clippy"]);
-  assert.match(step(p, "nextest").command, /-p pdo-daemon -p pdo-platform --no-fail-fast/);
-  assert.match(step(p, "nextest").reason, /CHANGELOG\.md, embedded by pdo-platform/);
+  assert.deepEqual(names(p), ["nextest"]);
+  assert.match(step(p, "nextest").command, /cargo nextest run -p pdo-platform --no-fail-fast/);
+  assert.match(step(p, "nextest").reason, /pdo-platform embeds CHANGELOG\.md/);
   assert.deepEqual(p.docs, []);
+});
+
+test("an embedded file next to a changed crate: the crate's dependents, plus the embedding crate's tests", () => {
+  const p = plan(["crates/pdo-skill/src/a.rs", "CHANGELOG.md"], { embeds: { "CHANGELOG.md": ["pdo-platform"] } });
+  assert.match(step(p, "nextest").command, /-p pdo-daemon -p pdo-platform -p pdo-skill --no-fail-fast/);
+  assert.match(step(p, "clippy").command, /cargo clippy -p pdo-daemon -p pdo-skill --all-targets/);
 });
 
 test("a workspace manifest runs the whole workspace", () => {

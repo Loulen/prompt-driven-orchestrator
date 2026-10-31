@@ -48,6 +48,21 @@ test("a step the gate cannot replay faithfully is refused, not guessed", () => {
   assert.throws(() => ciRunSteps(env), /env/);
 });
 
+test("a `run:` under a named step is read; a condition or a job default on it is refused", () => {
+  const named = "jobs:\n  rust:\n    steps:\n      - name: Test\n        run: cargo test\n      - run: cargo fmt --check\n";
+  assert.deepEqual(ciRunSteps(named).map((s) => s.command), ["cargo test", "cargo fmt --check"]);
+  const cond = "jobs:\n  rust:\n    steps:\n      - name: Test\n        if: github.event_name == 'push'\n        run: cargo test\n";
+  assert.throws(() => ciRunSteps(cond), /`cargo test` sets if/);
+  const after = "jobs:\n  rust:\n    steps:\n      - run: cargo test\n        continue-on-error: true\n";
+  assert.throws(() => ciRunSteps(after), /continue-on-error/);
+  const defaults = "jobs:\n  rust:\n    defaults:\n      run:\n        working-directory: x\n    steps:\n      - run: cargo test\n";
+  assert.throws(() => ciRunSteps(defaults), /defaults/);
+  const jobEnv = "jobs:\n  rust:\n    env:\n      A: b\n    steps:\n      - run: cargo test\n";
+  assert.throws(() => ciRunSteps(jobEnv), /job-level `env:`/);
+  const usesWith = "jobs:\n  rust:\n    steps:\n      - uses: a/b@v1\n        with:\n          x: 1\n      - run: cargo test\n";
+  assert.deepEqual(ciRunSteps(usesWith).map((s) => s.command), ["cargo test"]);
+});
+
 test("the gate runs each CI step once, nextest without fail-fast, then vitest and the script tests", () => {
   const steps = gateSteps(ciRunSteps(WORKFLOW, { skipJobs: ["e2e"] }));
   assert.deepEqual(

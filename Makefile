@@ -109,10 +109,10 @@ fast:
 
 # The scoped gate: `make fast`, then the plan computed from the diff since the
 # merge-base with the branch this one started from (BASE= to change it), printed
-# before it runs (DRY_RUN=1: the plan only): frontend -> typecheck, lint, vitest; a crate -> nextest and
+# before it runs (DRY_RUN=1: the plan only, without make fast): frontend -> typecheck, lint, vitest; a crate -> nextest and
 # clippy on it and its dependents; a type exported to the front -> types-check;
 # doc only -> nothing more. scripts/gates/lib/plan.mjs, tested by `node --test`.
-scoped: fast
+scoped: $(if $(filter 1,$(DRY_RUN)),,fast)
 	@BASE=$(BASE) DRY_RUN=$(DRY_RUN) $(NO_PDO_ENV) node scripts/gates/scoped.mjs
 
 # The full gate: every step .github/workflows/ci.yml declares, read from it, the

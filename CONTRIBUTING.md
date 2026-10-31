@@ -30,8 +30,9 @@ make gate         # once, before pushing: every CI step but the E2E, plus vitest
 branch you started from, and prints its plan, each step with its reason, before running it. A
 frontend change runs typecheck, lint and vitest; a crate runs nextest and clippy on that crate and
 every crate depending on it; a type exported to the front (ts-rs) runs `types-check`; a changed
-script runs its `node --test` suite; doc alone runs nothing more. `BASE=<ref>` diffs against
-another branch, `DRY_RUN=1` prints the plan only.
+script runs its `node --test` suite; a file a crate embeds (the CHANGELOG) runs that crate's
+tests; doc alone runs nothing more. `BASE=<ref>` diffs against another branch, `DRY_RUN=1` prints
+the plan only.
 
 `make gate` reads its steps from `.github/workflows/ci.yml`, so it follows the CI, and leaves out
 the E2E job: `make e2e` runs once per story, before it merges into `main`. Every step runs even

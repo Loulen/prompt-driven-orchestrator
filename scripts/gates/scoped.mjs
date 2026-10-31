@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listed } from "./lib/commands.mjs";
 import { pickBase, planScoped } from "./lib/plan.mjs";
 import { runSteps, shellExec } from "./lib/run.mjs";
 
@@ -26,7 +27,6 @@ const tryGit = (...args) => {
     return null;
   }
 };
-const some = (files) => (files.length > 10 ? `${files.slice(0, 10).join(", ")} (+${files.length - 10} more)` : files.join(", "));
 const lines = (text) => (text ? text.split("\n").filter(Boolean) : []);
 
 /** `{ ref, why }`: BASE=, else the upstream when it is another branch, else the nearest local branch. */
@@ -120,8 +120,8 @@ async function main() {
   });
 
   console.log(`\n==> Scoped gate: ${changed.length} changed file(s) since ${base.ref} (merge-base ${mergeBase.slice(0, 10)}), ${base.why}`);
-  if (plan.docs.length) console.log(`    doc only, nothing beyond the fast gate: ${some(plan.docs)}`);
-  if (plan.uncovered.length) console.log(`    no scoped step (make gate covers them): ${some(plan.uncovered)}`);
+  if (plan.docs.length) console.log(`    doc only, nothing beyond the fast gate: ${listed(plan.docs, 10)}`);
+  if (plan.uncovered.length) console.log(`    no scoped step (make gate covers them): ${listed(plan.uncovered, 10)}`);
   if (!plan.steps.length) {
     console.log("    plan: nothing beyond the fast gate");
     return 0;

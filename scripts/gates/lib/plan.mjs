@@ -3,12 +3,10 @@
 // Pure: what it needs from the repository (crate graph, embedded files, files
 // declaring a TS type, script suites) is handed in by scoped.mjs.
 
+import { VITEST, listed, nodeTests } from "./commands.mjs";
+
 const GENERATED_TS = "frontend/src/shared/generated/";
 const WORKSPACE_FILES = new Set(["Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml"]);
-const SHOWN = 3;
-
-const listed = (files) =>
-  files.length > SHOWN ? `${files.slice(0, SHOWN).join(", ")} (+${files.length - SHOWN} more)` : files.join(", ");
 
 const isDoc = (file) => file.endsWith(".md") || file.startsWith("docs/");
 
@@ -50,6 +48,7 @@ export function planScoped({ changed, crates, embeds = {}, typeFiles = [], scrip
   const generated = [];
   const types = [];
   const rustRoots = new Map(); // crate -> why
+  const embedded = new Map(); // crate -> the files outside it it embeds
   const workspace = [];
   const scripts = new Map(); // suite -> files
   const docs = [];
@@ -63,7 +62,7 @@ export function planScoped({ changed, crates, embeds = {}, typeFiles = [], scrip
     const crate = crateOf(file, crates);
     if (WORKSPACE_FILES.has(file) || file.startsWith(".cargo/")) workspace.push(file);
     else if (crate) touchCrate(crate, file);
-    else if (embeds[file]?.length) for (const c of embeds[file]) touchCrate(c, `${file}, embedded by ${c}`);
+    else if (embeds[file]?.length) for (const c of embeds[file]) embedded.set(c, [...(embedded.get(c) ?? []), file]);
     else if (file.startsWith("frontend/")) {
       front.push(file);
       if (file.startsWith(GENERATED_TS)) generated.push(file);
@@ -83,7 +82,7 @@ export function planScoped({ changed, crates, embeds = {}, typeFiles = [], scrip
     }
     steps.push({ name: "typecheck", command: "cd frontend && pnpm run typecheck", reason: why });
     steps.push({ name: "lint", command: "cd frontend && pnpm run lint", reason: why });
-    steps.push({ name: "vitest", command: "cd frontend && pnpm test", reason: why });
+    steps.push({ name: "vitest", command: VITEST, reason: why });
   }
   if (types.length || generated.length) {
     const why = [
@@ -96,18 +95,26 @@ export function planScoped({ changed, crates, embeds = {}, typeFiles = [], scrip
     const why = `workspace manifest changed: ${listed(workspace)}`;
     steps.push({ name: "nextest", command: "cargo nextest run --workspace --no-fail-fast", reason: why });
     steps.push({ name: "clippy", command: "cargo clippy --workspace --all-targets -- -D warnings", reason: why });
-  } else if (rustRoots.size) {
+  } else if (rustRoots.size || embedded.size) {
+    // A file a crate embeds (a CHANGELOG, a pipeline, a Dockerfile) is data to that crate's
+    // tests: they run, its dependents' do not, and clippy has no new code to read.
     const roots = [...rustRoots.keys()].sort();
-    const packages = rdeps(roots, crates);
-    const flags = packages.map((p) => `-p ${p}`).join(" ");
-    const why = `${roots.map((r) => `rdeps(${r}) from ${listed(rustRoots.get(r))}`).join("; ")} -> ${packages.join(", ")}`;
-    steps.push({ name: "nextest", command: `cargo nextest run ${flags} --no-fail-fast`, reason: why });
-    steps.push({ name: "clippy", command: `cargo clippy ${flags} --all-targets -- -D warnings`, reason: why });
+    const linted = rdeps(roots, crates);
+    const tested = [...new Set([...linted, ...embedded.keys()])].sort();
+    const flags = (packages) => packages.map((p) => `-p ${p}`).join(" ");
+    const why = [
+      ...roots.map((r) => `rdeps(${r}) from ${listed(rustRoots.get(r))}`),
+      ...[...embedded.keys()].sort().map((c) => `${c} embeds ${listed(embedded.get(c))}`),
+    ].join("; ");
+    steps.push({ name: "nextest", command: `cargo nextest run ${flags(tested)} --no-fail-fast`, reason: `${why} -> ${tested.join(", ")}` });
+    if (linted.length) {
+      steps.push({ name: "clippy", command: `cargo clippy ${flags(linted)} --all-targets -- -D warnings`, reason: `${why} -> ${linted.join(", ")}` });
+    }
   }
   for (const [suite, files] of scripts) {
     steps.push({
       name: `${suite} tests`,
-      command: `node --disable-warning=ExperimentalWarning --test '${suite}/test/*.test.mjs'`,
+      command: nodeTests(`${suite}/test/*.test.mjs`),
       reason: `scripts changed: ${listed(files)}`,
     });
   }

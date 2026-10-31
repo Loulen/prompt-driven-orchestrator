@@ -96,6 +96,10 @@ function DarkModeToggle() {
     <IconButton
       icon={dark ? Sun : Moon}
       label={dark ? "Dark mode off" : "Dark mode on"}
+      // A toggle: its state on `aria-pressed`, under a name that does not move.
+      aria-label="Dark mode"
+      pressed={dark}
+      className="sh-tb__mode"
       onClick={toggleMode}
       data-testid="dark-mode-toggle"
     />

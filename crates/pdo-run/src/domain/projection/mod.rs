@@ -210,6 +210,35 @@ mod tests {
     /// The `Option` on `sandbox_entries` is load-bearing: `Some(vec![])` is a legitimate
     /// resolution — it IS `minimal` — while `None` means "no key, a pre-profiles
     /// payload". Confusing the two would send `minimal` Runs down the re-resolve arm.
+    /// The values the launch gave the variables are what the Run received:
+    /// the Run's inspector shows them, not the pipeline's defaults.
+    #[test]
+    fn run_started_projects_the_variables_the_run_received() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "variables": { "max_rounds": 5, "label": "nightly", "strict": true },
+            }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.variables["max_rounds"], serde_json::json!(5));
+        assert_eq!(state.variables["label"], serde_json::json!("nightly"));
+        assert_eq!(state.variables["strict"], serde_json::json!(true));
+        let none = project(&[make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p" }),
+        )])
+        .unwrap();
+        assert!(none.variables.is_empty());
+        assert!(serde_json::to_value(&none)
+            .unwrap()
+            .get("variables")
+            .is_none());
+    }
+
     #[test]
     fn an_empty_frozen_list_projects_as_some_not_none() {
         let events = vec![make_event_with_payload(

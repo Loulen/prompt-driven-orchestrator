@@ -4,6 +4,7 @@ import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import { EmptyState, IconButton, KeyValue } from "../../shared/ui/kit";
 import type { EdgeTriggerStatus } from "../model/pipeline";
 import { FormRow } from "./InspectorPrimitives";
+import IterMark from "../../run/components/IterMark";
 
 /**
  * The Outputs section (#843): one checkbox per output the source node declares,
@@ -122,9 +123,13 @@ export function TriggerStatusView({ trigger }: { trigger: EdgeTriggerStatus | nu
                 {
                   k: "Evaluated",
                   mono: true,
-                  v: [trigger.iter != null ? `iter ${trigger.iter}` : "", trigger.evaluated_at ? formatTime(trigger.evaluated_at) : ""]
-                    .filter(Boolean)
-                    .join(" · "),
+                  v: (
+                    <>
+                      {trigger.iter != null && <IterMark iter={trigger.iter} />}
+                      {trigger.iter != null && trigger.evaluated_at ? " · " : ""}
+                      {trigger.evaluated_at ? formatTime(trigger.evaluated_at) : ""}
+                    </>
+                  ),
                 },
               ]
             : []),

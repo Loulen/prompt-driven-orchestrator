@@ -27,6 +27,7 @@ impl RunState {
             pipeline_name,
             name: None,
             input: None,
+            variables: HashMap::new(),
             started_at: None,
             completed_at: None,
             failure_reason: None,

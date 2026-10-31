@@ -5,7 +5,14 @@ import "./inspect.css";
 import { useEditStore } from "../store/editStore";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EdgeTriggerStatus } from "../model/pipeline";
-import { whenToRows, rowsToWhen, requalifyWhen, type ConditionRow } from "../../lib/whenClause";
+import {
+  whenToRows,
+  rowsToWhen,
+  requalifyWhen,
+  conditionKey,
+  inShownOrder,
+  type ConditionRow,
+} from "../../lib/whenClause";
 import {
   carriedPorts,
   declaredOutputs,
@@ -25,6 +32,13 @@ import {
 import { resolveOutputLabels } from "../../lib/edgeLabels";
 import { OutputsSection, RoutingSection, TriggerStatusView } from "./EdgeDetailSections";
 import { ConditionRowEditor, ElseToggle, Switch } from "./EdgeWhenControls";
+
+/**
+ * The order each edge's conditions were last shown in, by tab and edge: the
+ * clause cannot keep it (it groups the rows by field), and a condition added
+ * goes last. Lives as long as the page.
+ */
+const shownOrders = new Map<string, string[]>();
 
 interface Props {
   /**
@@ -57,7 +71,8 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
   const ports = edge ? carriedPorts(edge.source) : [];
   const declared = edge ? declaredOutputs(tab!.pipeline, edge) : [];
 
-  const rows = whenToRows(edge?.when, ports);
+  const orderKey = tab && edge ? `${tab.id}\u0000${edge.source.node}\u0000${edge.target.node}.${edge.target.port}` : "";
+  const rows = inShownOrder(whenToRows(edge?.when, ports), shownOrders.get(orderKey) ?? []);
   // An `else: true` edge is a fallback (fires iff no sibling matched). It and a
   // `when:` predicate are mutually exclusive (ADR-0011), so the panel mirrors the
   // canvas precedence (`editNodeDerivation.ts`): when `else` is set, the edge is
@@ -67,12 +82,13 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
   const commitRows = useCallback(
     (next: ConditionRow[], ports: string[]) => {
       if (edgeIndex == null) return;
+      shownOrders.set(orderKey, next.map(conditionKey));
       const when = rowsToWhen(next, ports);
       // `when:` and `else:` are mutually exclusive (ADR-0011). Authoring a
       // condition on a fallback edge converts it to a guarded edge.
       updateEdge(edgeIndex, when ? { when, else: false } : { when });
     },
-    [edgeIndex, updateEdge],
+    [edgeIndex, orderKey, updateEdge],
   );
 
   const handleToggleElse = useCallback(

@@ -100,6 +100,22 @@ describe("VersionsTab — a Replace", () => {
   });
 });
 
+describe("VersionsTab — ages", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("follows the clock: a version saved now reads « 2m » two minutes later", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: new Date("2026-10-14T10:00:10Z") });
+    vi.mocked(fetchPipelineVersions).mockResolvedValue([version(1, "v1")]);
+    render(<VersionsTab pipelineId="flow" />);
+    const row = await screen.findByTestId("version-row-1");
+    expect(row.querySelector(".pi-vrow__ago")).toHaveTextContent("now");
+    await act(async () => {
+      vi.advanceTimersByTime(120_000);
+    });
+    expect(row.querySelector(".pi-vrow__ago")).toHaveTextContent("2m");
+  });
+});
+
 describe("VersionsTab — states", () => {
   it("says it loads, then offers a retry when the history does not come", async () => {
     vi.mocked(fetchPipelineVersions).mockRejectedValueOnce(new Error("boom"));

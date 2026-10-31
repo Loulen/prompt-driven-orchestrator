@@ -13,9 +13,10 @@
  * Before 2.68 `pdo.ui.theme` held the luminosity (`light`, `dark` or `system`).
  * Such a value is migrated once: `light` and `dark` become the mode, `system`
  * the mode the operating system asks for at the migration; the Theme is
- * Acogni. The shared theme script (`public/shared/theme.js`) applies the same
- * rule before the first paint, on every page of the daemon;
- * `noFlashTheme.test.ts` holds the two together.
+ * Acogni. Any other unknown value is rewritten as the default. The shared
+ * theme script (`public/shared/theme.js`) applies the same rule before the
+ * first paint, on every page of the daemon; `noFlashTheme.test.ts` holds the
+ * two together.
  */
 
 export const THEME_STORAGE_KEY = "pdo.ui.theme";
@@ -68,8 +69,9 @@ export function systemPrefersDark(): boolean {
 
 /**
  * The stored Theme and mode; an absent, unknown or unreadable value gives the
- * default. A value written before 2.68 is migrated and the result stored, so
- * a `system` resolves once, against the OS of the moment (`systemDark`).
+ * default, and an unknown one is rewritten as it. A value written before 2.68
+ * is migrated and the result stored, so a `system` resolves once, against the
+ * OS of the moment (`systemDark`).
  */
 export function loadAppearance(systemDark: boolean = systemPrefersDark()): Appearance {
   const stored = read(THEME_STORAGE_KEY);
@@ -79,11 +81,12 @@ export function loadAppearance(systemDark: boolean = systemPrefersDark()): Appea
     write(MODE_STORAGE_KEY, mode);
     return { theme: DEFAULT_APPEARANCE.theme, mode };
   }
-  const mode = read(MODE_STORAGE_KEY);
-  return {
-    theme: isTheme(stored) ? stored : DEFAULT_APPEARANCE.theme,
-    mode: mode === "light" || mode === "dark" ? mode : DEFAULT_APPEARANCE.mode,
-  };
+  const storedMode = read(MODE_STORAGE_KEY);
+  const theme = isTheme(stored) ? stored : DEFAULT_APPEARANCE.theme;
+  const mode = storedMode === "light" || storedMode === "dark" ? storedMode : DEFAULT_APPEARANCE.mode;
+  if (stored !== null && stored !== theme) write(THEME_STORAGE_KEY, theme);
+  if (storedMode !== null && storedMode !== mode) write(MODE_STORAGE_KEY, mode);
+  return { theme, mode };
 }
 
 export function saveTheme(theme: Theme): void {

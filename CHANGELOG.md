@@ -73,6 +73,20 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   longer offered on an interrupted or stale node, nor in a paused Run, which the daemon refused
   to complete.
 
+### Run inspector and pipeline editing
+
+- `GET /runs/{id}` carries **`variables`**: the values the launch gave the pipeline's variables
+  (absent when it gave none). The Variables section of a Run's Pipeline info shows the value the
+  Run received, the default only for a variable the launch left out.
+- The Run inspector names an iteration by the canvas card's iteration icon and its number
+  ("⇄ 2", "⇄ 3/3") in the node header and its picker, the Transcript bar, the enlarged terminal
+  and the groups of the Run search.
+- Back on a tab, the canvas and the inspector show the selection the tab had.
+- The conditions of an edge stay in the order they were added, a new one last, even on a field
+  another condition already reads.
+- The ages of the Versions list follow the clock; an output's or input's name truncated in the
+  inspector is whole in its tooltip.
+
 ### Top bar, full-window pages and shared module seams
 
 - A `topbar/end` contribution may be a **panel** (`UiContribution::panel`, `type: "panel"`):
@@ -89,6 +103,21 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   read-only state).
 - The import map resolves `yjs` to the front's own copy (`/shared/yjs.js`): a bundle that lists
   `yjs` as external loads no second copy.
+
+### Design system and Workbench
+
+- **`Segmented` takes `fill`** (`@pdo/extension-ui` 0.20): the control takes its row's width,
+  its items share it equally and a long label ends in an ellipsis. Without it, nothing changes.
+- **A tooltip waits for the pointer to move**: a surface that opens under a still pointer no
+  longer shows the tooltip of the control that lands there, and a focus given back by code (a
+  menu closed with Escape or picked from) no longer reopens one. Tab and the arrows still do.
+- The top bar's Dark mode toggle exposes its state (`aria-pressed`) under the stable name
+  "Dark mode".
+- An unknown value stored under `pdo.ui.theme` or `pdo.ui.mode` is rewritten as the default,
+  as a migrated one is.
+- A Workbench layout whose side panels were dragged to their maximum is restored as dragged,
+  the canvas keeping its pixels instead of growing back to a third of the window. A drag and a
+  restore both leave the canvas at least 5 % of the window.
 
 ### Stats, Review, What's new and the artifact viewer
 

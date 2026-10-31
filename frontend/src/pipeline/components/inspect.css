@@ -393,20 +393,9 @@
   .ei-agent__slot {
     display: flex;
   }
-  /* the three modes share the row's width, whatever it is */
-  .ei-agent > .d-seg {
-    display: flex;
-    width: 100%;
-  }
+  /* the three modes share the row's width (`fill`), whatever it is */
   .ei-agent > .d-seg > .d-seg__btn {
-    flex: 1 1 0;
-    justify-content: center;
-    min-width: 0;
     padding: 0 var(--g-2);
-  }
-  .ei-agent > .d-seg > .d-seg__btn > span {
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   /* a narrow pane: the agent takes the row's whole width, under its label */
   @container (max-width: 360px) {

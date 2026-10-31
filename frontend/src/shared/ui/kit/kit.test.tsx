@@ -201,6 +201,54 @@ describe("primitives", () => {
     await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   });
 
+  it("Tooltip waits for the pointer to move: a surface opened under a still pointer shows none", async () => {
+    render(<IconButton icon={Bell} label="Refresh" />);
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    // What the engine sends when a layout brings the control under the pointer: no move.
+    fireEvent.pointerOver(refresh);
+    await act(() => new Promise((r) => setTimeout(r, 500)));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // The pointer moves on it: the tooltip shows, and leaves with the pointer.
+    fireEvent.pointerMove(refresh);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Refresh");
+    fireEvent.pointerOut(refresh);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  });
+
+  it("Tooltip stays closed on the focus a menu gives back to its trigger, after Escape or a pick", async () => {
+    const user = userEvent.setup();
+    render(
+      <Menu
+        label="Environment"
+        trigger={({ toggle }) => <IconButton icon={Bell} label="More" onClick={toggle} />}
+        entries={[{ label: "Deploy" }, { label: "Roll back" }]}
+      />,
+    );
+    const more = screen.getByRole("button", { name: "More" });
+    await user.tab();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("More");
+    for (const close of ["{Escape}", "{Enter}"]) {
+      await user.keyboard("{Enter}");
+      await screen.findByRole("menu");
+      await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+      await user.keyboard(close);
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      expect(more).toHaveFocus();
+      await act(() => new Promise((r) => setTimeout(r, 500)));
+      expect(screen.queryByRole("tooltip"), close).toBeNull();
+    }
+    // A pick with the pointer gives the focus back the same way.
+    await user.keyboard("{Enter}");
+    await user.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Deploy" }));
+    expect(more).toHaveFocus();
+    await act(() => new Promise((r) => setTimeout(r, 500)));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // The keyboard moving on and back shows it again.
+    await user.tab({ shift: true });
+    await user.tab();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("More");
+  });
+
   it("Segmented is a radio group the arrow keys move through", async () => {
     const user = userEvent.setup();
     function Strategy() {
@@ -227,6 +275,27 @@ describe("primitives", () => {
     expect(within(group).getByRole("radio", { name: "Blue-green" })).toHaveFocus();
     await user.keyboard("{ArrowLeft}{ArrowLeft}");
     expect(within(group).getByRole("radio", { name: "Recreate" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("Segmented fills its line on request, its items sharing it and ending a long label in an ellipsis", () => {
+    const items = [
+      { value: "rolling", label: "Rolling" },
+      { value: "blue", label: "Blue-green ".repeat(20) },
+    ];
+    const { rerender } = render(<Segmented label="Strategy" value="rolling" onChange={() => {}} items={items} />);
+    const group = screen.getByRole("radiogroup", { name: "Strategy" });
+    expect(group).not.toHaveClass("d-seg--fill");
+    rerender(<Segmented label="Strategy" fill value="rolling" onChange={() => {}} items={items} />);
+    expect(group).toHaveClass("d-seg", "d-seg--fill");
+    // The full label stays reachable on the truncated item.
+    expect(within(group).getByRole("radio", { name: items[1].label.trim() })).toHaveAttribute("title", items[1].label);
+    const css = readFileSync(join(import.meta.dirname, "kit.css"), "utf8");
+    const rule = (sel: string) => new RegExp(`${sel.replace(/[.*>]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    expect(rule(".d-seg--fill")).toMatch(/display:\s*flex/);
+    expect(rule(".d-seg--fill")).toMatch(/width:\s*100%/);
+    expect(rule(".d-seg--fill > .d-seg__btn")).toMatch(/flex:\s*1 1 0/);
+    expect(rule(".d-seg--fill > .d-seg__btn")).toMatch(/min-width:\s*0/);
+    expect(rule(".d-seg--fill > .d-seg__btn > span")).toMatch(/text-overflow:\s*ellipsis/);
   });
 
   it("Switch and Checkbox toggle and carry their state", async () => {

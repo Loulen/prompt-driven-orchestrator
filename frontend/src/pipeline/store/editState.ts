@@ -20,7 +20,8 @@ import type { SaveAs } from "../api/versions";
 // Repositories sidebar for the active run tab (#465 slice 2, F1). It is set by
 // an explicit toggle (canvas toolbar) rather than a canvas click, and — unlike
 // `"none"` — it survives the App auto-snap, so the panel stays reachable while a
-// live run's node is running. Cleared to `"none"` on any tab switch.
+// live run's node is running. A tab switch brings back the selection the tab
+// had (`tabSelections`), `"none"` the first time.
 export type SelectionKind = "node" | "edge" | "region" | "note" | "run" | "none";
 
 export interface Selection {
@@ -207,6 +208,11 @@ export interface EditState {
   openTabs: OpenPipeline[];
   activeTabId: string | null;
   selection: Selection;
+  /**
+   * The selection each tab had when another one came to the front: back on
+   * the tab, the canvas and the inspector show it again, if it still holds.
+   */
+  tabSelections: Record<string, Selection>;
   scrollToPort: string | null;
   lastSavedAt: Record<string, number>;
   // Undo/redo history keyed by tabId (ADR-0014 / #226). Lazily initialized on

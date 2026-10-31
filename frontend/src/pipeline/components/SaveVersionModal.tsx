@@ -116,30 +116,29 @@ export default function SaveVersionModal({
       }
     >
       <div className="flex flex-col gap-2 text-sm" data-testid="save-version-body">
-        <div className="flex *:min-w-0 *:flex-1 [&_[role=radio]]:min-w-0 [&_[role=radio]]:flex-1 [&_[role=radio]]:justify-center [&_[role=radio]>span]:truncate">
-          <Segmented<SaveKind>
-            label="Save as"
-            value={kind}
-            onChange={setKind}
-            items={[
-              {
-                value: "version",
-                label: `New version v${n + 1}`,
-                title: "New version",
-              },
-              {
-                value: "keep",
-                label: `Keep v${n} apart`,
-                title: `New version, keep v${n} as a pipeline`,
-              },
-              {
-                value: "replace",
-                label: `Replace v${n}`,
-                title: `Replace v${n}`,
-              },
-            ]}
-          />
-        </div>
+        <Segmented<SaveKind>
+          label="Save as"
+          fill
+          value={kind}
+          onChange={setKind}
+          items={[
+            {
+              value: "version",
+              label: `New version v${n + 1}`,
+              title: "New version",
+            },
+            {
+              value: "keep",
+              label: `Keep v${n} apart`,
+              title: `New version, keep v${n} as a pipeline`,
+            },
+            {
+              value: "replace",
+              label: `Replace v${n}`,
+              title: `Replace v${n}`,
+            },
+          ]}
+        />
         <label className="grid grid-cols-[40px_minmax(0,1fr)] items-center gap-x-1.5">
           <span className="text-text-2">Title</span>
           <TextInput

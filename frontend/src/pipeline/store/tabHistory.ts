@@ -10,7 +10,7 @@ import { requalifyWhen, renameWhenPorts } from "../../lib/whenClause";
 import { isEmergentInputNode } from "../../lib/anchorSide";
 import { hasUnsavedWork, isTabLocked } from "./editState";
 import { noteDraftGesture } from "./draftGesture";
-import type { EditState, OpenPipeline, TabHistory } from "./editState";
+import type { EditState, OpenPipeline, Selection, TabHistory } from "./editState";
 
 export function mutateActiveTab(
   state: EditState,
@@ -109,9 +109,9 @@ export function droppedHistory(
 // REKEY (#774): the pipeline a tab was opened under changed identity (its file
 // stem moved with a visible-name rename). The tab survives — content, dirty
 // state and undo stack are the user's work, none of it belongs to the old
-// stem — but every id-keyed slot (openTabs, activeTabId, lastSavedAt, history)
-// must follow to the new id, or the next save/watcher event would operate on a
-// tab the store can no longer find.
+// stem — but every id-keyed slot (openTabs, activeTabId, lastSavedAt, history,
+// tabSelections) must follow to the new id, or the next save/watcher event
+// would operate on a tab the store can no longer find.
 export function rekeyTab(
   state: EditState,
   oldId: string,
@@ -132,7 +132,71 @@ export function rekeyTab(
     history[newId] = history[oldId];
     delete history[oldId];
   }
-  return { openTabs, activeTabId, lastSavedAt, history, lastRekey: { from: oldId, to: newId } };
+  const tabSelections = { ...state.tabSelections };
+  if (tabSelections[oldId]) {
+    tabSelections[newId] = tabSelections[oldId];
+    delete tabSelections[oldId];
+  }
+  return { openTabs, activeTabId, lastSavedAt, history, tabSelections, lastRekey: { from: oldId, to: newId } };
+}
+
+/**
+ * Bring the open tab `id` to the front: the tab left keeps its selection, and
+ * `id` gets back the one it had, unless it no longer holds (a node gone, an
+ * edge index past the end).
+ */
+export function switchedTab(state: EditState, id: string): Partial<EditState> {
+  const tabSelections = leftSelection(state);
+  if (id === state.activeTabId) return { selection: state.selection };
+  const tab = state.openTabs.find((t) => t.id === id);
+  const kept = tabSelections[id];
+  return {
+    activeTabId: id,
+    tabSelections,
+    selection: tab && kept && stillHolds(tab, kept) ? kept : { kind: "none", id: null },
+  };
+}
+
+/**
+ * The closed tabs forget their selection; when the active one closed, the tab
+ * `activeTabId` that takes its place gets back its own.
+ */
+export function afterClose(
+  state: EditState,
+  closed: string[],
+  openTabs: OpenPipeline[],
+  activeTabId: string | null,
+): Partial<EditState> {
+  const tabSelections = { ...state.tabSelections };
+  for (const id of closed) delete tabSelections[id];
+  if (activeTabId == null || activeTabId === state.activeTabId) return { tabSelections };
+  const tab = openTabs.find((t) => t.id === activeTabId);
+  const kept = tabSelections[activeTabId];
+  return { tabSelections, ...(tab && kept && stillHolds(tab, kept) ? { selection: kept } : {}) };
+}
+
+/** The selections by tab, the active tab's as it is now. */
+function leftSelection(state: EditState): Record<string, Selection> {
+  const kept = { ...state.tabSelections };
+  if (state.activeTabId != null) kept[state.activeTabId] = state.selection;
+  return kept;
+}
+
+function stillHolds(tab: OpenPipeline, selection: Selection): boolean {
+  switch (selection.kind) {
+    case "node":
+      return tab.pipeline.nodes.some((n) => n.id === selection.id);
+    case "edge":
+      return selection.edgeIndex != null && selection.edgeIndex < tab.pipeline.edges.length;
+    case "run":
+      return tab.runId != null;
+    case "region":
+      return (tab.pipeline.loops ?? []).some((r) => r.id === selection.regionId);
+    case "note":
+      return (tab.pipeline.notes ?? []).some((n) => n.id === selection.noteId);
+    case "none":
+      return true;
+  }
 }
 
 // Single-tab replace (#342): `tab` becomes the sole open tab, every `victims`
@@ -148,6 +212,7 @@ export function replaceWithTab(
     openTabs: [tab],
     activeTabId: tab.id,
     selection: { kind: "none", id: null },
+    tabSelections: {},
     history,
     pendingSingleTab: null,
   };
@@ -161,10 +226,14 @@ export function replaceWithTab(
 // openPipeline/openRunPipeline handles the already-open case).
 export function placeOpenedTab(state: EditState, tab: OpenPipeline): Partial<EditState> {
   if (!state.singleTabMode) {
+    // A tab id opened afresh (a Run reopened) starts with nothing selected.
+    const tabSelections = { ...leftSelection(state) };
+    delete tabSelections[tab.id];
     return {
       openTabs: [...state.openTabs, tab],
       activeTabId: tab.id,
       selection: { kind: "none", id: null },
+      tabSelections,
     };
   }
   const victims = state.openTabs.filter((t) => t.id !== tab.id);

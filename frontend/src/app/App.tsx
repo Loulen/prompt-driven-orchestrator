@@ -221,7 +221,7 @@ export default function App() {
     bumpFiresRefreshKey,
   });
 
-  const { layout, rightPane, frozen, left, right } = useShellLayout(rightPaneCollapsed);
+  const { layout, rightPane, frozen, left, center, right } = useShellLayout(rightPaneCollapsed);
 
   // CORE-112: what the command field lists and acts on.
   usePaletteHostSync(
@@ -272,7 +272,7 @@ export default function App() {
 
           <ResizableHandle />
 
-          <ResizablePanel defaultSize={layout.defaultLayout.center} id="center">
+          <ResizablePanel {...center} id="center">
             <CenterPane
               hasEditTab={hasEditTab}
               orchestratorReturn={orchestratorReturn}

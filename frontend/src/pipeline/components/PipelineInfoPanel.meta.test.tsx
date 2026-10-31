@@ -366,6 +366,20 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
     },
   );
 
+  it("shows the value each variable received from the launch, the default for the others", () => {
+    patchPipeline({
+      variables: {
+        max_iter: { type: "int", default: 3 },
+        label: { type: "string", default: "draft" },
+      },
+    });
+    render(<StorePanel run={makeRun({ variables: { max_iter: 7 } })} />);
+    const [maxIter, label] = screen.getAllByTestId("pipeline-variable-value");
+    expect(maxIter).toHaveTextContent("int = 7");
+    expect(label).toHaveTextContent('string = "draft"');
+    expect(maxIter.closest("[title]")).toHaveAttribute("title", "int = 7 · default 3");
+  });
+
   it("names the global default when the Run's pipeline carries no grid size", () => {
     render(<StorePanel run={makeRun()} />);
     expect(screen.getByTestId("pipeline-meta-grid-size")).toHaveTextContent("Global (M)");

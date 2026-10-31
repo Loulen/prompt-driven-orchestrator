@@ -84,7 +84,7 @@ pub struct NodeProgress {
 }
 
 /// The working nodes of `run` (agent, script), in its pipeline's order.
-fn nodes_of(run: &RunState) -> Vec<NodeProgress> {
+pub(crate) fn working_nodes(run: &RunState) -> Vec<NodeProgress> {
     run.node_defs
         .iter()
         .filter(|def| def.node_type == "agent" || def.node_type == "script")
@@ -125,7 +125,7 @@ impl RunSummary {
             project_id: run.project_id.clone(),
             last_activity_at: activity.last().map(|span| span.to.clone()),
             activity,
-            nodes: nodes_of(run),
+            nodes: working_nodes(run),
         }
     }
 }

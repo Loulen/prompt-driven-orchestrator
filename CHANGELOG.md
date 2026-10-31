@@ -24,6 +24,23 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   and `Cargo.lock`, turns `## Unreleased` into the version's entry and numbers the draft ADRs,
   rewriting every citation. `DRY_RUN=1` prints the plan only.
 - `make e2e` runs the Playwright suite of the frontend, installing Chromium when it is missing.
+- `make demo-daemon PORT=<port>` starts a demo daemon for agentic tests: this branch's `pdo`,
+  rebuilt incrementally at each start, a fresh `HOME` under `/tmp/pdo-demo-<port>`, no inherited
+  `PDO_*`, `TMUX` or `TMUX_PANE`, copied harness credentials, and a pidfile. `TEST_EXT=1` serves
+  the test extension instead. `make demo-daemon-stop PORT=<port>` stops only that daemon and its
+  tmux socket `pdo-<port>`, and refuses a port without a pidfile.
+- The `grill-with-docs`, `to-spec` and `to-tickets` skills can be invoked by the model, so the
+  chain from grilling to tickets runs without a human command.
+
+### Waiting without polling
+
+- `pdo run status <run-id>` prints the state of a Run in one line: its status, its nodes by state,
+  its active children and its cost. `--json` prints the same fields as one compact object. Exit 0
+  when the Run is found, 4 when the daemon does not know it, 1 when the daemon is unreachable.
+- The seeded `pdo-orchestrate` skill (version 4) waits for children with `pdo run wait` and no
+  `--timeout`, as a background task of the harness when it offers one, otherwise with a timeout no
+  longer than the tool's; the same rule holds for a build or a long test suite. It reads a Run's
+  state with `pdo run status`. No more `run wait --timeout` loop, no `sleep`.
 
 ## 2.68.0 · Classic Theme, Dark mode and the acceptance fixes
 

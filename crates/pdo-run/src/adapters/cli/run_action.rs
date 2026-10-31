@@ -1,5 +1,5 @@
 //! The `pdo run` subcommands (#721, #588): create a Run, wait for the children
-//! of this node, list the Runs.
+//! of this node, list the Runs, read the state of one.
 
 use clap::Subcommand;
 
@@ -118,6 +118,18 @@ pub enum RunAction {
     /// (an extension requiring a token) prints its reason and exits 1.
     List {
         /// Print the daemon's JSON as is.
+        #[arg(long)]
+        json: bool,
+    },
+    /// The state of one Run in a single line: `<id> <status> · nodes
+    /// <done>/<total> done[, <n> running][, <n> awaiting_user][, <n> failed] ·
+    /// children <n> active · $<cost>`. A read, not a wait: the client of the
+    /// Run's detail and of its children. Exits 0 when the Run is found, **4**
+    /// when the daemon knows no such Run, 1 when the daemon is unreachable.
+    Status {
+        /// The Run to read.
+        run_id: String,
+        /// Print one compact JSON object with the line's fields instead.
         #[arg(long)]
         json: bool,
     },

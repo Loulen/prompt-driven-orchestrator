@@ -223,7 +223,8 @@ mod tests {
 
     #[test]
     fn the_excerpt_hides_the_unreleased_entry() {
-        let md = "# Changelog\n\n## Unreleased · Next\n\n- soon\n\n## 2.0.0\n\n- b\n\n## 1.0.0\n\n- a\n";
+        let md =
+            "# Changelog\n\n## Unreleased · Next\n\n- soon\n\n## 2.0.0\n\n- b\n\n## 1.0.0\n\n- a\n";
         assert_eq!(
             embedded_excerpt(md, 2),
             "## 2.0.0\n\n- b\n\n## 1.0.0\n\n- a"
@@ -261,7 +262,9 @@ mod tests {
         assert_eq!(head_fault(with, "2.1.0"), None);
         assert!(head_fault(with, "2.2.0").is_some());
         let below = "## 2.1.0\n\n- b\n\n## Unreleased\n\n- c\n";
-        assert!(head_fault(below, "2.1.0").unwrap().contains("not the first"));
+        assert!(head_fault(below, "2.1.0")
+            .unwrap()
+            .contains("not the first"));
     }
 
     /// « What's new » reads one entry per version, the newest being this build's

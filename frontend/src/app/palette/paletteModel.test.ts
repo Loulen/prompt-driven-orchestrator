@@ -1,7 +1,16 @@
 import { Play } from "lucide-react";
 import { describe, expect, it } from "vitest";
 import type { SourceState } from "../../shared/extensions/palette";
-import { buildSections, flatRows, parseQuery, RESULT_CAP, type BuildInput, type PaletteItem } from "./paletteModel";
+import {
+  buildSections,
+  byRank,
+  flatRows,
+  parseQuery,
+  RESULT_CAP,
+  type BuildInput,
+  type ExtensionGroup,
+  type PaletteItem,
+} from "./paletteModel";
 
 const icons = { selection: Play, recent: Play, commands: Play, runs: Play, pipelines: Play, triggers: Play };
 
@@ -70,6 +79,7 @@ describe("the palette's groups", () => {
       {
         extension: { id: "a", name: "Alpha" },
         icon: null,
+        rank: null,
         actions: [item("ext:a", "New note", { command: true, extension: { id: "a", name: "Alpha" } })],
         sources: [{ key: "a:s", state: ok(3, "new") }],
       },
@@ -84,6 +94,7 @@ describe("the palette's groups", () => {
       {
         extension: { id: "a", name: "Alpha" },
         icon: "/ext/a/icon.svg",
+        rank: null,
         actions: [item("ext:a", "Search notes", { extension: { id: "a", name: "Alpha" } })],
         sources: [
           { key: "a:fast", state: ok(8) },
@@ -93,10 +104,11 @@ describe("the palette's groups", () => {
       {
         extension: { id: "b", name: "Beta" },
         icon: null,
+        rank: null,
         actions: [],
         sources: [{ key: "b:down", state: { status: "error", results: [], total: 0, error: "down" } as SourceState }],
       },
-      { extension: { id: "c", name: "Gamma" }, icon: null, actions: [], sources: [{ key: "c:s", state: ok(0) }] },
+      { extension: { id: "c", name: "Gamma" }, icon: null, rank: null, actions: [], sources: [{ key: "c:s", state: ok(0) }] },
     ];
     const sections = buildSections(input({ query: "search", extensions }));
     expect(sections.map((s) => s.key)).toEqual(["pipelines", "runs", "ext:a", "ext:b"]);
@@ -112,9 +124,24 @@ describe("the palette's groups", () => {
     expect(walked.some((r) => r.key === "state:b:down")).toBe(true);
   });
 
+  it("orders the extensions' groups by rank, then those without one, each in registration order", () => {
+    const group = (id: string, rank: number | null): ExtensionGroup => ({
+      extension: { id, name: id.toUpperCase() },
+      icon: null,
+      rank,
+      actions: [item(`ext:${id}`, `Open ${id}`, { extension: { id, name: id.toUpperCase() } })],
+      sources: [],
+    });
+    const registered = [group("a", null), group("b", 2), group("c", 1), group("d", null), group("e", 2)];
+    expect(byRank(registered).map((g) => g.extension.id)).toEqual(["c", "b", "e", "a", "d"]);
+    expect(titles(input({ extensions: registered }))).toEqual(["commands", "ext:c", "ext:b", "ext:e", "ext:a", "ext:d"]);
+    // A negative rank comes before every other.
+    expect(byRank([group("a", 0), group("b", -1)]).map((g) => g.extension.id)).toEqual(["b", "a"]);
+  });
+
   it("asks nothing of the extensions' sources on an empty query, and still lists their Actions", () => {
     const extensions = [
-      { extension: { id: "a", name: "Alpha" }, icon: null, actions: [item("ext:a", "New note")], sources: [{ key: "a:s", state: undefined }] },
+      { extension: { id: "a", name: "Alpha" }, icon: null, rank: null, actions: [item("ext:a", "New note")], sources: [{ key: "a:s", state: undefined }] },
     ];
     expect(titles(input({ extensions }))).toEqual(["commands", "ext:a"]);
   });

@@ -525,6 +525,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("review/composer", "completion", "tags"),
         triple("palette", "action", "new-note"),
         triple("palette", "search", "notes"),
+        triple("palette", "action", "inbox"),
     ]);
     // One action at each Action location (#30), then the command that fails.
     expected.extend(
@@ -564,6 +565,25 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     let notes = contribution("notes");
     assert_eq!(notes["search"], "searchNotes");
     assert_eq!(notes["icon"], "/ext/test/icon.svg");
+    // 0.20: its palette contributions rank its group; its Inbox reads a counter.
+    assert_eq!(notes["rank"], 2);
+    assert_eq!(contribution("new-note")["rank"], 2);
+    let inbox = contribution("inbox");
+    assert_eq!(inbox["counter"], "/ext/test/inbox");
+    assert!(inbox.get("rank").is_none());
+    assert_eq!(
+        daemon.get_json("/ext/test/inbox").await,
+        json!({ "count": test_extension::palette::START, "accent": true, "detail": "3 unread" })
+    );
+    let set = reqwest::Client::new()
+        .put(format!("{}/ext/test/inbox", daemon.url()))
+        .json(&json!({ "count": 0 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(set.status(), 200);
+    assert_eq!(control.inbox.count(), 0);
+    assert_eq!(daemon.get_json("/ext/test/inbox").await["count"], 0);
     let commands = ui["commands"].as_array().unwrap();
     let new_note = commands
         .iter()
@@ -665,6 +685,31 @@ async fn two_extensions_add_up_at_one_location_in_registration_order() {
         [
             ("test".to_string(), "session-tab".to_string()),
             (test_extension::SECOND_ID.to_string(), "session".to_string())
+        ]
+    );
+    // 0.20: the second one, registered after, ranks its palette group first.
+    let palette_ranks: Vec<_> = (0..2)
+        .flat_map(|at| {
+            index[at]["ui"]["contributions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|c| c["location"] == "palette" && c.get("rank").is_some())
+                .map(move |c| {
+                    (
+                        index[at]["id"].as_str().unwrap().to_string(),
+                        c["rank"].clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        palette_ranks,
+        [
+            ("test".to_string(), json!(2)),
+            ("test".to_string(), json!(2)),
+            (test_extension::SECOND_ID.to_string(), json!(1))
         ]
     );
     let bundle = reqwest::get(format!("{}/ext/test2/ui.js", daemon.url()))

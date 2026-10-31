@@ -125,10 +125,6 @@ pub enum UiLocation {
     /// [`UiElement::Decoration`] per contribution.
     #[serde(rename = "pipeline/item")]
     PipelineItem,
-    /// A mark on a node card of the canvas, on a line under its title: a
-    /// [`UiElement::Decoration`] per contribution.
-    #[serde(rename = "canvas/node")]
-    CanvasNode,
     /// A mark on a port row of a node's detail (Inputs and Outputs), next to
     /// the port's name: a [`UiElement::Decoration`] per contribution.
     #[serde(rename = "port/item")]
@@ -275,7 +271,6 @@ impl UiLocation {
         UiLocation::RunItemPeople,
         UiLocation::TriggerItem,
         UiLocation::PipelineItem,
-        UiLocation::CanvasNode,
         UiLocation::PortItem,
         UiLocation::Statusbar,
         UiLocation::RunsEmpty,
@@ -325,7 +320,6 @@ impl UiLocation {
             UiLocation::RunItemPeople => "run/item/people",
             UiLocation::TriggerItem => "trigger/item",
             UiLocation::PipelineItem => "pipeline/item",
-            UiLocation::CanvasNode => "canvas/node",
             UiLocation::PortItem => "port/item",
             UiLocation::Statusbar => "statusbar",
             UiLocation::RunsEmpty => "runs/empty",

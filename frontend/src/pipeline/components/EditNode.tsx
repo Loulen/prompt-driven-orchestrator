@@ -1,11 +1,9 @@
 /**
  * A node card on the edit canvas: its type icon, ports, rim handles, run
- * status and orchestrator pastilles.
+ * status and orchestrator child runs.
  */
 
-import { useMemo, useState } from "react";
-import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
-import type { CanvasNodeContext } from "../../shared/extensions/contract";
+import { useState } from "react";
 import { Handle, Position, useConnection, type Node, type NodeProps } from "@xyflow/react";
 import type { LoopKind } from "../../shared/generated/LoopKind";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
@@ -28,13 +26,10 @@ import {
   SlidersHorizontal,
   TriangleAlert,
 } from "lucide-react";
-import { StatusIcon } from "../../shared/ui/kit";
 import type { NodeCost } from "../../shared/generated/NodeCost";
 import { InputImages, NodeMeta } from "./NodeMeta";
+import { NodeCardHead, OrchestratorRuns } from "./NodeCardParts";
 import type { NodeAgentLabel } from "../model/nodeAgent";
-// #723 — orchestrator pastilles on the run-view node card.
-import { ChildCountPills } from "../../run/components/OrchestrationTab";
-import { totalChildren } from "../../run/model/orchestration";
 import type { ChildCounts } from "../../run/model/orchestration";
 import SearchMatchBadge from "../../run/components/runSearch/SearchMatchBadge";
 // The four emergent body anchor handles (#168), each pinned to its side-centre
@@ -70,6 +65,8 @@ export interface EditNodeData {
   orchestrator?: boolean;
   /** #723: child-run counters of an orchestrator node (run view only). */
   childCounts?: ChildCounts;
+  /** Opens the orchestrator's Orchestration tab (run view only). */
+  onOpenOrchestration?: () => void;
   /** ADR-0086: the node carries the « on demand » option. */
   onDemand?: boolean;
   /** The card is drawn for a Run (not a template). */
@@ -112,14 +109,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   const selectedBy = useSelectedByOther("node", id);
   const selectedByColor = selectedBy ? presenceColor(selectedBy) : null;
   const isDropTarget = useIsDropTarget(id);
-  // ADR-0081 (#31): what the `canvas/node` decorations mark.
-  const decorated = useMemo(
-    () => ({
-      entity: { kind: "node", id: data.nodeId, name: data.label, attributes: {} },
-      node: { type: data.nodeType, status: data.status },
-    }),
-    [data.nodeId, data.label, data.nodeType, data.status],
-  );
   // A reached start/end marker wears the « done » border and, on End, a check,
   // so the run view signals end-reached like completed work nodes (#105).
   const reached = data.reached ?? false;
@@ -225,13 +214,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
         <span>{data.label}</span>
         {reached && !start && <CircleCheck size={12} strokeWidth={1.5} className="cv-mk__ok" aria-label="Reached" />}
         {inputImages.length > 0 && <InputImages names={inputImages} />}
-        {/* ADR-0081 (#31) — the `canvas/node` decorations, under the marker. */}
-        <ExtensionDecorations<CanvasNodeContext>
-          location="canvas/node"
-          extra={decorated}
-          block
-          className="cv-mk__deco"
-        />
         {rim}
       </div>
     );
@@ -239,14 +221,45 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
 
   const inRun = data.inRun === true;
   const run = data.run;
+  // The type icon leads, in the Theme's accent; the status closes the header.
   const typeIcon = (
-    <NodeTypeIcon
-      type={data.nodeType}
-      interactive={data.interactive}
-      orchestrator={data.orchestrator === true}
-      size={inRun ? 12 : 14}
-      className="cv-n__type"
-    />
+    <>
+      <NodeTypeIcon
+        type={data.nodeType}
+        interactive={data.interactive}
+        orchestrator={data.orchestrator === true}
+        size={12}
+        className="cv-n__type"
+      />
+      {data.agentMode === "profile" && (
+        <Bookmark data-testid="agent-mode-profile" size={8} className="cv-n__mode" aria-label="Agent profile" />
+      )}
+      {data.agentMode === "custom" && (
+        <SlidersHorizontal data-testid="agent-mode-custom" size={8} className="cv-n__mode" aria-label="Custom agent" />
+      )}
+      {data.agentMode === "broken" && (
+        <TriangleAlert data-testid="agent-mode-broken" size={8} className="cv-n__mode" data-broken aria-label="Missing agent profile" />
+      )}
+    </>
+  );
+  const flags = (
+    <>
+      <IsolationMarker isolated={data.isolated === true} />
+      {data.onDemand && !inRun && (
+        <span className="cv-n__flag" title="On demand" data-testid="on-demand-marker">
+          <Play size={10} strokeWidth={1.5} aria-label="On demand" />
+        </span>
+      )}
+      {data.loopBadge && (
+        <span
+          data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
+          className="cv-n__loop"
+          title={data.loopBadge.kind === "collection" ? "Collection region" : "Loop region"}
+        >
+          {data.loopBadge.text}
+        </span>
+      )}
+    </>
   );
   return (
     <>
@@ -256,60 +269,16 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
       idle={awaitingPlay}
       rimHover={rimHover != null}
       wireTarget={isWireTarget}
+      orchestrator={data.orchestrator === true}
       style={presenceStyle}
     >
       {selectedBy && <SelectedByLabel participant={selectedBy} />}
       {handles}
-      <div className="cv-n__head">
-        {/* In a Run the status icon leads; on a template, the type icon. */}
-        <span className="cv-n__lead">
-          {inRun ? <StatusIcon kind="node" status={data.status} /> : typeIcon}
-          {data.agentMode === "profile" && (
-            <Bookmark data-testid="agent-mode-profile" size={8} className="cv-n__mode" aria-label="Agent profile" />
-          )}
-          {data.agentMode === "custom" && (
-            <SlidersHorizontal data-testid="agent-mode-custom" size={8} className="cv-n__mode" aria-label="Custom agent" />
-          )}
-          {data.agentMode === "broken" && (
-            <TriangleAlert data-testid="agent-mode-broken" size={8} className="cv-n__mode" data-broken aria-label="Missing agent profile" />
-          )}
-        </span>
-        <span className="cv-n__name" title={data.label}>
-          {data.label}
-        </span>
-        <IsolationMarker isolated={data.isolated === true} />
-        {data.onDemand && !inRun && (
-          <span className="cv-n__flag" title="On demand" data-testid="on-demand-marker">
-            <Play size={10} strokeWidth={1.5} aria-label="On demand" />
-          </span>
-        )}
-        {data.loopBadge && (
-          <span
-            data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
-            className="cv-n__loop"
-            title={data.loopBadge.kind === "collection" ? "Collection region" : "Loop region"}
-          >
-            {data.loopBadge.text}
-          </span>
-        )}
-        {inRun && typeIcon}
-      </div>
+      <NodeCardHead type={typeIcon} name={data.label} flags={flags} status={inRun ? data.status : null} />
       <NodeMeta data={data} run={run} />
-      {/* #723 — orchestrator pastilles: a row under the grid; omitted entirely
-          without children, so a node that never orchestrated stays clean. */}
-      {data.childCounts && totalChildren(data.childCounts) > 0 && (
-        <div className="cv-n__row" data-testid="node-child-pills-row">
-          <ChildCountPills counts={data.childCounts} size="pill" testId="node-child-pills" />
-        </div>
-      )}
-      {/* ADR-0081 (#31) — the `canvas/node` decorations: a row under the
-          grid, omitted entirely without one. */}
-      <ExtensionDecorations<CanvasNodeContext>
-        location="canvas/node"
-        extra={decorated}
-        block
-        className="cv-n__row"
-      />
+      {/* #723 — an orchestrator's child runs: « N runs » and the Orchestration
+          tab's pastilles; omitted entirely without children. */}
+      {data.childCounts && <OrchestratorRuns counts={data.childCounts} onOpen={data.onOpenOrchestration} />}
       {rim}
       {/* While the Run's transcripts are searched: the node's count of hits. */}
       {inRun && <SearchMatchBadge nodeId={data.nodeId} />}

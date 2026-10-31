@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   conditionLabelOffset,
-  conditionPillMaxWidth,
+  conditionPillPlacement,
+  conditionPillWidth,
   departureHeading,
   firstSegmentHeading,
   midpointAxis,
@@ -104,33 +105,45 @@ describe("conditionLabelOffset (#845)", () => {
   });
 });
 
-describe("conditionPillMaxWidth", () => {
+describe("conditionPillPlacement", () => {
   const card = (x: number, y: number) => ({ x, y, width: 208, height: 60 });
 
-  it("keeps the full width when no card sits beside the pill", () => {
-    expect(conditionPillMaxWidth({ x: 0, y: 0 }, [card(0, 200)])).toBe(220);
+  it("keeps the full width, centred, when no card sits beside the pill", () => {
+    expect(conditionPillPlacement({ x: 0, y: 0 }, [card(0, 200)], "verdict = PASS")).toEqual({ x: 0, maxWidth: 220 });
   });
 
   it("shrinks to the gap between two cards side by side, a margin each side", () => {
     // Cards 300 px apart leave a 92 px gap; the pill sits mid-gap above the wire.
-    const left = card(0, 0);
-    const right = card(300, 0);
-    const w = conditionPillMaxWidth({ x: 254, y: 15 }, [left, right]);
-    expect(w).toBeLessThanOrEqual(92 - 2 * 4);
-    expect(w).toBeGreaterThan(60);
+    const { maxWidth } = conditionPillPlacement({ x: 254, y: 15 }, [card(0, 0), card(300, 0)], "x".repeat(40));
+    expect(maxWidth).toBe(92 - 2 * 4);
   });
 
-  it("is limited by the nearer card when the pill is off-centre", () => {
-    const w = conditionPillMaxWidth({ x: 250, y: 15 }, [card(0, 0), card(300, 0)]);
-    expect(w).toBe(2 * (250 - 208 - 4));
+  it("slides into the gap rather than shrinking when it sits off-centre", () => {
+    const pill = conditionPillPlacement({ x: 216, y: 15 }, [card(0, 0), card(300, 0)], "x".repeat(40));
+    expect(pill.maxWidth).toBe(84);
+    expect(pill.x).toBe(254);
+  });
+
+  it("keeps a short condition where it is when it fits", () => {
+    const pill = conditionPillPlacement({ x: 254, y: 15 }, [card(0, 0), card(300, 0)], "ok");
+    expect(pill.x).toBe(254);
+  });
+
+  it("moves off a card it was dropped against instead of shrinking to a few characters", () => {
+    // A condition pinned 2 px right of a card, nothing further right.
+    const label = "Verdict = Fail";
+    const pill = conditionPillPlacement({ x: 210, y: 15 }, [card(0, 0)], label);
+    expect(pill.maxWidth).toBe(220);
+    const width = Math.min(220, conditionPillWidth(label));
+    expect(pill.x - width / 2).toBeGreaterThanOrEqual(208 + 4);
   });
 
   it("ignores cards above or below the pill's line", () => {
-    expect(conditionPillMaxWidth({ x: 254, y: 120 }, [card(0, 0), card(300, 0)])).toBe(220);
+    expect(conditionPillPlacement({ x: 254, y: 120 }, [card(0, 0), card(300, 0)], "a").maxWidth).toBe(220);
   });
 
   it("never goes under a floor that still shows a few characters", () => {
-    expect(conditionPillMaxWidth({ x: 210, y: 15 }, [card(0, 0), card(212, 0)])).toBe(40);
+    expect(conditionPillPlacement({ x: 210, y: 15 }, [card(0, 0), card(212, 0)], "verdict").maxWidth).toBe(40);
   });
 });
 

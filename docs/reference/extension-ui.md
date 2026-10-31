@@ -397,14 +397,6 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
   after the node count and the version, before the edit date, on one line.
 - **Context**: `DecorationContext`, `entity` = `{ kind: "pipeline", id, name, attributes }`.
 
-### `canvas/node`
-
-- **Accepts**: decoration.
-- **Renders**: a node card of the canvas (editor and Run view), on a line of its own under the
-  title; the card grows that line only when there is a decoration.
-- **Context**: `CanvasNodeContext` = `DecorationContext` + `node` (`{ type, status }`), `entity` =
-  `{ kind: "node", id, name, attributes: {} }`.
-
 ### `port/item`
 
 - **Accepts**: decoration.

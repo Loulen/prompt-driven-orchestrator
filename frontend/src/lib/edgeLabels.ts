@@ -174,22 +174,40 @@ export function midpointAxis(points: Point[], mid: Point): LabelAxis {
   return "horizontal";
 }
 
+/** The `.cv-pill` box in canvas.css: its cap, its padding and border, and the
+ *  advance of one character of its mono 10 px text. */
+const PILL_CAP = 220;
+const PILL_CHROME = 10;
+const PILL_CHAR = 6;
+
+/** The width a condition pill takes for `label`, before any cap. */
+export function conditionPillWidth(label: string): number {
+  return label.length * PILL_CHAR + PILL_CHROME;
+}
+
 /**
- * The widest a condition pill centred on `center` may grow without running
- * over a card: twice the distance to the nearest card on its line, less a
+ * Where a condition pill meant to sit at `center` goes, and the widest it may
+ * grow: between the nearest cards left and right of it on its line, less a
  * margin, between a floor that still shows a few characters and the pill's own
- * cap. The pill is a 16 px line; a card counts when it overlaps that line.
+ * cap. Rather than shrinking against a card it was dropped beside, the pill
+ * slides into the free room on its line. The pill is a 16 px line; a
+ * card counts when it overlaps that line, and a card under the pill's centre
+ * bounds neither side.
  */
-export function conditionPillMaxWidth(center: Point, cards: Rect[]): number {
-  const CAP = 220; // `.cv-pill` max-width in canvas.css
+export function conditionPillPlacement(center: Point, cards: Rect[], label: string): { x: number; maxWidth: number } {
   const FLOOR = 40;
   const MARGIN = 4;
   const HALF_HEIGHT = 8; // half the `.cv-pill` height
-  let half = CAP / 2;
+  let left = -Infinity;
+  let right = Infinity;
   for (const c of cards) {
     if (c.y > center.y + HALF_HEIGHT || c.y + c.height < center.y - HALF_HEIGHT) continue;
-    const gap = c.x >= center.x ? c.x - center.x : center.x - (c.x + c.width);
-    half = Math.min(half, gap - MARGIN);
+    if (c.x + c.width <= center.x) left = Math.max(left, c.x + c.width + MARGIN);
+    else if (c.x >= center.x) right = Math.min(right, c.x - MARGIN);
   }
-  return Math.max(FLOOR, Math.min(CAP, 2 * half));
+  const maxWidth = Math.max(FLOOR, Math.min(PILL_CAP, right - left));
+  const width = Math.min(maxWidth, conditionPillWidth(label));
+  if (right - left <= width) return { x: Number.isFinite(left) ? (left + right) / 2 : center.x, maxWidth };
+  const x = Math.min(Math.max(center.x, left + width / 2), right - width / 2);
+  return { x, maxWidth };
 }

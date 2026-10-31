@@ -25,6 +25,28 @@ export function landingLeg(step: number): number {
   return Math.max(16, step);
 }
 
+/**
+ * The leg two FACING anchors can both have: the given one, or half the gap
+ * between them when two full legs would overlap — the wire would otherwise run
+ * past the target's border, back into the source card and out again, a line
+ * through both cards.
+ */
+function meetingLeg(src: Point, tgt: Point, sourceSide: PortSide, targetSide: PortSide, leg: number): number {
+  const gaps: Partial<Record<PortSide, Partial<Record<PortSide, number>>>> = {
+    bottom: { top: tgt.y - src.y },
+    top: { bottom: src.y - tgt.y },
+    right: { left: tgt.x - src.x },
+    left: { right: src.x - tgt.x },
+  };
+  const gap = gaps[sourceSide]?.[targetSide];
+  return gap != null && gap > 0 && gap < 2 * leg ? gap / 2 : leg;
+}
+
+/** Strictly inside the card: a waypoint there is a leftover of a card since moved or grown. */
+function insideCard(p: Point, rect: AnchorRect): boolean {
+  return p.x > rect.x + TOL && p.x < rect.x + rect.width - TOL && p.y > rect.y + TOL && p.y < rect.y + rect.height - TOL;
+}
+
 /** The point one leg OUTSIDE the border, from which the wire runs straight in. */
 export function approachPoint(anchor: Point, side: PortSide, leg: number): Point {
   const d = outwardDelta(side);
@@ -122,6 +144,10 @@ function crossesRect(points: Point[], rect: AnchorRect): boolean {
  * only the user's are worth preserving when the wire has to be re-laid.
  * `sourceRect` (the source card) keeps an AUTO route from running back through
  * the card it leaves — see {@link aroundSource}; a manual route is the user's.
+ *
+ * Two facing anchors closer than two legs share the gap ({@link meetingLeg});
+ * an interior point inside either card, or on either leg, is then dropped: it
+ * would send the wire back through a card or into a spur.
  */
 export function enforcePerpendicularEnds(
   points: Point[],
@@ -134,6 +160,9 @@ export function enforcePerpendicularEnds(
   if (points.length < 2) return points;
   const src = points[0];
   const tgt = points[points.length - 1];
+  const meeting = meetingLeg(src, tgt, sourceSide, targetSide, leg);
+  const close = meeting < leg;
+  leg = meeting;
   // Interior points sitting ON an endpoint are dropped: `dragSegmentOnGrid`
   // inserts a bend beside a pinned endpoint, which can land exactly on it, and
   // once the approach point is inserted in front of such a waypoint the wire
@@ -142,9 +171,17 @@ export function enforcePerpendicularEnds(
   const onEndpoint = (p: Point) =>
     (Math.abs(p.x - src.x) < TOL && Math.abs(p.y - src.y) < TOL) ||
     (Math.abs(p.x - tgt.x) < TOL && Math.abs(p.y - tgt.y) < TOL);
-  const interior = points.slice(1, -1).filter((p) => !onEndpoint(p));
   const sA = approachPoint(src, sourceSide, leg);
   const tA = approachPoint(tgt, targetSide, leg);
+  // Between two close facing cards, nothing but the two legs fits: a waypoint
+  // on a leg or inside a card is a leftover of the cards' older places.
+  const stray = (p: Point) =>
+    close &&
+    ((sourceRect != null && insideCard(p, sourceRect)) ||
+      (targetRect != null && insideCard(p, targetRect)) ||
+      onPolyline(p, [src, sA]) ||
+      onPolyline(p, [tA, tgt]));
+  const interior = points.slice(1, -1).filter((p) => !onEndpoint(p) && !stray(p));
 
   // Merge the middle FIRST, and never across the two approach points. When the
   // run arriving at the target approach is itself along the leg's axis — which

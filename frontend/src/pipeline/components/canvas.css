@@ -36,16 +36,29 @@
 .cv-n[data-selected] { outline: 1.5px solid var(--selected-edge); outline-offset: 3px; }
 /* An on-demand node the Run never launched: greyed, dashed, waiting for its ▶. */
 .cv-n[data-idle] { opacity: 0.6; border-style: dashed; border-color: var(--text-2); }
+/* An orchestrator: a second sheet behind the card, tinted like its border. */
+.cv-n[data-orch] { box-shadow: 3px 3px 0 -1px var(--surface-0), 3px 3px 0 0 var(--line); }
+.cv-n[data-orch][data-st] { box-shadow: 3px 3px 0 -1px var(--surface-0), 3px 3px 0 0 color-mix(in oklab, var(--st) 40%, var(--line)); }
 /* While a wire is drawn (#844): amber arms the gesture, solid amber lands it. */
 .cv-n[data-rim] { box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px color-mix(in oklab, var(--cv-wire) 45%, transparent); }
 .cv-n[data-wire] { box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px var(--cv-wire); }
+.cv-n[data-orch][data-rim] {
+  box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px color-mix(in oklab, var(--cv-wire) 45%, transparent),
+    3px 3px 0 -1px var(--surface-0), 3px 3px 0 0 var(--line);
+}
+.cv-n[data-orch][data-wire] {
+  box-shadow: 0 0 0 1px var(--surface-0), 0 0 0 2.5px var(--cv-wire), 3px 3px 0 -1px var(--surface-0), 3px 3px 0 0 var(--line);
+}
 .cv-n__head {
   display: flex;
   align-items: center;
   gap: 5px;
   height: 24px;
   padding: 0 6px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line);
+  border-radius: calc(var(--radius-ui) - 1px) calc(var(--radius-ui) - 1px) 0 0;
+  /* The blueprint header: tinted by the status, neutral on a template. */
+  background: color-mix(in oklab, var(--st, var(--text-3)) 16%, var(--surface-2));
   min-width: 0;
 }
 .cv-n__lead { position: relative; display: inline-grid; place-items: center; flex: none; }
@@ -60,7 +73,7 @@
   font-size: var(--fs-md);
   font-weight: var(--w-medium);
 }
-.cv-n__type { flex: none; color: var(--text-3); }
+.cv-n__type { flex: none; color: var(--primary); }
 .cv-n__flag { display: inline-grid; place-items: center; flex: none; color: var(--text-3); }
 .cv-n__loop {
   flex: none;
@@ -89,8 +102,26 @@
 }
 .cv-n__cell > svg { flex: none; color: var(--text-3); }
 .cv-n__cell > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cv-mk__deco { position: absolute; top: calc(100% + 4px); left: 0; display: flex; flex-wrap: wrap; gap: 3px; }
-.cv-n__row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 0 6px 4px; min-width: 0; }
+/* An orchestrator's « N runs », then the Orchestration tab's pastilles: one row that opens the tab. */
+.cv-n__runs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: calc(100% - 6px);
+  height: 18px;
+  margin: 0 3px 4px;
+  padding: 0 3px;
+  border: 0;
+  border-radius: var(--radius-ui);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  cursor: pointer;
+}
+.cv-n__runs:hover { background: var(--hover); color: var(--text); }
+.cv-n__runs:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: -1px; }
+.cv-n__runs-n { flex: none; font-family: var(--font-code); font-size: var(--fs-xs); }
+.cv-n__runs .cv-kids { margin-left: auto; flex-wrap: nowrap; }
 .cv-n__images { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 6px 4px; }
 .cv-n__img {
   position: relative;
@@ -374,22 +405,31 @@
 .cv-line--sub { padding-left: calc(var(--pad-x) + 4px); border-top: 0; }
 .cv-line[data-kind="nudge"] { --st: var(--color-st-await); }
 
-/* The child-run bar: back to the parent run. */
+/* The child-run bar: back to the parent run, the whole bar one button. */
 .cv-child {
   flex: none;
   display: flex;
   align-items: center;
   gap: var(--g-3);
+  width: 100%;
   height: var(--h-row);
   padding: 0 var(--g-2);
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+  border: 0;
   border-bottom: 1px solid var(--line);
   background: var(--surface-1);
+  font: inherit;
   font-size: var(--fs-sm);
   color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
 }
+.cv-child:hover { background: var(--surface-2); }
+.cv-child:hover .cv-child__back { color: var(--text); }
+.cv-child:focus-visible { outline: 1px solid var(--focus-ring); outline-offset: -1px; }
+.cv-child__back { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; color: var(--text-2); }
 .cv-child__parent { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
 .cv-child__node { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-code); font-size: var(--fs-xs); color: var(--text-3); }
 

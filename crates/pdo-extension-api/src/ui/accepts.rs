@@ -47,7 +47,6 @@ impl UiLocation {
             | UiLocation::RunItemPeople
             | UiLocation::TriggerItem
             | UiLocation::PipelineItem
-            | UiLocation::CanvasNode
             | UiLocation::PortItem
             | UiLocation::Statusbar
             | UiLocation::RunsEmpty

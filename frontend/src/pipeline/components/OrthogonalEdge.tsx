@@ -10,7 +10,7 @@ import type { Point } from "../../lib/orthogonalRouter";
 import { arrowChevron, pathMidpoint, pathToSvg, roundedPathToSvg, segHandleStyle } from "../../lib/edgePath";
 import {
   conditionLabelOffset,
-  conditionPillMaxWidth,
+  conditionPillPlacement,
   departureHeading,
   midpointAxis,
   outputLabelPlacement,
@@ -196,8 +196,9 @@ export default function OrthogonalEdge({
     y: mid.y + midOffset.y,
   };
   // Never wider than the room between the cards on its line: a long condition
-  // on a short edge ellipsizes instead of covering a card's title.
-  const pillMaxWidth = conditionPillMaxWidth(labelPoint, route.cards);
+  // on a short edge ellipsizes instead of covering a card's title; one dropped
+  // against a card slides into that room instead of shrinking.
+  const pill = conditionPillPlacement(labelPoint, route.cards, data?.label ?? "");
 
   // On the wire, as in the design; pushed to the other side of it when a
   // condition pill sits at `mid + midOffset`, so neither hides the other.
@@ -320,8 +321,8 @@ export default function OrthogonalEdge({
             onContextMenu={onLabelContextMenu}
             style={{
               position: "absolute",
-              transform: `translate(-50%, -50%) translate(${labelPoint.x}px, ${labelPoint.y}px)`,
-              maxWidth: pillMaxWidth,
+              transform: `translate(-50%, -50%) translate(${pill.x}px, ${labelPoint.y}px)`,
+              maxWidth: pill.maxWidth,
               // Grabbable, not click-through (#845): a plain click still hands
               // the selection to the edge, so the pill never blocks it.
               pointerEvents: "all",

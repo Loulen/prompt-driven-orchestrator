@@ -466,7 +466,7 @@ describe("the trigger/item decorations", () => {
   });
 });
 
-describe("the canvas/node decorations", () => {
+describe("a node card of the canvas", () => {
   function nodeProps(nodeType: "agent" | "start") {
     return {
       id: nodeType,
@@ -493,15 +493,18 @@ describe("the canvas/node decorations", () => {
     } as unknown as Parameters<typeof EditNode>[0];
   }
 
-  it.each(["agent", "start"] as const)("mark the %s card, a marker included", async (nodeType) => {
+  it.each(["agent", "start"] as const)("leave the %s card bare, a marker included", async (nodeType) => {
+    // The card has no decoration location any more: a contribution aimed at
+    // the old id renders nowhere on it.
     serve([extension("demo", [at("canvas/node", "decoration", "b", "Badge")])]);
     render(
       <ReactFlowProvider>
         <EditNode {...nodeProps(nodeType)} />
       </ReactFlowProvider>,
     );
-    expect(await screen.findByTestId("badge")).toHaveTextContent(`canvas/node:${nodeType}`);
-    expect(screen.getByTestId("node-card")).toContainElement(screen.getByTestId("badge"));
+    await screen.findByTestId("node-card");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(screen.queryByTestId("badge")).toBeNull();
   });
 });
 

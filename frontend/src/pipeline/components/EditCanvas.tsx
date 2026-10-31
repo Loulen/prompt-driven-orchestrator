@@ -37,6 +37,7 @@ import { useAgentProfiles } from "../../settings/store/useAgentProfiles";
 import { useSkillBank } from "../../skill/store/useSkillBank";
 // #723 — orchestrator pastilles on the run-view node card.
 import { childrenOfNode, countChildren, useRunChildren } from "../../run/model/orchestration";
+import { useOrchestrationFocus } from "../../run/store/orchestrationFocus";
 import { useCanvasContextMenu } from "../store/useCanvasContextMenu";
 import { useCanvasLint } from "../store/useCanvasLint";
 import { useCanvasPlacement } from "../store/useCanvasPlacement";
@@ -183,7 +184,12 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       if (!runId) return card;
       const nodeChildren = childrenOfNode(runChildren, runId, card.id);
       if (nodeChildren.length === 0) return card;
-      return { ...card, data: { ...card.data, childCounts: countChildren(nodeChildren) } };
+      const onOpenOrchestration = () => {
+        setSelection({ kind: "node", id: card.id });
+        onCloseInfo?.();
+        useOrchestrationFocus.getState().open(runId, card.id);
+      };
+      return { ...card, data: { ...card.data, childCounts: countChildren(nodeChildren), onOpenOrchestration } };
     });
     // Bounded loop regions (ADR-0011 / #148) render as translucent boxes BEHIND
     // their member cards. Each multi-member region is backed by a decorative,
@@ -198,7 +204,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     // pipeline alone (independent of run state).
     const noteNodes: Node[] = buildNoteNodes(pipeline);
     return [...regionNodes, ...cards, ...noteNodes];
-  }, [pipeline, activeRunState, agentProfileIds, agentProfiles, runChildren, withPlay]);
+  }, [pipeline, activeRunState, agentProfileIds, agentProfiles, runChildren, withPlay, setSelection, onCloseInfo]);
   const derivedEdges = useMemo(
     () => (pipeline ? deriveEditEdges(pipeline) : []),
     [pipeline],

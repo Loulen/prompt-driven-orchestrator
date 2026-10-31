@@ -353,7 +353,6 @@ describe("a row of the Pipelines tab", () => {
     render(
       <LibraryRow
         name="my pipe"
-        nodeCount={2}
         showDuplicate
         onOpen={() => {}}
         onDuplicate={() => {}}

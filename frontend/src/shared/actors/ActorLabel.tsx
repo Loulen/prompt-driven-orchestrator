@@ -1,6 +1,6 @@
 import type { Actor } from "../generated/Actor";
 import { actorLabel } from "../lib/actor";
-import { ActorAvatar } from "./ActorAvatar";
+import { Avatar } from "../ui/kit";
 import { useActorDisplay } from "./store";
 
 /**
@@ -12,7 +12,7 @@ export default function ActorLabel({ actor }: { actor: Actor }) {
   if (!display) return <>{actorLabel(actor)}</>;
   return (
     <span className="inline-flex items-center gap-1" title={actorLabel(actor)}>
-      <ActorAvatar display={display} size={12} />
+      <Avatar name={display.name} actor={actor} src={display.avatar_url} size={16} />
       {display.name}
     </span>
   );

@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAllowedActions } from "./actionRights";
 import { useContributions, useLocationContext, type ContributionElement } from "./catalogue";
+import type { Actor } from "../generated/Actor";
 import type { ActionLocation, EntityContext, LocationContext, PaletteContext, SearchResult } from "./contract";
 
 /** How long the core waits after a keystroke before asking the sources. */
@@ -102,7 +103,29 @@ export function readResults(answer: unknown): { results: SearchResult[]; total: 
       !seen.has(r.id) &&
       !!seen.add(r.id),
   );
-  return { results: valid.slice(0, MAX_RESULTS), total: valid.length };
+  return { results: valid.slice(0, MAX_RESULTS).map(withAvatar), total: valid.length };
+}
+
+/**
+ * A result whose avatar the core can draw: a name at least, else none; an
+ * `actor` that is not one, or an `avatar_url` that is not a text, left out.
+ */
+function withAvatar(result: SearchResult): SearchResult {
+  const avatar: unknown = result.avatar;
+  if (avatar === undefined || avatar === null) return result;
+  if (typeof avatar !== "object" || typeof (avatar as { name?: unknown }).name !== "string") {
+    return { ...result, avatar: null };
+  }
+  const { name, actor, avatar_url } = avatar as { name: string; actor?: unknown; avatar_url?: unknown };
+  const isActor = !!actor && typeof actor === "object" && typeof (actor as { kind?: unknown }).kind === "string";
+  return {
+    ...result,
+    avatar: {
+      name,
+      actor: isActor ? (actor as Actor) : null,
+      avatar_url: typeof avatar_url === "string" ? avatar_url : null,
+    },
+  };
 }
 
 /** Why a source failed, as its group says it. */

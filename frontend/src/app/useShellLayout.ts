@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useResizableLayout, type Layout } from "../hooks/useResizableLayout";
 import { useTerminalOverlayOpen } from "../session/store/terminalOverlayStore";
-import { defaultPaneSizes, PANE_BOUNDS, restorePaneSizes } from "../lib/paneSizes";
+import { CANVAS_MIN_PCT, defaultPaneSizes, PANE_BOUNDS, restorePaneSizes } from "../lib/paneSizes";
 import { cssViewport } from "../shared/ui/zoom";
 import { useCollapsibleRightPane } from "./useCollapsibleRightPane";
 
@@ -58,5 +58,7 @@ export function useShellLayout(rightPaneCollapsed: boolean) {
     // A wider window or another UI scale widens the canvas, not the side panels.
     groupResizeBehavior: "preserve-pixel-size" as const,
   });
-  return { layout, rightPane, frozen, left: bounds("left"), right: bounds("right") };
+  // The canvas stops a drag at the floor a restore gives it: a reload shows what was dragged.
+  const center = { defaultSize: layout.defaultLayout.center, minSize: `${CANVAS_MIN_PCT}%` };
+  return { layout, rightPane, frozen, left: bounds("left"), center, right: bounds("right") };
 }

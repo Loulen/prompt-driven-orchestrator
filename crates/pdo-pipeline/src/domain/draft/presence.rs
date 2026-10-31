@@ -7,9 +7,6 @@ use pdo_kernel::Actor;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// How many colors the participants take turns on.
-pub const COLORS: u8 = 8;
-
 /// The longest id a selection or a typing position may name.
 const MAX_ID: usize = 200;
 
@@ -22,8 +19,6 @@ pub struct DraftParticipant {
     pub actor: Actor,
     /// Its name and avatar, when an extension names the Actor.
     pub display: Option<ActorDisplay>,
-    /// Its color, `0..COLORS`.
-    pub color: u8,
     /// Whether it may change the draft; otherwise it only reads.
     pub can_write: bool,
     /// The library assistant of `actor`, seated by its saves.
@@ -89,32 +84,9 @@ impl PresenceState {
     }
 }
 
-/// The color of a newcomer: the first one nobody present has, else the one
-/// fewest have.
-pub fn next_color(taken: impl IntoIterator<Item = u8>) -> u8 {
-    let mut uses = [0u32; COLORS as usize];
-    for color in taken {
-        uses[(color % COLORS) as usize] += 1;
-    }
-    let fewest = uses.iter().copied().min().unwrap_or(0);
-    uses.iter().position(|&n| n == fewest).unwrap_or(0) as u8
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_newcomer_takes_the_first_free_color() {
-        assert_eq!(next_color([]), 0);
-        assert_eq!(next_color([0, 1, 3]), 2);
-    }
-
-    #[test]
-    fn colors_are_shared_once_all_are_taken() {
-        assert_eq!(next_color(0..COLORS), 0);
-        assert_eq!(next_color((0..COLORS).chain([0])), 1);
-    }
 
     #[test]
     fn a_state_reads_with_its_missing_fields_empty() {

@@ -24,7 +24,7 @@ export interface SelectProps<V extends string = string> {
   value: V | null;
   onChange: (value: V) => void;
   options: SelectOption<V>[];
-  /** Accessible name and tooltip. */
+  /** Accessible name; the tooltip without a value. */
   label: string;
   /** Trigger text when no option has the value (default: the label). */
   placeholder?: string;
@@ -36,6 +36,8 @@ export interface SelectProps<V extends string = string> {
   /** A search box over the list; by default when there are more than 8 options. */
   search?: boolean;
   align?: "start" | "end";
+  /** A filter in force: the trigger is tinted. */
+  active?: boolean;
   className?: string;
 }
 
@@ -57,6 +59,7 @@ export function Select<V extends string>({
   disabled,
   search,
   align,
+  active,
   className,
 }: SelectProps<V>) {
   const [open, setOpen] = React.useState(false);
@@ -172,13 +175,15 @@ export function Select<V extends string>({
         ref={btn}
         type="button"
         disabled={disabled}
-        title={label}
+        // The whole value, when the trigger cuts it.
+        title={cur?.label ?? label}
         aria-label={label}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? `${uid}-list` : undefined}
         aria-activedescendant={open && !withSearch && hi >= 0 ? optId(hi) : undefined}
         className={cx("d-sel", size === "sm" && "d-sel--sm", mono && "d-sel--mono", className)}
+        data-active={active || undefined}
         onClick={() => (open ? closeList() : openList())}
         onKeyDown={(e) => onKey(e, false)}
       >

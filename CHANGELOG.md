@@ -35,6 +35,29 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   du système au moment de la migration ; le Thème est Acogni. Le mode est stocké sous
   `pdo.ui.mode`, le Thème sous `pdo.ui.theme`.
 
+### One avatar for a person
+
+- **Breaking for extensions** (shared module): the kit's `Avatar` is round, tinted with the
+  person's hue, its initials in ink (first and last word), instead of a neutral square. The hue
+  is one of 8 fixed hues (`--av-h0` … `--av-h7`, new tokens with `--av-fill-*` and `--av-solid-*`
+  per Theme and mode), none a status colour, picked from the person's Actor (`actor`, new prop),
+  else its name. New props `hollow`, `present`, `title`. The core draws every person with it: the
+  presence on a Run and on a shared draft (whose marks on the canvas take the same hue), the
+  Actors, the Review's comments and completions, the versions.
+- **Breaking** (shared draft socket): the daemon no longer deals a colour to each participant of a
+  shared draft; `color` leaves `DraftParticipant` and the `welcome` message.
+- New in `@pdo/extension-ui`: `AvatarStack` (three overlapping, then « +n » listing the others),
+  `personColor(person)`, the person's colour for marks outside its avatar, and
+  `useActorDisplays(actors)`, the display names of a list of Actors in one hook.
+- A Source de recherche result may carry `avatar: { name, actor?, avatar_url? }`, drawn by the
+  core in its icon column; a suggestion of completion's `avatar` takes `actor` too.
+- `Select` takes `active` (a filter in force, tinted); its tooltip is the value shown, no longer
+  its label.
+- The Pipelines list no longer shows the node count of a pipeline.
+- Runs list: a Run archived while it ran ends at its archive (`completed_at`), and its row draws
+  its live nodes as stopped; a Retry all keeps the original's name; a row's accessible name is its
+  name and status.
+
 ### Command field
 
 - **Search results with a fixed status shape**: a Source de recherche result's `status` takes an
@@ -50,6 +73,20 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   on a running, awaiting or failed node of a Run that is neither paused nor archived. It is no
   longer offered on an interrupted or stale node, nor in a paused Run, which the daemon refused
   to complete.
+
+### Run inspector and pipeline editing
+
+- `GET /runs/{id}` carries **`variables`**: the values the launch gave the pipeline's variables
+  (absent when it gave none). The Variables section of a Run's Pipeline info shows the value the
+  Run received, the default only for a variable the launch left out.
+- The Run inspector names an iteration by the canvas card's iteration icon and its number
+  (« ⇄ 2 », « ⇄ 3/3 ») in the node header and its picker, the Transcript bar, the enlarged
+  terminal and the groups of the Run search.
+- Back on a tab, the canvas and the inspector show the selection the tab had.
+- The conditions of an edge stay in the order they were added, a new one last, even on a field
+  another condition already reads.
+- The ages of the Versions list follow the clock; an output's or input's name truncated in the
+  inspector is whole in its tooltip.
 
 ### Top bar, full-window pages and shared module seams
 
@@ -76,6 +113,21 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - Triggers name the time zone their cron is read in (UTC): beside the expression in New
   Trigger, in the schedule (« daily at 03:00 UTC ») and in the next fire of the Trigger's
   detail, whose tooltip gives the same instant in the browser's time zone.
+
+### Design system and Workbench
+
+- **`Segmented` takes `fill`** (`@pdo/extension-ui` 0.20): the control takes its row's width,
+  its items share it equally and a long label ends in an ellipsis. Without it, nothing changes.
+- **A tooltip waits for the pointer to move**: a surface that opens under a still pointer no
+  longer shows the tooltip of the control that lands there, and a focus given back by code (a
+  menu closed with Escape or picked from) no longer reopens one. Tab and the arrows still do.
+- The top bar's Dark mode toggle exposes its state (`aria-pressed`) under the stable name
+  « Dark mode ».
+- An unknown value stored under `pdo.ui.theme` or `pdo.ui.mode` is rewritten as the default,
+  as a migrated one is.
+- A Workbench layout whose side panels were dragged to their maximum is restored as dragged,
+  the canvas keeping its pixels instead of growing back to a third of the window. A drag and a
+  restore both leave the canvas at least 5 % of the window.
 
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 

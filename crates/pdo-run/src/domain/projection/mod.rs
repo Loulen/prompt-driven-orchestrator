@@ -210,6 +210,35 @@ mod tests {
     /// The `Option` on `sandbox_entries` is load-bearing: `Some(vec![])` is a legitimate
     /// resolution — it IS `minimal` — while `None` means "no key, a pre-profiles
     /// payload". Confusing the two would send `minimal` Runs down the re-resolve arm.
+    /// The values the launch gave the variables are what the Run received:
+    /// the Run's inspector shows them, not the pipeline's defaults.
+    #[test]
+    fn run_started_projects_the_variables_the_run_received() {
+        let events = vec![make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({
+                "pipeline_name": "p",
+                "variables": { "max_rounds": 5, "label": "nightly", "strict": true },
+            }),
+        )];
+        let state = project(&events).unwrap();
+        assert_eq!(state.variables["max_rounds"], serde_json::json!(5));
+        assert_eq!(state.variables["label"], serde_json::json!("nightly"));
+        assert_eq!(state.variables["strict"], serde_json::json!(true));
+        let none = project(&[make_event_with_payload(
+            EventKind::RunStarted,
+            None,
+            serde_json::json!({ "pipeline_name": "p" }),
+        )])
+        .unwrap();
+        assert!(none.variables.is_empty());
+        assert!(serde_json::to_value(&none)
+            .unwrap()
+            .get("variables")
+            .is_none());
+    }
+
     #[test]
     fn an_empty_frozen_list_projects_as_some_not_none() {
         let events = vec![make_event_with_payload(
@@ -1517,6 +1546,57 @@ mod tests {
         assert_eq!(state.pipeline_name, "archival-test");
         assert_eq!(state.nodes.len(), 1);
         assert_eq!(state.nodes["worker"].status, NodeStatus::Completed);
+    }
+
+    #[test]
+    fn a_run_archived_while_it_ran_ends_at_its_archive() {
+        let archived = Event {
+            ts: "2026-01-01T00:05:00.000Z".into(),
+            ..make_event(EventKind::RunArchived, None, None)
+        };
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "archival-test" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            archived,
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Archived);
+        assert_eq!(
+            state.completed_at.as_deref(),
+            Some("2026-01-01T00:05:00.000Z")
+        );
+    }
+
+    #[test]
+    fn a_finished_run_archived_later_keeps_its_end() {
+        let completed = Event {
+            ts: "2026-01-01T00:01:00.000Z".into(),
+            ..make_event(EventKind::RunCompleted, None, None)
+        };
+        let archived = Event {
+            ts: "2026-01-02T00:00:00.000Z".into(),
+            ..make_event(EventKind::RunArchived, None, None)
+        };
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "archival-test" }),
+            ),
+            completed,
+            archived,
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(
+            state.completed_at.as_deref(),
+            Some("2026-01-01T00:01:00.000Z")
+        );
     }
 
     #[test]

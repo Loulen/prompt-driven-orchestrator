@@ -28,11 +28,14 @@ export default function PipelineMetaSections({
   pipeline,
   readOnly,
   version = null,
+  received = null,
 }: {
   pipeline: EditorPipelineDef;
   readOnly: boolean;
   /** Read only: the label of the version shown (`v2 · title`), if any. */
   version?: string | null;
+  /** On a Run: the values its launch gave the variables; the others ran on their default. */
+  received?: Record<string, unknown> | null;
 }) {
   const updateMeta = useEditStore((s) => s.updatePipelineMeta);
   const globalGridSize = useWiringStore((s) => s.defaultGridSize);
@@ -172,12 +175,17 @@ export default function PipelineMetaSections({
           {readOnly && variables.length > 0 && (
             <div className="ei-pad">
               <KeyValue
-                rows={variables.map(([name, def]) => ({
-                  k: name,
-                  v: <span data-testid="pipeline-variable-value">{`${def.type} = ${formatVariableValue(def.default)}`}</span>,
-                  mono: true,
-                  tip: `${def.type} = ${formatVariableValue(def.default)}`,
-                }))}
+                rows={variables.map(([name, def]) => {
+                  const value = received && Object.hasOwn(received, name) ? received[name] : def.default;
+                  const shown = `${def.type} = ${formatVariableValue(value)}`;
+                  const changed = value !== def.default && formatVariableValue(value) !== formatVariableValue(def.default);
+                  return {
+                    k: name,
+                    v: <span data-testid="pipeline-variable-value">{shown}</span>,
+                    mono: true,
+                    tip: changed ? `${shown} · default ${formatVariableValue(def.default)}` : shown,
+                  };
+                })}
               />
             </div>
           )}

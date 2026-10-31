@@ -140,6 +140,7 @@ beforeEach(() => {
     openTabs: [],
     activeTabId: null,
     selection: { kind: "none", id: null },
+    tabSelections: {},
     lastSavedAt: {},
     history: {},
     singleTabMode: false,
@@ -2634,5 +2635,104 @@ describe("ADR-0085 run tab: « pilotage » locked, « Edit for this run » unloc
     mockSaveRunPipeline.mockRejectedValueOnce(new ApiError("mutation rejected", { status: 409 }));
     await expect(useEditStore.getState().overwriteDefaultPipeline(tabId)).rejects.toThrow("mutation rejected");
     expect(overwriteDefaultPipelineFromRun).not.toHaveBeenCalled();
+  });
+});
+
+describe("a tab switch keeps each tab's selection", () => {
+  function twoTabs() {
+    const tab = (id: string, runId?: string) => ({
+      id,
+      scope: "repo" as const,
+      pipeline: makePipeline([makeNode({ id: "check" }), makeNode({ id: "work" })]),
+      prompts: {},
+      diagnostics: [],
+      dirty: false,
+      externalDirty: false,
+      ...(runId ? { runId } : {}),
+    });
+    useEditStore.setState({
+      openTabs: [tab("__run__r1", "r1"), tab("flow")],
+      activeTabId: "__run__r1",
+      selection: { kind: "none", id: null },
+    });
+  }
+
+  it("shows the node selected on a tab again when the tab comes back", () => {
+    twoTabs();
+    useEditStore.getState().setSelection({ kind: "node", id: "check" });
+    useEditStore.getState().setActiveTab("flow");
+    expect(useEditStore.getState().selection).toEqual({ kind: "none", id: null });
+    useEditStore.getState().setSelection({ kind: "node", id: "work" });
+    useEditStore.getState().setActiveTab("__run__r1");
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "check" });
+    useEditStore.getState().setActiveTab("flow");
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "work" });
+  });
+
+  it("brings back nothing when the selected node is gone", () => {
+    twoTabs();
+    useEditStore.getState().setSelection({ kind: "node", id: "check" });
+    useEditStore.getState().setActiveTab("flow");
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) =>
+        t.id === "__run__r1" ? { ...t, pipeline: { ...t.pipeline, nodes: t.pipeline.nodes.filter((n) => n.id !== "check") } } : t,
+      ),
+    }));
+    useEditStore.getState().setActiveTab("__run__r1");
+    expect(useEditStore.getState().selection).toEqual({ kind: "none", id: null });
+  });
+
+  it("keeps the selection when the active tab is asked for again", () => {
+    twoTabs();
+    useEditStore.getState().setSelection({ kind: "node", id: "work" });
+    useEditStore.getState().setActiveTab("__run__r1");
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "work" });
+  });
+});
+
+describe("closing a tab hands the front to another with its own selection", () => {
+  function threeTabs() {
+    const tab = (id: string) => ({
+      id,
+      scope: "repo" as const,
+      pipeline: makePipeline([makeNode({ id: "check" }), makeNode({ id: "work" })]),
+      prompts: {},
+      diagnostics: [],
+      dirty: false,
+      externalDirty: false,
+    });
+    useEditStore.setState({
+      openTabs: [tab("A"), tab("B"), tab("C")],
+      activeTabId: "A",
+      selection: { kind: "none", id: null },
+    });
+  }
+
+  it("brings back the selection of the tab that takes the front", () => {
+    threeTabs();
+    useEditStore.getState().setActiveTab("C");
+    useEditStore.getState().setSelection({ kind: "node", id: "work" });
+    useEditStore.getState().setActiveTab("A");
+    useEditStore.getState().closeTab("A");
+    expect(useEditStore.getState().activeTabId).toBe("C");
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "work" });
+  });
+
+  it("forgets the selection of a closed tab", () => {
+    threeTabs();
+    useEditStore.getState().setActiveTab("C");
+    useEditStore.getState().setSelection({ kind: "node", id: "work" });
+    useEditStore.getState().setActiveTab("A");
+    useEditStore.getState().closeTabs(["C"]);
+    expect(useEditStore.getState().tabSelections.C).toBeUndefined();
+  });
+
+  it("brings back nothing for a region since deleted", () => {
+    threeTabs();
+    useEditStore.getState().setActiveTab("C");
+    useEditStore.getState().setSelection({ kind: "region", id: null, regionId: "loop" });
+    useEditStore.getState().setActiveTab("A");
+    useEditStore.getState().setActiveTab("C");
+    expect(useEditStore.getState().selection.kind).toBe("none");
   });
 });

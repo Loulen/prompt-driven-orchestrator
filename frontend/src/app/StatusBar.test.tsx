@@ -112,6 +112,7 @@ describe("StatusBar — icons and numbers only", () => {
     const counter = screen.getByTestId("session-counter");
     expect(counter).toHaveTextContent(/^3\/20$/);
     fireEvent.pointerEnter(counter);
+    fireEvent.pointerMove(counter);
     expect(await screen.findByTestId("tooltip-content")).toHaveTextContent("Sessions");
   });
 });

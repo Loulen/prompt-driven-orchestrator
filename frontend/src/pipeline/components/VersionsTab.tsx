@@ -25,7 +25,7 @@ function Author({ actor, external }: { actor: Actor | null; external: boolean })
   const name = display?.name ?? actorLabel(actor);
   return (
     <span className="pi-vrow__by" title={name}>
-      <Avatar name={name} src={display?.avatar_url} size={16} />
+      <Avatar name={name} actor={actor} src={display?.avatar_url} size={16} />
     </span>
   );
 }
@@ -55,6 +55,12 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
   const [versions, setVersions] = useState<PipelineVersionEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // The ages read « now », « 5m »…: they follow the clock, not the last read.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Read again when the last version moves (a Save, here or elsewhere).
   useEffect(() => {
@@ -133,7 +139,7 @@ export default function VersionsTab({ pipelineId }: { pipelineId: string }) {
             </span>
           )}
           <Author actor={version.author} external={version.external} />
-          <span className="pi-vrow__ago d-mono">{shortSavedAgo(version.saved_at)}</span>
+          <span className="pi-vrow__ago d-mono">{shortSavedAgo(version.saved_at, now)}</span>
           <span
             className="pi-vrow__runs d-mono"
             title={version.runs === 0 ? "Never launched" : version.runs === 1 ? "1 run" : `${version.runs} runs`}

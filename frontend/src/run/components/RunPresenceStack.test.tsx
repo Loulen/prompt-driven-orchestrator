@@ -56,6 +56,7 @@ describe("RunPresenceStack", () => {
     expect(stack.textContent).not.toContain("DB");
     expect(stack.textContent).toContain("+1");
     expect(stack.textContent).not.toContain("MM");
-    expect(screen.getByLabelText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByLabelText("Ada Lovelace · Viewing now")).toBeInTheDocument();
+    expect(screen.getByLabelText("1 more: Dan Brown")).toHaveAttribute("title", "Dan Brown · Viewing now");
   });
 });

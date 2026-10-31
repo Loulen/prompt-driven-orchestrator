@@ -266,7 +266,6 @@ export default function PipelinesPane({ projects = [] }: { projects?: Project[] 
               // user just built — keep it or delete it, both from here.
               testId={`library-row-${p.id}`}
               name={p.name}
-              nodeCount={p.node_count}
               checked={librarySel.has(`${p.scope}-${p.id}`)}
               selecting={librarySelIds.length > 0}
               invalid={p.invalid}

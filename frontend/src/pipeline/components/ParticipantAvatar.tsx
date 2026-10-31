@@ -1,38 +1,34 @@
 import { Bot } from "lucide-react";
 import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
-import { initials } from "../../shared/actors/initials";
+import { Avatar, AvatarStack, type AvatarProps } from "../../shared/ui/kit";
 import { firstName, participantName, presenceStyle } from "../model/presence";
 import "./inspect.css";
 
 /**
- * A participant of a shared draft (ADR-0088): the extension's image or the
- * initials of its name in its color; a robot for a library assistant; hollow
- * when it only reads. Its name (and whether it only reads) on hover.
+ * A participant of a shared draft (ADR-0088), as the kit's avatar: the
+ * extension's image or its initials in its hue; a robot for a library
+ * assistant; hollow when it only reads. Its name (and whether it only reads)
+ * on hover.
  */
-export function ParticipantAvatar({ participant, size = "md" }: { participant: DraftParticipant; size?: "sm" | "md" }) {
+function avatarOf(participant: DraftParticipant): AvatarProps {
   const name = participantName(participant);
-  const title = participant.can_write ? name : `${name} (read only)`;
-  return (
-    <span
-      title={title}
-      aria-label={title}
-      role="img"
-      className="pi-av"
-      style={presenceStyle(participant)}
-      data-size={size}
-      data-ro={participant.can_write ? undefined : true}
-      data-testid="draft-participant"
-      data-assistant={participant.assistant ? "true" : undefined}
-    >
-      {participant.assistant ? (
-        <Bot size={size === "sm" ? 9 : 11} strokeWidth={2} aria-hidden />
-      ) : participant.display?.avatar_url ? (
-        <img src={participant.display.avatar_url} alt="" />
-      ) : (
-        initials(name)
-      )}
-    </span>
-  );
+  return {
+    name,
+    actor: participant.actor,
+    kind: participant.assistant ? "agent" : "human",
+    src: participant.display?.avatar_url,
+    hollow: !participant.can_write,
+    title: participant.can_write ? name : `${name} (read only)`,
+    "data-testid": "draft-participant",
+    "data-assistant": participant.assistant ? "true" : undefined,
+  };
+}
+
+/** 16 px in a row, 20 px over the canvas. */
+const PX = { sm: 16, md: 20 } as const;
+
+export function ParticipantAvatar({ participant, size = "md" }: { participant: DraftParticipant; size?: "sm" | "md" }) {
+  return <Avatar {...avatarOf(participant)} size={PX[size]} />;
 }
 
 /**
@@ -49,31 +45,23 @@ function onePerPerson(participants: DraftParticipant[]): DraftParticipant[] {
   return [...byPerson.values()];
 }
 
-/** The participants side by side, overlapping a little; past `max`, a count. */
+/** The participants overlapping, three of them, then « +n » naming the others. */
 export function ParticipantStack({
   participants,
   size = "md",
-  max = 4,
+  max = 3,
 }: {
   participants: DraftParticipant[];
   size?: "sm" | "md";
   max?: number;
 }) {
-  const people = onePerPerson(participants);
-  if (people.length === 0) return null;
-  const shown = people.slice(0, max);
-  const rest = people.slice(max);
   return (
-    <span className="pi-stack" data-testid="draft-participants">
-      {shown.map((p) => (
-        <ParticipantAvatar key={p.connection} participant={p} size={size} />
-      ))}
-      {rest.length > 0 && (
-        <span className="pi-stack__more" title={rest.map(participantName).join(", ")}>
-          +{rest.length}
-        </span>
-      )}
-    </span>
+    <AvatarStack
+      people={onePerPerson(participants).map((p) => ({ ...avatarOf(p), key: p.connection }))}
+      size={PX[size]}
+      max={max}
+      data-testid="draft-participants"
+    />
   );
 }
 

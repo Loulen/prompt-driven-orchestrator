@@ -400,6 +400,20 @@
   .d-seg__btn:disabled {
     cursor: not-allowed;
   }
+  .d-seg--fill {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+  }
+  .d-seg--fill > .d-seg__btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-width: 0;
+  }
+  .d-seg--fill > .d-seg__btn > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   /* ---------------------------------------------------------------- switch, checkbox */
   .d-switch {
@@ -492,6 +506,15 @@
   .d-sel:hover:not(:disabled),
   .d-sel[aria-expanded="true"] {
     border-color: var(--line-strong);
+  }
+  .d-sel[data-active],
+  .d-sel[data-active]:hover:not(:disabled) {
+    border-color: var(--selected-edge);
+    background: var(--selected);
+    color: var(--text);
+  }
+  .d-sel[data-active] :is(.d-sel__lead, .d-sel__chev) {
+    color: var(--text-2);
   }
   .d-sel:focus-visible {
     outline: 1px solid var(--focus-ring);
@@ -841,49 +864,123 @@
     color: var(--text);
   }
 
-  /* ---------------------------------------------------------------- avatar */
-  .d-av {
+  /* ---------------------------------------------------------------- avatar
+     Round, the tint of the person's hue (`data-hue`, one of the 8 `--av-h*`),
+     the initials in ink; lightness and chroma follow the mode. An agent or a
+     trigger: a neutral fill and its glyph. */
+  .d-av,
+  .d-avmore {
+    --av-bg: var(--row-bg, var(--surface-1));
     display: inline-grid;
     flex: none;
     place-items: center;
+    box-sizing: border-box;
+    width: var(--av-px);
+    height: var(--av-px);
     overflow: hidden;
-    border: 1px solid var(--line);
-    border-radius: var(--radius-ui);
-    background: var(--surface-2);
-    color: var(--text-2);
+    border-radius: calc(var(--av-px) / 2);
     font-family: var(--font-ui);
     font-weight: var(--w-strong);
     letter-spacing: 0;
     line-height: 1;
     user-select: none;
+    box-shadow:
+      var(--av-in, 0 0 0 0 transparent),
+      var(--av-sep, 0 0 0 0 transparent),
+      var(--av-pres, 0 0 0 0 transparent);
   }
-  .d-av[data-size="16"] {
-    width: 16px;
-    height: 16px;
+  .d-av {
+    background: var(--surface-2);
+    color: var(--text-2);
+    --av-in: inset 0 0 0 1px var(--line);
+  }
+  :is(.d-av, .d-avmore)[data-size="16"] {
+    --av-px: 16px;
     font-size: calc(var(--fs-2xs) * 0.8);
   }
-  .d-av[data-size="20"] {
-    width: 20px;
-    height: 20px;
+  :is(.d-av, .d-avmore)[data-size="20"] {
+    --av-px: 20px;
     font-size: var(--fs-2xs);
   }
-  .d-av[data-size="24"] {
-    width: 24px;
-    height: 24px;
-    font-size: var(--fs-2xs);
+  :is(.d-av, .d-avmore)[data-size="24"] {
+    --av-px: 24px;
+    font-size: var(--fs-xs);
   }
-  .d-av[data-kind="agent"],
-  .d-av[data-kind="trigger"] {
+  .d-av[data-hue="0"] {
+    --av-h: var(--av-h0);
+  }
+  .d-av[data-hue="1"] {
+    --av-h: var(--av-h1);
+  }
+  .d-av[data-hue="2"] {
+    --av-h: var(--av-h2);
+  }
+  .d-av[data-hue="3"] {
+    --av-h: var(--av-h3);
+  }
+  .d-av[data-hue="4"] {
+    --av-h: var(--av-h4);
+  }
+  .d-av[data-hue="5"] {
+    --av-h: var(--av-h5);
+  }
+  .d-av[data-hue="6"] {
+    --av-h: var(--av-h6);
+  }
+  .d-av[data-hue="7"] {
+    --av-h: var(--av-h7);
+  }
+  .d-av[data-hue] {
+    --av-in: 0 0 0 0 transparent;
+    background: oklch(var(--av-fill-l) var(--av-fill-c) var(--av-h));
     color: var(--text);
   }
+  .d-av:not([data-hue])[data-hollow] {
+    --av-in: inset 0 0 0 1px var(--line-strong);
+    background: transparent;
+  }
+  .d-av[data-hue][data-hollow] {
+    --av-in: inset 0 0 0 1px oklch(var(--av-solid-l) var(--av-solid-c) var(--av-h));
+    background: transparent;
+    color: var(--text-2);
+  }
   .d-av[data-off] {
-    border-style: dashed;
+    --av-in: 0 0 0 0 transparent;
+    border: 1px dashed var(--line-strong);
+    background: transparent;
     color: var(--text-3);
+  }
+  .d-av[data-present] {
+    --av-pres: 0 0 0 1px var(--av-bg), 0 0 0 2px var(--color-st-done);
+  }
+  .d-av[data-stacked],
+  .d-avstack > .d-avmore {
+    --av-sep: 0 0 0 1px var(--av-bg);
+    margin-left: calc(var(--av-px) * -0.125);
   }
   .d-av img {
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+
+  /* 3 avatars, then « +n » */
+  .d-avstack {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    min-width: 0;
+  }
+  .d-avmore {
+    --av-in: inset 0 0 0 1px var(--line);
+    width: auto;
+    min-width: var(--av-px);
+    padding: 0 3px;
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-family: var(--font-code);
+    font-weight: var(--w-medium);
+    font-variant-numeric: tabular-nums;
   }
 
   /* ---------------------------------------------------------------- empty, banner, key/value */

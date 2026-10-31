@@ -8,7 +8,6 @@ function participant(connection: string, name: string): DraftParticipant {
     connection,
     actor: { kind: "identified", namespace: "test", id: name },
     display: { name, avatar_url: null },
-    color: Number(connection),
     can_write: true,
     assistant: false,
     selection: null,

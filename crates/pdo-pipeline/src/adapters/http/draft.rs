@@ -70,7 +70,6 @@ pub enum DraftServerMessage {
         connection: String,
         generation: String,
         can_write: bool,
-        color: u8,
     },
     Participants {
         participants: Vec<DraftParticipant>,
@@ -181,14 +180,12 @@ async fn serve(mut socket: WebSocket, pipelines: &Pipelines, join: DraftJoin) {
         room,
         connection,
         can_write,
-        color,
         mut messages,
     } = join;
     let welcome = DraftServerMessage::Welcome {
         connection: connection.to_string(),
         generation: room.generation(),
         can_write,
-        color,
     };
     let summary = room.summary();
     let greeting = [

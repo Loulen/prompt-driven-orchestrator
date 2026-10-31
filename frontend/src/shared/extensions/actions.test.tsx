@@ -395,7 +395,6 @@ describe("the « ⋯ » menus of the Trigger and Pipeline rows", () => {
       shell(
         <LibraryRow
           name="Deploy"
-          nodeCount={3}
           showDuplicate
           onOpen={vi.fn()}
           onDuplicate={vi.fn()}
@@ -415,7 +414,7 @@ describe("the « ⋯ » menus of the Trigger and Pipeline rows", () => {
 
     rerender(
       shell(
-        <LibraryRow name="Lib" nodeCount={1} showDuplicate={false} onOpen={vi.fn()} onDelete={vi.fn()} deleteTitle="Delete" />,
+        <LibraryRow name="Lib" showDuplicate={false} onOpen={vi.fn()} onDelete={vi.fn()} deleteTitle="Delete" />,
       ),
     );
     expect(screen.queryByTestId("pipeline-row-menu")).toBeNull();

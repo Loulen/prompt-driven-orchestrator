@@ -74,6 +74,9 @@ export function useCurrentActor(): { actor: Actor; display: ActorDisplay | null 
 /** The display name of `actor`; `null` while unknown or when no extension
  *  names it (since 0.8). */
 export function useActorDisplay(actor: Actor | null | undefined): ActorDisplay | null;
+/** The display names of `actors`, in their order (`null` while unknown, or when no extension names
+ *  them), asked for together: one hook for a list of any length, a stack of avatars say. Since 0.20. */
+export function useActorDisplays(actors: readonly Actor[]): (ActorDisplay | null)[];
 
 /** Where a probed socket stands (since 0.10): probing or connecting for the
  *  first time, open, or down (probing again, or closed for good). */
@@ -128,6 +131,14 @@ export interface PaletteSelection {
 /** What a global Action of `palette` and a Source de recherche receive. */
 export type PaletteContext = HostedContext & { location: "palette"; selected: PaletteSelection | null };
 
+/** A person on a result (since 0.20): its image, or its initials in its hue. With `actor`, the hue is
+ *  that Actor's everywhere in the core. */
+export interface RowAvatar {
+  name: string;
+  actor?: Actor | null;
+  avatar_url?: string | null;
+}
+
 /** One result, already filtered by what the Actor may read. */
 export interface SearchResult {
   /** Unique within the source's answer. */
@@ -137,6 +148,8 @@ export interface SearchResult {
   ref?: string | null;
   /** Facts at the right of the row. */
   meta?: string | null;
+  /** A person, the row's mark in place of its status or icon. Since 0.20. */
+  avatar?: RowAvatar | null;
   /** An SVG the extension serves, the row's icon when it has no status. */
   icon?: string | null;
   /** Drawn as the core draws its own statuses: the tone's icon, the label as tooltip.
@@ -269,9 +282,11 @@ export interface SelectProps<V extends string = string> {
   /** A search box over the list; by default when there are more than 8 options. */
   search?: boolean;
   align?: "start" | "end";
+  /** A filter in force: the trigger is tinted. Since 0.20. */
+  active?: boolean;
   className?: string;
 }
-/** A single-value dropdown under a bordered 24 px trigger. */
+/** A single-value dropdown under a bordered 24 px trigger; its tooltip is the value shown. */
 export function Select<V extends string>(props: SelectProps<V>): ReactNode;
 
 export interface SegmentedItem<T extends string = string> {
@@ -290,6 +305,8 @@ export interface SegmentedProps<T extends string = string> {
   label: string;
   size?: "md" | "sm";
   disabled?: boolean;
+  /** Full width: the items share the line equally, a long label ends in an ellipsis. */
+  fill?: boolean;
 }
 /** Two to four exclusive choices. */
 export function Segmented<T extends string>(props: SegmentedProps<T>): ReactNode;
@@ -466,14 +483,45 @@ export function StatusIcon(
   ),
 ): ReactNode;
 
-/** A neutral square with the initials, a robot for an agent, a bolt for a trigger. */
-export function Avatar(props: {
+/** A person, the same on every surface (since 0.20): round, a tint of its hue, its initials (first and
+ *  last word). The hue follows `actor` (its name without one), so the core and every extension draw the
+ *  same person alike. An agent or a trigger keeps a neutral fill and its glyph (a robot, a bolt). */
+export interface AvatarProps {
   name: string;
+  /** Who it is: its hue, and its glyph when it is an agent or a trigger. Since 0.20. */
+  actor?: Actor | null;
+  /** By default, the Actor's kind. */
   kind?: "human" | "agent" | "trigger";
+  /** 16 in rows, 20 in bars and presence, 24 in a profile. */
   size?: 16 | 20 | 24;
+  /** An image instead of the initials. */
   src?: string | null;
+  /** A deactivated account, or a person who left: dashed, faint. */
   off?: boolean;
+  /** Reads only: hollow, a ring in its hue. Since 0.20. */
+  hollow?: boolean;
+  /** Has it open now: a ring in the done colour. Since 0.20. */
+  present?: boolean;
+  /** Tooltip and accessible name; the name by default. Since 0.20. */
+  title?: string;
+  /** `data-testid` and the like, on the avatar. */
+  [data: `data-${string}`]: string | undefined;
+}
+export function Avatar(props: AvatarProps): ReactNode;
+
+/** People overlapping: the first `max` (3), then « +n » whose tooltip lists the others, one per line.
+ *  Nothing when `people` is empty. Since 0.20. */
+export function AvatarStack(props: {
+  people: (AvatarProps & { key?: string })[];
+  size?: 16 | 20 | 24;
+  max?: number;
+  /** Tooltip of the whole stack. */
+  title?: string;
 }): ReactNode;
+
+/** The colour of a person's marks outside its avatar (a presence outline, a cursor, a name tag): its
+ *  avatar's hue, solid, in the current Theme and mode. A CSS colour. Since 0.20. */
+export function personColor(person: { name?: string; actor?: Actor | null }): string;
 
 // ---------------------------------------------------------------- the session terminal (since 0.19)
 
@@ -622,9 +670,12 @@ declare const ExtensionUi: {
   HostedContributions: typeof HostedContributions;
   useCurrentActor: typeof useCurrentActor;
   useActorDisplay: typeof useActorDisplay;
+  useActorDisplays: typeof useActorDisplays;
   openProbedSocket: typeof openProbedSocket;
   copyToClipboard: typeof copyToClipboard;
   Avatar: typeof Avatar;
+  AvatarStack: typeof AvatarStack;
+  personColor: typeof personColor;
   Banner: typeof Banner;
   Button: typeof Button;
   Checkbox: typeof Checkbox;

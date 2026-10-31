@@ -79,7 +79,8 @@ function AxisSelect({ label, options, value, onChange }: {
   return (
     <Select
       size="sm"
-      className={cx("sh-rf__sel", value !== null && "sh-rf__sel--on")}
+      className="sh-rf__sel"
+      active={value !== null}
       label={label}
       placeholder="All"
       value={value ?? ANY}
@@ -108,7 +109,8 @@ function DateControl({ value, onChange }: { value: RunDateFilter; onChange: (v: 
         />
         <Select
           size="sm"
-          className={cx("sh-rf__sel", range !== null && "sh-rf__sel--on")}
+          className="sh-rf__sel"
+          active={range !== null}
           label="Date"
           value={rangeKey(range)}
           options={DATE_OPTIONS}

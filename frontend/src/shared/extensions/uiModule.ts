@@ -17,10 +17,12 @@
  * hébergée's detail, which the extension lays out (`SessionHeader`,
  * `SessionActions`, `SessionWaiting`, `SessionTabs`, `LiveArtifacts`,
  * `SessionInfo`, `SessionConfig`, `SessionEvents`), with their live state
- * (`useHostedSession`).
+ * (`useHostedSession`). Since 0.20 a person is one round avatar in its hue
+ * everywhere (`Avatar` follows its Actor, `AvatarStack`, `personColor` for
+ * the marks), and `useActorDisplays` names a list of Actors at once.
  */
 
-import { useActorDisplay, useCurrentActor } from "../actors/store";
+import { useActorDisplay, useActorDisplays, useCurrentActor } from "../actors/store";
 import { openProbedSocket } from "../http/probedSocket";
 import { copyToClipboard } from "../lib/clipboard";
 import SessionTerminal from "../../session/components/SessionTerminal";
@@ -49,9 +51,12 @@ export const extensionUiModule = {
   HostedContributions,
   useCurrentActor,
   useActorDisplay,
+  useActorDisplays,
   openProbedSocket,
   copyToClipboard,
   Avatar: kit.Avatar,
+  AvatarStack: kit.AvatarStack,
+  personColor: kit.personColor,
   Banner: kit.Banner,
   Button: kit.Button,
   Checkbox: kit.Checkbox,

@@ -17,3 +17,19 @@ export function actorLabel(actor: Actor): string {
       return `${actor.id} (${actor.namespace})`;
   }
 }
+
+/** The identity of an Actor: one per person, whatever names it (the cache key of its display name, the hue of its avatar). */
+export function actorKey(actor: Actor): string {
+  switch (actor.kind) {
+    case "local_operator":
+      return "local_operator";
+    case "agent":
+      return `agent:${actor.run_id}/${actor.node_id}`;
+    case "trigger":
+      return `trigger:${actor.trigger_id}`;
+    case "identified":
+      return `identified:${actor.namespace}/${actor.id}`;
+    default:
+      return JSON.stringify(actor);
+  }
+}

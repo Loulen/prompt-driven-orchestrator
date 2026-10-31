@@ -197,6 +197,26 @@ describe("EdgeDetailPanel", () => {
     expect(Object.keys(when.verdict)).toHaveLength(2);
   });
 
+  it("shows the conditions in the order they were added", () => {
+    seedEdge(baseEdge);
+    render(<EdgeDetailPanel />);
+    const shown = () =>
+      screen.getAllByTestId("condition-row").map((row) => {
+        const field = (within(row).getByTestId("field-dropdown") as HTMLSelectElement).value;
+        const op = (within(row).getByTestId("op-dropdown") as HTMLSelectElement).value;
+        return `${field} ${op}`;
+      });
+    const seen: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      fireEvent.click(screen.getByTestId("add-condition"));
+      const now = shown();
+      expect(now.slice(0, seen.length)).toEqual(seen);
+      seen.push(now[now.length - 1]);
+    }
+    // The fourth reuses a field: the clause groups it with the first.
+    expect(new Set(seen.map((s) => s.split(" ")[0])).size).toBeLessThan(4);
+  });
+
   it("offers iter as a selectable condition field", () => {
     seedEdge(baseEdge);
     render(<EdgeDetailPanel />);

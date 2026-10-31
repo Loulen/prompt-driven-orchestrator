@@ -112,6 +112,18 @@
      alone takes the larger radius. */
   --radius-ui: 2px;
   --radius-pop: 6px;
+
+  /* The 8 hues of the avatars (oklch): a person's identity picks one. None is
+     a status hue (red, orange, amber, the done green) nor the accent; each
+     palette sets their lightness and chroma (`--av-fill-*`, `--av-solid-*`). */
+  --av-h0: 185;
+  --av-h1: 300;
+  --av-h2: 215;
+  --av-h3: 130;
+  --av-h4: 275;
+  --av-h5: 235;
+  --av-h6: 110;
+  --av-h7: 325;
 }
 
 /* ------------------------------------------------------------ Acogni, dark (the default) */
@@ -137,6 +149,11 @@
   --color-st-failed: oklch(66% 0.15 28);
   --color-st-skipped: oklch(64% 0.018 255);
   /* Light text on a dark ground reads heavier: medium and strong step down. */
+  /* The avatars: the tint behind the initials, and the person's marks. */
+  --av-fill-l: 40%;
+  --av-fill-c: 0.08;
+  --av-solid-l: 71%;
+  --av-solid-c: 0.11;
   --w-medium: 470;
   --w-strong: 560;
   --shadow: oklch(0% 0 0 / 0.45);
@@ -165,6 +182,11 @@
   --color-st-blocked: oklch(51% 0.14 50);
   --color-st-failed: oklch(50% 0.175 30);
   --color-st-skipped: oklch(50% 0.02 255);
+  /* The avatars: the tint behind the initials, and the person's marks. */
+  --av-fill-l: 88%;
+  --av-fill-c: 0.06;
+  --av-solid-l: 54%;
+  --av-solid-c: 0.12;
   --w-medium: 500;
   --w-strong: 600;
   --shadow: oklch(28.2% 0.019 272 / 0.16);
@@ -198,6 +220,11 @@
   --color-st-blocked: oklch(70.5% 0.187 48);
   --color-st-failed: oklch(64.8% 0.208 25);
   --color-st-skipped: oklch(62% 0.041 257);
+  /* The avatars: the tint behind the initials, and the person's marks. */
+  --av-fill-l: 40%;
+  --av-fill-c: 0.08;
+  --av-solid-l: 71%;
+  --av-solid-c: 0.11;
   --w-medium: 470;
   --w-strong: 560;
   --shadow: oklch(0% 0 0 / 0.45);
@@ -227,6 +254,11 @@
   --color-st-blocked: oklch(47% 0.143 37);
   --color-st-failed: oklch(50.5% 0.19 28);
   --color-st-skipped: oklch(44.6% 0.037 257);
+  /* The avatars: the tint behind the initials, and the person's marks. */
+  --av-fill-l: 88%;
+  --av-fill-c: 0.06;
+  --av-solid-l: 54%;
+  --av-solid-c: 0.12;
   --w-medium: 500;
   --w-strong: 600;
   --shadow: oklch(20.8% 0.015 262 / 0.16);

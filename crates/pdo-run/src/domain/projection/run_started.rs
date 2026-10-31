@@ -27,6 +27,12 @@ pub(super) fn apply_run_started(state: &mut RunState, event: &Event) {
         if let Some(input) = payload.get("input").and_then(|v| v.as_str()) {
             state.input = Some(input.to_string());
         }
+        if let Some(variables) = payload.get("variables").and_then(|v| v.as_object()) {
+            state.variables = variables
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+        }
         if let Some(edges) = payload.get("edges") {
             if let Ok(parsed) = serde_json::from_value::<Vec<EdgeInfo>>(edges.clone()) {
                 state.edges = parsed;

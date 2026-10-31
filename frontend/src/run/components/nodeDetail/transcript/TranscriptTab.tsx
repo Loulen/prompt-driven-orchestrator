@@ -10,6 +10,7 @@ import { useSearchHighlight, useTranscriptFocus } from "../../../store/runSearch
 import IterSelector from "../IterSelector";
 import MessageCard from "./MessageCard";
 import ToolCallRow from "./ToolCallRow";
+import IterMark from "../../IterMark";
 
 /** How close to the end of the list the next page starts loading, in px. */
 const LOAD_AHEAD = 160;
@@ -104,7 +105,7 @@ export default function TranscriptTab({
         {iterations.length > 1 ? (
           <IterSelector iterations={iterations} selectedIter={iter} onSelect={onSelectIter} />
         ) : (
-          <span className="font-mono text-text-2">iter {iter}</span>
+          <IterMark iter={iter} />
         )}
         <span className="ri-tx__counts" data-testid="transcript-counts" title={`${counts} folded`} aria-label={counts}>
           <MessageSquare size={11} strokeWidth={1.5} aria-hidden />

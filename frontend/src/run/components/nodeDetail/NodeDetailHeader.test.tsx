@@ -143,8 +143,8 @@ describe("NodeDetailHeader duration", () => {
     expect(screen.queryByTestId("iteration-duration")).toBeNull();
     header(makeNode({ status: "interrupted", started_at: "2026-01-01T00:00:00Z" }));
     expect(screen.queryByTestId("iteration-duration")).toBeNull();
-    for (const line of screen.getAllByText("i1")) {
-      expect(line.parentElement).toHaveTextContent(/^i1$/);
+    for (const mark of screen.getAllByTestId("iter-mark")) {
+      expect(mark.parentElement).toHaveTextContent(/^Iteration 1$/);
     }
   });
 
@@ -323,5 +323,23 @@ describe("NodeDetailHeader duration", () => {
         vi.useRealTimers();
       }
     });
+  });
+});
+
+describe("NodeDetailHeader iteration", () => {
+  it("names the iteration by the card's icon and its number, never « i2 »", () => {
+    header(looped);
+    const picker = screen.getByRole("button", { name: "Iteration 2 of 2" });
+    const mark = within(picker).getByTestId("iter-mark");
+    expect(mark.querySelector("svg")).not.toBeNull();
+    expect(mark).toHaveTextContent("Iteration 2/2");
+    expect(picker).not.toHaveTextContent(/\bi\d/);
+  });
+
+  it("shows a single iteration as the icon and its number", () => {
+    header(makeNode({ iter: 1 }));
+    const mark = screen.getByTestId("iter-mark");
+    expect(mark.querySelector("svg")).not.toBeNull();
+    expect(mark).toHaveTextContent(/^Iteration 1$/);
   });
 });

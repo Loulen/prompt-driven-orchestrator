@@ -382,8 +382,8 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 
 - **Accepts**: decoration.
 - **Renders**: a row of the Runs list, at the end of line 2, after the `run/item` marks and
-  before the duration and the cost: the people of the Run (16 px avatars fit the row). **The core
-  draws no person there**: nothing without a contribution, neither the creator nor anyone else.
+  before the duration and the cost: the people of the Run (16 px avatars fit the row: draw them
+  with `AvatarStack`, [People](#people)). **The core draws no person there**: nothing without a contribution, neither the creator nor anyone else.
 - **Context**: `RunPeopleContext` = `DecorationContext` + `presences`, `entity` = `{ kind: "run",
   id, name?, attributes, created_by }`:
 
@@ -710,6 +710,7 @@ interface SearchResult {
   title: string;                 // the row's main text
   ref?: string | null;           // before the title, in mono (N-12)
   meta?: string | null;          // facts at the right of the row
+  avatar?: RowAvatar | null;     // a person, in place of the status or the icon (0.20)
   icon?: string | null;          // an SVG the extension serves, when there is no status
   status?: { tone: StatusTone; label: string; shape?: StatusShape | null } | null;
   // the tone's icon, or the fixed shape (0.20), in the tone's colour; the label as tooltip
@@ -742,6 +743,9 @@ type SearchFunction = (query: string, context: PaletteContext, signal: AbortSign
 - **A long title** ends in an ellipsis; the facts (`meta`) stay whole at the right of the row, up
   to 45 % of its width.
 - **Without `highlights`**, the core highlights each occurrence of the query in the title.
+- **`avatar`** (0.20): a person result shows the kit's avatar in its icon column, in place of its
+  status or icon, the same as the core draws that person ([People](#people)): give its `actor` for
+  its hue. An avatar without a `name` is left out, the result kept.
 - A source whose bundle does not export `search` is left out.
 
 ## Sources of completion
@@ -766,8 +770,9 @@ interface CompletionSuggestion {
   insert: string;        // what replaces the trigger and the query
   hint?: string | null;  // after the label, monospace (an id)
   detail?: string | null; // at the right of the row (a role)
-  avatar?: { name: string; avatar_url?: string | null } | null; // an image, or the initials of name
+  avatar?: RowAvatar | null; // an image, or the initials of name in its hue
 }
+interface RowAvatar { name: string; actor?: Actor | null; avatar_url?: string | null } // actor: since 0.20
 type CompletionFunction = (query: string, context: ReviewComposerContext)
   => CompletionSuggestion[] | Promise<CompletionSuggestion[]>;
 interface CompletionRenderProps { extension: ExtensionRef; context: LocationContext; text: string }
@@ -1104,12 +1109,12 @@ taking `size`, `strokeWidth` and `className`.
 | --- | --- |
 | `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon` |
 | `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count |
-| `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most |
+| `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most. Shows once the pointer moves on the control (not when a surface opens under a still pointer) or on a keyboard focus (not on the focus a menu gives back after Escape or a pick) |
 | `Kbd` | A key or a chord |
 | `TextInput`, `TextArea` | Inputs; `invalid`, `mono`, `small` |
 | `Field` | A form row: the label in a 96 px column (`help` in its tooltip), the control, the `error` at the row end |
-| `Select` | A single value out of `options` (icons, hints, groups, a search box past 8) |
-| `Segmented` | Two to four exclusive choices, arrow keys |
+| `Select` | A single value out of `options` (icons, hints, groups, a search box past 8); its tooltip is the value shown; `active` tints a filter in force (0.20) |
+| `Segmented` | Two to four exclusive choices, arrow keys; `fill` (0.20) takes the row's width, the items sharing it, a long label ending in an ellipsis |
 | `Switch`, `Checkbox` | On/off, the accent when on; a box with its text, `mixed` |
 | `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
 | `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger` |
@@ -1123,7 +1128,38 @@ taking `size`, `strokeWidth` and `className`.
 | `EmptyState` | An icon, two to four words, one action; loading and error alike |
 | `Chip` | A neutral chip, a status `tone` as its icon; removable |
 | `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name (and, since 0.20, a fixed `shape`: `todo`, `doing`, `review`, `done`) |
-| `Avatar` | A neutral square with the initials; a robot for an agent, a bolt for a trigger |
+| `Avatar` | A person: round, a tint of its hue, its initials; a robot for an agent, a bolt for a trigger ([People](#people)) |
+| `AvatarStack` | People overlapping, three then « +n » (0.20) |
+| `personColor(person)` | The CSS colour of a person's marks outside its avatar (0.20) |
+
+### People
+
+Since 0.20 a person looks the same on every surface, the core's and the extensions': one round
+avatar, the same hue, the same initials.
+
+- **Initials**: the first letter of the first and of the last word of the name (`Alice Martin` → `AM`,
+  `bob` → `B`).
+- **Hue**: one of 8 fixed hues (`--av-h0` … `--av-h7` in the tokens), none of them a status colour
+  nor the accent, picked from the person's **Actor**: give `actor` and the hue is the one the core
+  draws for that Actor (its presence, its comments, the Runs it created). Without `actor`, the name
+  picks it. Lightness and chroma follow the Theme and the mode.
+- **States**: `size` 16 in a row, 20 in a bar or a presence, 24 in a profile; `hollow` reads only (a
+  ring in its hue); `off` a deactivated account or a person who left (dashed, faint); `present` has
+  it open now (a ring in the done colour). An agent or a trigger Actor keeps a neutral fill and its
+  glyph. `src` draws an image instead of the initials. The tooltip is the name, or `title`.
+- **`AvatarStack({ people, size?, max?, title? })`**: the first `max` (3) overlapping, then « +n »
+  whose tooltip lists the others, one per line; nothing without anybody. Each entry takes the props
+  of `Avatar`, and a `key` when two people share a name.
+- **`personColor({ name?, actor? })`**: the person's hue, solid, for a mark that is not its avatar
+  (a presence outline, a cursor, a name tag), so it matches the avatar.
+
+```ts
+import { Avatar, AvatarStack, personColor } from "@pdo/extension-ui";
+
+<Avatar name="Alice Martin" actor={{ kind: "identified", namespace: "test", id: "alice" }} size={16} />
+<AvatarStack size={16} people={people.map((p) => ({ key: p.id, name: p.name, actor: p.actor, present: p.here }))} />
+<span style={{ outline: `1.5px solid ${personColor({ actor })}` }} />
+```
 
 The test extension `kit` (`crates/pdo/tests/test_extension/kit.js`) is a page drawn with nothing
 else.
@@ -1243,6 +1279,7 @@ them. The shared module `@pdo/extension-ui` exports:
 | --- | --- |
 | `useCurrentActor()` | The Actor using the interface and its display name, `{ actor, display }` (`display` is `null` when no extension names it); `null` until known |
 | `useActorDisplay(actor)` | The display name of any `Actor` (`{ name, avatar_url }`); `null` while unknown, or when no extension names it. Batched and cached: call it per row |
+| `useActorDisplays(actors)` | The display names of a list of Actors, in their order, in one hook (a stack of avatars); since 0.20 |
 
 The core shows them too: the `actor_display` of each row of the audit journal (`GET /audit`).
 It draws no person on a Run (since 0.12): an extension does, at `run/item/people` and `run/info`.

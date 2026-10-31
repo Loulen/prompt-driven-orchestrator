@@ -14,6 +14,7 @@ import RunRowMenu from "./RunRowMenu";
 import RunParentLink from "./RunParentLink";
 import RunRowPeople from "./RunRowPeople";
 import { ChildPills, NodePips, RunFigures, TriggerMark } from "./RunRowParts";
+import { shownNodes } from "../../model/runRowNodes";
 import type { RunGesture } from "../../model/runGestures";
 
 const RUN_STATUS_WORD: Record<RunListEntry["status"] | "stalled", string> = {
@@ -126,6 +127,8 @@ export default function RunRow({
       data-open={isOpen || undefined}
       data-checked={rowSelected || undefined}
       data-archived={isArchived || undefined}
+      // Its name and its status: the rest of the row has its own names.
+      aria-label={`${label}, ${RUN_STATUS_WORD[shownStatus]}`}
       aria-current={isOpen || undefined}
       aria-level={node.depth + 1}
       aria-expanded={hasChildren ? expanded : undefined}
@@ -236,7 +239,7 @@ export default function RunRow({
           />
         )}
         <span className="lp-end">
-          <NodePips nodes={run.nodes ?? []} />
+          <NodePips nodes={shownNodes(run)} />
         </span>
       </span>
       <span className="lp-l2">

@@ -28,7 +28,7 @@ import { stageCredentials, wipeCredentials } from "./credentials.mjs";
 
 const ROOT_PREFIX = "pdo-readme-media-";
 /** The user's usual ports, never taken even when free. */
-const RESERVED_PORTS = new Set([5172, 5173, 5174, 5272, 6160, 6172]);
+export const RESERVED_PORTS = new Set([5172, 5173, 5174, 5272, 6160, 6172]);
 
 export class DemoInstance {
   /** `binary` is the PDO the daemon runs. `fixtureRepo` (a folder, optional)

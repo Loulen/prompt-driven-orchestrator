@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build fast test bench-transcript-search check lint fmt clean types types-check support-table readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
+.PHONY: help dev build fast test bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -56,6 +56,8 @@ help:
 	@echo "  make lint    cargo clippy + eslint"
 	@echo "  make fmt     cargo fmt"
 	@echo "  make clean   cargo clean (embedded frontend included) + rm a stray frontend/dist"
+	@echo "  make demo-daemon PORT=<p> [TEST_EXT=1]  Start a demo daemon for an agentic test: this branch's pdo, fresh HOME under /tmp/pdo-demo-<p>"
+	@echo "  make demo-daemon-stop PORT=<p>          Stop it: its pid and its tmux socket pdo-<p>, nothing else"
 	@echo "  make support-table  Regenerate the harness support table in docs/reference/harnesses.md from the code"
 	@echo "  make readme-media [SCENE=stats]   Record the README media (2 variants per scene) into .readme-media/ — see CONTRIBUTING"
 	@echo "  make readme-media-publish [SCENE=…]  Copy the selected variants into docs/assets/readme/"
@@ -111,7 +113,7 @@ test:
 	$(NO_PDO_ENV) cargo nextest run --workspace --no-fail-fast
 	$(NO_PDO_ENV) cargo test --workspace --doc
 	cd frontend && pnpm test
-	node --disable-warning=ExperimentalWarning --test 'scripts/readme-media/test/*.test.mjs'
+	node --disable-warning=ExperimentalWarning --test 'scripts/readme-media/test/*.test.mjs' 'scripts/demo-daemon/test/*.test.mjs'
 
 # The bench of the search over a Run's transcripts (CORE-82): 15 searches at once
 # on a realistic Run, against the list of the Runs and the opening of a node.
@@ -151,6 +153,24 @@ types-check:
 # after adding a harness, adding a capability, or moving a "last validated version".
 support-table:
 	cargo run --quiet -p pdo-daemon -- docs support-table --write --file $(CURDIR)/$(SUPPORT_TABLE)
+
+# The demo daemon of the agentic tests (docs/agents/run-scenario.md): this
+# branch's `pdo daemon` (or, TEST_EXT=1, the test extension's demo daemon) on
+# PORT, under a fresh HOME in /tmp/pdo-demo-<PORT>, with no PDO_* nor TMUX*
+# inherited. PORT is required: the 6172 of `make dev` is not a default here.
+# DEMO_ENV='NAME=value …' sets variables on the daemon explicitly. The stop
+# reaches the pid of the pidfile and the tmux socket pdo-<PORT>, never the
+# user's daemon or tmux server; KEEP=1 keeps /tmp/pdo-demo-<PORT> (logs).
+DEMO_DAEMON := node --disable-warning=ExperimentalWarning scripts/demo-daemon/demo-daemon.mjs
+comma := ,
+DEMO_PORT_HINT = $(if $(filter demo-daemon-stop,$@),the port of a running demo daemon,a free port$(comma) 6400 to 6999)
+DEMO_PORT = $(if $(filter command line environment,$(origin PORT)),$(PORT),$(error PORT=<port> is required, e.g. make $@ PORT=6491 ($(DEMO_PORT_HINT))))
+
+demo-daemon:
+	@$(DEMO_DAEMON) start $(DEMO_PORT) $(if $(filter 1,$(TEST_EXT)),--test-ext) $(if $(DEMO_ENV),--env '$(DEMO_ENV)')
+
+demo-daemon-stop:
+	@$(DEMO_DAEMON) stop $(DEMO_PORT) $(if $(filter 1,$(KEEP)),--keep)
 
 # README media (ADR-0074): a sealed demo instance, real UI, real agents for the
 # live scenes. Costs an agent session per live scene — regenerate only when a

@@ -45,7 +45,8 @@ sequential `/tdd → /code-review → /agentic-tests` run otherwise.
 ## Git flow
 
 Simplified vanilla git flow, relaxed for a solo repo: **`docs/agents/git-flow.md` overrides the
-skill** (no `develop`, `integration/*` → `main`, sanity gate = `make check`).
+skill** (no `develop`, `integration/*` → `main`, ticket gate = `make gate`; `make fast` and
+`make scoped` while you work).
 
 ## Agent skills
 

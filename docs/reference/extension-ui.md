@@ -10,7 +10,7 @@ what each accepts and the context each hands over are part of the semver of
 The Rust types are in `pdo-extension-api` (`UiLocation`, `UiContribution`, `UiElement`,
 `UiCommand`, `When`, `UiContributions`). Their TypeScript is generated into
 `frontend/src/shared/generated/` (`UiLocation.ts`, `UiContribution.ts`…); the props and contexts
-below are `frontend/src/shared/extensions/contract.ts` (`runPeople.ts` for `run/item/people`).
+below are `frontend/src/shared/extensions/contract.ts` (`runPeople.ts` for `run/item/people`, `pageContract.ts` for the pages and the panels).
 
 ## Declaring contributions
 

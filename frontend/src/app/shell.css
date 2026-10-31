@@ -351,13 +351,16 @@
     flex: none;
     color: var(--text-3);
   }
+  /* An extension's filter draws its own caption: it starts where the labels'
+     text does, past their icon, and its control follows. */
   .sh-rf__row--ext {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: var(--g-2);
     min-width: 0;
+    padding-left: calc(12px + var(--g-2));
     color: var(--text-2);
-    font-size: var(--fs-xs);
   }
   .sh-rf__text {
     min-width: 0;
@@ -373,10 +376,6 @@
   .sh-rf__sel {
     width: 100%;
     min-width: 0;
-  }
-  .sh-rf__sel--on,
-  .sh-rf__sel--on:hover:not(:disabled) {
-    border-color: var(--primary);
   }
   .sh-rf__date {
     display: flex;

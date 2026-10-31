@@ -5,29 +5,16 @@
  * names Actors, every display is `null` and the UI shows what it always did.
  */
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { create } from "zustand";
 import type { Actor } from "../generated/Actor";
 import type { ActorDisplay } from "../generated/ActorDisplay";
 import type { ActorsDisplayResponse } from "../generated/ActorsDisplayResponse";
 import type { CurrentActor } from "../generated/CurrentActor";
 import { request } from "../http/client";
+import { actorKey } from "../lib/actor";
 
-/** The cache key of an Actor: its JSON, keys in a fixed order. */
-export function actorKey(actor: Actor): string {
-  switch (actor.kind) {
-    case "local_operator":
-      return "local_operator";
-    case "agent":
-      return `agent:${actor.run_id}/${actor.node_id}`;
-    case "trigger":
-      return `trigger:${actor.trigger_id}`;
-    case "identified":
-      return `identified:${actor.namespace}/${actor.id}`;
-    default:
-      return JSON.stringify(actor);
-  }
-}
+export { actorKey };
 
 interface ActorsState {
   /** The UI's own Actor; `null` until known. */
@@ -108,6 +95,26 @@ export function useActorDisplay(actor: Actor | null | undefined): ActorDisplay |
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, display]);
   return display ?? null;
+}
+
+/**
+ * The display names of `actors`, in their order (`null` while unknown, or
+ * when no extension names it); those not known yet are asked for, batched.
+ * One call for a list of any length, a stack of avatars say.
+ */
+export function useActorDisplays(actors: readonly Actor[]): (ActorDisplay | null)[] {
+  const displays = useActorsStore((state) => state.displays);
+  const keys = actors.map(actorKey);
+  const missing = actors.filter((_, i) => !(keys[i] in displays));
+  const ask = missing.map(actorKey).join("\n");
+  useEffect(() => {
+    if (missing.length > 0) void requestDisplays(missing);
+    // `ask` stands for `missing`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask]);
+  const list = keys.join("\n");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => keys.map((key) => displays[key] ?? null), [displays, list]);
 }
 
 /** Tests: forget everything. */

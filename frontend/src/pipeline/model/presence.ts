@@ -1,23 +1,24 @@
 /**
- * The participants of a shared draft as the editor draws them (ADR-0088): a
- * color each (the daemon deals them out), and a first name.
+ * The participants of a shared draft as the editor draws them (ADR-0088): the
+ * hue of their avatar (their Actor's), and a first name.
  */
 
 import type { CSSProperties } from "react";
 import type { DraftParticipant } from "../../shared/generated/DraftParticipant";
 import { actorLabel } from "../../shared/lib/actor";
+import { personColor, personStyle } from "../../shared/ui/kit";
 
-/** How many colors the participants share (`--presence-0` … in `inspect.css`). */
-export const PRESENCE_COLOR_COUNT = 8;
-
-/** One color per participant, by the index the daemon gave it: a theme token. */
-export function presenceColor(participant: Pick<DraftParticipant, "color">): string {
-  return `var(--presence-${participant.color % PRESENCE_COLOR_COUNT})`;
+/**
+ * The participant's colour: its avatar's hue, the same on every surface. A
+ * library assistant takes its Actor's.
+ */
+export function presenceColor(participant: Pick<DraftParticipant, "actor">): string {
+  return personColor({ actor: participant.actor });
 }
 
-/** The participant's color, as the `--pc` its marks paint with. */
-export function presenceStyle(participant: Pick<DraftParticipant, "color">): CSSProperties {
-  return { ["--pc" as string]: presenceColor(participant) };
+/** The participant's colour, as the `--pc` its marks paint with. */
+export function presenceStyle(participant: Pick<DraftParticipant, "actor">): CSSProperties {
+  return personStyle({ actor: participant.actor });
 }
 
 /**

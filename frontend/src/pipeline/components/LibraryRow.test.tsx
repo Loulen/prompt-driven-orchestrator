@@ -6,7 +6,6 @@ import LibraryRow from "./LibraryRow";
 function renderRow(
   over: {
     name?: string;
-    nodeCount?: number;
     modified?: string | null;
     selected?: boolean;
     checked?: boolean;
@@ -29,7 +28,6 @@ function renderRow(
 ) {
   const props = {
     name: "fixture",
-    nodeCount: 3,
     showDuplicate: false,
     onOpen: () => {},
     onDelete: () => {},
@@ -50,17 +48,17 @@ describe("LibraryRow, two lines", () => {
     expect(onOpen).toHaveBeenCalledTimes(2);
   });
 
-  it("puts the name and its validation on line 1, the nodes, version and edit date on line 2", () => {
+  it("puts the name and its validation on line 1, the version and edit date on line 2, no node count", () => {
     renderRow({
       name: "planner",
-      nodeCount: 7,
       version: 8,
       modified: "2026-10-25T12:00:00Z",
       indicator: <span>ind</span>,
     });
     expect(screen.getByTestId("library-row-name")).toHaveTextContent("planner");
     const meta = screen.getByTestId("library-row-meta");
-    expect(meta).toHaveTextContent("7n");
+    expect(meta.textContent).not.toMatch(/\d+n\b/);
+    expect(meta.querySelector('[title$=" nodes"], [title$=" node"]')).toBeNull();
     expect(within(meta).getByTestId("library-row-version")).toHaveTextContent("v8");
     expect(within(meta).getByTestId("library-row-edited")).toHaveTextContent("25 Oct");
     expect(meta).not.toContainElement(screen.getByText("ind"));
@@ -182,7 +180,6 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
     render(
       <LibraryRow
         name="flow"
-        nodeCount={5}
         showDuplicate={false}
         onOpen={() => {}}
         onDelete={() => {}}
@@ -195,7 +192,6 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
               connection: "4",
               actor: { kind: "local_operator" },
               display: null,
-              color: 1,
               can_write: true,
               assistant: false,
               selection: null,
@@ -206,7 +202,7 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
       />,
     );
     expect(screen.getByTestId("library-row-draft")).toHaveTextContent("draft: 3 changes");
-    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("6n");
+    expect(screen.getByTestId("library-row-meta").textContent).not.toContain("6n");
     expect(screen.getAllByTestId("draft-participant")).toHaveLength(1);
   });
 
@@ -214,7 +210,6 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
     render(
       <LibraryRow
         name="flow"
-        nodeCount={5}
         showDuplicate={false}
         onOpen={() => {}}
         onDelete={() => {}}
@@ -222,7 +217,7 @@ describe("LibraryRow shared draft (ADR-0088)", () => {
         draft={{ changes: 0, nodes: 5, participants: [] }}
       />,
     );
-    expect(screen.getByTestId("library-row-meta")).toHaveTextContent("5n");
+    expect(screen.getByTestId("library-row-meta").textContent).not.toContain("5n");
     expect(screen.queryByTestId("library-row-draft")).not.toBeInTheDocument();
     expect(screen.queryByTestId("draft-participant")).not.toBeInTheDocument();
   });

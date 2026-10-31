@@ -232,7 +232,7 @@ async fn the_display_name_of_the_caller_and_of_any_actor() {
         me,
         json!({
             "actor": { "kind": "identified", "namespace": "test", "id": "alice" },
-            "display": { "name": "Alice", "avatar_url": "/ext/test/avatar.svg" },
+            "display": { "name": "Alice", "avatar_url": null },
         })
     );
     let (status, displays) = body(

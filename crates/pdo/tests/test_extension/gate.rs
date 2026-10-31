@@ -9,10 +9,9 @@
 //!   is refused (`401`), or redirected to [`SIGN_IN`] in redirect mode; the
 //!   sign-in page itself is admitted. Without a token required, everything is.
 //! - **Display name**: an Actor it identifies, `id` capitalised (`alice` →
-//!   `Alice`), with the avatar [`AVATAR`].
+//!   `Alice`), without an image: the core draws its initials in its hue.
 //! - Routes: `GET`/`PUT /ext/test/gate` (`{token, redirect}`), `GET
-//!   /ext/test/sign-in` (a form setting the cookie, then back to `?next=`),
-//!   `GET /ext/test/avatar.svg`.
+//!   /ext/test/sign-in` (a form setting the cookie, then back to `?next=`).
 
 use std::sync::{Arc, Mutex};
 
@@ -31,9 +30,6 @@ pub const TOKEN_COOKIE: &str = "pdo-test-token";
 
 /// The page a redirection names.
 pub const SIGN_IN: &str = "/ext/test/sign-in";
-
-/// The avatar of the Actors it names.
-pub const AVATAR: &str = "/ext/test/avatar.svg";
 
 /// What the test extension requires: a token (none: everything is admitted),
 /// and whether a refusal redirects to its sign-in page.
@@ -125,7 +121,7 @@ pub fn display_name(actor: &Actor) -> Option<ActorDisplay> {
                 .next()
                 .map(|first| first.to_uppercase().chain(chars).collect::<String>())
                 .unwrap_or_default();
-            Some(ActorDisplay::new(name).with_avatar(AVATAR))
+            Some(ActorDisplay::new(name))
         }
         _ => None,
     }
@@ -136,9 +132,6 @@ pub fn display_name(actor: &Actor) -> Option<ActorDisplay> {
 /// its theme script (`/shared/theme.js`), so it opens in the Theme and the mode
 /// the browser chose.
 pub const SIGN_IN_PAGE: &str = include_str!("sign_in.html");
-
-/// Its avatar: a disc with an « A ».
-pub const AVATAR_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#f97316"/><text x="12" y="16" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#fff">A</text></svg>"##;
 
 #[cfg(test)]
 mod tests {

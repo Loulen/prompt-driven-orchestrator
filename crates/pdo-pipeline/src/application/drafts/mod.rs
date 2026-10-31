@@ -93,7 +93,6 @@ pub struct DraftJoin {
     pub room: Arc<Room>,
     pub connection: u64,
     pub can_write: bool,
-    pub color: u8,
     /// What the participant hears, from before it was seated on.
     pub messages: broadcast::Receiver<DraftMessage>,
 }
@@ -112,18 +111,16 @@ impl Pipelines {
             connection: connection.to_string(),
             actor: actor.clone(),
             display: self.host().display_name(actor),
-            color: 0,
             can_write,
             assistant: false,
             presence: PresenceState::default(),
         };
-        let color = room.seat(connection, participant);
+        room.seat(connection, participant);
         self.announce(&room);
         Ok(DraftJoin {
             room,
             connection,
             can_write,
-            color,
             messages,
         })
     }

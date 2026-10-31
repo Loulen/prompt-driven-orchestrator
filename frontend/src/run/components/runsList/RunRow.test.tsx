@@ -111,6 +111,11 @@ describe("a Run's row", () => {
     expect(pips).toHaveTextContent("+2");
   });
 
+  it("is named by its name and its status alone", () => {
+    mount([entry({ status: "failed", nodes: [{ id: "a", status: "failed" }] })]);
+    expect(row("r1")).toHaveAccessibleName("Add a product search, Failed");
+  });
+
   it("keeps a 200-character name whole in its title, on one line", () => {
     const name = "x".repeat(200);
     mount([entry({ name })]);

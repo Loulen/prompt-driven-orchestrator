@@ -639,6 +639,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("review/composer", "completion", "tags"),
         triple("palette", "action", "new-note"),
         triple("palette", "search", "notes"),
+        triple("palette", "search", "members"),
         triple("palette", "action", "inbox"),
     ]);
     // One action at each Action location (#30), then the command that fails.

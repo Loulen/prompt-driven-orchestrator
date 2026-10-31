@@ -5,6 +5,8 @@
 import React from "react";
 import * as Y from "yjs";
 import {
+  Avatar,
+  AvatarStack,
   Banner,
   Button,
   Chip,
@@ -23,7 +25,7 @@ import {
   SessionWaiting,
   TerminalZoom,
   toast,
-  useActorDisplay,
+  useActorDisplays,
   useCurrentActor,
 } from "@pdo/extension-ui";
 
@@ -668,30 +670,20 @@ export function RunsEmptyNote() {
   );
 }
 
-// `run/item/people` (0.12): one mark per Presence of the row's Run, live, each
-// named as the extensions name its Actor (its kind otherwise).
+// `run/item/people` (0.12): who has the row's Run open, live, as the kit's
+// stack (0.20): each named as the extensions name its Actor (its kind
+// otherwise), ringed as present, « Viewing now » in its tooltip.
 export function PeopleMarks({ context }) {
   const presences = context.presences ?? [];
+  const displays = useActorDisplays(presences.map((presence) => presence.actor));
   if (presences.length === 0) return null;
-  return h(
-    "span",
-    { style: { display: "inline-flex", gap: "2px" }, "data-testid": "test-people" },
-    presences.map((presence) => h(PresenceMark, { key: JSON.stringify(presence.actor), presence })),
-  );
-}
-
-function PresenceMark({ presence }) {
-  const display = useActorDisplay(presence.actor);
-  const name = display?.name ?? presence.actor.id ?? presence.actor.kind;
-  return h(
-    "span",
-    {
-      "data-testid": "test-presence",
-      title: `${name}, here since ${presence.since}`,
-      style: { border: "1px solid currentColor", borderRadius: "8px", padding: "0 4px", fontSize: "10px" },
-    },
-    name,
-  );
+  return h(AvatarStack, {
+    "data-testid": "test-people",
+    people: presences.map((presence, i) => {
+      const name = displays[i]?.name ?? presence.actor.id ?? presence.actor.kind;
+      return { key: JSON.stringify(presence.actor), name, actor: presence.actor, present: true, title: `${name} · Viewing now` };
+    }),
+  });
 }
 
 // A decoration that throws: its boundary shows a mark in its place, and nothing
@@ -708,7 +700,6 @@ export function AccountMenu() {
   const current = useCurrentActor();
   const [open, setOpen] = React.useState(false);
   const name = current?.display?.name ?? current?.actor?.kind ?? "…";
-  const initials = name.slice(0, 2).toUpperCase();
   const signOut = () => {
     document.cookie = "pdo-test-token=; path=/; max-age=0";
     window.location.assign(`/ext/test/sign-in?next=${encodeURIComponent(window.location.hash ? "/" + window.location.hash : "/")}`);
@@ -723,19 +714,9 @@ export function AccountMenu() {
         "aria-label": `Account: ${name}`,
         "data-testid": "test-account-avatar",
         onClick: () => setOpen((o) => !o),
-        style: {
-          width: "24px",
-          height: "24px",
-          borderRadius: "999px",
-          border: "none",
-          background: "#f97316",
-          color: "#fff",
-          fontSize: "9px",
-          fontWeight: 600,
-          cursor: "pointer",
-        },
+        style: { display: "inline-grid", padding: 0, border: "none", background: "transparent", cursor: "pointer" },
       },
-      initials,
+      h(Avatar, { name, actor: current?.actor, size: 20 }),
     ),
     open &&
       h(
@@ -829,6 +810,25 @@ export function searchNotes(query) {
   return NOTES.filter((note) => note.title.toLowerCase().includes(q) || note.ref.toLowerCase().includes(q)).map(
     noteResult,
   );
+}
+
+// 0.20: people, each result carrying its avatar (its Actor's hue) and its
+// role on the right.
+const PEOPLE = [
+  { id: "alice", name: "Alice Martin", role: "Administrator" },
+  { id: "bob", name: "Bob Stone", role: "Maintainer" },
+  { id: "carol", name: "Carol Dupont", role: "Member" },
+];
+
+export function searchPeople(query) {
+  const q = query.toLowerCase();
+  return PEOPLE.filter((p) => p.name.toLowerCase().includes(q) || p.id.includes(q)).map((p) => ({
+    id: p.id,
+    title: p.name,
+    meta: p.role,
+    avatar: { name: p.name, actor: { kind: "identified", namespace: "test", id: p.id } },
+    link: `#/ext/test/topbar/end/people/${p.id}`,
+  }));
 }
 
 // The same notes, answered after 3 s: a slow source.

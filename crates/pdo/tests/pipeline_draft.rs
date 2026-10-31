@@ -170,7 +170,7 @@ async fn two_clients_share_one_draft_and_both_concurrent_fields_stay() {
     let mut bob = Client::join(&daemon, "draft-target", None).await;
     assert_eq!(alice.welcome["can_write"], true);
     assert_eq!(alice.welcome["generation"], bob.welcome["generation"]);
-    assert_ne!(alice.welcome["color"], bob.welcome["color"]);
+    assert_ne!(alice.welcome["connection"], bob.welcome["connection"]);
     assert_eq!(alice.participants(2).await.len(), 2);
 
     // A change of one reaches the other.

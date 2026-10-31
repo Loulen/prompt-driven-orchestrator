@@ -1484,56 +1484,6 @@
     align-items: center;
     gap: var(--g-3);
   }
-  .pi-av {
-    display: inline-grid;
-    flex: none;
-    place-items: center;
-    overflow: hidden;
-    border-radius: 50%;
-    background: var(--pc);
-    box-shadow: 0 0 0 1.5px var(--surface-1);
-    color: var(--surface-0);
-    font-family: var(--font-ui);
-    font-weight: var(--w-strong);
-    letter-spacing: 0;
-    line-height: 1;
-  }
-  .pi-av[data-size="md"] {
-    width: 18px;
-    height: 18px;
-    font-size: calc(var(--fs-2xs) * 0.85);
-  }
-  .pi-av[data-size="sm"] {
-    width: 14px;
-    height: 14px;
-    font-size: calc(var(--fs-2xs) * 0.7);
-  }
-  .pi-av[data-ro] {
-    background: var(--surface-1);
-    box-shadow:
-      inset 0 0 0 1px var(--pc),
-      0 0 0 1.5px var(--surface-1);
-    color: var(--pc);
-  }
-  .pi-av img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-  .pi-stack {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-  }
-  .pi-stack > * + * {
-    margin-left: -3px;
-  }
-  .pi-stack__more {
-    margin-left: 2px !important;
-    color: var(--text-3);
-    font-family: var(--font-code);
-    font-size: var(--fs-2xs);
-  }
   .pi-typing {
     display: inline-flex;
     align-items: center;
@@ -1598,28 +1548,4 @@
     white-space: nowrap;
     pointer-events: none;
   }
-}
-
-/* One color per participant of a shared draft (the daemon deals the index):
-   never a status color, never the ruby. */
-:root,
-[data-mode="dark"] {
-  --presence-0: oklch(72% 0.12 300);
-  --presence-1: oklch(74% 0.1 220);
-  --presence-2: oklch(78% 0.1 90);
-  --presence-3: oklch(76% 0.09 185);
-  --presence-4: oklch(76% 0.11 130);
-  --presence-5: oklch(72% 0.1 350);
-  --presence-6: oklch(74% 0.09 40);
-  --presence-7: oklch(70% 0.06 260);
-}
-[data-mode="light"] {
-  --presence-0: oklch(52% 0.15 300);
-  --presence-1: oklch(52% 0.11 220);
-  --presence-2: oklch(52% 0.1 85);
-  --presence-3: oklch(55% 0.1 185);
-  --presence-4: oklch(53% 0.12 130);
-  --presence-5: oklch(52% 0.13 350);
-  --presence-6: oklch(52% 0.12 40);
-  --presence-7: oklch(50% 0.05 260);
 }

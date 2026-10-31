@@ -52,11 +52,11 @@ pass them explicitly with `DEMO_ENV='PDO_TEST_INTEROP=1 PDO_TEST_EXTENSION_REFUS
 `PDO_TOKEN`, `PDO_NODE_ID`, `PDO_DAEMON_NO_CLEANUP`, `TMUX` or `TMUX_PANE`.
 
 Drive it with the printed `PDO=` binary and `PDO_DAEMON_URL=`. Inside a PDO node, drop the node's
-own variables so the CLI does not act as the node of another daemon (the printed « Drive it » line
-already does):
+own variables, every `PDO_*`, so the CLI does not act as the node of another daemon (the printed
+« Drive it » line already unsets each of them by name):
 
 ```bash
-env -u PDO_TOKEN -u PDO_RUN_ID -u PDO_NODE_ID PDO_DAEMON_URL=http://127.0.0.1:6491 \
+env $(env | grep -o '^PDO_[A-Za-z0-9_]*' | sed 's/^/-u /') PDO_DAEMON_URL=http://127.0.0.1:6491 \
   <PDO> run list
 curl -fs http://127.0.0.1:6491/runs          # the daemon answers JSON
 ```

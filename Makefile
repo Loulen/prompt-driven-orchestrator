@@ -138,7 +138,9 @@ support-table:
 # reaches the pid of the pidfile and the tmux socket pdo-<PORT>, never the
 # user's daemon or tmux server; KEEP=1 keeps /tmp/pdo-demo-<PORT> (logs).
 DEMO_DAEMON := node --disable-warning=ExperimentalWarning scripts/demo-daemon/demo-daemon.mjs
-DEMO_PORT = $(if $(filter command line environment,$(origin PORT)),$(PORT),$(error PORT=<port> is required, e.g. make $@ PORT=6491 (a free port, 6400 to 6999)))
+comma := ,
+DEMO_PORT_HINT = $(if $(filter demo-daemon-stop,$@),the port of a running demo daemon,a free port$(comma) 6400 to 6999)
+DEMO_PORT = $(if $(filter command line environment,$(origin PORT)),$(PORT),$(error PORT=<port> is required, e.g. make $@ PORT=6491 ($(DEMO_PORT_HINT))))
 
 demo-daemon:
 	@$(DEMO_DAEMON) start $(DEMO_PORT) $(if $(filter 1,$(TEST_EXT)),--test-ext) $(if $(DEMO_ENV),--env '$(DEMO_ENV)')

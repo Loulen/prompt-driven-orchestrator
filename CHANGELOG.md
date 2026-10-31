@@ -63,7 +63,8 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - An unknown value stored under `pdo.ui.theme` or `pdo.ui.mode` is rewritten as the default,
   as a migrated one is.
 - A Workbench layout whose side panels were dragged to their maximum is restored as dragged,
-  the canvas keeping its pixels instead of growing back to a third of the window.
+  the canvas keeping its pixels instead of growing back to a third of the window. A drag and a
+  restore both leave the canvas at least 5 % of the window.
 
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 

@@ -76,6 +76,8 @@ export interface EditNodeData {
   onPlay?: () => void;
   /** What runs the node, for the card's meta grid. */
   agent?: NodeAgentLabel;
+  /** « Compact nodes » on a Run canvas: one line (two on an orchestrator with runs). */
+  compact?: boolean;
   /** The node in the Run: its iteration, its time and its cost. */
   run?: {
     iter: number;
@@ -221,6 +223,58 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
 
   const inRun = data.inRun === true;
   const run = data.run;
+  const runs = data.childCounts && <OrchestratorRuns counts={data.childCounts} onOpen={data.onOpenOrchestration} />;
+  const play = data.play && data.onPlay && (
+    <button
+      type="button"
+      data-testid="node-play-btn"
+      data-play={data.play}
+      aria-label={data.play === "start" ? `Start ${data.label}` : `Run ${data.label} again`}
+      title={data.play === "start" ? "Start" : "Run as if taken"}
+      onClick={(e) => {
+        e.stopPropagation();
+        data.onPlay?.();
+      }}
+      className="nodrag nopan cv-n__play"
+    >
+      <Play size={10} strokeWidth={1.75} aria-hidden />
+    </button>
+  );
+  if (data.compact) {
+    // The harness icon, the name, the status: the detailed header's order. The
+    // iteration, the worktree and profile markers stay in the inspector.
+    return (
+      <>
+        <NodeCard
+          compact
+          status={inRun ? data.status : null}
+          selected={isSelected}
+          idle={awaitingPlay}
+          orchestrator={data.orchestrator === true}
+          style={presenceStyle}
+        >
+          {selectedBy && <SelectedByLabel participant={selectedBy} />}
+          {handles}
+          <NodeCardHead
+            type={
+              <NodeTypeIcon
+                type={data.nodeType}
+                interactive={data.interactive}
+                orchestrator={data.orchestrator === true}
+                size={12}
+                className="cv-n__type"
+              />
+            }
+            name={data.label}
+            status={inRun ? data.status : null}
+          />
+          {runs}
+          {inRun && <SearchMatchBadge nodeId={data.nodeId} />}
+        </NodeCard>
+        {play}
+      </>
+    );
+  }
   // The type icon leads, in the Theme's accent; the status closes the header.
   const typeIcon = (
     <>
@@ -278,7 +332,7 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
       <NodeMeta data={data} run={run} />
       {/* #723 — an orchestrator's child runs: « N runs » and the Orchestration
           tab's pastilles; omitted entirely without children. */}
-      {data.childCounts && <OrchestratorRuns counts={data.childCounts} onOpen={data.onOpenOrchestration} />}
+      {runs}
       {rim}
       {/* While the Run's transcripts are searched: the node's count of hits. */}
       {inRun && <SearchMatchBadge nodeId={data.nodeId} />}
@@ -286,22 +340,7 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
     {/* ADR-0086: the ▶ — start an on-demand node, or run a skipped branch as
         if it had been taken. Outside the card so the greyed card does not dim
         it; `nodrag` keeps the click from moving the node. */}
-    {data.play && data.onPlay && (
-      <button
-        type="button"
-        data-testid="node-play-btn"
-        data-play={data.play}
-        aria-label={data.play === "start" ? `Start ${data.label}` : `Run ${data.label} again`}
-        title={data.play === "start" ? "Start" : "Run as if taken"}
-        onClick={(e) => {
-          e.stopPropagation();
-          data.onPlay?.();
-        }}
-        className="nodrag nopan cv-n__play"
-      >
-        <Play size={10} strokeWidth={1.75} aria-hidden />
-      </button>
-    )}
+    {play}
     </>
   );
 }

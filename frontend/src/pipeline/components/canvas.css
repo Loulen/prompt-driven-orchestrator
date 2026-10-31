@@ -179,6 +179,13 @@
 }
 .cv-kid i { width: 5px; height: 5px; border-radius: 50%; background: var(--st); }
 
+/* « Compact nodes » on a Run canvas: one line of 168 × 30, two on an orchestrator with runs (168 × 52), centred on
+   the detailed card's axis. The heights are mirrored in `model/compactCanvas.ts` (COMPACT_CARD): change both together. */
+.cv-n[data-compact] { width: 168px; }
+.cv-n[data-compact] .cv-n__head { height: 28px; padding: 0 8px; border-bottom: 0; background: none; }
+.cv-n[data-compact] .cv-n__name { min-width: 40px; }
+.cv-n[data-compact] .cv-n__runs { width: calc(100% - 10px); margin: 0 5px 4px; }
+
 /* ------------------------------------------------------------ Start / End markers */
 .cv-mk {
   position: relative;

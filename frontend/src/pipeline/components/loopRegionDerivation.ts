@@ -4,6 +4,7 @@ import type { Node } from "@xyflow/react";
 import type { LoopRegion } from "../../shared/generated/LoopRegion";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";
+import type { Box } from "../../lib/compactLayout";
 
 /**
  * Layout + label for a bounded loop region (ADR-0011 / #148) rendered on the
@@ -50,10 +51,13 @@ function regionMaxIterText(maxIter: LoopRegion["max_iter"]): string {
 /**
  * Derives the on-canvas layout for every bounded loop region in the pipeline.
  * Regions whose members are all missing (e.g. mid-edit deletion) are dropped.
+ * `cards`: the drawn box of each member when it is not the detailed card (a
+ * compact Run canvas); the region then wraps those.
  */
 export function deriveLoopRegions(
   pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
+  cards?: Readonly<Record<string, Box>>,
 ): LoopRegionLayout[] {
   const regions = pipeline.loops ?? [];
   const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
@@ -124,12 +128,13 @@ export function deriveLoopRegions(
     let maxX = -Infinity;
     let maxY = -Infinity;
     for (const n of members) {
-      const x = n.view?.x ?? 200;
-      const y = n.view?.y ?? 200;
+      const card = cards?.[n.id];
+      const x = card?.x ?? n.view?.x ?? 200;
+      const y = card?.y ?? n.view?.y ?? 200;
       minX = Math.min(minX, x);
       minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x + CARD_W);
-      maxY = Math.max(maxY, y + CARD_H);
+      maxX = Math.max(maxX, x + (card?.w ?? CARD_W));
+      maxY = Math.max(maxY, y + (card?.h ?? CARD_H));
     }
     layouts.push({
       id: region.id,
@@ -189,8 +194,9 @@ const REGION_CHROME_Z = 1001;
 export function buildLoopRegionNodes(
   pipeline: EditorPipelineDef,
   runState: RunState | null | undefined,
+  cards?: Readonly<Record<string, Box>>,
 ): Node[] {
-  return deriveLoopRegions(pipeline, runState)
+  return deriveLoopRegions(pipeline, runState, cards)
     .filter((r) => r.box != null)
     .flatMap((r) => {
       const position = { x: r.box!.x, y: r.box!.y };

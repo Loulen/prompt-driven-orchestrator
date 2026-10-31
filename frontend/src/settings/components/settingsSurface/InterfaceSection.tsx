@@ -1,6 +1,7 @@
 import { useState } from "react";
 import ThemeSelect from "../../../shared/ui/ThemeSelect";
 import { useTheme } from "../../../hooks/useTheme";
+import { useCompactNodes } from "../../../hooks/useCompactNodes";
 import { Segmented, Switch } from "../../../shared/ui/kit";
 import { setUiScale, UI_SCALES, useUiScale, type UiScale } from "../../../lib/uiScale";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../../../lib/uiPrefs";
@@ -14,7 +15,7 @@ import Section from "./Section";
 const SCALE_ITEMS = UI_SCALES.map((scale) => ({ value: String(scale), label: `${scale} %` }));
 
 /**
- * Per-client UI preferences (#342, #759; Theme and Dark mode, ADR-0093). Every control persists to localStorage AT
+ * Per-client UI preferences (#342, #759; Theme and Dark mode, ADR-0093; Compact nodes). Every control persists to localStorage AT
  * THE CHANGE — NOT behind the instance form's Save, and never part of the dirty set.
  * Rendered even when `GET /settings` failed (Trap A).
  */
@@ -36,6 +37,7 @@ export default function InterfaceSection({ section }: { section: SettingsSection
   const setDefaultGridSize = useWiringStore((s) => s.setDefaultGridSize);
   const uiScale = useUiScale();
   const { mode, setMode } = useTheme();
+  const { compactNodes, setCompactNodes } = useCompactNodes();
 
   return (
     <Section section={section}>
@@ -44,6 +46,9 @@ export default function InterfaceSection({ section }: { section: SettingsSection
       </SettingRow>
       <SettingRow label="Dark mode" scope="device" testId="setting-row-dark-mode">
         <Switch label="Dark mode" checked={mode === "dark"} onChange={(on) => setMode(on ? "dark" : "light")} />
+      </SettingRow>
+      <SettingRow label="Compact nodes" scope="device" testId="setting-row-compact-nodes">
+        <Switch label="Compact nodes" checked={compactNodes} onChange={setCompactNodes} />
       </SettingRow>
       <SettingRow
         label="UI scale"

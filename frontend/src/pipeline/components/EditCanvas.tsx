@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ReactFlow, Background, BackgroundVariant, useNodesState, useEdgesState, useReactFlow, type Node, type Edge, ReactFlowProvider, ViewportPortal } from "@xyflow/react";
+import { ReactFlow, Background, BackgroundVariant, useNodesState, useEdgesState, useReactFlow, useStore, type Node, type Edge, ReactFlowProvider, ViewportPortal } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 import type { RunState } from "../../shared/generated/RunState";
@@ -18,6 +18,9 @@ import { buildNoteNodes, deriveEditNodes } from "./editNodeDerivation";
 import { buildLoopRegionNodes } from "./loopRegionDerivation";
 import { deriveEditEdges, edgeIndexFromId } from "./editEdgeDerivation";
 import { useEditStore } from "../store/editStore";
+import { isRunTabLocked } from "../store/editState";
+import { compactCanvas } from "../model/compactCanvas";
+import { useCompactNodes } from "../../hooks/useCompactNodes";
 import { ViewportWiringGridOverlay } from "./WiringGridOverlay";
 import { LoopRegionNode } from "./LoopRegionNode";
 import { NoteNode } from "./NoteNode";
@@ -172,9 +175,52 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const { visibleItems, dismiss } = useCanvasLint(tab, agentProfileIds, skillIds, skillBankLoaded);
   const withChildren = useCanvasChildRuns(activeRunState, onCloseInfo);
   const { withPlay, nodePlay } = useCanvasNodePlay(pipeline, activeRunState);
+  const cards = useMemo(
+    () =>
+      pipeline
+        ? deriveEditNodes(pipeline, activeRunState, agentProfileIds, agentProfiles).map(withPlay).map(withChildren)
+        : [],
+    [pipeline, activeRunState, agentProfileIds, agentProfiles, withPlay, withChildren],
+  );
+  // « Compact nodes »: every Run canvas that is not being edited draws its
+  // cards on one line, from a shifted copy of the pipeline; nothing is written.
+  // A Run edited for itself, like the editor, keeps the detailed cards: a drag
+  // there writes positions.
+  const { compactNodes } = useCompactNodes();
+  const compactOn = compactNodes && isRunTabLocked(tab);
+  // The orchestrators with child runs carry « N runs » on both sizes, and the
+  // notes keep their drawn height: both shape the compaction.
+  // Both as JSON strings, so a new array with the same content changes nothing.
+  const withRuns = useMemo(
+    () => JSON.stringify(cards.filter((c) => (c.data as { childCounts?: unknown }).childCounts != null).map((c) => c.id)),
+    [cards],
+  );
+  const noteHeights = useStore((s) => {
+    const out: [string, number][] = [];
+    for (const [, n] of s.nodeLookup) if (n.type === "note" && n.measured?.height) out.push([n.id, n.measured.height]);
+    return JSON.stringify(out);
+  });
+  const compaction = useMemo(
+    () =>
+      compactOn && pipeline
+        ? compactCanvas(pipeline, {
+            withRuns: new Set(JSON.parse(withRuns) as string[]),
+            noteHeights: Object.fromEntries(JSON.parse(noteHeights) as [string, number][]),
+          })
+        : null,
+    [compactOn, pipeline, withRuns, noteHeights],
+  );
+  const shown = compaction?.pipeline ?? pipeline;
   const derivedNodes = useMemo(() => {
-    if (!pipeline) return [];
-    const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds, agentProfiles).map(withPlay).map(withChildren);
+    if (!shown) return [];
+    const placed = compaction
+      ? cards.map((card) => {
+          const box = compaction.cards[card.id];
+          const view = compaction.pipeline.nodes.find((n) => n.id === card.id)?.view;
+          if (box) return { ...card, position: { x: box.x, y: box.y }, data: { ...card.data, compact: true } };
+          return view ? { ...card, position: { x: view.x, y: view.y } } : card;
+        })
+      : cards;
     // Bounded loop regions (ADR-0011 / #148) render as translucent boxes BEHIND
     // their member cards. Each multi-member region is backed by a decorative,
     // non-interactive `loopRegion` node so it tracks pan/zoom with the graph;
@@ -182,16 +228,16 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     // region nodes are prepended, pinned to a low zIndex behind the member
     // cards, and given `pointer-events: none` so edges crossing the box stay
     // clickable (#167).
-    const regionNodes: Node[] = buildLoopRegionNodes(pipeline, activeRunState);
+    const regionNodes: Node[] = buildLoopRegionNodes(shown, activeRunState, compaction?.cards);
     // Inert canvas notes (#307 / ADR-0018) render as draggable/selectable cards
     // with no handle. They carry no run status, so they're derived from the
     // pipeline alone (independent of run state).
-    const noteNodes: Node[] = buildNoteNodes(pipeline);
-    return [...regionNodes, ...cards, ...noteNodes];
-  }, [pipeline, activeRunState, agentProfileIds, agentProfiles, withPlay, withChildren]);
+    const noteNodes: Node[] = buildNoteNodes(shown);
+    return [...regionNodes, ...placed, ...noteNodes];
+  }, [shown, compaction, cards, activeRunState]);
   const derivedEdges = useMemo(
-    () => (pipeline ? deriveEditEdges(pipeline) : []),
-    [pipeline],
+    () => (shown ? deriveEditEdges(shown) : []),
+    [shown],
   );
 
   useEffect(() => {

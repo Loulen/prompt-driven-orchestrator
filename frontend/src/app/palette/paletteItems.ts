@@ -1,6 +1,6 @@
 /**
  * The core's rows of the command field: its commands (New run, Stats,
- * Settings, the Theme and the Dark mode…), its Runs, Pipelines and Triggers, and the gestures
+ * Settings, the Theme, the Dark mode and Compact nodes…), its Runs, Pipelines and Triggers, and the gestures
  * on the selected item (a Run's Pause, Resume, Retry all; a node's Mark
  * complete, Retry and Stop) that the caller may make (CORE-42: a refused gesture is absent). And
  * the extensions' Actions, as rows.
@@ -9,6 +9,7 @@
 import {
   CircleCheck,
   Copy,
+  FoldVertical,
   History,
   MousePointerClick,
   Palette,
@@ -57,12 +58,14 @@ export interface CoreContext {
   appearance: Appearance;
   setTheme: (theme: Theme) => void;
   toggleMode: () => void;
+  compactNodes: boolean;
+  toggleCompactNodes: () => void;
 }
 
 const icon = (glyph: Icon): Lead => ({ kind: "icon", icon: glyph });
 
 /** The core's commands, Runs, Pipelines and Triggers. */
-export function coreItems({ host, pipelines, openPipeline, appearance, setTheme, toggleMode }: CoreContext): PaletteItem[] {
+export function coreItems({ host, pipelines, openPipeline, appearance, setTheme, toggleMode, compactNodes, toggleCompactNodes }: CoreContext): PaletteItem[] {
   const items: PaletteItem[] = [];
   const command = (id: string, label: string, glyph: Icon, run: () => void, extra: Partial<PaletteItem> = {}) =>
     items.push({ id: `cmd:${id}`, group: "commands", label, lead: icon(glyph), run, command: true, ...extra });
@@ -74,6 +77,7 @@ export function coreItems({ host, pipelines, openPipeline, appearance, setTheme,
   command("theme-acogni", "Theme: Acogni", Palette, () => setTheme("acogni"), { checked: appearance.theme === "acogni" });
   command("theme-classic", "Theme: Classic", Palette, () => setTheme("classic"), { checked: appearance.theme === "classic" });
   command("dark-mode", "Dark mode", SunMoon, toggleMode, { checked: appearance.mode === "dark" });
+  command("compact-nodes", "Compact nodes", FoldVertical, toggleCompactNodes, { checked: compactNodes });
   for (const run of host.runs) {
     items.push({
       id: `run:${run.run_id}`,

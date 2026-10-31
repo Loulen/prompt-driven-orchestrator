@@ -59,7 +59,7 @@ describe("the selection's gestures", () => {
 describe("the Theme and Dark mode commands (ADR-0093)", () => {
   const host = { runs: [], triggers: [], selection: null, openRun: vi.fn(), openTrigger: vi.fn() };
   const commands = (appearance: Appearance, setTheme = vi.fn(), toggleMode = vi.fn()) =>
-    coreItems({ host, pipelines: [], openPipeline: vi.fn(), appearance, setTheme, toggleMode }).filter((i) =>
+    coreItems({ host, pipelines: [], openPipeline: vi.fn(), appearance, setTheme, toggleMode, compactNodes: false, toggleCompactNodes: vi.fn() }).filter((i) =>
       ["cmd:theme-acogni", "cmd:theme-classic", "cmd:dark-mode"].includes(i.id),
     );
 
@@ -86,5 +86,28 @@ describe("the Theme and Dark mode commands (ADR-0093)", () => {
     dark.run();
     expect(setTheme.mock.calls).toEqual([["classic"], ["acogni"]]);
     expect(toggleMode).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the Compact nodes command", () => {
+  const host = { runs: [], triggers: [], selection: null, openRun: vi.fn(), openTrigger: vi.fn() };
+  const row = (compactNodes: boolean, toggleCompactNodes = vi.fn()) =>
+    coreItems({
+      host,
+      pipelines: [],
+      openPipeline: vi.fn(),
+      appearance: { theme: "acogni", mode: "dark" },
+      setTheme: vi.fn(),
+      toggleMode: vi.fn(),
+      compactNodes,
+      toggleCompactNodes,
+    }).find((i) => i.id === "cmd:compact-nodes")!;
+
+  it("is checked while Compact nodes is on, and switches it", () => {
+    expect([row(false).label, row(false).checked]).toEqual(["Compact nodes", false]);
+    expect(row(true).checked).toBe(true);
+    const toggle = vi.fn();
+    row(false, toggle).run();
+    expect(toggle).toHaveBeenCalledTimes(1);
   });
 });

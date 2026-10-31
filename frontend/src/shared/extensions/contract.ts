@@ -203,18 +203,12 @@ export interface TabProps extends ContributionProps<TabContext> {
 
 /**
  * A decoration (`run/item`, `run/item/people`, `trigger/item`, `pipeline/item`,
- * `canvas/node`, `port/item`, `review/file`, `statusbar`): the item it marks, `null` on the
+ * `port/item`, `review/file`, `statusbar`): the item it marks, `null` on the
  * status bar. A decoration sits inside its item (often a button): a clickable
  * one calls `event.stopPropagation()`.
  */
 export interface DecorationContext extends LocationContext {
   entity: EntityContext | null;
-}
-
-/** `canvas/node`: the node card, and the pipeline it belongs to. */
-export interface CanvasNodeContext extends DecorationContext {
-  entity: EntityContext;
-  node: { type: string; status: string };
 }
 
 /** `port/item`: a port of a node of a Run. */

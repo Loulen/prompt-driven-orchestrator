@@ -461,7 +461,6 @@ button.ri-port__name:hover { text-decoration: underline; }
 
 /* ------------------------------------------------------------ Orchestration */
 .ri-orch { padding-bottom: var(--g-2); }
-.ri-orch__hint { display: flex; align-items: center; gap: var(--g-2); height: var(--h-row); padding: 0 var(--pad-x); font-size: var(--fs-xs); color: var(--text-3); }
 .ri-orch__row {
   display: flex;
   align-items: center;

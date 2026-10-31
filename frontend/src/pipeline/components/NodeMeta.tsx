@@ -3,11 +3,12 @@
  * then on a template its inputs, worktree and outputs, in a Run its iteration,
  * time and cost) and the images of the Run's input on the Start marker.
  */
-import { ArrowDownToLine, ArrowUpFromLine, Bot, Coins, GitFork, Repeat, SquareTerminal, Timer, type LucideIcon } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Coins, GitFork, Repeat, Timer, type LucideIcon } from "lucide-react";
 import { formatDuration } from "../../run/model/runDuration";
 import { formatCostAmount } from "../../run/model/costLabel";
 import { useNow } from "../../run/model/iterationDuration";
 import type { EditNodeData } from "./EditNode";
+import { nodeTypeGlyph } from "../model/nodeTypeGlyph";
 
 /** Images uploaded with the Run's input, named, on the Start marker (#145). */
 export function InputImages({ names }: { names: string[] }) {
@@ -40,7 +41,7 @@ export function NodeMeta({ data, run }: { data: EditNodeData; run: EditNodeData[
   const live = run != null && (data.status === "running" || data.status === "awaiting_user");
   const now = useNow(live && run?.completedAt == null);
   const agent = data.agent ?? { short: "", title: "Agent" };
-  const AgentIcon = data.nodeType === "script" ? SquareTerminal : Bot;
+  const AgentIcon = nodeTypeGlyph(data.nodeType, data.interactive, data.orchestrator === true).icon;
   if (data.inRun !== true) {
     return (
       <div className="cv-n__grid">

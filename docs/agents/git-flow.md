@@ -25,7 +25,8 @@ this file and the skill disagree, **this file wins**; the skill describes the fu
   (`integration/CORE-8-<slug>`) and the ticket's ID (`feature/CORE-9-<slug>`).
 - **Version discipline (semver).** On a merge, reconcile `Cargo.toml` / `Cargo.lock` /
   `CHANGELOG.md`: a `feat` is a minor bump, a `fix` a patch, a breaking change (`!`) a major. The
-  CHANGELOG records only breaking changes + notes that don't follow from a commit title.
+  CHANGELOG has one entry per version, in English and without ticket ids: what changes on
+  screen, the new seams, the breaking changes. The binary embeds it for "What's new".
 - **Merged `integration/*` branches are throwaway** — delete once merged (skill's *Cleanup*); never
   pile new work onto an already-merged branch.
 

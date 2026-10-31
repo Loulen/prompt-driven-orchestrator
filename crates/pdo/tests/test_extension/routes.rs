@@ -36,6 +36,10 @@ pub(super) fn router(control: Control) -> Router {
         .merge(super::projets::routes(control.creation.clone()))
         .merge(super::run_view::routes(control.creation.clone()))
         .merge(super::sessions::routes(control.creation.clone()))
+        .merge(super::palette::routes(
+            control.inbox.clone(),
+            control.creation.clone(),
+        ))
         // A sub-router with a fallback of its own: what the admission must
         // guard as well as a route (`/ext/test/nested/<anything>`).
         .nest(

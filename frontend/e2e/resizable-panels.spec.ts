@@ -193,3 +193,51 @@ test("layout is unified across the run placeholder and the edit canvas", async (
     await page.evaluate(() => localStorage.getItem("pdo.layout.run")),
   ).not.toBe(layoutBeforeEdit);
 });
+
+test("side panels dragged to their maximum come back as dragged after a reload", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.reload();
+  // Open a node so the inspector is shown.
+  await page.getByRole("tab", { name: "Pipelines" }).click();
+  await page.getByText(PIPELINE_NAME).first().click();
+  const openNode = () =>
+    page.locator(".react-flow__node").filter({ hasText: "alpha" }).first().click();
+  await openNode();
+  const widths = () =>
+    page.evaluate(() =>
+      ["left", "center", "right"].map((id) => document.getElementById(id)!.getBoundingClientRect().width),
+    );
+  await expect.poll(async () => (await widths())[2]).toBeGreaterThan(0);
+
+  const drag = async (handle: string, dx: number) => {
+    const box = (await page.locator(handle).boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + 300;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx, y, { steps: 15 });
+    await page.mouse.up();
+  };
+  await drag('[data-slot="resizable-handle"] >> nth=0', 600);
+  await drag("#right-pane-handle", -900);
+  const [left, center, right] = await widths();
+  // 480 + 720 px of side panels: the canvas is under a third of the window.
+  expect(left).toBeCloseTo(480, -1);
+  expect(right).toBeCloseTo(720, -1);
+  expect(center / 1440).toBeLessThan(0.2);
+
+  await page.reload();
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  if ((await page.locator(".react-flow__node").count()) === 0) {
+    await page.getByRole("tab", { name: "Pipelines" }).click();
+    await page.getByText(PIPELINE_NAME).first().click();
+  }
+  await openNode();
+  await expect.poll(async () => (await widths())[2]).toBeGreaterThan(0);
+  const after = await widths();
+  expect(Math.abs(after[0] - left)).toBeLessThan(3);
+  expect(Math.abs(after[1] - center)).toBeLessThan(3);
+  expect(Math.abs(after[2] - right)).toBeLessThan(3);
+});

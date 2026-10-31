@@ -37,8 +37,13 @@
 //!   `SettingsPanel`, `ListFilter`/`DetailTab` of the Runs), so they prove the
 //!   0.1 form still renders; `topbar/end` through 0.2 contributions: a page with
 //!   its icon (which opens `/ws` through `openProbedSocket` of
-//!   `@pdo/extension-ui`, 0.10, and shows the socket's state), an action calling [`SHOW_CONTEXT`] while a Run is selected, and
-//!   an action whose `when` never holds. Every Action location (#30) through
+//!   `@pdo/extension-ui`, 0.10, and shows the socket's state), a panel under
+//!   its icon (`MessagesPanel`, 0.20: the items of `messages.rs`, each deleted with
+//!   an « Undo » in a toast; the icon counts them), an action calling [`SHOW_CONTEXT`] while a Run is selected, and
+//!   an action whose `when` never holds. The page, at `screens/alpha` and
+//!   `screens/beta`, sets the title and the icon of the shell's header per
+//!   route; `screens/beta` shows a read-only Banner with a lock (0.20); its
+//!   body shows a text kept in a yjs document, the front's own yjs (0.20). Every Action location (#30) through
 //!   one action each ([`ACTION_LOCATIONS`]), titled `Test <location>`, calling
 //!   the same function; the one of `run/item/menu` only while the row's Run is
 //!   not archived, and that menu also offers [`FAIL`], a command that throws.
@@ -62,7 +67,8 @@
 //! - `palette` (0.18): `new-note`, a global action calling [`NEW_NOTE`], which
 //!   makes `test/note` × `create` (refuse it to hide the action), and `notes`,
 //!   a Source de recherche (`searchNotes`: the notes whose title holds the
-//!   query, each a deep link to the test page).
+//!   query, each a deep link to the test page); `members` (0.20), another
+//!   (`searchPeople`), whose results carry an avatar.
 //! - `palette` (0.20, `palette.rs`): its two contributions rank its group 2;
 //!   its Source answers a note per status shape (`todo`, `doing`, `review`,
 //!   `done`) and one with a 200-character title without a space; `inbox`, a
@@ -95,7 +101,7 @@
 //! - **`Host::presences`** / **`Host::run_cost`** (API 0.12, `run_view.rs`):
 //!   `GET /ext/test/runs/<id>/view` answers them; `GET /ext/test/act-as?actor=
 //!   <id>` signs a browser in as that Actor; `PeopleMarks`, at
-//!   `run/item/people`, draws one mark per Presence of the row's Run.
+//!   `run/item/people`, stacks the avatars of the Presences of the row's Run.
 //! - **`Host::open_session`** and the other gestures of the Sessions
 //!   hébergées (API 0.19, `sessions.rs`): `POST /ext/test/sessions` opens one
 //!   on behalf of the caller, `GET` lists or reads them, `DELETE
@@ -134,6 +140,7 @@ pub mod gate;
 pub mod hosted;
 pub mod interop;
 pub mod launch;
+pub mod messages;
 pub mod palette;
 pub mod projets;
 mod routes;
@@ -701,6 +708,17 @@ impl Extension for TestExtension {
                     .with_icon(format!("/ext/{ID}/icon.svg"))
                     .with_counter(format!("/ext/{ID}/counter")),
             )
+            // 0.20: a panel under its icon, its counter the messages.
+            .contribute(
+                UiContribution::panel(
+                    UiLocation::TopbarEnd,
+                    "messages",
+                    "Test messages",
+                    "MessagesPanel",
+                )
+                .with_icon(format!("/ext/{ID}/messages.svg"))
+                .with_counter(format!("/ext/{ID}/messages/counter")),
+            )
             .contribute(
                 UiContribution::action(UiLocation::TopbarEnd, "show-context", &show_context)
                     .when(When::has("run")),
@@ -895,6 +913,13 @@ impl Extension for TestExtension {
                     .with_icon(format!("/ext/{ID}/icon.svg"))
                     .with_rank(2),
             )
+            // 0.20: results carrying an avatar.
+            .contribute(UiContribution::search(
+                UiLocation::Palette,
+                "members",
+                "Members",
+                "searchPeople",
+            ))
             .contribute(
                 UiContribution::action(UiLocation::Palette, "inbox", &inbox)
                     .with_counter(format!("/ext/{ID}/inbox")),

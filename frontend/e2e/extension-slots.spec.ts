@@ -21,6 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WORKSPACE_ROOT = path.resolve(__dirname, "..", "..");
 const BUNDLE_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/ui.js");
 const ICON_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/icon.svg");
+const MESSAGES_ICON_PATH = path.join(WORKSPACE_ROOT, "crates/pdo/tests/test_extension/messages.svg");
 const PIPELINE_NAME = `e2e-extension-slots-${process.pid}-${Date.now()}`;
 const PIPELINE_DIR = path.join(os.homedir(), ".pdo", "pipelines");
 const PIPELINE_PATH = path.join(PIPELINE_DIR, `${PIPELINE_NAME}.yaml`);
@@ -122,6 +123,11 @@ function declaration(reactMajor: number) {
           { location: "run/detail", id: "run-tab", label: "Test", type: "tab", component: "RunTab" },
           // Its 0.2 contributions to `topbar/end`.
           { location: "topbar/end", id: "page", label: "Test page", type: "page", component: "TestPage", icon },
+          // 0.20: a panel under its icon, which counts the messages.
+          {
+            location: "topbar/end", id: "messages", label: "Test messages", type: "panel", component: "MessagesPanel",
+            icon: "/ext/test/messages.svg", counter: "/ext/test/messages/counter",
+          },
           {
             location: "topbar/end", id: "show-context", label: "Show context", type: "action",
             command: "test.show-context", when: { has: "run" },
@@ -181,6 +187,27 @@ async function playTestExtension(page: Page, reactMajor = REACT_MAJOR) {
   await page.route("**/ext/test/icon.svg", (route) =>
     route.fulfill({ body: icon, contentType: "image/svg+xml" }),
   );
+  const messagesIcon = await fs.readFile(MESSAGES_ICON_PATH, "utf8");
+  await page.route("**/ext/test/messages.svg", (route) =>
+    route.fulfill({ body: messagesIcon, contentType: "image/svg+xml" }),
+  );
+  // The messages of `messages.rs`, played the same way: three items, deleted and restored.
+  const messages = [
+    { id: "item-1", title: "Review the release notes", deleted: false },
+    { id: "item-2", title: "Answer the question", deleted: false },
+    { id: "item-3", title: "Plan the demo", deleted: false },
+  ];
+  const live = () => messages.filter((item) => !item.deleted).map(({ id, title }) => ({ id, title }));
+  await page.route("**/ext/test/messages/counter", (route) =>
+    route.fulfill({ json: { count: live().length, accent: false, detail: `${live().length} items` } }),
+  );
+  await page.route(/\/ext\/test\/messages(\/[^/]+(\/restore)?)?$/, (route) => {
+    if (route.request().url().endsWith("/counter")) return route.fallback();
+    const match = /\/messages\/([^/]+)/.exec(route.request().url());
+    const item = messages.find((i) => i.id === match?.[1]);
+    if (item) item.deleted = route.request().method() === "DELETE";
+    return route.fulfill({ json: live() });
+  });
   const commands: unknown[] = [];
   await page.route("**/ext/test/commands", (route) => {
     commands.push(route.request().postDataJSON());
@@ -229,6 +256,8 @@ test.beforeEach(async ({ page, baseURL }) => {
 });
 
 test("the four slots show the test extension's contributions", async ({ page }) => {
+  // Four surfaces in a row, each read through the network: past the default 30 s on a loaded machine.
+  test.setTimeout(90_000);
   const played = await playTestExtension(page);
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
@@ -257,7 +286,16 @@ test("the four slots show the test extension's contributions", async ({ page }) 
   // Detail tab of the Run → its attributes.
   await page.getByText(runId.slice(0, 20)).first().click({ position: { x: 5, y: 5 } });
   await page.getByTestId("toolbar-info").click();
-  await page.getByTestId("info-tab-ext-test:run-tab").click();
+  // A narrow strip puts the extension's tab behind the « More tabs » chevron.
+  const runTab = page.getByTestId("info-tab-ext-test:run-tab");
+  const more = page.getByTestId("info-tabs-more");
+  await expect(page.locator('[data-testid="info-tab-ext-test:run-tab"]:not([hidden]), [data-testid="info-tabs-more"]').first()).toBeVisible();
+  if (await runTab.isVisible()) {
+    await runTab.click();
+  } else {
+    await more.click();
+    await page.getByRole("menuitem", { name: "Test", exact: true }).click();
+  }
   await expect(page.getByTestId("test-extension-run-tab")).toContainText(
     "test/started_by = alice",
   );
@@ -309,6 +347,67 @@ test("topbar/end: an icon before Stats, its page with the context, a command, a 
   await expect(page.getByTestId("test-page-socket")).toHaveText("Socket: ouvert (receiving)", { timeout: 10_000 });
   await page.goto("/#/ext/audit/journal");
   await expect(page.getByTestId("toast-error")).toContainText("Extension “audit” is not installed");
+});
+
+test("topbar/end: a panel under its counted icon, Undo in a toast keeps it open", async ({ page }) => {
+  await playTestExtension(page);
+  await page.goto("/");
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+
+  // The icon counts the three items, and opens the panel right under it.
+  const icon = page.getByTestId("extension-topbar-end-test:messages");
+  await expect(page.getByTestId("extension-topbar-end-count-test:messages")).toHaveText("3");
+  await expect(icon).toHaveAccessibleName("Test messages, 3");
+  await icon.click();
+  const panel = page.getByRole("dialog", { name: "Test messages" });
+  await expect(panel).toBeVisible();
+  const [iconBox, panelBox] = [await icon.boundingBox(), await panel.boundingBox()];
+  expect(panelBox!.y).toBeGreaterThanOrEqual(iconBox!.y + iconBox!.height);
+  expect(Math.abs(panelBox!.x + panelBox!.width - (iconBox!.x + iconBox!.width))).toBeLessThanOrEqual(1);
+
+  // Delete an item, then Undo in the toast: the panel stays open, the item comes back.
+  await panel.getByRole("button", { name: "Delete Answer the question" }).click();
+  await expect(panel.getByTestId("test-messages-item-2")).toHaveCount(0);
+  await page.getByTestId("toast-info").getByRole("button", { name: "Undo" }).click();
+  await expect(panel).toBeVisible();
+  await expect(panel.getByTestId("test-messages-item-2")).toBeVisible();
+
+  // Escape closes it, the focus back on the icon; a click outside too.
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await expect(icon).toBeFocused();
+  await icon.click();
+  await expect(panel).toBeVisible();
+  await page.mouse.click(10, 300);
+  await expect(panel).toHaveCount(0);
+});
+
+test("a full-window page names its header per route, a Banner shows a lock, and yjs loads once", async ({ page }) => {
+  const logs: string[] = [];
+  page.on("console", (message) => logs.push(message.text()));
+  await playTestExtension(page);
+  await page.goto("/#/ext/test/topbar/end/screens/alpha");
+  const header = page.getByTestId("extension-page-header");
+  await expect(header.getByRole("heading")).toHaveText("Alpha screen");
+  await expect(header.getByTestId("extension-page-icon").locator("svg")).toBeVisible();
+  await page.getByRole("button", { name: "Go to Beta screen" }).click();
+  await expect(header.getByRole("heading")).toHaveText("Beta screen");
+  await expect(header.getByTestId("extension-page-icon").getByTestId("extension-icon")).toBeVisible();
+  // The read-only state of the Beta screen: a lock, in the Banner's tone.
+  const banner = page.getByRole("status").filter({ hasText: "Read-only" });
+  await expect(banner.locator("svg.d-banner__icon")).toBeVisible();
+
+  // Its root sets nothing: the page's label and icon are back.
+  await page.goto("/#/ext/test/topbar/end");
+  await expect(header.getByRole("heading")).toHaveText("Test page");
+  // The page's yjs document, made with the front's own yjs.
+  await expect(page.getByTestId("test-page-yjs")).toHaveText("Yjs: shared");
+  const shared = await page.evaluate(async () => {
+    const shim = await import(/* @vite-ignore */ "/shared/yjs.js" as string);
+    return shim.Doc === (globalThis as { __PDO_SHARED__?: { yjs: { Doc: unknown } } }).__PDO_SHARED__?.yjs.Doc;
+  });
+  expect(shared).toBe(true);
+  expect(logs.filter((line) => line.includes("Yjs was already imported"))).toEqual([]);
 });
 
 test("Action locations: the header, a row's « ⋯ » menu with its when, a failing command, the bulk bar", async ({

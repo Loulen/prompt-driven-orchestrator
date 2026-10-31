@@ -10,7 +10,7 @@ what each accepts and the context each hands over are part of the semver of
 The Rust types are in `pdo-extension-api` (`UiLocation`, `UiContribution`, `UiElement`,
 `UiCommand`, `When`, `UiContributions`). Their TypeScript is generated into
 `frontend/src/shared/generated/` (`UiLocation.ts`, `UiContribution.ts`…); the props and contexts
-below are `frontend/src/shared/extensions/contract.ts` (`runPeople.ts` for `run/item/people`).
+below are `frontend/src/shared/extensions/contract.ts` (`runPeople.ts` for `run/item/people`, `pageContract.ts` for the pages and the panels).
 
 ## Declaring contributions
 
@@ -70,6 +70,7 @@ orders its groups by rank first, since 0.20: [`palette`](#palette)). No contribu
 | --- | --- | --- |
 | Page (`page`) | `UiContribution::page(location, id, label, component)`, `.with_icon(url)` | the exported component, full-window |
 | Action (`action`) | `UiContribution::action(location, id, &command)` | the core: an entry that calls the command; its label is the command's title |
+| Panel (`panel`, 0.20) | `UiContribution::panel(location, id, label, component)`, `.with_icon(url)` | the exported component, in a panel anchored under its icon |
 | Tab (`tab`) | `UiContribution::tab(…)` | the exported component, in a detail's tab |
 | Section (`section`) | `UiContribution::section(…)` | the exported component, under a heading |
 | Decoration (`decoration`) | `UiContribution::decoration(…)` | the exported component, a small mark on an item (a row, a card, the status bar) |
@@ -105,24 +106,41 @@ selected Run, or when its repository belongs to no Projet.
 
 ### `topbar/end`
 
-- **Accepts**: page, action.
+- **Accepts**: page, panel (since 0.20), action.
 - **Renders**: a 24 px icon button per element in the top bar's right-hand group, **before the
   core's icons** (New run, Stats, Settings, the Dark mode), a hairline after them, the label as
   tooltip. With many, the group keeps its icons aligned and is clipped before it overlaps the
   command field. A page's button opens it full-window **without rail**: the page brings its own
-  navigation. An action's button calls its command.
-- **Icon**: a page's `icon`, or an action's command `icon`, is an SVG the extension serves. It is
-  drawn as a mask in the colour of the text around it (hover and accent states apply). Without one,
-  or while it loads, the button shows the label's first letter, boxed.
-- **Counter** (since 0.19): a page may declare where the counter of its icon is read
+  navigation. A panel's button opens the panel under it (below). An action's button calls its
+  command.
+- **Icon**: a page's or a panel's `icon`, or an action's command `icon`, is an SVG the extension
+  serves. It is drawn as a mask in the colour of the text around it (hover and accent states
+  apply). Without one, or while it loads, the button shows the label's first letter, boxed.
+- **Panel** (since 0.20): the panel opens under its icon, right-aligned on it, 400 px wide (less
+  in a narrow window), at most 640 px high; the component fills it and scrolls inside it. It
+  flips above the icon when there is no room below. Escape (the focus goes back to the icon), a
+  click outside, a scroll that moves the icon, a resize and the icon itself close it; **a click
+  in a toast does not**, so the « Undo » of a toast the panel showed acts while the panel stays
+  open. It stops above the toasts' corner, so that « Undo » stays clickable. Opening focuses its
+  first control, or the panel itself while its content loads. The icon is `aria-expanded` while
+  it is open. The component receives `PanelProps`:
+
+  ```ts
+  interface PanelProps { extension: ExtensionRef; context: LocationContext; close(): void }
+  ```
+
+  `close()` closes it, before following a link it offers, say.
+- **Counter** (since 0.19, on a panel and an action since 0.20): a page, a panel or an action
+  may declare where the counter of its icon is read
   (`UiContribution::with_counter("/ext/<id>/counter")`, on the wire `counter`). The core reads it
   for the current Actor when it shows the icon, again at each event of the extension on `/ws` (its
   `extension_event`s, the events of its Sessions hébergées) and at each resync, a burst of events
   read once. The path answers a `PageCounter`: `{"count": 3, "accent": true, "detail": "1
   waiting"}`. A count above 0 shows as a 14 px pill at the top right of the icon, neutral, or in
-  the accent colour when `accent` is set; `detail` joins the label in the tooltip. A count of 0, a
-  page without counter, or a read that fails, shows nothing.
-- **Context**: `PageContext` for a page, `LocationContext` for an action.
+  the accent colour when `accent` is set, `99+` past 99; `detail` joins the label in the tooltip,
+  the count its accessible name (« Inbox, 3 »). A count of 0, an element without counter, or a
+  read that fails, shows nothing.
+- **Context**: `PageContext` for a page, `LocationContext` for a panel and an action.
 
 ### `topbar/account`
 
@@ -364,8 +382,8 @@ A decoration sits inside its item, often a button: keep it small (a badge of one
 
 - **Accepts**: decoration.
 - **Renders**: a row of the Runs list, at the end of line 2, after the `run/item` marks and
-  before the duration and the cost: the people of the Run (16 px avatars fit the row). **The core
-  draws no person there**: nothing without a contribution, neither the creator nor anyone else.
+  before the duration and the cost: the people of the Run (16 px avatars fit the row: draw them
+  with `AvatarStack`, [People](#people)). **The core draws no person there**: nothing without a contribution, neither the creator nor anyone else.
 - **Context**: `RunPeopleContext` = `DecorationContext` + `presences`, `entity` = `{ kind: "run",
   id, name?, attributes, created_by }`:
 
@@ -684,6 +702,7 @@ interface SearchResult {
   title: string;                 // the row's main text
   ref?: string | null;           // before the title, in mono (N-12)
   meta?: string | null;          // facts at the right of the row
+  avatar?: RowAvatar | null;     // a person, in place of the status or the icon (0.20)
   icon?: string | null;          // an SVG the extension serves, when there is no status
   status?: { tone: StatusTone; label: string; shape?: StatusShape | null } | null;
   // the tone's icon, or the fixed shape (0.20), in the tone's colour; the label as tooltip
@@ -716,6 +735,9 @@ type SearchFunction = (query: string, context: PaletteContext, signal: AbortSign
 - **A long title** ends in an ellipsis; the facts (`meta`) stay whole at the right of the row, up
   to 45 % of its width.
 - **Without `highlights`**, the core highlights each occurrence of the query in the title.
+- **`avatar`** (0.20): a person result shows the kit's avatar in its icon column, in place of its
+  status or icon, the same as the core draws that person ([People](#people)): give its `actor` for
+  its hue. An avatar without a `name` is left out, the result kept.
 - A source whose bundle does not export `search` is left out.
 
 ## Sources of completion
@@ -740,8 +762,9 @@ interface CompletionSuggestion {
   insert: string;        // what replaces the trigger and the query
   hint?: string | null;  // after the label, monospace (an id)
   detail?: string | null; // at the right of the row (a role)
-  avatar?: { name: string; avatar_url?: string | null } | null; // an image, or the initials of name
+  avatar?: RowAvatar | null; // an image, or the initials of name in its hue
 }
+interface RowAvatar { name: string; actor?: Actor | null; avatar_url?: string | null } // actor: since 0.20
 type CompletionFunction = (query: string, context: ReviewComposerContext)
   => CompletionSuggestion[] | Promise<CompletionSuggestion[]>;
 interface CompletionRenderProps { extension: ExtensionRef; context: LocationContext; text: string }
@@ -769,9 +792,11 @@ interface CompletionRenderProps { extension: ExtensionRef; context: LocationCont
 
 ```ts
 interface PageContext extends LocationContext { path: string }
+type PageIcon = string | Icon;           // an SVG URL the extension serves, or an icon component
 interface PageShell {
   setBreadcrumb(items: string[]): void; // crumbs after the page's title, in the shell's header
   setActions(node: ReactNode): void;    // right-aligned header content, before ✕
+  setTitle(title: string | null, icon?: PageIcon): void; // the header's title and icon (0.20)
   close(): void;
 }
 interface PageProps { extension: ExtensionRef; context: PageContext; navigate(path: string): void; shell: PageShell }
@@ -781,6 +806,15 @@ A page of `topbar/start` or `topbar/end` shows in the full-window shell Settings
 (a page of `settings/page` shows inside the Settings, [above](#settingspage)): its header (icon, title, breadcrumb,
 actions, ✕) and its Escape handling. `shell` keeps its identity for the page's lifetime, so it can
 sit in an effect's dependencies.
+
+**Title and icon per route** (since 0.20): a page that serves several screens (a profile and an
+administration, say) names the header after the route on screen with `shell.setTitle(title,
+icon?)`, typically in an effect on `context.path`. The title replaces the page's label (✕ reads
+« Close <title> »); `icon` replaces the page's icon, an SVG URL drawn as a contribution's icon or
+an icon component (a `lucide-react` icon) drawn at 14 px in the accent; without `icon`, the page's
+own. It holds for the path it was set on: a route that sets none shows the page's label and icon,
+and so does the page once closed and reopened. `setTitle(null)` restores them at once. In the
+Settings (`settings/page`) the header keeps the Settings' title: `setTitle` does nothing there.
 
 **Escape** closes the page. A page that handles Escape itself (a dialog, a drawer) listens on
 `document` or on its own elements and calls `event.preventDefault()`: the shell listens on
@@ -918,7 +952,8 @@ UiContributions::bundle("/ext/audit/ui.js", 19)
 
 The front declares the shared module in its import map next to React (`/shared/pdo-extension-ui.js`).
 A bundle imports it as a bare specifier and never embeds it: with Vite, list it in
-`build.rollupOptions.external` with `react`, `react/jsx-runtime` and `react-dom`. Its types are
+`build.rollupOptions.external` with `react`, `react/jsx-runtime` and `react-dom`, and `yjs` when
+the bundle uses it (below). Its types are
 `frontend/public/shared/pdo-extension-ui.d.ts` (served as `/shared/pdo-extension-ui.d.ts`).
 
 ```ts
@@ -957,6 +992,16 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 - **Version**: a bundle that imports the module declares it (`importing_ui_module()`, on the wire
   `ui.ui_module_major`). A bundle built against another major than the front's is never loaded,
   and a banner says so, as for React. The module's version is `pdo-extension-api`'s.
+
+### yjs, shared
+
+Since 0.20 the import map also resolves `yjs` to the front's own copy (`/shared/yjs.js`, every
+export of yjs, no default export). A bundle that edits a shared document lists `yjs` in
+`build.rollupOptions.external` and keeps the package in its dependencies for its types only:
+the page then loads one yjs, whose documents and types the front and every extension share. A
+bundle that embeds its own copy makes yjs warn « Yjs was already imported » and breaks the
+`instanceof` checks between the copies. The front's yjs is the one its `frontend/package.json`
+pins (13.6).
 
 ## The design system
 
@@ -1056,12 +1101,12 @@ taking `size`, `strokeWidth` and `className`.
 | --- | --- |
 | `Button` | A text button, hairline: `tone` `primary` (the accent, the one main action), `ghost`, `danger`; `size` `sm` (20 px); an `icon` |
 | `IconButton` | An icon-only button, its `label` and `kbd` in a tooltip; `pressed`, a `badge` count |
-| `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most |
+| `Tooltip` | Wraps one control: « Name (shortcut) », one `description` line at most. Shows once the pointer moves on the control (not when a surface opens under a still pointer) or on a keyboard focus (not on the focus a menu gives back after Escape or a pick) |
 | `Kbd` | A key or a chord |
 | `TextInput`, `TextArea` | Inputs; `invalid`, `mono`, `small` |
 | `Field` | A form row: the label in a 96 px column (`help` in its tooltip), the control, the `error` at the row end |
-| `Select` | A single value out of `options` (icons, hints, groups, a search box past 8) |
-| `Segmented` | Two to four exclusive choices, arrow keys |
+| `Select` | A single value out of `options` (icons, hints, groups, a search box past 8); its tooltip is the value shown; `active` tints a filter in force (0.20) |
+| `Segmented` | Two to four exclusive choices, arrow keys; `fill` (0.20) takes the row's width, the items sharing it, a long label ending in an ellipsis |
 | `Switch`, `Checkbox` | On/off, the accent when on; a box with its text, `mixed` |
 | `Popover` | A non-modal panel under its `trigger`; Escape and a click outside close it |
 | `Menu` | A menu under its `trigger`: check column, icon, label, shortcut; separators, labels, submenus, `danger` |
@@ -1071,11 +1116,42 @@ taking `size`, `strokeWidth` and `className`.
 | `Tabs` | A tab strip, the live tab underlined in the accent, a count |
 | `Section` | A section: caps head with a chevron and a count, actions on hover; folds |
 | `KeyValue` | A read-only property grid |
-| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions |
+| `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions; an `icon` in the tone's colour instead of the status icon (a lock on a read-only state, since 0.20) |
 | `EmptyState` | An icon, two to four words, one action; loading and error alike |
 | `Chip` | A neutral chip, a status `tone` as its icon; removable |
 | `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name (and, since 0.20, a fixed `shape`: `todo`, `doing`, `review`, `done`) |
-| `Avatar` | A neutral square with the initials; a robot for an agent, a bolt for a trigger |
+| `Avatar` | A person: round, a tint of its hue, its initials; a robot for an agent, a bolt for a trigger ([People](#people)) |
+| `AvatarStack` | People overlapping, three then « +n » (0.20) |
+| `personColor(person)` | The CSS colour of a person's marks outside its avatar (0.20) |
+
+### People
+
+Since 0.20 a person looks the same on every surface, the core's and the extensions': one round
+avatar, the same hue, the same initials.
+
+- **Initials**: the first letter of the first and of the last word of the name (`Alice Martin` → `AM`,
+  `bob` → `B`).
+- **Hue**: one of 8 fixed hues (`--av-h0` … `--av-h7` in the tokens), none of them a status colour
+  nor the accent, picked from the person's **Actor**: give `actor` and the hue is the one the core
+  draws for that Actor (its presence, its comments, the Runs it created). Without `actor`, the name
+  picks it. Lightness and chroma follow the Theme and the mode.
+- **States**: `size` 16 in a row, 20 in a bar or a presence, 24 in a profile; `hollow` reads only (a
+  ring in its hue); `off` a deactivated account or a person who left (dashed, faint); `present` has
+  it open now (a ring in the done colour). An agent or a trigger Actor keeps a neutral fill and its
+  glyph. `src` draws an image instead of the initials. The tooltip is the name, or `title`.
+- **`AvatarStack({ people, size?, max?, title? })`**: the first `max` (3) overlapping, then « +n »
+  whose tooltip lists the others, one per line; nothing without anybody. Each entry takes the props
+  of `Avatar`, and a `key` when two people share a name.
+- **`personColor({ name?, actor? })`**: the person's hue, solid, for a mark that is not its avatar
+  (a presence outline, a cursor, a name tag), so it matches the avatar.
+
+```ts
+import { Avatar, AvatarStack, personColor } from "@pdo/extension-ui";
+
+<Avatar name="Alice Martin" actor={{ kind: "identified", namespace: "test", id: "alice" }} size={16} />
+<AvatarStack size={16} people={people.map((p) => ({ key: p.id, name: p.name, actor: p.actor, present: p.here }))} />
+<span style={{ outline: `1.5px solid ${personColor({ actor })}` }} />
+```
 
 The test extension `kit` (`crates/pdo/tests/test_extension/kit.js`) is a page drawn with nothing
 else.
@@ -1195,6 +1271,7 @@ them. The shared module `@pdo/extension-ui` exports:
 | --- | --- |
 | `useCurrentActor()` | The Actor using the interface and its display name, `{ actor, display }` (`display` is `null` when no extension names it); `null` until known |
 | `useActorDisplay(actor)` | The display name of any `Actor` (`{ name, avatar_url }`); `null` while unknown, or when no extension names it. Batched and cached: call it per row |
+| `useActorDisplays(actors)` | The display names of a list of Actors, in their order, in one hook (a stack of avatars); since 0.20 |
 
 The core shows them too: the `actor_display` of each row of the audit journal (`GET /audit`).
 It draws no person on a Run (since 0.12): an extension does, at `run/item/people` and `run/info`.

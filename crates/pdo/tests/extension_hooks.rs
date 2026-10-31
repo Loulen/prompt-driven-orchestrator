@@ -455,6 +455,119 @@ async fn the_extension_routes_answer_under_ext_and_hide_no_core_route() {
     assert!(jsonl.contains("operation_applied"), "{jsonl}");
 }
 
+/// `method path` with `body`: the status and the JSON answered.
+async fn call(
+    daemon: &TestDaemon,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<Value>,
+) -> (u16, Value) {
+    let mut request = reqwest::Client::new().request(method, format!("{}{path}", daemon.url()));
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let resp = request.send().await.unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.json().await.unwrap_or(Value::Null))
+}
+
+/// The titles of the test messages.
+fn titles(items: &Value) -> Vec<&str> {
+    items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["title"].as_str().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn the_test_messages_are_deleted_restored_and_counted() {
+    let (daemon, _control) = daemon().await;
+    let items = daemon.get_json("/ext/test/messages").await;
+    assert_eq!(
+        titles(&items),
+        [
+            "Review the release notes",
+            "Answer the question",
+            "Plan the demo"
+        ]
+    );
+    let counter = daemon.get_json("/ext/test/messages/counter").await;
+    assert_eq!(
+        counter,
+        json!({ "count": 3, "accent": false, "detail": "3 items" })
+    );
+
+    let (status, items) = call(
+        &daemon,
+        reqwest::Method::DELETE,
+        "/ext/test/messages/item-2",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        titles(&items),
+        ["Review the release notes", "Plan the demo"]
+    );
+    assert_eq!(
+        daemon.get_json("/ext/test/messages/counter").await["count"],
+        2
+    );
+    let (status, _) = call(
+        &daemon,
+        reqwest::Method::DELETE,
+        "/ext/test/messages/item-2",
+        None,
+    )
+    .await;
+    assert_eq!(status, 404, "already deleted");
+
+    // « Undo »: back at its place.
+    let (status, items) = call(
+        &daemon,
+        reqwest::Method::POST,
+        "/ext/test/messages/item-2/restore",
+        None,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        titles(&items),
+        [
+            "Review the release notes",
+            "Answer the question",
+            "Plan the demo"
+        ]
+    );
+
+    // Many items, or none.
+    let (_, items) = call(
+        &daemon,
+        reqwest::Method::PUT,
+        "/ext/test/messages",
+        Some(json!({ "count": 120, "title": "Long" })),
+    )
+    .await;
+    assert_eq!(items.as_array().unwrap().len(), 120);
+    assert_eq!(items[119]["title"], "Long 120");
+    assert_eq!(
+        daemon.get_json("/ext/test/messages/counter").await["count"],
+        120
+    );
+    call(
+        &daemon,
+        reqwest::Method::PUT,
+        "/ext/test/messages",
+        Some(json!({ "count": 0 })),
+    )
+    .await;
+    let counter = daemon.get_json("/ext/test/messages/counter").await;
+    assert_eq!(counter["count"], 0);
+    assert_eq!(counter["detail"], "0 items");
+}
+
 /// `(location, type, id)` of each contribution `/ext` lists for the extension at `index`.
 fn contributions(index: &Value, at: usize) -> Vec<(String, String, String)> {
     index[at]["ui"]["contributions"]
@@ -494,6 +607,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     let mut expected = the_four_locations_of_0_1();
     expected.extend([
         triple("topbar/end", "page", "page"),
+        triple("topbar/end", "panel", "messages"),
         triple("topbar/end", "action", "show-context"),
         triple("topbar/end", "action", "never"),
         triple("node/detail", "tab", "node-tab"),
@@ -524,6 +638,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
         triple("review/composer", "completion", "tags"),
         triple("palette", "action", "new-note"),
         triple("palette", "search", "notes"),
+        triple("palette", "search", "members"),
         triple("palette", "action", "inbox"),
     ]);
     // One action at each Action location (#30), then the command that fails.
@@ -546,6 +661,11 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     // 0.19: the test page's icon carries the counter its extension serves.
     assert_eq!(contribution("page")["counter"], "/ext/test/counter");
     assert!(contribution("show-context").get("counter").is_none());
+    // 0.20: a panel under its icon, which counts the messages.
+    let messages = contribution("messages");
+    assert_eq!(messages["component"], "MessagesPanel");
+    assert_eq!(messages["icon"], "/ext/test/messages.svg");
+    assert_eq!(messages["counter"], "/ext/test/messages/counter");
     let row_menu = contribution("at-run-item-menu");
     assert_eq!(row_menu["label"], "Test run/item/menu");
     assert_eq!(row_menu["command"], "test.at-run-item-menu");
@@ -598,7 +718,7 @@ async fn ext_lists_each_extension_and_its_ui_contributions() {
     let page = &ui["contributions"][4];
     assert_eq!(page["icon"], "/ext/test/icon.svg");
     assert_eq!(page["component"], "TestPage");
-    let action = &ui["contributions"][5];
+    let action = &ui["contributions"][6];
     assert_eq!(action["command"], test_extension::SHOW_CONTEXT);
     assert_eq!(action["label"], "Show context");
     assert_eq!(action["when"], json!({ "has": "run" }));

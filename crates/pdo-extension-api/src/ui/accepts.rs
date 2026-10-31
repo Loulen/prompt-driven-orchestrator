@@ -15,7 +15,10 @@ impl UiLocation {
                 matches!(element, UiElement::Page { .. })
             }
             UiLocation::TopbarEnd => {
-                matches!(element, UiElement::Page { .. } | UiElement::Action { .. })
+                matches!(
+                    element,
+                    UiElement::Page { .. } | UiElement::Panel { .. } | UiElement::Action { .. }
+                )
             }
             UiLocation::ReviewFile => {
                 matches!(

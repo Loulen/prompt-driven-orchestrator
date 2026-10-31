@@ -90,6 +90,10 @@ test("an extension page made of the primitives only looks native and follows the
   expect(Math.abs(panel.x + panel.width - (trigger.x + trigger.width))).toBeLessThan(4);
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
+  // The focus Escape gives back to the trigger opens no tooltip.
+  await expect(more).toBeFocused();
+  await page.waitForTimeout(600);
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
   await kit.getByRole("button", { name: "Deploy", exact: true }).click();
   const modal = page.getByRole("dialog", { name: "Deploy qa" });
   await expect(modal).toBeVisible();
@@ -108,6 +112,12 @@ test("an extension page made of the primitives only looks native and follows the
   expect(autoDeploy.width).toBeLessThan(40);
   const strategy = (await kit.getByRole("radiogroup", { name: "Strategy" }).boundingBox())!;
   expect(strategy.width).toBeLessThan(fieldWidth / 2);
+  // Unless it asks to fill its row: its items share the row, a long label ends in an ellipsis.
+  const deployWindow = kit.getByRole("radiogroup", { name: "Deploy window" });
+  expect((await deployWindow.boundingBox())!.width).toBeCloseTo(fieldWidth, 0);
+  const office = deployWindow.getByRole("radio", { name: "Office hours, Monday to Friday" });
+  expect(await office.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await office.locator("span").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
 
   // In the core's tokens: the page and its primary button paint with the roles.
   expect(await computed(page, "kit-page", "background-color")).toBe(await role(page, "--surface-0"));

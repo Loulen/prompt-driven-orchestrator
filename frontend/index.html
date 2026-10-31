@@ -30,14 +30,16 @@
          bundle declaring another React major is not loaded at all
          (src/shared/extensions/). `@pdo/extension-ui` is the shared module that
          renders the locations an extension hosts (amendment #32), checked by
-         major the same way. -->
+         major the same way. yjs is the front's own too (API 0.20): a bundle
+         that edits a shared document never loads a second copy. -->
     <script type="importmap">
       {
         "imports": {
           "react": "/shared/react.js",
           "react/jsx-runtime": "/shared/react-jsx-runtime.js",
           "react-dom": "/shared/react-dom.js",
-          "@pdo/extension-ui": "/shared/pdo-extension-ui.js"
+          "@pdo/extension-ui": "/shared/pdo-extension-ui.js",
+          "yjs": "/shared/yjs.js"
         }
       }
     </script>

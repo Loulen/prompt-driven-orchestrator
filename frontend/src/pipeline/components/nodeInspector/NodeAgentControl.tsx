@@ -144,6 +144,7 @@ export default function NodeAgentControl({
     >
       <Segmented<Mode>
         label="Agent"
+        fill
         value={mode}
         disabled={readOnly}
         onChange={switchMode}

@@ -444,6 +444,7 @@
   gap: var(--g-3);
 }
 .cv-pres {
+  --row-bg: var(--surface-1);
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -454,10 +455,6 @@
   border-radius: var(--radius-ui);
   color: var(--text-3);
 }
-.cv-stack { display: inline-flex; align-items: center; }
-.cv-stack > * + * { margin-left: -4px; }
-.cv-stack .d-av { box-shadow: 0 0 0 1.5px var(--surface-1); }
-.cv-stack__more { margin-left: 3px; font-family: var(--font-code); font-size: var(--fs-2xs); color: var(--text-3); }
 
 /* ------------------------------------------------------------ empty canvas */
 .cv-empty {

@@ -10,7 +10,6 @@
  * passed.
  */
 
-import type { ReactNode } from "react";
 import type { UiLocation } from "../generated/UiLocation";
 import type { Actor } from "../generated/Actor";
 import type { TriggerSuspension } from "../generated/TriggerSuspension";
@@ -23,6 +22,8 @@ export type { BaseContext, ProjectContext, RunContext } from "./context";
 export type * from "./completionContract";
 // API 0.18: the command field, `palette`, and its Sources de recherche.
 export type * from "./paletteContract";
+// The pages and the panels of `topbar/end` (API 0.20).
+export type * from "./pageContract";
 
 /** Who the element belongs to. */
 export interface ExtensionRef {
@@ -38,28 +39,6 @@ export interface LocationContext extends BaseContext {
 export interface ContributionProps<C extends LocationContext = LocationContext> {
   extension: ExtensionRef;
   context: C;
-}
-
-/** A page (`topbar/start`, `topbar/end`, `settings/page`): the path of its deep link. */
-export interface PageContext extends LocationContext {
-  /** What follows `#/ext/<extension>/<location>/`; `""` from its entry. */
-  path: string;
-}
-
-/** What a page may do with the full-window shell around it. */
-export interface PageShell {
-  /** The crumbs after the page's title, in the shell's header. */
-  setBreadcrumb(items: string[]): void;
-  /** Right-aligned header content, before ✕. */
-  setActions(node: ReactNode): void;
-  /** Close the page (as ✕ and Escape do). */
-  close(): void;
-}
-
-export interface PageProps extends ContributionProps<PageContext> {
-  /** Go to another path of the page: the deep link follows. */
-  navigate(path: string): void;
-  shell: PageShell;
 }
 
 /**

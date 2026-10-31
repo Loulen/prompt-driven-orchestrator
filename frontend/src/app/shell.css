@@ -18,6 +18,13 @@
     background: var(--surface-2);
     font-size: var(--fs-sm);
   }
+  /* the Dark mode toggle carries its state for assistive technologies only:
+     its icon shows the mode, it keeps the rest look of an icon button (undoes
+     `.d-icon[aria-pressed="true"]` of kit.css) */
+  .sh-tb__mode.d-icon[aria-pressed="true"]:not(:hover):not(:active) {
+    background: transparent;
+    color: var(--text-2);
+  }
   .sh-tb__mark {
     display: grid;
     flex: none;
@@ -93,6 +100,25 @@
   .d-icon > .sh-tb__count[data-accent] {
     background: var(--primary);
     color: var(--primary-ink);
+  }
+  /* The panel of a `topbar/end` icon, under it, right-aligned on it: 400 px,
+     the extension's content scrolls inside it. It stops above the toasts'
+     corner, so the « Undo » of a toast it showed stays clickable. */
+  .d-pop.sh-tb__panel {
+    width: min(400px, calc(100vw / var(--app-zoom, 1) - 16px));
+    max-height: min(640px, calc(100dvh / var(--app-zoom, 1) - var(--h-topbar) - var(--h-statusbar) - 56px));
+    padding: 0;
+  }
+  .d-pop.sh-tb__panel:focus {
+    outline: none;
+  }
+  .sh-tb__panel-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .sh-tb__sep {
     flex: none;
@@ -325,13 +351,16 @@
     flex: none;
     color: var(--text-3);
   }
+  /* An extension's filter draws its own caption: it starts where the labels'
+     text does, past their icon, and its control follows. */
   .sh-rf__row--ext {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: var(--g-2);
     min-width: 0;
+    padding-left: calc(12px + var(--g-2));
     color: var(--text-2);
-    font-size: var(--fs-xs);
   }
   .sh-rf__text {
     min-width: 0;
@@ -347,10 +376,6 @@
   .sh-rf__sel {
     width: 100%;
     min-width: 0;
-  }
-  .sh-rf__sel--on,
-  .sh-rf__sel--on:hover:not(:disabled) {
-    border-color: var(--primary);
   }
   .sh-rf__date {
     display: flex;

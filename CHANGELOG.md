@@ -51,6 +51,29 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   towards a card beyond the next, and a condition label slides along its edge instead of shrinking.
   An unplaced condition label keeps off the labels placed by hand on other edges, and off the cards.
 
+### One avatar for a person
+
+- **Breaking for extensions** (shared module): the kit's `Avatar` is round, tinted with the
+  person's hue, its initials in ink (first and last word), instead of a neutral square. The hue
+  is one of 8 fixed hues (`--av-h0` … `--av-h7`, new tokens with `--av-fill-*` and `--av-solid-*`
+  per Theme and mode), none a status colour, picked from the person's Actor (`actor`, new prop),
+  else its name. New props `hollow`, `present`, `title`. The core draws every person with it: the
+  presence on a Run and on a shared draft (whose marks on the canvas take the same hue), the
+  Actors, the Review's comments and completions, the versions.
+- **Breaking** (shared draft socket): the daemon no longer deals a colour to each participant of a
+  shared draft; `color` leaves `DraftParticipant` and the `welcome` message.
+- New in `@pdo/extension-ui`: `AvatarStack` (three overlapping, then « +n » listing the others),
+  `personColor(person)`, the person's colour for marks outside its avatar, and
+  `useActorDisplays(actors)`, the display names of a list of Actors in one hook.
+- A Source de recherche result may carry `avatar: { name, actor?, avatar_url? }`, drawn by the
+  core in its icon column; a suggestion of completion's `avatar` takes `actor` too.
+- `Select` takes `active` (a filter in force, tinted); its tooltip is the value shown, no longer
+  its label.
+- The Pipelines list no longer shows the node count of a pipeline.
+- Runs list: a Run archived while it ran ends at its archive (`completed_at`), and its row draws
+  its live nodes as stopped; a Retry all keeps the original's name; a row's accessible name is its
+  name and status.
+
 ### Command field
 
 - **Search results with a fixed status shape**: a Source de recherche result's `status` takes an
@@ -66,6 +89,38 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   on a running, awaiting or failed node of a Run that is neither paused nor archived. It is no
   longer offered on an interrupted or stale node, nor in a paused Run, which the daemon refused
   to complete.
+
+### Top bar, full-window pages and shared module seams
+
+- A `topbar/end` contribution may be a **panel** (`UiContribution::panel`, `type: "panel"`):
+  its icon opens the exported component in a panel anchored under it (`PanelProps`, with
+  `close()`). Escape, a click outside and the icon close it. A panel and an action of
+  `topbar/end` may carry a counter on their icon, like a page (`with_counter`): absent at 0,
+  `99+` past 99.
+- A click in a toast no longer closes an open anchored panel (a panel of `topbar/end`, a
+  `Popover`, a `Menu`, a `Select`): « Undo » works from inside it.
+- A full-window page sets the title and the icon of its header for the route on screen:
+  `shell.setTitle(title, icon?)`. A route that sets none, and the page once reopened, show
+  the page's label and icon.
+- `Banner` takes an `icon`, drawn in the tone's colour instead of the status icon (a lock on a
+  read-only state).
+- The import map resolves `yjs` to the front's own copy (`/shared/yjs.js`): a bundle that lists
+  `yjs` as external loads no second copy.
+
+### Design system and Workbench
+
+- **`Segmented` takes `fill`** (`@pdo/extension-ui` 0.20): the control takes its row's width,
+  its items share it equally and a long label ends in an ellipsis. Without it, nothing changes.
+- **A tooltip waits for the pointer to move**: a surface that opens under a still pointer no
+  longer shows the tooltip of the control that lands there, and a focus given back by code (a
+  menu closed with Escape or picked from) no longer reopens one. Tab and the arrows still do.
+- The top bar's Dark mode toggle exposes its state (`aria-pressed`) under the stable name
+  « Dark mode ».
+- An unknown value stored under `pdo.ui.theme` or `pdo.ui.mode` is rewritten as the default,
+  as a migrated one is.
+- A Workbench layout whose side panels were dragged to their maximum is restored as dragged,
+  the canvas keeping its pixels instead of growing back to a third of the window. A drag and a
+  restore both leave the canvas at least 5 % of the window.
 
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 

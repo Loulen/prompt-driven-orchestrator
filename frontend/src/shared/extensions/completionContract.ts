@@ -6,6 +6,7 @@
  */
 
 import type { ExtensionRef, LocationContext, ReviewContext } from "./contract";
+import type { RowAvatar } from "./paletteContract";
 
 /**
  * `review/composer` (0.14): the comment editor of the Review page, for its
@@ -27,8 +28,8 @@ export interface CompletionSuggestion {
   hint?: string | null;
   /** A text at the right of the row (a role). */
   detail?: string | null;
-  /** An avatar at the left of the row: an image, or the initials of `name`. */
-  avatar?: { name: string; avatar_url?: string | null } | null;
+  /** An avatar at the left of the row: an image, or the initials of `name` in its hue (`actor` since 0.20). */
+  avatar?: RowAvatar | null;
 }
 
 /**

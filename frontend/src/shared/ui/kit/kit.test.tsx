@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { Bell, Rocket, Trash2 } from "lucide-react";
+import { Bell, Lock, Rocket, Trash2 } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type ExtensionUiDeclared from "../../../../public/shared/pdo-extension-ui";
 import { extensionUiModule } from "../../extensions/uiModule";
@@ -46,6 +46,8 @@ const PUBLIC = join(import.meta.dirname, "..", "..", "..", "..", "public", "shar
 /** The primitives of the design system, as the module hands them out. */
 const PRIMITIVES = [
   "Avatar",
+  "AvatarStack",
+  "personColor",
   "Banner",
   "Button",
   "Checkbox",
@@ -199,6 +201,54 @@ describe("primitives", () => {
     await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
   });
 
+  it("Tooltip waits for the pointer to move: a surface opened under a still pointer shows none", async () => {
+    render(<IconButton icon={Bell} label="Refresh" />);
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    // What the engine sends when a layout brings the control under the pointer: no move.
+    fireEvent.pointerOver(refresh);
+    await act(() => new Promise((r) => setTimeout(r, 500)));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // The pointer moves on it: the tooltip shows, and leaves with the pointer.
+    fireEvent.pointerMove(refresh);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Refresh");
+    fireEvent.pointerOut(refresh);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+  });
+
+  it("Tooltip stays closed on the focus a menu gives back to its trigger, after Escape or a pick", async () => {
+    const user = userEvent.setup();
+    render(
+      <Menu
+        label="Environment"
+        trigger={({ toggle }) => <IconButton icon={Bell} label="More" onClick={toggle} />}
+        entries={[{ label: "Deploy" }, { label: "Roll back" }]}
+      />,
+    );
+    const more = screen.getByRole("button", { name: "More" });
+    await user.tab();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("More");
+    for (const close of ["{Escape}", "{Enter}"]) {
+      await user.keyboard("{Enter}");
+      await screen.findByRole("menu");
+      await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+      await user.keyboard(close);
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      expect(more).toHaveFocus();
+      await act(() => new Promise((r) => setTimeout(r, 500)));
+      expect(screen.queryByRole("tooltip"), close).toBeNull();
+    }
+    // A pick with the pointer gives the focus back the same way.
+    await user.keyboard("{Enter}");
+    await user.click(within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Deploy" }));
+    expect(more).toHaveFocus();
+    await act(() => new Promise((r) => setTimeout(r, 500)));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // The keyboard moving on and back shows it again.
+    await user.tab({ shift: true });
+    await user.tab();
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("More");
+  });
+
   it("Segmented is a radio group the arrow keys move through", async () => {
     const user = userEvent.setup();
     function Strategy() {
@@ -225,6 +275,27 @@ describe("primitives", () => {
     expect(within(group).getByRole("radio", { name: "Blue-green" })).toHaveFocus();
     await user.keyboard("{ArrowLeft}{ArrowLeft}");
     expect(within(group).getByRole("radio", { name: "Recreate" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("Segmented fills its line on request, its items sharing it and ending a long label in an ellipsis", () => {
+    const items = [
+      { value: "rolling", label: "Rolling" },
+      { value: "blue", label: "Blue-green ".repeat(20) },
+    ];
+    const { rerender } = render(<Segmented label="Strategy" value="rolling" onChange={() => {}} items={items} />);
+    const group = screen.getByRole("radiogroup", { name: "Strategy" });
+    expect(group).not.toHaveClass("d-seg--fill");
+    rerender(<Segmented label="Strategy" fill value="rolling" onChange={() => {}} items={items} />);
+    expect(group).toHaveClass("d-seg", "d-seg--fill");
+    // The full label stays reachable on the truncated item.
+    expect(within(group).getByRole("radio", { name: items[1].label.trim() })).toHaveAttribute("title", items[1].label);
+    const css = readFileSync(join(import.meta.dirname, "kit.css"), "utf8");
+    const rule = (sel: string) => new RegExp(`${sel.replace(/[.*>]/g, "\\$&")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    expect(rule(".d-seg--fill")).toMatch(/display:\s*flex/);
+    expect(rule(".d-seg--fill")).toMatch(/width:\s*100%/);
+    expect(rule(".d-seg--fill > .d-seg__btn")).toMatch(/flex:\s*1 1 0/);
+    expect(rule(".d-seg--fill > .d-seg__btn")).toMatch(/min-width:\s*0/);
+    expect(rule(".d-seg--fill > .d-seg__btn > span")).toMatch(/text-overflow:\s*ellipsis/);
   });
 
   it("Switch and Checkbox toggle and carry their state", async () => {
@@ -259,6 +330,23 @@ describe("primitives", () => {
     const error = screen.getByRole("alert");
     expect(error).toHaveTextContent("Must be 1 to 20");
     expect(input).toHaveAttribute("aria-describedby", error.id);
+  });
+
+  it("Select shows its whole value in its tooltip, and tints a filter in force", () => {
+    const long = `feature/${"a-very-long-pipeline-name-".repeat(8)}`;
+    const options = [
+      { value: "", label: "All" },
+      { value: "long", label: long },
+    ];
+    const { rerender } = render(<Select label="Pipeline" value="" onChange={() => {}} options={options} />);
+    const trigger = screen.getByRole("button", { name: "Pipeline" });
+    expect(trigger).toHaveAttribute("title", "All");
+    expect(trigger).not.toHaveAttribute("data-active");
+    rerender(<Select label="Pipeline" value="long" active onChange={() => {}} options={options} />);
+    expect(trigger).toHaveAttribute("title", long);
+    expect(trigger).toHaveAttribute("data-active");
+    rerender(<Select label="Pipeline" value={null} onChange={() => {}} options={options} />);
+    expect(trigger).toHaveAttribute("title", "Pipeline");
   });
 
   it("Select opens a listbox from the keyboard and picks the highlighted option", async () => {
@@ -373,6 +461,36 @@ describe("primitives", () => {
     fireEvent.scroll(screen.getByTestId("list"));
     expect(screen.getByRole("dialog", { name: "Filters" })).toBeInTheDocument();
     fireEvent.scroll(screen.getByTestId("page"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("Popover stays open on a click in a toast, closes on a click elsewhere", async () => {
+    const user = userEvent.setup();
+    const undo = vi.fn();
+    render(
+      <>
+        <button type="button">Elsewhere</button>
+        <Popover
+          label="Inbox"
+          trigger={({ toggle }) => (
+            <button type="button" onClick={toggle}>
+              Open
+            </button>
+          )}
+        >
+          <button type="button" onClick={() => toast("Deleted", "info", { actionLabel: "Undo", onAction: undo })}>
+            Delete
+          </button>
+        </Popover>
+        <Toaster />
+      </>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    await user.click(within(await screen.findByTestId("toast-info")).getByRole("button", { name: "Undo" }));
+    expect(undo).toHaveBeenCalledOnce();
+    expect(screen.getByRole("dialog", { name: "Inbox" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Elsewhere" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
@@ -494,5 +612,16 @@ describe("primitives", () => {
     expect(screen.getByRole("img", { name: "Degraded" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Alice Martin" })).toHaveTextContent("AM");
     expect(screen.getByRole("img", { name: "implement-review" })).not.toHaveTextContent(/\w/);
+  });
+
+  it("Banner draws its icon instead of the tone's, in the tone's colour", () => {
+    const { container } = render(<Banner tone="skipped" icon={Lock} title="Read-only" text="Only its owner edits it" />);
+    const banner = screen.getByRole("status");
+    expect(banner).toHaveTextContent("Read-onlyOnly its owner edits it");
+    const icons = container.querySelectorAll("svg");
+    expect(icons).toHaveLength(1);
+    expect(icons[0]).toHaveClass("lucide-lock", "d-banner__icon");
+    render(<Banner tone="skipped" title="Skipped" />);
+    expect(screen.getAllByRole("status")[1].querySelector(".lucide-lock")).toBeNull();
   });
 });

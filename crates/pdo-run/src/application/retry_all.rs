@@ -114,7 +114,9 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
         project_id: run_state.project_id.clone(),
         target_repos,
         source_branch,
-        name: None,
+        // The twin keeps the original's name; an unnamed original is named
+        // afresh (`auto_name` below).
+        name: run_state.name.clone(),
         triggered_by: None,
         // A retry preserves the original Run's isolation mode. Wrapped in
         // `Some` so the chokepoint treats it as EXPLICIT: a changed instance
@@ -138,10 +140,11 @@ pub async fn retry_all_run(state: &Arc<Runs>, run_id: &str) -> Response {
         // forwards as `None`, so the retry re-resolves through the legacy
         // `harness` tier exactly as the original did.
         agent_choice: run_state.agent_choice.clone(),
-        // A retry sets `name: None` and re-derives the name. `Some(true)`
+        // An unnamed original's twin re-derives its name. `Some(true)`
         // reproduces that regardless of the instance default, so a changed
-        // `default_auto_name` cannot silently alter how a retried Run is named.
-        auto_name: Some(true),
+        // `default_auto_name` cannot silently alter how a retried Run is named;
+        // a named one keeps its name and derives none.
+        auto_name: Some(run_state.name.is_none()),
         // Reproduce the original Run's `auto_fail`, like `harness`: `None`
         // forwards as `None` and re-resolves through project / instance.
         auto_fail: run_state.auto_fail,

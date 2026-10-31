@@ -18,9 +18,12 @@ export type {
   TextAreaProps,
   TextInputProps,
 } from "./controls";
-export { Avatar, Banner, Chip, EmptyState, KeyValue, Section, Tabs } from "./structure";
+export { Avatar, AvatarStack } from "./avatar";
+export type { AvatarProps, AvatarSize, AvatarStackProps, StackPerson } from "./avatar";
+export { AVATAR_HUES, avatarHue, avatarIdentity, personColor, personStyle } from "./avatarHue";
+export type { Person } from "./avatarHue";
+export { Banner, Chip, EmptyState, KeyValue, Section, Tabs } from "./structure";
 export type {
-  AvatarProps,
   BannerProps,
   ChipProps,
   EmptyStateProps,

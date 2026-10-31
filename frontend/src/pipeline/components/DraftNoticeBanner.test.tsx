@@ -54,7 +54,6 @@ describe("a library assistant among the participants", () => {
     connection: "9",
     actor: { kind: "local_operator" },
     display: { name: "Alice Martin", avatar_url: null },
-    color: 2,
     can_write: true,
     assistant: true,
     selection: { kind: "node", id: "fixer" },

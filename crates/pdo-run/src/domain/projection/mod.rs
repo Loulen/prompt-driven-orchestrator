@@ -1520,6 +1520,57 @@ mod tests {
     }
 
     #[test]
+    fn a_run_archived_while_it_ran_ends_at_its_archive() {
+        let archived = Event {
+            ts: "2026-01-01T00:05:00.000Z".into(),
+            ..make_event(EventKind::RunArchived, None, None)
+        };
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "archival-test" }),
+            ),
+            make_event(EventKind::NodeStarted, Some("worker"), Some(1)),
+            archived,
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::Archived);
+        assert_eq!(
+            state.completed_at.as_deref(),
+            Some("2026-01-01T00:05:00.000Z")
+        );
+    }
+
+    #[test]
+    fn a_finished_run_archived_later_keeps_its_end() {
+        let completed = Event {
+            ts: "2026-01-01T00:01:00.000Z".into(),
+            ..make_event(EventKind::RunCompleted, None, None)
+        };
+        let archived = Event {
+            ts: "2026-01-02T00:00:00.000Z".into(),
+            ..make_event(EventKind::RunArchived, None, None)
+        };
+        let events = vec![
+            make_event_with_payload(
+                EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "archival-test" }),
+            ),
+            completed,
+            archived,
+        ];
+
+        let state = project(&events).unwrap();
+        assert_eq!(
+            state.completed_at.as_deref(),
+            Some("2026-01-01T00:01:00.000Z")
+        );
+    }
+
+    #[test]
     fn projects_halted_run() {
         let events = vec![
             make_event_with_payload(

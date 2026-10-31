@@ -4,12 +4,22 @@
  * group on an empty query. Per browser.
  */
 
+import type { RowAvatar } from "../../shared/extensions/contract";
+
 const KEY = "pdo.palette.recent";
 const MAX = 5;
 
 export type RecentPick =
   | { kind: "run" | "pipeline" | "trigger"; id: string }
-  | { kind: "result"; id: string; extension: string; title: string; ref?: string | null; link: string };
+  | {
+      kind: "result";
+      id: string;
+      extension: string;
+      title: string;
+      ref?: string | null;
+      link: string;
+      avatar?: RowAvatar | null;
+    };
 
 /** The key a pick is remembered under: the same item opened twice is one pick. */
 export const recentKey = (pick: RecentPick) =>

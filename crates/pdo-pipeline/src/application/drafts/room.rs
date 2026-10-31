@@ -10,7 +10,7 @@ use tokio::sync::broadcast;
 use crate::application::ports::{DraftDocument, StoredDraft};
 use crate::domain::draft::changes::{change_count, changed_fields};
 use crate::domain::draft::notice::DraftNotice;
-use crate::domain::draft::presence::{next_color, DraftParticipant, PresenceState};
+use crate::domain::draft::presence::{DraftParticipant, PresenceState};
 use crate::domain::draft::{DraftContent, DraftSummary};
 
 /// How many messages a slow participant may lag behind before it resyncs.
@@ -143,16 +143,14 @@ impl Room {
         self.lock().baseline.clone()
     }
 
-    /// Seat a participant; its color.
-    pub(super) fn seat(&self, connection: u64, mut participant: DraftParticipant) -> u8 {
+    /// Seat a participant.
+    pub(super) fn seat(&self, connection: u64, participant: DraftParticipant) {
         let participants = {
             let mut state = self.lock();
-            participant.color = next_color(state.participants.values().map(|p| p.color));
-            state.participants.insert(connection, participant.clone());
+            state.participants.insert(connection, participant);
             state.participants.values().cloned().collect()
         };
         self.send(DraftMessage::Participants(participants));
-        participant.color
     }
 
     pub(super) fn unseat(&self, connection: u64) {

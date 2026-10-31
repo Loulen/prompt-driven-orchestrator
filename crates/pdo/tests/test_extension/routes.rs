@@ -17,6 +17,9 @@ const BUNDLE: &str = include_str!("ui.js");
 /// The icon of its page and its command: a plain SVG drawn in `currentColor`.
 const ICON: &str = include_str!("icon.svg");
 
+/// The icon of its messages panel (API 0.20), drawn the same way.
+const MESSAGES_ICON: &str = include_str!("messages.svg");
+
 pub(super) fn router(control: Control) -> Router {
     let events = control.clone();
     let operations = control.clone();
@@ -36,6 +39,7 @@ pub(super) fn router(control: Control) -> Router {
         .merge(super::projets::routes(control.creation.clone()))
         .merge(super::run_view::routes(control.creation.clone()))
         .merge(super::sessions::routes(control.creation.clone()))
+        .merge(super::messages::routes(control.creation.clone()))
         .merge(super::palette::routes(
             control.inbox.clone(),
             control.creation.clone(),
@@ -60,10 +64,6 @@ pub(super) fn router(control: Control) -> Router {
         .route(
             "/sign-in",
             get(|| async { ([(header::CONTENT_TYPE, "text/html")], gate::SIGN_IN_PAGE) }),
-        )
-        .route(
-            "/avatar.svg",
-            get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], gate::AVATAR_SVG) }),
         )
         .route(
             "/",
@@ -126,6 +126,12 @@ pub(super) fn router(control: Control) -> Router {
         .route(
             "/icon.svg",
             get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], ICON).into_response() }),
+        )
+        .route(
+            "/messages.svg",
+            get(|| async {
+                ([(header::CONTENT_TYPE, "image/svg+xml")], MESSAGES_ICON).into_response()
+            }),
         )
         .route(
             "/commands",

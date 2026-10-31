@@ -137,7 +137,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   duplicated, imported or deleted (a new pipeline is born a test pipeline): a client that keeps
   the pipeline list reads it again, and an open New Run offers the new pipeline at once.
 - Triggers name the time zone their cron is read in (UTC): beside the expression in New
-  Trigger, in the schedule (« daily at 03:00 UTC ») and in the next fire of the Trigger's
+  Trigger, in the schedule ("daily at 03:00 UTC") and in the next fire of the Trigger's
   detail, whose tooltip gives the same instant in the browser's time zone.
 - New Run says why a repository cannot be used once, under the field: a path that does not
   exist, a folder that is not a repository, a repository without a commit, or one outside the

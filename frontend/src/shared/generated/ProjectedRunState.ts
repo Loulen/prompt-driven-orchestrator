@@ -23,7 +23,13 @@ import type { SourceFetchError } from "./SourceFetchError";
 import type { StartNodeInfo } from "./StartNodeInfo";
 import type { SwitchState } from "./SwitchState";
 
-export type ProjectedRunState = { run_id: string, status: RunStatus, pipeline_name: string, name?: string, input: string | null, started_at: string | null, completed_at: string | null, 
+export type ProjectedRunState = { run_id: string, status: RunStatus, pipeline_name: string, name?: string, input: string | null, 
+/**
+ * The values the Run was launched with for the pipeline's variables, as
+ * its `run_started` froze them: only the ones the launch set, a variable
+ * left out runs on its default. Empty for a Run launched without any.
+ */
+variables?: { [key in string]: unknown }, started_at: string | null, completed_at: string | null, 
 /**
  * Why the Run reached a non-green terminal state — the `reason` of its
  * `RunFailed` / `RunSkipped` / `RunHalted` (#503).

@@ -128,12 +128,15 @@ export default function PortRow({
             }}
             data-testid="port-row-open"
             aria-label={`Open ${port.port}`}
+            title={port.port}
             className="ri-port__name"
           >
             {port.port}
           </button>
         ) : (
-          <span className="ri-port__name">{port.port}</span>
+          <span className="ri-port__name" title={port.port}>
+            {port.port}
+          </span>
         )}
         {port.repeated && <Chip mono>repeated</Chip>}
         {(isImage || isHtml || isFiles) && (

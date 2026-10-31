@@ -28,7 +28,13 @@ import type { SwitchState } from "./SwitchState";
  * `get_run` adds to the JSON on the way out (`has_manager`, and the entity
  * attributes the extensions stamped on the Run when it carries some).
  */
-export type RunState = { has_manager?: boolean, attributes?: { [key in string]: string }, run_id: string, status: RunStatus, pipeline_name: string, name?: string, input: string | null, started_at: string | null, completed_at: string | null, 
+export type RunState = { has_manager?: boolean, attributes?: { [key in string]: string }, run_id: string, status: RunStatus, pipeline_name: string, name?: string, input: string | null, 
+/**
+ * The values the Run was launched with for the pipeline's variables, as
+ * its `run_started` froze them: only the ones the launch set, a variable
+ * left out runs on its default. Empty for a Run launched without any.
+ */
+variables?: { [key in string]: unknown }, started_at: string | null, completed_at: string | null, 
 /**
  * Why the Run reached a non-green terminal state — the `reason` of its
  * `RunFailed` / `RunSkipped` / `RunHalted` (#503).

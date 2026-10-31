@@ -238,6 +238,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_version_put_again_takes_its_new_date() {
+        let store = store().await;
+        store.put("p", &version(1, "v1", None)).await.unwrap();
+        let mut again = version(1, "v1", Some(Actor::LocalOperator));
+        again.meta.saved_at = "2026-10-19T11:30:00Z".into();
+        store.put("p", &again).await.unwrap();
+        let listed = store.list("p").await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].saved_at, "2026-10-19T11:30:00Z");
+    }
+
+    #[tokio::test]
     async fn keeps_the_versions_of_a_pipeline_and_its_last_one() {
         let store = store().await;
         store.put("p", &version(1, "v1", None)).await.unwrap();

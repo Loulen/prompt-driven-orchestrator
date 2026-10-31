@@ -10,6 +10,10 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { isOn, rowOf, switchFor, switchOf, tipFor, tipOf } from "./settingsSurface/testing";
 
+// Every case renders the whole surface: a few seconds each on a busy machine,
+// past the suite's 20 s now and then. The file gets its own ceiling.
+vi.setConfig({ testTimeout: 60_000 });
+
 const fetchSettingsMock = vi.fn();
 const updateSettingsMock = vi.fn();
 const browseFsMock = vi.fn();

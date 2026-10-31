@@ -4,7 +4,7 @@
  * request aborted, hits grouped by node iteration, ↑↓ / ↵ / Esc, an explicit
  * message when nothing matches.
  */
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunState } from "../../../shared/generated/RunState";
 import type { RunTranscriptSearch } from "../../../shared/generated/RunTranscriptSearch";
@@ -122,8 +122,8 @@ describe("RunSearchHost", () => {
     expect(screen.getByTestId("run-search-count").textContent).toBe("3 in 2 nodes");
     const groups = screen.getAllByTestId("run-search-group");
     expect(groups).toHaveLength(2);
-    expect(groups[0].textContent).toContain("iter 2");
-    expect(groups[1].textContent).toContain("iter 1");
+    expect(within(groups[0]).getByTestId("iter-mark")).toHaveTextContent("Iteration 2");
+    expect(within(groups[1]).getByTestId("iter-mark")).toHaveTextContent("Iteration 1");
     expect(screen.getAllByTestId("run-search-group-node").map((n) => n.textContent)).toEqual(["Builder", "Reviewer"]);
     const hits = screen.getAllByTestId("run-search-hit");
     expect(hits).toHaveLength(3);

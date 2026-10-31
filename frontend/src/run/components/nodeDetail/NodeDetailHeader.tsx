@@ -19,6 +19,7 @@ import { nodeIterationTimings } from "../../model/iterationDuration";
 import type { IterationTiming } from "../../model/iterationDuration";
 import { useNodeDurationMode } from "../../store/nodeDurationModeStore";
 import { STATUS_LABELS } from "./labels";
+import IterMark from "../IterMark";
 
 /** The one-letter glyph of a harness, its full name in the tooltip. */
 const HARNESS_LETTER: Record<string, string> = { claude: "C", opencode: "O", copilot: "G", codex: "X", pi: "P" };
@@ -100,7 +101,8 @@ export default function NodeDetailHeader({
         {hasMultipleIters ? (
           <IterSelector iterations={iterations} selectedIter={selectedIter} onSelect={onSelectIter} />
         ) : (
-          <span title="Iteration">i{node.iter}</span>
+          // A node that never started has no iteration to name.
+          node.iter > 0 && <IterMark iter={node.iter} />
         )}
       </span>
       {/* The duration of the SELECTED iteration; its start and end live in

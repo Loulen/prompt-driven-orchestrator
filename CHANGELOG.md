@@ -74,6 +74,20 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   longer offered on an interrupted or stale node, nor in a paused Run, which the daemon refused
   to complete.
 
+### Run inspector and pipeline editing
+
+- `GET /runs/{id}` carries **`variables`**: the values the launch gave the pipeline's variables
+  (absent when it gave none). The Variables section of a Run's Pipeline info shows the value the
+  Run received, the default only for a variable the launch left out.
+- The Run inspector names an iteration by the canvas card's iteration icon and its number
+  (« ⇄ 2 », « ⇄ 3/3 ») in the node header and its picker, the Transcript bar, the enlarged
+  terminal and the groups of the Run search.
+- Back on a tab, the canvas and the inspector show the selection the tab had.
+- The conditions of an edge stay in the order they were added, a new one last, even on a field
+  another condition already reads.
+- The ages of the Versions list follow the clock; an output's or input's name truncated in the
+  inspector is whole in its tooltip.
+
 ### Top bar, full-window pages and shared module seams
 
 - A `topbar/end` contribution may be a **panel** (`UiContribution::panel`, `type: "panel"`):

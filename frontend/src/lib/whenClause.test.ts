@@ -7,6 +7,8 @@ import {
   splitFieldKey,
   fieldKey,
   isPortlessField,
+  conditionKey,
+  inShownOrder,
   OPERATORS,
 } from "./whenClause";
 
@@ -229,5 +231,22 @@ describe("renameWhenPorts", () => {
 describe("OPERATORS", () => {
   it("is the ADR-0002 mechanical predicate set", () => {
     expect(OPERATORS).toEqual(["eq", "neq", "lt", "lte", "gt", "gte", "in", "not_in"]);
+  });
+});
+
+describe("inShownOrder", () => {
+  const row = (field: string, op: "eq" | "neq" | "gte") => ({ port: "out", field, op, value: "1" });
+
+  it("puts a condition added on a used field last, not next to its field", () => {
+    const shown = [row("verdict", "eq"), row("iter", "gte"), row("verdict", "neq")];
+    const decoded = whenToRows(rowsToWhen(shown), []).map((r) => ({ ...r, port: "out" }));
+    expect(decoded.map(conditionKey)).not.toEqual(shown.map(conditionKey));
+    expect(inShownOrder(decoded, shown.map(conditionKey)).map(conditionKey)).toEqual(shown.map(conditionKey));
+  });
+
+  it("puts the rows it does not know after, in the clause's order", () => {
+    const rows = [row("a", "eq"), row("b", "eq"), row("c", "eq")];
+    expect(inShownOrder(rows, [conditionKey(rows[2])]).map((r) => r.field)).toEqual(["c", "a", "b"]);
+    expect(inShownOrder(rows, []).map((r) => r.field)).toEqual(["a", "b", "c"]);
   });
 });

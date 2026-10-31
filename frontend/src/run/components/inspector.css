@@ -127,6 +127,10 @@
   cursor: pointer;
 }
 .ri-iter:hover { color: var(--text); border-color: var(--line-strong); }
+/* An iteration: the canvas card's iteration icon, then the number (« ⇄ 3/3 »). */
+.ri-itermark { display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-code); font-size: var(--fs-xs); white-space: nowrap; }
+.ri-itermark svg { flex: none; color: var(--text-3); }
+.ri-itermark__of { color: var(--text-3); }
 .ri-iter-menu { min-width: 180px; }
 .ri-iter-menu__item {
   display: flex;

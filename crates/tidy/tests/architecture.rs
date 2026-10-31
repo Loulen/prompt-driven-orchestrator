@@ -43,10 +43,6 @@ impl std::fmt::Display for Violation {
     }
 }
 
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -153,7 +149,7 @@ pub fn domain_violations(crate_dir: &Path) -> Vec<Violation> {
 
 /// The bounded-context crates: every `crates/*` with a `src/domain/`.
 fn context_crates() -> Vec<PathBuf> {
-    let mut crates: Vec<PathBuf> = std::fs::read_dir(workspace_root().join("crates"))
+    let mut crates: Vec<PathBuf> = std::fs::read_dir(tidy::workspace_root().join("crates"))
         .unwrap()
         .flatten()
         .map(|e| e.path())

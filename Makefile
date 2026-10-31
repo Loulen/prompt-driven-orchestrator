@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build test e2e release-bump bench-transcript-search check lint fmt clean types types-check support-table readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
+.PHONY: help dev build fast test e2e release-bump bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -25,6 +25,19 @@ TS_CHECK_DIR := $(CURDIR)/target/ts-rs-check
 # fresh target/), which is enough for a test build.
 EXPORT_TS := PDO_SKIP_FRONTEND_BUILD=1 cargo test --quiet --workspace --lib export_bindings_ -- --test-threads=1
 
+# sccache (ADR draft « les contrôles structurels tournent dans un crate tidy »):
+# every PDO worktree starts with an empty target/, and sccache, which lives
+# outside of it, hands the compiled dependencies from one worktree to the next.
+# Used when installed, unless the caller set RUSTC_WRAPPER itself; without it,
+# the build works the same, only slower, and says how to get it.
+ifeq ($(origin RUSTC_WRAPPER),undefined)
+ifneq ($(shell command -v sccache 2>/dev/null),)
+export RUSTC_WRAPPER := sccache
+else
+$(info warning: sccache is not installed, so every fresh worktree compiles the dependencies again. Install it with `cargo install sccache --locked` (see CONTRIBUTING.md).)
+endif
+endif
+
 # ---- installed global daemon (build-from-source; runs as a systemd --user service) ----
 REPO_URL      := git@github.com:Loulen/prompt-driven-orchestrator.git
 PDO_PROD_DIR  ?= $(HOME)/.pdo/app
@@ -35,7 +48,8 @@ help:
 	@echo "Targets:"
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
 	@echo "  make build   cargo build (build.rs runs pnpm run build, frontend embedded into daemon)"
-	@echo "  make test    cargo nextest + doctests + vitest + the scripts' node tests"
+	@echo "  make fast    The fast gate (< 1 min, even on a cold target/): cargo fmt --check + the structural checks of crates/tidy"
+	@echo "  make test    cargo nextest (every failure, no fail-fast) + doctests + vitest + the scripts' node tests"
 	@echo "  make e2e [E2E_PORT=5273]  The frontend's Playwright suite on a real daemon (installs Chromium if missing)"
 	@echo "  make release-bump [LEVEL=…] [API_LEVEL=…] [DRY_RUN=1]  At integration -> main: bump the versions, release ## Unreleased, number the draft ADRs"
 	@echo "  make bench-transcript-search [RELEASE=1]  Bench 15 concurrent searches over a Run's transcripts"
@@ -44,6 +58,8 @@ help:
 	@echo "  make lint    cargo clippy + eslint"
 	@echo "  make fmt     cargo fmt"
 	@echo "  make clean   cargo clean (embedded frontend included) + rm a stray frontend/dist"
+	@echo "  make demo-daemon PORT=<p> [TEST_EXT=1]  Start a demo daemon for an agentic test: this branch's pdo, fresh HOME under /tmp/pdo-demo-<p>"
+	@echo "  make demo-daemon-stop PORT=<p>          Stop it: its pid and its tmux socket pdo-<p>, nothing else"
 	@echo "  make support-table  Regenerate the harness support table in docs/reference/harnesses.md from the code"
 	@echo "  make readme-media [SCENE=stats]   Record the README media (2 variants per scene) into .readme-media/ — see CONTRIBUTING"
 	@echo "  make readme-media-publish [SCENE=…]  Copy the selected variants into docs/assets/readme/"
@@ -81,12 +97,22 @@ build:
 # réglages du build (`PDO_FRONTEND_DIST`, `PDO_SKIP_FRONTEND_BUILD`) restent.
 NO_PDO_ENV := env $(foreach v,$(filter-out PDO_FRONTEND_DIST PDO_SKIP_FRONTEND_BUILD,$(filter PDO_%,$(.VARIABLES))),-u $(v))
 
+# Le fast gate : le format, puis les contrôles structurels (taille des fichiers,
+# couverture des routes, règle hexagonale, liens de la doc, version du module
+# partagé du front). `tidy` ne dépend que de std : il compile en quelques
+# secondes même sur un target/ froid, avant toute suite longue.
+fast:
+	cargo fmt --all --check
+	$(NO_PDO_ENV) cargo test --quiet -p tidy --no-fail-fast
+
 # nextest : un process par test (isolation retrouvée depuis que les 50 binaires de
 # tests sont fusionnés en un seul, cf. crates/pdo/tests/it.rs) et un pool
 # global au lieu d'un pool par binaire. nextest NE LANCE PAS les doctests, d'où la
 # ligne `--doc` séparée : la retirer ferait disparaître leur couverture en silence.
+# `--no-fail-fast` : un passage liste tous les échecs, de tous les crates, au lieu
+# de s'arrêter au premier et de coûter une relance par échec.
 test:
-	$(NO_PDO_ENV) cargo nextest run --workspace
+	$(NO_PDO_ENV) cargo nextest run --workspace --no-fail-fast
 	$(NO_PDO_ENV) cargo test --workspace --doc
 	cd frontend && pnpm test
 	node --disable-warning=ExperimentalWarning --test 'scripts/*/test/*.test.mjs'
@@ -145,6 +171,24 @@ types-check:
 # after adding a harness, adding a capability, or moving a "last validated version".
 support-table:
 	cargo run --quiet -p pdo-daemon -- docs support-table --write --file $(CURDIR)/$(SUPPORT_TABLE)
+
+# The demo daemon of the agentic tests (docs/agents/run-scenario.md): this
+# branch's `pdo daemon` (or, TEST_EXT=1, the test extension's demo daemon) on
+# PORT, under a fresh HOME in /tmp/pdo-demo-<PORT>, with no PDO_* nor TMUX*
+# inherited. PORT is required: the 6172 of `make dev` is not a default here.
+# DEMO_ENV='NAME=value …' sets variables on the daemon explicitly. The stop
+# reaches the pid of the pidfile and the tmux socket pdo-<PORT>, never the
+# user's daemon or tmux server; KEEP=1 keeps /tmp/pdo-demo-<PORT> (logs).
+DEMO_DAEMON := node --disable-warning=ExperimentalWarning scripts/demo-daemon/demo-daemon.mjs
+comma := ,
+DEMO_PORT_HINT = $(if $(filter demo-daemon-stop,$@),the port of a running demo daemon,a free port$(comma) 6400 to 6999)
+DEMO_PORT = $(if $(filter command line environment,$(origin PORT)),$(PORT),$(error PORT=<port> is required, e.g. make $@ PORT=6491 ($(DEMO_PORT_HINT))))
+
+demo-daemon:
+	@$(DEMO_DAEMON) start $(DEMO_PORT) $(if $(filter 1,$(TEST_EXT)),--test-ext) $(if $(DEMO_ENV),--env '$(DEMO_ENV)')
+
+demo-daemon-stop:
+	@$(DEMO_DAEMON) stop $(DEMO_PORT) $(if $(filter 1,$(KEEP)),--keep)
 
 # README media (ADR-0074): a sealed demo instance, real UI, real agents for the
 # live scenes. Costs an agent session per live scene — regenerate only when a

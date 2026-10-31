@@ -2153,6 +2153,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tempfile",
+ "tidy",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "tower",
@@ -3831,6 +3832,10 @@ checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "tidy"
+version = "2.68.0"
 
 [[package]]
 name = "tinystr"

@@ -18,11 +18,17 @@ The git flow lives in `.agents/skills/git-flow/SKILL.md`. In short: branch from 
 (`feature/<issue>-<slug>` or `fix/<issue>-<slug>`), open a PR against `main`, and let CI
 run. A maintainer reviews and merges. Nobody merges their own PR.
 
+While you work, run the fast gate: it answers in under a minute, even on a fresh checkout.
+
+```bash
+make fast         # cargo fmt --check, then the structural checks of crates/tidy
+```
+
 Before pushing:
 
 ```bash
 make check        # cargo check, frontend typecheck, harness support table
-make test         # daemon and frontend tests
+make test         # daemon and frontend tests; lists every failure in one pass
 ```
 
 Commit messages follow Conventional Commits with a French or English body, as the rest of
@@ -60,6 +66,22 @@ into the version's entry and numbers the draft ADRs, rewriting their citations.
 | [Rust](https://rustup.rs/) | Stable |
 | [Node.js](https://nodejs.org/) | 22 or newer |
 | [pnpm](https://pnpm.io/) | Use the version declared by the project |
+| [cargo-nextest](https://nexte.st/) | Any recent version (`make test`) |
+| [sccache](https://github.com/mozilla/sccache) | Optional, recommended |
+
+#### sccache
+
+Every PDO worktree starts with an empty `target/`, so each one compiles the dependencies again.
+sccache keeps the compiled crates in a cache outside `target/` and hands them to the next
+worktree. Install it once:
+
+```bash
+cargo install sccache --locked
+```
+
+The Makefile then sets `RUSTC_WRAPPER=sccache` for every `make` target (unless you set
+`RUSTC_WRAPPER` yourself). Without sccache, the build works the same and `make` prints a warning
+saying how to install it. `sccache --show-stats` shows the cache hits.
 
 ### Where the code lives
 
@@ -128,6 +150,7 @@ Every command is documented in [docs/reference/cli.md](docs/reference/cli.md).
 
 | Purpose | Command |
 | --- | --- |
+| Fast gate: formatting and structural checks | `make fast` |
 | Check Rust | `cargo check --workspace --all-targets` |
 | Regenerate the TS types of the DTOs | `make types` |
 | Test Rust | `cargo test --workspace` |

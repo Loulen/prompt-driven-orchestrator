@@ -20,6 +20,8 @@ members = [
   "crates/pdo-telemetry",
   "crates/pdo-settings",
   "crates/pdo",
+  # The structural checks (`make fast`), std only, never published.
+  "crates/tidy",
 ]
 
 [workspace.package]
@@ -99,6 +101,7 @@ pdo-stats = { path = "crates/pdo-stats" }
 pdo-review = { path = "crates/pdo-review" }
 pdo-telemetry = { path = "crates/pdo-telemetry" }
 pdo-settings = { path = "crates/pdo-settings" }
+tidy = { path = "crates/tidy" }
 
 # --- Release packaging (dist / ex-cargo-dist) -------------------------------
 # `dist` génère .github/workflows/release.yml à partir de cette config (voir
@@ -157,7 +160,9 @@ lto = "thin"
 # `incremental = false` : PDO donne à chaque itération de node un worktree neuf,
 # donc un `target/` neuf. Le cache incrémental (2 à 3,6 Go par worktree) est
 # écrit puis jamais relu, c'est du poids mort pur. Le vrai cache inter-worktrees
-# est sccache (voir .cargo/config.toml), qui vit hors de target/.
+# est sccache, qui vit hors de target/ : le Makefile l'active (RUSTC_WRAPPER)
+# quand il est installé, et sccache ne met en cache que les crates compilés sans
+# incrémental.
 # ATTENTION : ce raisonnement S'INVERSE si un CARGO_TARGET_DIR partagé atterrit
 # un jour (issues #518 / #631). Le cache serait alors relu d'une itération sur
 # l'autre et `incremental = true` redeviendrait le bon défaut.

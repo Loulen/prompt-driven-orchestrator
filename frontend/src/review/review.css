@@ -614,6 +614,14 @@ span.rv-pill {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.rv-ct__head > .rv-ct__anchor {
+  display: inline-flex;
+}
+.rv-ct__anchor-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .rv-ct__body {
   padding: var(--g-3) var(--g-4);
   font-size: var(--fs-md);

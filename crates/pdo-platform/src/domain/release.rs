@@ -53,8 +53,6 @@ pub struct Release {
     pub version: String,
     /// `published_at` as GitHub sends it (RFC3339), when present.
     pub published_at: Option<String>,
-    /// The release page, when present.
-    pub html_url: Option<String>,
     /// Release notes, verbatim markdown. Empty when the release has none.
     pub body: String,
 }
@@ -89,7 +87,6 @@ pub fn parse_releases_body(body: &str) -> Result<Vec<Release>, String> {
             Some(Release {
                 version: format!("{maj}.{min}.{pat}"),
                 published_at: r["published_at"].as_str().map(str::to_string),
-                html_url: r["html_url"].as_str().map(str::to_string),
                 body: r["body"].as_str().unwrap_or("").to_string(),
             })
         })
@@ -138,9 +135,6 @@ mod tests {
         Release {
             version: v.to_string(),
             published_at: Some(format!("2026-09-0{}T10:00:00Z", v.len() % 9 + 1)),
-            html_url: Some(format!(
-                "https://github.com/Loulen/PDO-v2/releases/tag/v{v}"
-            )),
             body: body.to_string(),
         }
     }
@@ -213,7 +207,6 @@ mod tests {
             rels[0].published_at.as_deref(),
             Some("2026-09-06T00:00:00Z")
         );
-        assert_eq!(rels[0].html_url.as_deref(), Some("u1"));
         assert_eq!(rels[1].body, "");
         assert!(parse_releases_body(r#"{"tag_name":"v1"}"#).is_err());
         assert!(parse_releases_body("<html>").is_err());

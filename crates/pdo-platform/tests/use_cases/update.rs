@@ -256,7 +256,6 @@ fn release(version: &str, body: &str) -> Release {
     Release {
         version: version.into(),
         published_at: Some("2026-09-01T00:00:00Z".into()),
-        html_url: None,
         body: body.into(),
     }
 }

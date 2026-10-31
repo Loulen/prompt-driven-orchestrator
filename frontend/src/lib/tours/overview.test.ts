@@ -621,7 +621,7 @@ describe("gestures advance only on the observed state", () => {
     expect(needsConfirm(TOUR, entered, fake.obs())).toBe(true);
   });
 
-  it("re-aims the archive step onto the confirmation, then waits for Next on the grey dot", () => {
+  it("re-aims the archive step onto the confirmation, then waits for Next on the archive icon", () => {
     const fake = new FakeApp();
     const step = stepById("archive-run");
     const run = at("archive-run", fake);
@@ -639,7 +639,8 @@ describe("gestures advance only on the observed state", () => {
     const after = observeTour(TOUR, run, fake.obs(), 200);
     expect(after.index, "stops on the archived Run").toBe(run.index);
     expect(needsConfirm(TOUR, after, fake.obs())).toBe(true);
-    expect(stepBody(step, fake.obs())).toMatch(/grey/);
+    expect(stepBody(step, fake.obs())).toMatch(/archive icon/);
+    expect(stepBody(step, fake.obs())).not.toMatch(/grey|dot/);
   });
 
   it("lets the archive be skipped, leaving the Run as it is", () => {

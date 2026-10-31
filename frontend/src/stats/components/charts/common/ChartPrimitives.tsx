@@ -279,7 +279,12 @@ export function Kpis({ items, testid }: { items: KpiItem[]; testid?: string }) {
           {item.label && <span className="sx-kpi__label">{item.label} </span>}
           <span className="sx-kpi__value">{item.value}</span>
           {item.sub !== undefined && (
-            <span className="sx-kpi__sub" data-tone={item.warn ? "warn" : undefined}>
+            <span
+              className="sx-kpi__sub"
+              data-tone={item.warn ? "warn" : undefined}
+              // The qualifier is the part a narrow line cuts short: its tooltip reads it whole.
+              title={typeof item.sub === "string" ? item.sub : undefined}
+            >
               {" "}
               {item.sub}
             </span>

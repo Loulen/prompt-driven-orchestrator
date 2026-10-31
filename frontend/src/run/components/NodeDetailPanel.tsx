@@ -30,6 +30,8 @@ import { useFocusTab } from "../store/runSearchStore";
 interface Props {
   node: NodeState;
   runId: string;
+  /** The Run's name, on the footer of an artifact opened from here. */
+  runName?: string | null;
   isArchived?: boolean;
   /** The Run's status: a paused Run takes no completion until resumed. */
   runStatus?: RunStatus;
@@ -53,6 +55,7 @@ interface Props {
 export default function NodeDetailPanel({
   node,
   runId,
+  runName = null,
   isArchived,
   runStatus,
   nodeName,
@@ -372,6 +375,7 @@ export default function NodeDetailPanel({
       {modal && modalSource && (
         <MarkdownArtifactModal
           runId={runId}
+          runName={runName}
           portName={modal.portName}
           portType={modal.portType}
           source={modalSource}

@@ -746,6 +746,13 @@ describe("StatsCharts — harness drill-down (#638)", () => {
         "~$1.75† median",
       );
       expect(screen.getByTestId("stats-harness-card-claude")).not.toHaveTextContent("avg");
+      // A narrow line cuts the median short: its tooltip carries it whole.
+      expect(
+        within(screen.getByTestId("stats-harness-card-claude")).getByTitle("~$1.75† median"),
+      ).toBeInTheDocument();
+      expect(
+        within(screen.getByTestId("stats-selection-headline")).getByTitle("~$1.50† median per Run"),
+      ).toBeInTheDocument();
       expect(screen.getByTestId("stats-harness-card-copilot")).toHaveTextContent("$2.00");
       expect(screen.getByTestId("stats-harness-card-opencode")).toHaveTextContent("—");
       expect(screen.getByText(/1 Run without computable cost/i)).toBeInTheDocument();

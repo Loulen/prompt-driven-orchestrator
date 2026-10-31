@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useState, type CSSProperties } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { StatsCostEntity } from "../../../../shared/generated/StatsCostEntity";
 import { harnessColor } from "../../../../harness/model/color";
@@ -60,8 +60,8 @@ export function CostTable({
   // table on the drill path, so a stale expanded set never leaks across Nodes.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   return (
-    <>
-      <table className="sx-table">
+    <div className="sx-hscroll">
+      <table className="sx-table sx-table--cost" style={{ "--sx-cols": harnesses.length } as CSSProperties}>
         <thead>
           <tr>
             <SortTh sort={sort} onSort={onSort} sortKey="name">
@@ -236,6 +236,6 @@ export function CostTable({
           })}
         </tbody>
       </table>
-    </>
+    </div>
   );
 }

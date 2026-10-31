@@ -6,9 +6,24 @@ latest entries. The full history lives in the git log and in the
 [GitHub Releases](https://github.com/Loulen/prompt-driven-orchestrator/releases), generated from
 the commits.
 
+Work not released yet sits under `## Unreleased`, the first entry; "What's new" does not show it.
+`make release-bump` turns it into the version's entry when a story merges into `main`.
+
 The project follows semantic versioning. It has **no backward-compatibility goal**: a break is
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
+
+## Unreleased
+
+### Development
+
+- Versions, the CHANGELOG and ADR numbers are set once, when a story merges into `main`: changes
+  are written under `## Unreleased`, and a new ADR is born as a draft (`docs/adr/draft-<slug>.md`).
+- `make release-bump` proposes the semver level from the conventional commits since the last tag
+  (`LEVEL=` forces it), bumps the workspace, the extension API, the shared module of the front
+  and `Cargo.lock`, turns `## Unreleased` into the version's entry and numbers the draft ADRs,
+  rewriting every citation. `DRY_RUN=1` prints the plan only.
+- `make e2e` runs the Playwright suite of the frontend, installing Chromium when it is missing.
 
 ## 2.68.0 · Classic Theme, Dark mode and the acceptance fixes
 

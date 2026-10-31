@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build fast test bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
+.PHONY: help dev build fast test e2e release-bump bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -49,7 +49,9 @@ help:
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
 	@echo "  make build   cargo build (build.rs runs pnpm run build, frontend embedded into daemon)"
 	@echo "  make fast    The fast gate (< 1 min, even on a cold target/): cargo fmt --check + the structural checks of crates/tidy"
-	@echo "  make test    cargo nextest (every failure, no fail-fast) + doctests + vitest"
+	@echo "  make test    cargo nextest (every failure, no fail-fast) + doctests + vitest + the scripts' node tests"
+	@echo "  make e2e [E2E_PORT=5273]  The frontend's Playwright suite on a real daemon (installs Chromium if missing)"
+	@echo "  make release-bump [LEVEL=…] [API_LEVEL=…] [DRY_RUN=1]  At integration -> main: bump the versions, release ## Unreleased, number the draft ADRs"
 	@echo "  make bench-transcript-search [RELEASE=1]  Bench 15 concurrent searches over a Run's transcripts"
 	@echo "  make check   cargo check + generated TS types current + tsc --noEmit + the harness support table (docs/reference/harnesses.md) is current"
 	@echo "  make types   Regenerate the TS types of the daemon's DTOs into $(GENERATED_TS)"
@@ -113,7 +115,23 @@ test:
 	$(NO_PDO_ENV) cargo nextest run --workspace --no-fail-fast
 	$(NO_PDO_ENV) cargo test --workspace --doc
 	cd frontend && pnpm test
-	node --disable-warning=ExperimentalWarning --test 'scripts/readme-media/test/*.test.mjs' 'scripts/demo-daemon/test/*.test.mjs'
+	node --disable-warning=ExperimentalWarning --test 'scripts/*/test/*.test.mjs'
+
+# The frontend's E2E (Playwright, a real daemon built by `cargo run`), once per
+# story before `integration/*` -> `main`. `playwright install` downloads Chromium
+# only when its cache lacks it. E2E_PORT: the e2e daemon's port (5273 by default).
+e2e:
+	cd frontend && pnpm exec playwright install chromium
+	cd frontend && $(NO_PDO_ENV) $(if $(E2E_PORT),PDO_E2E_PORT=$(E2E_PORT)) pnpm run e2e
+
+# At the merge of `integration/*` into `main`, never on a ticket (ADR
+# draft-version-changelog-et-numero-d-adr-se-fixent-a-la-fusion-vers-main):
+# proposes the semver level from the commits since the last tag, bumps the
+# workspace, the extension API, the front's shared module and Cargo.lock,
+# renames `## Unreleased` and numbers the draft ADRs. LEVEL= / API_LEVEL= force
+# a level, DRY_RUN=1 prints the plan only.
+release-bump:
+	LEVEL=$(LEVEL) API_LEVEL=$(API_LEVEL) DRY_RUN=$(DRY_RUN) node scripts/release/release-bump.mjs
 
 # The bench of the search over a Run's transcripts (CORE-82): 15 searches at once
 # on a realistic Run, against the list of the Runs and the opening of a node.

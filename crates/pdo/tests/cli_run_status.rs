@@ -98,5 +98,5 @@ fn an_unreachable_daemon_exits_1() {
         .expect("failed to spawn pdo");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("failed to reach the daemon"), "{stderr}");
+    assert!(stderr.contains("failed to reach daemon"), "{stderr}");
 }

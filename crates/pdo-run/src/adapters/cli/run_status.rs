@@ -8,8 +8,7 @@ use std::process::ExitCode;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use super::cli_daemon_url;
-use super::run_list::daemon_sentence;
+use super::run_list::{daemon_get, refusal_message};
 use crate::domain::run_summary::working_nodes;
 use crate::domain::state::{NodeStatus, RunState, RunStatus};
 
@@ -28,6 +27,9 @@ pub struct RunStatusLine {
     pub nodes_total: usize,
     /// Working nodes running, or ready to run and waiting for a session slot.
     pub nodes_running: usize,
+    /// Working nodes waiting for a person: one that asked its user, or one
+    /// whose session died on an incident (`interrupted`) and needs a human to
+    /// resume it.
     pub nodes_awaiting_user: usize,
     pub nodes_failed: usize,
     /// Child Runs not yet terminal.
@@ -56,7 +58,9 @@ impl RunStatusLine {
             nodes_done: count(NodeStatus::is_settled_complete),
             nodes_total: nodes.len(),
             nodes_running: count(|s| matches!(s, NodeStatus::Running | NodeStatus::Waiting)),
-            nodes_awaiting_user: count(|s| matches!(s, NodeStatus::AwaitingUser)),
+            nodes_awaiting_user: count(|s| {
+                matches!(s, NodeStatus::AwaitingUser | NodeStatus::Interrupted)
+            }),
             nodes_failed: count(|s| matches!(s, NodeStatus::Failed)),
             children_active,
             cost_usd: cost.map(|cost| cost.usd),
@@ -93,10 +97,10 @@ impl RunStatusLine {
 
 /// The wire word of a Run status (`awaiting_user`, …).
 fn status_word(status: &RunStatus) -> String {
-    serde_json::to_value(status)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default()
+    match serde_json::to_value(status) {
+        Ok(serde_json::Value::String(word)) => word,
+        other => unreachable!("a RunStatus serializes to its word, not {other:?}"),
+    }
 }
 
 /// The part of `GET /runs/{id}/children` this command reads.
@@ -156,18 +160,14 @@ pub fn run_run_status(run_id: &str, json: bool) -> ExitCode {
 
 /// The status of the Run `run_id`; `None` when the daemon knows no such Run.
 fn status_of(run_id: &str) -> anyhow::Result<Option<RunStatusLine>> {
-    let client = reqwest::blocking::Client::builder()
-        .default_headers(pdo_kernel::env::cli_headers())
-        .build()
-        .unwrap_or_default();
-    let base = format!("{}/runs/{run_id}", cli_daemon_url());
-    let Read::Found(detail) = read(&client, &base)? else {
+    let base = format!("/runs/{run_id}");
+    let Read::Found(detail) = read(&base)? else {
         return Ok(None);
     };
     let run: RunState = serde_json::from_str(&detail)
         .map_err(|e| anyhow::anyhow!("unreadable run detail from the daemon: {e}"))?;
     // A Run forgotten between the two reads has no children left to count.
-    let children_active = match read(&client, &format!("{base}/children"))? {
+    let children_active = match read(&format!("{base}/children"))? {
         Read::Found(body) => serde_json::from_str::<Children>(&body)
             .map_err(|e| anyhow::anyhow!("unreadable children list from the daemon: {e}"))?
             .active(),
@@ -176,20 +176,13 @@ fn status_of(run_id: &str) -> anyhow::Result<Option<RunStatusLine>> {
     Ok(Some(RunStatusLine::of(&run, children_active)))
 }
 
-fn read(client: &reqwest::blocking::Client, url: &str) -> anyhow::Result<Read> {
-    let resp = client
-        .get(url)
-        .header("X-PDO-Actor", "cli")
-        .send()
-        .map_err(|e| anyhow::anyhow!("failed to reach the daemon: {e}"))?;
-    let status = resp.status();
-    let body = resp.text().unwrap_or_default();
+fn read(path: &str) -> anyhow::Result<Read> {
+    let (status, body) = daemon_get(path)?;
     if status == StatusCode::NOT_FOUND {
         return Ok(Read::NotFound);
     }
     if !status.is_success() {
-        let sentence = daemon_sentence(&body).unwrap_or(body);
-        anyhow::bail!("daemon returned {status}: {sentence}");
+        anyhow::bail!("daemon returned {status}: {}", refusal_message(&body));
     }
     Ok(Read::Found(body))
 }
@@ -263,13 +256,14 @@ mod tests {
                 ("a", Some("completed")),
                 ("b", Some("running")),
                 ("c", Some("awaiting_user")),
-                ("d", None),
+                ("d", Some("interrupted")),
+                ("e", None),
             ],
             Some(cost(0.123, false)),
         );
         assert_eq!(
             RunStatusLine::of(&run, 0).line(),
-            "r1 awaiting_user · nodes 1/4 done, 1 running, 1 awaiting_user · children 0 active · $0.12"
+            "r1 awaiting_user · nodes 1/5 done, 1 running, 2 awaiting_user · children 0 active · $0.12"
         );
     }
 

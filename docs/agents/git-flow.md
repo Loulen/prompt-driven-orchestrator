@@ -17,8 +17,21 @@ this file and the skill disagree, **this file wins**; the skill describes the fu
 ## What still holds
 
 - **Branch shape** stays the skill's: `integration/*`, `feature/*`, `hotfix/*`, off the right base.
-- **Sanity gate before `main` moves:** `make check` (cargo check + frontend typecheck) must be
-  green. `make test` and HP are on request only.
+- **Three gates** (ADR draft-les-controles-structurels-tournent-dans-un-crate-tidy-avant-toute-suite-longue):
+  - `make fast` while you work: `cargo fmt --check` and the structural checks of `crates/tidy`, in
+    under a minute even on a fresh checkout.
+  - `make scoped` after a change: `make fast`, then only what the diff since the merge-base with the
+    branch you started from touches (`BASE=` to change it). It prints its plan first: frontend ->
+    typecheck, lint, vitest; a crate -> nextest and clippy on it and its dependents; a type
+    exported to the front -> `types-check`; doc only -> nothing more.
+  - `make gate`, the **gate of a ticket**, once, after the FP and its minor fixes (those go
+    through `make scoped` on the delta, replaying only the FP steps they touch): every step
+    `.github/workflows/ci.yml` declares except the E2E, without fail-fast, plus vitest and the
+    script tests. It lists every failure at the end.
+
+  A ticket merges into its `integration/*` on a green `make gate`, a green FP and no blocking
+  finding. The E2E (`make e2e`) runs once per story, before `integration/*` -> `main`. HP is on
+  request only.
 - **A merge closes no Tâche by itself** (tickets live in `pm`, Backlog `CORE`, no `Closes #N`):
   the node that validates a ticket sets it to `Done` once its merge is **on the remote**; the story
   goes to `Done` at the `integration/*` → `main` merge. Branches are named after the story's ID

@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build fast test e2e release-bump bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
+.PHONY: help dev build fast scoped gate test e2e release-bump bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -49,6 +49,8 @@ help:
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
 	@echo "  make build   cargo build (build.rs runs pnpm run build, frontend embedded into daemon)"
 	@echo "  make fast    The fast gate (< 1 min, even on a cold target/): cargo fmt --check + the structural checks of crates/tidy"
+	@echo "  make scoped [BASE=<ref>] [DRY_RUN=1]  The scoped gate: make fast, then only the checks the diff since the merge-base touches (plan printed first)"
+	@echo "  make gate    The full gate, once per ticket: every CI step but the E2E, without fail-fast, + vitest + script tests; lists every failure"
 	@echo "  make test    cargo nextest (every failure, no fail-fast) + doctests + vitest + the scripts' node tests"
 	@echo "  make e2e [E2E_PORT=5273]  The frontend's Playwright suite on a real daemon (installs Chromium if missing)"
 	@echo "  make release-bump [LEVEL=…] [API_LEVEL=…] [DRY_RUN=1]  At integration -> main: bump the versions, release ## Unreleased, number the draft ADRs"
@@ -104,6 +106,21 @@ NO_PDO_ENV := env $(foreach v,$(filter-out PDO_FRONTEND_DIST PDO_SKIP_FRONTEND_B
 fast:
 	cargo fmt --all --check
 	$(NO_PDO_ENV) cargo test --quiet -p tidy --no-fail-fast
+
+# The scoped gate: `make fast`, then the plan computed from the diff since the
+# merge-base with the branch this one started from (BASE= to change it), printed
+# before it runs (DRY_RUN=1: the plan only, without make fast): frontend -> typecheck, lint, vitest; a crate -> nextest and
+# clippy on it and its dependents; a type exported to the front -> types-check;
+# doc only -> nothing more. scripts/gates/lib/plan.mjs, tested by `node --test`.
+scoped: $(if $(filter 1,$(DRY_RUN)),,fast)
+	@BASE=$(BASE) DRY_RUN=$(DRY_RUN) $(NO_PDO_ENV) node scripts/gates/scoped.mjs
+
+# The full gate: every step .github/workflows/ci.yml declares, read from it, the
+# E2E job aside (`make e2e`, before `integration -> main`), nextest without
+# fail-fast, plus vitest and the script tests. Every step runs whatever failed
+# before it; the failures are listed at the end. Once per ticket, after the FP.
+gate:
+	@$(NO_PDO_ENV) node scripts/gates/gate.mjs
 
 # nextest : un process par test (isolation retrouvée depuis que les 50 binaires de
 # tests sont fusionnés en un seul, cf. crates/pdo/tests/it.rs) et un pool

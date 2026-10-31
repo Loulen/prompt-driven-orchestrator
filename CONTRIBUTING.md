@@ -18,18 +18,26 @@ The git flow lives in `.agents/skills/git-flow/SKILL.md`. In short: branch from 
 (`feature/<issue>-<slug>` or `fix/<issue>-<slug>`), open a PR against `main`, and let CI
 run. A maintainer reviews and merges. Nobody merges their own PR.
 
-While you work, run the fast gate: it answers in under a minute, even on a fresh checkout.
+Three gates, from the fastest to the most complete:
 
 ```bash
-make fast         # cargo fmt --check, then the structural checks of crates/tidy
+make fast         # while you work: cargo fmt --check, then the structural checks of crates/tidy (< 1 min)
+make scoped       # after a change: make fast, then only the checks your diff touches
+make gate         # once, before pushing: every CI step but the E2E, plus vitest and the script tests
 ```
 
-Before pushing:
+`make scoped` diffs the working tree (untracked files included) against the merge-base with the
+branch you started from, and prints its plan, each step with its reason, before running it. A
+frontend change runs typecheck, lint and vitest; a crate runs nextest and clippy on that crate and
+every crate depending on it; a type exported to the front (ts-rs) runs `types-check`; a changed
+script runs its `node --test` suite; a file a crate embeds (the CHANGELOG) runs that crate's
+tests; doc alone runs nothing more. `BASE=<ref>` diffs against another branch, `DRY_RUN=1` prints
+the plan only.
 
-```bash
-make check        # cargo check, frontend typecheck, harness support table
-make test         # daemon and frontend tests; lists every failure in one pass
-```
+`make gate` reads its steps from `.github/workflows/ci.yml`, so it follows the CI, and leaves out
+the E2E job: `make e2e` runs once per story, before it merges into `main`. Every step runs even
+when one before it failed, and the failures are listed at the end. `make test` and `make check`
+remain for a narrower pass.
 
 Commit messages follow Conventional Commits with a French or English body, as the rest of
 the history does. Reference the issue in the title.
@@ -151,6 +159,8 @@ Every command is documented in [docs/reference/cli.md](docs/reference/cli.md).
 | Purpose | Command |
 | --- | --- |
 | Fast gate: formatting and structural checks | `make fast` |
+| Scoped gate: the checks the diff touches | `make scoped` |
+| Full gate: the CI's steps but the E2E, plus vitest and the script tests | `make gate` |
 | Check Rust | `cargo check --workspace --all-targets` |
 | Regenerate the TS types of the DTOs | `make types` |
 | Test Rust | `cargo test --workspace` |

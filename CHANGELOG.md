@@ -15,6 +15,12 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### Restarting a node
+
+- A node restarted while the liveness sweep was looking at it stays running: the sweep no longer
+  takes the restart's own kill of the old session for a death, so it neither marks the node
+  interrupted nor kills the new session.
+
 ### Development
 
 - Versions, the CHANGELOG and ADR numbers are set once, when a story merges into `main`: changes
@@ -24,6 +30,16 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   and `Cargo.lock`, turns `## Unreleased` into the version's entry and numbers the draft ADRs,
   rewriting every citation. `DRY_RUN=1` prints the plan only.
 - `make e2e` runs the Playwright suite of the frontend, installing Chromium when it is missing.
+- `make fast`, a fast gate that answers in under a minute even on a fresh checkout
+  (`cargo fmt --check` and the structural checks, now in the std-only `tidy` crate); `make test`
+  lists every failure in one pass (`--no-fail-fast`); the Makefile uses sccache when it is
+  installed to share compiled dependencies between worktrees.
+- `make scoped` runs `make fast`, then only the checks the diff since the merge-base touches,
+  after printing its plan: typecheck, lint and vitest for the frontend, nextest and clippy on a
+  changed crate and its dependents, `types-check` for a type exported to the front, nothing more
+  for doc. `BASE=` changes the base, `DRY_RUN=1` prints the plan only.
+- `make gate`, the gate of a ticket: every step the CI declares except the E2E, plus vitest and the
+  script tests, without stopping at a failure; every failure is listed at the end.
 - `make demo-daemon PORT=<port>` starts a demo daemon for agentic tests: this branch's `pdo`,
   rebuilt incrementally at each start, a fresh `HOME` under `/tmp/pdo-demo-<port>`, no inherited
   `PDO_*`, `TMUX` or `TMUX_PANE`, copied harness credentials, and a pidfile. `TEST_EXT=1` serves

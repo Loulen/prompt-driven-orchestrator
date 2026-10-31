@@ -3,14 +3,20 @@
  * viewer shows it as a card and renders the markdown after it.
  */
 
-/** `content` without its leading frontmatter block, or unchanged without one. */
-export function stripFrontmatter(content: string): string {
+/** The leading fence of `content`: the YAML inside it and the text after it. */
+function splitFence(content: string): { yaml: string; rest: string } | null {
   const trimmed = content.trimStart();
-  if (!trimmed.startsWith("---")) return content;
+  if (!trimmed.startsWith("---")) return null;
   const after = trimmed.slice(3);
   const end = after.indexOf("\n---");
-  if (end === -1) return content;
-  return after.slice(end + 4).trimStart();
+  if (end === -1) return null;
+  return { yaml: after.slice(0, end), rest: after.slice(end + 4) };
+}
+
+/** `content` without its leading frontmatter block, or unchanged without one. */
+export function stripFrontmatter(content: string): string {
+  const fence = splitFence(content);
+  return fence ? fence.rest.trimStart() : content;
 }
 
 /**
@@ -35,14 +41,9 @@ export function frontmatterEntries(
 
 /** The top-level keys of the leading fence, in order. */
 function fenceKeys(content: string | null): string[] {
-  if (!content) return [];
-  const trimmed = content.trimStart();
-  if (!trimmed.startsWith("---")) return [];
-  const after = trimmed.slice(3);
-  const end = after.indexOf("\n---");
-  if (end === -1) return [];
-  return after
-    .slice(0, end)
+  const fence = content ? splitFence(content) : null;
+  if (!fence) return [];
+  return fence.yaml
     .split("\n")
     .map((line) => /^([^\s#][^:]*):(\s|$)/.exec(line)?.[1].trim().replace(/^["']|["']$/g, ""))
     .filter((key): key is string => !!key);

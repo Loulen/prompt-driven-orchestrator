@@ -95,6 +95,7 @@ test("Stats › Cost at 1024 px and 120 %: the Name column stays readable, the m
   expect(width).toBeGreaterThanOrEqual(180);
   // The table scrolls sideways inside its panel rather than over the next one.
   const scroller = page.locator(".sx-hscroll").filter({ has: name });
-  expect(await scroller.evaluate((el) => el.scrollWidth >= el.clientWidth)).toBe(true);
+  expect(await scroller.evaluate((el) => getComputedStyle(el).overflowX)).toBe("auto");
+  expect(await scroller.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
   await expect(page.getByTestId("stats-detail-row").first()).toContainText("implementer-with-a-long-node-name");
 });

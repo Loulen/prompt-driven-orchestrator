@@ -1126,7 +1126,7 @@ The core goes through its own config: its commands and its published media do no
 ## 2.7.0 · Location catalogue: tabs, sections, decorations and filters
 
 `pdo-extension-api` goes to **0.7.0**, by addition: an extension written for 0.1 to 0.6 compiles
-and runs unchanged (decision record amendment; reference: `docs/reference/extension-ui.md`).
+and runs unchanged (see the amended decision record; reference: `docs/reference/extension-ui.md`).
 
 - **Tabs**: `node/detail`, `trigger/detail`, `skill/detail`.
 - **Sections**: `project/edit` (at creation as at editing of a Project), `run/new`,
@@ -1147,7 +1147,7 @@ and runs unchanged (decision record amendment; reference: `docs/reference/extens
 ## 2.6.0 · Action locations, "⋯" row menus, core menus on the shared `DropdownMenu`
 
 `pdo-extension-api` goes to **0.6.0**, by addition: an extension written for 0.1 to 0.5 compiles
-and runs unchanged (decision record amendment; reference: `docs/reference/extension-ui.md`).
+and runs unchanged (see the amended decision record; reference: `docs/reference/extension-ui.md`).
 
 - **Fourteen Action locations**: `runs/header`, `run/item/menu`, `runs/bulk`, `run/toolbar`,
   `canvas/node/menu`, `canvas/edge/menu`, `node/toolbar`, `trigger/item/menu`,
@@ -1171,7 +1171,7 @@ compile, so neither did any consumer of the tag. No API change:
 
 `pdo-extension-api` goes to **0.5.0**, by addition: an extension written for 0.1 to 0.4
 compiles and runs unchanged if it does not use the new hooks
-(decision record amendment).
+(see the amended decision record).
 
 - **`pdo ext <id> <args...>`**: the CLI of an extension, relayed by the daemon (`POST
   /ext-cli/<id>`). Arguments and flags as is, standard input (pipe or file only),
@@ -1193,7 +1193,7 @@ compiles and runs unchanged if it does not use the new hooks
 ## 2.4.0 · UI locations hosted by an extension
 
 `pdo-extension-api` goes to **0.4.0**, by addition: an extension written for 0.1, 0.2 or 0.3
-compiles and runs unchanged (decision record amendment; reference: `docs/reference/extension-ui.md`
+compiles and runs unchanged (see the amended decision record; reference: `docs/reference/extension-ui.md`
 § *Hosted locations*).
 
 - **Hosted locations** (`HostedLocation`, `UiContributions::host`): an extension declares

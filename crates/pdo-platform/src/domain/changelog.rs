@@ -207,18 +207,30 @@ mod tests {
         assert_eq!(embedded_excerpt("# Changelog\n", 5), "");
     }
 
-    /// « What's new » reads one entry per version, from 2.59 to the version of
-    /// this build.
+    /// « What's new » reads one entry per version, the newest being this build's,
+    /// and the changelog has an entry for every minor since 2.59.
     #[test]
-    fn the_shown_excerpt_has_one_entry_per_version_up_to_this_build() {
+    fn the_changelog_has_one_entry_per_version_up_to_this_build() {
         let shown = embedded_excerpt(EMBEDDED_CHANGELOG, EMBEDDED_VERSIONS);
-        let headings: Vec<&str> = shown
+        assert_eq!(
+            shown
+                .lines()
+                .next()
+                .and_then(|l| l.strip_prefix("## "))
+                .and_then(|h| h.split(' ').next()),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
+            shown.lines().filter(|l| l.starts_with("## ")).count(),
+            EMBEDDED_VERSIONS
+        );
+        let headings: Vec<&str> = EMBEDDED_CHANGELOG
             .lines()
             .filter_map(|l| l.strip_prefix("## "))
             .map(|h| h.split(' ').next().unwrap_or(h))
             .collect();
-        assert_eq!(headings.first().copied(), Some(env!("CARGO_PKG_VERSION")));
-        for minor in 59..=68 {
+        let current: u32 = env!("CARGO_PKG_VERSION_MINOR").parse().unwrap();
+        for minor in 59..=current {
             let version = format!("2.{minor}.0");
             assert!(
                 headings.contains(&version.as_str()),
@@ -237,7 +249,9 @@ mod tests {
                 .any(|word| {
                     let mut parts = word.splitn(2, '-');
                     let (prefix, number) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-                    prefix.len() >= 2
+                    // Standard names share the shape of an id: `UTF-8`, `SHA-256`…
+                    !["UTF", "SHA", "ISO", "RFC", "HTTP", "TLS"].contains(&prefix)
+                        && prefix.len() >= 2
                         && prefix.chars().all(|c| c.is_ascii_uppercase())
                         && !number.is_empty()
                         && number.chars().all(|c| c.is_ascii_digit())

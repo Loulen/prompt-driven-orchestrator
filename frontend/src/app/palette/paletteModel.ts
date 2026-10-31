@@ -1,9 +1,9 @@
 /**
  * What the command field lists for a query: its groups (the selection's
  * Actions, the recent picks, the core's groups by relevance, then one group
- * per extension in registration order: its Actions, its sources' results and
- * their state), each capped with a « Show all n » row, and the rows the
- * arrows walk through.
+ * per extension, by rank then in registration order: its Actions, its
+ * sources' results and their state), each capped with a « Show all n » row,
+ * and the rows the arrows walk through.
  *
  * `>` at the start of the query keeps the commands: the core's, the
  * extensions' Actions and the selection's.
@@ -13,7 +13,7 @@ import type { SearchResult } from "../../shared/extensions/contract";
 import type { SourceState } from "../../shared/extensions/palette";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import type { RunStatus } from "../../shared/generated/RunStatus";
-import type { Icon, StatusTone } from "../../shared/ui/kit";
+import type { Icon, StatusShape, StatusTone } from "../../shared/ui/kit";
 import { fuzzy, isRelevant, substringRanges } from "./fuzzy";
 import type { RecentPick } from "./recent";
 
@@ -22,7 +22,7 @@ export type Lead =
   | { kind: "icon"; icon: Icon }
   | { kind: "run"; status: RunStatus | "stalled" }
   | { kind: "node"; status: NodeStatus }
-  | { kind: "tone"; tone: StatusTone; label: string }
+  | { kind: "tone"; tone: StatusTone; label: string; shape?: StatusShape | null }
   | { kind: "extension"; url: string | null; label: string };
 
 export interface ExtensionRef {
@@ -47,6 +47,8 @@ export interface PaletteItem {
   entity?: { label: string; lead: Lead };
   /** An extension's Action: whose. */
   extension?: ExtensionRef;
+  /** A global Action's counter: the path its extension answers it at (API 0.20). */
+  counter?: string;
   /** A destructive entry of a row menu. */
   danger?: boolean;
   /** Listed under `>`. */
@@ -83,6 +85,8 @@ export interface ExtensionGroup {
   extension: ExtensionRef;
   /** The icon of its group: its first source's, else its first letter. */
   icon: string | null;
+  /** The lowest rank of its `palette` contributions; `null` without one. */
+  rank: number | null;
   actions: PaletteItem[];
   sources: { key: string; state: SourceState | undefined }[];
 }
@@ -192,7 +196,7 @@ export function buildSections(input: BuildInput): Section[] {
   sections.push(...core.map((c) => c.section));
 
   if (commands) return sections;
-  for (const group of input.extensions) {
+  for (const group of byRank(input.extensions)) {
     const key = `ext:${group.extension.id}`;
     const actions = match(group.actions, text).map(itemRow);
     const results: Row[] = [];
@@ -219,6 +223,19 @@ export function buildSections(input: BuildInput): Section[] {
     });
   }
   return sections;
+}
+
+/**
+ * The extensions' groups in their order: by rank, lowest first, then those
+ * without one; each in registration order.
+ */
+export function byRank(groups: readonly ExtensionGroup[]): ExtensionGroup[] {
+  return [...groups].sort((a, b) => {
+    if (a.rank === b.rank) return 0;
+    if (a.rank === null) return 1;
+    if (b.rank === null) return -1;
+    return a.rank - b.rank;
+  });
 }
 
 /** Whether the arrows stop on `row`: a source still searching is only shown. */

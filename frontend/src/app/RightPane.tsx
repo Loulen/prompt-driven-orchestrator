@@ -164,6 +164,7 @@ export default function RightPane({
           node={runNode}
           runId={selectedRun.run_id}
           isArchived={isArchived}
+          runStatus={selectedRun.status}
           nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
           provisioningRepository={selectedRun.target_repo ?? ""}
           inheritedProvisioning={selectedRun.provisioning_rules}
@@ -336,6 +337,7 @@ export default function RightPane({
                 node={selectedNode}
                 runId={selectedRun.run_id}
                 isArchived={isArchived}
+                runStatus={selectedRun.status}
                 nodeName={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.name}
                 isOrchestratorNode={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.orchestrator ?? false}
                 isOnDemand={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.on_demand ?? false}

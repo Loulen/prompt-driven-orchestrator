@@ -623,10 +623,22 @@ export function TagChip({ text }) {
 // 0.18: the Source de recherche of the command field. Its notes, already
 // filtered as the test extension's rights would; each opens the test page on
 // its path. `query` is the text typed, `context.selected` the item selected.
+// 0.20: each status carries its fixed shape (`todo`, `doing`, `review`,
+// `done`), and one note has a 200-character title without a space.
 const NOTES = [
-  { id: "1", ref: "N-1", title: "Release checklist", meta: "Ops", tone: "done", status: "Done" },
-  { id: "2", ref: "N-2", title: "Search index rebuild", meta: "Platform", tone: "running", status: "In progress" },
-  { id: "3", ref: "N-3", title: "Retry budget for flaky searches", meta: "Platform", tone: "skipped", status: "To do" },
+  { id: "1", ref: "N-1", title: "Release checklist", meta: "Ops", tone: "done", shape: "done", status: "Done" },
+  { id: "2", ref: "N-2", title: "Search index rebuild", meta: "Platform", tone: "running", shape: "doing", status: "In progress" },
+  { id: "3", ref: "N-3", title: "Retry budget for flaky searches", meta: "Platform", tone: "skipped", shape: "todo", status: "To do" },
+  { id: "4", ref: "N-4", title: "Upgrade notes for the next release", meta: "Ops", tone: "awaiting", shape: "review", status: "In review" },
+  {
+    id: "5",
+    ref: "N-5",
+    title: `Unbroken-${"segment-without-any-space-".repeat(8)}`.slice(0, 200),
+    meta: "Platform › Long titles",
+    tone: "skipped",
+    shape: "todo",
+    status: "To do",
+  },
 ];
 
 function noteResult(note) {
@@ -635,7 +647,7 @@ function noteResult(note) {
     ref: note.ref,
     title: note.title,
     meta: note.meta,
-    status: { tone: note.tone, label: note.status },
+    status: { tone: note.tone, shape: note.shape, label: note.status },
     link: `#/ext/test/topbar/end/notes/${note.id}`,
   };
 }

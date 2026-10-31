@@ -160,13 +160,15 @@ function PaletteBox() {
   const groups = useMemo((): ExtensionGroup[] => {
     return extensions.flatMap(({ entry }): ExtensionGroup[] => {
       const own = sources.filter((s) => s.extension.id === entry.id);
-      const actions = global.filter((a) => a.element.extension.id === entry.id).map((a) => actionItem(a, null));
-      if (own.length === 0 && actions.length === 0) return [];
+      const mine = global.filter((a) => a.element.extension.id === entry.id);
+      if (own.length === 0 && mine.length === 0) return [];
+      const ranks = [...own, ...mine.map((a) => a.element)].flatMap((e) => e.contribution.rank ?? []);
       return [
         {
           extension: { id: entry.id, name: entry.name },
           icon: own.find((s) => s.search?.icon)?.search?.icon ?? null,
-          actions,
+          rank: ranks.length > 0 ? Math.min(...ranks) : null,
+          actions: mine.map((a) => actionItem(a, null)),
           sources: own.map((s) => ({ key: s.key, state: states[s.key] })),
         },
       ];

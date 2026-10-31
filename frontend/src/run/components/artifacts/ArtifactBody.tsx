@@ -5,6 +5,7 @@ import type { Components } from "react-markdown";
 import type { FileInfo } from "../../api/nodes";
 import type { PortType } from "../../../shared/generated/PortType";
 import { artifactDownloadUrl, artifactUrl } from "../../api/artifacts";
+import { frontmatterEntries } from "../../model/frontmatter";
 import FrontmatterRow from "./FrontmatterRow";
 import ImageBody from "./ImageBody";
 
@@ -136,7 +137,7 @@ export default function ArtifactBody({
           {/* Frontmatter card */}
           {frontmatter && Object.keys(frontmatter).length > 0 && (
             <dl className="art__fm" data-testid="artifact-frontmatter">
-              {Object.entries(frontmatter).map(([k, v]) => (
+              {frontmatterEntries(frontmatter, content).map(([k, v]) => (
                 <FrontmatterRow key={k} field={k} value={v} />
               ))}
             </dl>

@@ -128,12 +128,14 @@ export default function WhereSection({ form, repoExplorerStartPath }: { form: Ne
             hint={remoteUrl ? <RemoteRepoHint clone={form} home={home} /> : undefined}
             badge={isProjectDefault ? <DefaultPill of={launchProject.name} testId="project-default-badge" /> : undefined}
             rowBadge={(path) => (launchProject?.primary_repo === path ? <DefaultPill of={launchProject.name} /> : null)}
+            refusal={
+              outsideProjectReason && !remoteUrl ? (
+                <span className="ln-err" data-testid="primary-outside-project">
+                  {outsideProjectReason}
+                </span>
+              ) : undefined
+            }
           />
-          {outsideProjectReason && !remoteUrl && (
-            <span className="ln-err" data-testid="primary-outside-project">
-              {outsideProjectReason}
-            </span>
-          )}
         </div>
       </FormRow>
 

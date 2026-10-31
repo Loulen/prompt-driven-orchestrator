@@ -153,8 +153,13 @@ export default function SentCard({
             {c.line} <span className="font-sans text-text-3">on</span> {outdated.writtenOn}
           </span>
         ) : (
-          <span className="rv-ct__fit font-mono text-text-3 text-2xs" title={label}>
-            {label}
+          <span className="rv-ct__fit rv-ct__anchor font-mono text-text-3 text-2xs" title={label} data-testid="review-comment-anchor">
+            {/* The file name gives way, the line number stays: folded in a Split column,
+                the line is what tells two threads of one file apart. */}
+            <span className="rv-ct__anchor-file" data-testid="review-comment-anchor-file">
+              {label.slice(0, label.lastIndexOf(":"))}
+            </span>
+            <span className="shrink-0" data-testid="review-comment-anchor-line">{label.slice(label.lastIndexOf(":"))}</span>
           </span>
         )}
         {movedFrom !== undefined && !outdated && (

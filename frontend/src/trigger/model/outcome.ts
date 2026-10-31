@@ -1,5 +1,6 @@
 import type { Trigger } from "../../shared/generated/Trigger";
 import type { StatusTone } from "../../shared/ui/kit";
+import { CRON_TIME_ZONE } from "./cronPresets";
 
 /** A fire outcome as a status tone; `null` before the first fire. */
 export function outcomeTone(outcome: string | null | undefined): StatusTone | null {
@@ -46,16 +47,23 @@ export function lastOutcomeTooltip(t: Trigger): string {
   return `last run: ${when}, result: ${t.last_outcome}`;
 }
 
-/** A fire's instant, short and local (`Sep 27, 09:00`); `null` when absent. */
-export function formatFireTs(iso: string | null | undefined): string | null {
+/**
+ * An instant of a Trigger, named in its time zone: by default the one its
+ * cron is read in (« Nov 1, 03:00 UTC », a daily 03:00 reads 03:00 whatever
+ * the browser's zone); `"local"`, the browser's (« Nov 1, 04:00 GMT+1 »).
+ */
+export function formatFireTs(iso: string | null | undefined, zone: "cron" | "local" = "cron"): string | null {
   if (!iso) return null;
   try {
-    return new Date(iso).toLocaleString(undefined, {
+    const at = new Date(iso).toLocaleString(undefined, {
       month: "short",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+      hourCycle: "h23",
+      ...(zone === "cron" ? { timeZone: CRON_TIME_ZONE } : { timeZoneName: "short" }),
     });
+    return zone === "cron" ? `${at} ${CRON_TIME_ZONE}` : at;
   } catch {
     return iso;
   }

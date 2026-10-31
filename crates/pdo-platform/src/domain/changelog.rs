@@ -6,12 +6,13 @@ use ts_rs::TS;
 
 use super::release::{missed_releases, Release};
 
-/// The `CHANGELOG.md` at the repository root, embedded at compile time. It lists
-/// breaking changes only; « What's new » shows its [`embedded_excerpt`].
+/// The `CHANGELOG.md` at the repository root, embedded at compile time: one
+/// entry per version, its visible changes and its breaking changes, in English.
+/// « What's new » shows its [`embedded_excerpt`].
 pub const EMBEDDED_CHANGELOG: &str = include_str!("../../../../CHANGELOG.md");
 
 /// How many versions of the embedded changelog « What's new » shows.
-pub const EMBEDDED_VERSIONS: usize = 5;
+pub const EMBEDDED_VERSIONS: usize = 10;
 
 /// The newest `versions` sections (`## …`) of a changelog, without its title and
 /// preamble: the fallback body of « What's new » when the release list is
@@ -63,15 +64,12 @@ pub struct Changelog {
     pub markdown: String,
 }
 
-/// One markdown document from the missed releases: `## vX.Y.Z · <date>` (the
-/// version links to its release page), then the notes verbatim.
+/// One markdown document from the missed releases: `## vX.Y.Z · <date>` (a title,
+/// not a link), then the notes verbatim.
 pub fn render_releases_markdown(missed: &[Release]) -> String {
     let mut md = String::new();
     for r in missed {
-        let version = match r.html_url.as_deref() {
-            Some(url) => format!("[v{}]({url})", r.version),
-            None => format!("v{}", r.version),
-        };
+        let version = format!("v{}", r.version);
         match r.published_at.as_deref() {
             Some(at) => {
                 let date = at.split('T').next().unwrap_or(at);
@@ -139,9 +137,6 @@ mod tests {
         Release {
             version: v.to_string(),
             published_at: Some(format!("2026-09-0{}T10:00:00Z", v.len() % 9 + 1)),
-            html_url: Some(format!(
-                "https://github.com/Loulen/PDO-v2/releases/tag/v{v}"
-            )),
             body: body.to_string(),
         }
     }
@@ -157,11 +152,14 @@ mod tests {
         assert_eq!(c.source, ChangelogSource::Releases);
         assert_eq!(c.fallback_reason, None);
         assert_eq!(c.missed_versions, ["1.60.0", "1.59.0"]);
-        let h60 = c.markdown.find("## [v1.60.0](").unwrap();
-        let h59 = c.markdown.find("## [v1.59.0](").unwrap();
+        let h60 = c.markdown.find("## v1.60.0 · 2026-09-").unwrap();
+        let h59 = c.markdown.find("## v1.59.0 · 2026-09-").unwrap();
         assert!(h60 < h59, "newest first:\n{}", c.markdown);
         assert!(!c.markdown.contains("v1.58.1"));
-        assert!(c.markdown.contains("/releases/tag/v1.60.0) · 2026-09-"));
+        assert!(
+            !c.markdown.contains("]("),
+            "a release title is text, not a link"
+        );
         assert!(c.markdown.contains("- first"));
         assert!(c.markdown.contains("_No release notes._"));
     }
@@ -207,6 +205,72 @@ mod tests {
             md["# Changelog\n\nPreamble.\n\n".len()..].trim_end()
         );
         assert_eq!(embedded_excerpt("# Changelog\n", 5), "");
+    }
+
+    /// « What's new » reads one entry per version, the newest being this build's,
+    /// and the changelog has an entry for every minor since 2.59.
+    #[test]
+    fn the_changelog_has_one_entry_per_version_up_to_this_build() {
+        let shown = embedded_excerpt(EMBEDDED_CHANGELOG, EMBEDDED_VERSIONS);
+        assert_eq!(
+            shown
+                .lines()
+                .next()
+                .and_then(|l| l.strip_prefix("## "))
+                .and_then(|h| h.split(' ').next()),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(
+            shown.lines().filter(|l| l.starts_with("## ")).count(),
+            EMBEDDED_VERSIONS
+        );
+        let headings: Vec<&str> = EMBEDDED_CHANGELOG
+            .lines()
+            .filter_map(|l| l.strip_prefix("## "))
+            .map(|h| h.split(' ').next().unwrap_or(h))
+            .collect();
+        let current: u32 = env!("CARGO_PKG_VERSION_MINOR").parse().unwrap();
+        for minor in 59..=current {
+            let version = format!("2.{minor}.0");
+            assert!(
+                headings.contains(&version.as_str()),
+                "no entry for {version}: {headings:?}"
+            );
+        }
+    }
+
+    /// The changelog is read in the UI: in English, and in the user's terms
+    /// rather than the backlog's (no ticket id).
+    #[test]
+    fn the_changelog_is_in_english_and_cites_no_ticket() {
+        for (n, line) in EMBEDDED_CHANGELOG.lines().enumerate() {
+            let ticket = line
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                .any(|word| {
+                    let mut parts = word.splitn(2, '-');
+                    let (prefix, number) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                    // Standard names share the shape of an id: `UTF-8`, `SHA-256`…
+                    !["UTF", "SHA", "ISO", "RFC", "HTTP", "TLS"].contains(&prefix)
+                        && prefix.len() >= 2
+                        && prefix.chars().all(|c| c.is_ascii_uppercase())
+                        && !number.is_empty()
+                        && number.chars().all(|c| c.is_ascii_digit())
+                });
+            assert!(!ticket, "line {}: ticket id: {line}", n + 1);
+            let issue = line.match_indices('#').any(|(i, _)| {
+                line[i + 1..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit())
+                    && !line[..i].ends_with('&')
+            });
+            assert!(!issue, "line {}: issue number: {line}", n + 1);
+            assert!(
+                !line.contains(['é', 'è', 'ê', 'à', 'â', 'ç', '«', '»']),
+                "line {}: not English: {line}",
+                n + 1
+            );
+        }
     }
 
     /// The UI names no product but its brand: the excerpt « What's new » shows

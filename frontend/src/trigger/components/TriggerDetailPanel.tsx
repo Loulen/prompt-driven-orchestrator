@@ -89,9 +89,16 @@ export default function TriggerDetailPanel({
     {
       k: "Schedule",
       v: <span data-testid="trigger-detail-schedule">{humanizeCron(trigger.cron)}</span>,
-      tip: `${humanizeCron(trigger.cron)} · ${trigger.cron}`,
+      tip: humanizeCron(trigger.cron).startsWith(trigger.cron.trim())
+        ? humanizeCron(trigger.cron)
+        : `${humanizeCron(trigger.cron)} · ${trigger.cron}`,
     },
-    { k: "Next", v: formatFireTs(trigger.next_fire_at) ?? (trigger.enabled ? "–" : "off"), mono: true },
+    {
+      k: "Next",
+      v: <span data-testid="trigger-detail-next">{formatFireTs(trigger.next_fire_at) ?? (trigger.enabled ? "–" : "off")}</span>,
+      tip: formatFireTs(trigger.next_fire_at, "local") ?? undefined,
+      mono: true,
+    },
     ...(trigger.last_editor
       ? [
           {

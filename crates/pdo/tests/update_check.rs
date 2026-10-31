@@ -402,12 +402,15 @@ async fn changelog_assembles_missed_releases_newest_first_and_memoises_the_list(
         "strictly newer, sorted desc, pre-release and ancient dropped"
     );
     let md = body["markdown"].as_str().unwrap();
-    let h99 = md.find("## [v99.0.0](").expect("one heading per version");
-    let h98 = md.find("## [v98.0.0](").expect("one heading per version");
+    let h99 = md.find("## v99.0.0").expect("one heading per version");
+    let h98 = md.find("## v98.0.0").expect("one heading per version");
     assert!(h99 < h98, "newest first:\n{md}");
     assert!(!md.contains("v0.0.1"), "older releases are not listed");
     assert!(!md.contains("100.0.0"), "pre-releases are not listed");
-    assert!(md.contains("## [v99.0.0](https://example.test/releases/tag/v99.0.0) · 2026-09-05"));
+    assert!(
+        md.contains("## v99.0.0 · 2026-09-05"),
+        "the version is a title, not a link"
+    );
     assert!(md.contains("- ninety-nine"), "notes verbatim");
     assert!(md.contains("| a | b |"), "GFM table verbatim");
 

@@ -58,9 +58,9 @@ export interface AbsorptionCount<T extends AbsorbableRow> {
   word: "execution" | "run";
 }
 
-export function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
+import { plural } from "../../shared/lib/plural";
+
+export { plural };
 
 /** `2026-09-23T07:08:00Z` → `2026-09-23` — the day, as every Stats axis reads. */
 export function day(iso: string | null | undefined): string | null {

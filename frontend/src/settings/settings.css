@@ -667,6 +667,9 @@
   }
 
   /* ---------------------------------------------------------------- Settings › Projects */
+  .set-projects {
+    container: set-projects / inline-size;
+  }
   .set-md {
     display: flex;
     align-items: flex-start;
@@ -678,11 +681,24 @@
     display: flex;
     flex: 0 1 220px;
     flex-direction: column;
-    min-width: 140px;
+    min-width: 180px;
     padding: 2px 0;
     border: 1px solid var(--line);
     border-radius: var(--radius-ui);
     background: var(--surface-1);
+  }
+  /* Too narrow for the list beside the detail (a large UI scale): the list goes
+     above it, and the repositories get the full width. */
+  @container set-projects (max-width: 600px) {
+    .set-md {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .set-md__list {
+      flex: none;
+      max-height: calc(6 * var(--h-row) + 4px);
+      overflow-y: auto;
+    }
   }
   .set-md__item {
     display: flex;
@@ -761,8 +777,10 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    container: set-repos / inline-size;
   }
   .set-rrow {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--g-3);
@@ -785,12 +803,20 @@
   .set-rrow__path {
     flex: 1 1 auto;
   }
+  /* The remote gives way first, down to a few characters: the repository's
+     name stays whole. */
   .set-rrow__remote {
-    flex: 0 1 34%;
-    min-width: 0;
+    flex: 0 1000 34%;
+    min-width: 14ch;
     color: var(--text-3);
     font-size: var(--fs-xs);
     text-align: right;
+  }
+  /* Too narrow for both: the remote goes to the row's tooltip. */
+  @container set-repos (max-width: 560px) {
+    .set-rrow__remote {
+      display: none;
+    }
   }
   .set-hover {
     opacity: 0;
@@ -798,6 +824,26 @@
   .set-rrow:hover .set-hover,
   .set-rrow:focus-within .set-hover {
     opacity: 1;
+  }
+  /* Hidden, a row's actions take no width from its name; they stay reachable
+     by Tab, and show once the row holds the focus. Without a pointer that
+     hovers, they always show. */
+  @media (hover: hover) {
+    .set-rrow:not(:hover, :focus-within) .set-hover {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      overflow: hidden;
+      border: 0;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+  }
+  @media (hover: none) {
+    .set-hover {
+      opacity: 1;
+    }
   }
   .set-cform {
     display: flex;

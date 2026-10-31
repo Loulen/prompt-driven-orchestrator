@@ -123,8 +123,14 @@ export function draftsForPair(drafts: ReviewDraft[], pair: RefPair): ReviewDraft
 
 /** `ReviewPage.tsx:R48` — basename, GitHub's side letter, line. */
 export function anchorLabel(anchor: Anchor): string {
+  const [file, line] = anchorParts(anchor);
+  return `${file}${line}`;
+}
+
+/** `["ReviewPage.tsx", ":R48"]` — the label in the two parts a narrow column cuts apart. */
+export function anchorParts(anchor: Anchor): [string, string] {
   const base = anchor.path.includes("/") ? anchor.path.slice(anchor.path.lastIndexOf("/") + 1) : anchor.path;
-  return `${base}:${anchor.side === "old" ? "L" : "R"}${anchor.line}`;
+  return [base, `:${anchor.side === "old" ? "L" : "R"}${anchor.line}`];
 }
 
 /** `destination side` / `source side` — the header spells the side out. */

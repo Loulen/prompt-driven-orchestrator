@@ -118,7 +118,7 @@ export default function ProjectsPanel({
   }
 
   return (
-    <div data-testid="projects-panel">
+    <div className="set-projects" data-testid="projects-panel">
       {error && (
         <div className="set-row__note set-row__note--failed" role="alert" data-testid="projects-error">
           <span className="set-ellipsis" title={error}>

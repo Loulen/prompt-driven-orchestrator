@@ -163,6 +163,7 @@ export default function RightPane({
           key={runNode.node_id}
           node={runNode}
           runId={selectedRun.run_id}
+          runName={selectedRun.name || selectedRun.run_id}
           isArchived={isArchived}
           runStatus={selectedRun.status}
           nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
@@ -266,6 +267,7 @@ export default function RightPane({
               <StartInspector
                 startNode={selectedRun.start_node}
                 runId={selectedRun.run_id}
+                runName={selectedRun.name || selectedRun.run_id}
                 nodeId={selection.id}
               />
             ) : selection.kind === "node" && nodeInspectorKind === "run-end" && selectedRun?.end_node ? (
@@ -323,6 +325,7 @@ export default function RightPane({
               <StartInspector
                 startNode={selectedRun.start_node}
                 runId={selectedRun.run_id}
+                runName={selectedRun.name || selectedRun.run_id}
                 nodeId={selectedNodeId!}
               />
             )}
@@ -336,6 +339,7 @@ export default function RightPane({
                 key={selectedNode.node_id}
                 node={selectedNode}
                 runId={selectedRun.run_id}
+                runName={selectedRun.name || selectedRun.run_id}
                 isArchived={isArchived}
                 runStatus={selectedRun.status}
                 nodeName={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.name}

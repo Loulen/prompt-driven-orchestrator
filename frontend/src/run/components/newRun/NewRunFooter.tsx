@@ -3,6 +3,7 @@ import { CalendarClock, Play, Save } from "lucide-react";
 import { Button, Kbd, Tooltip } from "../../../shared/ui/kit";
 import { baseName } from "../../../lib/homePath";
 import type { NewRunForm } from "../../store/newRun/useNewRunForm";
+import { CRON_TIME_ZONE, cronDependsOnZone } from "../../../trigger/model/cronPresets";
 
 /**
  * Left of the footer: the close warning when attachments would be lost, else
@@ -36,6 +37,12 @@ export function NewRunFooterNote({ form }: { form: NewRunForm }) {
     );
   }
   const pipeline = selectedPipeline?.name ?? "no pipeline";
+  // The schedule names the time zone it is read in, as its row does.
+  const schedule = !resolvedCron
+    ? "no schedule"
+    : cronDependsOnZone(resolvedCron)
+      ? `${resolvedCron} ${CRON_TIME_ZONE}`
+      : resolvedCron;
   const text =
     mode === "run"
       ? [
@@ -45,7 +52,7 @@ export function NewRunFooterNote({ form }: { form: NewRunForm }) {
         ]
           .filter(Boolean)
           .join(" · ")
-      : `${resolvedCron || "no schedule"} · ${pipeline}`;
+      : `${schedule} · ${pipeline}`;
   return (
     <span className="ln-note ln-mono" title={text} data-testid="new-run-summary">
       {text}

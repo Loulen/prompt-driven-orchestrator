@@ -63,10 +63,13 @@ impl Pipelines {
     /// The pipeline `id` was just created, duplicated or imported: it is born
     /// a test pipeline. Best effort, like the Stats of a rename: the file is
     /// written, and failing the request over a lost row would lie about it.
+    /// Announced: the watcher passes over the daemon's own writes, so this is
+    /// how the lists and an open launch form learn of the new pipeline.
     pub(crate) async fn born_unvalidated(&self, id: &str) {
         if let Err(e) = self.validations.put(id, &PipelineValidation::None).await {
             warn!("failed to mark pipeline {id} as a test pipeline: {e}");
         }
+        self.events.validation_changed(id);
     }
 
     /// A rename moved the pipeline `from` to `to`: its validation follows.
@@ -79,11 +82,13 @@ impl Pipelines {
         }
     }
 
-    /// The pipeline `id` is deleted: its validation goes with it.
+    /// The pipeline `id` is deleted: its validation goes with it, announced so
+    /// the lists and an open launch form drop the pipeline.
     pub(crate) async fn forget_validation(&self, id: &str) {
         if let Err(e) = self.validations.forget(id).await {
             warn!("failed to forget the validation of pipeline {id}: {e}");
         }
+        self.events.validation_changed(id);
     }
 
     /// The Projet `project_id` is deleted: it is withdrawn from every

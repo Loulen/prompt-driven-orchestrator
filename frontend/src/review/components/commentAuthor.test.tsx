@@ -108,6 +108,19 @@ describe("the author of a sent review comment", () => {
   });
 });
 
+describe("the anchor of a folded thread", () => {
+  it("keeps its line number out of the part that gives way", () => {
+    const file = "a-file-name-long-enough-to-be-cut-in-a-half-width-split-column.rs";
+    card(comment({ path: `src/deep/${file}`, status: "resolved", resolved_at: "2026-10-09T10:05:00.000Z" }));
+    expect(screen.getByTestId("review-comment-header")).toHaveAttribute("aria-expanded", "false");
+    const anchor = screen.getByTestId("review-comment-anchor");
+    expect(anchor).toHaveAttribute("title", `${file}:R3`);
+    // The file name ends in an ellipsis; the line number never shrinks with it.
+    expect(screen.getByTestId("review-comment-anchor-file")).toHaveTextContent(file);
+    expect(screen.getByTestId("review-comment-anchor-line")).toHaveTextContent(":R3");
+  });
+});
+
 describe("the label of an author", () => {
   it("reads the name of a person, and the person an agent acts for", () => {
     expect(authorLabel("user")).toBe("you");

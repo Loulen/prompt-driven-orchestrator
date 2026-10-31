@@ -76,6 +76,15 @@ const UP_TO_DATE: UpdateChangelog = {
   markdown: "## 1.58.1\n\n**Livraison**\n",
 };
 
+const UNREACHABLE: UpdateChangelog = {
+  installed_version: "1.58.1",
+  latest_version: null,
+  missed_versions: [],
+  source: "embedded",
+  fallback_reason: "The release source was unreachable at the last check.",
+  markdown: "## 1.58.1\n",
+};
+
 const FALLBACK: UpdateChangelog = {
   installed_version: "1.58.1",
   latest_version: null,
@@ -139,7 +148,8 @@ describe("ChangelogModal (#698)", () => {
       />,
     );
     expect(await screen.findByTestId("changelog-uptodate")).toHaveTextContent("up to date");
-    expect(screen.getByTestId("changelog-uptodate-banner")).toHaveTextContent(/Latest release/);
+    expect(screen.getByTestId("changelog-uptodate-banner")).toHaveTextContent("Latest release · embedded changelog");
+    expect(screen.getByTestId("changelog-uptodate-banner")).not.toHaveTextContent(/breaking/);
     expect(screen.getByTestId("markdown-body")).toHaveTextContent("1.58.1");
     expect(screen.queryByTestId("changelog-behind")).not.toBeInTheDocument();
     expect(screen.queryByTestId("changelog-fallback")).not.toBeInTheDocument();
@@ -147,6 +157,27 @@ describe("ChangelogModal (#698)", () => {
   });
 
   it("signals the fallback to the embedded changelog with its reason", async () => {
+    fetchUpdateChangelogMock.mockResolvedValue(UNREACHABLE);
+    render(
+      <ChangelogModal
+        update={status({ latest_version: null, newer_available: false })}
+        onClose={() => {}}
+        onOpenVersionSettings={() => {}}
+      />,
+    );
+    const banner = await screen.findByTestId("changelog-fallback");
+    expect(banner).toHaveTextContent("Release notes offline");
+    expect(banner).toHaveAttribute("title", expect.stringContaining("unreachable at the last check"));
+    // The embedded changelog lists every version's notes, not only its breaking changes.
+    expect(banner).not.toHaveTextContent(/breaking/);
+    expect(screen.getByTestId("markdown-body")).toHaveTextContent("1.58.1");
+    // Bare version in the header: no arrow, no « up to date » claim.
+    expect(screen.getByTestId("changelog-header")).toHaveTextContent("v1.58.1");
+    expect(screen.queryByTestId("changelog-latest")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("changelog-uptodate")).not.toBeInTheDocument();
+  });
+
+  it("does not call the release notes offline when the update check is off", async () => {
     fetchUpdateChangelogMock.mockResolvedValue(FALLBACK);
     render(
       <ChangelogModal
@@ -155,15 +186,29 @@ describe("ChangelogModal (#698)", () => {
         onOpenVersionSettings={() => {}}
       />,
     );
-    const banner = await screen.findByTestId("changelog-fallback");
-    expect(banner).toHaveTextContent("Release notes offline");
-    expect(banner).toHaveAttribute("title", expect.stringContaining("The update check is off."));
-    expect(banner).toHaveTextContent(/breaking changes only/);
+    const banner = await screen.findByTestId("changelog-check-off");
+    expect(banner).toHaveTextContent("Update check off · embedded changelog");
+    expect(screen.queryByTestId("changelog-fallback")).not.toBeInTheDocument();
+    expect(screen.queryByText(/offline/)).not.toBeInTheDocument();
     expect(screen.getByTestId("markdown-body")).toHaveTextContent("1.58.1");
-    // Bare version in the header: no arrow, no « up to date » claim.
-    expect(screen.getByTestId("changelog-header")).toHaveTextContent("v1.58.1");
-    expect(screen.queryByTestId("changelog-latest")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("changelog-uptodate")).not.toBeInTheDocument();
+  });
+
+  it("nor when the build declares no release source", async () => {
+    fetchUpdateChangelogMock.mockResolvedValue({
+      ...FALLBACK,
+      fallback_reason: "No release source is declared for this build.",
+    });
+    render(
+      <ChangelogModal
+        update={status({ source: null, source_url: null, latest_version: null, newer_available: false })}
+        onClose={() => {}}
+        onOpenVersionSettings={() => {}}
+      />,
+    );
+    // The check itself is on (Settings says so): the banner names the missing source.
+    expect(await screen.findByTestId("changelog-check-off")).toHaveTextContent("No release source · embedded changelog");
+    expect(screen.queryByText(/Update check off/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("changelog-fallback")).not.toBeInTheDocument();
   });
 
   it("shows the endpoint error in a banner and keeps the footer", async () => {

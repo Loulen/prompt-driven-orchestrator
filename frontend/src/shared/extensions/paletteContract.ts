@@ -4,8 +4,21 @@
  * `contract.ts`, which re-exports them.
  */
 
+import type { Actor } from "../generated/Actor";
 import type { StatusTone } from "../ui/kit/tones";
 import type { EntityContext, LocationContext } from "./contract";
+
+/**
+ * A person on a row an extension answers (a search result, a suggestion of
+ * completion), drawn by the core with the kit's avatar: its image, or its
+ * initials in its hue. Given `actor`, the hue is that Actor's on every
+ * surface of the core; otherwise it follows `name`.
+ */
+export interface RowAvatar {
+  name: string;
+  actor?: Actor | null;
+  avatar_url?: string | null;
+}
 
 /**
  * `palette` (0.18): the command field. `selected` is the item selected in
@@ -26,6 +39,8 @@ export interface SearchResult {
   ref?: string | null;
   /** Facts at the right of the row (a group, a breadcrumb, a role). */
   meta?: string | null;
+  /** A person, the row's mark in place of its status or icon (since 0.20). */
+  avatar?: RowAvatar | null;
   /** An SVG the extension serves, the row's icon when it has no status. */
   icon?: string | null;
   /** A status, drawn as the core draws its own: a tone's icon, its label as tooltip. */

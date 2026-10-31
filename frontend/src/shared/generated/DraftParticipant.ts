@@ -17,10 +17,6 @@ connection: string, actor: Actor,
  */
 display: ActorDisplay | null, 
 /**
- * Its color, `0..COLORS`.
- */
-color: number, 
-/**
  * Whether it may change the draft; otherwise it only reads.
  */
 can_write: boolean, 

@@ -81,7 +81,6 @@ async fn a_change_reaches_the_other_participants_and_is_counted() {
         .join_draft(&operator(), "flow")
         .await
         .unwrap();
-    assert_ne!(alice.color, bob.color);
     let update = Client::of(&alice).edit(|c| {
         c.pipeline["nodes"][1]["name"] = json!("Builder");
         c.prompts.insert("worker".into(), "Build it.".into());

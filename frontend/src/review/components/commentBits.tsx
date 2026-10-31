@@ -1,7 +1,7 @@
 import { Bot, CheckCircle2, Cpu, Hourglass, MessageSquare, User } from "lucide-react";
-import { ActorAvatar } from "../../shared/actors/ActorAvatar";
 import { useActorDisplay } from "../../shared/actors/store";
 import type { Actor } from "../../shared/generated/Actor";
+import { Avatar } from "../../shared/ui/kit";
 import type { AuthorKind, CommentState } from "../model/commentStatus";
 import { authorKind, authorLabel } from "../model/commentStatus";
 
@@ -29,7 +29,7 @@ export function AuthorIcon({ author, actor, size = 12 }: { author: string; actor
   if (display && kind === "user") {
     return (
       <span className="inline-flex min-w-0 items-center gap-1 text-text-2" title={display.name} data-testid="review-author" data-author-kind={kind}>
-        <ActorAvatar display={display} size={size + 2} />
+        <Avatar name={display.name} actor={actor} src={display.avatar_url} size={16} />
         <span className="truncate font-medium" data-testid="review-author-name">
           {display.name}
         </span>

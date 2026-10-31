@@ -1,6 +1,6 @@
 import { useLayoutEffect, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { ActorAvatar } from "../../shared/actors/ActorAvatar";
+import { Avatar } from "../../shared/ui/kit";
 import type { Completion, CompletionItem } from "../../shared/extensions/useCompletion";
 import { caretOffset } from "../../shared/lib/caretOffset";
 import { appRoot, cssViewport, toCssRect } from "../../shared/ui/zoom";
@@ -73,7 +73,7 @@ export default function CompletionList({ completion, textarea, onPick }: Props) 
           >
             {avatars && (
               <span className="inline-flex w-4 justify-center">
-                {s.avatar && <ActorAvatar display={{ name: s.avatar.name, avatar_url: s.avatar.avatar_url ?? null }} size={16} />}
+                {s.avatar && <Avatar name={s.avatar.name} actor={s.avatar.actor} src={s.avatar.avatar_url} size={16} />}
               </span>
             )}
             <span className="min-w-0 truncate">

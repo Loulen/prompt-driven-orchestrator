@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url";
 // de recherche answering 200 results; `fast`, `slow` and `down` each a source
 // that answers at once, after 3 s, or fails. What is under test is the front:
 // its palette, the extensions' groups, the refused Action absent, a slow or
-// failing source kept to its own group.
+// failing source kept to its own group; `people` answers results carrying an
+// avatar, drawn by the core.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEST_EXTENSION = path.resolve(__dirname, "..", "..", "crates/pdo/tests/test_extension");
@@ -70,6 +71,7 @@ const DECLARATION = [
   source("fast", "Fast source", "searchNotes"),
   source("slow", "Slow source", "searchSlowly"),
   source("down", "Down source", "searchFailing"),
+  source("people", "People source", "searchPeople"),
 ];
 
 async function playExtensions(page: Page) {
@@ -190,4 +192,34 @@ test("200 results of 200 characters: capped, truncated, walked through with the 
   await expect(active).toBeInViewport();
   const id = await active.getAttribute("id");
   await expect(input).toHaveAttribute("aria-activedescendant", id!);
+});
+
+test("a result carrying an avatar shows the kit's round avatar, in its Actor's hue, in both modes", async ({ page }) => {
+  await playExtensions(page);
+  await openApp(page);
+
+  await page.getByTestId("command-field").click();
+  await page.getByTestId("command-palette-input").fill("t");
+  const group = page.getByTestId("palette-group-ext:people");
+  await expect(group.getByTestId("palette-result")).toHaveCount(3);
+  const alice = group.getByTestId("palette-result").filter({ hasText: "Alice Martin" });
+  await expect(alice).toContainText("Administrator");
+  const avatar = alice.locator(".d-av");
+  await expect(avatar).toHaveText("AM");
+  await expect(avatar).toHaveAttribute("role", "img");
+  await expect(avatar).toHaveAttribute("aria-label", "Alice Martin");
+  const hues = await group.locator(".d-av").evaluateAll((els) => els.map((el) => el.getAttribute("data-hue")));
+  expect(hues.every((h) => h !== null && /^[0-7]$/.test(h))).toBe(true);
+  // Round, filled with a tint that is not the surface; its fill follows the mode.
+  const look = () =>
+    avatar.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { radius: parseFloat(style.borderRadius), width: el.getBoundingClientRect().width, fill: style.backgroundColor };
+    });
+  const dark = await look();
+  expect(dark.width).toBe(16);
+  expect(dark.radius).toBeGreaterThanOrEqual(8);
+  await page.evaluate(() => document.documentElement.setAttribute("data-mode", "light"));
+  const light = await look();
+  expect(light.fill).not.toBe(dark.fill);
 });

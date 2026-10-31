@@ -9,7 +9,7 @@
  * extensions' Actions and the selection's.
  */
 
-import type { SearchResult } from "../../shared/extensions/contract";
+import type { RowAvatar, SearchResult } from "../../shared/extensions/contract";
 import type { SourceState } from "../../shared/extensions/palette";
 import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import type { RunStatus } from "../../shared/generated/RunStatus";
@@ -23,7 +23,8 @@ export type Lead =
   | { kind: "run"; status: RunStatus | "stalled" }
   | { kind: "node"; status: NodeStatus }
   | { kind: "tone"; tone: StatusTone; label: string }
-  | { kind: "extension"; url: string | null; label: string };
+  | { kind: "extension"; url: string | null; label: string }
+  | { kind: "avatar"; avatar: RowAvatar };
 
 export interface ExtensionRef {
   id: string;

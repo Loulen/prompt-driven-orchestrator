@@ -1,14 +1,14 @@
 /**
  * The structure and display primitives of the shared design system
- * (ADR-0091): tabs, sections, chips, avatars, empty states, banners and
+ * (ADR-0091): tabs, sections, chips, empty states, banners and
  * property grids. Styles in kit.css, tokens only.
  */
 import * as React from "react";
-import { Bot, ChevronDown, ChevronRight, X, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, X } from "lucide-react";
 import { Tooltip } from "./tip";
 import { ToneIcon } from "./tone";
 import { toneColor, type Icon, type StatusTone, type Tone } from "./tones";
-import { cx, initials } from "./util";
+import { cx } from "./util";
 
 // ================================================================== tabs
 
@@ -141,37 +141,6 @@ export function Chip({ children, tone = "neutral", icon: Icon, mono, title, onRe
         <button type="button" className="d-chip__x" aria-label={removeLabel} title={removeLabel} onClick={onRemove}>
           <X size={10} strokeWidth={2} aria-hidden />
         </button>
-      )}
-    </span>
-  );
-}
-
-// ================================================================== avatar
-
-export interface AvatarProps {
-  name: string;
-  /** An agent shows a robot, a trigger a bolt. */
-  kind?: "human" | "agent" | "trigger";
-  size?: 16 | 20 | 24;
-  /** The image an extension gives the person, if any. */
-  src?: string | null;
-  /** A deactivated account. */
-  off?: boolean;
-}
-
-/** A neutral square with the initials: the name next to it says who, not a colour. */
-export function Avatar({ name, kind = "human", size = 20, src, off }: AvatarProps) {
-  const ic = Math.round(size * 0.62);
-  return (
-    <span className="d-av" data-size={size} data-off={off || undefined} data-kind={kind} title={name} role="img" aria-label={name}>
-      {src ? (
-        <img src={src} alt="" />
-      ) : kind === "agent" ? (
-        <Bot size={ic} strokeWidth={1.75} aria-hidden />
-      ) : kind === "trigger" ? (
-        <Zap size={ic} strokeWidth={1.75} aria-hidden />
-      ) : (
-        initials(name)
       )}
     </span>
   );

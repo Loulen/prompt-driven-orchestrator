@@ -2,7 +2,6 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Actor } from "../generated/Actor";
 import ActorLabel from "./ActorLabel";
-import { initials } from "./initials";
 import { actorKey, requestDisplays, resetActorsForTests, useActorsStore } from "./store";
 
 const alice: Actor = { kind: "identified", namespace: "test", id: "alice" };
@@ -48,11 +47,6 @@ describe("the Actors' display names", () => {
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("down"))));
     await requestDisplays([alice]);
     expect(useActorsStore.getState().displays[actorKey(alice)]).toBeNull();
-  });
-
-  it("initials are the first letters of two words", () => {
-    expect(initials("Alice Martin")).toBe("AM");
-    expect(initials("bob")).toBe("B");
   });
 
   it("a label names the Actor, or falls back to the core's label", async () => {

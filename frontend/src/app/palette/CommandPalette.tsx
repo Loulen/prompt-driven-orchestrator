@@ -184,7 +184,7 @@ function PaletteBox() {
         }
         const ext = extensions.find((e) => e.entry.id === pick.extension);
         if (!ext) return [];
-        const result = { id: pick.id, title: pick.title, ref: pick.ref, link: pick.link };
+        const result = { id: pick.id, title: pick.title, ref: pick.ref, link: pick.link, avatar: pick.avatar };
         return [{ key: `${pick.extension}:${pick.link}`, extension: { id: ext.entry.id, name: ext.entry.name }, result }];
       }),
     [picks, items, extensions],
@@ -257,7 +257,15 @@ function PaletteBox() {
       row.item.run();
     } else {
       const { extension, result } = row.item;
-      rememberPick({ kind: "result", id: result.id, extension: extension.id, title: result.title, ref: result.ref, link: result.link });
+      rememberPick({
+        kind: "result",
+        id: result.id,
+        extension: extension.id,
+        title: result.title,
+        ref: result.ref,
+        link: result.link,
+        avatar: result.avatar,
+      });
       followDeepLink(result.link);
     }
   };

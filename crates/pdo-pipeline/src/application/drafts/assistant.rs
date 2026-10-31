@@ -238,7 +238,6 @@ impl Pipelines {
                 connection: connection.to_string(),
                 actor: actor.clone(),
                 display: self.host().display_name(actor),
-                color: 0,
                 can_write: true,
                 assistant: true,
                 presence: PresenceState::default(),

@@ -58,10 +58,6 @@ pub(super) fn router(control: Control) -> Router {
             get(|| async { ([(header::CONTENT_TYPE, "text/html")], gate::SIGN_IN_PAGE) }),
         )
         .route(
-            "/avatar.svg",
-            get(|| async { ([(header::CONTENT_TYPE, "image/svg+xml")], gate::AVATAR_SVG) }),
-        )
-        .route(
             "/",
             get(move || {
                 let data_dir = control.data_dir();

@@ -1,7 +1,7 @@
 /**
  * The rows of the command field (`shell.paletteRow=plain`): icon, label, the
- * entity a contextual Action acts on, shortcut; an extension's result (status
- * or icon, reference and title, facts on the right); « Show all n »; and the
+ * entity a contextual Action acts on, shortcut; an extension's result (avatar,
+ * status or icon, reference and title, facts on the right); « Show all n »; and the
  * state of a source (searching, or failed with Retry). The groups' headers:
  * their icon and caps title.
  */
@@ -9,7 +9,7 @@
 import type { ReactNode } from "react";
 import { Check, ChevronDown, CircleAlert, LoaderCircle, RotateCcw } from "lucide-react";
 import ExtensionIcon from "../../shared/extensions/ExtensionIcon";
-import { Kbd, StatusIcon } from "../../shared/ui/kit";
+import { Avatar, Kbd, StatusIcon } from "../../shared/ui/kit";
 import { rowDomId, type Lead, type PaletteItem, type ResultItem, type Row, type Section } from "./paletteModel";
 
 /** Matched letters (their indexes) in the selection's colour. */
@@ -62,6 +62,12 @@ export function LeadMark({ lead, size = 14 }: { lead: Lead | null; size?: number
       return (
         <span className="sh-pal__ico">
           <ExtensionIcon url={lead.url} label={lead.label} size={size} />
+        </span>
+      );
+    case "avatar":
+      return (
+        <span className="sh-pal__ico sh-pal__ico--av">
+          <Avatar name={lead.avatar.name} actor={lead.avatar.actor} src={lead.avatar.avatar_url} size={16} />
         </span>
       );
   }
@@ -121,7 +127,8 @@ function ItemRow({ item, hits, ...p }: Omit<RowProps, "row"> & { item: PaletteIt
 }
 
 function resultLead(item: ResultItem): Lead | null {
-  const { status, icon } = item.result;
+  const { avatar, status, icon } = item.result;
+  if (avatar) return { kind: "avatar", avatar };
   if (status) return { kind: "tone", tone: status.tone, label: status.label };
   if (icon) return { kind: "extension", url: icon, label: item.result.title };
   return null;

@@ -35,6 +35,29 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   du système au moment de la migration ; le Thème est Acogni. Le mode est stocké sous
   `pdo.ui.mode`, le Thème sous `pdo.ui.theme`.
 
+### One avatar for a person
+
+- **Breaking for extensions** (shared module): the kit's `Avatar` is round, tinted with the
+  person's hue, its initials in ink (first and last word), instead of a neutral square. The hue
+  is one of 8 fixed hues (`--av-h0` … `--av-h7`, new tokens with `--av-fill-*` and `--av-solid-*`
+  per Theme and mode), none a status colour, picked from the person's Actor (`actor`, new prop),
+  else its name. New props `hollow`, `present`, `title`. The core draws every person with it: the
+  presence on a Run and on a shared draft (whose marks on the canvas take the same hue), the
+  Actors, the Review's comments and completions, the versions.
+- **Breaking** (shared draft socket): the daemon no longer deals a colour to each participant of a
+  shared draft; `color` leaves `DraftParticipant` and the `welcome` message.
+- New in `@pdo/extension-ui`: `AvatarStack` (three overlapping, then « +n » listing the others),
+  `personColor(person)`, the person's colour for marks outside its avatar, and
+  `useActorDisplays(actors)`, the display names of a list of Actors in one hook.
+- A Source de recherche result may carry `avatar: { name, actor?, avatar_url? }`, drawn by the
+  core in its icon column; a suggestion of completion's `avatar` takes `actor` too.
+- `Select` takes `active` (a filter in force, tinted); its tooltip is the value shown, no longer
+  its label.
+- The Pipelines list no longer shows the node count of a pipeline.
+- Runs list: a Run archived while it ran ends at its archive (`completed_at`), and its row draws
+  its live nodes as stopped; a Retry all keeps the original's name; a row's accessible name is its
+  name and status.
+
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 
 ### Briques du détail de session, emplacement `session/detail`, compteur de Page (CORE-125)

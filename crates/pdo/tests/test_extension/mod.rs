@@ -62,7 +62,8 @@
 //! - `palette` (0.18): `new-note`, a global action calling [`NEW_NOTE`], which
 //!   makes `test/note` × `create` (refuse it to hide the action), and `notes`,
 //!   a Source de recherche (`searchNotes`: the notes whose title holds the
-//!   query, each a deep link to the test page).
+//!   query, each a deep link to the test page); `members` (0.20), another
+//!   (`searchPeople`), whose results carry an avatar.
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
@@ -89,7 +90,7 @@
 //! - **`Host::presences`** / **`Host::run_cost`** (API 0.12, `run_view.rs`):
 //!   `GET /ext/test/runs/<id>/view` answers them; `GET /ext/test/act-as?actor=
 //!   <id>` signs a browser in as that Actor; `PeopleMarks`, at
-//!   `run/item/people`, draws one mark per Presence of the row's Run.
+//!   `run/item/people`, stacks the avatars of the Presences of the row's Run.
 //! - **`Host::open_session`** and the other gestures of the Sessions
 //!   hébergées (API 0.19, `sessions.rs`): `POST /ext/test/sessions` opens one
 //!   on behalf of the caller, `GET` lists or reads them, `DELETE
@@ -887,7 +888,14 @@ impl Extension for TestExtension {
             .contribute(
                 UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes")
                     .with_icon(format!("/ext/{ID}/icon.svg")),
-            );
+            )
+            // 0.20: results carrying an avatar.
+            .contribute(UiContribution::search(
+                UiLocation::Palette,
+                "members",
+                "Members",
+                "searchPeople",
+            ));
         for &location in ACTION_LOCATIONS {
             let id = action_id(location);
             let command = UiCommand::new(

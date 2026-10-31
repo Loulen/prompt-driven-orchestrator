@@ -13,7 +13,6 @@ import { ParticipantStack } from "./ParticipantAvatar";
 
 interface Props {
   name: string;
-  nodeCount: number;
   modified?: string | null;
   /** Highlighted as the open editor tab. */
   selected?: boolean;
@@ -66,13 +65,12 @@ interface Props {
 
 /**
  * One row of the Pipelines tab, two lines: its name (mono), the lint when it
- * is invalid, who has its draft open and its validation; then its node count,
- * version and draft, its marks and its edit date. Rename, Duplicate, Delete
+ * is invalid, who has its draft open and its validation; then its version and
+ * draft, its marks and its edit date. Rename, Duplicate, Delete
  * and the « ⋯ » menu in the hover bar.
  */
 export default function LibraryRow({
   name,
-  nodeCount,
   selected = false,
   showDuplicate,
   onOpen,
@@ -97,9 +95,6 @@ export default function LibraryRow({
   draft,
   version,
 }: Props) {
-  // ADR-0088: a draft with changes counts its own nodes (none counted yet for
-  // a draft kept before the count).
-  const nodes = draft && draft.changes > 0 && draft.nodes > 0 ? draft.nodes : nodeCount;
   const lead = <Workflow size={14} strokeWidth={1.5} className="lp-dim" aria-hidden />;
   return (
     <div
@@ -173,9 +168,6 @@ export default function LibraryRow({
         </span>
       </span>
       <span className="lp-l2" data-testid="library-row-meta">
-        <span className="lp-num" title={`${nodes} node${nodes === 1 ? "" : "s"}`}>
-          {nodes}n
-        </span>
         {version != null && (
           <span className="lp-num lp-muted" title={`Version ${version}`} data-testid="library-row-version">
             v{version}

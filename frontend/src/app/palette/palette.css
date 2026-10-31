@@ -114,6 +114,9 @@
     width: 14px;
     color: var(--text-2);
   }
+  .sh-pal__ico--av {
+    width: 16px;
+  }
   .sh-pal__label {
     flex: 0 1 auto;
     min-width: 0;

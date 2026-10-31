@@ -95,7 +95,9 @@ function main() {
     console.log(`Citations rewritten in ${rewritten.length} files${rewritten.length ? `: ${rewritten.join(", ")}` : ""}.`);
   }
   console.log(`\nReleased ${next.workspace}. Check \`git diff\`, then commit: chore(release): v${next.workspace}`);
-  console.log("Another level: `git checkout -- . && git clean -f docs/adr`, then `make release-bump LEVEL=…`.");
+  const undo = ["git checkout -- ."];
+  if (renames.length) undo.push(`rm ${renames.map((r) => `${ADR_DIR}/${r.to}`).join(" ")}`);
+  console.log(`Another level: \`${undo.join(" && ")}\`, then \`make release-bump LEVEL=…\`.`);
 }
 
 try {

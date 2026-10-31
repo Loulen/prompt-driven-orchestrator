@@ -24,12 +24,13 @@ this file and the skill disagree, **this file wins**; the skill describes the fu
   goes to `Done` at the `integration/*` → `main` merge. Branches are named after the story's ID
   (`integration/CORE-8-<slug>`) and the ticket's ID (`feature/CORE-9-<slug>`).
 - **No version bump on a ticket.** A ticket touches no version (workspace, extension API, the
-  front's shared module, `Cargo.toml` / `Cargo.lock`) and takes no ADR number (ADR
-  draft-version-changelog-et-numero-d-adr-se-fixent-a-la-fusion-vers-main). It writes its
-  CHANGELOG entry under `## Unreleased`, the first entry, in English and without ticket ids: what
-  changes on screen, the new seams, the breaking changes. A new ADR is born
+  front's shared module, `Cargo.toml` / `Cargo.lock`) and takes no ADR number
+  (ADR draft-version-changelog-et-numero-d-adr-se-fixent-a-la-fusion-vers-main).
+  It writes its CHANGELOG entry under `## Unreleased`, the first entry, in English and without
+  ticket ids: what changes on screen, the new seams, the breaking changes. A new ADR is born
   `docs/adr/draft-<slug>.md`. The binary embeds the CHANGELOG for "What's new", which hides
-  `Unreleased`.
+  `Unreleased`. `.gitattributes` merges `CHANGELOG.md` with the `union` driver, so two tickets
+  adding a bullet at the same place merge without a conflict: both lines are kept.
 - **Merged `integration/*` branches are throwaway** — delete once merged (skill's *Cleanup*); never
   pile new work onto an already-merged branch.
 

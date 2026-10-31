@@ -34,6 +34,9 @@ A contribution bumps **no version**: not the workspace, not `pdo-extension-api`,
 shared module, not `Cargo.lock`. Write what it changes under `## Unreleased`, the first entry of
 [CHANGELOG.md](CHANGELOG.md), in English and without ticket ids; "What's new" hides that entry. A
 new ADR is born `docs/adr/draft-<slug>.md`, without a number, and is cited `ADR draft-<slug>`.
+`.gitattributes` merges `CHANGELOG.md` with git's `union` driver: two branches adding a bullet at
+the same place keep both lines instead of conflicting. Read the merged entry once in a while: a
+line both sides edited comes out twice.
 
 The version is set when a story merges into `main`, by one command
 ([docs/agents/git-flow.md](docs/agents/git-flow.md) § *integration/\* -> main*):

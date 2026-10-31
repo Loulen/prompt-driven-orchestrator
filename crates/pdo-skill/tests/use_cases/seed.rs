@@ -77,7 +77,7 @@ async fn a_version_bump_rewrites_the_content_keeping_id_and_row() {
     f.skills.seed().await.unwrap();
     let before = f.index.one(SEEDED_SKILL_ID).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(2));
-    let bumped = SEEDED_SKILL_MD.replace("skill_version: 3", "skill_version: 4");
+    let bumped = SEEDED_SKILL_MD.replace("skill_version: 4", "skill_version: 5");
     let outcome = f
         .skills
         .seed_with(

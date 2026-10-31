@@ -6,17 +6,7 @@ use serde_json::Value;
 use super::cli_daemon_url;
 
 pub fn run_run_list(json: bool) -> Result<()> {
-    let url = cli_daemon_url();
-    let resp = reqwest::blocking::Client::builder()
-        .default_headers(pdo_kernel::env::cli_headers())
-        .build()
-        .unwrap_or_default()
-        .get(format!("{url}/runs"))
-        .header("X-PDO-Actor", "cli")
-        .send()
-        .context("failed to reach daemon")?;
-    let status = resp.status();
-    let body = resp.text().unwrap_or_default();
+    let (status, body) = daemon_get("/runs")?;
     if !status.is_success() {
         anyhow::bail!("daemon returned {status}: {}", refusal_message(&body));
     }
@@ -29,9 +19,24 @@ pub fn run_run_list(json: bool) -> Result<()> {
     Ok(())
 }
 
+/// `GET <daemon><path>` as the CLI, with the headers every command sends
+/// (`PDO_TOKEN`): the status and the body of the answer.
+pub(super) fn daemon_get(path: &str) -> Result<(reqwest::StatusCode, String)> {
+    let resp = reqwest::blocking::Client::builder()
+        .default_headers(pdo_kernel::env::cli_headers())
+        .build()
+        .unwrap_or_default()
+        .get(format!("{}{path}", cli_daemon_url()))
+        .header("X-PDO-Actor", "cli")
+        .send()
+        .context("failed to reach daemon")?;
+    let status = resp.status();
+    Ok((status, resp.text().unwrap_or_default()))
+}
+
 /// The daemon's sentence for a refusal (`message`, else `error`), else the
 /// body as is.
-fn refusal_message(body: &str) -> String {
+pub(super) fn refusal_message(body: &str) -> String {
     daemon_sentence(body).unwrap_or_else(|| body.to_string())
 }
 

@@ -92,10 +92,18 @@ mod tests {
         assert!(INTERACTIVE_SKILL_MD.contains("skill_version: 2"));
         assert!(INTERACTIVE_SKILL_MD.contains("The banner is a notification, not the message"));
         assert!(INTERACTIVE_SKILL_MD.contains("Never refer the user to « my previous message »"));
-        // The orchestrate skill's v3 guidance is the blocking pull, no polling.
+        // The orchestrate skill's v4 guidance is the blocking pull with no
+        // timeout, in the background when the harness offers it: no polling
+        // loop, no `sleep`, and the run's state read in one line.
         assert!(SEEDED_SKILL_MD.contains("pdo run wait"));
         assert!(!SEEDED_SKILL_MD.contains("Check it periodically"));
-        assert!(SEEDED_SKILL_MD.contains("skill_version: 3"));
+        assert!(!SEEDED_SKILL_MD.contains("run wait --timeout"));
+        assert!(!SEEDED_SKILL_MD.contains("while ! pdo run wait"));
+        assert!(!SEEDED_SKILL_MD.contains("sleep "));
+        assert!(SEEDED_SKILL_MD.contains("without `--timeout`"));
+        assert!(SEEDED_SKILL_MD.contains("background task"));
+        assert!(SEEDED_SKILL_MD.contains("pdo run status <run-id>"));
+        assert!(SEEDED_SKILL_MD.contains("skill_version: 4"));
     }
 
     #[test]

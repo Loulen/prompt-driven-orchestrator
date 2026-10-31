@@ -14,7 +14,7 @@ use pdo_platform::adapters::cli::{run_page, run_service, ServiceAction};
 use pdo_review::adapters::cli::run_review;
 use pdo_run::adapters::cli::{
     refused_in_hosted_session, run_complete, run_fail, run_reap, run_run_create, run_run_list,
-    run_run_wait, run_skip, run_wait_user, RunAction,
+    run_run_status, run_run_wait, run_skip, run_wait_user, RunAction,
 };
 
 use crate::cli::{run_docs, run_ext, run_migrate, Cli, Commands};
@@ -150,6 +150,8 @@ where
             // `run wait` owns the `2` (timeout, not a failure).
             RunAction::Wait { all, timeout } => run_run_wait(all, timeout),
             RunAction::List { json } => exit(run_run_list(json)),
+            // `run status` owns the `4` (no such Run).
+            RunAction::Status { run_id, json } => run_run_status(&run_id, json),
             create => exit(run_run_create(create)),
         },
         Commands::Page { action } => exit(run_page(action)),

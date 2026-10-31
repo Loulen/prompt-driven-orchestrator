@@ -1,7 +1,7 @@
 ---
 name: pdo-orchestrate
 description: Orchestrate child runs with PDO — create runs from this node session, wait for them with `pdo run wait`, and complete truthfully.
-skill_version: 3
+skill_version: 4
 ---
 
 # Orchestrating with PDO
@@ -64,32 +64,59 @@ a child may orchestrate in turn.
 
 ## Waiting for your children
 
-Never poll on a timer. Block on the daemon instead:
+Never poll on a timer, and never `sleep`. Block on the daemon instead:
 
 ```bash
-pdo run wait --timeout 600
+pdo run wait
 ```
 
 `pdo run wait` returns as soon as **one** child of this node becomes terminal
-(`--all`: once every child is terminal). Its exit code tells you what happened:
+(`--all`: once every child is terminal). Call it **without `--timeout`**: it
+waits as long as the child takes, and you are woken only when something
+settled.
+
+- If your harness can run a command as a **background task** and tell you when
+  it ends, run `pdo run wait` that way: your turn stays free and nothing wakes
+  you for nothing.
+- Otherwise, give it a `--timeout` no longer than your harness's own tool
+  timeout, so the call returns before the harness cuts it.
+
+The same rule holds for any long command — a build, a test suite: a background
+task when the harness offers one, never a `sleep` loop that checks on it.
+
+Its exit code tells you what happened:
 
 - **0** — something settled: one JSON line per child on stdout —
   `{"run_id","name","status","reason","children_active"}`. Read the child's
   outputs (its artifacts, its `reason` when it failed), then decide: create a
   corrected child, move on, or `pdo fail` if the plan is dead.
-- **2** — `--timeout` elapsed, nothing settled, nothing on stdout. **Not a
-  failure**: call `pdo run wait` again (loop `while ! pdo run wait --timeout 600;
-  do :; done` when your harness caps the length of one tool call).
 - **0 with `{"noop":true,…}`** — no child of this node is active: you have
   nothing to wait for.
+- **2** — only with `--timeout`: it elapsed, nothing settled, nothing on stdout.
+  **Not a failure**: call `pdo run wait` again.
 - **1** — the daemon is unreachable, or you are not in a node session.
 
 A child that is itself `awaiting_user` (its agent asked its user a question)
 does **not** wake you: PDO shows that wait on your node and your run — « child
 run <name> is awaiting you » — and lifts it when the user answers. Keep waiting.
 
-If you need the full picture, `curl -s "$PDO_DAEMON_URL/runs/$PDO_RUN_ID/children"`
-lists every child with status, duration and cost — a read, not a wait.
+## Reading a run's state
+
+To know where a run stands — yours or a child's — read it in one line:
+
+```bash
+pdo run status <run-id>
+```
+
+```text
+<id> running · nodes 2/5 done, 1 running, 1 awaiting_user · children 1 active · $3.20
+```
+
+`--json` gives the same fields as one compact object (`run_id`, `status`,
+`nodes_done`, `nodes_total`, `nodes_running`, `nodes_awaiting_user`,
+`nodes_failed`, `children_active`, `cost_usd`, `cost_partial`). Exit 0 when
+the run is found, 4 when it is unknown. It is a read, not a wait: use it
+after `pdo run wait` returns, not in a loop.
 
 ## Completing truthfully
 

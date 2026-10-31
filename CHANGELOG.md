@@ -45,6 +45,11 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   `PDO_*`, `TMUX` or `TMUX_PANE`, copied harness credentials, and a pidfile. `TEST_EXT=1` serves
   the test extension instead. `make demo-daemon-stop PORT=<port>` stops only that daemon and its
   tmux socket `pdo-<port>`, and refuses a port without a pidfile.
+- `make bench-gates REF="<ref> …"` measures the dev loop at each ref in a throwaway worktree,
+  removed even on failure: cold build, build with a warm sccache, time to the first structural
+  failure, the scoped gate on a front-only diff and the full suite, with the machine load; a gate
+  the ref lacks reads "n/a". `make run-costs RUN=<run-id>` prints the cost and duration per
+  ticket of a Run and its child Runs.
 - The `grill-with-docs`, `to-spec` and `to-tickets` skills can be invoked by the model, so the
   chain from grilling to tickets runs without a human command.
 

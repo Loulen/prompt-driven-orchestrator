@@ -46,9 +46,10 @@ export function PageTabButtons({ drag }: { drag?: TabDrag } = {}) {
           active={tab.name === active}
           title={`/pages/${tab.name}/`}
           closeLabel={`Close ${tab.name}`}
-          kind={<BookOpen size={13} strokeWidth={1.5} className="sh-tab__kind" aria-hidden />}
-          label={tab.name}
+          kind={<BookOpen size={13} strokeWidth={1.5} className="sh-tab__kind text-primary" aria-hidden />}
+          label={<span className="font-mono">{tab.name}</span>}
           testId={`page-tab-${tab.name}`}
+          labelTestId={`page-tab-label-${tab.name}`}
           closeTestId={`page-tab-close-${tab.name}`}
           drag={drag?.props("page", tab.name, index)}
           onActivate={() => void show(tab.name)}

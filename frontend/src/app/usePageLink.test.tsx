@@ -1,7 +1,7 @@
 // CORE-83 — the deep link toward a mounted page (`#/pages/<name>`, what
 // `pdo page mount` prints for a page with a guide): the page opens in its tab,
 // an unknown page is a toast, and the link leaves the address bar.
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import TabBar from "../pipeline/components/TabBar";
 import { useMountedPages } from "../platform/store/mountedPages";
@@ -48,6 +48,9 @@ describe("#/pages/<name>", () => {
     window.history.replaceState(null, "", "/#/pages/design");
     render(<Shell />);
     expect(await screen.findByTestId("page-tab-design")).toHaveAttribute("data-active", "true");
+    // A page's name is an id: mono, beside the accent book.
+    expect(within(screen.getByTestId("page-tab-label-design")).getByText("design")).toHaveClass("font-mono");
+    expect(screen.getByTestId("page-tab-design").querySelector("svg")).toHaveClass("text-primary");
     expect(useMountedPages.getState().active).toBe("design");
     expect(screen.getByTestId("page-copy-link")).toHaveAccessibleName("Copy link");
     expect(screen.getByTestId("page-open-alone")).toHaveAttribute("href", "/pages/design/");

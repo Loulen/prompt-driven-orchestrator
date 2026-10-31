@@ -6,7 +6,7 @@
  * component computes — which is exactly what the browser would lay out.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Projecteur from "./Projecteur";
 import TourPopover, { TourAside } from "./TourPopover";
@@ -242,6 +242,20 @@ describe("the popover", () => {
     const { onSkip } = renderPopover(step({ skippable: true }));
     await userEvent.click(screen.getByTestId("tour-skip"));
     expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops Skip once the step's action is done, keeping it on a reading step", () => {
+    const done = () => true;
+    renderPopover(step({ skippable: true, confirm: true, done }), { awaitingConfirm: true, ready: true });
+    expect(screen.getByTestId("tour-next")).toBeEnabled();
+    expect(screen.queryByTestId("tour-skip")).not.toBeInTheDocument();
+    cleanup();
+    renderPopover(step({ skippable: true, confirm: true, done }), { awaitingConfirm: true, ready: false });
+    expect(screen.getByTestId("tour-skip")).toBeInTheDocument();
+    cleanup();
+    // A reading step has nothing to do: Skip stays beside Next.
+    renderPopover(step({ skippable: true, confirm: true }), { awaitingConfirm: true, ready: true });
+    expect(screen.getByTestId("tour-skip")).toBeInTheDocument();
   });
 
   it("hides Skip on a step the rest of the tour depends on", () => {

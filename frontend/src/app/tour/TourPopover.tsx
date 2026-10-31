@@ -72,6 +72,9 @@ export default function TourPopover({
   // met there is nothing left to wait for, and a spinner that kept turning under
   // a satisfied checklist would be the card contradicting itself.
   const waiting = step.waitingNote && !ready;
+  // Skip is for a gesture not yet made: once the step's action is done, only Next
+  // is left. A reading step (no `done`) has no gesture, so Skip stays beside Next.
+  const skippable = step.skippable && !(step.done && ready);
 
   // Measure after paint and re-place: the card's height depends on its body and
   // on whether it carries a copy block, so a fixed estimate would flip it on the
@@ -185,9 +188,9 @@ export default function TourPopover({
       {/* Not rendered at all when the step has neither: a step that is simply
           waiting for the right click says so in its title, and an empty row
           under the progress bar would be a control that is not there. */}
-      {(step.skippable || awaitingConfirm || step.advanceHint) && (
+      {(skippable || awaitingConfirm || step.advanceHint) && (
         <div className="tr-cfoot">
-          {step.skippable ? (
+          {skippable ? (
             <Button tone="ghost" size="sm" onClick={onSkip} data-testid="tour-skip">
               Skip
             </Button>

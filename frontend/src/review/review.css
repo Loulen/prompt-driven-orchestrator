@@ -392,11 +392,12 @@ span.rv-pill {
 }
 .rv-crow {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--g-3);
   width: 100%;
   height: 22px;
+  white-space: nowrap;
   padding: 0 var(--g-4);
   border: 0;
   background: none;
@@ -413,8 +414,16 @@ span.rv-pill {
   opacity: 0.55;
 }
 .rv-crow__at {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 14rem;
   font-family: var(--font-code);
   color: var(--text-2);
+}
+.rv-crow__at-file {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ------------------------------------------------------------ file card */
@@ -610,6 +619,14 @@ span.rv-pill {
 .rv-ct__head > .rv-ct__peek,
 .rv-ct__head > .rv-ct__fit,
 .rv-ct__foot > .rv-ct__fit {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rv-ct__head > .rv-ct__anchor {
+  display: inline-flex;
+}
+.rv-ct__anchor-file {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -32,6 +32,8 @@ export type ArtifactSource =
 
 interface Props {
   runId: string;
+  /** The Run's name, first on the footer's meta line. */
+  runName?: string | null;
   portName: string;
   portType?: PortType;
   source: ArtifactSource;
@@ -51,6 +53,7 @@ interface Props {
 
 export default function MarkdownArtifactModal({
   runId,
+  runName = null,
   portName,
   portType = "markdown",
   source,
@@ -255,9 +258,10 @@ export default function MarkdownArtifactModal({
   // An inline document is rendered as given (a release note may open on a `---` rule).
   const bodyContent = content ? (isInline ? content : stripFrontmatter(content)) : null;
 
-  // The meta line of the file shown: which node and iteration it comes from,
+  // The meta line of the file shown: which Run, node and iteration it comes from,
   // its kind and its size.
   const meta = [
+    runName,
     source.kind === "iter-nav" ? source.nodeId : null,
     source.kind === "iter-nav" ? `iter ${iter}` : null,
     portType,

@@ -7,7 +7,7 @@ import { Hourglass } from "lucide-react";
 import type { StateCounts } from "../model/commentStatus";
 import type { ReviewEntry } from "../model/entries";
 import { authorKind, authorLabel, commentState, footerStatus, plural, sortForSidebar } from "../model/commentStatus";
-import { anchorLabel } from "../model/drafts";
+import { anchorLabel, anchorParts } from "../model/drafts";
 import { dirCount, matchesFilter } from "../model/fileTree";
 import type { TreeRow } from "../model/fileTree";
 import { AuthorGlyph, Badge, StateIcon } from "./commentBits";
@@ -223,6 +223,8 @@ function CommentRow({ entry, pair, onClick }: { entry: ReviewEntry; pair?: strin
         : lastActor
           ? `replied by ${authorLabel(lastActor)}`
           : "awaiting reply";
+  const at = anchorLabel(entry.anchor);
+  const [atFile, atLine] = anchorParts(entry.anchor);
   return (
     <button
       type="button"
@@ -240,7 +242,11 @@ function CommentRow({ entry, pair, onClick }: { entry: ReviewEntry; pair?: strin
       ) : (
         <Badge kind="draft">✎</Badge>
       )}
-      <span className="rv-crow__at">{anchorLabel(entry.anchor)}</span>
+      {/* Same cut as a folded thread: the file name gives way, the line stays. */}
+      <span className="rv-crow__at" title={at} data-testid="review-comment-row-anchor">
+        <span className="rv-crow__at-file">{atFile}</span>
+        <span className="shrink-0">{atLine}</span>
+      </span>
       <span className="truncate">{pair ? `at ${pair}` : first}</span>
       {state && (
         <span className="inline-flex items-center gap-1" title={stateTitle}>

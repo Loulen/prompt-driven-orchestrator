@@ -11,6 +11,8 @@ import ImageLightbox from "../../shared/ui/ImageLightbox";
 interface Props {
   startNode: StartNodeInfo;
   runId: string;
+  /** The Run's name, on the footer of the input file opened from here. */
+  runName?: string | null;
   nodeId: string;
 }
 
@@ -21,7 +23,7 @@ function startFileBadge(name: string): string {
   return name.slice(dot + 1).toUpperCase().slice(0, 4);
 }
 
-export default function StartInspector({ startNode, runId, nodeId }: Props) {
+export default function StartInspector({ startNode, runId, runName = null, nodeId }: Props) {
   const [inputText, setInputText] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   // The ordered image list + clicked index currently shown fullscreen, or null
@@ -139,6 +141,7 @@ export default function StartInspector({ startNode, runId, nodeId }: Props) {
       {modalOpen && (
         <MarkdownArtifactModal
           runId={runId}
+          runName={runName}
           portName="_input"
           source={{ kind: "static", files: modalFiles }}
           onClose={() => setModalOpen(false)}

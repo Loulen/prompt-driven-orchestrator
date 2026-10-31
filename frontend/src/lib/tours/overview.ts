@@ -106,7 +106,7 @@ const APP_STEPS: TourStep[] = [
     title: "Archive this Run",
     body: (o) => {
       if (isArchived(o.app)) {
-        return "Archived: the worktree is gone and the dot turned grey. The outputs are still there to read.";
+        return "Archived: the worktree is gone and the row shows the archive icon. The outputs are still there to read.";
       }
       if (o.present(CLEANUP_MODAL)) {
         return "Cleanup removes the Run's worktree and keeps its history and outputs. Skip leaves the Run as it is.";
@@ -134,7 +134,7 @@ const APP_STEPS: TourStep[] = [
     targetTimeoutMs: READING_TIMEOUT_MS,
     skippable: true,
     advanceHint: "advances once the Run is archived",
-    // Once archived the card stops for a Next: the grey dot is the thing to see.
+    // Once archived the card stops for a Next: the archive icon is the thing to see.
     confirm: (o) => isArchived(o.app),
     done: (o) => isArchived(o.app),
   },

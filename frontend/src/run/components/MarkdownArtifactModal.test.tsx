@@ -63,6 +63,51 @@ describe("MarkdownArtifactModal", () => {
     });
   });
 
+  describe("footer", () => {
+    it("names the Run, then the node, the iteration, the kind and the size", async () => {
+      fetchArtifactMock.mockResolvedValue("# Review");
+      fetchNodeIOMock.mockResolvedValue({
+        inputs: [],
+        outputs: [{ port: "out", repeated: false, files: [{ ...makeFile("/iter-2/out.md"), size: 2048 }] }],
+      });
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          runName="Add a product search"
+          portName="out"
+          source={{ kind: "iter-nav", nodeId: "reviewer", portKind: "output", iterations: makeIters(2), initialIter: 2 }}
+          onClose={() => {}}
+        />,
+      );
+      await act(async () => {});
+      expect(screen.getByTestId("artifact-meta")).toHaveTextContent(
+        "Add a product search · reviewer · iter 2 · markdown · 2.0 kB",
+      );
+    });
+  });
+
+  describe("frontmatter", () => {
+    it("shows the fields in the file's order, a list as its items", async () => {
+      fetchArtifactMock.mockResolvedValue("---\nverdict: PASS\nreviewers: [alice, bob]\n---\n# Review");
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={{
+            kind: "static",
+            files: [{ ...makeFile("/out.md"), frontmatter: { reviewers: ["alice", "bob"], verdict: "PASS" } }],
+          }}
+          onClose={() => {}}
+        />,
+      );
+      await act(async () => {});
+      const strip = screen.getByTestId("artifact-frontmatter");
+      expect([...strip.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["verdict", "reviewers"]);
+      expect(strip).toHaveTextContent("alice, bob");
+      expect(strip).not.toHaveTextContent('["alice"');
+    });
+  });
+
   describe("iter-nav source", () => {
     it("shows iter nav when multiple iterations exist", async () => {
       fetchArtifactMock.mockResolvedValue("# Iter 2 content");

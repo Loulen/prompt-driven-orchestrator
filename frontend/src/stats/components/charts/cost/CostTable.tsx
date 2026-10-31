@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { StatsCostEntity } from "../../../../shared/generated/StatsCostEntity";
 import { harnessColor } from "../../../../harness/model/color";
@@ -59,183 +59,201 @@ export function CostTable({
   // Expansion state lives HERE and dies with the table: the parent keys the
   // table on the drill path, so a stale expanded set never leaks across Nodes.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const scroller = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  const measure = useCallback(() => {
+    const el = scroller.current;
+    if (el) setMore(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+  }, []);
+  useEffect(() => {
+    const el = scroller.current;
+    measure();
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, [measure]);
   return (
-    <>
-      <table className="sx-table">
-        <thead>
-          <tr>
-            <SortTh sort={sort} onSort={onSort} sortKey="name">
-              Name
-            </SortTh>
-            <SortTh sort={sort} onSort={onSort} sortKey="total" className="sx-r w-32">
-              Total
-            </SortTh>
-            {harnesses.map((harness) => (
-              <SortTh key={harness} sort={sort} onSort={onSort} sortKey={harness} className="sx-r w-28">
-                <span className="sx-swatch" style={{ backgroundColor: harnessColor(harness) }} aria-hidden />
-                {harness}
+    // Columns left to the right fade out on the edge until the table is scrolled to its end.
+    <div className="sx-hscroll-wrap" data-more={more} data-testid="stats-cost-scroll">
+      <div className="sx-hscroll" ref={scroller} onScroll={measure}>
+        <table className="sx-table sx-table--cost" style={{ "--sx-cols": harnesses.length } as CSSProperties}>
+          <thead>
+            <tr>
+              <SortTh sort={sort} onSort={onSort} sortKey="name">
+                Name
               </SortTh>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((row) => {
-            const pairs = expandablePairs ? (row.models ?? []) : [];
-            const pick = tableSelection(selection, row, order);
-            const couples = coupleLine(
-              coupleSelection?.(row),
-              coupleRows(pairs),
-            );
-            return (
-              <Fragment key={row.id}>
-                <tr
-                  className="group"
-                  tabIndex={0}
-                  data-testid="stats-detail-row"
-                  {...pick.rowProps}
-                >
-                  <td>
-                    <span className="sx-name">
-                      {pick.control}
-                      {pairs.length > 0 ? (
-                        <button
-                          type="button"
-                          aria-label={`${expanded.has(row.id) ? "Collapse" : "Expand"} ${row.name} models`}
-                          data-testid="stats-node-toggle"
-                          onClick={() =>
-                            setExpanded((current) => {
-                              const next = new Set(current);
-                              if (next.has(row.id)) next.delete(row.id);
-                              else next.add(row.id);
-                              return next;
-                            })
-                          }
-                          className="sx-chev"
-                        >
-                          {expanded.has(row.id) ? (
-                            <ChevronDown size={12} />
-                          ) : (
-                            <ChevronRight size={12} />
-                          )}
-                        </button>
-                      ) : null}
-                      {(() => {
-                        const content = renderName ? renderName(row) : row.name;
-                        return onOpen ? (
+              <SortTh sort={sort} onSort={onSort} sortKey="total" className="sx-r w-32">
+                Total
+              </SortTh>
+              {harnesses.map((harness) => (
+                <SortTh key={harness} sort={sort} onSort={onSort} sortKey={harness} className="sx-r w-28">
+                  <span className="sx-swatch" style={{ backgroundColor: harnessColor(harness) }} aria-hidden />
+                  {harness}
+                </SortTh>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((row) => {
+              const pairs = expandablePairs ? (row.models ?? []) : [];
+              const pick = tableSelection(selection, row, order);
+              const couples = coupleLine(
+                coupleSelection?.(row),
+                coupleRows(pairs),
+              );
+              return (
+                <Fragment key={row.id}>
+                  <tr
+                    className="group"
+                    tabIndex={0}
+                    data-testid="stats-detail-row"
+                    {...pick.rowProps}
+                  >
+                    <td>
+                      <span className="sx-name">
+                        {pick.control}
+                        {pairs.length > 0 ? (
                           <button
                             type="button"
-                            aria-label={`Open ${row.name}`}
-                            title={row.name}
-                            onClick={() => onOpen(row)}
-                            className="sx-open"
+                            aria-label={`${expanded.has(row.id) ? "Collapse" : "Expand"} ${row.name} models`}
+                            data-testid="stats-node-toggle"
+                            onClick={() =>
+                              setExpanded((current) => {
+                                const next = new Set(current);
+                                if (next.has(row.id)) next.delete(row.id);
+                                else next.add(row.id);
+                                return next;
+                              })
+                            }
+                            className="sx-chev"
                           >
-                            {content}
+                            {expanded.has(row.id) ? (
+                              <ChevronDown size={12} />
+                            ) : (
+                              <ChevronRight size={12} />
+                            )}
                           </button>
-                        ) : renderName ? (
-                          content
-                        ) : (
-                          <span className="sx-ellipsis" title={row.name}>
-                            {content}
-                          </span>
-                        );
-                      })()}
-                      <TableCombinedIcon selection={selection} row={row} />
-                    </span>
-                  </td>
-                  <td className="sx-r">
-                    <CostCell
-                      bar={<InBar value={row.usd} max={max} top={row.id === topId} />}
-                      unit={unit}
-                      metric={{
-                        harness: "total",
-                        usd: row.usd,
-                        estimated: row.estimated,
-                        partial: row.partial,
-                        executions: row.executions,
-                        readable: row.readable,
-                        unknown: row.unknown,
-                        average_usd: row.average_usd,
-                        median_usd: row.median_usd,
-                        unpriced_models: row.unpriced_models,
-                        missing_reasons: row.missing_reasons,
-                      }}
-                    />
-                  </td>
-                  {harnesses.map((harness) => (
-                    <td key={harness} className="sx-r">
+                        ) : null}
+                        {(() => {
+                          const content = renderName ? renderName(row) : row.name;
+                          return onOpen ? (
+                            <button
+                              type="button"
+                              aria-label={`Open ${row.name}`}
+                              title={row.name}
+                              onClick={() => onOpen(row)}
+                              className="sx-open"
+                            >
+                              {content}
+                            </button>
+                          ) : renderName ? (
+                            content
+                          ) : (
+                            <span className="sx-ellipsis" title={row.name}>
+                              {content}
+                            </span>
+                          );
+                        })()}
+                        <TableCombinedIcon selection={selection} row={row} />
+                      </span>
+                    </td>
+                    <td className="sx-r">
                       <CostCell
+                        bar={<InBar value={row.usd} max={max} top={row.id === topId} />}
                         unit={unit}
-                        metric={row.harnesses.find(
-                          (item) => item.harness === harness,
-                        )}
+                        metric={{
+                          harness: "total",
+                          usd: row.usd,
+                          estimated: row.estimated,
+                          partial: row.partial,
+                          executions: row.executions,
+                          readable: row.readable,
+                          unknown: row.unknown,
+                          average_usd: row.average_usd,
+                          median_usd: row.median_usd,
+                          unpriced_models: row.unpriced_models,
+                          missing_reasons: row.missing_reasons,
+                        }}
                       />
                     </td>
-                  ))}
-                </tr>
-                {expanded.has(row.id)
-                  ? pairs.map((pair, index) => {
-                      const couple = couples.rows[index];
-                      const coupled = couples.pick(couple);
-                      return (
-                        <tr
-                          key={`${row.id}-${pair.key}`}
-                          className="group sx-sub"
-                          data-testid="stats-model-effort-row"
-                          tabIndex={coupled.control ? 0 : undefined}
-                          {...coupled.rowProps}
-                        >
-                          <td>
-                            <span className="sx-name">
-                              {coupled.control}
-                              <span className="inline-flex items-baseline gap-1">
-                                <ProvenanceName
-                                  name={pair.model}
-                                  mono
-                                  provenance={pair.model_provenance}
-                                  harnesses={pair.harnesses}
-                                  target="model"
-                                />
-                                <span className="text-text-3">·</span>
-                                {pair.effort === null ? (
-                                  <Tooltip content={NOT_SET_COPY} side="top">
-                                    <span className="italic text-text-3">
-                                      not set
-                                    </span>
-                                  </Tooltip>
-                                ) : (
+                    {harnesses.map((harness) => (
+                      <td key={harness} className="sx-r">
+                        <CostCell
+                          unit={unit}
+                          metric={row.harnesses.find(
+                            (item) => item.harness === harness,
+                          )}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                  {expanded.has(row.id)
+                    ? pairs.map((pair, index) => {
+                        const couple = couples.rows[index];
+                        const coupled = couples.pick(couple);
+                        return (
+                          <tr
+                            key={`${row.id}-${pair.key}`}
+                            className="group sx-sub"
+                            data-testid="stats-model-effort-row"
+                            tabIndex={coupled.control ? 0 : undefined}
+                            {...coupled.rowProps}
+                          >
+                            <td>
+                              <span className="sx-name">
+                                {coupled.control}
+                                <span className="inline-flex items-baseline gap-1">
                                   <ProvenanceName
-                                    name={pair.effort}
-                                    provenance={pair.effort_provenance}
+                                    name={pair.model}
+                                    mono
+                                    provenance={pair.model_provenance}
                                     harnesses={pair.harnesses}
-                                    target="effort"
+                                    target="model"
                                   />
-                                )}
+                                  <span className="text-text-3">·</span>
+                                  {pair.effort === null ? (
+                                    <Tooltip content={NOT_SET_COPY} side="top">
+                                      <span className="italic text-text-3">
+                                        not set
+                                      </span>
+                                    </Tooltip>
+                                  ) : (
+                                    <ProvenanceName
+                                      name={pair.effort}
+                                      provenance={pair.effort_provenance}
+                                      harnesses={pair.harnesses}
+                                      target="effort"
+                                    />
+                                  )}
+                                </span>
+                                {couples.marks(couple)}
                               </span>
-                              {couples.marks(couple)}
-                            </span>
-                          </td>
-                          <td className="sx-r">
-                            <CostCell unit={unit} metric={pairMetric(pair)} />
-                          </td>
-                          {harnesses.map((harness) => (
-                            <td key={harness} className="sx-r">
-                              <CostCell
-                                unit={unit}
-                                metric={pair.harnesses.find(
-                                  (item) => item.harness === harness,
-                                )}
-                              />
                             </td>
-                          ))}
-                        </tr>
-                      );
-                    })
-                  : null}
-              </Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </>
+                            <td className="sx-r">
+                              <CostCell unit={unit} metric={pairMetric(pair)} />
+                            </td>
+                            {harnesses.map((harness) => (
+                              <td key={harness} className="sx-r">
+                                <CostCell
+                                  unit={unit}
+                                  metric={pair.harnesses.find(
+                                    (item) => item.harness === harness,
+                                  )}
+                                />
+                              </td>
+                            ))}
+                          </tr>
+                        );
+                      })
+                    : null}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

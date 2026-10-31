@@ -34,7 +34,7 @@ when?: When,
  * Where the counter of an icon of `topbar/end` is read (0.19 for a
  * [`UiElement::Page`], 0.20 for a [`UiElement::Panel`] and a
  * [`UiElement::Action`]): an absolute path the extension serves, usually
- * under `/ext/<id>/`, answering a [`PageCounter`] for the Actor of the
+ * under `/ext/<id>/`, answering a [`PageCounter`](super::PageCounter) for the Actor of the
  * request. The core reads it when it shows the icon,
  * and again at each event of the extension on `/ws` (its
  * `extension_event`s, the events of its Sessions hébergées) and at each

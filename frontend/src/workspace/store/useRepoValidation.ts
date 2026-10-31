@@ -67,19 +67,21 @@ export function useRepoValidation({
       setValidatedRepo(null);
       try {
         const result = await validateRepo(targetRepo.trim());
-        setRepoValid(result.valid);
         if (!result.valid) {
+          setRepoValid(false);
           setRepoError(result.error ?? "Not a valid git repository");
           clearBranches();
         } else {
           const branches = await loadBranches(targetRepo.trim());
           // A repository without a commit has no branch to cut a Run from:
           // the field says so, once, rather than a git error further down.
+          // The verdict waits for the list, so nothing shows for it meanwhile.
           if (branches && branches.length === 0) {
             setRepoValid(false);
             setRepoError(`${targetRepo.trim()} has no commit yet`);
             clearBranches();
           } else {
+            setRepoValid(true);
             setValidatedRepo(targetRepo.trim());
           }
         }

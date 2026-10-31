@@ -230,11 +230,9 @@ export function useNewRunSubmit(
     launchProject && !primaryInProject && targetRepo.trim() !== ""
       ? `${targetRepo.trim()} is not a repository of ${launchProject.name}.`
       : undefined;
-  // Notion #7: the provisioning reason is the one the disabled Launch spells out.
-  // A path refused on its own gives its own reason, the field's.
-  const launchBlockReason =
-    (repoValid === false && repoError ? repoError : outsideProjectReason) ??
-    (provisioningValid ? undefined : provisioningBlockReason);
+  // Notion #7: the reason the disabled Launch spells out; a path refused on its own gives the field's.
+  const repoReason = repoValid === false && repoError ? repoError : outsideProjectReason;
+  const launchBlockReason = repoReason ?? (provisioningValid ? undefined : provisioningBlockReason);
 
   // The cron the Trigger will be created with: a compiled preset, or the raw escape hatch.
   // Memoized (like `selectedPipeline`/`overrideCount` above) so the compiler can

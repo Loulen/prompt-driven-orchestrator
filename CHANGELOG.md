@@ -132,8 +132,9 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - New Run says why a repository cannot be used once, under the field: a path that does not
   exist, a folder that is not a repository, a repository without a commit, or one outside the
   Projet. Provisioning is previewed only for a repository the field has accepted.
-- Settings › Projects: a repository row's hover actions take no room while hidden, and under a
-  narrow width the Projects list goes above the selected Projet. A path cut in its middle shows
+- Settings: the hover actions of a repository or staging profile row take no room while hidden
+  (they always show without a hovering pointer), and under a narrow width the Projects list goes
+  above the selected Projet. A path cut in its middle shows
   an ellipsis in its folders.
 
 ### Design system and Workbench

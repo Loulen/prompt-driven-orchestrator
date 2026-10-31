@@ -277,7 +277,7 @@
      only then is the last segment cut, with its own ellipsis. */
   .ln-path__head {
     flex: 0 1 auto;
-    min-width: 3ch;
+    min-width: var(--ln-path-head, 3ch);
     overflow: hidden;
     color: var(--text-2);
     text-overflow: ellipsis;
@@ -290,7 +290,7 @@
     text-overflow: ellipsis;
   }
   .ln-path__head + .ln-path__tail {
-    max-width: calc(100% - 3ch);
+    max-width: calc(100% - var(--ln-path-head, 3ch));
   }
 
   /* ---------------------------------------------------------------- the repository field */

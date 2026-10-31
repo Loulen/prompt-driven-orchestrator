@@ -156,7 +156,8 @@ describe("useRepoValidation — handing over to the branch loader", () => {
     act(() => result.current.handleRepoChange(REPO));
     await settle();
 
-    expect(result.current.repoValid).toBe(true);
+    // The verdict lands with the branches: a repository without any is refused.
+    expect(result.current.repoValid).toBeNull();
     expect(result.current.repoValidating).toBe(true);
 
     await act(async () => {
@@ -165,6 +166,7 @@ describe("useRepoValidation — handing over to the branch loader", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(result.current.repoValidating).toBe(false);
+    expect(result.current.repoValid).toBe(true);
   });
 
   it("rejects an invalid repo with the daemon's reason and drops the branches", async () => {

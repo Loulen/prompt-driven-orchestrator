@@ -1,3 +1,5 @@
+import type { CSSProperties } from "react";
+
 /**
  * A path on one line, cut in its middle: the folders shrink with an ellipsis,
  * the last segment stays whole while it fits
@@ -19,8 +21,16 @@ export default function MidPath({
   const cut = trimmed.lastIndexOf("/");
   const head = cut > 0 ? trimmed.slice(0, cut) : "";
   const tail = cut > 0 ? trimmed.slice(cut) : trimmed || path;
+  // The folders shrink down to two characters and their ellipsis, never wider
+  // than they are (`~` stays `~`).
+  const style = head ? ({ "--ln-path-head": `${Math.min(head.length, 3)}ch` } as CSSProperties) : undefined;
   return (
-    <span className={className ? `ln-path ${className}` : "ln-path"} title={title ? path : undefined} data-testid={testId}>
+    <span
+      className={className ? `ln-path ${className}` : "ln-path"}
+      style={style}
+      title={title ? path : undefined}
+      data-testid={testId}
+    >
       {head && (
         <span className="ln-path__head" data-testid={testId ? `${testId}-head` : undefined}>
           {head}

@@ -825,17 +825,25 @@
   .set-rrow:focus-within .set-hover {
     opacity: 1;
   }
-  /* Hidden, a row's actions take no width from the repository's name; they
-     stay reachable by Tab, and show once the row holds the focus. */
-  .set-rrow:not(:hover, :focus-within) .set-hover {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    overflow: hidden;
-    border: 0;
-    clip-path: inset(50%);
-    white-space: nowrap;
+  /* Hidden, a row's actions take no width from its name; they stay reachable
+     by Tab, and show once the row holds the focus. Without a pointer that
+     hovers, they always show. */
+  @media (hover: hover) {
+    .set-rrow:not(:hover, :focus-within) .set-hover {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      overflow: hidden;
+      border: 0;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+  }
+  @media (hover: none) {
+    .set-hover {
+      opacity: 1;
+    }
   }
   .set-cform {
     display: flex;

@@ -749,8 +749,10 @@ describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
     await vi.advanceTimersByTimeAsync(500);
     await waitFor(() => expect(screen.getByTestId("repo-error")).toHaveTextContent("/code/gone does not exist"));
     await vi.advanceTimersByTimeAsync(500);
-    expect(previewProvisioning).not.toHaveBeenCalledWith("/code/gone", expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything());
+    expect(vi.mocked(previewProvisioning).mock.calls.map((call) => call[0])).not.toContain("/code/gone");
     expect(screen.getByTestId("provisioning-run")).not.toHaveTextContent("/code/gone");
+    // The disabled Run gives the field's reason, not the Projet's.
+    expect(screen.getByTestId("launch-button")).toHaveAccessibleDescription("/code/gone does not exist or is not a directory");
   });
 
   it("shows an edited Trigger's Projet repository once, among the Projet's, and keeps its Projet", async () => {

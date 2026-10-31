@@ -678,7 +678,7 @@
     display: flex;
     flex: 0 1 220px;
     flex-direction: column;
-    min-width: 140px;
+    min-width: 180px;
     padding: 2px 0;
     border: 1px solid var(--line);
     border-radius: var(--radius-ui);
@@ -761,6 +761,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    container: set-repos / inline-size;
   }
   .set-rrow {
     display: flex;
@@ -785,12 +786,20 @@
   .set-rrow__path {
     flex: 1 1 auto;
   }
+  /* The remote gives way first, down to a few characters: the repository's
+     name stays whole. */
   .set-rrow__remote {
-    flex: 0 1 34%;
-    min-width: 0;
+    flex: 0 1000 34%;
+    min-width: 14ch;
     color: var(--text-3);
     font-size: var(--fs-xs);
     text-align: right;
+  }
+  /* Too narrow for both: the remote goes to the row's tooltip. */
+  @container set-repos (max-width: 560px) {
+    .set-rrow__remote {
+      display: none;
+    }
   }
   .set-hover {
     opacity: 0;

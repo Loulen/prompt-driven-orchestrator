@@ -224,9 +224,10 @@ export function useNewRunSubmit(
     // #465: every non-empty secondary must have resolved before Launch.
     secondariesReady,
   }) && primaryInProject;
-  // ADR-0087: a Run launched in a Projet works in one of its repositories.
+  // ADR-0087: a Run launched in a Projet works in one of its repositories. An
+  // empty field names no repository: it is not outside the Projet.
   const outsideProjectReason =
-    launchProject && !primaryInProject
+    launchProject && !primaryInProject && targetRepo.trim() !== ""
       ? `${targetRepo.trim()} is not a repository of ${launchProject.name}.`
       : undefined;
   // Notion #7: the provisioning reason is the one the disabled Launch spells out.

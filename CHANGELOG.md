@@ -68,6 +68,15 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - The import map resolves `yjs` to the front's own copy (`/shared/yjs.js`): a bundle that lists
   `yjs` as external loads no second copy.
 
+### Launch forms and Triggers
+
+- `pipeline_validation_changed` now also goes out on `/ws` when a pipeline is created,
+  duplicated, imported or deleted (a new pipeline is born a test pipeline): a client that keeps
+  the pipeline list reads it again, and an open New Run offers the new pipeline at once.
+- Triggers name the time zone their cron is read in (UTC): beside the expression in New
+  Trigger, in the schedule (« daily at 03:00 UTC ») and in the next fire of the Trigger's
+  detail, whose tooltip gives the same instant in the browser's time zone.
+
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 
 ### Briques du détail de session, emplacement `session/detail`, compteur de Page (CORE-125)

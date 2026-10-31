@@ -301,6 +301,21 @@ describe("NewRunModal — pipeline picker", () => {
     );
   });
 
+  it("lists a pipeline created since the last opening", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([makePipeline({ id: "review", name: "Review Pipeline" })]);
+    const { rerender } = render(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await enterValidRepo();
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "nightly", name: "Nightly" }),
+      makePipeline({ id: "review", name: "Review Pipeline" }),
+    ]);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await vi.advanceTimersByTimeAsync(500);
+    await openPipelineMenu();
+    expect(pipelineOptions().map((o) => o.id)).toEqual(["nightly", "review"]);
+  });
+
   it("does not group legacy-scoped responses", async () => {
     vi.mocked(fetchPipelines).mockResolvedValue([
       makePipeline({ id: "lib-pipe", name: "Library Pipeline", scope: legacyScope("library") }),
@@ -694,6 +709,35 @@ describe("NewRunModal — the Projet a Run is launched in (ADR-0087)", () => {
     fireEvent.click(screen.getByTestId("launch-button"));
     await waitFor(() => expect(createRun).toHaveBeenCalled());
     expect(vi.mocked(createRun).mock.calls[0][0].project_id).toBeUndefined();
+  });
+
+  it("says a repository outside the Projet once, without the verdict of a valid repository", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    await enterValidRepo("/code/elsewhere");
+    expect(screen.getByTestId("primary-outside-project")).toBeInTheDocument();
+    expect(screen.queryByTestId("repo-valid")).toBeNull();
+    expect(screen.queryByTestId("repo-error")).toBeNull();
+    expect(screen.getByLabelText(/target repository/i)).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("names no repository outside the Projet while the field is empty", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    fireEvent.change(screen.getByLabelText(/target repository/i), { target: { value: "" } });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(screen.queryByTestId("primary-outside-project")).toBeNull();
+    expect(screen.getByTestId("launch-button")).toBeDisabled();
+  });
+
+  it("says only the repository's own error when it is neither a repository nor in the Projet", async () => {
+    renderModal();
+    await settleRepo("/code/shop-web");
+    vi.mocked(validateRepo).mockResolvedValueOnce({ valid: false, error: "/code/empty is not a git repository" });
+    fireEvent.change(screen.getByLabelText(/target repository/i), { target: { value: "/code/empty" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(screen.getByTestId("repo-error")).toHaveTextContent("/code/empty is not a git repository"));
+    expect(screen.queryByTestId("primary-outside-project")).toBeNull();
   });
 
   it("shows an edited Trigger's Projet repository once, among the Projet's, and keeps its Projet", async () => {
@@ -1946,6 +1990,21 @@ describe("NewRunModal — Trigger mode (#160)", () => {
     expect(screen.getByTestId("preset-daily")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("preset-custom"));
     expect(screen.getByTestId("raw-cron-input")).toBeInTheDocument();
+  });
+
+  it("says the time zone the schedule is read in, beside the expression", async () => {
+    await selectPipelineAndRepo();
+    fireEvent.click(screen.getByTestId("mode-trigger"));
+    fireEvent.click(screen.getByTestId("preset-daily"));
+    fireEvent.change(screen.getByTestId("daily-hour"), { target: { value: "3" } });
+    expect(screen.getByTestId("resolved-cron")).toHaveTextContent("0 3 * * *");
+    expect(screen.getByTestId("cron-time-zone")).toHaveTextContent("UTC");
+    fireEvent.click(screen.getByTestId("preset-custom"));
+    fireEvent.change(screen.getByTestId("raw-cron-input"), { target: { value: "17 3 * * 1" } });
+    expect(screen.getByTestId("cron-time-zone")).toHaveTextContent("UTC");
+    // A schedule on minutes alone fires alike in every time zone.
+    fireEvent.click(screen.getByTestId("preset-every_15_min"));
+    expect(screen.queryByTestId("cron-time-zone")).toBeNull();
   });
 
   it("relabels the prompt field as an optional input template in Trigger mode", async () => {

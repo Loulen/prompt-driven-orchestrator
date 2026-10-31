@@ -177,7 +177,6 @@ export function footerStatus(c: ReviewComment): FooterStatus {
   return { kind: "awaiting" };
 }
 
-/** `2 drafts` / `1 draft` — pluralised counter. */
-export function plural(n: number, word: string): string {
-  return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
+import { plural } from "../../shared/lib/plural";
+
+export { plural };

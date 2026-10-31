@@ -69,6 +69,7 @@ export function useDaemonEvents({
       refreshTriggersPaused();
       refreshProjects();
       void loadPipelines();
+      announceLaunchOfferChanged();
     });
     // CORE-42: the gestures shown follow the rights and the Projets.
     const gestures = trailingWindow(refreshGestureRights);
@@ -84,15 +85,19 @@ export function useDaemonEvents({
         gestures();
         return;
       }
-      if (msg.type === "pipeline_changed" && msg.pipeline_id) {
-        reloadPipeline(msg.pipeline_id);
+      // A Pipeline file written (a save, a rename, an edit outside PDO): the
+      // list and an open launch form read it again.
+      if (msg.type === "pipeline_changed") {
+        if (msg.pipeline_id) reloadPipeline(msg.pipeline_id);
         loadPipelines();
+        announceLaunchOfferChanged();
         return;
       }
       // ADR-0088: a Save numbered a new version: the list (and the Save, launch
       // and history windows that read it) learn it, no editor reloads.
       if (msg.type === "pipeline_version_changed") {
         loadPipelines();
+        announceLaunchOfferChanged();
         return;
       }
       // ADR-0088: the list shows who has a shared draft open, live.

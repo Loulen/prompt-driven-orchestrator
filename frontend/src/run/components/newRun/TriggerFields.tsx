@@ -1,6 +1,6 @@
 import { FlaskConical } from "lucide-react";
 import GuardTestResult from "../../../trigger/components/GuardTestResult";
-import { CRON_PRESETS } from "../../../trigger/model/cronPresets";
+import { CRON_PRESETS, CRON_TIME_ZONE, cronDependsOnZone } from "../../../trigger/model/cronPresets";
 import { Button, TextInput } from "../../../shared/ui/kit";
 import FormRow from "../../../shared/ui/FormRow";
 import { AutoNameBox } from "./RunNameSection";
@@ -92,6 +92,11 @@ export default function TriggerFields({ form }: { form: NewRunForm }) {
         ) : (
           <span className="ln-mono ln-faint ln-cron" data-testid="resolved-cron">
             {resolvedCron || "–"}
+          </span>
+        )}
+        {cronDependsOnZone(resolvedCron) && (
+          <span className="ln-mono ln-faint" data-testid="cron-time-zone">
+            {CRON_TIME_ZONE}
           </span>
         )}
       </FormRow>

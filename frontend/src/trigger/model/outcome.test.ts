@@ -31,6 +31,11 @@ describe("trigger outcome model", () => {
     );
   });
 
+  it("says the next fire in the time zone its cron is read in", () => {
+    expect(formatFireTs("2026-11-01T03:00:00.000Z")).toMatch(/03:00 UTC$/);
+    expect(formatFireTs("2026-11-01T03:00:00.000Z", "local")).not.toMatch(/UTC$/);
+  });
+
   it("has no instant for an absent timestamp", () => {
     expect(formatFireTs(undefined)).toBeNull();
     expect(formatFireTs("2026-09-27T09:00:00.000Z")).not.toBeNull();

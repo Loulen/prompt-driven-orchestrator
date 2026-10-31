@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { pathsOverlap, scopePrecedes } from "../model/provisioning";
 import type { ProvisioningPlan } from "../../shared/generated/ProvisioningPlan";
 import { LEVEL_LABELS } from "../model/provisioningCopy";
+import { plural } from "../../shared/lib/plural";
 
 type PlanRule = ProvisioningPlan["rules"][number];
 
@@ -101,9 +102,9 @@ export default function ProvisioningResolvedPlan({
           </details>
         );
       })}
-      <div className="mt-1 text-text-3">
-        {plan?.entries.filter((entry) => !entry.provided_by_git).length ?? 0} paths added ·{" "}
-        {plan?.entries.filter((entry) => entry.provided_by_git).length ?? 0} Git paths skipped
+      <div className="mt-1 text-text-3" data-testid="provisioning-plan-count">
+        {plural(plan?.entries.filter((entry) => !entry.provided_by_git).length ?? 0, "path")} added ·{" "}
+        {plural(plan?.entries.filter((entry) => entry.provided_by_git).length ?? 0, "Git path")} skipped
       </div>
     </div>
   );

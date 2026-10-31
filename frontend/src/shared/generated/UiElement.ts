@@ -16,7 +16,11 @@ export type UiElement = { "type": "page", component: string,
  * `/ext/<id>/`), drawn in the colour of the text around it. Without
  * one, an icon location shows the label's first letter, boxed.
  */
-icon?: string, } | { "type": "action", command: string, } | { "type": "tab", component: string, } | { "type": "section", component: string, } | { "type": "decoration", component: string, } | { "type": "list_filter", component: string, } | { "type": "completion", 
+icon?: string, } | { "type": "action", command: string, } | { "type": "panel", component: string, 
+/**
+ * An SVG the extension serves, drawn as a [`UiElement::Page`]'s.
+ */
+icon?: string, } | { "type": "tab", component: string, } | { "type": "section", component: string, } | { "type": "decoration", component: string, } | { "type": "list_filter", component: string, } | { "type": "completion", 
 /**
  * The one character that opens the list, typed at the start of the
  * text or after a space.

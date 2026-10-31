@@ -4,7 +4,7 @@ import { dismissTransientOverlays } from "../../lib/overlays";
 import FullWindowShell from "../ui/FullWindowShell";
 import { toast } from "../ui/toast";
 import { elementsAt, useLocationContext, type ContributionElement } from "./catalogue";
-import type { PageContext, PageProps, PageShell } from "./contract";
+import type { PageContext, PageIcon, PageProps, PageShell } from "./contract";
 import {
   closePage,
   formatDeepLink,
@@ -89,6 +89,30 @@ export function Breadcrumb({ items }: { items: string[] }) {
   );
 }
 
+/** The title and the icon a page set for one of its routes (`shell.setTitle`). */
+interface RouteHeader {
+  path: string;
+  title: string;
+  icon?: PageIcon;
+}
+
+/** An icon of the header: an SVG the extension serves, or a component. */
+function HeaderIcon({ icon, label }: { icon: PageIcon | null | undefined; label: string }) {
+  if (icon && typeof icon !== "string") {
+    const Icon = icon;
+    return (
+      <span className="text-primary" data-testid="extension-page-icon">
+        <Icon size={14} strokeWidth={1.5} aria-hidden />
+      </span>
+    );
+  }
+  return (
+    <span className="text-primary" data-testid="extension-page-icon">
+      <ExtensionIcon url={icon} label={label} />
+    </span>
+  );
+}
+
 function ExtensionPage({
   open,
   active,
@@ -100,15 +124,28 @@ function ExtensionPage({
 }) {
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   const [actions, setActions] = useState<ReactNode>(null);
+  const [routeHeader, setRouteHeader] = useState<RouteHeader | null>(null);
   const shell = useMemo<PageShell>(
-    () => ({ setBreadcrumb, setActions, close: closePage }),
+    () => ({
+      setBreadcrumb,
+      setActions,
+      // Kept for the path on screen when the page sets it: another route
+      // shows the page's own until it sets its own.
+      setTitle: (title, icon) => {
+        const path = usePages.getState().open?.path ?? "";
+        setRouteHeader(title === null ? null : { path, title, icon });
+      },
+      close: closePage,
+    }),
     [],
   );
   const extra = useMemo(() => ({ path: open.path }), [open.path]);
   const context = useLocationContext<PageContext>(open.location, extra);
   const { Component, extension, contribution } = active;
   if (!Component) return null;
-  const label = contribution.label;
+  const header = routeHeader?.path === open.path ? routeHeader : null;
+  const label = header?.title ?? contribution.label;
+  const declaredIcon = contribution.type === "page" ? contribution.icon : null;
   const body = (
     <ExtensionBoundary extensionId={extension.id}>
       <Component
@@ -133,6 +170,7 @@ function ExtensionPage({
     return (
       <FullWindowShell
         {...common}
+        titleIcon={header?.icon ? <HeaderIcon icon={header.icon} label={label} /> : undefined}
         rail={pages.map((p) => ({ id: p.key, label: p.contribution.label }))}
         activeRail={active.key}
         onRailChange={(key) => {
@@ -148,15 +186,10 @@ function ExtensionPage({
     );
   }
   // A `topbar/end` page brings its own navigation: no rail.
-  const icon = contribution.type === "page" ? contribution.icon : null;
   return (
     <FullWindowShell
       {...common}
-      titleIcon={
-        <span className="text-primary">
-          <ExtensionIcon url={icon} label={label} />
-        </span>
-      }
+      titleIcon={<HeaderIcon icon={header?.icon ?? declaredIcon} label={label} />}
       mainClassName="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
     >
       {body}

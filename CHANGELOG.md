@@ -65,6 +65,23 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
 - The ages of the Versions list follow the clock; an output's or input's name truncated in the
   inspector is whole in its tooltip.
 
+### Top bar, full-window pages and shared module seams
+
+- A `topbar/end` contribution may be a **panel** (`UiContribution::panel`, `type: "panel"`):
+  its icon opens the exported component in a panel anchored under it (`PanelProps`, with
+  `close()`). Escape, a click outside and the icon close it. A panel and an action of
+  `topbar/end` may carry a counter on their icon, like a page (`with_counter`): absent at 0,
+  `99+` past 99.
+- A click in a toast no longer closes an open anchored panel (a panel of `topbar/end`, a
+  `Popover`, a `Menu`, a `Select`): « Undo » works from inside it.
+- A full-window page sets the title and the icon of its header for the route on screen:
+  `shell.setTitle(title, icon?)`. A route that sets none, and the page once reopened, show
+  the page's label and icon.
+- `Banner` takes an `icon`, drawn in the tone's colour instead of the status icon (a lock on a
+  read-only state).
+- The import map resolves `yjs` to the front's own copy (`/shared/yjs.js`): a bundle that lists
+  `yjs` as external loads no second copy.
+
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 
 ### Briques du détail de session, emplacement `session/detail`, compteur de Page (CORE-125)

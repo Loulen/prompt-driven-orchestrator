@@ -62,9 +62,9 @@ beforeEach(() => {
 describe("AgentProfileModal — refresh models", () => {
   it("says how many models the harness offers and when they were probed", async () => {
     renderModal();
-    expect(await screen.findByTestId("agent-profile-models-probed")).toHaveTextContent(
-      "2 models · probed 3 days ago",
-    );
+    // The line shows before the catalogue answers (« not probed »): wait for its read.
+    const probed = await screen.findByTestId("agent-profile-models-probed");
+    await waitFor(() => expect(probed).toHaveTextContent("2 models · probed 3 days ago"));
   });
 
   it("↻ probes the harness again, spins meanwhile, then lists the new models", async () => {

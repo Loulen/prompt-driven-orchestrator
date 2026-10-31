@@ -8,6 +8,7 @@
 mod accepts;
 mod command;
 mod contribution;
+mod counter;
 mod hosted;
 mod location;
 mod slot;
@@ -16,7 +17,8 @@ mod when;
 use serde::Serialize;
 
 pub use command::{CommandOperation, UiCommand};
-pub use contribution::{CompletionRender, PageCounter, UiContribution, UiElement, UiElementKind};
+pub use contribution::{CompletionRender, UiContribution, UiElement, UiElementKind};
+pub use counter::PageCounter;
 pub use hosted::{ContextKey, HostedLocation};
 pub use location::UiLocation;
 pub use slot::{Slot, UiSlot};

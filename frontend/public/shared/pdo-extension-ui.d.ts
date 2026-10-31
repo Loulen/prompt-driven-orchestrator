@@ -36,7 +36,7 @@ export interface HostedElement {
   extension: ExtensionRef;
   id: string;
   label: string;
-  type: "page" | "action" | "tab" | "section" | "decoration" | "list_filter" | "completion" | "search";
+  type: "page" | "action" | "panel" | "tab" | "section" | "decoration" | "list_filter" | "completion" | "search";
   context: HostedContext;
 }
 
@@ -423,8 +423,16 @@ export interface KeyValueRow {
 /** A read-only property grid. */
 export function KeyValue(props: { rows: KeyValueRow[] }): ReactNode;
 
-/** A tinted line at the top of a pane: the status icon, a short fact, the detail, actions. */
-export function Banner(props: { tone: StatusTone; title: string; text?: string; actions?: ReactNode }): ReactNode;
+/** A tinted line at the top of a pane: the status icon (or `icon`, in the
+ *  tone's colour, since 0.20: a lock on a read-only state), a short fact, the
+ *  detail, actions. */
+export function Banner(props: {
+  tone: StatusTone;
+  title: string;
+  text?: string;
+  actions?: ReactNode;
+  icon?: Icon;
+}): ReactNode;
 
 /** An icon, 2 to 4 words, one action. */
 export function EmptyState(props: {

@@ -44,7 +44,8 @@ impl RunStatusLine {
     /// terminal.
     pub fn of(run: &RunState, children_active: usize) -> Self {
         let nodes = working_nodes(run);
-        let count = |pred: fn(&NodeStatus) -> bool| nodes.iter().filter(|n| pred(&n.status)).count();
+        let count =
+            |pred: fn(&NodeStatus) -> bool| nodes.iter().filter(|n| pred(&n.status)).count();
         let cost = run
             .cost
             .as_ref()
@@ -203,8 +204,8 @@ mod tests {
     fn run(status: &str, defs: &[(&str, Option<&str>)], cost: Option<CostStat>) -> RunState {
         let node_defs: Vec<_> = defs
             .iter()
-            .map(|(id, _)| serde_json::json!({ "id": id, "node_type": "agent" }))
-            .chain([serde_json::json!({ "id": "loop", "node_type": "loop" })])
+            .map(|(id, _)| def(id, "agent"))
+            .chain([def("loop", "loop")])
             .collect();
         let nodes: serde_json::Map<_, _> = defs
             .iter()
@@ -227,6 +228,13 @@ mod tests {
         .expect("a RunState");
         run.cost = cost;
         run
+    }
+
+    fn def(id: &str, node_type: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "node_type": node_type, "view_x": null, "view_y": null,
+            "inputs": [], "outputs": []
+        })
     }
 
     fn cost(usd: f64, partial: bool) -> CostStat {

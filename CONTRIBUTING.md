@@ -18,15 +18,44 @@ The git flow lives in `.agents/skills/git-flow/SKILL.md`. In short: branch from 
 (`feature/<issue>-<slug>` or `fix/<issue>-<slug>`), open a PR against `main`, and let CI
 run. A maintainer reviews and merges. Nobody merges their own PR.
 
+While you work, run the fast gate: it answers in under a minute, even on a fresh checkout.
+
+```bash
+make fast         # cargo fmt --check, then the structural checks of crates/tidy
+```
+
 Before pushing:
 
 ```bash
 make check        # cargo check, frontend typecheck, harness support table
-make test         # daemon and frontend tests
+make test         # daemon and frontend tests; lists every failure in one pass
 ```
 
 Commit messages follow Conventional Commits with a French or English body, as the rest of
 the history does. Reference the issue in the title.
+
+### Versions, CHANGELOG and ADRs
+
+A contribution bumps **no version**: not the workspace, not `pdo-extension-api`, not the front's
+shared module, not `Cargo.lock`. Write what it changes under `## Unreleased`, the first entry of
+[CHANGELOG.md](CHANGELOG.md), in English and without ticket ids; "What's new" hides that entry. A
+new ADR is born `docs/adr/draft-<slug>.md`, without a number, and is cited `ADR draft-<slug>`.
+`.gitattributes` merges `CHANGELOG.md` with git's `union` driver: two branches adding a bullet at
+the same place keep both lines instead of conflicting. Read the merged entry once in a while: a
+line both sides edited comes out twice.
+
+The version is set when a story merges into `main`, by one command
+([docs/agents/git-flow.md](docs/agents/git-flow.md) § *integration/\* -> main*):
+
+```bash
+make e2e                     # the frontend's Playwright suite (installs Chromium if missing)
+make release-bump DRY_RUN=1  # the proposed semver level and the plan, nothing written
+make release-bump            # LEVEL=patch|minor|major forces the level
+```
+
+`make release-bump` proposes the level from the conventional commits since the last tag (`feat` a
+minor, `fix` a patch, `!` a major), bumps the four versions and `Cargo.lock`, turns `## Unreleased`
+into the version's entry and numbers the draft ADRs, rewriting their citations.
 
 ## Development
 
@@ -37,6 +66,22 @@ the history does. Reference the issue in the title.
 | [Rust](https://rustup.rs/) | Stable |
 | [Node.js](https://nodejs.org/) | 22 or newer |
 | [pnpm](https://pnpm.io/) | Use the version declared by the project |
+| [cargo-nextest](https://nexte.st/) | Any recent version (`make test`) |
+| [sccache](https://github.com/mozilla/sccache) | Optional, recommended |
+
+#### sccache
+
+Every PDO worktree starts with an empty `target/`, so each one compiles the dependencies again.
+sccache keeps the compiled crates in a cache outside `target/` and hands them to the next
+worktree. Install it once:
+
+```bash
+cargo install sccache --locked
+```
+
+The Makefile then sets `RUSTC_WRAPPER=sccache` for every `make` target (unless you set
+`RUSTC_WRAPPER` yourself). Without sccache, the build works the same and `make` prints a warning
+saying how to install it. `sccache --show-stats` shows the cache hits.
 
 ### Where the code lives
 
@@ -105,6 +150,7 @@ Every command is documented in [docs/reference/cli.md](docs/reference/cli.md).
 
 | Purpose | Command |
 | --- | --- |
+| Fast gate: formatting and structural checks | `make fast` |
 | Check Rust | `cargo check --workspace --all-targets` |
 | Regenerate the TS types of the DTOs | `make types` |
 | Test Rust | `cargo test --workspace` |
@@ -114,7 +160,8 @@ Every command is documented in [docs/reference/cli.md](docs/reference/cli.md).
 | Test frontend | `cd frontend && pnpm run test` |
 | Lint frontend | `cd frontend && pnpm run lint` |
 | Build frontend | `cd frontend && pnpm run build` |
-| Test the README media tooling | `node --test 'scripts/readme-media/test/*.test.mjs'` |
+| Test the scripts (README media, release) | `node --test 'scripts/*/test/*.test.mjs'` |
+| Run the frontend's E2E | `make e2e` |
 
 ### TypeScript types of the daemon's DTOs
 

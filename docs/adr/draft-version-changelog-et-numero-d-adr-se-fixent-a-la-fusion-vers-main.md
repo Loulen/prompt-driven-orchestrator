@@ -19,6 +19,9 @@ l'API (0.17 -> 0.19) et un ADR (0091 -> 0092), suivie de 24 min de re-vérificat
    conventionnels depuis le dernier tag (`feat` mineur, `fix` patch, `!` majeur), bumpe toutes les
    versions, renomme `Unreleased` en titre de version et numérote les ADR en brouillon. L'agent
    qui fusionne confirme le niveau proposé. Un bump poussé sur `main` reste une release.
+   L'API d'extension prend le niveau des seuls commits qui la touchent (un majeur y compte pour
+   un mineur tant qu'elle est en 0.x), et un patch si aucun ne la touche, qu'une extension qui
+   demande `^0.N` accepte encore.
 3. Un ADR naît en brouillon, `docs/adr/draft-<slug>.md`, et se cite `ADR draft-<slug>`. La même
    commande lui donne le numéro suivant et réécrit ses citations.
 

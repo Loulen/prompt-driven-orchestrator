@@ -12,7 +12,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    tidy::workspace_root()
 }
 
 /// The checked documents, relative to the repository root.

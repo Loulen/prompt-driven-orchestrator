@@ -5,7 +5,7 @@
 //! generated from the Rust DTOs (`frontend/src/shared/generated/`).
 //!
 //! The files that were already too big when the rule landed are listed, with
-//! their size, in `file_size_baseline.txt`. That list may only shrink: a file
+//! their size, in `crates/tidy/file_size_baseline.txt`. That list may only shrink: a file
 //! outside it must stay within the limit, a file in it must not grow, and an
 //! entry whose file is gone or back within the limit must be removed.
 
@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const MAX_LINES: usize = 400;
-const BASELINE: &str = "tests/file_size_baseline.txt";
+const BASELINE: &str = "crates/tidy/file_size_baseline.txt";
 
 /// Why the size check failed for one file.
 #[derive(Debug, PartialEq, Eq)]
@@ -106,13 +106,6 @@ pub fn rust_production_lines(source: &str) -> usize {
     count
 }
 
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap()
-}
-
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -161,7 +154,7 @@ fn production_sizes(root: &Path) -> BTreeMap<String, usize> {
 }
 
 fn read_baseline(root: &Path) -> BTreeMap<String, usize> {
-    let path = root.join("crates/pdo").join(BASELINE);
+    let path = root.join(BASELINE);
     std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
         .lines()
@@ -178,7 +171,7 @@ fn read_baseline(root: &Path) -> BTreeMap<String, usize> {
 
 #[test]
 fn production_files_stay_within_400_lines() {
-    let root = workspace_root();
+    let root = tidy::workspace_root();
     let sizes = production_sizes(&root);
     assert!(
         sizes.contains_key("crates/pdo/src/lib.rs") && sizes.contains_key("frontend/src/main.tsx"),

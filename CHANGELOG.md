@@ -58,6 +58,22 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   its live nodes as stopped; a Retry all keeps the original's name; a row's accessible name is its
   name and status.
 
+### Command field
+
+- **Search results with a fixed status shape**: a Source de recherche result's `status` takes an
+  optional `shape` (`todo`, `doing`, `review`, `done`), drawn in the tone's colour and never
+  spinning, so an entity that is no Run no longer spins like a running Run. `StatusIcon` of
+  `@pdo/extension-ui` takes the same `shape`.
+- **Counter on a global Action**: `UiContribution::with_counter` now also applies to an Action of
+  `palette`; its row shows the `PageCounter` the path answers, nothing at 0.
+- **Group rank**: `UiContribution::with_rank(n)` on a `palette` contribution orders the extensions'
+  groups by rank, lowest first, then those without one, each in registration order.
+- A long result title ends in an ellipsis and its facts stay visible.
+- **Mark complete** is offered in the command field exactly where the node inspector offers it:
+  on a running, awaiting or failed node of a Run that is neither paused nor archived. It is no
+  longer offered on an interrupted or stale node, nor in a paused Run, which the daemon refused
+  to complete.
+
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 
 ### Briques du détail de session, emplacement `session/detail`, compteur de Page (CORE-125)

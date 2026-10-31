@@ -1253,13 +1253,22 @@ describe("NodeDetailPanel", () => {
       expect(screen.getByTestId("stale-banner")).toHaveTextContent("Idle 2m+ — outputs incomplete");
     });
 
-    it("stale node shows Mark complete button", () => {
-      render(
-        <>
-          <NodeDetailPanel node={makeNode({ status: "stale" })} runId="run-1" />
-        </>,
-      );
-      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+    it("offers Mark complete only where the daemon completes: never on a stale or interrupted node", () => {
+      // The completion guard takes a running, awaiting or failed iteration; the
+      // command field offers the same (paletteItems.test.ts).
+      for (const status of ["running", "failed"] as const) {
+        const { unmount } = render(<NodeDetailPanel node={makeNode({ status })} runId="run-1" />);
+        expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+        unmount();
+      }
+      for (const status of ["stale", "interrupted"] as const) {
+        const { unmount } = render(<NodeDetailPanel node={makeNode({ status })} runId="run-1" />);
+        expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
+        unmount();
+      }
+      // A paused Run is resumed before anything completes in it.
+      render(<NodeDetailPanel node={makeNode({ status: "failed" })} runId="run-1" runStatus="paused" />);
+      expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
     });
 
     it("stopped node does not show Mark complete button", () => {
@@ -1363,13 +1372,14 @@ describe("NodeDetailPanel", () => {
       expect(retryNodeMock).toHaveBeenCalledWith("run-1", "test-node");
     });
 
-    it("keeps Mark complete reachable (accept the artifacts as they are)", () => {
+    it("offers no Mark complete: the daemon refuses to complete an interrupted node, Reopen re-drives it", () => {
       render(
         <>
           <NodeDetailPanel node={interrupted()} runId="run-1" />
         </>,
       );
-      expect(screen.getByTestId("mark-complete-btn")).toBeInTheDocument();
+      expect(screen.queryByTestId("mark-complete-btn")).not.toBeInTheDocument();
+      expect(screen.getByTestId("interrupted-reopen-btn")).toBeInTheDocument();
     });
 
     it("opens minimized — the dead session is never attached", () => {

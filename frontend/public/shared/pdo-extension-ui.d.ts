@@ -152,8 +152,9 @@ export interface SearchResult {
   avatar?: RowAvatar | null;
   /** An SVG the extension serves, the row's icon when it has no status. */
   icon?: string | null;
-  /** Drawn as the core draws its own statuses: the tone's icon, the label as tooltip. */
-  status?: { tone: StatusTone; label: string } | null;
+  /** Drawn as the core draws its own statuses: the tone's icon, the label as tooltip.
+   *  With a `shape` (since 0.20), that fixed shape in the tone's colour, never spinning. */
+  status?: { tone: StatusTone; label: string; shape?: StatusShape | null } | null;
   /** Where choosing it goes: `#/ext/<extension>/<location>/<path>` or `#/runs/<id>`. */
   link: string;
   /** The ranges `[start, end)` of `title` the query matched. */
@@ -181,6 +182,8 @@ export type Icon = ComponentType<{ size?: number | string; strokeWidth?: number 
 export type StatusTone = "running" | "awaiting" | "done" | "blocked" | "failed" | "skipped";
 /** A status tone, or none. */
 export type Tone = "neutral" | StatusTone;
+/** The fixed shape of a status that is no Run's (since 0.20): to do, in progress, in review, done. */
+export type StatusShape = "todo" | "doing" | "review" | "done";
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   icon?: Icon;
@@ -466,7 +469,7 @@ export function StatusIcon(
         kind: "node";
         status: "pending" | "waiting" | "running" | "awaiting_user" | "completed" | "skipped" | "failed" | "stopped" | "stale" | "interrupted";
       }
-    | { kind: "tone"; status: StatusTone; label: string }
+    | { kind: "tone"; status: StatusTone; label: string; shape?: StatusShape | null }
   ),
 ): ReactNode;
 

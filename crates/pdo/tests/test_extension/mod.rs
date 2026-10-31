@@ -64,6 +64,12 @@
 //!   a Source de recherche (`searchNotes`: the notes whose title holds the
 //!   query, each a deep link to the test page); `members` (0.20), another
 //!   (`searchPeople`), whose results carry an avatar.
+//! - `palette` (0.20, `palette.rs`): its two contributions rank its group 2;
+//!   its Source answers a note per status shape (`todo`, `doing`, `review`,
+//!   `done`) and one with a 200-character title without a space; `inbox`, a
+//!   global action calling [`palette::INBOX`], shows the counter `GET
+//!   /ext/test/inbox` answers ([`palette::START`] until `PUT
+//!   /ext/test/inbox` sets it, which publishes `inbox_changed`).
 //! - **`skills`**: one skill, `test-extension-cli` (`skill/`), at the
 //!   extension's version.
 //! - **`node_env`** / **`node_preamble`** / **`trigger_suspension`** (API
@@ -107,8 +113,10 @@
 //!   naming who started it, which `identify` recognises, so a `pdo` typed in
 //!   a hosted shell acts as that Actor.
 //! - [`SecondTestExtension`] (`test2`): a second extension with a section at
-//!   `project/edit` and a tab at `session/detail`, so two extensions share a
-//!   location.
+//!   `project/edit`, a tab at `session/detail` and a global action of
+//!   `palette` ranked 1, so two extensions share a location, and its group
+//!   comes before the test extension's in the command field although it is
+//!   registered after it.
 //!
 //! Its peers of `interop.rs` run their own mutations through the [`Host`] the
 //! core hands them (amendment #34): the test extension sees their Operations
@@ -127,6 +135,7 @@ pub mod gate;
 pub mod hosted;
 pub mod interop;
 pub mod launch;
+pub mod palette;
 pub mod projets;
 mod routes;
 pub mod run_view;
@@ -384,6 +393,8 @@ pub struct Control {
     pub launch: launch::Launch,
     /// What it saw of the creations, and its Host (API 0.9).
     pub creation: creation::Creation,
+    /// The count of its `Inbox` Action (API 0.20).
+    pub inbox: palette::Inbox,
 }
 
 impl Default for Control {
@@ -401,6 +412,7 @@ impl Default for Control {
             gate: Arc::default(),
             launch: launch::Launch::default(),
             creation: creation::Creation::default(),
+            inbox: palette::Inbox::default(),
         }
     }
 }
@@ -875,19 +887,20 @@ impl Extension for TestExtension {
                 .rendering("#[a-z][a-z0-9-]*", "TagChip"),
             );
         // 0.18: the command field, a global action guarded by the Operation it
-        // makes, and a search source.
+        // makes, and a search source. 0.20: the group ranked 2, and a global
+        // action with a counter.
         let new_note = UiCommand::new(NEW_NOTE, "New note", "showContext")
             .guarded_by(ResourceKind::extension(ID, NOTE), Verb::Create);
+        let inbox = UiCommand::new(palette::INBOX, "Inbox", "showContext");
         ui = ui
-            .contribute(UiContribution::action(
-                UiLocation::Palette,
-                "new-note",
-                &new_note,
-            ))
+            .contribute(
+                UiContribution::action(UiLocation::Palette, "new-note", &new_note).with_rank(2),
+            )
             .command(new_note)
             .contribute(
                 UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes")
-                    .with_icon(format!("/ext/{ID}/icon.svg")),
+                    .with_icon(format!("/ext/{ID}/icon.svg"))
+                    .with_rank(2),
             )
             // 0.20: results carrying an avatar.
             .contribute(UiContribution::search(
@@ -895,7 +908,12 @@ impl Extension for TestExtension {
                 "members",
                 "Members",
                 "searchPeople",
-            ));
+            ))
+            .contribute(
+                UiContribution::action(UiLocation::Palette, "inbox", &inbox)
+                    .with_counter(format!("/ext/{ID}/inbox")),
+            )
+            .command(inbox);
         for &location in ACTION_LOCATIONS {
             let id = action_id(location);
             let command = UiCommand::new(
@@ -983,12 +1001,17 @@ impl Extension for TestExtension {
 /// A second test extension (`test2`): one section at `project/edit`, so the
 /// location lists two extensions' sections, in registration order, and one
 /// tab at `session/detail` (API 0.19), so the detail of a Session hébergée the
-/// test extension composes shows another extension's tab.
+/// test extension composes shows another extension's tab; one global action
+/// of `palette` ranked 1 (API 0.20), so its group comes before the test
+/// extension's (ranked 2) although it is registered after it.
 pub struct SecondTestExtension;
 
 impl SecondTestExtension {
+    /// The id of its global action's command (`palette`, 0.20).
+    pub const ACTION: &'static str = "test2.hello";
+
     /// Its bundle: one section, naming the Projet it edits; one tab, naming
-    /// the session it details.
+    /// the session it details; the function of its global action.
     const BUNDLE: &'static str = r#"import React from "react";
 export function SecondSection({ entity }) {
   return React.createElement("p", { "data-testid": "test2-section" },
@@ -999,7 +1022,12 @@ export function SessionTab({ entity, context }) {
   return React.createElement("p", { "data-testid": "test2-session-tab" },
     `Second extension · ${entity.kind} ${session?.key ?? entity.id} of ${session?.extension ?? "?"} · ${session?.state ?? "?"}`);
 }
+export function hello() {}
 "#;
+
+    fn hello() -> UiCommand {
+        UiCommand::new(Self::ACTION, "Second hello", "hello")
+    }
 }
 
 impl Extension for SecondTestExtension {
@@ -1030,7 +1058,12 @@ impl Extension for SecondTestExtension {
                     "session",
                     "Second",
                     "SessionTab",
-                )),
+                ))
+                .contribute(
+                    UiContribution::action(UiLocation::Palette, "hello", &Self::hello())
+                        .with_rank(1),
+                )
+                .command(Self::hello()),
         )
     }
 }

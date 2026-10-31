@@ -33,10 +33,20 @@ pub struct UiContribution {
     /// the Actor of the request. The core reads it when it shows the icon,
     /// and again at each event of the extension on `/ws` (its
     /// `extension_event`s, the events of its Sessions hébergées) and at each
-    /// resync. Without one, the icon shows no counter.
+    /// resync. Without one, the icon shows no counter. Since 0.20, a global
+    /// [`UiElement::Action`] of `palette` reads its count the same way, shown
+    /// at the end of its row.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub counter: Option<String>,
+    /// The rank of the extension's group in the command field (0.20; a
+    /// contribution at `palette`): the groups of the extensions follow their
+    /// rank, lowest first, then those without one, each in registration
+    /// order. An extension's group takes the lowest rank of its `palette`
+    /// contributions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub rank: Option<i32>,
 }
 
 /// The kinds of contribution: few kinds, many locations.
@@ -199,6 +209,7 @@ impl UiContribution {
             element,
             when: None,
             counter: None,
+            rank: None,
         }
     }
 
@@ -332,11 +343,27 @@ impl UiContribution {
         self
     }
 
-    /// The same page, its icon showing the counter `path` answers (0.19): see
+    /// The same page, its icon showing the counter `path` answers (0.19), or
+    /// the same global Action of `palette`, its row showing it (0.20): see
     /// [`UiContribution::counter`]. Ignored on any other element.
     pub fn with_counter(mut self, path: impl Into<String>) -> Self {
-        if matches!(self.element, UiElement::Page { .. }) {
+        let counted = match self.element {
+            UiElement::Page { .. } => true,
+            UiElement::Action { .. } => self.location == UiLocation::Palette,
+            _ => false,
+        };
+        if counted {
             self.counter = Some(path.into());
+        }
+        self
+    }
+
+    /// The same contribution of `palette`, its extension's group ranked
+    /// `rank` in the command field (0.20): see [`UiContribution::rank`].
+    /// Ignored at any other location.
+    pub fn with_rank(mut self, rank: i32) -> Self {
+        if self.location == UiLocation::Palette {
+            self.rank = Some(rank);
         }
         self
     }
@@ -392,6 +419,42 @@ mod tests {
             serde_json::from_value::<PageCounter>(json!({ "count": 2 })).unwrap(),
             PageCounter::new(2)
         );
+    }
+
+    #[test]
+    fn a_global_action_of_the_palette_may_name_its_counter() {
+        let command = UiCommand::new("test.inbox", "Inbox", "openInbox");
+        let inbox =
+            UiContribution::action(UiLocation::Palette, "inbox", &command).with_counter("/ext/t/n");
+        assert_eq!(
+            serde_json::to_value(&inbox).unwrap(),
+            json!({
+                "location": "palette", "id": "inbox", "label": "Inbox",
+                "type": "action", "command": "test.inbox", "counter": "/ext/t/n",
+            })
+        );
+        let elsewhere =
+            UiContribution::action(UiLocation::TopbarEnd, "inbox", &command).with_counter("/x");
+        assert!(serde_json::to_value(&elsewhere)
+            .unwrap()
+            .get("counter")
+            .is_none());
+        let source = UiContribution::search(UiLocation::Palette, "n", "N", "s").with_counter("/x");
+        assert!(serde_json::to_value(&source)
+            .unwrap()
+            .get("counter")
+            .is_none());
+    }
+
+    #[test]
+    fn a_palette_contribution_may_rank_its_group() {
+        let source = UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes")
+            .with_rank(-2);
+        assert_eq!(serde_json::to_value(&source).unwrap()["rank"], -2);
+        let plain = UiContribution::search(UiLocation::Palette, "notes", "Notes", "searchNotes");
+        assert!(serde_json::to_value(&plain).unwrap().get("rank").is_none());
+        let page = UiContribution::page(UiLocation::TopbarEnd, "p", "P", "P").with_rank(1);
+        assert!(serde_json::to_value(&page).unwrap().get("rank").is_none());
     }
 
     #[test]

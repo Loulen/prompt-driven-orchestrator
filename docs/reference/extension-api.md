@@ -7,7 +7,9 @@ source of truth for signatures; this page says what each part is for and what go
 Version: **0.20.0** (0.17 added the design system of `@pdo/extension-ui`, see
 [extension-ui.md](extension-ui.md#the-design-system); 0.19 the Sessions hébergées; 0.20 the
 Theme, independent of the mode, and the theme script, see
-[extension-ui.md](extension-ui.md#tokens)). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
+[extension-ui.md](extension-ui.md#tokens), and in the command field the rank of a group, the
+counter of a global Action and the fixed shape of a result's status, see
+[extension-ui.md](extension-ui.md#palette)). In 0.x a minor may break; `OLDEST_COMPATIBLE_API_VERSION` names the oldest
 version the daemon still runs (`0.1.0`: no minor has broken the wire so far).
 
 ## The hooks
@@ -543,7 +545,8 @@ above as the browser's Actor: `GET /sessions/<id>/hosted`, `POST …/terminate`,
 …/relaunch`, `PUT …/config`, `GET …/events`, `GET …/live[/<path>]`
 ([extension-ui.md](extension-ui.md#the-detail-of-a-session-hébergée)). Other extensions add tabs to
 that detail at `session/detail`; a page of `topbar/end` may show a counter on its icon
-(`UiContribution::with_counter`, answering a `PageCounter` for the Actor of the request).
+(`UiContribution::with_counter`, answering a `PageCounter` for the Actor of the request), and since
+0.20 a global Action of `palette` the same counter on its row.
 
 ## The creation of a Run (0.9)
 

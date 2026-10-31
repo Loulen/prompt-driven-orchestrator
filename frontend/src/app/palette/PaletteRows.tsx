@@ -1,14 +1,16 @@
 /**
  * The rows of the command field (`shell.paletteRow=plain`): icon, label, the
- * entity a contextual Action acts on, shortcut; an extension's result (avatar,
- * status or icon, reference and title, facts on the right); « Show all n »; and the
- * state of a source (searching, or failed with Retry). The groups' headers:
- * their icon and caps title.
+ * entity a contextual Action acts on, a global Action's counter, shortcut; an
+ * extension's result (avatar, status or icon, reference and title, facts on
+ * the right, kept whole); « Show all n »; and the state of a source
+ * (searching, or failed with Retry). The groups' headers: their icon and caps
+ * title.
  */
 
 import type { ReactNode } from "react";
 import { Check, ChevronDown, CircleAlert, LoaderCircle, RotateCcw } from "lucide-react";
 import ExtensionIcon from "../../shared/extensions/ExtensionIcon";
+import { usePageCounter } from "../../shared/extensions/pageCounter";
 import { Avatar, Kbd, StatusIcon } from "../../shared/ui/kit";
 import { rowDomId, type Lead, type PaletteItem, type ResultItem, type Row, type Section } from "./paletteModel";
 
@@ -57,7 +59,11 @@ export function LeadMark({ lead, size = 14 }: { lead: Lead | null; size?: number
     case "node":
       return <span className="sh-pal__ico"><StatusIcon kind="node" status={lead.status} size={size} /></span>;
     case "tone":
-      return <span className="sh-pal__ico"><StatusIcon kind="tone" status={lead.tone} label={lead.label} size={size} /></span>;
+      return (
+        <span className="sh-pal__ico">
+          <StatusIcon kind="tone" status={lead.tone} label={lead.label} shape={lead.shape} size={size} />
+        </span>
+      );
     case "extension":
       return (
         <span className="sh-pal__ico">
@@ -93,6 +99,22 @@ function SourceMark({ extension, icon }: { extension: { id: string; name: string
   );
 }
 
+/** A global Action's counter (API 0.20): what its extension answers, absent at 0. */
+function ActionCount({ extension, path }: { extension: string; path: string }) {
+  const counter = usePageCounter(extension, path);
+  if (!counter || counter.count <= 0) return null;
+  return (
+    <span
+      className="d-chip d-chip--mono sh-pal__count"
+      data-accent={counter.accent || undefined}
+      title={counter.detail ?? undefined}
+      data-testid="palette-count"
+    >
+      {counter.count > 99 ? "99+" : counter.count}
+    </span>
+  );
+}
+
 function ItemRow({ item, hits, ...p }: Omit<RowProps, "row"> & { item: PaletteItem; hits: number[]; id: string }) {
   const foreign = item.extension && p.section.key !== `ext:${item.extension.id}`;
   return (
@@ -116,6 +138,7 @@ function ItemRow({ item, hits, ...p }: Omit<RowProps, "row"> & { item: PaletteIt
         </span>
       )}
       <span className="sh-pal__fill" />
+      {item.counter && item.extension && <ActionCount extension={item.extension.id} path={item.counter} />}
       {item.checked ? (
         <Check size={14} strokeWidth={1.5} aria-label="Current" className="sh-pal__check" />
       ) : item.kbd ? (
@@ -129,7 +152,7 @@ function ItemRow({ item, hits, ...p }: Omit<RowProps, "row"> & { item: PaletteIt
 function resultLead(item: ResultItem): Lead | null {
   const { avatar, status, icon } = item.result;
   if (avatar) return { kind: "avatar", avatar };
-  if (status) return { kind: "tone", tone: status.tone, label: status.label };
+  if (status) return { kind: "tone", tone: status.tone, label: status.label, shape: status.shape };
   if (icon) return { kind: "extension", url: icon, label: item.result.title };
   return null;
 }

@@ -61,8 +61,8 @@ UiContributions::bundle("/ext/test/ui.js", 19)
   an action whose command is not declared, and an id already taken.
 
 **A location is a list.** Every extension's contributions add up there: extensions in
-registration order, then each extension's contributions in declaration order. No contribution is
-exclusive.
+registration order, then each extension's contributions in declaration order (the command field
+orders its groups by rank first, since 0.20: [`palette`](#palette)). No contribution is exclusive.
 
 ## Kinds of contribution
 
@@ -648,6 +648,16 @@ interface ReviewFileContext extends ReviewContext { entity: FileEntity; file: { 
   name in caps after the core's groups, its icon the command's. Under `>` (the commands only),
   the extensions' Actions join the core's commands. A Source de recherche's results join the
   same group ([Sources de recherche](#sources-de-recherche)).
+- **Order of the groups** (since 0.20): a contribution of `palette` may carry a rank
+  (`UiContribution::with_rank(n)`, on the wire `rank`, ignored at any other location). An
+  extension's group takes the lowest rank of its `palette` contributions; the groups follow their
+  rank, lowest first, then the groups without a rank, each in registration order.
+- **Counter** (since 0.20): a global Action of `palette` may declare where its counter is read
+  (`UiContribution::with_counter("/ext/<id>/inbox")`, on the wire `counter`), as a page of
+  `topbar/end` does: the same `PageCounter`, read when the palette shows the row, again at each
+  event of the extension on `/ws` and at each resync. A count above 0 shows as a mono chip at the
+  end of the row, before its shortcut, tinted in the awaiting colour when `accent` is set;
+  `detail` is its tooltip. A count of 0, or a read that fails, shows nothing.
 - **The selection's Actions**: for the item selected when the palette opens, the core also lists,
   in its « Selection » group, the actions of the location that acts on it, with that location's
   context: a Run, `run/item/menu`; a node of the Run on screen, `node/toolbar`; a Trigger,
@@ -684,7 +694,8 @@ interface SearchResult {
   meta?: string | null;          // facts at the right of the row
   avatar?: RowAvatar | null;     // a person, in place of the status or the icon (0.20)
   icon?: string | null;          // an SVG the extension serves, when there is no status
-  status?: { tone: StatusTone; label: string } | null; // the tone's icon, the label as tooltip
+  status?: { tone: StatusTone; label: string; shape?: StatusShape | null } | null;
+  // the tone's icon, or the fixed shape (0.20), in the tone's colour; the label as tooltip
   link: string;                  // #/ext/<extension>/<location>/<path> or #/runs/<id>
   highlights?: [number, number][] | null; // ranges of title the query matched
 }
@@ -707,6 +718,12 @@ type SearchFunction = (query: string, context: PaletteContext, signal: AbortSign
   query is dropped.
 - **Choosing a result** follows its `link`. The core remembers it among the recent picks shown
   on an empty query.
+- **Status** (shape since 0.20): without `shape`, the tone's icon, which spins while `running`,
+  as a Run's. With `shape` (`todo`, `doing`, `review`, `done`: an empty circle, a dotted one, an
+  ellipsis, a check), that fixed shape in the tone's colour, which never spins: the status of an
+  entity that is no Run (an item to do, in progress, in review, done).
+- **A long title** ends in an ellipsis; the facts (`meta`) stay whole at the right of the row, up
+  to 45 % of its width.
 - **Without `highlights`**, the core highlights each occurrence of the query in the title.
 - **`avatar`** (0.20): a person result shows the kit's avatar in its icon column, in place of its
   status or icon, the same as the core draws that person ([People](#people)): give its `actor` for
@@ -1070,7 +1087,7 @@ taking `size`, `strokeWidth` and `className`.
 | `Banner` | A tinted line at the top of a pane: status icon, fact, detail, actions |
 | `EmptyState` | An icon, two to four words, one action; loading and error alike |
 | `Chip` | A neutral chip, a status `tone` as its icon; removable |
-| `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name |
+| `StatusIcon` | A Run's or a node's status as the core draws it, or a `tone` with its name (and, since 0.20, a fixed `shape`: `todo`, `doing`, `review`, `done`) |
 | `Avatar` | A person: round, a tint of its hue, its initials; a robot for an agent, a bolt for a trigger ([People](#people)) |
 | `AvatarStack` | People overlapping, three then « +n » (0.20) |
 | `personColor(person)` | The CSS colour of a person's marks outside its avatar (0.20) |

@@ -223,3 +223,83 @@ test("a result carrying an avatar shows the kit's round avatar, in its Actor's h
   const light = await look();
   expect(light.fill).not.toBe(dark.fill);
 });
+
+test("fixed status shapes, an Action's counter, groups by rank, the facts beside a long title", async ({ page }) => {
+  const bundle = await fs.readFile(BUNDLE_PATH, "utf8");
+  const action = (ext: string, id: string, label: string, extra: object = {}) => ({
+    location: "palette",
+    id,
+    label,
+    type: "action",
+    command: `${ext}.${id}`,
+    ...extra,
+  });
+  const command = (ext: string, id: string, title: string) => ({ id: `${ext}.${id}`, title, export: "showContext" });
+  const entry = (id: string, name: string, contributions: object[], commands: object[]) => ({
+    id,
+    name,
+    version: "0.0.0",
+    ui: { bundle_url: `/ext/${id}/ui.js`, react_major: 19, ui_module_major: 0, locations: [], contributions, commands },
+  });
+  // Registered in the reverse order of their ranks: `test` ranks its group 2, `test2` 1.
+  const declaration = [
+    entry(
+      "test",
+      "Test extension",
+      [
+        action("test", "inbox", "Inbox", { counter: "/ext/test/inbox" }),
+        { location: "palette", id: "notes", label: "Notes", type: "search", search: "searchNotes", rank: 2 },
+      ],
+      [command("test", "inbox", "Inbox")],
+    ),
+    entry("test2", "Second test extension", [action("test2", "hello", "Second hello", { rank: 1 })], [command("test2", "hello", "Second hello")]),
+  ];
+  let unread = 3;
+  await page.route("**/ext", (route) => route.fulfill({ json: declaration }));
+  await page.route("**/ext/*/ui.js", (route) => route.fulfill({ body: bundle, contentType: "text/javascript" }));
+  await page.route("**/ext/test/inbox", (route) =>
+    route.fulfill({ json: { count: unread, accent: true, detail: `${unread} unread` } }),
+  );
+  await openApp(page);
+
+  const field = page.getByTestId("command-field");
+  const palette = page.getByTestId("command-palette");
+  await field.click();
+  const groups = palette.locator('[data-testid^="palette-group-ext:"]');
+  await expect(groups).toHaveCount(2);
+  await expect(groups.nth(0)).toHaveAttribute("data-testid", "palette-group-ext:test2");
+  await expect(groups.nth(1)).toHaveAttribute("data-testid", "palette-group-ext:test");
+  const inbox = groups.nth(1).getByTestId("palette-row").filter({ hasText: "Inbox" });
+  await expect(inbox.getByTestId("palette-count")).toHaveText("3");
+  await page.keyboard.press("Escape");
+
+  unread = 0;
+  await field.click();
+  await expect(palette.getByTestId("palette-group-ext:test").getByText("Inbox")).toBeVisible();
+  await expect(palette.getByTestId("palette-count")).toHaveCount(0);
+
+  // One note per fixed shape, none spinning, in its tone's colour.
+  await page.getByTestId("command-palette-input").fill("N-");
+  const results = palette.getByTestId("palette-group-ext:test").getByTestId("palette-result");
+  await expect(results).toHaveCount(5);
+  const marks = results.locator(".sh-pal__ico svg[role=img]");
+  await expect(marks).toHaveCount(5);
+  expect(await marks.evaluateAll((svgs) => svgs.slice(0, 4).map((s) => s.getAttribute("aria-label")))).toEqual([
+    "Done",
+    "In progress",
+    "To do",
+    "In review",
+  ]);
+  expect(await marks.evaluateAll((svgs) => svgs.filter((s) => s.classList.contains("d-spin")).length)).toBe(0);
+
+  // A 200-character title without a space: the title ends in an ellipsis, the facts stay whole.
+  const long = results.filter({ hasText: "N-5" });
+  const label = long.locator(".sh-pal__label");
+  expect(await label.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  const meta = long.locator(".sh-pal__meta");
+  await expect(meta).toHaveText("Platform › Long titles");
+  expect(await meta.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  const row = (await long.boundingBox())!;
+  const facts = (await meta.boundingBox())!;
+  expect(facts.x + facts.width).toBeLessThanOrEqual(row.x + row.width);
+});

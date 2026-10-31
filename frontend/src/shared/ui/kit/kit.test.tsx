@@ -150,6 +150,24 @@ describe("rendering in both themes", () => {
 });
 
 describe("primitives", () => {
+  it("StatusIcon draws a tone's fixed shape in the tone's colour, never spinning (API 0.20)", () => {
+    const shapes = ["todo", "doing", "review", "done"] as const;
+    const { container } = render(
+      <>
+        {shapes.map((shape) => (
+          <StatusIcon key={shape} kind="tone" status="running" shape={shape} label={shape} />
+        ))}
+        <StatusIcon kind="tone" status="running" label="Running" />
+      </>,
+    );
+    const icons = [...container.querySelectorAll("svg")];
+    expect(icons.map((i) => i.getAttribute("aria-label"))).toEqual([...shapes, "Running"]);
+    expect(new Set(icons.slice(0, 4).map((i) => i.getAttribute("class"))).size).toBe(4);
+    expect(icons.every((i) => i.getAttribute("stroke") === "var(--color-st-running)")).toBe(true);
+    expect(icons.slice(0, 4).some((i) => i.classList.contains("d-spin"))).toBe(false);
+    expect(icons[4].classList.contains("d-spin")).toBe(true);
+  });
+
   it("Button and IconButton are named buttons; the icon one shows its name and shortcut", async () => {
     const user = userEvent.setup();
     const click = vi.fn();

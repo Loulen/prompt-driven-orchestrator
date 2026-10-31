@@ -5,7 +5,7 @@
  */
 
 import type { Actor } from "../generated/Actor";
-import type { StatusTone } from "../ui/kit/tones";
+import type { StatusShape, StatusTone } from "../ui/kit/tones";
 import type { EntityContext, LocationContext } from "./contract";
 
 /**
@@ -43,8 +43,12 @@ export interface SearchResult {
   avatar?: RowAvatar | null;
   /** An SVG the extension serves, the row's icon when it has no status. */
   icon?: string | null;
-  /** A status, drawn as the core draws its own: a tone's icon, its label as tooltip. */
-  status?: { tone: StatusTone; label: string } | null;
+  /**
+   * A status, drawn as the core draws its own: a tone's icon, its label as
+   * tooltip. With a `shape` (0.20), that fixed shape in the tone's colour,
+   * which never spins.
+   */
+  status?: { tone: StatusTone; label: string; shape?: StatusShape | null } | null;
   /** Where choosing the result goes: an extension's page (`#/ext/…`) or a Run (`#/runs/…`). */
   link: string;
   /** The ranges of `title` the query matched, `[start, end)`, in the selection's colour. */

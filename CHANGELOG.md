@@ -134,8 +134,7 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   Projet. Provisioning is previewed only for a repository the field has accepted.
 - Settings: the hover actions of a repository or staging profile row take no room while hidden
   (they always show without a hovering pointer), and under a narrow width the Projects list goes
-  above the selected Projet. A path cut in its middle shows
-  an ellipsis in its folders.
+  above the selected Projet. A path cut in its middle shows an ellipsis in its folders.
 
 ### Design system and Workbench
 

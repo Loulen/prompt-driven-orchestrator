@@ -1,4 +1,4 @@
-# Production files over the 400-line limit (crates/pdo/tests/file_size.rs), with
+# Production files over the 400-line limit (crates/tidy/tests/file_size.rs), with
 # their size when the rule landed (#915). This list may only shrink: remove a
 # line once its file is back within the limit, and lower a size whenever you
 # shrink one. Never add a line or raise a size.

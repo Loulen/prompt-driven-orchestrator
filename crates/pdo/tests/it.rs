@@ -44,16 +44,8 @@ mod wait_for_started_nodes;
 #[path = "daemon_bind.rs"]
 mod daemon_bind;
 
-#[path = "route_coverage.rs"]
-mod route_coverage;
-
-// Structure (ADR-0079): the hexagonal rule inside a context crate, and the
-// 400-line limit per production file.
-#[path = "architecture.rs"]
-mod architecture;
-
-#[path = "file_size.rs"]
-mod file_size;
+// The structural checks (route coverage, hexagonal rule, 400 lines, doc links)
+// read the repository as text: they live in `crates/tidy` (`make fast`).
 
 // The composition root: `serve(config, extensions)` and the `identify` middleware.
 #[path = "composition_root.rs"]
@@ -201,9 +193,6 @@ mod update_check;
 
 #[path = "telemetry.rs"]
 mod telemetry;
-
-#[path = "docs_links.rs"]
-mod docs_links;
 
 #[path = "edit_self_write_loop.rs"]
 mod edit_self_write_loop;

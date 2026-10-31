@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := help
-.PHONY: help dev build test bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
+.PHONY: help dev build fast test bench-transcript-search check lint fmt clean types types-check support-table demo-daemon demo-daemon-stop readme-media readme-media-publish readme-media-export readme-media-import install update service-install service-status service-restart service-logs
 
 PORT := 6172
 VITE_PORT := 5174
@@ -25,6 +25,19 @@ TS_CHECK_DIR := $(CURDIR)/target/ts-rs-check
 # fresh target/), which is enough for a test build.
 EXPORT_TS := PDO_SKIP_FRONTEND_BUILD=1 cargo test --quiet --workspace --lib export_bindings_ -- --test-threads=1
 
+# sccache (ADR draft « les contrôles structurels tournent dans un crate tidy »):
+# every PDO worktree starts with an empty target/, and sccache, which lives
+# outside of it, hands the compiled dependencies from one worktree to the next.
+# Used when installed, unless the caller set RUSTC_WRAPPER itself; without it,
+# the build works the same, only slower, and says how to get it.
+ifeq ($(origin RUSTC_WRAPPER),undefined)
+ifneq ($(shell command -v sccache 2>/dev/null),)
+export RUSTC_WRAPPER := sccache
+else
+$(info warning: sccache is not installed, so every fresh worktree compiles the dependencies again. Install it with `cargo install sccache --locked` (see CONTRIBUTING.md).)
+endif
+endif
+
 # ---- installed global daemon (build-from-source; runs as a systemd --user service) ----
 REPO_URL      := git@github.com:Loulen/prompt-driven-orchestrator.git
 PDO_PROD_DIR  ?= $(HOME)/.pdo/app
@@ -35,7 +48,8 @@ help:
 	@echo "Targets:"
 	@echo "  make dev     Run dev daemon (port $(PORT)) + Vite (port $(VITE_PORT)) for chrome-MCP testing"
 	@echo "  make build   cargo build (build.rs runs pnpm run build, frontend embedded into daemon)"
-	@echo "  make test    cargo nextest + doctests + vitest"
+	@echo "  make fast    The fast gate (< 1 min, even on a cold target/): cargo fmt --check + the structural checks of crates/tidy"
+	@echo "  make test    cargo nextest (every failure, no fail-fast) + doctests + vitest"
 	@echo "  make bench-transcript-search [RELEASE=1]  Bench 15 concurrent searches over a Run's transcripts"
 	@echo "  make check   cargo check + generated TS types current + tsc --noEmit + the harness support table (docs/reference/harnesses.md) is current"
 	@echo "  make types   Regenerate the TS types of the daemon's DTOs into $(GENERATED_TS)"
@@ -81,12 +95,22 @@ build:
 # réglages du build (`PDO_FRONTEND_DIST`, `PDO_SKIP_FRONTEND_BUILD`) restent.
 NO_PDO_ENV := env $(foreach v,$(filter-out PDO_FRONTEND_DIST PDO_SKIP_FRONTEND_BUILD,$(filter PDO_%,$(.VARIABLES))),-u $(v))
 
+# Le fast gate : le format, puis les contrôles structurels (taille des fichiers,
+# couverture des routes, règle hexagonale, liens de la doc, version du module
+# partagé du front). `tidy` ne dépend que de std : il compile en quelques
+# secondes même sur un target/ froid, avant toute suite longue.
+fast:
+	cargo fmt --all --check
+	$(NO_PDO_ENV) cargo test --quiet -p tidy --no-fail-fast
+
 # nextest : un process par test (isolation retrouvée depuis que les 50 binaires de
 # tests sont fusionnés en un seul, cf. crates/pdo/tests/it.rs) et un pool
 # global au lieu d'un pool par binaire. nextest NE LANCE PAS les doctests, d'où la
 # ligne `--doc` séparée : la retirer ferait disparaître leur couverture en silence.
+# `--no-fail-fast` : un passage liste tous les échecs, de tous les crates, au lieu
+# de s'arrêter au premier et de coûter une relance par échec.
 test:
-	$(NO_PDO_ENV) cargo nextest run --workspace
+	$(NO_PDO_ENV) cargo nextest run --workspace --no-fail-fast
 	$(NO_PDO_ENV) cargo test --workspace --doc
 	cd frontend && pnpm test
 	node --disable-warning=ExperimentalWarning --test 'scripts/readme-media/test/*.test.mjs' 'scripts/demo-daemon/test/*.test.mjs'

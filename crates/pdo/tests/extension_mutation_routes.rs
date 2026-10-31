@@ -1,11 +1,12 @@
 //! Stage 4 (ADR-0080) — **every mutation route of an extracted context goes
 //! through the Autorisation d'opération** (#930).
 //!
-//! The routes are read from the routers themselves (`route_coverage.rs`'s
-//! reader, over the context routers it lists), so a context extracted later
-//! inherits the check: its mutation routes (`POST`, `PUT`, `PATCH`, `DELETE`)
-//! join the enumeration, and each needs a request below. With an extension that
-//! refuses everything, every one of them answers `403 operation_refused`.
+//! The routes are read from the routers themselves (the reader of the route
+//! coverage, `crates/tidy/src/routes/`, over the context routers it lists), so
+//! a context extracted later inherits the check: its mutation routes (`POST`,
+//! `PUT`, `PATCH`, `DELETE`) join the enumeration, and each needs a request
+//! below. With an extension that refuses everything, every one of them answers
+//! `403 operation_refused`.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -14,8 +15,8 @@ use serde_json::{json, Value};
 
 use crate::common::flow::git_init;
 use crate::common::TestDaemon;
-use crate::route_coverage::{context_routes, Route};
 use crate::test_extension::{Refusal, TestExtension};
+use tidy::routes::{context_routes, Route};
 
 const MUTATIONS: [&str; 4] = ["POST", "PUT", "PATCH", "DELETE"];
 

@@ -45,24 +45,28 @@ Frontend: `frontend/src/<context>/{api,model,store,components}/`, plus `shared/`
 
 ## Rules checked by the test suite
 
+These checks read the repository as text. They live in `crates/tidy`, a crate of the workspace
+that depends on the standard library alone, and run in `make fast` (under a minute, even on a
+cold `target/`). A check that needs the code of a product crate stays out of `tidy`.
+
 - **Architecture test.** A `domain/` module imports nothing technical and no `adapters::`: no
-  sqlx, no axum, no `tokio::process` (`crates/pdo/tests/architecture.rs`, proven on the fixtures
-  of `crates/pdo/tests/fixtures/architecture/`). It covers every crate with a `src/domain/`, and
+  sqlx, no axum, no `tokio::process` (`crates/tidy/tests/architecture.rs`, proven on the fixtures
+  of `crates/tidy/tests/fixtures/architecture/`). It covers every crate with a `src/domain/`, and
   checks that those are exactly the thirteen contexts.
 - **File size.** A production file has **at most 400 lines**, Rust and TypeScript. Tests are not
   counted (`tests/`, a `#[cfg(test)]` module, `*.test.ts(x)`), nor is `shared/generated/`. The
   baseline of the files that were already too big when the rule landed
-  (`crates/pdo/tests/file_size_baseline.txt`) is empty: every production file is within the limit,
-  and a line may never be added back (`crates/pdo/tests/file_size.rs`). Split a file that grows
+  (`crates/tidy/file_size_baseline.txt`) is empty: every production file is within the limit,
+  and a line may never be added back (`crates/tidy/tests/file_size.rs`). Split a file that grows
   past it by responsibility.
 - **Typed contract.** Every DTO sent over HTTP or `/ws` derives `ts_rs::TS` with
   `#[ts(export)]`; `make types` writes `frontend/src/shared/generated/`, and `make check` fails
   when it drifts from the Rust types.
 - **Route coverage.** Every route of the assembled router has at least one HTTP-level test,
-  method by method (`crates/pdo/tests/route_coverage.rs`). It reads the router's
-  `.route(…)` calls and the URL literals of `tests/`. Write the call so the method is readable
-  (`client.post(format!("{}/runs", …))`). When the router moves, point the test's
-  `ROUTER_SOURCES` at its new home.
+  method by method (`crates/tidy/tests/route_coverage.rs`). It reads the router's
+  `.route(…)` calls and the URL literals of `crates/pdo/tests/`. Write the call so the method is
+  readable (`client.post(format!("{}/runs", …))`). When the router moves, point
+  `ROUTER_SOURCES` (`crates/tidy/src/routes/mod.rs`) at its new home.
 
 ## The contexts
 
@@ -256,5 +260,6 @@ never context-specific.
 ## The HTTP and WebSocket contract
 
 The wire is a contract: the generated TypeScript types (`make check`) guard its shape, and the
-stage-4 tests of `crates/pdo/tests/` (at least one per route, `route_coverage.rs`) its behaviour.
+stage-4 tests of `crates/pdo/tests/` (at least one per route, `crates/tidy/tests/route_coverage.rs`)
+its behaviour.
 A new top-level path prefix also needs its entry in the Vite dev proxy (`frontend/vite.config.ts`).

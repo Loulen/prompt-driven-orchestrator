@@ -44,6 +44,12 @@ test("every form of a citation is rewritten: ADR name, link, path", () => {
   );
 });
 
+test("a citation wrapped at `ADR` keeps one `ADR`", () => {
+  assert.equal(rewriteCitations("(ADR\n  draft-les-controles)", renames), "(ADR-0094)");
+  assert.equal(rewriteCitations("# the (ADR\n# draft-les-controles) rule", renames), "# the (ADR-0094) rule");
+  assert.equal(rewriteCitations("// (ADR\n  // `draft-les-controles`)", renames), "// (ADR-0094)");
+});
+
 test("a longer slug sharing a draft's prefix is not touched", () => {
   const text = "ADR draft-les-controles-bis and draft-target";
   assert.equal(rewriteCitations(text, renames), text);

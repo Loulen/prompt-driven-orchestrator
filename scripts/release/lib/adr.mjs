@@ -29,7 +29,8 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /**
  * `text` with every citation of a renamed draft rewritten: its file name (in a
  * link or a path) becomes the numbered one, `ADR draft-<slug>`, ``ADR `draft-<slug>` ``
- * and a bare `draft-<slug>` become `ADR-NNNN`.
+ * and a bare `draft-<slug>` become `ADR-NNNN`,
+ * a citation wrapped after `ADR` included.
  */
 export function rewriteCitations(text, renames) {
   let out = text;
@@ -37,10 +38,12 @@ export function rewriteCitations(text, renames) {
     const name = `draft-${escape(slug)}`;
     // The slug must end there: `draft-a` is no citation of `draft-a-bis`.
     const end = "(?![\\w-])";
+    // `ADR`, then spaces, a line break and the next line's comment marker if any.
+    const adr = "ADR\\s+(?:(?://[/!]?|#|\\*)\\s*)?";
     out = out
-      .replace(new RegExp(`${escape(from)}`, "g"), to)
-      .replace(new RegExp(`ADR \`${name}\`${end}`, "g"), id)
-      .replace(new RegExp(`ADR ${name}${end}`, "g"), id)
+      .replace(new RegExp(escape(from), "g"), to)
+      .replace(new RegExp(`${adr}\`${name}\`${end}`, "g"), id)
+      .replace(new RegExp(`${adr}${name}${end}`, "g"), id)
       .replace(new RegExp(`\`${name}\`${end}`, "g"), id)
       .replace(new RegExp(`(?<![\\w-])${name}${end}`, "g"), id);
   }

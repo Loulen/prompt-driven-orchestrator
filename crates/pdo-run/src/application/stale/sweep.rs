@@ -20,7 +20,9 @@ use crate::application::paths::resolve_run_pipeline_path;
 use crate::application::sandbox as run_sandbox;
 use crate::application::scheduler::node_completion::retry_waiting_nodes;
 use crate::application::scheduler::stall::reconcile_run_level_stall;
+use crate::application::stale::death_probe::gather_session_death_diagnostics;
 use crate::application::stale::detector as stale_detector;
+use crate::application::stale::restart_race::restarted_since_snapshot;
 use crate::application::supervision::run_isolated;
 use crate::domain::{projection, state};
 use crate::Runs;
@@ -36,42 +38,6 @@ pub async fn run_stale_detection_supervised(state: &Arc<Runs>) {
         run_stale_detection(&sweep_state).await
     })
     .await;
-}
-
-/// Gather best-effort diagnostic context the moment a node session is found dead.
-/// All I/O lives here; the pure shaping into the event payload is
-/// [`stale_detector::SessionDeathDiagnostics`]. The most discriminating fact is
-/// `tmux_server_alive`: a dead server means the whole socket collapsed and every
-/// session under it died at once, rather than this one node dying in isolation.
-pub fn gather_session_death_diagnostics(
-    tmux: &dyn pdo_session::application::ports::Tmux,
-    run_id: &str,
-    node_id: &str,
-    iter: i64,
-    running: &[(String, i64)],
-) -> stale_detector::SessionDeathDiagnostics {
-    let tmux_server_alive = tmux.server_alive();
-
-    let (mem_available_kb, swap_free_kb) = std::fs::read_to_string("/proc/meminfo")
-        .ok()
-        .map(|c| stale_detector::parse_meminfo(&c))
-        .unwrap_or((None, None));
-
-    let correlated_deaths =
-        stale_detector::count_correlated_deaths(running, (node_id, iter), |id, it| {
-            let s = pdo_session::domain::names::node_session_name(run_id, id, it);
-            !tmux.session_exists(&s)
-        });
-
-    stale_detector::SessionDeathDiagnostics {
-        tmux_server_alive,
-        mem_available_kb,
-        swap_free_kb,
-        correlated_deaths,
-        // Filled by `assess_node` after this impure gather; this function does the
-        // tmux/proc reads only.
-        harness_error: None,
-    }
 }
 
 /// Sweep-time [`stale_detector::NodeProbes`] adapter: binds one running node's tmux
@@ -306,6 +272,12 @@ pub async fn run_stale_detection(state: &Arc<Runs>) {
 
             if assessment.blocked_on_limit {
                 blocked_on_limit_count += 1;
+            }
+            // A restart of this iteration since the snapshot: the death is its kill (restart_race).
+            if assessment.detection == stale_detector::Detection::SessionDied
+                && restarted_since_snapshot(state, &events, run_id, node_id, *iter).await
+            {
+                continue;
             }
 
             for event in &assessment.events {

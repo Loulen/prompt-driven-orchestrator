@@ -15,6 +15,12 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### Restarting a node
+
+- A node restarted while the liveness sweep was looking at it stays running: the sweep no longer
+  takes the restart's own kill of the old session for a death, so it neither marks the node
+  interrupted nor kills the new session.
+
 ### Development
 
 - Versions, the CHANGELOG and ADR numbers are set once, when a story merges into `main`: changes

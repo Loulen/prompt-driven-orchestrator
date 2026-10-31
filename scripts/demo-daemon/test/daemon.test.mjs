@@ -194,7 +194,7 @@ describe("a real demo daemon", { skip }, () => {
     const port = await freePort();
     const hostHome = fakeHostHome();
     const caller = { ...process.env, HOME: hostHome, PDO_PORT: "5272", PDO_TOKEN: "pdo_node_x", PDO_NODE_ID: "abc", TMUX: "/tmp/tmux-0/default,1,0" };
-    const demo = await startDemo({ port, repoRoot, tmpRoot, env: caller, log: quiet });
+    const demo = await startDemo({ port, repoRoot, tmpRoot, env: caller, log: quiet, build: false });
     try {
       assert.equal(demo.url, `http://127.0.0.1:${port}`);
       assert.equal(demo.pdo, binary);
@@ -204,7 +204,7 @@ describe("a real demo daemon", { skip }, () => {
       const environ = fs.readFileSync(`/proc/${demo.pid}/environ`, "utf8").split("\0");
       assert.ok(environ.includes(`HOME=${demo.paths.home}`));
       assert.ok(!environ.some((line) => /^(PDO_TOKEN|PDO_NODE_ID|TMUX)=/.test(line)));
-      await assert.rejects(startDemo({ port, repoRoot, tmpRoot, env: caller, log: quiet }), /already running/);
+      await assert.rejects(startDemo({ port, repoRoot, tmpRoot, env: caller, log: quiet, build: false }), /already running/);
     } finally {
       stopDemo({ port, tmpRoot, log: quiet });
     }

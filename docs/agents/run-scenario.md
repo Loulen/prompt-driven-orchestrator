@@ -30,7 +30,8 @@ make demo-daemon PORT=6491 TEST_EXT=1  # the demo daemon of the test extension i
 Pick a free port between 6400 and 6999 (another agent may be testing at the same time); the
 user's ports (5172, 5272, 6160, 6172…) and the caller's own daemon are refused. The command:
 
-- builds the branch's `pdo` if `target/debug/pdo` is missing;
+- builds the branch's `pdo` (`cargo build`, incremental: a few seconds when nothing changed), so
+  the binary is never older than the branch;
 - creates a fresh `HOME` under `/tmp/pdo-demo-<port>/home` (any previous one on that port is wiped)
   and runs the daemon from `~/.pdo/app` there, so its event log, pipelines, profiles and skill bank
   start empty;

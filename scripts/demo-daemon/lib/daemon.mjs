@@ -30,9 +30,11 @@ export function stageHarnessCredentials({ hostHome, demoHome }) {
 /**
  * Start a demo daemon on `port`. `testExt`: the test extension's demo daemon
  * instead of the bare one. `extra`: variables set explicitly on the daemon.
- * Resolves to `{ url, pdo, pid, paths, env }`.
+ * `build`: run cargo's incremental build of `pdo` first, so a branch that moved
+ * since the last build is not tested on a stale binary (false: build only if
+ * the binary is missing). Resolves to `{ url, pdo, pid, paths, env }`.
  */
-export async function startDemo({ port, testExt = false, extra = {}, repoRoot, tmpRoot = "/tmp", env = process.env, log = console.log }) {
+export async function startDemo({ port, testExt = false, extra = {}, build = true, repoRoot, tmpRoot = "/tmp", env = process.env, log = console.log }) {
   const paths = demoPaths(port, tmpRoot);
   const running = readPid(paths.pidfile);
   if (running && isAlive(running)) {
@@ -41,8 +43,8 @@ export async function startDemo({ port, testExt = false, extra = {}, repoRoot, t
   if (!(await portFree(port))) throw new Error(`port ${port} is taken: pick another (6400 to 6999)`);
 
   const pdo = path.join(targetDir(repoRoot, env), "debug", "pdo");
-  if (!fs.existsSync(pdo)) {
-    log(`no ${pdo}: building it`);
+  if (build || !fs.existsSync(pdo)) {
+    log(`building ${pdo} (incremental)`);
     execFileSync("cargo", ["build", "-p", "pdo-daemon", "--bin", "pdo"], { cwd: repoRoot, stdio: ["ignore", "inherit", "inherit"] });
   }
   const [command, args, own] = testExt

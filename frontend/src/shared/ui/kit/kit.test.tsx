@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { Bell, Rocket, Trash2 } from "lucide-react";
+import { Bell, Lock, Rocket, Trash2 } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type ExtensionUiDeclared from "../../../../public/shared/pdo-extension-ui";
 import { extensionUiModule } from "../../extensions/uiModule";
@@ -445,6 +445,36 @@ describe("primitives", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
+  it("Popover stays open on a click in a toast, closes on a click elsewhere", async () => {
+    const user = userEvent.setup();
+    const undo = vi.fn();
+    render(
+      <>
+        <button type="button">Elsewhere</button>
+        <Popover
+          label="Inbox"
+          trigger={({ toggle }) => (
+            <button type="button" onClick={toggle}>
+              Open
+            </button>
+          )}
+        >
+          <button type="button" onClick={() => toast("Deleted", "info", { actionLabel: "Undo", onAction: undo })}>
+            Delete
+          </button>
+        </Popover>
+        <Toaster />
+      </>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    await user.click(within(await screen.findByTestId("toast-info")).getByRole("button", { name: "Undo" }));
+    expect(undo).toHaveBeenCalledOnce();
+    expect(screen.getByRole("dialog", { name: "Inbox" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Elsewhere" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   it("Tabs select with the arrow keys and Home / End", async () => {
     const user = userEvent.setup();
     function Strip() {
@@ -563,5 +593,16 @@ describe("primitives", () => {
     expect(screen.getByRole("img", { name: "Degraded" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Alice Martin" })).toHaveTextContent("AM");
     expect(screen.getByRole("img", { name: "implement-review" })).not.toHaveTextContent(/\w/);
+  });
+
+  it("Banner draws its icon instead of the tone's, in the tone's colour", () => {
+    const { container } = render(<Banner tone="skipped" icon={Lock} title="Read-only" text="Only its owner edits it" />);
+    const banner = screen.getByRole("status");
+    expect(banner).toHaveTextContent("Read-onlyOnly its owner edits it");
+    const icons = container.querySelectorAll("svg");
+    expect(icons).toHaveLength(1);
+    expect(icons[0]).toHaveClass("lucide-lock", "d-banner__icon");
+    render(<Banner tone="skipped" title="Skipped" />);
+    expect(screen.getAllByRole("status")[1].querySelector(".lucide-lock")).toBeNull();
   });
 });

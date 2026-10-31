@@ -44,8 +44,9 @@ pub enum UiLocation {
     TopbarStart,
     /// The right-hand group of the top bar, **before Stats**: an icon button per
     /// [`UiElement::Page`] (the page opens full-window, without rail: the page
-    /// brings its own navigation) or per [`UiElement::Action`] (the button calls
-    /// its command).
+    /// brings its own navigation), per [`UiElement::Panel`] (the button opens
+    /// the panel under it, 0.20) or per [`UiElement::Action`] (the button calls
+    /// its command). Each icon may carry a counter.
     #[serde(rename = "topbar/end")]
     TopbarEnd,
     /// The far right of the top bar, **after Settings**: the component of a
@@ -378,8 +379,15 @@ mod tests {
         let action = UiElement::Action {
             command: "c".into(),
         };
+        let panel = UiElement::Panel {
+            component: "P".into(),
+            icon: None,
+        };
         assert!(UiLocation::TopbarEnd.accepts(&page));
         assert!(UiLocation::TopbarEnd.accepts(&action));
+        assert!(UiLocation::TopbarEnd.accepts(&panel));
+        assert!(!UiLocation::TopbarStart.accepts(&panel));
+        assert!(!UiLocation::TopbarAccount.accepts(&panel));
         assert!(UiLocation::TopbarStart.accepts(&page));
         assert!(!UiLocation::TopbarStart.accepts(&action));
         assert!(!UiLocation::Settings.accepts(&page));

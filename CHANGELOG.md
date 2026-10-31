@@ -10,24 +10,7 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
-## 2.69.0 · Stats, Review, What's new and the artifact viewer
-
-- Stats › Cost: the Name column keeps a readable width at 1024 px and 120 %; below that the
-  table scrolls sideways, the Name column held in place and the right edge fading while
-  columns remain. A median the line cuts short reads whole in its tooltip.
-- Review: a folded thread, and a row of the comments list, keep their line number; only the file
-  name gives way.
-- What's new reads this changelog in English, one entry per version, its latest ten versions. A
-  release title is text, no longer a link. "Release notes offline" only shows when the update
-  check is on and its source unreachable; otherwise the banner reads "Update check off", or "No
-  release source" when the build declares none.
-- The artifact viewer's footer names the Run (its id when it has no name, as in the Runs list);
-  the frontmatter keeps the file's order and reads a list as its items.
-- A mounted page's tab shows its name in mono beside the book in the accent color.
-- Overview tour: the archive step points at the archive icon of the row, and Skip goes once the
-  Run is archived.
-
-## 2.68.0 · Classic Theme and Dark mode
+## 2.68.0 · Classic Theme, Dark mode and the acceptance fixes
 
 ### Theme and Dark mode
 
@@ -151,6 +134,23 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - A Workbench layout whose side panels were dragged to their maximum is restored as dragged,
   the canvas keeping its pixels instead of growing back to a third of the window. A drag and a
   restore both leave the canvas at least 5 % of the window.
+
+### Stats, Review, What's new and the artifact viewer
+
+- Stats › Cost: the Name column keeps a readable width at 1024 px and 120 %; below that the
+  table scrolls sideways, the Name column held in place and the right edge fading while
+  columns remain. A median the line cuts short reads whole in its tooltip.
+- Review: a folded thread, and a row of the comments list, keep their line number; only the file
+  name gives way.
+- What's new reads this changelog in English, one entry per version, its latest ten versions. A
+  release title is text, no longer a link. "Release notes offline" only shows when the update
+  check is on and its source unreachable; otherwise the banner reads "Update check off", or "No
+  release source" when the build declares none.
+- The artifact viewer's footer names the Run (its id when it has no name, as in the Runs list);
+  the frontmatter keeps the file's order and reads a list as its items.
+- A mounted page's tab shows its name in mono beside the book in the accent color.
+- Overview tour: the archive step points at the archive icon of the row, and Skip goes once the
+  Run is archived.
 
 ## 2.67.0 · Session detail bricks, `session/detail` location, page counter
 

@@ -9,6 +9,7 @@ import {
 import { useNodeDurationMode } from "../../store/nodeDurationModeStore";
 import { IterOptionDuration } from "./IterationDuration";
 import { StatusIcon } from "../../../shared/ui/kit";
+import IterMark from "../IterMark";
 
 export default function IterSelector({
   iterations,
@@ -27,7 +28,7 @@ export default function IterSelector({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="ri-iter" aria-label={`Iteration ${selectedIter} of ${total}`} title="Iteration">
-        i{selectedIter}/{total}
+        <IterMark iter={selectedIter} of={total} title={null} />
         <ChevronDown size={11} strokeWidth={1.5} aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent className="ri-iter-menu" side="bottom" align="end">
@@ -40,7 +41,7 @@ export default function IterSelector({
             data-testid={`iter-option-${it.iter}`}
           >
             <StatusIcon kind="node" status={it.status} size="sm" />
-            <span className="font-mono">iter {it.iter}</span>
+            <IterMark iter={it.iter} of={total} title={null} />
             <span className="ri-iter-menu__dur">
               <IterOptionDuration timing={it} mode={durationMode} />
             </span>

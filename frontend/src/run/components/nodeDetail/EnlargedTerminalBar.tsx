@@ -4,6 +4,7 @@ import type { NodeState } from "../../../shared/generated/NodeState";
 import { IconButton, StatusIcon } from "../../../shared/ui/kit";
 import type { MarkVerdict, ReleaseVerdict } from "../../store/useNodeRun";
 import { MarkCompleteVerdict, ReleaseCompletionVerdict } from "./verdicts";
+import IterMark from "../IterMark";
 
 const RELEASE_LABEL = "Mark ready for completion";
 const RELEASED_LABEL = "Completion released";
@@ -49,7 +50,9 @@ export function EnlargedTerminalIdentity({
       <span className="truncate text-sm font-medium text-text" data-testid="term-identity-name">
         {nodeName ?? node.node_id}
       </span>
-      <span className="shrink-0 font-mono text-2xs text-text-3">iter {iter}</span>
+      <span className="shrink-0 text-text-3">
+        <IterMark iter={iter} />
+      </span>
     </span>
   );
 }

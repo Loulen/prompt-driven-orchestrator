@@ -75,6 +75,20 @@ function exports(paths: string[]): PortIO {
   };
 }
 
+describe("PortRow — a long name", () => {
+  it("is whole in the tooltip, written or not", () => {
+    const name = "a".repeat(200);
+    renderRow({ ...preview(true), port: name });
+    expect(screen.getByTestId("port-row-open")).toHaveAttribute("title", name);
+  });
+
+  it("is whole in the tooltip of a port not written yet", () => {
+    const name = `${"long_output_name_".repeat(12)}end`;
+    renderRow({ ...preview(false), port: name });
+    expect(screen.getByText(name)).toHaveAttribute("title", name);
+  });
+});
+
 describe("PortRow — downloads", () => {
   it("a files port lists its files, each one downloading, and zips them all", () => {
     renderRow(exports(["worker/iter-1/exports/report.pdf", "worker/iter-1/exports/rows.csv"]));

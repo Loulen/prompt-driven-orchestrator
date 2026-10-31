@@ -172,6 +172,25 @@ export function renameWhenPorts(
   return out;
 }
 
+/** What tells one row from another: no two rows share a port, a field and an operator. */
+export function conditionKey(row: ConditionRow): string {
+  return `${row.port}\u0000${row.field}\u0000${row.op}`;
+}
+
+/**
+ * The rows in the order the editor last showed them. A clause groups its rows
+ * by field (`{ verdict: { eq, neq } }`), so a condition added on a field
+ * already used would come back next to it, not last: `order` (the keys of the
+ * rows as shown) puts each where it was. A row `order` does not know (an undo,
+ * an outside write) comes after, in the clause's order.
+ */
+export function inShownOrder(rows: ConditionRow[], order: readonly string[]): ConditionRow[] {
+  const rank = new Map(order.map((key, i) => [key, i]));
+  const known = rows.filter((r) => rank.has(conditionKey(r)));
+  known.sort((a, b) => rank.get(conditionKey(a))! - rank.get(conditionKey(b))!);
+  return [...known, ...rows.filter((r) => !rank.has(conditionKey(r)))];
+}
+
 function parseValue(row: ConditionRow): unknown {
   if (row.op === "in" || row.op === "not_in") {
     try {

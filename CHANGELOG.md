@@ -35,6 +35,20 @@ archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son paylo
   du système au moment de la migration ; le Thème est Acogni. Le mode est stocké sous
   `pdo.ui.mode`, le Thème sous `pdo.ui.theme`.
 
+### Run inspector and pipeline editing
+
+- `GET /runs/{id}` carries **`variables`**: the values the launch gave the pipeline's variables
+  (absent when it gave none). The Variables section of a Run's Pipeline info shows the value the
+  Run received, the default only for a variable the launch left out.
+- The Run inspector names an iteration by the canvas card's iteration icon and its number
+  (« ⇄ 2 », « ⇄ 3/3 ») in the node header and its picker, the Transcript bar, the enlarged
+  terminal and the groups of the Run search.
+- Back on a tab, the canvas and the inspector show the selection the tab had.
+- The conditions of an edge stay in the order they were added, a new one last, even on a field
+  another condition already reads.
+- The ages of the Versions list follow the clock; an output's or input's name truncated in the
+  inspector is whole in its tooltip.
+
 ## 2.67.0 — Sessions hébergées par une extension (CORE-121)
 
 ### Briques du détail de session, emplacement `session/detail`, compteur de Page (CORE-125)

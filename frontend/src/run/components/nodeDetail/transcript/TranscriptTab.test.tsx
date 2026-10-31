@@ -69,7 +69,7 @@ describe("TranscriptTab", () => {
     expect(screen.getByTestId("transcript-message-prompt")).toBeTruthy();
     expect(screen.getByTestId("transcript-message-agent").textContent).toContain("asks for a debounce");
     expect(screen.getByTestId("transcript-counts")).toHaveAccessibleName("2 messages · 1 tool call");
-    expect(screen.getByText("iter 2")).toBeTruthy();
+    expect(screen.getByTestId("iter-mark")).toHaveTextContent("Iteration 2");
     const toolRow = screen.getByTestId("transcript-tool");
     expect(toolRow.textContent).toContain("Read");
     expect(toolRow.textContent).toContain("spec.md");

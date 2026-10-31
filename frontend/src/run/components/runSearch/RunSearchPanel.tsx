@@ -5,6 +5,7 @@ import type { TranscriptSnippet } from "../../../shared/generated/TranscriptSnip
 import { formatTime } from "../../model/nodeDetailFormat";
 import { countLabel, groupHits, moveSelection, SEARCH_MAX_HITS } from "../../model/runSearch";
 import { useRunSearchStore } from "../../store/runSearchStore";
+import IterMark from "../IterMark";
 
 /** The excerpt of a hit, its match marked. */
 function SnippetText({ snippet }: { snippet: TranscriptSnippet }) {
@@ -122,7 +123,7 @@ export default function RunSearchPanel({
               <div className="flex items-center gap-1.5 px-2.5 pb-0.5 pt-1.5 font-mono text-text-3 text-xs">
                 <Box size={11} className="shrink-0 text-text-3" />
                 <span data-testid="run-search-group-node">{nodeName(group.nodeId)}</span>
-                <span className="text-text-3">iter {group.iter}</span>
+                <IterMark iter={group.iter} />
               </div>
               {group.hits.map((hit, i) => {
                 const at = group.first + i;

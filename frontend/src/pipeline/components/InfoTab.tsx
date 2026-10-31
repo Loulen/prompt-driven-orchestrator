@@ -301,7 +301,14 @@ export function InfoTab({
       {/* Notion #6 / #948: Pipeline info is the only surface of the pipeline's
           metadata — editable on a template, read-only on a Run (active or
           archived) and on a version. */}
-      {pipeline && <PipelineMetaSections pipeline={pipeline} readOnly={run != null || viewingVersion} version={version} />}
+      {pipeline && (
+        <PipelineMetaSections
+          pipeline={pipeline}
+          readOnly={run != null || viewingVersion}
+          version={version}
+          received={run?.variables ?? null}
+        />
+      )}
 
       {/* On a Run and a version the node and edge counts are rows of the
           Pipeline section; a template keeps them in a section of their own. */}

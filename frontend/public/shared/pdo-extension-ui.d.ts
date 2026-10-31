@@ -305,6 +305,8 @@ export interface SegmentedProps<T extends string = string> {
   label: string;
   size?: "md" | "sm";
   disabled?: boolean;
+  /** Full width: the items share the line equally, a long label ends in an ellipsis. */
+  fill?: boolean;
 }
 /** Two to four exclusive choices. */
 export function Segmented<T extends string>(props: SegmentedProps<T>): ReactNode;

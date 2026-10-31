@@ -102,10 +102,12 @@ export interface SegmentedProps<T extends string = string> {
   label: string;
   size?: "md" | "sm";
   disabled?: boolean;
+  /** Full width: the items share the line equally, a long label ends in an ellipsis. */
+  fill?: boolean;
 }
 
 /** Two to four exclusive choices, inset, no dividers. Arrow keys move and select, Home and End jump (one tab stop). */
-export function Segmented<T extends string>({ items, value, onChange, label, size = "md", disabled }: SegmentedProps<T>) {
+export function Segmented<T extends string>({ items, value, onChange, label, size = "md", disabled, fill }: SegmentedProps<T>) {
   const onKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const dir = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
     const jump = e.key === "Home" || e.key === "End";
@@ -121,7 +123,7 @@ export function Segmented<T extends string>({ items, value, onChange, label, siz
   };
   return (
     <div
-      className={cx("d-seg", size === "sm" && "d-seg--sm")}
+      className={cx("d-seg", size === "sm" && "d-seg--sm", fill && "d-seg--fill")}
       role="radiogroup"
       aria-label={label}
       aria-disabled={disabled || undefined}

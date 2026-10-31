@@ -83,6 +83,12 @@ const STRATEGIES = [
   { value: "blue-green", label: "Blue/green" },
   { value: "recreate", label: "Recreate" },
 ];
+// A choice that fills its row (`fill`), its labels long enough to end in an ellipsis.
+const WINDOWS = [
+  { value: "any", label: "Any time" },
+  { value: "office", label: "Office hours, Monday to Friday" },
+  { value: "weekend", label: "Weekends only" },
+];
 const BRANCHES = ["main", "release/2.14", "release/2.13", "feature/SHOP-12-product-search"];
 const PEOPLE = [
   { by: "Alice Martin", kind: "human" },
@@ -175,6 +181,7 @@ function Settings({ env, onSave }) {
   const [draft, setDraft] = React.useState(env);
   const [replicas, setReplicas] = React.useState(String(env.replicas));
   const [notify, setNotify] = React.useState(true);
+  const [deployWindow, setDeployWindow] = React.useState("office");
   const bad = !/^\d+$/.test(replicas) || +replicas < 1 || +replicas > 20;
   return h(
     Section,
@@ -189,6 +196,7 @@ function Settings({ env, onSave }) {
         h(Select, { label: "Branch", mono: true, icon: Branch, value: draft.branch, onChange: (v) => setDraft({ ...draft, branch: v }), options: BRANCHES.map((b) => ({ value: b, label: b })) }),
       ),
       h(Field, { label: "Strategy" }, h(Segmented, { label: "Strategy", value: draft.strategy, onChange: (v) => setDraft({ ...draft, strategy: v }), items: STRATEGIES })),
+      h(Field, { label: "Window" }, h(Segmented, { label: "Deploy window", fill: true, value: deployWindow, onChange: setDeployWindow, items: WINDOWS })),
       h(
         Field,
         { label: "Replicas", help: "1 to 20", error: bad ? "Must be 1 to 20" : null },

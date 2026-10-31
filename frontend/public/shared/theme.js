@@ -9,9 +9,10 @@
 //
 // A classic script, in the <head>, without `defer` or `async`. It applies the
 // rule of `src/lib/theme.ts` (`src/noFlashTheme.test.ts` holds them together):
-// Acogni and dark by default, and a value stored before 2.68 (`light`, `dark`
-// or `system` under `pdo.ui.theme`) migrated once. It repaints the page when
-// another page of the daemon changes the preferences. Dependency-free and
+// Acogni and dark by default, a value stored before 2.68 (`light`, `dark` or
+// `system` under `pdo.ui.theme`) migrated once, any other unknown value
+// rewritten as the default. It repaints the page when another page of the
+// daemon changes the preferences. Dependency-free and
 // total: a throwing store must not blank the page.
 (function () {
   function stamp() {
@@ -33,8 +34,20 @@
         localStorage.setItem("pdo.ui.mode", mode);
       } catch (e) {}
     }
-    if (theme !== "acogni" && theme !== "classic") theme = "acogni";
-    if (mode !== "dark" && mode !== "light") mode = "dark";
+    if (theme !== null && theme !== "acogni" && theme !== "classic") {
+      theme = "acogni";
+      try {
+        localStorage.setItem("pdo.ui.theme", theme);
+      } catch (e) {}
+    }
+    if (mode !== null && mode !== "dark" && mode !== "light") {
+      mode = "dark";
+      try {
+        localStorage.setItem("pdo.ui.mode", mode);
+      } catch (e) {}
+    }
+    if (theme === null) theme = "acogni";
+    if (mode === null) mode = "dark";
     var root = document.documentElement;
     root.setAttribute("data-theme", theme);
     root.setAttribute("data-mode", mode);

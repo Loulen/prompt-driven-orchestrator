@@ -400,6 +400,20 @@
   .d-seg__btn:disabled {
     cursor: not-allowed;
   }
+  .d-seg--fill {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+  }
+  .d-seg--fill > .d-seg__btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-width: 0;
+  }
+  .d-seg--fill > .d-seg__btn > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   /* ---------------------------------------------------------------- switch, checkbox */
   .d-switch {

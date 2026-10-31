@@ -48,8 +48,6 @@ const LEVEL = 0.5;
 export interface CompactCanvasInput {
   /** The orchestrators that have child runs: their cards carry « N runs » on both sizes. */
   withRuns?: ReadonlySet<string>;
-  /** The drawn height of each note, when the canvas has measured it. */
-  noteHeights?: Readonly<Record<string, number>>;
 }
 
 export interface CompactCanvas {
@@ -59,10 +57,15 @@ export interface CompactCanvas {
   cards: Record<string, Box>;
 }
 
-/** A rough height of a note card (`.cv-note`: 164 px of 12 px text, 1.4 line height). */
+/**
+ * The height of a note card (`.cv-note`: 164 px of 12 px text, 1.4 line
+ * height, 14 px of padding and border), on the high side: a note is never
+ * taller than its estimate, so one that clears the cards by its estimate
+ * clears them for real.
+ */
 export function estimateNoteHeight(content: string): number {
-  const lines = content.split("\n").reduce((n, line) => n + Math.max(1, Math.ceil((line.length * 6.2) / 164)), 0);
-  return Math.round(lines * 16.8 + 14);
+  const lines = content.split("\n").reduce((n, line) => n + Math.max(1, Math.ceil((line.length * 7.5) / 164)), 0);
+  return Math.ceil(lines * 17 + 16);
 }
 
 const isMarker = (type: string) => type === "start" || type === "end";
@@ -90,7 +93,7 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
     id: note.id,
     x: note.view?.x ?? 240,
     y: note.view?.y ?? 80 + i * 120,
-    h: input.noteHeights?.[note.id] ?? estimateNoteHeight(note.content),
+    h: estimateNoteHeight(note.content),
   }));
 
   // The points that follow the canvas, keyed so they can be read back.

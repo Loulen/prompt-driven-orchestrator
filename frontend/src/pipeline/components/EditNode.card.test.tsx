@@ -174,6 +174,15 @@ describe("the compact card (Compact nodes)", () => {
     expect(screen.queryByTestId("agent-mode-profile")).toBeNull();
   });
 
+  it("keeps the rim's source handles, which every outgoing edge binds to", () => {
+    const compact = draw({ compact: true, inRun: true, status: "completed", run: RUN }).container;
+    const handles = (root: Element) => [...root.querySelectorAll(".react-flow__handle.source")].map((h) => h.getAttribute("data-handleid")).sort();
+    const compactHandles = handles(compact);
+    expect(compactHandles.length).toBeGreaterThan(0);
+    const detailed = draw({ inRun: true, status: "completed", run: RUN }).container;
+    expect(compactHandles).toEqual(handles(detailed));
+  });
+
   it("keeps an orchestrator's « N runs » and pastilles on a second line", () => {
     draw({ compact: true, orchestrator: true, inRun: true, status: "running", run: RUN, childCounts: { finished: 7, failed: 2, stale: 0, running: 6 } });
     expect(screen.getByTestId("node-card")).toHaveAttribute("data-orch", "true");

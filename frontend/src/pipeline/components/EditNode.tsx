@@ -269,6 +269,8 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
             status={inRun ? data.status : null}
           />
           {runs}
+          {/* The rim carries the source handles every outgoing edge binds to. */}
+          {rim}
           {inRun && <SearchMatchBadge nodeId={data.nodeId} />}
         </NodeCard>
         {play}

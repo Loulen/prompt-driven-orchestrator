@@ -201,13 +201,15 @@ describe("compactCanvas", () => {
       name: "p",
       version: "1.0",
       variables: {},
-      nodes: [node("a", 0, 0), node("b", 300, 100), node("c", 300, 200), node("d", 0, 400)],
+      nodes: [node("a", 0, 0), node("b", 300, 100), node("c", 300, 200), node("d", 0, 500)],
       edges: [],
-      notes: [{ id: "tall", content: "x", view: { x: 0, y: 80 } }],
+      notes: [{ id: "tall", content: "a line\n".repeat(17), view: { x: 0, y: 80 } }],
     };
-    const c = compactCanvas(pipeline, { noteHeights: { tall: 300 } });
+    const h = estimateNoteHeight(pipeline.notes![0].content);
+    expect(h).toBeGreaterThan(270);
+    const c = compactCanvas(pipeline);
     const note = c.pipeline.notes![0].view!;
-    const box = { x: note.x, y: note.y, w: 200, h: 300 };
+    const box = { x: note.x, y: note.y, w: 200, h };
     expect(Object.values(c.cards).some((r) => boxesOverlap(box, r))).toBe(false);
     expect(note.y).toBe(80 - 35);
   });

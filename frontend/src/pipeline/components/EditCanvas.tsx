@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ReactFlow, Background, BackgroundVariant, useNodesState, useEdgesState, useReactFlow, useStore, type Node, type Edge, ReactFlowProvider, ViewportPortal } from "@xyflow/react";
+import { ReactFlow, Background, BackgroundVariant, useNodesState, useEdgesState, useReactFlow, type Node, type Edge, ReactFlowProvider, ViewportPortal } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 import type { RunState } from "../../shared/generated/RunState";
@@ -188,27 +188,15 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   // there writes positions.
   const { compactNodes } = useCompactNodes();
   const compactOn = compactNodes && isRunTabLocked(tab);
-  // The orchestrators with child runs carry « N runs » on both sizes, and the
-  // notes keep their drawn height: both shape the compaction.
-  // Both as JSON strings, so a new array with the same content changes nothing.
+  // The orchestrators with child runs carry « N runs » on both sizes: their
+  // ids as one string, so a new array with the same content changes nothing.
   const withRuns = useMemo(
     () => JSON.stringify(cards.filter((c) => (c.data as { childCounts?: unknown }).childCounts != null).map((c) => c.id)),
     [cards],
   );
-  const noteHeights = useStore((s) => {
-    const out: [string, number][] = [];
-    for (const [, n] of s.nodeLookup) if (n.type === "note" && n.measured?.height) out.push([n.id, n.measured.height]);
-    return JSON.stringify(out);
-  });
   const compaction = useMemo(
-    () =>
-      compactOn && pipeline
-        ? compactCanvas(pipeline, {
-            withRuns: new Set(JSON.parse(withRuns) as string[]),
-            noteHeights: Object.fromEntries(JSON.parse(noteHeights) as [string, number][]),
-          })
-        : null,
-    [compactOn, pipeline, withRuns, noteHeights],
+    () => (compactOn && pipeline ? compactCanvas(pipeline, { withRuns: new Set(JSON.parse(withRuns) as string[]) }) : null),
+    [compactOn, pipeline, withRuns],
   );
   const shown = compaction?.pipeline ?? pipeline;
   const derivedNodes = useMemo(() => {

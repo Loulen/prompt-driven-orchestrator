@@ -126,6 +126,8 @@ Modèle (A) — **document-first, code en side-channel** :
 
 Une edge porte une clause `when:` **optionnelle**. Sans clause, l'edge est inconditionnelle.
 
+**Conditions** *(terme)* : le nom, dans l'UI, de la clause `when:` d'une edge, c'est-à-dire la liste de ses prédicats (AND). Le YAML garde la clé `when:`. Une edge sans condition est **Always** ; une edge `else` n'a pas de conditions. _Éviter_ : « When » comme libellé d'UI, « filtre », « règle ».
+
 ### Évaluation — multi-match, pas d'ordre
 
 À l'arrivée d'un artefact sur un output port, **toutes** les edges sortantes dont la clause est satisfaite **firent** — le flux peut fan-out vers plusieurs nœuds simultanément. Pas de `first-match-wins`. Si deux conditions se chevauchent, les deux branches partent : c'est voulu (ADR-0001, *sharp tool*) — le designer écrit des conditions disjointes pour un XOR, ou fait converger le fan-out sur un nœud aval (cf. *Convergence*). Une edge **`else`** fire **uniquement si aucune edge sœur** (même output port source) n'a matché.

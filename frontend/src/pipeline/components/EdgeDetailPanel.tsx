@@ -23,6 +23,7 @@ import {
 import {
   edgeConditionFields,
   isBoolField,
+  declaredValueType,
   clampOperator,
   isConditionHeld,
   nextFreeCondition,
@@ -367,15 +368,16 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
 const NOTHING_FREE = "Every field already has a condition on each of its operators";
 
 /**
- * The type the row's value is written with. A bool field writes a bool. Any
- * other field infers it from the text, except a value read from the clause as a
- * string that looks like a number (`"42"`): it stays a string until its field or
- * its value is changed, so editing the operator does not turn it into `42`.
+ * The type the row's value is written with. A declared field writes its
+ * declared type (bool, or string for a string or an enum). Any other field keeps
+ * the type its value was read with until its field or its value changes, so
+ * editing the operator of `flag: { eq: true }` or `code: { eq: "42" }` does not
+ * turn the value into `"true"` or `42`; a new value is inferred from its text.
  */
 function withTypeHint(row: ConditionRow, fields: EdgeConditionField[], before?: ConditionRow): ConditionRow {
-  if (isBoolField(fields, row.field)) return { ...row, valueType: "bool" };
-  const unchanged = before?.valueType === "string" && before.field === row.field && before.value === row.value;
-  return { ...row, valueType: unchanged ? "string" : undefined };
+  const declared = declaredValueType(fields, row.field);
+  const unchanged = before !== undefined && before.field === row.field && before.value === row.value;
+  return { ...row, valueType: declared ?? (unchanged ? before.valueType : undefined) };
 }
 
 function defaultValueFor(field: string, fields: EdgeConditionField[]): string {

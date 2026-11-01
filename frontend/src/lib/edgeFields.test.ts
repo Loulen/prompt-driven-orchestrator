@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { edgeConditionFields, operatorsForField, clampOperator, nextFreeCondition } from "./edgeFields";
+import {
+  edgeConditionFields,
+  operatorsForField,
+  clampOperator,
+  nextFreeCondition,
+  declaredValueType,
+  type EdgeConditionField,
+} from "./edgeFields";
 import { OPERATORS, type Operator } from "./whenClause";
 import type { EdgeDef } from "../shared/generated/EdgeDef";
 import type { EditorPipelineDef } from "../pipeline/model/pipeline";
@@ -112,6 +119,36 @@ describe("isBoolField helper", () => {
     expect(isBoolField(fields, "is_blocking")).toBe(true);
     expect(isBoolField(fields, "verdict")).toBe(false);
     expect(isBoolField(fields, "iter")).toBe(false);
+  });
+});
+
+describe("declaredValueType", () => {
+  const field = (name: string, type: string | null): EdgeConditionField => ({
+    name,
+    decl: type ? { type } : null,
+    group: "Output · out",
+    hint: type ?? "",
+  });
+  const fields = [
+    field("ok", "bool"),
+    field("label", "string"),
+    field("level", "enum"),
+    field("count", "int"),
+    field("score", "float"),
+    field("loose", null),
+  ];
+
+  it("writes a declared bool as a boolean, a declared string or enum as a string", () => {
+    expect(declaredValueType(fields, "ok")).toBe("bool");
+    expect(declaredValueType(fields, "label")).toBe("string");
+    expect(declaredValueType(fields, "level")).toBe("string");
+  });
+
+  it("leaves numbers and undeclared fields to inference", () => {
+    expect(declaredValueType(fields, "count")).toBeUndefined();
+    expect(declaredValueType(fields, "score")).toBeUndefined();
+    expect(declaredValueType(fields, "loose")).toBeUndefined();
+    expect(declaredValueType(fields, "missing")).toBeUndefined();
   });
 });
 

@@ -96,7 +96,8 @@ export function whenToRows(
       const { port, field } = splitFieldKey(key, ports);
       for (const [op, val] of Object.entries(predicate as Record<string, unknown>)) {
         const value = Array.isArray(val) ? JSON.stringify(val) : String(val ?? "");
-        const valueType = typeOf(val);
+        const valueType = typeHintFor(val);
+        // No `valueType` key at all when inference already gives the type back.
         rows.push(
           valueType
             ? { port, field, op: op as Operator, value, valueType }
@@ -199,7 +200,7 @@ export function inShownOrder(rows: ConditionRow[], order: readonly string[]): Co
  * `parseValue`: a bool would be read back as a string, a string that reads as a
  * number as a number. Numbers and lists infer back to themselves.
  */
-function typeOf(val: unknown): ConditionRow["valueType"] {
+function typeHintFor(val: unknown): ConditionRow["valueType"] {
   if (typeof val === "boolean") return "bool";
   if (typeof val === "string" && readsAsNumber(val)) return "string";
   return undefined;

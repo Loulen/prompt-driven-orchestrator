@@ -221,6 +221,29 @@ describe("EdgeDetailPanel", () => {
     expect(when.iter).toEqual({ neq: "42" });
   });
 
+  it("keeps a bool on a field no output declares a bool when only its operator changes", () => {
+    seedEdge({ ...baseEdge, when: { flag: { eq: true } } });
+    render(<EdgeDetailPanel />);
+    pickOption(screen.getByTestId("op-dropdown"), "≠");
+    const when = useEditStore.getState().openTabs[0].pipeline.edges[0].when as Record<string, Record<string, unknown>>;
+    expect(when.flag).toEqual({ neq: true });
+  });
+
+  it("writes an enum value that reads as a number as a string", () => {
+    seedEdge({ ...baseEdge, when: { level: { eq: "1" } } });
+    const tab = useEditStore.getState().openTabs[0];
+    const nodes = tab.pipeline.nodes.map((n) =>
+      n.id === "reviewer"
+        ? { ...n, outputs: [{ name: "verdict", frontmatter: { level: { type: "enum", allowed: ["1", "2"] } } }] }
+        : n,
+    );
+    useEditStore.setState({ openTabs: [{ ...tab, pipeline: { ...tab.pipeline, nodes } }] });
+    render(<EdgeDetailPanel />);
+    pickOption(screen.getByTestId("value-dropdown"), "2");
+    const when = useEditStore.getState().openTabs[0].pipeline.edges[0].when as Record<string, Record<string, unknown>>;
+    expect(when.level).toEqual({ eq: "2" });
+  });
+
   it("moves a row onto a held field with another operator, keeping both values", () => {
     seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" }, iter: { gte: 2 } } });
     render(<EdgeDetailPanel />);

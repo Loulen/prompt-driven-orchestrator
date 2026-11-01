@@ -33,7 +33,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   controls. The "Fields" section is gone. The `when:` key of the file is unchanged.
 - Fix: a condition keeps the type of its value when another condition is added or edited. A
   bool condition was saved as the string `"true"`, which never matches a frontmatter `true`, so
-  the edge never fired; a string that reads as a number (`"42"`) was saved as a number.
+  the edge never fired; a string that reads as a number (`"42"`) was saved as a number. An enum
+  or string field now always writes its value as a string (an allowed value `"2"` is no longer
+  saved as `2`).
 
 ## 2.69.0 · A shorter dev loop: fast, scoped and full gates, `pdo run status`
 

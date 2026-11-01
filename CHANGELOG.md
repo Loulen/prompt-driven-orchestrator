@@ -36,6 +36,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   the edge never fired; a string that reads as a number (`"42"`) was saved as a number. An enum
   or string field now always writes its value as a string (an allowed value `"2"` is no longer
   saved as `2`).
+
 ### Node detail pane
 
 - The Transcript opens on its latest entries: newest first by default, the Prompt at the oldest

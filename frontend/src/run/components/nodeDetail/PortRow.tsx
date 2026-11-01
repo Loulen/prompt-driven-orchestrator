@@ -9,7 +9,7 @@ import ImageLightbox from "../../../shared/ui/ImageLightbox";
 import { formatSize, isImageFile } from "../../model/nodeDetailFormat";
 import CopyButton from "../artifacts/CopyButton";
 import FrontmatterView from "../artifacts/FrontmatterView";
-import { verdictTone } from "../../model/frontmatter";
+import { verdictFirst, verdictTone } from "../../model/frontmatter";
 import { openFromAnywhere } from "./openFromAnywhere";
 import FileChip from "./FileChip";
 import PortDownloads from "./PortDownloads";
@@ -88,7 +88,8 @@ export default function PortRow({
     showFrontmatter && !isImage && !isFiles && firstFile?.frontmatter && !firstFile.inherited
       ? firstFile.frontmatter
       : null;
-  const fields = frontmatter ? Object.entries(frontmatter) : [];
+  // The verdict reads first: the daemon's map order is not the file's.
+  const fields = frontmatter ? verdictFirst(frontmatter) : [];
   // The card's edge: the tone of its verdict-like value, if any.
   const tone = card ? fields.map(([, v]) => verdictTone(v)).find(Boolean) : undefined;
 

@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { ArrowUpRight, ChevronDown, ChevronUp, TriangleAlert } from "lucide-react";
 import { IconButton, Tooltip } from "../../../shared/ui/kit";
 import type { SchemaWarning } from "../../../shared/generated/SchemaWarning";
-import { frontmatterValue, isWebUrl, verdictTone } from "../../model/frontmatter";
+import { frontmatterValue, isWebUrl, isWideValue, verdictTone } from "../../model/frontmatter";
 import { useCopyToClipboard } from "../../store/useCopyToClipboard";
 
 export type FrontmatterLayout = "band" | "rows";
@@ -16,6 +16,8 @@ export type FrontmatterLayout = "band" | "rows";
  *   « Copy failed » after it);
  * - an http(s) value also opens in a new tab (↗);
  * - a verdict-like value keeps its tone;
+ * - in `rows`, a web address or a long value takes a line of its own, short
+ *   values share one;
  * - when a value is cut, a chevron unfolds the fields as a key/value list,
  *   each value whole, and folds them back. Local: never persisted.
  *
@@ -50,14 +52,20 @@ export default function FrontmatterView({
       <dl className="fmv__list" ref={listRef}>
         {entries.map(([field, value]) => {
           const reason = byField.get(field);
+          const text = frontmatterValue(value);
           return (
-            <div key={field} className="fmv__item" data-testid={reason ? warningTestId : fieldTestId}>
+            <div
+              key={field}
+              className="fmv__item"
+              data-testid={reason ? warningTestId : fieldTestId}
+              data-wide={(layout === "rows" && isWideValue(text)) || undefined}
+            >
               <dt className="fmv__k" data-st={reason ? "awaiting" : undefined}>
                 {reason && <TriangleAlert size={10} strokeWidth={1.75} aria-label="Schema not respected" />}
                 {field}
               </dt>
               <dd className="fmv__v">
-                <FieldValue field={field} text={frontmatterValue(value)} tone={reason ? "awaiting" : verdictTone(value)} warning={reason} />
+                <FieldValue field={field} text={text} tone={reason ? "awaiting" : verdictTone(value)} warning={reason} />
               </dd>
             </div>
           );

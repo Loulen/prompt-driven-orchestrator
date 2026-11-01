@@ -111,3 +111,20 @@ describe("FrontmatterView with a schema check", () => {
     expect(value("step")).toHaveAttribute("data-st", "awaiting");
   });
 });
+
+describe("FrontmatterView (rows): one line per wide value", () => {
+  it("gives a web address or a long value its own line, short ones share", () => {
+    render(
+      <FrontmatterView values={{ verdict: "pass", blocking_findings: 0, PR_link: PR, note: "x".repeat(60) }} layout="rows" />,
+    );
+    const wide = screen
+      .getAllByTestId("frontmatter-field")
+      .map((item) => [item.querySelector<HTMLElement>("[data-field]")!.dataset.field, item.hasAttribute("data-wide")]);
+    expect(wide).toEqual([
+      ["verdict", false],
+      ["blocking_findings", false],
+      ["PR_link", true],
+      ["note", true],
+    ]);
+  });
+});

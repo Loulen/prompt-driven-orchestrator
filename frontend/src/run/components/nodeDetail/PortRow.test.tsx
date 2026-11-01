@@ -178,6 +178,13 @@ describe("PortRow — an output card", () => {
     expect(screen.getByTestId("port-download")).toBeInTheDocument();
   });
 
+  it("reads its verdict first, whatever the order of the fields", () => {
+    renderOutput(review({ PR_link: PR, Verdict: "Pending", orchestration_status: "Finished" }));
+    const fields = screen.getAllByTestId("frontmatter-value").map((v) => v.dataset.field);
+    expect(fields).toEqual(["Verdict", "PR_link", "orchestration_status"]);
+    expect(screen.getByTestId("port-row")).toHaveAttribute("data-st", "awaiting");
+  });
+
   it("opens from anywhere on it, its controls keeping their own action", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

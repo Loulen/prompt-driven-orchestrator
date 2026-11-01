@@ -301,7 +301,7 @@ button.ri-port__name:hover { text-decoration: underline; }
 .ri-port--card {
   margin: var(--g-2) var(--pad-x) 0;
   border: 1px solid var(--line);
-  border-left: 2px solid var(--st, var(--line-strong));
+  border-left: 3px solid var(--st, var(--line-strong));
   border-radius: var(--radius-ui);
   background: var(--surface-0);
 }

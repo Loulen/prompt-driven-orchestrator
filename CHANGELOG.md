@@ -26,9 +26,12 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   ("✓ Copied" or "Copy failed"), an http(s) value opens with ↗, and a chevron unfolds the
   values cut off to read them whole. Verdicts keep their tone.
 - In the I/O tab, each output is a card: its edge in its verdict's tone, its name, path, size and
-  tools, and its whole frontmatter. An output not produced yet is dashed and says "not produced
+  tools, and its whole frontmatter, the verdict first, a link or a long value on a line of its
+  own. An output not produced yet is dashed and says "not produced
   yet" on hover only. A click anywhere on an output card, a live artifact row or an input row
   opens it; its controls keep their own action.
+- A Run search hit inside a long transcript entry scrolls to the marked word, not to the middle
+  of the entry.
 
 ## 2.69.0 · A shorter dev loop: fast, scoped and full gates, `pdo run status`
 

@@ -95,3 +95,27 @@ export function verdictTone(value: unknown): StatusTone | undefined {
 export function isWebUrl(text: string): boolean {
   return /^https?:\/\/\S+$/i.test(text.trim());
 }
+
+/**
+ * The fields with the verdict first: a field named `verdict`, else the first
+ * value that reads as one. The others keep their order.
+ */
+export function verdictFirst(
+  values: Record<string, unknown> | ReadonlyArray<readonly [string, unknown]>,
+): [string, unknown][] {
+  const entries: [string, unknown][] = (Array.isArray(values) ? values : Object.entries(values)).map(
+    ([k, v]) => [k, v],
+  );
+  let at = entries.findIndex(([k]) => k.toLowerCase() === "verdict");
+  if (at === -1) at = entries.findIndex(([, v]) => verdictTone(v) !== undefined);
+  if (at <= 0) return entries;
+  return [entries[at], ...entries.slice(0, at), ...entries.slice(at + 1)];
+}
+
+/** Longer than this, a value takes a line of its own in the I/O rows. */
+const WIDE_VALUE = 32;
+
+/** Whether a value needs a line of its own: a web address or a long text. */
+export function isWideValue(text: string): boolean {
+  return isWebUrl(text) || text.length > WIDE_VALUE;
+}

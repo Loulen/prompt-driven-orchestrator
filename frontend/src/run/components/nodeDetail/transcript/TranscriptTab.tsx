@@ -90,9 +90,10 @@ function TranscriptList({
     }
     if (scrolledTo.current === focus.nonce) return;
     scrolledTo.current = focus.nonce;
-    scrollRef.current
-      ?.querySelector(`[data-entry="${focus.index}"]`)
-      ?.scrollIntoView?.({ block: "center" });
+    // The marked word, when the entry shows one: a tall entry centred whole
+    // could leave the word off screen.
+    const entry = scrollRef.current?.querySelector(`[data-entry="${focus.index}"]`);
+    (entry?.querySelector("mark.query-mark") ?? entry)?.scrollIntoView?.({ block: "center" });
     // `view` changes at every read, a live poll's included: a page asked while
     // another read was in flight is asked again.
   }, [focus, loaded, view, first, end, loadOlder, loadNewer]);

@@ -270,6 +270,11 @@
     min-width: 0;
     max-width: min(100%, 48ch);
   }
+  /* The I/O rows: a web address or a long value on a line of its own. */
+  .fmv--rows .fmv__item[data-wide] {
+    flex-basis: 100%;
+    max-width: 100%;
+  }
   .fmv__k {
     display: inline-flex;
     flex: none;

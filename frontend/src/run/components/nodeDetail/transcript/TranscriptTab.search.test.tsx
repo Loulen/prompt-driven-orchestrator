@@ -120,6 +120,21 @@ describe.each([
     expect(document.querySelectorAll("[data-focused]").length).toBe(1);
   });
 
+  it("brings the marked word into view, not only its entry", async () => {
+    useRunSearchStore.setState({ runId: "r1", query: "debounce", result: ANSWER, status: "done" });
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    renderTab();
+    await screen.findByText(opening);
+    choose(115);
+    await waitFor(() => expect(scrolled.length).toBeGreaterThan(0));
+    expect(scrolled[0].tagName).toBe("MARK");
+    expect(scrolled[0].textContent?.toLowerCase()).toBe("debounce");
+    expect(scrolled[0].closest("[data-entry]")).toHaveAttribute("data-entry", "115");
+  });
+
   it("unfolds a tool call chosen as a hit and reads it", async () => {
     fetchDetail.mockResolvedValue({ name: "Edit", input: "{}", diff: [], output: "done", is_error: false, truncated: false });
     renderTab();

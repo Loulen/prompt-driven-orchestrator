@@ -182,6 +182,45 @@ describe("EdgeDetailPanel", () => {
     expect((edge.when as Record<string, Record<string, unknown>>).verdict).toEqual({ eq: "FAIL" });
   });
 
+  // A bool condition kept its type only while it was the last row committed: the
+  // next commit (an added or edited condition) wrote it back as the string "true",
+  // which the runtime never matches against a frontmatter `true`.
+  it("keeps a bool condition a bool when another condition is added and edited", () => {
+    seedEdge(baseEdge);
+    render(<EdgeDetailPanel />);
+
+    fireEvent.click(screen.getByTestId("add-condition"));
+    pickOption(screen.getByTestId("field-dropdown"), "is_blocking");
+    fireEvent.click(screen.getByTestId("add-condition"));
+    pickOption(screen.getAllByTestId("field-dropdown")[1], "verdict");
+    pickOption(screen.getAllByTestId("value-dropdown")[0], "FAIL");
+
+    let when = useEditStore.getState().openTabs[0].pipeline.edges[0].when;
+    expect(when).toEqual({ is_blocking: { eq: true }, verdict: { eq: "FAIL" } });
+
+    pickOption(screen.getAllByTestId("value-dropdown")[0], "PASS");
+    when = useEditStore.getState().openTabs[0].pipeline.edges[0].when;
+    expect(when).toEqual({ is_blocking: { eq: true }, verdict: { eq: "PASS" } });
+  });
+
+  it("keeps numbers and numeric-looking strings typed when another condition is added", () => {
+    seedEdge({ ...baseEdge, when: { iter: { gte: 2 }, verdict: { eq: "42" }, is_blocking: { eq: false } } });
+    render(<EdgeDetailPanel />);
+    fireEvent.click(screen.getByTestId("add-condition"));
+    const when = useEditStore.getState().openTabs[0].pipeline.edges[0].when as Record<string, Record<string, unknown>>;
+    expect(when.iter.gte).toBe(2);
+    expect(when.verdict.eq).toBe("42");
+    expect(when.is_blocking).toEqual({ eq: false });
+  });
+
+  it("keeps a numeric-looking string a string when only its operator changes", () => {
+    seedEdge({ ...baseEdge, when: { iter: { eq: "42" } } });
+    render(<EdgeDetailPanel />);
+    pickOption(screen.getByTestId("op-dropdown"), "≠");
+    const when = useEditStore.getState().openTabs[0].pipeline.edges[0].when as Record<string, Record<string, unknown>>;
+    expect(when.iter).toEqual({ neq: "42" });
+  });
+
   it("moves a row onto a held field with another operator, keeping both values", () => {
     seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" }, iter: { gte: 2 } } });
     render(<EdgeDetailPanel />);

@@ -36,10 +36,12 @@ export interface ConditionRow {
   /**
    * Type hint for `value` coercion. `"bool"` forces the written value to a
    * canonical YAML boolean (`true`/`false`) rather than a string, resolving the
-   * true / 1 / True ambiguity (#147). Absent means "infer" (numeric → number,
-   * otherwise string).
+   * true / 1 / True ambiguity (#147). `"string"` keeps a value that reads as a
+   * number (`"42"`) a string. Absent means "infer" (numeric → number, otherwise
+   * string). `whenToRows` sets it from the clause, so re-committing a row the
+   * user did not touch writes back the type it was read with.
    */
-  valueType?: "bool";
+  valueType?: "bool" | "string";
 }
 
 /**
@@ -93,12 +95,13 @@ export function whenToRows(
     if (typeof predicate === "object" && predicate !== null && !Array.isArray(predicate)) {
       const { port, field } = splitFieldKey(key, ports);
       for (const [op, val] of Object.entries(predicate as Record<string, unknown>)) {
-        rows.push({
-          port,
-          field,
-          op: op as Operator,
-          value: Array.isArray(val) ? JSON.stringify(val) : String(val ?? ""),
-        });
+        const value = Array.isArray(val) ? JSON.stringify(val) : String(val ?? "");
+        const valueType = typeOf(val);
+        rows.push(
+          valueType
+            ? { port, field, op: op as Operator, value, valueType }
+            : { port, field, op: op as Operator, value },
+        );
       }
     }
   }
@@ -191,6 +194,21 @@ export function inShownOrder(rows: ConditionRow[], order: readonly string[]): Co
   return [...known, ...rows.filter((r) => !rank.has(conditionKey(r)))];
 }
 
+/**
+ * The type hint a clause value needs to come back unchanged through
+ * `parseValue`: a bool would be read back as a string, a string that reads as a
+ * number as a number. Numbers and lists infer back to themselves.
+ */
+function typeOf(val: unknown): ConditionRow["valueType"] {
+  if (typeof val === "boolean") return "bool";
+  if (typeof val === "string" && readsAsNumber(val)) return "string";
+  return undefined;
+}
+
+function readsAsNumber(value: string): boolean {
+  return value.trim() !== "" && !isNaN(Number(value));
+}
+
 function parseValue(row: ConditionRow): unknown {
   if (row.op === "in" || row.op === "not_in") {
     try {
@@ -205,7 +223,6 @@ function parseValue(row: ConditionRow): unknown {
     // Canonical boolean: the toggle only ever produces "true"/"false".
     return row.value === "true";
   }
-  const num = Number(row.value);
-  if (!isNaN(num) && row.value.trim() !== "") return num;
-  return row.value;
+  if (row.valueType === "string") return row.value;
+  return readsAsNumber(row.value) ? Number(row.value) : row.value;
 }

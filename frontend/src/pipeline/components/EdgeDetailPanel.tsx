@@ -174,6 +174,7 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
             }
           : merged,
         fields,
+        r,
       );
     });
     // Two rows on one field and operator would share one value in the clause:
@@ -365,8 +366,16 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
 /** Why « Add condition » is off: every field already holds every operator it admits. */
 const NOTHING_FREE = "Every field already has a condition on each of its operators";
 
-function withTypeHint(row: ConditionRow, fields: EdgeConditionField[]): ConditionRow {
-  return isBoolField(fields, row.field) ? { ...row, valueType: "bool" } : { ...row, valueType: undefined };
+/**
+ * The type the row's value is written with. A bool field writes a bool. Any
+ * other field infers it from the text, except a value read from the clause as a
+ * string that looks like a number (`"42"`): it stays a string until its field or
+ * its value is changed, so editing the operator does not turn it into `42`.
+ */
+function withTypeHint(row: ConditionRow, fields: EdgeConditionField[], before?: ConditionRow): ConditionRow {
+  if (isBoolField(fields, row.field)) return { ...row, valueType: "bool" };
+  const unchanged = before?.valueType === "string" && before.field === row.field && before.value === row.value;
+  return { ...row, valueType: unchanged ? "string" : undefined };
 }
 
 function defaultValueFor(field: string, fields: EdgeConditionField[]): string {

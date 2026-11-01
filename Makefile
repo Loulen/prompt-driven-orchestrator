@@ -152,7 +152,7 @@ e2e:
 release-bump:
 	LEVEL=$(LEVEL) API_LEVEL=$(API_LEVEL) DRY_RUN=$(DRY_RUN) node scripts/release/release-bump.mjs
 
-# The dev loop measured before/after (docs/agents/measure-dev-loop.md): for each
+# The dev loop measured before/after: for each
 # ref of REF, a throwaway worktree (removed even on failure), then the cold build,
 # the build with a warm sccache, the time to the first structural failure, the
 # scoped gate on a front-only diff and the full suite; a gate the ref lacks is

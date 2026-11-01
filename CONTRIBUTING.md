@@ -172,7 +172,7 @@ Every command is documented in [docs/reference/cli.md](docs/reference/cli.md).
 | Build frontend | `cd frontend && pnpm run build` |
 | Test the scripts (README media, release) | `node --test 'scripts/*/test/*.test.mjs'` |
 | Run the frontend's E2E | `make e2e` |
-| Measure the dev loop at refs (builds, gates), cost per ticket of a Run | `make bench-gates REF=…`, `make run-costs RUN=…` ([how](docs/agents/measure-dev-loop.md)) |
+| Measure the dev loop at refs (builds, gates), cost per ticket of a Run | `make bench-gates REF=…`, `make run-costs RUN=…` |
 
 ### TypeScript types of the daemon's DTOs
 

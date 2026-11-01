@@ -4,6 +4,7 @@ import { shiftCaret } from "../../model/draftDelta";
 import { firstName, presenceStyle } from "../../model/presence";
 import { draftSessionOf } from "../../store/draftSessions";
 import { useEditStore } from "../../store/editStore";
+import { TextArea } from "../../../shared/ui/kit";
 
 /** The pixel position of `caret` inside `textarea`, by a mirror of its text. */
 function caretPosition(textarea: HTMLTextAreaElement, caret: number): { top: number; left: number } {
@@ -34,7 +35,8 @@ function caretPosition(textarea: HTMLTextAreaElement, caret: number): { top: num
  * A node's prompt in its shared draft (ADR-0088): the text others type lands
  * without moving my caret, and the caret of each other participant typing here
  * shows in their color, with their first name. The textarea's own handlers
- * (a completion's keys, its `ref`) run beside the draft's.
+ * (a completion's keys, its `ref`) run beside the draft's. The field is the
+ * kit's `TextArea`: bordered, mono, with its focus ring.
  */
 export default function SharedPromptField({
   nodeId,
@@ -89,8 +91,9 @@ export default function SharedPromptField({
   };
 
   return (
-    <div className="ei-prompt">
-      <textarea
+    <div className="ei-prompt__field">
+      <TextArea
+        mono
         {...rest}
         ref={(textarea) => {
           ref.current = textarea;

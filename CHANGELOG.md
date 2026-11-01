@@ -13,6 +13,25 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### Pipeline editor
+
+- A node card lists each of its outputs on a line of its own, with an icon of its port type
+  (markdown, html, image, image list, files) and its name; the inputs line is gone. A card with
+  several outputs is taller, and the canvas moves what lies under it down by as much, without
+  writing anything: positions in the pipeline file stay as they were, a card with one output is
+  drawn exactly as before, and no wire gains a bend. The Run canvas is unchanged.
+- The node inspector's prompt is a bordered field with a focus ring; the line PDO adds at launch
+  (`/pdo-interactive`, `/pdo-orchestrate`) sits under it, locked, "Added at launch".
+- The Agent section's row is named "Model". In Custom, the summary line no longer repeats the
+  three pickers; Inherit and Profile keep it. The Skills selector takes the row's whole width.
+- The edge inspector's "When" section is now "Conditions". "Add condition" is always shown
+  under the last condition (or under "Always"), and says why when nothing is left to add. The
+  field dropdown groups its fields by origin (the output, the loop, the pipeline variables), each
+  with its type and allowed values. Output, Field, Op and Value share one grid of same-height
+  controls. The "Fields" section is gone. The `when:` key of the file is unchanged.
+
 ## 2.69.0 · A shorter dev loop: fast, scoped and full gates, `pdo run status`
 
 ### Restarting a node

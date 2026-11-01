@@ -5,6 +5,7 @@ import { useEditStore } from "../store/editStore";
 import { pipelineToYamlObject } from "../../lib/serializePipeline";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../model/pipeline";
+import { pickOption, selectOptions, selectedLabel } from "../../test/kitSelect";
 
 // #843 — the Outputs section: an edge carries one or more outputs of its source
 // node (ADR-0073), chosen here, and each condition row names the output it reads.
@@ -112,12 +113,12 @@ describe("Outputs section (#843)", () => {
     expect(within(section).queryByTestId("output-checkbox-progress")).not.toBeInTheDocument();
   });
 
-  it("is the FIRST section of the panel, before When", () => {
+  it("is the FIRST section of the panel, before Conditions", () => {
     seedEdge(singlePort);
     render(<EdgeDetailPanel />);
     const text = screen.getByTestId("edge-detail-panel").textContent ?? "";
     expect(text.indexOf("Outputs")).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf("Outputs")).toBeLessThan(text.indexOf("When"));
+    expect(text.indexOf("Outputs")).toBeLessThan(text.indexOf("Conditions"));
   });
 
   it("ticking a second output makes the edge carry both, in declaration order", () => {
@@ -195,17 +196,17 @@ describe("condition rows read a designated output (#843)", () => {
       when: { "out.has_design_work": { eq: true } },
     });
     render(<EdgeDetailPanel />);
-    const sel = screen.getByTestId("condition-port-dropdown") as HTMLSelectElement;
-    expect(Array.from(sel.options).map((o) => o.value)).toEqual(["out", "spec"]);
-    expect(sel.value).toBe("out");
+    const sel = screen.getByTestId("condition-port-dropdown");
+    expect(selectOptions(sel).map((o) => o.label)).toEqual(["out", "spec"]);
+    expect(selectedLabel(sel)).toBe("out");
   });
 
   it("shows the dropdown on a single-port edge too, so rows keep their shape", () => {
     seedEdge({ ...singlePort, when: { has_design_work: { eq: true } } });
     render(<EdgeDetailPanel />);
-    const sel = screen.getByTestId("condition-port-dropdown") as HTMLSelectElement;
-    expect(sel.value).toBe("out");
-    expect(Array.from(sel.options).map((o) => o.value)).toEqual(["out"]);
+    const sel = screen.getByTestId("condition-port-dropdown");
+    expect(selectedLabel(sel)).toBe("out");
+    expect(selectOptions(sel).map((o) => o.label)).toEqual(["out"]);
   });
 
   it("resolves the field list from the row's output, not the edge's first port", () => {
@@ -215,8 +216,7 @@ describe("condition rows read a designated output (#843)", () => {
       when: { "spec.ready": { eq: true } },
     });
     render(<EdgeDetailPanel />);
-    const fields = screen.getByTestId("field-dropdown") as HTMLSelectElement;
-    const names = Array.from(fields.options).map((o) => o.value);
+    const names = selectOptions(screen.getByTestId("field-dropdown")).map((o) => o.label);
     expect(names).toContain("ready");
     expect(names).not.toContain("has_design_work");
   });
@@ -229,9 +229,7 @@ describe("condition rows read a designated output (#843)", () => {
     });
     render(<EdgeDetailPanel />);
 
-    fireEvent.change(screen.getByTestId("condition-port-dropdown"), {
-      target: { value: "spec" },
-    });
+    pickOption(screen.getByTestId("condition-port-dropdown"), "spec");
 
     // `has_design_work` does not exist on `spec`; keeping it would leave the
     // dropdown showing a property the port does not declare.
@@ -244,9 +242,7 @@ describe("condition rows read a designated output (#843)", () => {
 
     fireEvent.click(screen.getByTestId("add-condition"));
 
-    expect(
-      (screen.getByTestId("condition-port-dropdown") as HTMLSelectElement).value,
-    ).toBe("out");
+    expect(selectedLabel(screen.getByTestId("condition-port-dropdown"))).toBe("out");
     expect(Object.keys(currentEdge().when ?? {})[0]).toBe("out.has_design_work");
   });
 

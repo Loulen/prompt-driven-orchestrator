@@ -47,7 +47,7 @@ export default function AgentSection({
 }) {
   return (
     <>
-      <FormRow label="Agent" help="Inherit, a profile, or a combination of its own">
+      <FormRow label="Model" help="Inherit, a profile, or a combination of its own">
         <NodeAgentControl
           key={node.id}
           choice={node.agent_choice}

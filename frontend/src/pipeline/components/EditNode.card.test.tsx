@@ -197,3 +197,48 @@ describe("the compact card (Compact nodes)", () => {
     expect(within(screen.getByTestId("node-card-head")).getByRole("img", { name: "Failed" })).toBeInTheDocument();
   });
 });
+
+describe("the meta grid of a template's card: typed outputs", () => {
+  it("lists each output on its own line, with an icon of its port type and its name", () => {
+    draw({
+      inputs: [{ name: "in" }],
+      outputs: [
+        { name: "out", port_type: "markdown" },
+        { name: "prototype", port_type: "html" },
+        { name: "final", port_type: "image" },
+        { name: "shots", port_type: "image_list" },
+        { name: "bundle", port_type: "files" },
+      ],
+    });
+    const lines = screen.getAllByTestId("node-output-line");
+    expect(lines.map((l) => l.textContent)).toEqual(["out", "prototype", "final", "shots", "bundle"]);
+    expect(lines.map((l) => within(l).getByRole("img").getAttribute("aria-label"))).toEqual([
+      "markdown",
+      "html",
+      "image",
+      "image_list",
+      "files",
+    ]);
+    expect(lines[1]).toHaveAttribute("title", "prototype · html");
+  });
+
+  it("reads an output without a declared type as markdown", () => {
+    draw({ outputs: [{ name: "report" }] });
+    expect(within(screen.getByTestId("node-output-line")).getByRole("img")).toHaveAccessibleName("markdown");
+  });
+
+  it("no longer lists the inputs; keeps what runs the node and its worktree", () => {
+    draw({ inputs: [{ name: "task" }], outputs: [{ name: "out" }], isolated: true });
+    expect(screen.queryByTitle(/^Inputs/)).toBeNull();
+    expect(screen.getByTestId("node-card")).not.toHaveTextContent("task");
+    expect(screen.getByTitle("Worktree: isolated")).toBeInTheDocument();
+  });
+
+  it("keeps a Run's grid: what runs the node, iteration, time and cost, no output line", () => {
+    draw({ inRun: true, status: "completed", run: RUN, outputs: [{ name: "out" }, { name: "spec" }] });
+    expect(screen.queryAllByTestId("node-output-line")).toHaveLength(0);
+    expect(screen.getByTitle(/^Iteration/)).toBeInTheDocument();
+    expect(screen.getByTitle(/^Elapsed/)).toBeInTheDocument();
+    expect(screen.getByTitle(/^Cost/)).toBeInTheDocument();
+  });
+});

@@ -48,6 +48,29 @@ const guardedEdge: EdgeDef = {
 };
 
 describe("edgeConditionFields", () => {
+  it("groups each field by where its value comes from: the output, the loop, the pipeline", () => {
+    const fields = edgeConditionFields(pipeline(), guardedEdge);
+    expect(fields.map((f) => [f.name, f.group])).toEqual([
+      ["verdict", "Output · verdict"],
+      ["is_blocking", "Output · verdict"],
+      ["iter", "Loop"],
+      ["$threshold", "Pipeline variables"],
+    ]);
+  });
+
+  it("hints each field with its type and its allowed values", () => {
+    const p = pipeline();
+    p.variables.branch = { type: "string", default: null };
+    const hints = Object.fromEntries(edgeConditionFields(p, guardedEdge).map((f) => [f.name, f.hint]));
+    expect(hints).toEqual({
+      verdict: "enum · PASS | FAIL",
+      is_blocking: "bool",
+      iter: "int · loop iteration",
+      $threshold: "int · default 5",
+      $branch: "string",
+    });
+  });
+
   it("exposes the source port's frontmatter fields with their declarations", () => {
     const fields = edgeConditionFields(pipeline(), guardedEdge);
     const verdict = fields.find((f) => f.name === "verdict");

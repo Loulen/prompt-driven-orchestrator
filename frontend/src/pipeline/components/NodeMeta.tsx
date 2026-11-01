@@ -1,9 +1,11 @@
 /**
  * The parts of a node card under its head: the meta grid (what runs the node,
- * then on a template its inputs, worktree and outputs, in a Run its iteration,
- * time and cost) and the images of the Run's input on the Start marker.
+ * then on a template its worktree and one line per output, in a Run its
+ * iteration, time and cost) and the images of the Run's input on the Start
+ * marker.
  */
-import { ArrowDownToLine, ArrowUpFromLine, Coins, GitFork, Repeat, Timer, type LucideIcon } from "lucide-react";
+import { Coins, FileCode, FileImage, Files, FileText, GitFork, Images, Repeat, Timer, type LucideIcon } from "lucide-react";
+import type { PortType } from "../../shared/generated/PortType";
 import { formatDuration } from "../../run/model/runDuration";
 import { formatCostAmount } from "../../run/model/costLabel";
 import { useNow } from "../../run/model/iterationDuration";
@@ -33,9 +35,30 @@ function Cell({ icon: Icon, title, value }: { icon: LucideIcon; title: string; v
   );
 }
 
+/** The icon of each port type, on the card's output lines. */
+const PORT_TYPE_ICON: Record<PortType, LucideIcon> = {
+  markdown: FileText,
+  html: FileCode,
+  image: FileImage,
+  image_list: Images,
+  files: Files,
+};
+
+/** One output of a template's card: its port type's icon and its name, on a line of its own. */
+function OutputLine({ name, type }: { name: string; type: PortType }) {
+  const Icon = PORT_TYPE_ICON[type] ?? FileText;
+  return (
+    <span className="cv-n__cell cv-n__out" title={`${name} · ${type}`} data-testid="node-output-line" data-port-type={type}>
+      <Icon size={11} strokeWidth={1.5} role="img" aria-label={type} />
+      <span>{name}</span>
+    </span>
+  );
+}
+
 /**
  * The card's meta grid, two columns: what runs the node, then on a template
- * its inputs, worktree and outputs, in a Run its iteration, time and cost.
+ * its worktree and one line per output (the card grows with them), in a Run
+ * its iteration, time and cost.
  */
 export function NodeMeta({ data, run }: { data: EditNodeData; run: EditNodeData["run"] }) {
   const live = run != null && (data.status === "running" || data.status === "awaiting_user");
@@ -46,9 +69,10 @@ export function NodeMeta({ data, run }: { data: EditNodeData; run: EditNodeData[
     return (
       <div className="cv-n__grid">
         <Cell icon={AgentIcon} title={agent.title} value={agent.short} />
-        <Cell icon={ArrowDownToLine} title="Inputs" value={data.inputs.map((p) => p.name).join(", ")} />
         <Cell icon={GitFork} title="Worktree" value={data.isolated === true ? "isolated" : "run"} />
-        <Cell icon={ArrowUpFromLine} title="Outputs" value={data.outputs.map((p) => p.name).join(", ")} />
+        {data.outputs.map((p) => (
+          <OutputLine key={p.name} name={p.name} type={p.port_type ?? "markdown"} />
+        ))}
       </div>
     );
   }

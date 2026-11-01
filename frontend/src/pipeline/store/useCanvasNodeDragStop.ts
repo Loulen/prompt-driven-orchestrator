@@ -1,10 +1,13 @@
 import { useCallback } from "react";
 import type { Node } from "@xyflow/react";
 import { useEditStore } from "./editStore";
+import { IDENTITY_SHIFT, type CanvasShift } from "./canvasShift";
 
 /** The canvas's `onNodeDragStop`: persists the final positions of the dragged
- *  pipeline nodes and notes. */
-export function useCanvasNodeDragStop() {
+ *  pipeline nodes and notes. A position is drawn; the file gets the stored one
+ *  (`shift`), read against the canvas without what was dragged — the shift is
+ *  frozen during the drag and drawn again from what is written. */
+export function useCanvasNodeDragStop(shift: CanvasShift = IDENTITY_SHIFT) {
   const updateNodeViews = useEditStore((s) => s.updateNodeViews);
   const moveNote = useEditStore((s) => s.moveNote);
   return useCallback(
@@ -17,16 +20,18 @@ export function useCanvasNodeDragStop() {
       // back on the next re-derivation. Decorative loop-region boxes are skipped
       // (draggable:false already, belt-and-suspenders against config drift).
       const movedNodes: { id: string; x: number; y: number }[] = [];
+      const moving = new Set(nodes.map((n) => n.id));
+      const stored = (y: number) => Math.round(shift.toStored(y, moving));
       for (const n of nodes) {
         if (n.type === "loopRegion") continue;
         if (n.type === "note") {
-          moveNote(n.id, n.position.x, n.position.y);
+          moveNote(n.id, n.position.x, stored(n.position.y));
           continue;
         }
-        movedNodes.push({ id: n.id, x: n.position.x, y: n.position.y });
+        movedNodes.push({ id: n.id, x: n.position.x, y: stored(n.position.y) });
       }
       if (movedNodes.length > 0) updateNodeViews(movedNodes);
     },
-    [updateNodeViews, moveNote],
+    [updateNodeViews, moveNote, shift],
   );
 }

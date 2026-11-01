@@ -99,7 +99,8 @@ export function deriveEditNodes(
         inputImages:
           n.type === "start" ? (runState?.start_node?.input_images ?? []) : undefined,
         inputs: n.inputs.map((p) => ({ name: p.name, description: p.description })),
-        outputs: n.outputs.map((p) => ({ name: p.name, description: p.description })),
+        // The card lists each output with its type's icon.
+        outputs: n.outputs.map((p) => ({ name: p.name, description: p.description, port_type: p.port_type ?? "markdown" })),
         interactive: n.interactive,
         agentMode:
           n.agent_choice?.mode === "profile"

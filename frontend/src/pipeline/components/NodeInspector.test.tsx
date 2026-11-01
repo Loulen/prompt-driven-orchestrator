@@ -255,6 +255,21 @@ describe("NodeInspector — stable tour targets (#822)", () => {
     expect(useEditStore.getState().openTabs[0].prompts.rv1).toBe("Implement it.");
   });
 
+  it("presents the prompt as a field, the line added at launch outside it", () => {
+    seedTabWithReviewer(false, "Review this code.");
+    renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
+    fireEvent.click(screen.getByTestId("node-interactive-toggle"));
+
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    expect(prompt).toBe(screen.getByTestId("node-prompt-input"));
+    const launch = screen.getByTestId("node-toggle-prompt-amendment");
+    expect(launch).toHaveTextContent("Added at launch");
+    expect(launch).toHaveTextContent("/pdo-interactive");
+    expect(prompt).not.toHaveValue(expect.stringContaining("/pdo-interactive"));
+    expect(launch.contains(prompt)).toBe(false);
+    expect(prompt.parentElement?.contains(launch)).toBe(false);
+  });
+
   it("leaves a script node's body under its own name", () => {
     seedTabWithScript();
     renderInspector({ libraryEntries: [], onLibraryChanged: () => {} });
@@ -1191,8 +1206,8 @@ describe("NodeInspector — toggle skills (#588 / ADR-0069)", () => {
     fireEvent.click(screen.getByTestId("node-orchestrator-toggle"));
     fireEvent.click(screen.getByTestId("node-interactive-toggle"));
     expect((node().skills ?? []).map((s) => s.id)).toEqual(["pdo-orchestrate", "pdo-interactive"]);
-    const pre = screen.getByTestId("node-toggle-prompt-amendment").querySelector("pre");
-    expect(pre?.textContent).toBe("/pdo-interactive\n/pdo-orchestrate");
+    const lines = [...screen.getByTestId("node-toggle-prompt-amendment").querySelectorAll("code")];
+    expect(lines.map((line) => line.textContent)).toEqual(["/pdo-interactive", "/pdo-orchestrate"]);
   });
 
   it("warns when the seeded skill is removed by hand while the toggle stays on, and re-adds it", () => {

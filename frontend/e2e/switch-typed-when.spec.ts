@@ -96,21 +96,27 @@ test("when-editor shows typed field and value dropdowns from upstream schema", a
   // a `verdict: PASS` predicate, so one condition row is present).
   await expect(page.getByTestId("edge-detail-panel")).toBeVisible({ timeout: 5_000 });
 
-  // Field dropdown lists the upstream output schema fields (+ the region `iter`).
+  // The section is « Conditions », and « Add condition » shows without hover.
+  const panel = page.getByTestId("edge-detail-panel");
+  await expect(panel.getByText("Conditions", { exact: true })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Add condition" })).toBeVisible();
+
+  // Field dropdown lists the upstream output schema fields (+ the region `iter`),
+  // grouped by origin, each with its type and allowed values.
   const fieldDropdown = page.getByTestId("field-dropdown").first();
   await expect(fieldDropdown).toBeVisible();
-  const fieldValues = await fieldDropdown
-    .locator("option")
-    .evaluateAll((opts) => (opts as HTMLOptionElement[]).map((o) => o.value));
-  expect(fieldValues).toContain("verdict");
-  expect(fieldValues).toContain("score");
+  await fieldDropdown.getByRole("button").click();
+  const fieldList = page.getByRole("listbox", { name: "Field" });
+  await expect(fieldList.getByRole("option", { name: /^verdict/ })).toContainText("enum · PASS | FAIL");
+  await expect(fieldList.getByRole("option", { name: /^score/ })).toContainText("int");
+  await expect(fieldList).toContainText("Output · review");
+  await page.keyboard.press("Escape");
 
   // The verdict field is an enum, so the value dropdown shows its allowed values.
   const valueDropdown = page.getByTestId("value-dropdown").first();
   await expect(valueDropdown).toBeVisible();
-  const valueValues = await valueDropdown
-    .locator("option")
-    .evaluateAll((opts) => (opts as HTMLOptionElement[]).map((o) => o.value));
-  expect(valueValues).toContain("PASS");
-  expect(valueValues).toContain("FAIL");
+  await valueDropdown.getByRole("button").click();
+  const valueList = page.getByRole("listbox", { name: "Value" });
+  await expect(valueList.getByRole("option", { name: "PASS" })).toBeVisible();
+  await expect(valueList.getByRole("option", { name: "FAIL" })).toBeVisible();
 });

@@ -411,6 +411,13 @@
       order: 1;
     }
   }
+  /* the Skills selector takes the row's whole width, like the agent above it */
+  .d-field__ctl > .ln-skills {
+    flex: 1 1 auto;
+  }
+  .d-field__ctl > .ln-skills > .ln-skills__field {
+    width: 100%;
+  }
   .ei-agent__line {
     min-width: 0;
     overflow: hidden;
@@ -425,17 +432,45 @@
   }
 
   /* ---------------------------------------------------------------- prompt */
+  /* a field of the kit, bordered and inset in its section, with its focus ring */
   .ei-prompt {
+    position: relative;
+    padding: var(--g-3) var(--pad-x) 0;
+  }
+  .ei-prompt:last-child {
+    padding-bottom: var(--g-3);
+  }
+  .ei-prompt__field {
     position: relative;
   }
   .ei-prompt .d-area {
     display: block;
     min-height: 140px;
-    border-width: 1px 0;
-    border-radius: 0;
-    font-family: var(--font-code);
+    background: var(--surface-0);
     font-size: var(--fs-xs);
     line-height: 1.5;
+  }
+  /* what PDO adds at launch: under the field, outside it, locked */
+  .ei-launch {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    min-height: var(--h-row);
+    padding: var(--g-1) var(--pad-x) var(--g-3);
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .ei-launch > svg {
+    flex: none;
+  }
+  .ei-launch__line {
+    padding: 0 4px;
+    border-radius: var(--radius-ui);
+    background: var(--hover);
+    color: var(--text-2);
+    font-family: var(--font-code);
   }
   .ei-amend {
     display: flex;
@@ -634,36 +669,52 @@
   }
 
   /* ---------------------------------------------------------------- edge */
-  /* one condition: output, field, operator, value. Each keeps a readable
-     width and the row wraps in a narrow pane rather than squeezing them. */
+  /* one condition: output, field, operator, value, delete. The rows and their
+     header share one grid, so each column has the same width on every row,
+     and every control the same height. */
   .ei-cond {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr) 60px 108px 24px;
     align-items: center;
     gap: var(--g-2);
     min-width: 0;
     padding: 2px var(--pad-x);
   }
-  .ei-cond > .ei-select {
-    flex: 1 1 72px;
-    max-width: 120px;
+  .ei-cond--head {
+    padding-top: var(--g-2);
+    padding-bottom: 0;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
   }
-  .ei-cond > .ei-cond__field {
-    flex: 2 1 96px;
-    max-width: none;
-  }
-  .ei-cond > .ei-cond__op {
-    flex: 0 0 auto;
-    min-width: 44px;
-  }
-  .ei-cond > .d-input,
-  .ei-cond > .ei-cond__value {
-    flex: 1 1 72px;
-    max-width: none;
+  .ei-cond__cell,
+  .ei-cond__fill {
+    display: flex;
     min-width: 0;
   }
-  .ei-cond .d-seg {
-    flex: none;
+  .ei-cond__cell > :is(.d-sel, .d-input, .d-seg, .ei-cond__fill),
+  .ei-cond__fill > :is(.d-sel, .d-seg) {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+  }
+  .ei-cond .d-seg > .d-seg__btn {
+    padding: 0 var(--g-2);
+  }
+  /* the persistent « Add condition », under the last row or under « Always » */
+  .ei-cond-add {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    padding: var(--g-2) var(--pad-x) var(--g-3);
+  }
+  .ei-cond-add__why {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .ei-check {
     display: flex;

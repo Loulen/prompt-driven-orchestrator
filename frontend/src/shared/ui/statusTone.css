@@ -3,9 +3,9 @@
  * with it (a tint, a border, a dot): `data-st="running"`, `"awaiting"`,
  * `"done"`, `"blocked"`, `"failed"`, `"skipped"`.
  */
-:is(.cv-pane, .ri) [data-st="running"] { --st: var(--color-st-running); }
-:is(.cv-pane, .ri) [data-st="awaiting"] { --st: var(--color-st-await); }
-:is(.cv-pane, .ri) [data-st="done"] { --st: var(--color-st-done); }
-:is(.cv-pane, .ri) [data-st="blocked"] { --st: var(--color-st-blocked); }
-:is(.cv-pane, .ri) [data-st="failed"] { --st: var(--color-st-failed); }
-:is(.cv-pane, .ri) [data-st="skipped"] { --st: var(--color-st-skipped); }
+:is(.cv-pane, .ri, .fmv) [data-st="running"] { --st: var(--color-st-running); }
+:is(.cv-pane, .ri, .fmv) [data-st="awaiting"] { --st: var(--color-st-await); }
+:is(.cv-pane, .ri, .fmv) [data-st="done"] { --st: var(--color-st-done); }
+:is(.cv-pane, .ri, .fmv) [data-st="blocked"] { --st: var(--color-st-blocked); }
+:is(.cv-pane, .ri, .fmv) [data-st="failed"] { --st: var(--color-st-failed); }
+:is(.cv-pane, .ri, .fmv) [data-st="skipped"] { --st: var(--color-st-skipped); }

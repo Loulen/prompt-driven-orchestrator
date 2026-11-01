@@ -1,21 +1,23 @@
 import { useState } from "react";
-import { ArrowUpRight, Download, FileText, Files, Images, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, Download, FileText, Files, Images } from "lucide-react";
 import { IconButton, Section, Tooltip } from "../../../shared/ui/kit";
 import type { LiveArtifactIO } from "../../../shared/generated/LiveArtifactIO";
-import type { SchemaWarning } from "../../../shared/generated/SchemaWarning";
 import type { FileInfo } from "../../api/nodes";
 import { artifactDownloadUrl, artifactUrl, portZipUrl } from "../../api/artifacts";
 import ImageLightbox from "../../../shared/ui/ImageLightbox";
 import { formatSize, isImageFile } from "../../model/nodeDetailFormat";
 import { liveDisplayPath, liveUpdatedAgo, newestUpdate } from "../../model/liveArtifacts";
+import FrontmatterView from "../artifacts/FrontmatterView";
+import { openFromAnywhere } from "./openFromAnywhere";
 
 /**
  * ADR-0089: the live artifacts of the iteration on screen, polled with the I/O
  * while the node works, one row each under the Outputs, a live dot before it —
  * declared ones first (« not produced » until the agent publishes them), then
- * the ones it published freely. The frontmatter reads as tags; a field that
- * misses the declared schema is an amber tag, its rule on hover. Nothing here
- * is a verdict: a live artifact is never checked.
+ * the ones it published freely. The frontmatter reads as in the viewer (a
+ * value copies, a cut one unfolds); a field that misses the declared schema is
+ * amber, its rule on hover. Nothing here is a verdict: a live artifact is never
+ * checked. A produced row opens from anywhere on it.
  */
 export default function LiveSection({
   live,
@@ -115,16 +117,20 @@ function LiveRow({
 
   const Icon = isFolder ? (images.length > 0 ? Images : Files) : FileText;
   return (
-    <div data-testid="live-row" data-live={artifact.name} data-produced="true" className="ri-port">
-      <div className="ri-port__line" data-open onClick={onOpen}>
+    <div
+      data-testid="live-row"
+      data-live={artifact.name}
+      data-produced="true"
+      data-open
+      className="ri-port"
+      onClick={openFromAnywhere(onOpen)}
+    >
+      <div className="ri-port__line">
         <span className="ri-dot" data-live aria-label="live" role="img" />
         <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-hidden />
         <button
           type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpen();
-          }}
+          onClick={onOpen}
           aria-label={`Open ${artifact.name}`}
           data-testid="live-row-open"
           className="ri-port__name"
@@ -140,7 +146,7 @@ function LiveRow({
           {subline}
         </span>
         {totalSize > 0 && <span className="ri-port__size">{formatSize(totalSize)}</span>}
-        <span className="ri-port__tools" onClick={(e) => e.stopPropagation()}>
+        <span className="ri-port__tools">
           {downloadHref && (
             <Tooltip label="Download">
               <a
@@ -158,7 +164,18 @@ function LiveRow({
         </span>
       </div>
 
-      <FrontmatterTags frontmatter={frontmatter} warnings={artifact.schema_warnings} />
+      {(frontmatter || artifact.schema_warnings.length > 0) && (
+        <div className="ri-port__sub">
+          <FrontmatterView
+            values={frontmatter ?? {}}
+            warnings={artifact.schema_warnings}
+            layout="rows"
+            testId="live-frontmatter"
+            fieldTestId="live-tag"
+            warningTestId="live-tag-warning"
+          />
+        </div>
+      )}
 
       {images.length > 0 && (
         <div className="ri-thumbs" data-testid="live-thumbnails">
@@ -179,58 +196,4 @@ function LiveRow({
       {lightbox && <ImageLightbox images={lightbox.images} index={lightbox.index} onClose={() => setLightbox(null)} />}
     </div>
   );
-}
-
-/** The frontmatter as `key value` tags, a field that misses the schema in
- *  amber with its rule on hover — and one amber tag per declared field absent. */
-function FrontmatterTags({
-  frontmatter,
-  warnings,
-}: {
-  frontmatter: Record<string, unknown> | null;
-  warnings: SchemaWarning[];
-}) {
-  const entries = Object.entries(frontmatter ?? {});
-  const byField = new Map(warnings.map((w) => [w.field, w.reason]));
-  const absent = warnings.filter((w) => !(frontmatter && w.field in frontmatter));
-  if (entries.length === 0 && absent.length === 0) return null;
-  return (
-    <div className="ri-port__sub" data-testid="live-frontmatter">
-      {entries.map(([field, value]) => {
-        const reason = byField.get(field);
-        return (
-          <span
-            key={field}
-            data-testid={reason ? "live-tag-warning" : "live-tag"}
-            data-st={reason ? "awaiting" : undefined}
-            title={reason ? `Schema: ${reason}` : `${field}: ${display(value)}`}
-            className="ri-fm__chip"
-          >
-            {reason ? (
-              <TriangleAlert size={10} strokeWidth={1.75} aria-label="Schema not respected" />
-            ) : (
-              <span className="ri-fm__k">{field}</span>
-            )}
-            <span>{reason ? `${field} ${display(value)}` : display(value)}</span>
-          </span>
-        );
-      })}
-      {absent.map((w) => (
-        <span
-          key={`absent:${w.field}`}
-          data-testid="live-tag-warning"
-          data-st="awaiting"
-          title={`Schema: ${w.reason}`}
-          className="ri-fm__chip"
-        >
-          <TriangleAlert size={10} strokeWidth={1.75} aria-label="Schema not respected" />
-          <span>{w.field === "(frontmatter)" ? "frontmatter" : `${w.field} missing`}</span>
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function display(value: unknown): string {
-  return typeof value === "object" ? JSON.stringify(value) : String(value);
 }

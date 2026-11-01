@@ -196,7 +196,7 @@ async function openPort(page: Page, port: string) {
     .locator('.port-row:has([data-testid="port-row-open"])')
     .filter({ hasText: new RegExp(`^${port}`) });
   await expect(card).toBeVisible({ timeout: 5_000 });
-  await card.click();
+  await card.locator(".ri-port__where").click();
   await expect(page.locator(".artifact-markdown")).toBeVisible({
     timeout: 3_000,
   });

@@ -1,3 +1,5 @@
+import type { StatusTone } from "../../shared/ui/kit/tones";
+
 /**
  * The YAML frontmatter fence (`---` … `---`) an artifact may open with: the
  * viewer shows it as a card and renders the markdown after it.
@@ -65,4 +67,31 @@ function nested(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(nested).join(", ")}]`;
   if (value != null && typeof value === "object") return `{${frontmatterValue(value)}}`;
   return frontmatterValue(value);
+}
+
+/** The verdicts a frontmatter value may carry, and their tone. */
+const VERDICT_TONE: Record<string, StatusTone> = {
+  pass: "done",
+  passed: "done",
+  approved: "done",
+  ok: "done",
+  done: "done",
+  finished: "done",
+  true: "done",
+  fail: "failed",
+  failed: "failed",
+  rejected: "failed",
+  false: "failed",
+  needs_work: "awaiting",
+  pending: "awaiting",
+};
+
+/** The tone a frontmatter value is painted in when it reads as a verdict. */
+export function verdictTone(value: unknown): StatusTone | undefined {
+  return VERDICT_TONE[frontmatterValue(value).toLowerCase()];
+}
+
+/** Whether a frontmatter value is a web address the viewer can open. */
+export function isWebUrl(text: string): boolean {
+  return /^https?:\/\/\S+$/i.test(text.trim());
 }

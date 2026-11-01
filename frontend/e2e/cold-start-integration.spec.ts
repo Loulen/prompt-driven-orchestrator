@@ -149,7 +149,8 @@ test("cold-start full flow: run → node → modal, no console errors", async ({
     .locator('.port-row:has([data-testid="port-row-open"])')
     .filter({ hasText: /^result/ });
   await expect(portCard).toBeVisible({ timeout: 5_000 });
-  await portCard.click();
+  // Anywhere but its controls: a frontmatter value copies instead.
+  await portCard.locator(".ri-port__where").click();
 
   // 7. Modal should appear with content
   const modal = page.locator(".artifact-markdown");

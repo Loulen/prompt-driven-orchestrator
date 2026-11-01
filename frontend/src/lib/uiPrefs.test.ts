@@ -4,10 +4,12 @@ import {
   loadCollapsedRunGroups,
   loadNodeDurationMode,
   loadTabsDisabled,
+  loadTranscriptOrder,
   saveChildRunsExpanded,
   saveCollapsedRunGroups,
   saveNodeDurationMode,
   saveTabsDisabled,
+  saveTranscriptOrder,
 } from "./uiPrefs";
 
 beforeEach(() => {
@@ -120,5 +122,38 @@ describe("uiPrefs — nodeDurationMode", () => {
     expect(loadNodeDurationMode()).toBe("total");
     localStorage.setItem("pdo.ui.nodeDurationMode", JSON.stringify("waiting"));
     expect(loadNodeDurationMode()).toBe("total");
+  });
+});
+
+describe("uiPrefs — transcript order", () => {
+  it("defaults to newest first", () => {
+    expect(loadTranscriptOrder()).toBe("newest-first");
+  });
+
+  it("round-trips the order under pdo.ui.transcriptOrder", () => {
+    saveTranscriptOrder("oldest-first");
+    expect(localStorage.getItem("pdo.ui.transcriptOrder")).toBe('"oldest-first"');
+    expect(loadTranscriptOrder()).toBe("oldest-first");
+    saveTranscriptOrder("newest-first");
+    expect(loadTranscriptOrder()).toBe("newest-first");
+  });
+
+  it("falls back to newest first on garbage or an unknown order", () => {
+    localStorage.setItem("pdo.ui.transcriptOrder", "not-json{");
+    expect(loadTranscriptOrder()).toBe("newest-first");
+    localStorage.setItem("pdo.ui.transcriptOrder", JSON.stringify("sideways"));
+    expect(loadTranscriptOrder()).toBe("newest-first");
+  });
+
+  it("degrades to the default when the storage is unavailable", () => {
+    localStorage.setItem("pdo.ui.transcriptOrder", JSON.stringify("oldest-first"));
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("SecurityError");
+    });
+    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("QuotaExceededError");
+    });
+    expect(() => saveTranscriptOrder("oldest-first")).not.toThrow();
+    expect(loadTranscriptOrder()).toBe("newest-first");
   });
 });

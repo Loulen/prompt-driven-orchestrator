@@ -8,7 +8,7 @@ vi.mock("../../api/artifacts", async (importOriginal) => ({
   fetchArtifact: (...args: unknown[]) => fetchArtifactMock(...args),
 }));
 
-import PortRow, { FrontmatterChips } from "./PortRow";
+import PortRow from "./PortRow";
 
 function preview(exists: boolean): PortIO {
   return {
@@ -41,9 +41,10 @@ describe("PortRow — an html output", () => {
     fetchArtifactMock.mockResolvedValue("<p>step 2</p>");
   });
 
-  it("an absent one keeps its path, with nothing to open or copy", () => {
+  it("an absent one stays quiet, with nothing to open or copy", () => {
     renderRow(preview(false));
-    expect(screen.getByText("worker/iter-1/preview/output.html")).toBeInTheDocument();
+    expect(screen.queryByText("worker/iter-1/preview/output.html")).not.toBeInTheDocument();
+    expect(screen.getByTestId("port-type-badge")).toHaveTextContent("html");
     expect(screen.queryByTestId("port-row-open")).not.toBeInTheDocument();
     expect(screen.queryByTestId("port-copy")).not.toBeInTheDocument();
   });
@@ -115,7 +116,7 @@ describe("PortRow — downloads", () => {
 
   it("an empty files port has nothing to download", () => {
     renderRow(exports([]));
-    expect(screen.getByText("no file yet")).toBeInTheDocument();
+    expect(screen.getByTestId("port-row")).toHaveAttribute("data-pending");
     expect(screen.queryByTestId("port-download-all")).not.toBeInTheDocument();
   });
 
@@ -144,22 +145,87 @@ describe("PortRow — downloads", () => {
   });
 });
 
-describe("FrontmatterChips", () => {
-  it("shows the verdict alone with a count of the other keys, every key in the tooltip", () => {
-    render(<FrontmatterChips values={{ score: 7, status: "draft", verdict: "PASS" }} />);
-    const card = screen.getByTestId("frontmatter-card");
-    const chips = card.querySelectorAll(".ri-fm__chip");
-    expect(chips).toHaveLength(2);
-    expect(chips[0]).toHaveTextContent("verdictPASS");
-    expect(chips[0]).toHaveAttribute("data-st", "done");
-    expect(chips[1]).toHaveTextContent("+2");
-    expect(card).toHaveAttribute("title", "score: 7\nstatus: draft\nverdict: PASS");
+function review(frontmatter: Record<string, unknown> | null, exists = true): PortIO {
+  return {
+    port: "review",
+    repeated: false,
+    port_type: "markdown",
+    files: [{ path: "worker/iter-2/review/output.md", exists, size: exists ? 6400 : null, frontmatter }],
+  };
+}
+
+const PR = "https://github.com/acme/app/compare/main...feature/x";
+
+function renderOutput(port: PortIO, onOpen = vi.fn()) {
+  render(<PortRow port={port} kind="output" runId="run-1" nodeId="worker" showFrontmatter onOpen={onOpen} />);
+  return onOpen;
+}
+
+describe("PortRow — an output card", () => {
+  it("shows its whole frontmatter, its edge in its verdict's tone", () => {
+    renderOutput(review({ verdict: "pass", blocking_findings: 0, PR_link: PR }));
+    const row = screen.getByTestId("port-row");
+    expect(row).toHaveAttribute("data-st", "done");
+    const values = screen.getAllByTestId("frontmatter-value").map((v) => [v.dataset.field, v.textContent]);
+    expect(values).toEqual([
+      ["verdict", "pass"],
+      ["blocking_findings", "0"],
+      ["PR_link", PR],
+    ]);
+    expect(screen.getByTestId("frontmatter-open")).toHaveAttribute("href", PR);
+    // Its tools are there at rest: copy, download, open.
+    expect(screen.getByTestId("port-copy")).toBeInTheDocument();
+    expect(screen.getByTestId("port-download")).toBeInTheDocument();
   });
 
-  it("a single key shows alone, without a count", () => {
-    render(<FrontmatterChips values={{ score: 7 }} />);
-    const chips = screen.getByTestId("frontmatter-card").querySelectorAll(".ri-fm__chip");
-    expect(chips).toHaveLength(1);
-    expect(chips[0]).toHaveTextContent("score7");
+  it("opens from anywhere on it, its controls keeping their own action", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const onOpen = renderOutput(review({ verdict: "pass", PR_link: PR }));
+    fireEvent.click(screen.getByText("worker/iter-2/review/output.md"));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText("PR_link"));
+    expect(onOpen).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByTestId("port-row-open"));
+    expect(onOpen).toHaveBeenCalledTimes(3);
+    // A value copies, ↗ opens the address: neither opens the artifact.
+    await act(async () => {
+      fireEvent.click(screen.getByText(PR));
+    });
+    expect(writeText).toHaveBeenCalledWith(PR);
+    fireEvent.click(screen.getByTestId("frontmatter-open"));
+    expect(onOpen).toHaveBeenCalledTimes(3);
+  });
+
+  it("says « not produced yet » only on hover, and does not open", () => {
+    const onOpen = renderOutput(review(null, false));
+    const row = screen.getByTestId("port-row");
+    expect(row).toHaveAttribute("data-pending");
+    expect(screen.queryByText("not produced yet")).not.toBeInTheDocument();
+    fireEvent.mouseEnter(row);
+    expect(screen.getByTestId("port-not-produced")).toHaveTextContent("not produced yet");
+    fireEvent.mouseLeave(row);
+    expect(screen.queryByText("not produced yet")).not.toBeInTheDocument();
+    fireEvent.click(row);
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(row.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("shows no frontmatter for a previous execution's file", () => {
+    const port = review({ verdict: "pass" });
+    port.files[0].inherited = true;
+    renderOutput(port);
+    expect(screen.queryByTestId("frontmatter-card")).not.toBeInTheDocument();
+    expect(screen.getByTestId("port-row")).not.toHaveAttribute("data-st");
+  });
+});
+
+describe("PortRow — an input row", () => {
+  it("opens from anywhere on its line", () => {
+    const onOpen = vi.fn();
+    render(<PortRow port={review(null)} kind="input" runId="run-1" nodeId="worker" onOpen={onOpen} />);
+    expect(screen.getByTestId("port-row")).not.toHaveClass("ri-port--card");
+    fireEvent.click(screen.getByText("worker/iter-2/review/output.md"));
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 });

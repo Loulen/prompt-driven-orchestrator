@@ -95,40 +95,8 @@
     overflow: auto;
     padding: 0 var(--g-6) var(--g-6);
   }
-  .art__body > :first-child:not(.art__fm) {
+  .art__body > :first-child:not(.fmv--band) {
     margin-top: var(--g-5);
-  }
-  .art__fm {
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--g-1) var(--g-5);
-    margin: 0 calc(-1 * var(--g-6)) var(--g-4);
-    padding: var(--g-3) var(--g-6);
-    border-bottom: 1px solid var(--line-soft);
-    background: var(--surface-1);
-    font-family: var(--font-code);
-    font-size: var(--fs-xs);
-  }
-  /* Several fields per line: a long value is cut, its whole text in the tooltip. */
-  .art__fm-item {
-    display: flex;
-    gap: var(--g-3);
-    min-width: 0;
-    max-width: min(100%, 48ch);
-  }
-  .art__fm-item > dt {
-    flex: none;
-    color: var(--text-3);
-  }
-  .art__fm-item > dd {
-    margin: 0;
-    overflow: hidden;
-    color: var(--text);
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   /* The long read: 13 px at 1.6, 76 characters, headings on the type scale. */
   .art__read {
@@ -271,4 +239,115 @@
   background: none;
   color: var(--text-3);
   font-weight: var(--w-medium);
+}
+
+@layer components {
+  /*
+   * FrontmatterView: an artifact's frontmatter wherever the Run shows it — the
+   * viewer's band, an output card, a live artifact row. Folded, the fields
+   * wrap, a long value cut; unfolded, one key/value per line, values whole.
+   */
+  .fmv {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--g-2);
+    min-width: 0;
+    font-family: var(--font-code);
+    font-size: var(--fs-xs);
+  }
+  .fmv__list {
+    flex: 1 1 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--g-1) var(--g-5);
+    min-width: 0;
+    margin: 0;
+  }
+  .fmv__item {
+    display: flex;
+    align-items: center;
+    gap: var(--g-3);
+    min-width: 0;
+    max-width: min(100%, 48ch);
+  }
+  .fmv__k {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 3px;
+    color: var(--text-3);
+  }
+  .fmv__k[data-st] {
+    color: var(--st);
+  }
+  .fmv__v {
+    display: flex;
+    align-items: center;
+    gap: var(--g-2);
+    min-width: 0;
+    margin: 0;
+  }
+  .fmv__val {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0 3px;
+    border: 0;
+    border-radius: var(--radius-ui);
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: copy;
+  }
+  .fmv__val:hover {
+    background: var(--hover);
+  }
+  .fmv__val[data-st] {
+    color: var(--st);
+    background: color-mix(in oklab, var(--st) 12%, transparent);
+  }
+  .fmv__open {
+    flex: none;
+    color: var(--text-3);
+  }
+  .fmv__fb {
+    flex: none;
+    color: var(--st);
+    white-space: nowrap;
+  }
+  .fmv__missing {
+    color: var(--text-3);
+  }
+  .fmv__fold {
+    flex: none;
+    margin-left: auto;
+  }
+  .fmv[data-expanded] .fmv__list {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--g-1) var(--g-5);
+    align-items: baseline;
+  }
+  .fmv[data-expanded] .fmv__item {
+    display: contents;
+  }
+  .fmv[data-expanded] .fmv__v {
+    align-items: baseline;
+  }
+  .fmv[data-expanded] .fmv__val {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  /* The viewer's band: sticky on top of the body it heads. */
+  .fmv--band {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: 0 calc(-1 * var(--g-6)) var(--g-4);
+    padding: var(--g-3) var(--g-6);
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--surface-1);
+  }
 }

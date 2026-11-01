@@ -130,7 +130,7 @@ test("clicking anywhere on port card opens modal with markdown + frontmatter", a
 
   const portCard = reviewCard(page);
   await expect(portCard).toBeVisible({ timeout: 5_000 });
-  await portCard.click();
+  await portCard.locator(".ri-port__where").click();
 
   const modal = page.locator(".artifact-markdown");
   await expect(modal).toBeVisible({ timeout: 3_000 });
@@ -147,6 +147,10 @@ test("clicking anywhere on port card opens modal with markdown + frontmatter", a
   // Close via the X button of the modal's header.
   await overlay.getByTestId("artifact-close").click();
   await expect(modal).not.toBeVisible({ timeout: 2_000 });
+
+  // The card's own frontmatter value copies: it does not open the artifact.
+  await portCard.getByTestId("frontmatter-value").filter({ hasText: "PASS" }).click();
+  await expect(modal).not.toBeVisible();
 });
 
 test("modal closes on Escape key", async ({ page, baseURL }) => {
@@ -158,7 +162,7 @@ test("modal closes on Escape key", async ({ page, baseURL }) => {
 
   const portCard = reviewCard(page);
   await expect(portCard).toBeVisible({ timeout: 5_000 });
-  await portCard.click();
+  await portCard.locator(".ri-port__where").click();
 
   const modal = page.locator(".artifact-markdown");
   await expect(modal).toBeVisible({ timeout: 3_000 });
@@ -176,7 +180,7 @@ test("modal closes on backdrop click", async ({ page, baseURL }) => {
 
   const portCard = reviewCard(page);
   await expect(portCard).toBeVisible({ timeout: 5_000 });
-  await portCard.click();
+  await portCard.locator(".ri-port__where").click();
 
   const modal = page.locator(".artifact-markdown");
   await expect(modal).toBeVisible({ timeout: 3_000 });
@@ -204,6 +208,10 @@ test("port card with no files renders as non-interactive div", async ({
     .filter({ hasText: "notes" });
   await expect(notesRow).toBeVisible({ timeout: 5_000 });
   await expect(notesRow.locator("button")).toHaveCount(0);
+  // Quiet at rest: « not produced yet » only on hover.
+  await expect(notesRow.getByText("not produced yet")).toHaveCount(0);
+  await notesRow.hover();
+  await expect(notesRow.getByText("not produced yet")).toBeVisible();
 });
 
 test("port card opens modal via keyboard (Enter key)", async ({

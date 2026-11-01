@@ -106,6 +106,37 @@ describe("MarkdownArtifactModal", () => {
       expect(strip).toHaveTextContent("alice, bob");
       expect(strip).not.toHaveTextContent('["alice"');
     });
+
+    it("copies a value on click, opens a web address, and unfolds a cut value", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      const pr = "https://github.com/acme/app/compare/main...feature/a-long-branch";
+      fetchArtifactMock.mockResolvedValue(`---\nverdict: PASS\nPR_link: ${pr}\n---\n# Review`);
+      const wide = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(500);
+      const narrow = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
+      render(
+        <MarkdownArtifactModal
+          runId="run-1"
+          portName="out"
+          source={{ kind: "static", files: [{ ...makeFile("/out.md"), frontmatter: { verdict: "PASS", PR_link: pr } }] }}
+          onClose={() => {}}
+        />,
+      );
+      await act(async () => {});
+      const strip = screen.getByTestId("artifact-frontmatter");
+      await act(async () => {
+        fireEvent.click(screen.getByText(pr));
+      });
+      expect(writeText).toHaveBeenCalledWith(pr);
+      expect(screen.getByTestId("frontmatter-copied")).toHaveTextContent("Copied");
+      expect(screen.getByTestId("frontmatter-open")).toHaveAttribute("href", pr);
+      fireEvent.click(screen.getByTestId("frontmatter-toggle"));
+      expect(strip).toHaveAttribute("data-expanded");
+      fireEvent.click(screen.getByTestId("frontmatter-toggle"));
+      expect(strip).not.toHaveAttribute("data-expanded");
+      wide.mockRestore();
+      narrow.mockRestore();
+    });
   });
 
   describe("iter-nav source", () => {

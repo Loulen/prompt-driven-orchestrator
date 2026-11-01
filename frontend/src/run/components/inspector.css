@@ -261,7 +261,8 @@
   padding: 0 var(--g-2) 0 var(--pad-x);
   min-width: 0;
 }
-.ri-port__line:hover { background: var(--hover); }
+.ri-port[data-open] { cursor: pointer; }
+.ri-port[data-open]:hover { background: var(--hover); }
 .ri-port__ic { flex: none; color: var(--text-2); }
 .ri-port[data-pending] .ri-port__ic { color: var(--text-3); opacity: 0.6; }
 /* The name gives way to the path and the frontmatter only past 45 % of the row. */
@@ -292,6 +293,26 @@ button.ri-port__name:hover { text-decoration: underline; }
 .ri-port__size { flex: none; font-family: var(--font-code); font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
 .ri-port__tools { flex: none; display: inline-flex; align-items: center; gap: 0; opacity: 0; }
 .ri-port__line:hover .ri-port__tools, .ri-port__tools:focus-within { opacity: 1; }
+/*
+ * An output: a card, the node's deliverable first — a left edge in its
+ * verdict's tone, the name large, the tools always there, the whole
+ * frontmatter under it. Not produced yet: dashed and quiet.
+ */
+.ri-port--card {
+  margin: var(--g-2) var(--pad-x) 0;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--st, var(--line-strong));
+  border-radius: var(--radius-ui);
+  background: var(--surface-0);
+}
+.ri-port--card:last-child { margin-bottom: var(--g-2); }
+.ri-port--card .ri-port__line { height: calc(var(--h-row) + 4px); padding-left: var(--g-4); }
+.ri-port--card .ri-port__name { font-family: var(--font-ui); font-size: var(--fs-md); font-weight: var(--w-strong); }
+.ri-port--card .ri-port__tools { opacity: 1; }
+.ri-port--card .ri-thumbs,
+.ri-port--card .ri-port__sub { padding-left: var(--g-4); }
+.ri-port--card[data-pending] { border-style: dashed; border-left-width: 1px; border-left-color: var(--line); background: none; }
+.ri-port__fm { padding: var(--g-2) var(--g-2) var(--g-2) var(--g-4); border-top: 1px solid var(--line-soft); }
 .ri-port__sub { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 0 var(--pad-x) var(--g-2) 30px; min-width: 0; }
 .ri-dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
 .ri-dot[data-live] { background: var(--color-st-running); animation: ri-pulse 1.6s ease-in-out infinite; }
@@ -302,29 +323,6 @@ button.ri-port__name:hover { text-decoration: underline; }
 /* Frontmatter values: key and value chips, a verdict tinted. */
 /* One line, whatever the number of keys: one chip and a count, its value
    ellipsized, and the path keeps a share of the row. */
-.ri-fm { display: inline-flex; flex: none; align-items: center; gap: 3px; min-width: 0; max-width: 40%; overflow: hidden; }
-.ri-fm__chip {
-  display: inline-flex;
-  flex: 0 1 auto;
-  min-width: 0;
-  align-items: center;
-  gap: 4px;
-  height: 16px;
-  max-width: 180px;
-  padding: 0 4px;
-  overflow: hidden;
-  white-space: nowrap;
-  border-radius: var(--radius-ui);
-  background: var(--hover);
-  font-family: var(--font-code);
-  font-size: var(--fs-2xs);
-  font-weight: var(--w-medium);
-  color: var(--text);
-}
-.ri-fm__chip > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.ri-fm__chip[data-st] { color: var(--st); background: color-mix(in oklab, var(--st) 12%, transparent); }
-.ri-fm__more { flex: none; color: var(--text-3); font-weight: var(--w-regular); }
-.ri-fm__k { flex: none; color: var(--text-3); font-weight: var(--w-regular); }
 .ri-thumbs { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 var(--pad-x) var(--g-2) 30px; }
 .ri-thumb {
   width: 44px;
@@ -535,4 +533,28 @@ button.ri-port__name:hover { text-decoration: underline; }
 .ri-dur__dot[data-st="running"] { animation: ri-pulse 1.6s ease-in-out infinite; }
 .ri-dur__dot[data-st="awaiting"] { --st: var(--color-st-await); }
 @media (prefers-reduced-motion: reduce) { .ri-dur__dot { animation: none !important; } }
-.ri-port__line[data-open] { cursor: pointer; }
+
+/* The list under the Transcript's bar, and the « N new » pill over its newest end. */
+.ri-tx__frame { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* New entries land on top newest first: the tab keeps the reader's place itself. */
+.ri-tx[data-order="newest-first"] .ri-tx__scroll { overflow-anchor: none; }
+.ri-tx__new {
+  position: absolute;
+  left: 50%;
+  z-index: 1;
+  transform: translateX(-50%);
+  height: var(--h-control-sm);
+  padding: 0 var(--g-3);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-1);
+  box-shadow: 0 2px 6px var(--shadow);
+  font-family: var(--font-code);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  cursor: pointer;
+}
+.ri-tx__new[data-edge="top"] { top: var(--g-2); }
+.ri-tx__new[data-edge="bottom"] { bottom: var(--g-2); }
+.ri-tx__new:hover { background: var(--hover); }
+.ri-port__sub > .fmv { flex: 1 1 100%; }

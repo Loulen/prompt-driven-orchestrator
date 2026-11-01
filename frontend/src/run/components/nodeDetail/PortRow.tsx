@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { ArrowUpRight, FileCode, FileImage, FileText, Files, Images, type LucideIcon } from "lucide-react";
 import { Chip, IconButton } from "../../../shared/ui/kit";
-import type { StatusTone } from "../../../shared/ui/kit/tones";
 import ExtensionDecorations from "../../../shared/extensions/ExtensionDecorations";
 import type { PortItemContext } from "../../../shared/extensions/contract";
 import { artifactDownloadUrl, artifactUrl, fetchArtifact } from "../../api/artifacts";
@@ -9,6 +8,9 @@ import type { PortIO } from "../../api/nodes";
 import ImageLightbox from "../../../shared/ui/ImageLightbox";
 import { formatSize, isImageFile } from "../../model/nodeDetailFormat";
 import CopyButton from "../artifacts/CopyButton";
+import FrontmatterView from "../artifacts/FrontmatterView";
+import { verdictFirst, verdictTone } from "../../model/frontmatter";
+import { openFromAnywhere } from "./openFromAnywhere";
 import FileChip from "./FileChip";
 import PortDownloads from "./PortDownloads";
 import { useCopyToClipboard } from "../../store/useCopyToClipboard";
@@ -62,6 +64,10 @@ export default function PortRow({
   // Images are out of scope, and a port with nothing on disk has nothing to copy.
   const copyTarget = kind === "output" && !isImage && !isFiles ? existing[0] : undefined;
   const { status: copyStatus, error: copyError, copy } = useCopyToClipboard();
+  // An output is a card (the node's deliverable first); an input stays a compact row.
+  const card = kind === "output";
+  // A card not produced yet stays quiet: « not produced yet » on hover only.
+  const [hovered, setHovered] = useState(false);
 
   let displayPath = firstFile?.path ?? "";
   if (port.files.length > 1 && (port.repeated || isImage)) {
@@ -82,6 +88,10 @@ export default function PortRow({
     showFrontmatter && !isImage && !isFiles && firstFile?.frontmatter && !firstFile.inherited
       ? firstFile.frontmatter
       : null;
+  // The verdict reads first: the daemon's map order is not the file's.
+  const fields = frontmatter ? verdictFirst(frontmatter) : [];
+  // The card's edge: the tone of its verdict-like value, if any.
+  const tone = card ? fields.map(([, v]) => verdictTone(v)).find(Boolean) : undefined;
 
   const imageFiles = isImage
     ? port.files.filter((f) => f.exists && isImageFile(f.path))
@@ -106,26 +116,28 @@ export default function PortRow({
     />
   );
 
+  const pendingCard = card && !anyExists;
   return (
     <div
       data-testid="port-row"
       data-port={port.port}
       data-kind={kind}
       data-pending={anyExists ? undefined : true}
-      className="port-row ri-port"
+      data-open={anyExists || undefined}
+      data-st={tone}
+      className={`port-row ri-port${card ? " ri-port--card" : ""}`}
+      // A written port opens from anywhere on it; its controls keep their own clicks.
+      onClick={anyExists ? openFromAnywhere(onOpen) : undefined}
+      onMouseEnter={pendingCard ? () => setHovered(true) : undefined}
+      onMouseLeave={pendingCard ? () => setHovered(false) : undefined}
     >
-      {/* A written port opens from anywhere on its line, as before; its tools
-          keep their own clicks. */}
-      <div className="ri-port__line" data-open={anyExists || undefined} onClick={anyExists ? onOpen : undefined}>
+      <div className="ri-port__line">
         <Icon size={14} strokeWidth={1.5} className="ri-port__ic" aria-label={portType} role="img" />
         {anyExists ? (
-          // The name opens the artifact; the tools at the end keep their own clicks.
+          // The name opens the artifact too, from the keyboard.
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpen();
-            }}
+            onClick={onOpen}
             data-testid="port-row-open"
             aria-label={`Open ${port.port}`}
             title={port.port}
@@ -139,7 +151,7 @@ export default function PortRow({
           </span>
         )}
         {port.repeated && <Chip mono>repeated</Chip>}
-        {(isImage || isHtml || isFiles) && (
+        {(isImage || isHtml || isFiles || pendingCard) && (
           <span className="d-chip d-chip--mono" data-testid="port-type-badge">
             {portType}
           </span>
@@ -162,30 +174,39 @@ export default function PortRow({
             {inheritedCount} inherited
           </span>
         )}
-        {frontmatter && Object.keys(frontmatter).length > 0 && <FrontmatterChips values={frontmatter} />}
         <span className="contents" onClick={(e) => e.stopPropagation()}>
           <ExtensionDecorations<PortItemContext> location="port/item" extra={decorated} className="relative" />
         </span>
-        <span className="ri-port__where" title={tip}>
-          {displayPath}
-        </span>
+        {pendingCard ? (
+          <span className="ri-port__where" title={tip}>
+            {hovered && <span data-testid="port-not-produced">not produced yet</span>}
+          </span>
+        ) : (
+          <span className="ri-port__where" title={tip}>
+            {displayPath}
+          </span>
+        )}
         {anyExists && totalSize > 0 && <span className="ri-port__size">{formatSize(totalSize)}</span>}
-        <span className="ri-port__tools" onClick={(e) => e.stopPropagation()}>
+        <span className="ri-port__tools">
           {copyTarget && (
             <CopyButton
               status={copyStatus}
               error={copyError}
               testId="port-copy"
-              onClick={(e) => {
-                e.stopPropagation();
-                void copy(() => fetchArtifact(runId, copyTarget.path));
-              }}
+              onClick={() => void copy(() => fetchArtifact(runId, copyTarget.path))}
             />
           )}
           <PortDownloads runId={runId} existing={existing} isImage={isImage} isFiles={isFiles} repeated={port.repeated} />
           {anyExists && <IconButton icon={ArrowUpRight} size="sm" label={`Open ${port.port}`} onClick={onOpen} />}
         </span>
       </div>
+
+      {/* An output's whole frontmatter: a value copies, a cut one unfolds */}
+      {fields.length > 0 && (
+        <div className="ri-port__fm">
+          <FrontmatterView values={fields} layout="rows" testId="frontmatter-card" />
+        </div>
+      )}
 
       {/* Image thumbnails */}
       {imageFiles.length > 0 && (
@@ -196,11 +217,10 @@ export default function PortRow({
               type="button"
               className="ri-thumb"
               title={f.inherited ? "inherited: present before this execution started" : (f.path.split("/").pop() ?? "")}
-              onClick={(e) => {
+              onClick={() => {
                 // Open this thumbnail fullscreen. Snapshot the FULL imageFiles
                 // list (not the four shown) so arrows reach images behind the
                 // +N; a snapshot at click time is immune to poll churn.
-                e.stopPropagation();
                 setLightbox({
                   images: imageFiles.map((im) => artifactUrl(runId, im.path)),
                   index: i,
@@ -250,41 +270,3 @@ const PORT_ICON: Record<string, LucideIcon> = {
   html: FileCode,
   files: Files,
 };
-
-/** The verdicts a frontmatter value may carry, and their tone. */
-const VERDICT_TONE: Record<string, StatusTone> = {
-  pass: "done",
-  passed: "done",
-  approved: "done",
-  ok: "done",
-  done: "done",
-  true: "done",
-  fail: "failed",
-  failed: "failed",
-  rejected: "failed",
-  needs_work: "awaiting",
-  false: "failed",
-};
-
-const toneOf = (v: unknown) => VERDICT_TONE[display(v).toLowerCase()];
-
-/** A frontmatter on one line: its verdict-like value (else its first key) as
- *  a tinted chip, a count of the other keys, every key in the tooltip. */
-export function FrontmatterChips({ values }: { values: Record<string, unknown> }) {
-  const entries = Object.entries(values);
-  const [k, v] = entries.find(([, value]) => toneOf(value)) ?? entries[0];
-  const others = entries.length - 1;
-  return (
-    <span className="ri-fm" data-testid="frontmatter-card" title={entries.map(([key, value]) => `${key}: ${display(value)}`).join("\n")}>
-      <span className="ri-fm__chip" data-st={toneOf(v)}>
-        <span className="ri-fm__k">{k}</span>
-        <span>{display(v)}</span>
-      </span>
-      {others > 0 && <span className="ri-fm__chip ri-fm__more">+{others}</span>}
-    </span>
-  );
-}
-
-function display(value: unknown): string {
-  return typeof value === "object" ? JSON.stringify(value) : String(value);
-}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { frontmatterEntries, frontmatterValue, stripFrontmatter } from "./frontmatter";
+import { frontmatterEntries, frontmatterValue, isWideValue, stripFrontmatter, verdictFirst } from "./frontmatter";
 
 describe("stripFrontmatter", () => {
   it("drops the leading fence and keeps the body", () => {
@@ -49,5 +49,30 @@ describe("frontmatterValue", () => {
 
   it("reads a map as its pairs", () => {
     expect(frontmatterValue({ zeta: 1, tags: ["a", "b"] })).toBe("zeta: 1, tags: [a, b]");
+  });
+});
+
+describe("verdictFirst", () => {
+  it("puts a field named verdict first, the others in their order", () => {
+    const entries = verdictFirst({ PR_link: "https://x.y", Verdict: "Pending", status: "done" });
+    expect(entries.map(([k]) => k)).toEqual(["Verdict", "PR_link", "status"]);
+  });
+
+  it("without a verdict field, puts the first verdict-like value first", () => {
+    const entries = verdictFirst([["count", 3], ["outcome", "PASS"], ["state", "failed"]]);
+    expect(entries.map(([k]) => k)).toEqual(["outcome", "count", "state"]);
+  });
+
+  it("keeps the order when no value reads as a verdict", () => {
+    expect(verdictFirst({ b: 1, a: "x" }).map(([k]) => k)).toEqual(["b", "a"]);
+  });
+});
+
+describe("isWideValue", () => {
+  it("takes a web address or a long value as wide, a short one not", () => {
+    expect(isWideValue("http://192.168.1.143:6391/")).toBe(true);
+    expect(isWideValue("a".repeat(40))).toBe(true);
+    expect(isWideValue("Finished")).toBe(false);
+    expect(isWideValue("0")).toBe(false);
   });
 });

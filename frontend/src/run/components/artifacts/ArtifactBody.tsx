@@ -6,7 +6,7 @@ import type { FileInfo } from "../../api/nodes";
 import type { PortType } from "../../../shared/generated/PortType";
 import { artifactDownloadUrl, artifactUrl } from "../../api/artifacts";
 import { frontmatterEntries } from "../../model/frontmatter";
-import FrontmatterRow from "./FrontmatterRow";
+import FrontmatterView from "./FrontmatterView";
 import ImageBody from "./ImageBody";
 
 /** The artifact viewer's body: the images, the html in its sandbox, one file
@@ -134,13 +134,14 @@ export default function ArtifactBody({
       ) : (
         <>
           {banner}
-          {/* Frontmatter card */}
+          {/* Frontmatter band: copy a value, unfold the cut ones */}
           {frontmatter && Object.keys(frontmatter).length > 0 && (
-            <dl className="art__fm" data-testid="artifact-frontmatter">
-              {frontmatterEntries(frontmatter, content).map(([k, v]) => (
-                <FrontmatterRow key={k} field={k} value={v} />
-              ))}
-            </dl>
+            <FrontmatterView
+              key={file?.path}
+              values={frontmatterEntries(frontmatter, content)}
+              layout="band"
+              testId="artifact-frontmatter"
+            />
           )}
 
           {/* Markdown body */}

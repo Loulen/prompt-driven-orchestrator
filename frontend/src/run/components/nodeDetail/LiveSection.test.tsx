@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import type { LiveArtifactIO } from "../../../shared/generated/LiveArtifactIO";
 
@@ -79,14 +79,29 @@ describe("LiveSection (ADR-0089)", () => {
     expect(within(row("draft-screens")).getByTestId("live-thumbnails").children).toHaveLength(2);
   });
 
-  it("shows the frontmatter as tags, the field off schema in amber with its rule", () => {
+  it("shows the frontmatter as the viewer does, the field off schema in amber with its rule", () => {
     render(<LiveSection live={[progress]} runId="run-1" onOpen={vi.fn()} />);
     const tags = within(row("progress")).getAllByTestId("live-tag");
     expect(tags).toHaveLength(1);
     expect(tags[0]).toHaveTextContent("statusdrafting");
     const warning = within(row("progress")).getByTestId("live-tag-warning");
-    expect(warning).toHaveTextContent("step three of five");
-    expect(warning).toHaveAttribute("title", "Schema: expected int, got string");
+    expect(warning).toHaveTextContent("stepthree of five");
+    expect(within(warning).getByTestId("frontmatter-value")).toHaveAttribute("data-st", "awaiting");
+    expect(within(warning).getByLabelText("Schema not respected")).toBeInTheDocument();
+  });
+
+  it("opens a produced row from anywhere on it, a frontmatter value copying instead", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const onOpen = vi.fn();
+    render(<LiveSection live={[progress]} runId="run-1" onOpen={onOpen} />);
+    fireEvent.click(within(row("progress")).getByText("live/progress.md"));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      fireEvent.click(within(row("progress")).getByText("drafting"));
+    });
+    expect(writeText).toHaveBeenCalledWith("drafting");
+    expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
   it("names a declared field that is absent", () => {
@@ -96,7 +111,7 @@ describe("LiveSection (ADR-0089)", () => {
       schema_warnings: [{ field: "status", reason: "missing required field" }],
     };
     render(<LiveSection live={[missing]} runId="run-1" onOpen={vi.fn()} />);
-    expect(screen.getByTestId("live-tag-warning")).toHaveTextContent("status missing");
+    expect(screen.getByTestId("live-tag-warning")).toHaveTextContent("statusmissing");
   });
 
   it("badges a free artifact, greys a declared one not produced", () => {

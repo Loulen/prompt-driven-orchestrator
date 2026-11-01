@@ -6,6 +6,9 @@ import {
   formatBytes,
   mergeCounts,
   mergePage,
+  newerRemaining,
+  olderPage,
+  olderRemaining,
   refreshFrom,
   remaining,
 } from "./transcript";
@@ -65,6 +68,42 @@ describe("the transcript view", () => {
     const next = mergeCounts(view, page([], 7, { messages: 4, tool_calls: 3 }));
     expect(next.entries).toEqual(view.entries);
     expect([next.total, next.messages, next.toolCalls]).toEqual([7, 4, 3]);
+  });
+
+  it("loads from the end backward, page by page, down to the start", () => {
+    // Nothing loaded: the counts say how long it is, the first read is the tail.
+    const counted = mergeCounts(EMPTY_TRANSCRIPT, page([], 120));
+    expect(olderRemaining(counted)).toBe(120);
+    expect(olderPage(counted, 50)).toEqual({ after: 70, limit: 50 });
+    const tail = mergePage(counted, 70, page(Array.from({ length: 50 }, (_, i) => msg(70 + i)), 120));
+    expect(olderRemaining(tail)).toBe(70);
+    expect(newerRemaining(tail)).toBe(0);
+    expect(olderPage(tail, 50)).toEqual({ after: 20, limit: 50 });
+    const older = mergePage(tail, 20, page(Array.from({ length: 50 }, (_, i) => msg(20 + i)), 120));
+    expect(olderPage(older, 50)).toEqual({ after: 0, limit: 20 });
+    const all = mergePage(older, 0, page(Array.from({ length: 20 }, (_, i) => msg(i)), 120));
+    expect(all.entries.map((e) => e.index)).toEqual(Array.from({ length: 120 }, (_, i) => i));
+    expect(olderRemaining(all)).toBe(0);
+    expect(olderPage(all, 50)).toBeNull();
+    expect(remaining(all)).toBe(0);
+  });
+
+  it("neither duplicates nor loses an entry when a live page lands on a view read from its end", () => {
+    const tail = mergePage(EMPTY_TRANSCRIPT, 8, page([msg(8), tool(9, "pending")], 10));
+    expect(refreshFrom(tail)).toBe(9);
+    const live = mergePage(tail, 9, page([tool(9, "ok"), msg(10), msg(11)], 12));
+    expect(live.entries).toEqual([msg(8), tool(9, "ok"), msg(10), msg(11)]);
+    expect(olderRemaining(live)).toBe(8);
+    expect(newerRemaining(live)).toBe(0);
+    // An older page read meanwhile slots in below, the live entries kept.
+    const older = mergePage(live, 6, page([msg(6), msg(7)], 12));
+    expect(older.entries.map((e) => e.index)).toEqual([6, 7, 8, 9, 10, 11]);
+  });
+
+  it("counts the newer entries of a view read from its start", () => {
+    const head = mergePage(EMPTY_TRANSCRIPT, 0, page([msg(0), msg(1)], 5));
+    expect(newerRemaining(head)).toBe(3);
+    expect(olderRemaining(head)).toBe(0);
   });
 
   it("says an output's size", () => {

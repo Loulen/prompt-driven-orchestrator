@@ -185,3 +185,33 @@ export function saveCollapsedRunGroups(keys: string[]): void {
     // quota / disabled / private mode → in-memory only for this session
   }
 }
+
+/**
+ * The order the Transcript tab reads in: the newest entries first (the
+ * default: the reader sees what just happened) or the oldest first. One global
+ * choice, toggled from the tab's bar: it follows the user from node to node
+ * and from Run to Run, and survives a reload. Absent / unparseable →
+ * `newest-first`.
+ */
+export type TranscriptOrder = "newest-first" | "oldest-first";
+
+const TRANSCRIPT_ORDER_KEY = "pdo.ui.transcriptOrder";
+
+export function loadTranscriptOrder(): TranscriptOrder {
+  try {
+    const raw = localStorage.getItem(TRANSCRIPT_ORDER_KEY);
+    if (raw == null) return "newest-first";
+    const v: unknown = JSON.parse(raw);
+    return v === "oldest-first" ? "oldest-first" : "newest-first";
+  } catch {
+    return "newest-first";
+  }
+}
+
+export function saveTranscriptOrder(v: TranscriptOrder): void {
+  try {
+    localStorage.setItem(TRANSCRIPT_ORDER_KEY, JSON.stringify(v));
+  } catch {
+    // quota / disabled / private mode → in-memory only for this session
+  }
+}

@@ -36,6 +36,23 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   the edge never fired; a string that reads as a number (`"42"`) was saved as a number. An enum
   or string field now always writes its value as a string (an allowed value `"2"` is no longer
   saved as `2`).
+### Node detail pane
+
+- The Transcript opens on its latest entries: newest first by default, the Prompt at the oldest
+  end. A sort icon in the tab's bar switches to oldest first; the choice is remembered on this
+  device and follows you from node to node and Run to Run. Older pages load as you scroll, from
+  the end of the transcript. While a node is live, new entries land on top; a reader lower down
+  stays in place and a "↑ N new" pill brings them back ("↓ N new" oldest first).
+- Frontmatter reads the same in the artifact viewer and the I/O tab: click a value to copy it
+  ("✓ Copied" or "Copy failed"), an http(s) value opens with ↗, and a chevron unfolds the
+  values cut off to read them whole. Verdicts keep their tone.
+- In the I/O tab, each output is a card: its edge in its verdict's tone, its name, path, size and
+  tools, and its whole frontmatter, the verdict first, a link or a long value on a line of its
+  own. An output not produced yet is dashed and says "not produced
+  yet" on hover only. A click anywhere on an output card, a live artifact row or an input row
+  opens it; its controls keep their own action.
+- A Run search hit inside a long transcript entry scrolls to the marked word, not to the middle
+  of the entry.
 
 ## 2.69.0 · A shorter dev loop: fast, scoped and full gates, `pdo run status`
 

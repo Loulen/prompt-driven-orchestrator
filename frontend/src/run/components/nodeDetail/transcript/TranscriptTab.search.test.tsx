@@ -23,6 +23,7 @@ vi.mock("../../../api/transcript", () => ({
 const api = await import("../../../api/transcript");
 const { default: TranscriptTab } = await import("./TranscriptTab");
 const { useRunSearchStore } = await import("../../../store/runSearchStore");
+const { useTranscriptOrder } = await import("../../../store/transcriptOrderStore");
 
 const fetchPage = vi.mocked(api.fetchTranscriptPage);
 const fetchDetail = vi.mocked(api.fetchToolCallDetail);
@@ -86,37 +87,68 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
 
-describe("TranscriptTab and the Run's search", () => {
-  it("loads up to the chosen hit, unfolds it and brings it into view", async () => {
+describe.each([
+  // Oldest first, the tab opens on the Prompt; newest first, on the last entry.
+  { order: "oldest-first" as const, opening: "message 0" },
+  { order: "newest-first" as const, opening: "message 119" },
+])("TranscriptTab and the Run's search, $order", ({ order, opening }) => {
+  beforeEach(() => {
+    useTranscriptOrder.setState({ order });
+  });
+
+  it("brings the chosen hit into view, the pages up to it loaded first", async () => {
     renderTab();
-    await screen.findByText("message 0");
-    choose(115);
+    await screen.findByText(opening);
+    choose(order === "oldest-first" ? 115 : 5);
     const card = await waitFor(() => {
-      const el = document.querySelector('[data-entry="115"]');
+      const el = document.querySelector(`[data-entry="${order === "oldest-first" ? 115 : 5}"]`);
       if (!el) throw new Error("not loaded yet");
       return el as HTMLElement;
     });
-    expect(fetchPage).toHaveBeenCalledWith("r1", "worker", 2, 100, 50);
+    if (order === "oldest-first") {
+      expect(fetchPage).toHaveBeenCalledWith("r1", "worker", 2, 100, 50);
+      expect(card.textContent).toContain("Show less");
+      expect(card.textContent).toContain("x".repeat(1300));
+    } else {
+      // From the tail backward, a page at a time, down to the hit.
+      expect(fetchPage).toHaveBeenCalledWith("r1", "worker", 2, 70, 50);
+      expect(fetchPage).toHaveBeenCalledWith("r1", "worker", 2, 20, 50);
+      expect(fetchPage).toHaveBeenCalledWith("r1", "worker", 2, 0, 20);
+    }
     expect(card.dataset.focused).toBe("true");
-    expect(card.textContent).toContain("Show less");
-    expect(card.textContent).toContain("x".repeat(1300));
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
     expect(document.querySelectorAll("[data-focused]").length).toBe(1);
+  });
+
+  it("brings the marked word into view, not only its entry", async () => {
+    useRunSearchStore.setState({ runId: "r1", query: "debounce", result: ANSWER, status: "done" });
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    renderTab();
+    await screen.findByText(opening);
+    choose(115);
+    await waitFor(() => expect(scrolled.length).toBeGreaterThan(0));
+    expect(scrolled[0].tagName).toBe("MARK");
+    expect(scrolled[0].textContent?.toLowerCase()).toBe("debounce");
+    expect(scrolled[0].closest("[data-entry]")).toHaveAttribute("data-entry", "115");
   });
 
   it("unfolds a tool call chosen as a hit and reads it", async () => {
     fetchDetail.mockResolvedValue({ name: "Edit", input: "{}", diff: [], output: "done", is_error: false, truncated: false });
     renderTab();
-    await screen.findByText("message 0");
-    choose(13);
+    await screen.findByText(opening);
+    choose(order === "oldest-first" ? 13 : 113);
     expect(await screen.findByTestId("transcript-tool-detail")).toBeTruthy();
-    expect(fetchDetail).toHaveBeenCalledWith("r1", "worker", 2, 13);
-    expect((document.querySelector('[data-entry="13"]') as HTMLElement).dataset.focused).toBe("true");
+    const index = order === "oldest-first" ? 13 : 113;
+    expect(fetchDetail).toHaveBeenCalledWith("r1", "worker", 2, index);
+    expect((document.querySelector(`[data-entry="${index}"]`) as HTMLElement).dataset.focused).toBe("true");
   });
 
   it("ignores a hit of another iteration", async () => {
     renderTab();
-    await screen.findByText("message 0");
+    await screen.findByText(opening);
     choose(4, 1);
     expect(document.querySelector("[data-focused]")).toBeNull();
   });
@@ -130,7 +162,7 @@ describe("TranscriptTab and the Run's search", () => {
       status: "searching",
     });
     renderTab();
-    await screen.findByText("message 0");
+    await waitFor(() => expect(document.querySelector(`[data-entry="${order === "oldest-first" ? 0 : 119}"]`)).toBeTruthy());
     const marks = [...document.querySelectorAll("mark.query-mark")].map((m) => m.textContent);
     expect(marks.length).toBeGreaterThan(0);
     expect(new Set(marks)).toEqual(new Set(["message 1"]));

@@ -180,7 +180,7 @@ test("renders an html artifact in a scriptless sandboxed iframe", async ({
     .locator('.port-row:has([data-testid="port-row-open"])')
     .filter({ hasText: /^report/ });
   await expect(portRow).toBeVisible({ timeout: 5_000 });
-  await portRow.click();
+  await portRow.locator(".ri-port__where").click();
 
   // The artifact renders inside the sandboxed iframe.
   const frame = page.locator('[data-testid="html-artifact-frame"]');

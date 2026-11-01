@@ -15,6 +15,7 @@ import RetryAllConfirmModal from "../../run/components/runsList/RetryAllConfirmM
 import { useCanvasNodePlay } from "../store/useCanvasNodePlay";
 import { useCanvasChildRuns } from "../store/useCanvasChildRuns";
 import { useCanvasCompaction } from "../store/useCanvasCompaction";
+import { CanvasShiftContext, useStoredEdgeWrites } from "../store/useStoredEdgeWrites";
 import { buildNoteNodes, deriveEditNodes } from "./editNodeDerivation";
 import { buildLoopRegionNodes } from "./loopRegionDerivation";
 import { deriveEditEdges, edgeIndexFromId } from "./editEdgeDerivation";
@@ -85,7 +86,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
   const addEdgeToStore = useEditStore((s) => s.addEdge);
-  const updateEdge = useEditStore((s) => s.updateEdge);
+  const { shiftRef, updateEdge } = useStoredEdgeWrites();
   const addNodeToStore = useEditStore((s) => s.addNode);
   const addNoteToStore = useEditStore((s) => s.addNote);
 
@@ -129,6 +130,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   usePaneToggleReframe(reactFlowRef, reactFlow, tab != null && pipeline != null, rightPaneCollapsed);
   const { computeDropPosition, handleAddNode, handleAddNote } = useCanvasPlacement({
     pipeline,
+    shiftRef,
     reactFlowRef,
     reactFlow,
     addNodeToStore,
@@ -180,7 +182,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         : [],
     [pipeline, activeRunState, agentProfileIds, agentProfiles, withPlay, withChildren],
   );
-  const { shown, cards: compactCards, placed } = useCanvasCompaction(tab, pipeline, cards);
+  const { shown, cards: compactCards, placed, shift } = useCanvasCompaction(tab, pipeline, cards, activeRunState == null, shiftRef);
   const derivedNodes = useMemo(() => {
     if (!shown) return [];
     // Bounded loop regions (ADR-0011 / #148) render as translucent boxes BEHIND
@@ -210,7 +212,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     setEdges(derivedEdges);
   }, [derivedEdges, setEdges]);
 
-  const onNodeDragStop = useCanvasNodeDragStop();
+  const onNodeDragStop = useCanvasNodeDragStop(shift);
 
   if (!tab || !pipeline) {
     return (
@@ -269,6 +271,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         </div>
       )}
 
+      <CanvasShiftContext.Provider value={shift}>
       <DragHighlightProvider value={dragHighlightNodeId}>
         <ReactFlow
           nodes={nodes}
@@ -348,6 +351,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           )}
         </ReactFlow>
       </DragHighlightProvider>
+      </CanvasShiftContext.Provider>
 
       <CanvasContextMenuHost
         contextMenu={contextMenu}

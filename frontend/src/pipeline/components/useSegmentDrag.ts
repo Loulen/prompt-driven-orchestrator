@@ -5,6 +5,7 @@ import { enforcePerpendicularEnds } from "../../lib/anchorLanding";
 import { mergeAlignedSegments, snapStepAtZoom } from "../../lib/wiringGrid";
 import { useWiringStore } from "../../stores/wiringStore";
 import { useEditStore } from "../store/editStore";
+import { storedEdgePatch, useCanvasShift } from "../store/canvasShift";
 import type { EdgeRoute } from "./useEdgeRoute";
 
 /**
@@ -17,7 +18,13 @@ export function useSegmentDrag(
   edgeIndex: number | undefined,
   route: EdgeRoute,
 ): (segmentIndex: number, orientation: "horizontal" | "vertical") => (e: React.PointerEvent) => void {
-  const updateEdge = useEditStore((s) => s.updateEdge);
+  const storeUpdateEdge = useEditStore((s) => s.updateEdge);
+  // The segment is dragged where it is drawn; the file gets where it is stored.
+  const shift = useCanvasShift();
+  const updateEdge = useCallback(
+    (index: number, updates: Parameters<typeof storeUpdateEdge>[1]) => storeUpdateEdge(index, storedEdgePatch(shift, updates)),
+    [storeUpdateEdge, shift],
+  );
   const { screenToFlowPosition, getZoom } = useReactFlow();
   const { points, srcSide, tgtSide, step, leg, tgtRect } = route;
   // Shift state during a segment drag, read off the live event (the pointer is

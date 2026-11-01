@@ -123,7 +123,7 @@ export default function PromptSection({
           {...(isScript
             ? { value: promptContent, onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => updatePrompt(nodeId, e.target.value) }
             : fieldProps)}
-          className="d-input d-area"
+          aria-label={isScript ? "Script" : "Prompt"}
           title={isScript ? undefined : "/ inserts a skill; one this node does not receive joins its skills"}
           wrap={isScript ? "off" : undefined}
           rows={10}
@@ -135,17 +135,24 @@ export default function PromptSection({
       </div>
 
       {/* #723 / #588 — the invocation lines PDO files at spawn for the toggles
-          that are on, in spawn order (interactive, then orchestrate). Rendered,
-          never editable, never in the textarea: toggle and text cannot drift.
-          Byte-for-byte the daemon's `toggle_invocations`. */}
+          that are on, in spawn order (interactive, then orchestrate). Rendered
+          under the field, outside it, never editable: toggle and text cannot
+          drift. Byte-for-byte the daemon's `toggle_invocations`. */}
       {!isScript && (isInteractive || isOrchestrator) && (
         <div
-          className="ei-amend"
-          title={`Added at spawn (${[isInteractive && "Interactive", isOrchestrator && "Orchestrator"].filter(Boolean).join(", ")})`}
+          className="ei-launch"
+          title={`Added at launch (${[isInteractive && "Interactive", isOrchestrator && "Orchestrator"].filter(Boolean).join(", ")})`}
           data-testid="node-toggle-prompt-amendment"
         >
-          <Lock size={10} strokeWidth={1.75} aria-hidden />
-          <pre>{[isInteractive && "/pdo-interactive", isOrchestrator && "/pdo-orchestrate"].filter(Boolean).join("\n")}</pre>
+          <Lock size={11} strokeWidth={1.75} aria-hidden />
+          <span>Added at launch</span>
+          {[isInteractive && "/pdo-interactive", isOrchestrator && "/pdo-orchestrate"]
+            .filter((line): line is string => typeof line === "string")
+            .map((line) => (
+              <code key={line} className="ei-launch__line">
+                {line}
+              </code>
+            ))}
         </div>
       )}
       {/* The completion says it once it added a skill; how to call it is in the prompt's tooltip. */}

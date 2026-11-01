@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { ArrowRight, Infinity as Always, LayoutTemplate, Plus } from "lucide-react";
-import { EmptyState, IconButton, KeyValue, Section } from "../../shared/ui/kit";
+import { Button, EmptyState, Section } from "../../shared/ui/kit";
 import "./inspect.css";
 import { useEditStore } from "../store/editStore";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
@@ -31,7 +31,7 @@ import {
 } from "../../lib/edgeFields";
 import { resolveOutputLabels } from "../../lib/edgeLabels";
 import { OutputsSection, RoutingSection, TriggerStatusView } from "./EdgeDetailSections";
-import { ConditionRowEditor, ElseToggle, Switch } from "./EdgeWhenControls";
+import { ConditionGridHead, ConditionRowEditor, ElseToggle, Switch } from "./EdgeWhenControls";
 
 /**
  * The order each edge's conditions were last shown in, by tab and edge: the
@@ -201,12 +201,6 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
   const fromName = sourceNode?.name ?? edge.source.node;
   const toName = targetNode?.name ?? edge.target.node;
   const route = `${fromName}.${ports.join("+")} → ${toName}.${edge.target.port}`;
-  // The fields a condition may read: every carried output's schema, plus `iter`.
-  const available = ports.flatMap((port) =>
-    fieldsFor(port)
-      .filter((f) => !f.isIter)
-      .map((f) => ({ port, f })),
-  );
 
   return (
     <aside className="ei" data-testid="edge-detail-panel">
@@ -237,19 +231,11 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
         <OutputsSection declared={declared} carried={ports} targetName={toName} onToggle={handleTogglePort} />
       </Section>
 
-      {/* When — a fallback (else) edge fires iff no sibling (same source output
-          port) matched. Mutually exclusive with a `when:` predicate (ADR-0011),
-          so toggling it on suppresses the predicate editor. */}
-      <Section
-        title="When"
-        count={isElse ? undefined : rows.length}
-        flush
-        aside={
-          isElse ? undefined : (
-            <IconButton icon={Plus} size="sm" label="Add condition" disabled={!free} onClick={handleAddCondition} data-testid="add-condition" />
-          )
-        }
-      >
+      {/* Conditions (CONTEXT.md, « Conditions ») — the `when:` clause. A
+          fallback (else) edge fires iff no sibling (same source output port)
+          matched. Mutually exclusive with a `when:` predicate (ADR-0011), so
+          toggling it on suppresses the predicate editor. */}
+      <Section title="Conditions" count={isElse ? undefined : rows.length} flush>
         <div className="ei-pad">
           <ElseToggle isElse={isElse} onToggle={handleToggleElse} />
         </div>
@@ -263,6 +249,7 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
           </div>
         ) : (
           <div data-testid="when-editor">
+            {rows.length > 0 && <ConditionGridHead />}
             {rows.map((row, i) => (
               <ConditionRowEditor
                 key={i}
@@ -280,27 +267,29 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
                 </EmptyState>
               </div>
             )}
+            {/* Always there, under the last row or under « Always »: never a
+                hover-only « + ». Disabled, it says why. */}
+            <div className="ei-cond-add" title={free ? undefined : NOTHING_FREE}>
+              <Button
+                tone="ghost"
+                size="sm"
+                icon={Plus}
+                disabled={!free}
+                onClick={handleAddCondition}
+                data-testid="add-condition"
+                aria-describedby={free ? undefined : "add-condition-why"}
+              >
+                Add condition
+              </Button>
+              {!free && (
+                <span className="ei-cond-add__why" id="add-condition-why" data-testid="add-condition-why">
+                  {NOTHING_FREE}
+                </span>
+              )}
+            </div>
           </div>
         )}
       </Section>
-
-      {/* Available fields — irrelevant for a default edge (no predicate). */}
-      {!isElse && (
-        <Section title="Fields" count={available.length + 1} flush>
-          <div className="ei-pad" title="Each condition reads the output named on its left; iter is the counter of the enclosing region">
-            <KeyValue
-              rows={[
-                ...available.map(({ port, f }) => ({
-                  k: `${port}.${f.name}`,
-                  mono: true,
-                  v: `${f.decl?.type ?? "any"}${f.decl?.allowed?.length ? ` · ${f.decl.allowed.join("|")}` : ""}`,
-                })),
-                { k: "iter", mono: true, v: "region counter" },
-              ]}
-            />
-          </div>
-        </Section>
-      )}
 
       {/* Routing — orthogonal edge shaping (#154, design screen 14). The
           per-edge "Re-route automatically" reset lives here, not on the canvas. */}
@@ -372,6 +361,9 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
     </aside>
   );
 }
+
+/** Why « Add condition » is off: every field already holds every operator it admits. */
+const NOTHING_FREE = "Every field already has a condition on each of its operators";
 
 function withTypeHint(row: ConditionRow, fields: EdgeConditionField[]): ConditionRow {
   return isBoolField(fields, row.field) ? { ...row, valueType: "bool" } : { ...row, valueType: undefined };

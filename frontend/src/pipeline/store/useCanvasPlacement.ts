@@ -6,6 +6,7 @@ import type { ReactFlowInstance } from "@xyflow/react";
 import type { EditorPipelineDef } from "../model/pipeline";
 import type { NoteDef } from "../../shared/generated/NoteDef";
 import type { Selection } from "./editState";
+import type { CanvasShift } from "./canvasShift";
 import type { NodeType } from "../../shared/generated/NodeType";
 import { generateNodeId } from "../../lib/nanoid";
 import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../../lib/nodePlacement";
@@ -18,6 +19,7 @@ const DEFAULT_NODE_NAMES: Partial<Record<NodeType, string>> = {
 
 export function useCanvasPlacement({
   pipeline,
+  shiftRef,
   reactFlowRef,
   reactFlow,
   addNodeToStore,
@@ -25,6 +27,8 @@ export function useCanvasPlacement({
   setSelection,
 }: {
   pipeline: EditorPipelineDef | undefined;
+  /** The drawn pipeline against the stored one: the search runs on what is drawn, the file gets the stored place. */
+  shiftRef?: React.RefObject<CanvasShift>;
   reactFlowRef: React.RefObject<HTMLDivElement | null>;
   reactFlow: ReactFlowInstance;
   addNodeToStore: (node: EditorNodeDef) => void;
@@ -71,15 +75,17 @@ export function useCanvasPlacement({
     // A node with no persisted position is on screen too — a fresh pipeline's
     // Start and End are written without a `view`, and the search that could not
     // see them dropped the first agent right on End.
-    const occupied = (pipeline?.nodes ?? []).map((n, i) => {
+    const shift = shiftRef?.current;
+    const occupied = ((shift?.shown ?? pipeline)?.nodes ?? []).map((n, i) => {
       const fallback = fallbackNodeSpot(i);
       return { x: n.view?.x ?? fallback.x, y: n.view?.y ?? fallback.y };
     });
-    return freeDropSpot(
+    const spot = freeDropSpot(
       { x: Math.round(cx - CARD_WIDTH / 2), y: Math.round(cy - CARD_HEIGHT / 2) },
       occupied,
       visible,
     );
+    return shift ? { x: spot.x, y: Math.round(shift.toStored(spot.y)) } : spot;
   };
 
   const handleAddNode = (type: NodeType) => {

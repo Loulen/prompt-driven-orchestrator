@@ -14,6 +14,28 @@ export interface EdgeConditionField {
   decl: FrontmatterFieldDecl | null;
   /** True for the `iter` region counter (re-authorised in `when:` by ADR-0011). */
   isIter?: boolean;
+  /** Where the value comes from, the header of its group in the field dropdown:
+   *  « Output · <port> », « Loop » or « Pipeline variables ». */
+  group: string;
+  /** Its type and the values it admits, beside it in the dropdown. */
+  hint: string;
+}
+
+/** The group of the loop's iteration counter in the field dropdown. */
+export const LOOP_GROUP = "Loop";
+/** The group of the pipeline's variables in the field dropdown. */
+export const VARIABLES_GROUP = "Pipeline variables";
+
+/** The type of a declared frontmatter field, then the values it allows. */
+function declHint(decl: FrontmatterFieldDecl): string {
+  return decl.allowed?.length ? `${decl.type} · ${decl.allowed.join(" | ")}` : decl.type;
+}
+
+/** The type of a pipeline variable, then its default when it has one. */
+function variableHint(variable: { type: string; default?: unknown }): string {
+  const fallback = variable.default;
+  if (fallback == null || fallback === "") return variable.type;
+  return `${variable.type} · default ${typeof fallback === "string" ? fallback : JSON.stringify(fallback)}`;
 }
 
 /**
@@ -37,16 +59,16 @@ export function edgeConditionFields(
   const sourcePort = sourceNode?.outputs.find((p) => p.name === readPort);
   if (sourcePort?.frontmatter) {
     for (const [name, decl] of Object.entries(sourcePort.frontmatter)) {
-      fields.push({ name, decl });
+      fields.push({ name, decl, group: `Output · ${readPort}`, hint: declHint(decl) });
     }
   }
 
   // The enclosing region's iteration counter. Always offered so an exhaust-exit
   // such as `iter >= max` can be authored even before a region is materialised.
-  fields.push({ name: "iter", decl: null, isIter: true });
+  fields.push({ name: "iter", decl: null, isIter: true, group: LOOP_GROUP, hint: "int · loop iteration" });
 
-  for (const varName of Object.keys(pipeline.variables)) {
-    fields.push({ name: `$${varName}`, decl: null });
+  for (const [varName, variable] of Object.entries(pipeline.variables)) {
+    fields.push({ name: `$${varName}`, decl: null, group: VARIABLES_GROUP, hint: variableHint(variable) });
   }
 
   return fields;

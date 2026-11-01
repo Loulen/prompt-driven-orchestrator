@@ -56,4 +56,11 @@ describe("AgentSection", () => {
       effort: "medium",
     });
   });
+
+  it("labels the agent row « Model », not « Agent » like its section", () => {
+    render(section({ agent_choice: { mode: "inherit" } }));
+    const label = screen.getByTitle("Inherit, a profile, or a combination of its own");
+    expect(label).toHaveTextContent("Model");
+    expect(label).not.toHaveTextContent("Agent");
+  });
 });

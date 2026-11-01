@@ -76,10 +76,31 @@ describe("NodeAgentControl (inspector.agentControl)", () => {
     expect(onChange).toHaveBeenLastCalledWith({ mode: "custom", harness: "claude", model: "opus", effort: "high" });
   });
 
-  it("names the resolved combination in its tooltip, the model alone on a line when narrow", () => {
-    renderControl({ choice: { mode: "custom", harness: "claude", model: "opus", effort: "high" }, catalog: OFFERING });
+  it("names the resolved combination in its tooltip in Profile and in Inherit", () => {
+    renderControl({ choice: { mode: "profile", profile_id: "deep" } });
     expect(screen.getByTitle("Resolved agent · claude · opus · high")).toBeInTheDocument();
+  });
+
+  it("shows the resolved combination in Inherit", () => {
+    renderControl({ choice: { mode: "inherit" } });
+    expect(screen.getByTestId("node-agent-control-resolved")).toHaveTextContent("claude");
+  });
+
+  it("shows no summary line in an editable Custom: its three pickers already say it", () => {
+    renderControl({ choice: { mode: "custom", harness: "claude", model: "opus", effort: "high" }, catalog: OFFERING });
+    expect(screen.queryByTestId("node-agent-control-resolved")).toBeNull();
+    expect(screen.queryByTitle("Resolved agent · claude · opus · high")).toBeNull();
     expect(screen.getByTestId("node-agent-control-custom-model")).toHaveClass("ei-agent__model");
+  });
+
+  it("keeps the summary line on a read-only Custom, which shows no picker", () => {
+    renderControl({ choice: { mode: "custom", harness: "claude", model: "opus", effort: "high" }, catalog: OFFERING, readOnly: true });
+    expect(screen.getByTestId("node-agent-control-resolved")).toHaveTextContent("claude · opus · high");
+  });
+
+  it("warns of a missing profile on the summary line", () => {
+    renderControl({ choice: { mode: "profile", profile_id: "gone" } });
+    expect(screen.getByTestId("node-agent-control-resolved")).toHaveTextContent("missing");
   });
 
   it("puts harness, model and effort on one line", () => {

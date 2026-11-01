@@ -101,6 +101,9 @@
   color: var(--text-2);
 }
 .cv-n__cell > svg { flex: none; color: var(--text-3); }
+/* One output per line, the whole width: its port type's icon, then its name.
+   Each adds 16 px to the card (`model/grownCanvas.ts`, EDIT_CARD). */
+.cv-n__out { grid-column: 1 / -1; }
 .cv-n__cell > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* An orchestrator's « N runs », then the Orchestration tab's pastilles: one row that opens the tab. */
 .cv-n__runs {

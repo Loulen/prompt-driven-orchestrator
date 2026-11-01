@@ -90,7 +90,7 @@ function CustomModel({
 /**
  * The agent of a node (`inspector.agentControl`): Inherit, Profile or Custom
  * as a segmented control, the picker of the chosen mode under it, the
- * resolved combination in mono.
+ * resolved combination in mono (not in an editable Custom: its pickers say it).
  */
 export default function NodeAgentControl({
   choice,
@@ -110,6 +110,7 @@ export default function NodeAgentControl({
   testId: string;
 }) {
   const mode: Mode = choice?.mode ?? "inherit";
+  const editingCustom = choice?.mode === "custom" && !readOnly;
   const resolved = resolveAgentChoice(choice, profiles, inherited);
   const broken = resolved.brokenId != null;
   const custom: AgentCombination = choice?.mode === "custom" ? choice : inherited;
@@ -210,17 +211,22 @@ export default function NodeAgentControl({
           )}
         </div>
       )}
-      <span
-        className="ei-agent__line"
-        title={
-          broken
-            ? `Profile ${resolved.brokenId} is missing: the next tier resolves`
-            : `Resolved agent · ${combinationLabel(resolved.combination)}`
-        }
-      >
-        {broken && <TriangleAlert size={10} strokeWidth={1.75} aria-hidden />}{" "}
-        {broken ? `missing · ${combinationLabel(resolved.combination)}` : combinationLabel(resolved.combination)}
-      </span>
+      {/* The resolved combination, in Inherit and Profile. In an editable
+          Custom the three pickers above already say it: no line repeats them. */}
+      {!editingCustom && (
+        <span
+          className="ei-agent__line"
+          data-testid={`${testId}-resolved`}
+          title={
+            broken
+              ? `Profile ${resolved.brokenId} is missing: the next tier resolves`
+              : `Resolved agent · ${combinationLabel(resolved.combination)}`
+          }
+        >
+          {broken && <TriangleAlert size={10} strokeWidth={1.75} aria-hidden />}{" "}
+          {broken ? `missing · ${combinationLabel(resolved.combination)}` : combinationLabel(resolved.combination)}
+        </span>
+      )}
     </div>
   );
 }

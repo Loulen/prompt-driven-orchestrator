@@ -10,6 +10,7 @@ import type { NodeStatus } from "../../shared/generated/NodeStatus";
 import type { NodeType } from "../../shared/generated/NodeType";
 import type { PortBrief } from "../../shared/generated/PortBrief";
 import type { PortSide } from "../../shared/generated/PortSide";
+import type { PortType } from "../../shared/generated/PortType";
 import { useEditStore } from "../store/editStore";
 import { useSelectedByOther } from "../store/useDraftPresence";
 import { presenceColor } from "../model/presence";
@@ -42,12 +43,15 @@ const ANCHOR_HANDLE_SIDES: { side: PortSide; position: Position; style: React.CS
   { side: "bottom", position: Position.Bottom, style: { bottom: 0, left: "50%", transform: "translateX(-50%)" } },
 ];
 
+/** A port as the card lists it: an output's line carries its type's icon. */
+export type CardPort = PortBrief & { port_type?: PortType };
+
 export interface EditNodeData {
   label: string;
   nodeId: string;
   nodeType: NodeType;
   inputs: PortBrief[];
-  outputs: PortBrief[];
+  outputs: CardPort[];
   interactive: boolean;
   status: NodeStatus;
   // True only for start/end markers on a completed run, or one waiting at End

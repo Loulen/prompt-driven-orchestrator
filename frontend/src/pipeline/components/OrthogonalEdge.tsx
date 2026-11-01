@@ -16,6 +16,7 @@ import {
   outputLabelPlacement,
 } from "../../lib/edgeLabels";
 import { useEditStore } from "../store/editStore";
+import { storedEdgePatch, useCanvasShift } from "../store/canvasShift";
 import { selectActiveTabLocked } from "../store/editState";
 import type { EdgeAnchor } from "../../shared/generated/EdgeAnchor";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
@@ -121,12 +122,14 @@ export default function OrthogonalEdge({
 
   // Every label write goes through here, so the `edgeIndex` guard is stated
   // once and the drag handlers below stay about the gesture.
+  // A label is dragged where it is drawn; the file gets where it is stored.
+  const shift = useCanvasShift();
   const patchEdge = useCallback(
     (updates: Partial<EdgeDef>) => {
       if (edgeIndex == null) return;
-      updateEdge(edgeIndex, updates);
+      updateEdge(edgeIndex, storedEdgePatch(shift, updates));
     },
-    [edgeIndex, updateEdge],
+    [edgeIndex, updateEdge, shift],
   );
 
   /**

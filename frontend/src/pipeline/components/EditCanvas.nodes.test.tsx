@@ -319,15 +319,15 @@ describe("EditNode rim drag-source (#844)", () => {
     } as unknown as Parameters<typeof EditNode>[0];
   }
 
-  it("renders NO output dot — the card names no port any more", () => {
+  it("renders NO output dot — the outputs are listed in the meta grid, not as ports", () => {
     const { container } = render(
       <EditNode {...workProps([{ name: "out" }, { name: "spec" }])} />,
       { wrapper: Wrapper },
     );
     expect(container.querySelectorAll(".port-dot")).toHaveLength(0);
     expect(container.querySelectorAll(".port-pill.kind-output")).toHaveLength(0);
-    expect(screen.queryByText("out")).toBeNull();
-    expect(screen.queryByText("spec")).toBeNull();
+    expect(container.querySelectorAll('[data-testid^="port-output-"]')).toHaveLength(0);
+    expect(screen.getAllByTestId("node-output-line").map((line) => line.textContent)).toEqual(["out", "spec"]);
   });
 
   it("makes the whole border a connection source: one source strip per side", () => {

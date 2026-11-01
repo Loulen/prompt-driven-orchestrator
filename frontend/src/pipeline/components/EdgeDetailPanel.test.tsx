@@ -5,6 +5,7 @@ import { useEditStore } from "../store/editStore";
 import { pipelineToYamlObject } from "../../lib/serializePipeline";
 import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { EditorNodeDef, EditorPipelineDef } from "../model/pipeline";
+import { pickOption, selectOptions, selectedLabel } from "../../test/kitSelect";
 
 function reviewer(): EditorNodeDef {
   return {
@@ -101,13 +102,10 @@ describe("EdgeDetailPanel", () => {
 
     fireEvent.click(screen.getByTestId("add-condition"));
 
-    const fieldSel = screen.getByTestId("field-dropdown");
-    fireEvent.change(fieldSel, { target: { value: "verdict" } });
-    const opSel = screen.getByTestId("op-dropdown");
-    fireEvent.change(opSel, { target: { value: "eq" } });
+    pickOption(screen.getByTestId("field-dropdown"), "verdict");
+    pickOption(screen.getByTestId("op-dropdown"), "=");
     // enum field exposes its allowed values as a dropdown
-    const valueSel = screen.getByTestId("value-dropdown");
-    fireEvent.change(valueSel, { target: { value: "FAIL" } });
+    pickOption(screen.getByTestId("value-dropdown"), "FAIL");
 
     const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
     expect(edge.when).toEqual({ verdict: { eq: "FAIL" } });
@@ -120,7 +118,7 @@ describe("EdgeDetailPanel", () => {
     // No free-text value input for a bool field; a toggle is shown instead.
     const row = screen.getByTestId("condition-row");
     expect(within(row).queryByTestId("value-input")).toBeNull();
-    const toggleTrue = within(row).getByTestId("bool-true");
+    const toggleTrue = within(within(row).getByTestId("bool-toggle")).getByRole("radio", { name: "true" });
 
     fireEvent.click(toggleTrue);
 
@@ -137,16 +135,14 @@ describe("EdgeDetailPanel", () => {
     it("offers only = and ≠ for a boolean field", () => {
       seedEdge({ ...baseEdge, when: { is_blocking: { eq: true } } });
       render(<EdgeDetailPanel />);
-      const opSel = screen.getByTestId("op-dropdown") as HTMLSelectElement;
-      expect(Array.from(opSel.options).map((o) => o.value)).toEqual(["eq", "neq"]);
+      expect(selectOptions(screen.getByTestId("op-dropdown")).map((o) => o.label)).toEqual(["=", "≠"]);
     });
 
     it("keeps the full operator set for iter and for an enum field", () => {
       seedEdge({ ...baseEdge, when: { iter: { gte: 3 } } });
       render(<EdgeDetailPanel />);
-      const opSel = screen.getByTestId("op-dropdown") as HTMLSelectElement;
-      expect(Array.from(opSel.options).map((o) => o.value)).toEqual([
-        "eq", "neq", "lt", "lte", "gt", "gte", "in", "not_in",
+      expect(selectOptions(screen.getByTestId("op-dropdown")).map((o) => o.label)).toEqual([
+        "=", "≠", "<", "≤", ">", "≥", "in", "not in",
       ]);
     });
 
@@ -154,9 +150,7 @@ describe("EdgeDetailPanel", () => {
       seedEdge({ ...baseEdge, when: { iter: { gte: 3 } } });
       render(<EdgeDetailPanel />);
 
-      fireEvent.change(screen.getByTestId("field-dropdown"), {
-        target: { value: "is_blocking" },
-      });
+      pickOption(screen.getByTestId("field-dropdown"), "is_blocking");
 
       const edge = useEditStore.getState().openTabs[0].pipeline.edges[0];
       // `gte` would have survived the field change and written `is_blocking >= true`.
@@ -173,9 +167,9 @@ describe("EdgeDetailPanel", () => {
     it("still renders an out-of-range operator already present on the edge", () => {
       seedEdge({ ...baseEdge, when: { is_blocking: { gte: true } } });
       render(<EdgeDetailPanel />);
-      const opSel = screen.getByTestId("op-dropdown") as HTMLSelectElement;
-      expect(opSel.value).toBe("gte");
-      expect(Array.from(opSel.options).map((o) => o.value)).toContain("gte");
+      const opSel = screen.getByTestId("op-dropdown");
+      expect(selectedLabel(opSel)).toBe("≥");
+      expect(selectOptions(opSel).map((o) => o.label)).toContain("≥");
     });
   });
 
@@ -191,7 +185,7 @@ describe("EdgeDetailPanel", () => {
   it("moves a row onto a held field with another operator, keeping both values", () => {
     seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" }, iter: { gte: 2 } } });
     render(<EdgeDetailPanel />);
-    fireEvent.change(screen.getAllByTestId("field-dropdown")[1], { target: { value: "verdict" } });
+    pickOption(screen.getAllByTestId("field-dropdown")[1], "verdict");
     const when = useEditStore.getState().openTabs[0].pipeline.edges[0].when as Record<string, Record<string, unknown>>;
     expect(when.verdict.eq).toBe("FAIL");
     expect(Object.keys(when.verdict)).toHaveLength(2);
@@ -202,8 +196,8 @@ describe("EdgeDetailPanel", () => {
     render(<EdgeDetailPanel />);
     const shown = () =>
       screen.getAllByTestId("condition-row").map((row) => {
-        const field = (within(row).getByTestId("field-dropdown") as HTMLSelectElement).value;
-        const op = (within(row).getByTestId("op-dropdown") as HTMLSelectElement).value;
+        const field = selectedLabel(within(row).getByTestId("field-dropdown"));
+        const op = selectedLabel(within(row).getByTestId("op-dropdown"));
         return `${field} ${op}`;
       });
     const seen: string[] = [];
@@ -217,12 +211,81 @@ describe("EdgeDetailPanel", () => {
     expect(new Set(seen.map((s) => s.split(" ")[0])).size).toBeLessThan(4);
   });
 
+  describe("Conditions section", () => {
+    it("is titled « Conditions », with no Fields section", () => {
+      seedEdge(baseEdge);
+      render(<EdgeDetailPanel />);
+      const panel = screen.getByTestId("edge-detail-panel");
+      expect(within(panel).getByText("Conditions")).toBeInTheDocument();
+      expect(within(panel).queryByText("When")).toBeNull();
+      expect(within(panel).queryByText("Fields")).toBeNull();
+    });
+
+    it("offers « Add condition » under « Always » when the edge has none", () => {
+      seedEdge(baseEdge);
+      render(<EdgeDetailPanel />);
+      const editor = screen.getByTestId("when-editor");
+      const add = within(editor).getByRole("button", { name: "Add condition" });
+      expect(add).toBeEnabled();
+      const always = within(editor).getByText("Always");
+      expect(always.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("keeps « Add condition » under the last condition row", () => {
+      seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" }, iter: { gte: 2 } } });
+      render(<EdgeDetailPanel />);
+      const rows = screen.getAllByTestId("condition-row");
+      const add = screen.getByRole("button", { name: "Add condition" });
+      expect(rows[rows.length - 1].compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      fireEvent.click(add);
+      const after = screen.getAllByTestId("condition-row");
+      expect(after).toHaveLength(3);
+      expect(after[2].compareDocumentPosition(screen.getByRole("button", { name: "Add condition" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("disables « Add condition » with its reason when no field/operator pair is free", () => {
+      // A port with no frontmatter and no variable leaves `iter` alone: eight operators.
+      const plain: EdgeDef = { source: { node: "impl", port: "diff" }, target: { node: "reviewer", port: "task" } };
+      seedEdge({
+        ...plain,
+        when: { iter: { eq: 1, neq: 2, lt: 3, lte: 4, gt: 5, gte: 6, in: [1], not_in: [2] } },
+      });
+      render(<EdgeDetailPanel />);
+      const add = screen.getByRole("button", { name: "Add condition" });
+      expect(add).toBeDisabled();
+      expect(screen.getByTestId("add-condition-why")).toHaveTextContent(/already has a condition/);
+      expect(add.parentElement).toHaveAttribute("title", expect.stringMatching(/already has a condition/));
+    });
+
+    it("groups the field options by origin, each with its type and allowed values", () => {
+      const pipeline = makePipeline([{ ...baseEdge, when: { verdict: { eq: "FAIL" } } }]);
+      pipeline.variables = { max_iter: { type: "int", default: 5 } };
+      useEditStore.setState({
+        openTabs: [{ id: "tab1", scope: "repo", pipeline, prompts: {}, diagnostics: [], dirty: false, externalDirty: false }],
+        activeTabId: "tab1",
+        selection: { kind: "edge", id: null, edgeIndex: 0 },
+      });
+      render(<EdgeDetailPanel />);
+      expect(selectOptions(screen.getByTestId("field-dropdown"))).toEqual([
+        { label: "verdict", hint: "enum · PASS | FAIL | NEEDS_WORK", group: "Output · verdict" },
+        { label: "is_blocking", hint: "bool", group: "Output · verdict" },
+        { label: "iter", hint: "int · loop iteration", group: "Loop" },
+        { label: "$max_iter", hint: "int · default 5", group: "Pipeline variables" },
+      ]);
+    });
+
+    it("labels the columns of the condition grid", () => {
+      seedEdge({ ...baseEdge, when: { verdict: { eq: "FAIL" } } });
+      render(<EdgeDetailPanel />);
+      expect(screen.getByTestId("condition-grid-head")).toHaveTextContent("OutputFieldOpValue");
+    });
+  });
+
   it("offers iter as a selectable condition field", () => {
     seedEdge(baseEdge);
     render(<EdgeDetailPanel />);
     fireEvent.click(screen.getByTestId("add-condition"));
-    const fieldSel = screen.getByTestId("field-dropdown") as HTMLSelectElement;
-    const options = Array.from(fieldSel.options).map((o) => o.value);
+    const options = selectOptions(screen.getByTestId("field-dropdown")).map((o) => o.label);
     expect(options).toContain("iter");
   });
 

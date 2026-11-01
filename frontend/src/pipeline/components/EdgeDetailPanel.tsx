@@ -23,6 +23,7 @@ import {
 import {
   edgeConditionFields,
   isBoolField,
+  declaredValueType,
   clampOperator,
   isConditionHeld,
   nextFreeCondition,
@@ -174,6 +175,7 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
             }
           : merged,
         fields,
+        r,
       );
     });
     // Two rows on one field and operator would share one value in the clause:
@@ -365,8 +367,17 @@ export default function EdgeDetailPanel({ trigger = null }: Props) {
 /** Why « Add condition » is off: every field already holds every operator it admits. */
 const NOTHING_FREE = "Every field already has a condition on each of its operators";
 
-function withTypeHint(row: ConditionRow, fields: EdgeConditionField[]): ConditionRow {
-  return isBoolField(fields, row.field) ? { ...row, valueType: "bool" } : { ...row, valueType: undefined };
+/**
+ * The type the row's value is written with. A declared field writes its
+ * declared type (bool, or string for a string or an enum). Any other field keeps
+ * the type its value was read with until its field or its value changes, so
+ * editing the operator of `flag: { eq: true }` or `code: { eq: "42" }` does not
+ * turn the value into `"true"` or `42`; a new value is inferred from its text.
+ */
+function withTypeHint(row: ConditionRow, fields: EdgeConditionField[], before?: ConditionRow): ConditionRow {
+  const declared = declaredValueType(fields, row.field);
+  const unchanged = before !== undefined && before.field === row.field && before.value === row.value;
+  return { ...row, valueType: declared ?? (unchanged ? before.valueType : undefined) };
 }
 
 function defaultValueFor(field: string, fields: EdgeConditionField[]): string {

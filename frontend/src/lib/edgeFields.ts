@@ -79,6 +79,20 @@ export function isBoolField(fields: EdgeConditionField[], name: string): boolean
   return fields.find((f) => f.name === name)?.decl?.type === "bool";
 }
 
+/**
+ * The type a condition's value is written with, from the field's declaration:
+ * a `bool` writes a boolean, a `string` or an `enum` a string (an allowed value
+ * `"2"` must not be saved as the number `2`, which the frontmatter's string
+ * never equals). Numbers, and a field nobody declares, are inferred from the
+ * text (`undefined`).
+ */
+export function declaredValueType(fields: EdgeConditionField[], name: string): ConditionRow["valueType"] {
+  const type = fields.find((f) => f.name === name)?.decl?.type;
+  if (type === "bool") return "bool";
+  if (type === "string" || type === "enum") return "string";
+  return undefined;
+}
+
 /** Equality only — a boolean has no ordering the predicate grammar can use (#456). */
 const BOOL_OPERATORS: readonly Operator[] = ["eq", "neq"];
 

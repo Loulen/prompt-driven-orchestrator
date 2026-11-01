@@ -1,5 +1,5 @@
 // The semver level of a release, from the conventional commits since the last
-// tag (ADR draft-version-changelog-et-numero-d-adr-se-fixent-a-la-fusion-vers-main).
+// tag (ADR-0095).
 // A commit is `{ message, files }`: its full message and the paths it touches.
 
 const LEVELS = ["patch", "minor", "major"];

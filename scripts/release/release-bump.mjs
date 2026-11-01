@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// `make release-bump` (ADR draft-version-changelog-et-numero-d-adr-se-fixent-a-la-fusion-vers-main):
+// `make release-bump` (ADR-0095):
 // at the merge of an `integration/*` branch into `main`, propose the semver
 // level from the commits since the last tag, then bump every version, release
 // the CHANGELOG's `## Unreleased` and number the draft ADRs.

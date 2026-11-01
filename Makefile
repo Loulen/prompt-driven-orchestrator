@@ -143,8 +143,7 @@ e2e:
 	cd frontend && pnpm exec playwright install chromium
 	cd frontend && $(NO_PDO_ENV) $(if $(E2E_PORT),PDO_E2E_PORT=$(E2E_PORT)) pnpm run e2e
 
-# At the merge of `integration/*` into `main`, never on a ticket (ADR
-# draft-version-changelog-et-numero-d-adr-se-fixent-a-la-fusion-vers-main):
+# At the merge of `integration/*` into `main`, never on a ticket (ADR-0095):
 # proposes the semver level from the commits since the last tag, bumps the
 # workspace, the extension API, the front's shared module and Cargo.lock,
 # renames `## Unreleased` and numbers the draft ADRs. LEVEL= / API_LEVEL= force

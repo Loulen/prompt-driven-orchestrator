@@ -1,4 +1,4 @@
-// The scoped gate's plan (ADR draft-les-controles-structurels-tournent-dans-un-crate-tidy-avant-toute-suite-longue):
+// The scoped gate's plan (ADR-0094):
 // the changed files -> the steps that check them, each with the reason it was kept.
 // Pure: what it needs from the repository (crate graph, embedded files, files
 // declaring a TS type, script suites) is handed in by scoped.mjs.

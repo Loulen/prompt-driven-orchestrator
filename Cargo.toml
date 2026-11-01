@@ -26,7 +26,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "2.68.0"
+version = "2.69.0"
 license = "MIT"
 description = "Prompt-Driven Orchestrator — a local daemon that runs and supervises agentic coding pipelines"
 repository = "https://github.com/Loulen/PDO-v2"
@@ -86,7 +86,7 @@ opentelemetry-http = { version = "0.33.1", default-features = false }
 opentelemetry-prometheus = { version = "0.33.1", default-features = false }
 prometheus = { version = "0.14", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["charset", "http2", "system-proxy", "rustls-tls", "json", "blocking", "multipart"] }
-pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.20.0" }
+pdo-extension-api = { path = "crates/pdo-extension-api", version = "0.20.1" }
 pdo-kernel = { path = "crates/pdo-kernel" }
 pdo-workspace = { path = "crates/pdo-workspace" }
 pdo-skill = { path = "crates/pdo-skill" }

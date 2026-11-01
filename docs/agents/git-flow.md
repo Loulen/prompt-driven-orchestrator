@@ -17,7 +17,7 @@ this file and the skill disagree, **this file wins**; the skill describes the fu
 ## What still holds
 
 - **Branch shape** stays the skill's: `integration/*`, `feature/*`, `hotfix/*`, off the right base.
-- **Three gates** (ADR draft-les-controles-structurels-tournent-dans-un-crate-tidy-avant-toute-suite-longue):
+- **Three gates** (ADR-0094):
   - `make fast` while you work: `cargo fmt --check` and the structural checks of `crates/tidy`, in
     under a minute even on a fresh checkout.
   - `make scoped` after a change: `make fast`, then only what the diff since the merge-base with the
@@ -38,7 +38,7 @@ this file and the skill disagree, **this file wins**; the skill describes the fu
   (`integration/CORE-8-<slug>`) and the ticket's ID (`feature/CORE-9-<slug>`).
 - **No version bump on a ticket.** A ticket touches no version (workspace, extension API, the
   front's shared module, `Cargo.toml` / `Cargo.lock`) and takes no ADR number
-  (ADR draft-version-changelog-et-numero-d-adr-se-fixent-a-la-fusion-vers-main).
+  (ADR-0095).
   It writes its CHANGELOG entry under `## Unreleased`, the first entry, in English and without
   ticket ids: what changes on screen, the new seams, the breaking changes. A new ADR is born
   `docs/adr/draft-<slug>.md`. The binary embeds the CHANGELOG for "What's new", which hides

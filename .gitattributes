@@ -2,7 +2,6 @@
 # tag pdo-sandbox:h-<hash> soit identique quel que soit l'OS de checkout/build (release/GHCR #411).
 crates/pdo-sandbox/assets/sandbox/Dockerfile text eol=lf
 
-# Every ticket of a story adds its entry under `## Unreleased` (ADR
-# draft-version-changelog-et-numero-d-adr-se-fixent-a-la-fusion-vers-main): two tickets appending
+# Every ticket of a story adds its entry under `## Unreleased` (ADR-0095): two tickets appending
 # at the same place would conflict on every merge. The union driver keeps the lines of both sides.
 CHANGELOG.md merge=union

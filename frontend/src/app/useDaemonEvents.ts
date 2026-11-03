@@ -5,6 +5,7 @@ import { trailingWindow } from "../shared/lib/trailingWindow";
 import { refreshGestureRights } from "../run/store/gestureRightsStore";
 import { announceHarnessCatalogueChanged } from "../harness/store/useHarnessCatalog";
 import { announceLaunchOfferChanged } from "../run/store/useLaunchTargets";
+import { syncAppearance } from "../hooks/useAppearance";
 
 /** What the live stream refreshes. */
 export interface DaemonEventTargets {
@@ -65,6 +66,8 @@ export function useDaemonEvents({
     // What only a resync re-reads, in one window too: the daemon may send
     // several in a burst, and the stream's own may follow one.
     const lists = trailingWindow(() => {
+      // The Apparence another device may have changed meanwhile.
+      void syncAppearance();
       refreshTriggers();
       refreshTriggersPaused();
       refreshProjects();
@@ -73,6 +76,9 @@ export function useDaemonEvents({
     });
     // CORE-42: the gestures shown follow the rights and the Projets.
     const gestures = trailingWindow(refreshGestureRights);
+    // The Actor's Apparence, kept by the daemon: the local copy painted at boot
+    // gives way to it (CONTEXT.md « Apparence »).
+    void syncAppearance();
     const unsubscribe = subscribe((msg) => {
       // ADR-0083 §6: back from an absence (the stream reopened, the tab shows
       // again, the network is back) or told by the daemon that this client

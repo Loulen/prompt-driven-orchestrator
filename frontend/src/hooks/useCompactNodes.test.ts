@@ -1,10 +1,15 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
+
+const saveAppearance = vi.hoisted(() => vi.fn(async (document: unknown) => ({ appearance: document })));
+vi.mock("../settings/api/appearance", () => ({ fetchAppearance: vi.fn(), saveAppearance }));
+
 import { resetCompactNodes, useCompactNodes } from "./useCompactNodes";
 
 beforeEach(() => {
   localStorage.clear();
   resetCompactNodes();
+  saveAppearance.mockClear();
 });
 
 describe("useCompactNodes", () => {
@@ -29,6 +34,12 @@ describe("useCompactNodes", () => {
     expect(localStorage.getItem("pdo.ui.compactNodes")).toBe("true");
     act(() => b.result.current.setCompactNodes(false));
     expect(a.result.current.compactNodes).toBe(false);
+  });
+
+  it("writes the Actor's Apparence, as the command field's switch does", () => {
+    const { result } = renderHook(() => useCompactNodes());
+    act(() => result.current.toggleCompactNodes());
+    expect(saveAppearance).toHaveBeenCalledWith({ version: 1, compact_nodes: true, elements: {} });
   });
 
   it("follows a change made in another tab", () => {

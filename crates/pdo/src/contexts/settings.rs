@@ -1,5 +1,5 @@
 //! The `settings` context: the stored tier and the agentic profiles over
-//! SQLite, the page's sections — each context's instance defaults, the staging
+//! SQLite, the Apparence of each Actor, the page's sections — each context's instance defaults, the staging
 //! profiles and Docker, the harnesses' catalogues, the price table — under the
 //! daemon's home, the platform's version check, the telemetry export an edit
 //! reloads, and who names a profile (the Projets, the Triggers, the instance
@@ -19,6 +19,7 @@ use pdo_settings::adapters::sections::{
     HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,
     SandboxSection, SessionDefaults, TelemetryDefaults, TriggerDefaults, WorkspaceDefaults,
 };
+use pdo_settings::adapters::sqlite::SqliteAppearances;
 use pdo_settings::application::ports::CatalogueEvents;
 use pdo_settings::{Settings, SettingsPorts};
 use tokio::sync::broadcast;
@@ -48,6 +49,7 @@ pub(super) fn settings(
     Settings::new(SettingsPorts {
         config: stored.config,
         profiles: stored.profiles,
+        appearances: Arc::new(SqliteAppearances::new(r.db.clone())),
         sections: vec![
             Arc::new(RunDefaults),
             Arc::new(SessionDefaults),

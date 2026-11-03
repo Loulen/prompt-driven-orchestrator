@@ -1,23 +1,27 @@
-//! The settings context over SQLite: the stored tier (`instance_config`) and
-//! the agentic profiles (`agent_profiles`), behind the context's ports. The
+//! The settings context over SQLite: the stored tier (`instance_config`), the
+//! agentic profiles (`agent_profiles`) and the Apparence of each Actor
+//! (`actor_appearances`), behind the context's ports. The
 //! free functions stay public for the readers of another tier (who names a
 //! skill or a staging profile, the sweep's TTLs in the composition root).
 
 pub mod agent_profiles;
+pub mod appearances;
 pub mod instance_config;
 mod schema;
 
 use std::collections::BTreeMap;
 
 use pdo_harness::agent_choice::ResolvedCombo;
+use pdo_kernel::Actor;
 use sqlx::SqlitePool;
 
 pub use schema::init;
 
 use crate::application::ports::{
-    AgentProfileStore, BoxFuture, InstanceConfigStore, StorageError, Stored,
+    AgentProfileStore, AppearanceStore, BoxFuture, InstanceConfigStore, StorageError, Stored,
 };
 use crate::domain::agent_profile::{AgentProfile, ProfileDraft};
+use crate::domain::appearance::AppearanceDocument;
 use crate::domain::instance_config::{InstanceConfig, UpdateInstanceConfig};
 
 fn stored<T>(result: Result<T, sqlx::Error>) -> Stored<T> {
@@ -103,5 +107,31 @@ impl AgentProfileStore for SqliteAgentProfiles {
 
     fn snapshot(&self) -> BoxFuture<'_, Stored<BTreeMap<String, ResolvedCombo>>> {
         Box::pin(async move { stored(agent_profiles::snapshot(&self.db).await) })
+    }
+}
+
+/// The Apparence of each Actor, in `pdo.db`.
+#[derive(Clone)]
+pub struct SqliteAppearances {
+    db: SqlitePool,
+}
+
+impl SqliteAppearances {
+    pub fn new(db: SqlitePool) -> Self {
+        Self { db }
+    }
+}
+
+impl AppearanceStore for SqliteAppearances {
+    fn get<'a>(&'a self, actor: &'a Actor) -> BoxFuture<'a, Stored<Option<AppearanceDocument>>> {
+        Box::pin(async move { stored(appearances::get(&self.db, actor).await) })
+    }
+
+    fn put<'a>(
+        &'a self,
+        actor: &'a Actor,
+        document: &'a AppearanceDocument,
+    ) -> BoxFuture<'a, Stored<()>> {
+        Box::pin(async move { stored(appearances::put(&self.db, actor, document).await) })
     }
 }

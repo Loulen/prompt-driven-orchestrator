@@ -5,6 +5,7 @@
 //! settings and the agentic profiles.
 
 mod agent_profiles;
+mod appearance;
 mod boot;
 mod fakes;
 mod page;

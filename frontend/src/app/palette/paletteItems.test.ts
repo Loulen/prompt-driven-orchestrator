@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { NOTHING_REFUSED } from "../../run/model/runGestures";
 import { coreItems, selectionItems } from "./paletteItems";
-import type { Appearance } from "../../lib/theme";
+import type { ThemeChoice } from "../../lib/theme";
 import type { PaletteSelection } from "./paletteHost";
 
 const node = (status: string): PaletteSelection =>
@@ -58,13 +58,13 @@ describe("the selection's gestures", () => {
 
 describe("the Theme and Dark mode commands (ADR-0093)", () => {
   const host = { runs: [], triggers: [], selection: null, openRun: vi.fn(), openTrigger: vi.fn() };
-  const commands = (appearance: Appearance, setTheme = vi.fn(), toggleMode = vi.fn()) =>
+  const commands = (appearance: ThemeChoice, setTheme = vi.fn(), toggleMode = vi.fn()) =>
     coreItems({ host, pipelines: [], openPipeline: vi.fn(), appearance, setTheme, toggleMode, compactNodes: false, toggleCompactNodes: vi.fn() }).filter((i) =>
       ["cmd:theme-acogni", "cmd:theme-classic", "cmd:dark-mode"].includes(i.id),
     );
 
   it("offers Theme: Acogni, Theme: Classic and Dark mode, each checked while it holds", () => {
-    const rows = (a: Appearance) => commands(a).map((i) => [i.label, i.checked]);
+    const rows = (a: ThemeChoice) => commands(a).map((i) => [i.label, i.checked]);
     expect(rows({ theme: "acogni", mode: "dark" })).toEqual([
       ["Theme: Acogni", true],
       ["Theme: Classic", false],
@@ -109,5 +109,33 @@ describe("the Compact nodes command", () => {
     const toggle = vi.fn();
     row(false, toggle).run();
     expect(toggle).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the Customize appearance entry", () => {
+  const items = (openAppearance?: () => void) =>
+    coreItems({
+      host: { runs: [], triggers: [], selection: null, openRun: vi.fn(), openTrigger: vi.fn(), openSettings: vi.fn(), openAppearance },
+      pipelines: [],
+      openPipeline: vi.fn(),
+      appearance: { theme: "acogni", mode: "dark" },
+      setTheme: vi.fn(),
+      toggleMode: vi.fn(),
+      compactNodes: false,
+      toggleCompactNodes: vi.fn(),
+    });
+
+  it("follows Settings and opens Settings › Appearance", () => {
+    const open = vi.fn();
+    const ids = items(open).map((i) => i.id);
+    expect(ids.indexOf("cmd:appearance")).toBe(ids.indexOf("cmd:settings") + 1);
+    const entry = items(open).find((i) => i.id === "cmd:appearance")!;
+    expect(entry.label).toBe("Customize appearance");
+    entry.run();
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("is absent without a shell that opens it", () => {
+    expect(items().some((i) => i.id === "cmd:appearance")).toBe(false);
   });
 });

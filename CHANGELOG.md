@@ -13,6 +13,32 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### Settings › Appearance
+
+- Settings has an **Appearance** category, right after General, in three sections. **Theme** holds
+  the Theme and Dark mode, which now follow your account, and the UI scale, which stays with this
+  device. **Appearance** holds one block per surface, its switches on the left and a preview
+  beside them. Its first block, Run canvas, starts with Compact nodes; Reset to defaults in the
+  section's title bar shows how many choices differ, and is greyed when none does. **Interface**
+  keeps the behaviour settings (Single-tab mode, Child runs, Wiring grid, Wiring grid size). General
+  no longer shows any of them.
+- Each row shows its scope: "Your account" (new) or "This device". Every choice is saved at once,
+  never by the instance form's Save.
+- Theme, Dark mode and Compact nodes are kept by the daemon for each Actor: you find them on every
+  device you sign in from. The first load of an Actor with nothing saved yet adopts the values this
+  browser held. Other tabs follow a change at once; other devices take it at their next load or
+  reconnection. Without an identity extension, the local operator has the one Appearance of the
+  instance.
+- The command field has a "Customize appearance" entry that opens Settings › Appearance; its
+  Compact nodes switch writes the Actor's Appearance.
+- New seams: `GET` and `PUT /actors/me/appearance`, the caller's Appearance (a versioned document,
+  at most 32 KiB; a malformed one is refused with a `400`, a larger one with a `413`), and the
+  exported types `AppearanceDocument` and `ActorAppearance`. The browser keeps its copy under the
+  same storage keys: `/shared/theme.js`, and the pages extensions serve outside the interface, are
+  unchanged.
+
 ## 2.70.0
 
 ### Pipeline editor

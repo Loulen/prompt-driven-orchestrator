@@ -5,7 +5,7 @@
  * line does not find it.
  */
 
-import { CircleX, Monitor, Zap } from "lucide-react";
+import { CircleX, Monitor, UserRound, Zap } from "lucide-react";
 import { useId, type ReactNode } from "react";
 import { Switch, TextInput } from "../../../shared/ui/kit";
 import { cx } from "../../../shared/ui/kit/util";
@@ -14,10 +14,14 @@ import { sourceNote } from "../../model/sourceNotes";
 import { rangeError } from "./range";
 import { useRowVisible } from "./search";
 
-/** Where a value is kept when it is not the instance form: this browser, or its own resource. */
-export type Scope = "device" | "live";
+/**
+ * Where a value is kept when it is not the instance form: the Actor's Apparence (on the
+ * daemon, followed on every device), this browser, or its own resource.
+ */
+export type Scope = "account" | "device" | "live";
 
 const SCOPE: Record<Scope, { icon: typeof Monitor; label: string }> = {
+  account: { icon: UserRound, label: "Your account, saved at once" },
   device: { icon: Monitor, label: "This device, saved at once" },
   live: { icon: Zap, label: "Saved at once" },
 };
@@ -46,6 +50,11 @@ export interface SettingRowProps {
   kind?: "value" | "wide";
   top?: boolean;
   dirty?: boolean;
+  /**
+   * The value differs from its default (an Apparence choice, saved at once): « changed »
+   * before the control, the default in its tooltip. Found by « Modified only » too.
+   */
+  changed?: { default: string };
   /** The control's id: the name is its label. */
   htmlFor?: string;
   testId?: string;
@@ -66,6 +75,7 @@ export function SettingRow({
   kind = "value",
   top,
   dirty,
+  changed,
   htmlFor,
   testId,
   note,
@@ -74,7 +84,7 @@ export function SettingRow({
   children,
 }: SettingRowProps) {
   const id = useId();
-  const visible = useRowVisible(`${label} ${help ?? ""} ${keywords ?? ""}`, !!dirty);
+  const visible = useRowVisible(`${label} ${help ?? ""} ${keywords ?? ""}`, !!dirty || !!changed);
   if (!visible) return null;
   const tip = [help, source].filter(Boolean).join("\n") || label;
   const Name = htmlFor ? "label" : "span";
@@ -97,7 +107,14 @@ export function SettingRow({
           {tip}
         </span>
       )}
-      <div className="set-row__ctl">{children}</div>
+      <div className="set-row__ctl">
+        {changed && (
+          <span className="set-changed" title={`Default: ${changed.default}`} data-testid={testId && `${testId}-changed`}>
+            changed
+          </span>
+        )}
+        {children}
+      </div>
       <ScopeIcon scope={scope} />
       {note && (
         <div

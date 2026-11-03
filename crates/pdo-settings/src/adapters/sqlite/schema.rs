@@ -1,5 +1,6 @@
 //! The settings context's tables: `instance_config`, the singleton row of the
-//! stored tier, and `agent_profiles`, seeded with the reserved `Default`.
+//! stored tier, `agent_profiles`, seeded with the reserved `Default`, and
+//! `actor_appearances`, one Apparence per Actor.
 //! Idempotent: safe on every boot. Future knobs are added by an idempotent,
 //! PRAGMA-guarded `ALTER TABLE … ADD COLUMN`, never a migration runner.
 
@@ -56,11 +57,26 @@ const ADDED_COLUMNS: &[(&str, &str)] = &[
     ("clones_folder", "TEXT"),
 ];
 
-/// Create both tables if absent, seed the all-NULL singleton row and the
+/// Create the tables if absent, seed the all-NULL singleton row and the
 /// reserved profile, and add the columns an older database lacks.
 pub async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
     init_instance_config(db).await?;
-    init_agent_profiles(db).await
+    init_agent_profiles(db).await?;
+    init_actor_appearances(db).await
+}
+
+/// One row per Actor that wrote its Apparence; none is seeded.
+async fn init_actor_appearances(db: &SqlitePool) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS actor_appearances (
+            actor      TEXT PRIMARY KEY,
+            document   TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+    )
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 async fn init_instance_config(db: &SqlitePool) -> Result<(), sqlx::Error> {

@@ -32,7 +32,7 @@ export interface SettingsSurfaceProps {
    * Programmatic entry (#690, story 18): where to land. Read once at mount — the host
    * bumps the component `key` when it wants a new position applied. Without it the
    * surface lands on the last visited category › section of this page session, else
-   * General › Interface.
+   * General, on its first section.
    */
   initialPosition?: SettingsPosition;
   /** Diagnostics › Price table links to Stats › Cost › Pricing details (one surface at a time). */

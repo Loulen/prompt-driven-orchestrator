@@ -15,7 +15,7 @@ export default function Section({
   children,
 }: {
   /** A core section, or an extension's (keyed by its contribution). */
-  section: Pick<SettingsSection, "label" | "readOnly" | "ownPersistence" | "deviceLocal"> & { id: string };
+  section: Pick<SettingsSection, "label" | "readOnly" | "ownPersistence" | "deviceLocal" | "account"> & { id: string };
   /** After the title (who added an extension's section). */
   badge?: ReactNode;
   /** Icon buttons at the right of the title bar. */
@@ -26,7 +26,7 @@ export default function Section({
   const query = useContext(SearchContext);
   const inSearch = searching(query);
   const labelMatch = inSearch && !query.modifiedOnly && matches(query.needle, section.label);
-  const scope = section.deviceLocal ? "device" : section.ownPersistence ? "live" : undefined;
+  const scope = section.account ? "account" : section.deviceLocal ? "device" : section.ownPersistence ? "live" : undefined;
   return (
     <section
       id={`settings-section-${section.id}`}

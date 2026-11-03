@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import InterfaceSection from "../settings/components/settingsSurface/InterfaceSection";
+import ThemeSection from "../settings/components/settingsSurface/ThemeSection";
 import { SETTINGS_CATEGORIES } from "../settings/model/settingsCategories";
 import { DEFAULT_UI_SCALE, initUiScale, loadUiScale, setUiScale, UI_SCALE_STORAGE_KEY } from "./uiScale";
 
@@ -34,10 +34,10 @@ describe("UI scale", () => {
     expect(zoom()).toBe("1");
   });
 
-  it("is chosen in Settings › Interface", async () => {
+  it("is chosen in Settings › Appearance › Theme", async () => {
     const user = userEvent.setup();
-    const interfaceSection = SETTINGS_CATEGORIES.flatMap((c) => c.sections).find((s) => s.label === "Interface");
-    render(<InterfaceSection section={interfaceSection!} />);
+    const themeSection = SETTINGS_CATEGORIES.flatMap((c) => c.sections).find((s) => s.id === "theme");
+    render(<ThemeSection section={themeSection!} />);
     const group = screen.getByRole("radiogroup", { name: "UI scale" });
     expect(screen.getByRole("radio", { name: "120 %" })).toHaveAttribute("aria-checked", "true");
     await user.click(screen.getByRole("radio", { name: "100 %" }));

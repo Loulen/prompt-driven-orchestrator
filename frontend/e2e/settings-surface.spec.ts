@@ -29,7 +29,7 @@ test("rail, sections, search, discard, then a save that holds after a reload", a
   await openSettings(page);
   await expect(page.getByTestId("settings-category-general")).toHaveAttribute("aria-selected", "true");
   await expect(page.getByTestId("settings-header-category")).toHaveText("General");
-  await expect(page.getByTestId("settings-subcolumn").getByRole("button")).toHaveCount(7);
+  await expect(page.getByTestId("settings-subcolumn").getByRole("button")).toHaveCount(6);
 
   // The search line finds a setting in any category, and only it.
   await page.getByTestId("settings-search").fill("reaper");

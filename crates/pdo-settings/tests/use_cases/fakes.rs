@@ -10,10 +10,11 @@ use pdo_harness::agent_choice::ResolvedCombo;
 use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_settings::application::ports::{
-    AgentProfileStore, BoxFuture, CatalogueEvents, Harnesses, InstanceConfigStore,
+    AgentProfileStore, AppearanceStore, BoxFuture, CatalogueEvents, Harnesses, InstanceConfigStore,
     ProfileReferents, SettingsSection, StagingProfiles, Stored, TelemetryReloads, UpdateChecks,
 };
 use pdo_settings::domain::agent_profile::{AgentProfile, ProfileDraft, DEFAULT_PROFILE_ID};
+use pdo_settings::domain::appearance::AppearanceDocument;
 use pdo_settings::domain::instance_config::{InstanceConfig, UpdateInstanceConfig};
 use pdo_settings::domain::referents::{PipelineReferent, ProjectReferent, TriggerReferent};
 use pdo_settings::{Settings, SettingsPorts};
@@ -426,10 +427,41 @@ impl ExtensionHost for Host {
 }
 
 /// The context over fresh fakes, and the fakes.
+/// The Apparence of each Actor, in memory.
+#[derive(Default)]
+pub struct InMemoryAppearances {
+    pub documents: Mutex<Vec<(Actor, AppearanceDocument)>>,
+}
+
+impl AppearanceStore for InMemoryAppearances {
+    fn get<'a>(&'a self, actor: &'a Actor) -> BoxFuture<'a, Stored<Option<AppearanceDocument>>> {
+        let found = self
+            .documents
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(who, _)| who == actor)
+            .map(|(_, document)| document.clone());
+        Box::pin(ready(Ok(found)))
+    }
+
+    fn put<'a>(
+        &'a self,
+        actor: &'a Actor,
+        document: &'a AppearanceDocument,
+    ) -> BoxFuture<'a, Stored<()>> {
+        let mut documents = self.documents.lock().unwrap();
+        documents.retain(|(who, _)| who != actor);
+        documents.push((actor.clone(), document.clone()));
+        Box::pin(ready(Ok(())))
+    }
+}
+
 pub struct World {
     pub settings: Arc<Settings>,
     pub config: Arc<InMemoryConfig>,
     pub profiles: Arc<InMemoryProfiles>,
+    pub appearances: Arc<InMemoryAppearances>,
     pub harnesses: Arc<KnownHarnesses>,
     pub checks: Arc<Checks>,
     pub host: Arc<Host>,
@@ -459,9 +491,11 @@ pub fn world_with(sections: Vec<Arc<dyn SettingsSection>>, referents: Referents)
     let harnesses = Arc::new(KnownHarnesses::default());
     let checks = Arc::new(Checks::default());
     let host = Arc::new(Host::default());
+    let appearances = Arc::new(InMemoryAppearances::default());
     let settings = Settings::new(SettingsPorts {
         config: config.clone(),
         profiles: profiles.clone(),
+        appearances: appearances.clone(),
         sections,
         harnesses: harnesses.clone(),
         catalogue_events: harnesses.clone(),
@@ -475,6 +509,7 @@ pub fn world_with(sections: Vec<Arc<dyn SettingsSection>>, referents: Referents)
         settings,
         config,
         profiles,
+        appearances,
         harnesses,
         checks,
         host,

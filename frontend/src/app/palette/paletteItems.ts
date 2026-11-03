@@ -1,6 +1,6 @@
 /**
  * The core's rows of the command field: its commands (New run, Stats,
- * Settings, the Theme, the Dark mode and Compact nodes…), its Runs, Pipelines and Triggers, and the gestures
+ * Settings, Customize appearance, the Theme, the Dark mode and Compact nodes…), its Runs, Pipelines and Triggers, and the gestures
  * on the selected item (a Run's Pause, Resume, Retry all; a node's Mark
  * complete, Retry and Stop) that the caller may make (CORE-42: a refused gesture is absent). And
  * the extensions' Actions, as rows.
@@ -37,7 +37,7 @@ import { markNodeDone } from "../../run/api/completion";
 import { mayOnNode, mayOnRun, type GestureRights } from "../../run/model/runGestures";
 import { isMarkCompletable } from "../../run/model/nodeStatus";
 import type { Icon } from "../../shared/ui/kit";
-import type { Appearance, Theme } from "../../lib/theme";
+import type { ThemeChoice, Theme } from "../../lib/theme";
 import type { BuildInput, Lead, PaletteItem } from "./paletteModel";
 import type { PaletteHost, PaletteSelection } from "./paletteHost";
 import type { PaletteConfirm } from "./paletteStore";
@@ -55,7 +55,7 @@ export interface CoreContext {
   host: PaletteHost;
   pipelines: PipelineListEntry[];
   openPipeline: (id: string) => void;
-  appearance: Appearance;
+  appearance: ThemeChoice;
   setTheme: (theme: Theme) => void;
   toggleMode: () => void;
   compactNodes: boolean;
@@ -73,6 +73,9 @@ export function coreItems({ host, pipelines, openPipeline, appearance, setTheme,
   if (host.newTrigger) command("new-trigger", "New trigger", Zap, host.newTrigger);
   if (host.openStats) command("stats", "Stats", StatsIcon, host.openStats);
   if (host.openSettings) command("settings", "Settings", SettingsIcon, host.openSettings);
+  if (host.openAppearance) {
+    command("appearance", "Customize appearance", Palette, host.openAppearance, { meta: "settings theme compact hide" });
+  }
   // ADR-0093: one row per Theme, and the Dark mode switch; each checked while it holds.
   command("theme-acogni", "Theme: Acogni", Palette, () => setTheme("acogni"), { checked: appearance.theme === "acogni" });
   command("theme-classic", "Theme: Classic", Palette, () => setTheme("classic"), { checked: appearance.theme === "classic" });

@@ -6,6 +6,7 @@
 //! transitions of the daemon and never ask.
 
 pub mod agent_profiles;
+pub mod appearance;
 pub mod boot;
 pub mod ports;
 pub mod read_settings;
@@ -29,6 +30,8 @@ pub enum SettingsError {
     NotFound(String),
     /// Another agentic profile carries the name (`409`).
     Conflict(String),
+    /// The body is larger than the daemon keeps (`413`).
+    TooLarge(String),
     /// The storage failed (`500`); the message says what failed.
     Storage(String),
 }

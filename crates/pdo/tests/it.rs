@@ -26,6 +26,9 @@ mod cli_complete_does_not_panic;
 #[path = "extension_identity.rs"]
 mod extension_identity;
 
+#[path = "actor_appearance.rs"]
+mod actor_appearance;
+
 #[path = "cli_run_create.rs"]
 mod cli_run_create;
 

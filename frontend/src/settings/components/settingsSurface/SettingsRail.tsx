@@ -1,9 +1,10 @@
-import { Activity, Bot, Briefcase, Container, Puzzle, RadioTower, SlidersHorizontal, type LucideIcon } from "lucide-react";
+import { Activity, Bot, Briefcase, Container, Palette, Puzzle, RadioTower, SlidersHorizontal, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 /** The icon of each core category on the rail. */
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
   general: SlidersHorizontal,
+  appearance: Palette,
   agents: Bot,
   sandbox: Container,
   projects: Briefcase,

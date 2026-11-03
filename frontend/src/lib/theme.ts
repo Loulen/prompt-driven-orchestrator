@@ -25,13 +25,13 @@ export const MODE_STORAGE_KEY = "pdo.ui.mode";
 export type Theme = "acogni" | "classic";
 export type Mode = "dark" | "light";
 
-export interface Appearance {
+export interface ThemeChoice {
   theme: Theme;
   mode: Mode;
 }
 
 export const THEMES: readonly Theme[] = ["acogni", "classic"];
-export const DEFAULT_APPEARANCE: Appearance = { theme: "acogni", mode: "dark" };
+export const DEFAULT_THEME_CHOICE: ThemeChoice = { theme: "acogni", mode: "dark" };
 
 const LEGACY = ["light", "dark", "system"];
 
@@ -73,17 +73,17 @@ export function systemPrefersDark(): boolean {
  * is migrated and the result stored, so a `system` resolves once, against the
  * OS of the moment (`systemDark`).
  */
-export function loadAppearance(systemDark: boolean = systemPrefersDark()): Appearance {
+export function loadThemeChoice(systemDark: boolean = systemPrefersDark()): ThemeChoice {
   const stored = read(THEME_STORAGE_KEY);
   if (stored !== null && LEGACY.includes(stored)) {
     const mode: Mode = stored === "system" ? (systemDark ? "dark" : "light") : (stored as Mode);
-    write(THEME_STORAGE_KEY, DEFAULT_APPEARANCE.theme);
+    write(THEME_STORAGE_KEY, DEFAULT_THEME_CHOICE.theme);
     write(MODE_STORAGE_KEY, mode);
-    return { theme: DEFAULT_APPEARANCE.theme, mode };
+    return { theme: DEFAULT_THEME_CHOICE.theme, mode };
   }
   const storedMode = read(MODE_STORAGE_KEY);
-  const theme = isTheme(stored) ? stored : DEFAULT_APPEARANCE.theme;
-  const mode = storedMode === "light" || storedMode === "dark" ? storedMode : DEFAULT_APPEARANCE.mode;
+  const theme = isTheme(stored) ? stored : DEFAULT_THEME_CHOICE.theme;
+  const mode = storedMode === "light" || storedMode === "dark" ? storedMode : DEFAULT_THEME_CHOICE.mode;
   if (stored !== null && stored !== theme) write(THEME_STORAGE_KEY, theme);
   if (storedMode !== null && storedMode !== mode) write(MODE_STORAGE_KEY, mode);
   return { theme, mode };
@@ -102,8 +102,8 @@ export function saveMode(mode: Mode): void {
  * palette of `/shared/tokens.css`, `color-scheme` makes the engine's own chrome
  * (scrollbars, form widgets) follow the mode.
  */
-export function applyAppearance(
-  { theme, mode }: Appearance,
+export function applyThemeChoice(
+  { theme, mode }: ThemeChoice,
   root: HTMLElement = document.documentElement,
 ): void {
   root.setAttribute("data-theme", theme);

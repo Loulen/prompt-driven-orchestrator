@@ -41,6 +41,18 @@ async function playKitExtension(page: Page) {
   await page.route("**/ext/kit/ui.js", (route) => route.fulfill({ body: bundle, contentType: "text/javascript" }));
 }
 
+/**
+ * The Actor's Apparence, played on the network for this page only: the e2e daemon is
+ * shared, and a Theme written to it would follow the next tests.
+ */
+async function stubAppearance(page: Page, initial: Record<string, unknown> | null = null, { keep = true } = {}) {
+  let stored = initial;
+  await page.route("**/actors/me/appearance", async (route) => {
+    if (route.request().method() === "PUT" && keep) stored = route.request().postDataJSON();
+    await route.fulfill({ json: { appearance: stored } });
+  });
+}
+
 /** The computed value of `property` on the element `testId`. */
 function computed(page: Page, testId: string, property: string) {
   return page.getByTestId(testId).evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), property);
@@ -141,6 +153,7 @@ test("an extension page made of the primitives only looks native and follows the
 
 test("the Theme and the Dark mode chosen in Settings repaint the extension's page", async ({ page }) => {
   await playKitExtension(page);
+  await stubAppearance(page);
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("extension-nav-kit:deploy").click();
@@ -149,6 +162,7 @@ test("the Theme and the Dark mode chosen in Settings repaint the extension's pag
   await expect(page.getByTestId("kit-page")).toHaveCount(0);
 
   await page.getByTestId("open-settings").click();
+  await page.getByTestId("settings-category-appearance").click();
   await page.getByRole("radio", { name: "Classic" }).click();
   await page.getByRole("switch", { name: "Dark mode" }).click();
   await page.keyboard.press("Escape");
@@ -167,6 +181,9 @@ test("the Theme and the Dark mode chosen in Settings repaint the extension's pag
   // A reload opens in Classic light from the first paint: the theme script has stamped it.
   await page.reload();
   expect(await root()).toEqual(["classic", "light"]);
+  // The Actor's Apparence kept it too.
+  const kept = await page.evaluate(async () => (await (await fetch("/actors/me/appearance")).json()).appearance);
+  expect(kept).toMatchObject({ theme: "classic", dark_mode: false });
 });
 
 test("the token sheet and the fonts are served at their stable address", async ({ request }) => {
@@ -195,12 +212,13 @@ test("the test extension's page outside the interface opens in the Theme and the
   // The e2e daemon runs no extension: the page is played on the network, as
   // the test extension serves it.
   await page.route("**/ext/test/sign-in", (route) => route.fulfill({ contentType: "text/html", body: signIn }));
+  // The Actor chose Classic light on another device: the interface adopts it and keeps
+  // it as this browser's copy, which the page outside the interface reads.
+  await stubAppearance(page, { version: 1, theme: "classic", dark_mode: false, elements: {} });
   await page.goto("/");
-  await page.evaluate(() => {
-    localStorage.setItem("pdo.ui.theme", "classic");
-    localStorage.setItem("pdo.ui.mode", "light");
-  });
-  await page.reload();
+  await expect
+    .poll(() => page.evaluate(() => [document.documentElement.dataset.theme, document.documentElement.dataset.mode]))
+    .toEqual(["classic", "light"]);
   const appSurface = await role(page, "--surface-0");
   const appPrimary = await role(page, "--primary");
 
@@ -214,6 +232,8 @@ test("the test extension's page outside the interface opens in the Theme and the
 });
 
 test("a preference stored before 2.68 is migrated on the first page, System to the OS's mode", async ({ page }) => {
+  // An Actor who never saves anything: each load hands it the browser's values.
+  await stubAppearance(page, null, { keep: false });
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
   await page.evaluate(() => {

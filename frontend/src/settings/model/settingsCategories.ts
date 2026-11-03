@@ -7,6 +7,7 @@
 
 export type SettingsCategoryId =
   | "general"
+  | "appearance"
   | "agents"
   | "sandbox"
   | "projects"
@@ -14,6 +15,8 @@ export type SettingsCategoryId =
   | "diagnostics";
 
 export type SettingsSectionId =
+  | "theme"
+  | "appearance"
   | "interface"
   | "public-url"
   | "runtime-limits"
@@ -53,6 +56,12 @@ export interface SettingsSection {
    * immediately` badge the Interface controls already wear.
    */
   deviceLocal?: boolean;
+  /**
+   * The section's choices belong to the Actor's Apparence (CONTEXT.md « Apparence »):
+   * kept by the daemon for the Actor, written at once, out of the instance form.
+   * Rendered as the `Your account, saved at once` icon next to the title.
+   */
+  account?: boolean;
 }
 
 export interface SettingsCategory {
@@ -66,11 +75,6 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
     id: "general",
     label: "General",
     sections: [
-      {
-        id: "interface",
-        label: "Interface",
-        deviceLocal: true,
-      },
       {
         id: "public-url",
         label: "Public URL",
@@ -105,6 +109,31 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         // included. Its own REST resource — each ✕ is written at once.
         label: "Stats absorptions",
         ownPersistence: true,
+      },
+    ],
+  },
+  {
+    // The Apparence (CONTEXT.md « Apparence »): what changes the whole interface, the
+    // blocks of each surface, then this browser's behaviour. Nothing here belongs to the
+    // instance form: every choice is written at the change.
+    id: "appearance",
+    label: "Appearance",
+    sections: [
+      {
+        // Each row wears its own scope: the Theme and the Dark mode follow the Actor,
+        // the UI scale stays with this device.
+        id: "theme",
+        label: "Theme",
+      },
+      {
+        id: "appearance",
+        label: "Appearance",
+        account: true,
+      },
+      {
+        id: "interface",
+        label: "Interface",
+        deviceLocal: true,
       },
     ],
   },

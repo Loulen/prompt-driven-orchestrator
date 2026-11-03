@@ -145,6 +145,12 @@ vi.mock("../../workspace/api/provisioning", async (importOriginal) => ({
     fetchInstanceProvisioningMock(...args),
 }));
 
+const saveAppearanceMock = vi.fn();
+vi.mock("../api/appearance", () => ({
+  fetchAppearance: vi.fn().mockResolvedValue({ appearance: null }),
+  saveAppearance: (...args: unknown[]) => saveAppearanceMock(...args),
+}));
+
 import SettingsSurface from "./SettingsSurface";
 import type { ExtensionEntry } from "../../shared/generated/ExtensionEntry";
 import type { UiContribution } from "../../shared/generated/UiContribution";
@@ -1496,7 +1502,7 @@ describe("SettingsSurface — Interface / child runs default (#783)", () => {
 
   it("defaults to « Expanded by default » and writes the pick to localStorage at once", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsSurface open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} initialPosition={{ category: "appearance" }} />);
 
     const row = await screen.findByTestId("setting-row-child-runs");
     const expanded = within(row).getByRole("radio", { name: "Expanded" });
@@ -1518,34 +1524,109 @@ describe("SettingsSurface — Interface / child runs default (#783)", () => {
   it("seeds the control from the stored preference", async () => {
     localStorage.setItem("pdo.ui.childRunsExpanded", "false");
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsSurface open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} initialPosition={{ category: "appearance" }} />);
     const row = await screen.findByTestId("setting-row-child-runs");
     expect(within(row).getByRole("radio", { name: "Collapsed" })).toHaveAttribute("aria-checked", "true");
   });
 });
 
-describe("SettingsSurface — Interface / Compact nodes", () => {
+describe("SettingsSurface — Settings › Appearance", () => {
+  const openAppearance = () => render(<SettingsSurface open onClose={() => {}} initialPosition={{ category: "appearance" }} />);
   beforeEach(() => {
     fetchSettingsMock.mockReset();
     updateSettingsMock.mockReset();
+    saveAppearanceMock.mockReset().mockImplementation(async (document: unknown) => ({ appearance: document }));
     localStorage.clear();
     resetCompactNodes();
   });
 
-  it("is the third row, off by default, and saved in this browser at the change", async () => {
+  it("follows General on the rail, with Theme, Appearance and Interface", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsSurface open onClose={() => {}} />);
-    const row = await screen.findByTestId("setting-row-compact-nodes");
-    const rows = Array.from(document.querySelectorAll('[data-testid^="setting-row-"]')).map((r) => r.getAttribute("data-testid"));
-    const at = rows.indexOf("setting-row-compact-nodes");
-    expect(rows.slice(at - 2, at + 1)).toEqual(["setting-row-theme", "setting-row-dark-mode", "setting-row-compact-nodes"]);
-    expect(row.querySelector('[data-scope="device"]')).not.toBeNull();
-    const toggle = within(row).getByRole("switch", { name: "Compact nodes" });
+    openAppearance();
+    await screen.findByTestId("setting-row-theme");
+    expect(screen.getByTestId("settings-category-appearance")).toHaveAttribute("aria-selected", "true");
+    const sections = within(screen.getByTestId("settings-subcolumn")).getAllByRole("button").map((b) => b.textContent);
+    expect(sections).toEqual(["Theme", "Appearance", "Interface"]);
+  });
+
+  it("shows every row with its scope: the Actor's, or this device's", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    openAppearance();
+    const scope = async (id: string) =>
+      (await screen.findByTestId(`setting-row-${id}`)).querySelector("[data-scope]")?.getAttribute("data-scope");
+    expect(await scope("theme")).toBe("account");
+    expect(await scope("dark-mode")).toBe("account");
+    expect(await scope("ui-scale")).toBe("device");
+    for (const id of ["tabs-disabled", "child-runs", "wiring-grid", "wiring-grid-size"]) expect(await scope(id)).toBe("device");
+    // The Appearance section wears « Your account » on its title, not on each row.
+    const title = screen.getByTestId("settings-section-appearance-scope");
+    expect(title).toHaveAttribute("data-scope", "account");
+    expect(title).toHaveAttribute("title", "Your account, saved at once");
+    expect(screen.getByTestId("setting-row-compact-nodes").querySelector("[data-scope]")).toBeNull();
+  });
+
+  it("keeps Interface to the behaviour settings, and General without any of them", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    openAppearance();
+    await screen.findByTestId("setting-row-tabs-disabled");
+    const rows = (section: string) =>
+      Array.from(screen.getByTestId(`settings-section-body-${section}`).querySelectorAll('[data-testid^="setting-row-"]')).map((r) =>
+        r.getAttribute("data-testid"),
+      );
+    expect(rows("theme")).toEqual(["setting-row-theme", "setting-row-dark-mode", "setting-row-ui-scale"]);
+    expect(rows("interface")).toEqual([
+      "setting-row-tabs-disabled",
+      "setting-row-child-runs",
+      "setting-row-wiring-grid",
+      "setting-row-wiring-grid-size",
+    ]);
+    const general = screen.getByTestId("settings-page-general");
+    for (const id of ["theme", "dark-mode", "ui-scale", "compact-nodes", "tabs-disabled", "child-runs", "wiring-grid"]) {
+      expect(within(general).queryByTestId(`setting-row-${id}`)).toBeNull();
+    }
+  });
+
+  it("shows even when GET /settings fails", async () => {
+    fetchSettingsMock.mockRejectedValue(new Error("500"));
+    openAppearance();
+    expect(await screen.findByTestId("setting-row-theme")).toBeInTheDocument();
+    expect(screen.getByTestId("appearance-block-run-canvas")).toBeInTheDocument();
+    expect(within(screen.getByTestId("setting-row-compact-nodes")).getByRole("switch")).toBeInTheDocument();
+  });
+
+  it("puts Compact nodes at the head of the Run canvas block, saved to the Actor at the change", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    openAppearance();
+    const block = await screen.findByTestId("appearance-block-run-canvas");
+    expect(block).toHaveTextContent("Always shown: Type icon, name, status, child runs of an orchestrator");
+    const preview = within(block).getByTestId("appearance-preview-run-canvas");
+    expect(preview).not.toHaveAttribute("data-compact");
+    const toggle = within(within(block).getByTestId("setting-row-compact-nodes")).getByRole("switch", { name: "Compact nodes" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
-    expect(localStorage.getItem("pdo.ui.compactNodes")).toBe("true");
     expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(localStorage.getItem("pdo.ui.compactNodes")).toBe("true");
+    expect(saveAppearanceMock).toHaveBeenCalledWith({ version: 1, compact_nodes: true, elements: {} });
     expect(updateSettingsMock).not.toHaveBeenCalled();
+    expect(preview).toHaveAttribute("data-compact", "true");
+    expect(block).toHaveTextContent("Compact nodes is on: cards show their icon, name and status only.");
+    // Off its default: « changed », the default in the tooltip, found by « Modified only ».
+    expect(screen.getByTestId("setting-row-compact-nodes-changed")).toHaveAttribute("title", "Default: Off");
+  });
+
+  it("Reset to defaults counts the choices off their default and puts Compact nodes back off", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    openAppearance();
+    const reset = await screen.findByTestId("appearance-reset");
+    expect(reset).toBeDisabled();
+    expect(reset).toHaveTextContent("Reset to defaults");
+    fireEvent.click(within(screen.getByTestId("setting-row-compact-nodes")).getByRole("switch"));
+    expect(reset).toBeEnabled();
+    expect(reset).toHaveTextContent("Reset to defaults · 1");
+    fireEvent.click(reset);
+    expect(within(screen.getByTestId("setting-row-compact-nodes")).getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    expect(reset).toBeDisabled();
+    expect(localStorage.getItem("pdo.ui.compactNodes")).toBe("false");
   });
 });
 
@@ -1559,7 +1640,7 @@ describe("SettingsSurface — Interface / wiring grid size (#877)", () => {
 
   it("offers S / M / L, defaults to M, and saves the pick to this browser at once", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsSurface open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} initialPosition={{ category: "appearance" }} />);
 
     const row = await screen.findByTestId("setting-row-wiring-grid-size");
     const m = within(row).getByRole("radio", { name: "M" });
@@ -1581,7 +1662,7 @@ describe("SettingsSurface — Interface / wiring grid size (#877)", () => {
 
   it("no longer tells the reader the step is a product constant", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsSurface open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} initialPosition={{ category: "appearance" }} />);
     await screen.findByTestId("setting-row-wiring-grid-size");
     expect(screen.queryByText(/product constant/)).not.toBeInTheDocument();
   });
@@ -1603,7 +1684,7 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
 
   it("persists to localStorage at the change, WITHOUT the numeric Save button", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsSurface open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} initialPosition={{ category: "appearance" }} />);
 
     const toggle =(await switchFor("tabs-disabled"));
     expect(toggle).toHaveAttribute("aria-checked", "false");
@@ -1619,7 +1700,7 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
 
   it("toggles back off and writes false", async () => {
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsSurface open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} initialPosition={{ category: "appearance" }} />);
     const toggle =(await switchFor("tabs-disabled"));
     fireEvent.click(toggle);
     fireEvent.click(toggle);
@@ -1630,7 +1711,7 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
   it("stays reachable when GET /settings fails (Trap A — lives in the outer modal)", async () => {
     // Daemon 500: settings never load, the numeric form never mounts…
     fetchSettingsMock.mockRejectedValue(new Error("500"));
-    render(<SettingsSurface open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} initialPosition={{ category: "appearance" }} />);
 
     // …but the toggle is present and functional.
     const toggle =(await switchFor("tabs-disabled"));
@@ -1642,7 +1723,7 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
   it("seeds the toggle from the current store state", async () => {
     useEditStore.setState({ singleTabMode: true });
     fetchSettingsMock.mockResolvedValue(sample());
-    render(<SettingsSurface open onClose={() => {}} />);
+    render(<SettingsSurface open onClose={() => {}} initialPosition={{ category: "appearance" }} />);
     const toggle =(await switchFor("tabs-disabled"));
     expect(toggle).toHaveAttribute("aria-checked", "true");
   });
@@ -2314,6 +2395,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     const tabs = within(rail).getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       "General",
+      "Appearance",
       "Agents",
       "Sandbox & worktrees",
       "Projects",
@@ -2333,9 +2415,8 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       within(screen.getByTestId("settings-subcolumn"))
         .getAllByRole("button")
         .map((button) => button.textContent);
-    // #823 added Tutorials as General's fifth section, #891 Stats absorptions.
+    // #823 added Tutorials, #891 Stats absorptions; Interface moved to Appearance.
     expect(entries()).toEqual([
-      "Interface",
       "Public URL",
       "Runtime limits",
       "Runs",
@@ -2343,10 +2424,13 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       "Tutorials",
       "Stats absorptions",
     ]);
-    expect(screen.getByTestId("settings-section-interface")).toHaveAttribute(
+    expect(screen.getByTestId("settings-section-public-url")).toHaveAttribute(
       "aria-current",
       "true",
     );
+
+    fireEvent.click(screen.getByTestId("settings-category-appearance"));
+    expect(entries()).toEqual(["Theme", "Appearance", "Interface"]);
 
     fireEvent.click(screen.getByTestId("settings-category-diagnostics"));
     expect(screen.getByTestId("settings-page-general")).toHaveAttribute(
@@ -2370,7 +2454,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     await screen.findByTestId("setting-session-cap");
     const rail = screen.getByRole("tablist", { name: "Settings categories" });
     fireEvent.keyDown(rail, { key: "ArrowDown" });
-    expect(screen.getByTestId("settings-category-agents")).toHaveAttribute(
+    expect(screen.getByTestId("settings-category-appearance")).toHaveAttribute(
       "aria-selected",
       "true",
     );
@@ -2401,7 +2485,7 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
         "true",
       );
       expect(
-        screen.getByTestId("settings-section-interface"),
+        screen.getByTestId("settings-section-public-url"),
       ).not.toHaveAttribute("aria-current");
     } finally {
       Element.prototype.scrollIntoView = original;
@@ -2674,11 +2758,12 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
   it("the single-tab toggle persists immediately and never dirties the draft", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     await screen.findByTestId("setting-session-cap");
+    fireEvent.click(screen.getByTestId("settings-category-appearance"));
     fireEvent.click(switchOf("tabs-disabled"));
     expect(localStorage.getItem("pdo.ui.tabsDisabled")).toBe("true");
     expect(rowOf("tabs-disabled").querySelector('[data-scope="device"]')).not.toBeNull();
     expect(
-      screen.queryByTestId("settings-category-general-dirty"),
+      screen.queryByTestId("settings-category-appearance-dirty"),
     ).not.toBeInTheDocument();
     expect(screen.queryByTestId("settings-footer")).not.toBeInTheDocument();
     // Closing needs no confirmation.
@@ -3767,6 +3852,7 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
     render(<SettingsSurface open onClose={() => {}} />);
     expect(await railLabels()).toEqual([
       "General",
+      "Appearance",
       "Agents",
       "Sandbox & worktrees",
       "Projects",
@@ -3782,6 +3868,7 @@ describe("SettingsSurface — the `settings/page` location (extensions' pages)",
     await waitFor(async () =>
       expect(await railLabels()).toEqual([
         "General",
+        "Appearance",
         "Agents",
         "Sandbox & worktrees",
         "Projects",

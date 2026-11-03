@@ -882,4 +882,92 @@
   .set-bad {
     color: var(--color-st-failed);
   }
+
+  /* ---------------------------------------------------------------- appearance */
+  /* « changed »: an Apparence choice off its default (its default in the tooltip). */
+  .set-changed {
+    color: var(--color-st-await);
+    font-size: var(--fs-xs);
+    cursor: default;
+  }
+  /* One surface's block: switches on the left, the preview beside them. */
+  .set-ablock {
+    margin: var(--g-3) 0;
+    background: var(--surface-1);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+  }
+  .set-ablock__head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--g-3);
+    min-width: 0;
+    padding: var(--g-2) var(--g-4);
+    border-bottom: 1px solid var(--line);
+  }
+  .set-ablock__title {
+    flex: none;
+    margin: 0;
+    color: var(--text);
+    font-size: var(--fs-md);
+    font-weight: var(--w-strong);
+  }
+  .set-ablock__fixed {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .set-ablock__body {
+    display: grid;
+    grid-template-columns: minmax(0, 440px) minmax(0, 1fr);
+    gap: var(--g-5);
+    align-items: start;
+    padding: var(--g-2) var(--g-4) var(--g-4) 0;
+  }
+  .set-ablock__switches {
+    min-width: 0;
+  }
+  .set-ablock__note {
+    margin: 0;
+    padding: var(--g-2) var(--g-4);
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+  .set-ablock__preview {
+    position: sticky;
+    top: 0;
+    min-width: 0;
+  }
+  .set-preview {
+    margin: 0;
+  }
+  .set-preview__canvas {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--g-4);
+    background-color: var(--surface-0);
+    background-image: radial-gradient(var(--line) 1px, transparent 1px);
+    background-size: 16px 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+  }
+  .set-preview__step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .set-preview__edge {
+    width: 1px;
+    height: var(--g-5);
+    background: var(--text-3);
+  }
+  .set-preview__caption {
+    padding-top: var(--g-2);
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
 }

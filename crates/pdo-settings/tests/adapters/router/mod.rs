@@ -22,7 +22,9 @@ use pdo_settings::adapters::sections::{
     HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,
     SandboxSection, SessionDefaults, TelemetryDefaults, TriggerDefaults,
 };
-use pdo_settings::adapters::sqlite::{SqliteAgentProfiles, SqliteInstanceConfig};
+use pdo_settings::adapters::sqlite::{
+    SqliteAgentProfiles, SqliteAppearances, SqliteInstanceConfig,
+};
 use pdo_settings::application::ports::{CatalogueEvents, TelemetryReloads, UpdateChecks};
 use pdo_settings::{Settings, SettingsPorts};
 use sqlx::SqlitePool;
@@ -77,6 +79,7 @@ pub(super) async fn test_state() -> TestState {
     let settings = Settings::new(SettingsPorts {
         config: Arc::new(SqliteInstanceConfig::new(db.clone())),
         profiles: Arc::new(SqliteAgentProfiles::new(db.clone())),
+        appearances: Arc::new(SqliteAppearances::new(db.clone())),
         sections: vec![
             Arc::new(RunDefaults),
             Arc::new(SessionDefaults),

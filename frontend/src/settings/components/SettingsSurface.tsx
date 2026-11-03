@@ -17,9 +17,10 @@ import { announceSettingsChanged, useSettings } from "../store/useSettings";
 import { useSettingsForm } from "../store/useSettingsForm";
 import { settingsPageOpen, useSettingsExtensionPages } from "../store/useSettingsExtensionPages";
 import AgentsSections from "./settingsSurface/AgentsSections";
+import AppearanceCategory from "./settingsSurface/AppearanceCategory";
 import CategoryPage from "./settingsSurface/CategoryPage";
 import GeneralCategory from "./settingsSurface/GeneralCategory";
-import { HarnessDescriptorRows, PriceTableRows } from "./settingsSurface/DiagnosticsRows";
+import { DiagnosticsCategory } from "./settingsSurface/DiagnosticsRows";
 import { ConfirmCloseDialog } from "./settingsSurface/overlays";
 import SandboxSections from "./settingsSurface/SandboxSections";
 import ExtensionPanels from "./settingsSurface/ExtensionPanels";
@@ -288,6 +289,8 @@ export default function SettingsSurface({
                   />
                 )}
 
+                {item.id === "appearance" && <AppearanceCategory sections={item.sections} />}
+
                 {item.id === "agents" &&
                   (formProps && catalog ? (
                     <AgentsSections
@@ -336,15 +339,9 @@ export default function SettingsSurface({
                 {item.id === "telemetry" &&
                   (formProps ? <TelemetrySections sections={item.sections} active={shownCategory === item.id} {...formProps} /> : loading)}
 
-                {item.id === "diagnostics" &&
-                  (settings ? (
-                    <>
-                      <PriceTableRows section={item.sections[0]} settings={settings} onOpenStats={onOpenStats} />
-                      <HarnessDescriptorRows section={item.sections[1]} settings={settings} />
-                    </>
-                  ) : (
-                    loading
-                  ))}
+                {item.id === "diagnostics" && (
+                  <DiagnosticsCategory sections={item.sections} settings={settings} onOpenStats={onOpenStats} loading={loading} />
+                )}
               </CategoryPage>
             ))}
               {extensionPanels.length > 0 && !inSearch && (

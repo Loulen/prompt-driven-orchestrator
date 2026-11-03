@@ -23,6 +23,12 @@ const MUTATIONS: [&str; 4] = ["POST", "PUT", "PATCH", "DELETE"];
 /// The `POST`s that mutate nothing, with why.
 const NOT_MUTATIONS: &[(&str, &str, &str)] = &[
     (
+        "PUT",
+        "/actors/me/appearance",
+        "the caller's own Apparence (CONTEXT.md): no Ressource of the instance, never another \
+         Actor's, so no Operation is asked (`actor_appearance.rs`)",
+    ),
+    (
         "POST",
         "/repos/provisioning/preview",
         "computes the plan of a worktree provisioning; stores nothing",

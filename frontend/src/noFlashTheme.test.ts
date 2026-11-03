@@ -4,12 +4,16 @@
  * both BEFORE the bundle, so the page never paints one look and then flips.
  * The theme script duplicates the rule `lib/theme.ts` owns, migration
  * included: this test runs the real script and asserts it agrees with the
- * library on every case.
+ * library on every case. The Apparence of the Actor (`lib/appearance.ts`) keeps
+ * its local copy under the same keys: a browser already used paints the
+ * Actor's Theme and mode before the daemon answers, and so does a page an
+ * extension serves outside the interface.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
-import { loadAppearance } from "./lib/theme";
+import { fromDocument, writeLocalCopy } from "./lib/appearance";
+import { loadThemeChoice } from "./lib/theme";
 import { loadUiScale } from "./lib/uiScale";
 
 const FRONT = join(import.meta.dirname, "..");
@@ -74,7 +78,7 @@ describe("the theme script", () => {
 
           window.localStorage.clear();
           for (const [key, value] of Object.entries(values)) if (value !== null) window.localStorage.setItem(key, value);
-          const expected = loadAppearance(osDark);
+          const expected = loadThemeChoice(osDark);
           expect({ theme, mode, osDark, got: [root["data-theme"], root["data-mode"], root["color-scheme"]] }).toEqual({
             theme,
             mode,
@@ -99,6 +103,28 @@ describe("the theme script", () => {
     stub.setItem("pdo.ui.mode", "light");
     listeners.storage({ key: "pdo.ui.theme" });
     expect([root["data-theme"], root["data-mode"]]).toEqual(["classic", "light"]);
+  });
+
+  it("paints the Actor's Theme and mode the Apparence left as this browser's copy", () => {
+    for (const document of [
+      { version: 1, theme: "classic", dark_mode: false, elements: {} },
+      { version: 1, dark_mode: true, compact_nodes: true, elements: {} },
+      { version: 1, theme: "classic", elements: {} },
+    ]) {
+      window.localStorage.clear();
+      const appearance = fromDocument(document);
+      writeLocalCopy(appearance);
+      const copy = store({
+        "pdo.ui.theme": window.localStorage.getItem("pdo.ui.theme"),
+        "pdo.ui.mode": window.localStorage.getItem("pdo.ui.mode"),
+      });
+      const { root } = run(THEME_SCRIPT, copy);
+      expect([root["data-theme"], root["data-mode"], root["color-scheme"]]).toEqual([
+        appearance.theme,
+        appearance.mode,
+        appearance.mode,
+      ]);
+    }
   });
 
   it("survives a store that throws, rather than blanking the page", () => {

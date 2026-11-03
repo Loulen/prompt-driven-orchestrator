@@ -33,6 +33,8 @@ export interface PaletteHost {
   newRun?: () => void;
   newTrigger?: () => void;
   openSettings?: () => void;
+  /** Settings › Appearance (« Customize appearance »). */
+  openAppearance?: () => void;
   openStats?: () => void;
 }
 

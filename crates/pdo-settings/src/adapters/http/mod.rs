@@ -6,6 +6,7 @@
 //! proxy whitelist (`frontend/vite.config.ts`).
 
 mod agent_profiles;
+mod appearance;
 mod harnesses;
 mod settings;
 
@@ -21,7 +22,8 @@ pub use agent_profiles::WriteAgentProfileRequest;
 use crate::application::SettingsError;
 use crate::Settings;
 
-/// The routes of the settings context, with their state. The staging profiles
+/// The routes of the settings context, with their state, and the caller's
+/// Apparence (`/actors/me/appearance`). The staging profiles
 /// (`/settings/sandbox-profiles*`), the skills (`/settings/skills*`) and the
 /// price sync sit under `/settings` too, as a routing decision only: they are
 /// the sandbox, skill and stats contexts' routes.
@@ -48,6 +50,12 @@ pub fn router(settings: Arc<Settings>) -> Router {
             "/settings/agent-profiles/{id}/referents",
             get(agent_profiles::referents),
         )
+        // The caller's Apparence, under the `/actors` prefix of the Actors'
+        // own routes (already in the vite dev proxy whitelist).
+        .route(
+            "/actors/me/appearance",
+            get(appearance::get).put(appearance::put),
+        )
         .with_state(settings)
 }
 
@@ -60,6 +68,7 @@ fn refusal(error: SettingsError) -> Response {
         SettingsError::Invalid(m) => (StatusCode::BAD_REQUEST, m),
         SettingsError::NotFound(m) => (StatusCode::NOT_FOUND, m),
         SettingsError::Conflict(m) => (StatusCode::CONFLICT, m),
+        SettingsError::TooLarge(m) => (StatusCode::PAYLOAD_TOO_LARGE, m),
         SettingsError::Storage(m) => (StatusCode::INTERNAL_SERVER_ERROR, m),
     };
     (status, Json(serde_json::json!({ "error": message }))).into_response()

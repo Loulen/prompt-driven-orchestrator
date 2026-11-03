@@ -6,8 +6,10 @@ use std::future::Future;
 use std::pin::Pin;
 
 use pdo_harness::agent_choice::ResolvedCombo;
+use pdo_kernel::Actor;
 
 use crate::domain::agent_profile::{AgentProfile, ProfileDraft};
+use crate::domain::appearance::AppearanceDocument;
 use crate::domain::instance_config::{InstanceConfig, UpdateInstanceConfig};
 use crate::domain::referents::{PipelineReferent, ProjectReferent, TriggerReferent};
 
@@ -63,6 +65,18 @@ pub trait AgentProfileStore: Send + Sync {
     /// Every profile's `id → combo` in ONE read, so a resolution walking the
     /// tiers never mixes two revisions of a profile (ADR-0057 ¶4).
     fn snapshot(&self) -> BoxFuture<'_, Stored<BTreeMap<String, ResolvedCombo>>>;
+}
+
+/// The Apparence of each Actor: one document per Actor, replaced whole.
+pub trait AppearanceStore: Send + Sync {
+    /// `actor`'s document; `None` while it never wrote one.
+    fn get<'a>(&'a self, actor: &'a Actor) -> BoxFuture<'a, Stored<Option<AppearanceDocument>>>;
+    /// Replace `actor`'s document.
+    fn put<'a>(
+        &'a self,
+        actor: &'a Actor,
+        document: &'a AppearanceDocument,
+    ) -> BoxFuture<'a, Stored<()>>;
 }
 
 /// A part of the settings page a context discloses: its instance defaults

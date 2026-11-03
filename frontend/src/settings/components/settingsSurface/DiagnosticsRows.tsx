@@ -1,4 +1,5 @@
 import { Check, CircleX, ExternalLink, RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
 import { modelCount, probedAgo } from "../../../harness/model/catalog";
 import type { HarnessListItem } from "../../../harness/model/harness";
 import { useRefreshModels } from "../../../harness/store/useHarnessCatalog";
@@ -219,5 +220,26 @@ function HarnessRow({
         />
       </td>
     </tr>
+  );
+}
+
+/** Settings › Diagnostics: read-only, once `GET /settings` answered. */
+export function DiagnosticsCategory({
+  sections,
+  settings,
+  onOpenStats,
+  loading,
+}: {
+  sections: SettingsSection[];
+  settings: InstanceSettings | null;
+  onOpenStats?: (intent: StatsOpenIntent) => void;
+  loading: ReactNode;
+}) {
+  if (!settings) return <>{loading}</>;
+  return (
+    <>
+      <PriceTableRows section={sections[0]} settings={settings} onOpenStats={onOpenStats} />
+      <HarnessDescriptorRows section={sections[1]} settings={settings} />
+    </>
   );
 }

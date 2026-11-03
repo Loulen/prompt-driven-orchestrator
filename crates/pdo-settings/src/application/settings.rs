@@ -7,8 +7,8 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 
 use super::ports::{
-    AgentProfileStore, CatalogueEvents, Harnesses, InstanceConfigStore, ProfileReferents,
-    SettingsSection, StagingProfiles, TelemetryReloads, UpdateChecks,
+    AgentProfileStore, AppearanceStore, CatalogueEvents, Harnesses, InstanceConfigStore,
+    ProfileReferents, SettingsSection, StagingProfiles, TelemetryReloads, UpdateChecks,
 };
 
 /// Every port the context needs, as the composition root plugs them in.
@@ -16,6 +16,8 @@ pub struct SettingsPorts {
     /// The stored tier of the instance defaults.
     pub config: Arc<dyn InstanceConfigStore>,
     pub profiles: Arc<dyn AgentProfileStore>,
+    /// The Apparence of each Actor.
+    pub appearances: Arc<dyn AppearanceStore>,
     /// The sections of the page, one per context that discloses something on
     /// it. The page is their union, plus the instance tiers the settings
     /// context owns itself (the agentic profile and the skills selection).
@@ -35,6 +37,7 @@ pub struct SettingsPorts {
 pub struct Settings {
     pub(crate) config: Arc<dyn InstanceConfigStore>,
     pub(crate) profiles: Arc<dyn AgentProfileStore>,
+    pub(crate) appearances: Arc<dyn AppearanceStore>,
     pub(crate) sections: Vec<Arc<dyn SettingsSection>>,
     pub(crate) harnesses: Arc<dyn Harnesses>,
     pub(crate) catalogue_events: Arc<dyn CatalogueEvents>,
@@ -50,6 +53,7 @@ impl Settings {
         let SettingsPorts {
             config,
             profiles,
+            appearances,
             sections,
             harnesses,
             catalogue_events,
@@ -62,6 +66,7 @@ impl Settings {
         Arc::new(Self {
             config,
             profiles,
+            appearances,
             sections,
             harnesses,
             catalogue_events,

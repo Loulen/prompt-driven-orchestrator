@@ -4,6 +4,7 @@ import type { OpenPipeline, Selection } from "../../pipeline/store/editState";
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
 import type { RunState } from "../../shared/generated/RunState";
 import type { Trigger } from "../../shared/generated/Trigger";
+import type { SettingsPosition } from "../../settings/components/settingsSurface/surfaceProps";
 import { usePaletteHost, type PaletteHost, type PaletteSelection } from "./paletteHost";
 
 interface SelectionInput {
@@ -53,7 +54,7 @@ export function paletteSelection({ selectedTrigger, selectedRun, editTab, canvas
 /** What the shell opens: a Run, a Trigger, the New Run form, Settings, Stats. */
 interface ShellGestures extends Pick<PaletteHost, "runs" | "triggers" | "openRun" | "openTrigger"> {
   openNewRunModal: (intent: OpenIntent) => void;
-  openSettings: () => void;
+  openSettings: (position?: SettingsPosition) => void;
   openStats: () => void;
 }
 
@@ -70,6 +71,7 @@ export function usePaletteHostSync(shell: ShellGestures, selection: SelectionInp
   const settings = shell.openSettings;
   const stats = shell.openStats;
   const openSettings = useCallback(() => settings(), [settings]);
+  const openAppearance = useCallback(() => settings({ category: "appearance", section: "appearance" }), [settings]);
   const openStats = useCallback(() => stats(), [stats]);
   useEffect(() => {
     usePaletteHost.getState().setHost({
@@ -81,7 +83,8 @@ export function usePaletteHostSync(shell: ShellGestures, selection: SelectionInp
       newRun,
       newTrigger,
       openSettings,
+      openAppearance,
       openStats,
     });
-  }, [runs, triggers, selected, openRun, openTrigger, newRun, newTrigger, openSettings, openStats]);
+  }, [runs, triggers, selected, openRun, openTrigger, newRun, newTrigger, openSettings, openAppearance, openStats]);
 }

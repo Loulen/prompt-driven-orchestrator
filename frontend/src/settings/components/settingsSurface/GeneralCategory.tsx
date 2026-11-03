@@ -6,13 +6,11 @@ import { updateSettings } from "../../api/settings";
 import type { SettingsSection } from "../../model/settingsCategories";
 import { announceSettingsChanged } from "../../store/useSettings";
 import { RunsSection, SessionsSection, type FormSectionProps } from "./GeneralSections";
-import InterfaceSection from "./InterfaceSection";
 import PublicUrlSection from "./PublicUrlSection";
 import Section, { SectionExtra } from "./Section";
 
 /**
- * Settings › General: this browser's interface, the instance form's address, limits and
- * Run defaults (once `GET /settings` answered), then the sections that write on their own —
+ * Settings › General: the instance form's address, limits and Run defaults (once `GET /settings` answered), then the sections that write on their own —
  * Version & update, Tutorials, Stats absorptions.
  */
 export default function GeneralCategory({
@@ -46,26 +44,25 @@ export default function GeneralCategory({
   }, []);
   return (
     <>
-      <InterfaceSection section={sections[0]} />
       {form ? (
         <>
-          <PublicUrlSection section={sections[1]} {...form} />
-          <SessionsSection section={sections[2]} {...form} liveSessions={liveSessions} />
-          <RunsSection section={sections[3]} {...form} />
+          <PublicUrlSection section={sections[0]} {...form} />
+          <SessionsSection section={sections[1]} {...form} liveSessions={liveSessions} />
+          <RunsSection section={sections[2]} {...form} />
         </>
       ) : (
         loading
       )}
       <VersionUpdateSection
-        section={sections[4]}
+        section={sections[3]}
         onRequestUpdate={onRequestUpdate}
         active={active}
         onOpenChangelog={onOpenChangelog}
         onToggleCheck={toggleUpdateCheck}
       />
-      <TutorialsSection section={sections[5]} onStartTour={onStartTour} onStartFullTour={onStartFullTour} />
+      <TutorialsSection section={sections[4]} onStartTour={onStartTour} onStartFullTour={onStartFullTour} />
       {/* #891 — Stats absorptions: saved at once, whatever `GET /settings` said. */}
-      <Section section={sections[6]}>
+      <Section section={sections[5]}>
         <SectionExtra>
           <StatsAbsorptionsPanel active={active} />
         </SectionExtra>

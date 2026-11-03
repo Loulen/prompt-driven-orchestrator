@@ -1,9 +1,5 @@
 import { useState } from "react";
-import ThemeSelect from "../../../shared/ui/ThemeSelect";
-import { useTheme } from "../../../hooks/useTheme";
-import { useCompactNodes } from "../../../hooks/useCompactNodes";
 import { Segmented, Switch } from "../../../shared/ui/kit";
-import { setUiScale, UI_SCALES, useUiScale, type UiScale } from "../../../lib/uiScale";
 import { loadChildRunsExpanded, saveChildRunsExpanded } from "../../../lib/uiPrefs";
 import { GRID_SIZES, gridStep, type GridSize } from "../../../lib/wiringGrid";
 import { useEditStore } from "../../../pipeline/store/editStore";
@@ -12,12 +8,11 @@ import type { SettingsSection } from "../../model/settingsCategories";
 import { SettingRow } from "./fields";
 import Section from "./Section";
 
-const SCALE_ITEMS = UI_SCALES.map((scale) => ({ value: String(scale), label: `${scale} %` }));
-
 /**
- * Per-client UI preferences (#342, #759; Theme and Dark mode, ADR-0093; Compact nodes). Every control persists to localStorage AT
- * THE CHANGE — NOT behind the instance form's Save, and never part of the dirty set.
- * Rendered even when `GET /settings` failed (Trap A).
+ * Settings › Appearance › Interface: this browser's behaviour (#342, #783, #844). Every
+ * control persists to localStorage AT THE CHANGE — NOT behind the instance form's Save,
+ * and never part of the dirty set. The Theme, the Dark mode, the UI scale and Compact
+ * nodes are in the sections above. Rendered even when `GET /settings` failed (Trap A).
  */
 export default function InterfaceSection({ section }: { section: SettingsSection }) {
   const singleTabMode = useEditStore((s) => s.singleTabMode);
@@ -35,36 +30,9 @@ export default function InterfaceSection({ section }: { section: SettingsSection
   const setGridFeedback = useWiringStore((s) => s.setGridFeedback);
   const defaultGridSize = useWiringStore((s) => s.defaultGridSize);
   const setDefaultGridSize = useWiringStore((s) => s.setDefaultGridSize);
-  const uiScale = useUiScale();
-  const { mode, setMode } = useTheme();
-  const { compactNodes, setCompactNodes } = useCompactNodes();
 
   return (
     <Section section={section}>
-      <SettingRow label="Theme" scope="device" testId="setting-row-theme">
-        <ThemeSelect />
-      </SettingRow>
-      <SettingRow label="Dark mode" scope="device" testId="setting-row-dark-mode">
-        <Switch label="Dark mode" checked={mode === "dark"} onChange={(on) => setMode(on ? "dark" : "light")} />
-      </SettingRow>
-      <SettingRow label="Compact nodes" scope="device" testId="setting-row-compact-nodes">
-        <Switch label="Compact nodes" checked={compactNodes} onChange={setCompactNodes} />
-      </SettingRow>
-      <SettingRow
-        label="UI scale"
-        help="Size of the whole interface on this device"
-        keywords="zoom"
-        scope="device"
-        testId="setting-row-ui-scale"
-      >
-        <Segmented
-          label="UI scale"
-          size="sm"
-          value={String(uiScale)}
-          onChange={(v) => setUiScale(Number(v) as UiScale)}
-          items={SCALE_ITEMS}
-        />
-      </SettingRow>
       <SettingRow
         label="Single-tab mode"
         help="Opening a pipeline or a run replaces the current tab; turning it on closes the other tabs"

@@ -34,8 +34,10 @@ import { toast } from "../shared/ui/toast";
 
 let snapshot: Appearance = DEFAULT_APPEARANCE;
 let loaded = false;
-/** Bumped on every local change: a daemon answer older than one is dropped. */
+/** Bumped on every change, here or in another tab: a daemon answer older than one is dropped. */
 let changes = 0;
+/** A change of this tab the daemon has not confirmed yet (on its way, or refused). */
+let unsaved = false;
 const listeners = new Set<() => void>();
 let unbindStorage: (() => void) | null = null;
 
@@ -73,7 +75,11 @@ export function initAppearance(): Appearance {
 function followOtherTabs(): void {
   if (unbindStorage || typeof window === "undefined") return;
   const onStorage = (event: StorageEvent) => {
-    if (event.key === null || LOCAL_COPY_KEYS.includes(event.key)) publish(readLocalCopy());
+    if (event.key === null || LOCAL_COPY_KEYS.includes(event.key)) {
+      // Newer than a daemon answer on its way to this tab.
+      changes += 1;
+      publish(readLocalCopy());
+    }
   };
   window.addEventListener("storage", onStorage);
   unbindStorage = () => window.removeEventListener("storage", onStorage);
@@ -93,8 +99,9 @@ function persist(appearance: Appearance): Promise<void> {
       try {
         await saveAppearance(toDocument(next));
         warned = false;
+        if (!queued) unsaved = false;
       } catch {
-        // The local copy holds the change; the next one, or the next load, tries again.
+        // The local copy holds the change; the next change, or the next sync, writes it again.
         if (!warned) toast("Your appearance could not be saved", "error");
         warned = true;
       }
@@ -107,9 +114,14 @@ function persist(appearance: Appearance): Promise<void> {
 /**
  * Read the Actor's Apparence from the daemon. Without one, this browser's
  * values become the Actor's. A daemon that does not answer leaves the local
- * copy on screen.
+ * copy on screen. A change of this tab the daemon has not confirmed yet is
+ * newer than what it keeps: written again, never overwritten.
  */
 export async function syncAppearance(): Promise<void> {
+  if (unsaved) {
+    await persist(current());
+    return;
+  }
   const asked = changes;
   let stored;
   try {
@@ -117,8 +129,8 @@ export async function syncAppearance(): Promise<void> {
   } catch {
     return;
   }
-  // Changed here while the daemon answered: this browser's change is the newer.
-  if (asked !== changes) return;
+  // Changed here or in another tab while the daemon answered: that change is the newer.
+  if (asked !== changes || unsaved) return;
   if (stored == null) {
     await persist(current());
     return;
@@ -133,6 +145,7 @@ export function updateAppearance(change: (appearance: Appearance) => Appearance)
   const next = change(current());
   if (sameAppearance(next, current())) return;
   changes += 1;
+  unsaved = true;
   writeLocalCopy(next);
   publish(next);
   void persist(next);
@@ -145,6 +158,7 @@ export function resetAppearance(): void {
   loaded = false;
   snapshot = DEFAULT_APPEARANCE;
   changes = 0;
+  unsaved = false;
   queued = null;
   writing = null;
   warned = false;

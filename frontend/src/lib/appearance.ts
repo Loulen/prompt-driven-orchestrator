@@ -18,6 +18,10 @@
  *  - **The migration**: an Actor with no document yet adopts the values this
  *    browser held ({@link readLocalCopy}).
  *
+ * The interface is served by the daemon, so every device of an instance reads
+ * the document with the same code: a Theme this interface does not know, or a
+ * later `version`, only comes from a downgrade, and is read as the default.
+ *
  * An element id is stable: `<surface>.<element>`, and
  * `<surface>.ext.<extension>:<contribution>` for an extension's contribution.
  * A deviation on an element no surface knows (an extension removed) is kept

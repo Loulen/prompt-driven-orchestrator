@@ -48,7 +48,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   several outputs is taller, and the canvas moves what lies under it down by as much, without
   writing anything: positions in the pipeline file stay as they were, a card with one output is
   drawn exactly as before, and no wire gains a bend. The Run canvas is unchanged.
-- The node inspector's prompt is a bordered field with a focus ring; the line PDO adds at launch
+- The node inspector's prompt is a bordered field with a focus ring; the line added at launch
   (`/pdo-interactive`, `/pdo-orchestrate`) sits under it, locked, "Added at launch".
 - The Agent section's row is named "Model". In Custom, the summary line no longer repeats the
   three pickers; Inherit and Profile keep it. The Skills selector takes the row's whole width.

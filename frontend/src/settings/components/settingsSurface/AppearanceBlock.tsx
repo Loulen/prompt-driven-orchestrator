@@ -15,7 +15,7 @@ export default function AppearanceBlock({
   preview,
   children,
 }: {
-  /** The surface (`run.canvas`…). */
+  /** The block's test id suffix (`run-canvas`…). */
   id: string;
   title: string;
   /** Its fixed elements, never hidden. */

@@ -113,3 +113,34 @@ describe("the Apparence store", () => {
     expect(api.saveAppearance).not.toHaveBeenCalled();
   });
 });
+
+describe("the Apparence store, against a write the daemon has not confirmed", () => {
+  it("writes a refused change again at the next sync instead of adopting the daemon's older document", async () => {
+    initAppearance();
+    api.saveAppearance.mockRejectedValueOnce(new Error("restarting"));
+    updateAppearance((a) => ({ ...a, theme: "classic" }));
+    await vi.waitFor(() => expect(api.saveAppearance).toHaveBeenCalledTimes(1));
+    api.fetchAppearance.mockResolvedValue({ appearance: { version: 1, elements: {} } });
+    await syncAppearance();
+    expect(api.fetchAppearance).not.toHaveBeenCalled();
+    expect(api.saveAppearance).toHaveBeenCalledTimes(2);
+    expect(api.saveAppearance.mock.calls[1][0]).toMatchObject({ theme: "classic" });
+    expect(localStorage.getItem("pdo.ui.theme")).toBe("classic");
+    // Saved now: the next sync reads the daemon again.
+    await syncAppearance();
+    expect(api.fetchAppearance).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a daemon answer older than a change another tab made meanwhile", async () => {
+    initAppearance();
+    let answer: (value: ActorAppearance) => void = () => {};
+    api.fetchAppearance.mockReturnValue(new Promise<ActorAppearance>((resolve) => (answer = resolve)));
+    const sync = syncAppearance();
+    localStorage.setItem("pdo.ui.theme", "classic");
+    window.dispatchEvent(new StorageEvent("storage", { key: "pdo.ui.theme" }));
+    answer({ appearance: { version: 1, elements: {} } });
+    await sync;
+    expect(localStorage.getItem("pdo.ui.theme")).toBe("classic");
+    expect(renderHook(() => useAppearance()).result.current.theme).toBe("classic");
+  });
+});

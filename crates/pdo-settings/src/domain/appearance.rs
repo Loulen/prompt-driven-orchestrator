@@ -172,7 +172,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(document.theme.as_deref(), Some("tomorrow"));
-        assert_eq!(document.elements["nowhere.thing"], true);
+        assert!(document.elements["nowhere.thing"]);
     }
 
     #[test]

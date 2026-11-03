@@ -62,3 +62,20 @@ async fn a_wrong_document_is_refused_and_stores_nothing() {
     assert_eq!(stored.compact_nodes, Some(true));
     assert_eq!(w.appearances.documents.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn only_a_person_keeps_an_appearance() {
+    let w = world();
+    let agent = Actor::Agent {
+        run_id: "r1".into(),
+        node_id: "n1".into(),
+    };
+    let err = w
+        .settings
+        .set_appearance(&agent, br#"{"version":1}"#)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, SettingsError::Invalid(_)), "{err:?}");
+    assert_eq!(w.settings.appearance(&agent).await.unwrap(), None);
+    assert!(w.appearances.documents.lock().unwrap().is_empty());
+}

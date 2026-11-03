@@ -1008,6 +1008,12 @@
     opacity: 0.4;
     outline-style: dashed;
   }
+  /* A hidden second line, back while one of its elements is pointed: the row keeps
+     its two-line height for as long, its line's other elements stay out. */
+  .set-preview .lp-row[data-ghost-line] {
+    grid-template-rows: 20px 18px;
+    height: calc(var(--h-row-2) + 6px);
+  }
   .set-preview__caption {
     padding-top: var(--g-2);
     color: var(--text-3);

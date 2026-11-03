@@ -41,7 +41,7 @@ function previewPane(runs: RunListEntry[], expanded: ReadonlySet<string>): RunRo
 
 /**
  * The preview of the Runs list block: the list's own rows (`RunRow`) on the most
- * recent Run the user sees and a parent with its child, or on a sample Run
+ * recent Run the user sees, a triggered Run and a parent with its child, or on a sample Run
  * without extension marks, at the list's width. Inert: nothing in it reacts.
  * `pointed` is the element whose switch the pointer or the focus is on.
  */
@@ -56,7 +56,8 @@ export default function RunsListPreview({
 }) {
   const shown = useMemo(() => runsListPreview(runs), [runs]);
   const pane = useMemo(() => {
-    const parents = new Set(shown.nodes.filter((node) => node.depth === 0 && node.children.length > 0).map((n) => n.run.run_id));
+    // Open only the parent whose child the preview shows below it; another row with children stays closed.
+    const parents = new Set(shown.nodes.filter((_, i) => shown.nodes[i + 1]?.depth === 1).map((n) => n.run.run_id));
     return previewPane(runs, parents);
   }, [runs, shown]);
   const context = useMemo(() => ({ pointed, sample: shown.sample }), [pointed, shown.sample]);

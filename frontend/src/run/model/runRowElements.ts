@@ -46,3 +46,8 @@ export const RUN_ROW_LOCATIONS: readonly UiLocation[] = ["run/item", "run/item/p
 export function hasSecondLine(shown: (id: string) => boolean, contributionIds: readonly string[]): boolean {
   return RUN_ROW_SECOND_LINE.some((element) => shown(element.id)) || contributionIds.some(shown);
 }
+
+/** Whether `id` is an element of a Run row's second line: a core one or a contribution. */
+export function isSecondLineElement(id: string, contributionIds: readonly string[]): boolean {
+  return RUN_ROW_SECOND_LINE.some((element) => element.id === id) || contributionIds.includes(id);
+}

@@ -66,4 +66,40 @@ describe("the preview of the Runs list block", () => {
       ["child", 1],
     ]);
   });
+  it("adds the most recent triggered Run when no other row has a Trigger, so the Trigger mark appears once", () => {
+    const runs = [
+      run("new", "2026-01-01T12:00:00Z"),
+      run("nightly-old", "2026-01-01T08:00:00Z", { triggered_by: "t1" }),
+      run("nightly", "2026-01-01T11:00:00Z", { triggered_by: "t1" }),
+      run("parent", "2026-01-01T10:00:00Z"),
+      run("child", "2026-01-01T10:01:00Z", { parent_run_id: "parent" }),
+    ];
+    expect(ids(runs)).toEqual([
+      ["new", 0],
+      ["nightly", 0],
+      ["parent", 0],
+      ["child", 1],
+    ]);
+    expect(runsListPreview(runs).caption).toBe("Your most recent run, a triggered run, and a parent with its child");
+    expect(runsListPreview(runs.slice(0, 3)).caption).toBe("Your most recent run, and a triggered run");
+  });
+
+  it("adds no triggered Run when a row already has a Trigger", () => {
+    const runs = [
+      run("nightly", "2026-01-01T12:00:00Z", { triggered_by: "t1" }),
+      run("other", "2026-01-01T11:00:00Z", { triggered_by: "t2" }),
+    ];
+    expect(ids(runs)).toEqual([["nightly", 0]]);
+    const family = [
+      run("new", "2026-01-01T12:00:00Z"),
+      run("other", "2026-01-01T11:00:00Z", { triggered_by: "t2" }),
+      run("parent", "2026-01-01T10:00:00Z", { triggered_by: "t1" }),
+      run("child", "2026-01-01T10:01:00Z", { parent_run_id: "parent" }),
+    ];
+    expect(ids(family)).toEqual([
+      ["new", 0],
+      ["parent", 0],
+      ["child", 1],
+    ]);
+  });
 });

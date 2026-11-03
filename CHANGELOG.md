@@ -45,11 +45,13 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   runs, node progress, the parent link and the cost are hidden; extension contributions are shown.
 - When every element of the second line is hidden, Run rows take one line. The height comes from
   your Appearance alone, so every row of the list keeps the same height.
-- The block's preview is drawn with the Runs list's own rows: your most recent Run, plus a parent
-  with its child, or a sample Run without extension marks when you see no Run. Hovering or focusing
-  a switch rings its element in the preview; a hidden element comes back faded, with a dashed
-  outline. A switch that differs from its default says "changed", with the default in its tooltip,
-  and "Modified only" finds it.
+- The block's preview is drawn with the Runs list's own rows: your most recent Run, plus your
+  most recent triggered Run when no other row has a Trigger, plus a parent with its child, or a
+  sample Run without extension marks when you see no Run. Hovering or focusing a switch rings its
+  element in the preview; a hidden element comes back faded, with a dashed outline. This works on
+  rows that take one line too: the second line comes back while you point to one of its elements.
+  A switch that differs from its default says "changed", with the default in its tooltip, and
+  "Modified only" finds it.
 - New seams in the interface: the core's table of default visibilities for each surface, and the
   filtering of the contributions an Appearance hides at the `run/item` and `run/item/people`
   locations. The extension API is unchanged.

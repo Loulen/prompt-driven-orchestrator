@@ -176,6 +176,13 @@ describe("the Runs list block", () => {
       fireEvent.click(control);
     }
     expect(previewRow("recent")).toHaveAttribute("data-lines", "1");
+    // The switch still pointed: its line is a ghost, holding that element alone.
+    expect(previewRow("recent")).toHaveAttribute("data-ghost-line");
+    expect(previewRow("recent").querySelector(".lp-l2")).not.toBeNull();
+    expect(within(previewRow("recent")).queryByTestId("run-pipeline-name")).toBeNull();
+    const people = screen.getByRole("switch", { name: "Test · People" });
+    fireEvent.pointerLeave(people.closest(".set-ablock__point")!);
+    fireEvent.blur(people);
     expect(previewRow("recent").querySelector(".lp-l2")).toBeNull();
   });
 
@@ -194,6 +201,61 @@ describe("the Runs list block", () => {
 
     fireEvent.pointerLeave(rowOf("runs.list.cost").parentElement!);
     expect(within(previewRow("recent")).queryByTestId("run-cost")).toBeNull();
+  });
+
+  it("brings a hidden second line back as a ghost while one of its elements is pointed", async () => {
+    mount();
+    await within(previewRow("recent")).findByTestId("badge");
+    for (const name of ["Pipeline", "Duration", "Test · Badge", "Test · People"]) {
+      fireEvent.click(screen.getByRole("switch", { name }));
+    }
+    expect(previewRow("recent").querySelector(".lp-l2")).toBeNull();
+
+    fireEvent.pointerEnter(rowOf("runs.list.cost").parentElement!);
+    expect(previewRow("recent").querySelector(".lp-l2")).not.toBeNull();
+    expect(previewRow("recent")).toHaveAttribute("data-ghost-line");
+    // Still one line by the Apparence; only the pointed element comes back, as a ghost.
+    expect(previewRow("recent")).toHaveAttribute("data-lines", "1");
+    expect(await within(previewRow("recent")).findByTestId("run-cost")).toHaveAttribute("data-ghost");
+    expect(within(previewRow("recent")).queryByTestId("run-pipeline-name")).toBeNull();
+    expect(within(previewRow("recent")).queryByTestId("run-duration")).toBeNull();
+
+    fireEvent.pointerLeave(rowOf("runs.list.cost").parentElement!);
+    expect(previewRow("recent").querySelector(".lp-l2")).toBeNull();
+    expect(previewRow("recent")).not.toHaveAttribute("data-ghost-line");
+
+    // A first-line element pointed brings no second line back.
+    fireEvent.pointerEnter(rowOf("runs.list.trigger").parentElement!);
+    expect(previewRow("recent").querySelector(".lp-l2")).toBeNull();
+    // Nor does an element this row cannot draw: no parent to link to.
+    fireEvent.pointerEnter(rowOf("runs.list.parent").parentElement!);
+    expect(previewRow("recent").querySelector(".lp-l2")).toBeNull();
+  });
+
+  it("brings the ghost line back on the child only, when Parent link is pointed on one line", async () => {
+    const runs = [
+      ...RUNS,
+      run("parent", "Review", "2026-01-01T10:00:00Z"),
+      run("child", "Slice", "2026-01-01T10:05:00Z", { parent_run_id: "parent" }),
+    ];
+    mount(runs);
+    await within(previewRow("recent")).findByTestId("badge");
+    for (const name of ["Pipeline", "Duration", "Test · Badge", "Test · People"]) {
+      fireEvent.click(screen.getByRole("switch", { name }));
+    }
+    fireEvent.pointerEnter(rowOf("runs.list.parent").parentElement!);
+    expect(previewRow("child")).toHaveAttribute("data-ghost-line");
+    expect(within(previewRow("child")).getByTestId("run-parent-link")).toHaveAttribute("data-ghost");
+    expect(previewRow("recent")).not.toHaveAttribute("data-ghost-line");
+    expect(previewRow("parent")).not.toHaveAttribute("data-ghost-line");
+  });
+
+  it("shows the most recent triggered Run, so the Trigger mark appears once", () => {
+    mount([...RUNS, run("nightly", "Nightly sweep", "2026-01-01T11:00:00Z", { triggered_by: "Nightly" })]);
+    expect(preview()).toHaveTextContent("Your most recent run, and a triggered run");
+    expect(within(previewRow("nightly")).getByTestId("run-trigger-badge")).toBeInTheDocument();
+    fireEvent.pointerEnter(rowOf("runs.list.trigger").parentElement!);
+    expect(within(previewRow("nightly")).getByTestId("run-trigger-badge")).toHaveAttribute("data-pointed");
   });
 
   it("points by the keyboard focus too", () => {
@@ -236,5 +298,11 @@ describe("the Runs list block", () => {
     fireEvent.click(switchOf("runs.list.cost"));
     expect(within(preview()).getByTestId("run-cost")).toHaveTextContent("$0.42");
     expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/runs/costs"))).toBe(false);
+    // On one line, an extension's contribution pointed brings no empty ghost line to the sample.
+    for (const name of ["Cost", "Pipeline", "Duration", "Test · Badge", "Test · People"]) {
+      fireEvent.click(screen.getByRole("switch", { name }));
+    }
+    fireEvent.pointerEnter(screen.getByRole("switch", { name: "Test · Badge" }).closest(".set-ablock__point")!);
+    expect(within(preview()).getByRole("button", { name: /Sample run/ })).not.toHaveAttribute("data-ghost-line");
   });
 });

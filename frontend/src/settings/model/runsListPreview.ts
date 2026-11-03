@@ -1,8 +1,9 @@
 /**
  * What the preview of the Runs list block of Settings › Appearance shows: the
- * most recent Run the user sees, and a parent with its child so that every
- * element of a row (child pills, parent link) appears once; a sample Run when
- * the user sees none.
+ * most recent Run the user sees, the most recent triggered Run when none of the
+ * other rows has a Trigger, and a parent with its child, so that every element
+ * of a row (Trigger mark, child pills, parent link) appears once; a sample Run
+ * when the user sees none.
  */
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
 import { buildRunTree, type RunTreeNode } from "../../run/model/runTree";
@@ -66,21 +67,30 @@ export function runsListPreview(runs: RunListEntry[], now: number = Date.now()):
   const active = runs.filter((run) => run.status !== "archived");
   const nodes = everyNode(buildRunTree(active.length > 0 ? active : runs));
   const byNewest = (a: RunTreeNode, b: RunTreeNode) => newer(a.run, b.run);
-  const recent = [...nodes].sort(byNewest)[0];
-  const parent = nodes.filter((node) => node.children.length > 0).sort(byNewest)[0];
-  if (!parent) {
-    return { nodes: [{ ...recent, depth: 0 }], sample: false, caption: "Your most recent run" };
-  }
-  const child = [...parent.children].sort(byNewest)[0];
+  const sorted = [...nodes].sort(byNewest);
+  const recent = sorted[0];
+  const parent = sorted.find((node) => node.children.length > 0);
   // The child names its parent: the Parent link shows once, when it is shown.
-  const family = [
-    { ...parent, depth: 0 },
-    { ...child, depth: 1, sectionParentLink: parent.run.run_id },
+  const child = parent && [...parent.children].sort(byNewest)[0];
+  const family =
+    parent && child
+      ? [
+          { ...parent, depth: 0 },
+          { ...child, depth: 1, sectionParentLink: parent.run.run_id },
+        ]
+      : [];
+  const inFamily = (node: RunTreeNode) => family.some((member) => member.run.run_id === node.run.run_id);
+  const rows = inFamily(recent) ? [] : [{ ...recent, depth: 0 }];
+  // The Trigger mark shows once too: the most recent triggered Run joins when no row has one.
+  const triggered = sorted.find((node) => node.run.triggered_by);
+  const hasTrigger = [...rows, ...family].some((node) => node.run.triggered_by);
+  const addTriggered = triggered !== undefined && !hasTrigger;
+  if (addTriggered) rows.push({ ...triggered, depth: 0 });
+  const parts = [
+    "Your most recent run",
+    ...(addTriggered ? ["a triggered run"] : []),
+    ...(family.length > 0 ? ["a parent with its child"] : []),
   ];
-  const inFamily = recent === parent || recent === child;
-  return {
-    nodes: inFamily ? family : [{ ...recent, depth: 0 }, ...family],
-    sample: false,
-    caption: "Your most recent run, and a parent with its child",
-  };
+  const caption = parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
+  return { nodes: [...rows, ...family], sample: false, caption };
 }

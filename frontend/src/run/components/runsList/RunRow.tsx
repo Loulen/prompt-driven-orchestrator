@@ -16,7 +16,7 @@ import RunRowPeople from "./RunRowPeople";
 import { ChildPills, NodePips, RunFigures, TriggerMark } from "./RunRowParts";
 import { shownNodes } from "../../model/runRowNodes";
 import type { RunGesture } from "../../model/runGestures";
-import { hasSecondLine, RUN_ROW, RUN_ROW_LOCATIONS } from "../../model/runRowElements";
+import { hasSecondLine, isSecondLineElement, RUN_ROW, RUN_ROW_LOCATIONS } from "../../model/runRowElements";
 import { useAppearancePreview, useElementMarks } from "../../../hooks/useElementMarks";
 import { useAppearance } from "../../../hooks/useAppearance";
 import { isVisible } from "../../../lib/appearance";
@@ -85,9 +85,11 @@ interface Props {
  * Every element but its status and its name is an Élément masquable
  * (`model/runRowElements.ts`): one the Apparence hides is not rendered, and the
  * row takes one line when its whole second line is hidden — the Apparence
- * decides, not the Run, so every row of the list keeps one height (a ghost of
- * a preview shows only on a line that is there). In a preview
- * of Settings › Appearance the row is inert: no hover bar, out of the tab order.
+ * decides, not the Run, so every row of the list keeps one height. In a preview
+ * of Settings › Appearance, pointing to an element of a hidden second line
+ * brings that line back as a ghost (`data-ghost-line`), the row still counting
+ * one line (`data-lines="1"`). A preview's row is inert too: no hover bar, out
+ * of the tab order.
  */
 export default function RunRow({
   node,
@@ -110,17 +112,25 @@ export default function RunRow({
   const contributions = useHideableContributions("runs.list", RUN_ROW_LOCATIONS);
   // From what the Apparence shows alone: a preview's ghost never keeps a line.
   const appearance = useAppearance();
-  const secondLine = hasSecondLine(
-    (id) => isVisible(appearance, id),
-    contributions.map((c) => c.id),
-  );
+  const contributionIds = contributions.map((c) => c.id);
+  const secondLine = hasSecondLine((id) => isVisible(appearance, id), contributionIds);
+  // A root whose parent sits in the other section (active / archived) links to it.
+  const linkedParent = node.sectionParentLink ? runById.get(node.sectionParentLink) : undefined;
+  // A preview points to an element of a hidden second line that this row can
+  // draw: the line comes back as a ghost, to show that element at its place;
+  // the row still counts one line.
+  const pointed = preview?.pointed ?? null;
+  const ghostLine =
+    !secondLine &&
+    pointed !== null &&
+    isSecondLineElement(pointed, contributionIds) &&
+    (pointed !== RUN_ROW.parent || linkedParent !== undefined) &&
+    !(preview?.sample && contributionIds.includes(pointed));
   const triggerMarks = marksOf(RUN_ROW.trigger);
   const pillsMarks = marksOf(RUN_ROW.childPills);
   const pipsMarks = marksOf(RUN_ROW.nodePips);
   const pipelineMarks = marksOf(RUN_ROW.pipeline);
   const parentMarks = marksOf(RUN_ROW.parent);
-  // A root whose parent sits in the other section (active / archived) links to it.
-  const linkedParent = node.sectionParentLink ? runById.get(node.sectionParentLink) : undefined;
   // ADR-0081 (#31): what the `run/item` decorations mark.
   const decorated = useMemo(
     () => ({
@@ -180,6 +190,7 @@ export default function RunRow({
       className="lp-row"
       data-run-row={run.run_id}
       data-lines={secondLine ? 2 : 1}
+      data-ghost-line={ghostLine || undefined}
       data-depth={node.depth}
       data-open={isOpen || undefined}
       data-checked={rowSelected || undefined}
@@ -301,7 +312,7 @@ export default function RunRow({
           {pipsMarks && <NodePips nodes={shownNodes(run)} marks={pipsMarks} />}
         </span>
       </span>
-      {secondLine && (
+      {(secondLine || ghostLine) && (
         <span className="lp-l2">
           {pipelineMarks && (
             <span className="lp-pipe" title={run.pipeline_name} data-testid="run-pipeline-name" {...pipelineMarks}>

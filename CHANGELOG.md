@@ -38,6 +38,21 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   exported types `AppearanceDocument` and `ActorAppearance`. The browser keeps its copy under the
   same storage keys: `/shared/theme.js`, and the pages extensions serve outside the interface, are
   unchanged.
+- The **Runs list** block comes first in Appearance, with "Always shown: Status, name". Its switches
+  show or hide, on every row of the Runs list, the Trigger, the child runs, the node progress (first
+  line), the pipeline, the parent link, the duration and the cost (second line), and each mark or
+  people contribution of an extension, named "Extension · label". The defaults are lighter: child
+  runs, node progress, the parent link and the cost are hidden; extension contributions are shown.
+- When every element of the second line is hidden, Run rows take one line. The height comes from
+  your Appearance alone, so every row of the list keeps the same height.
+- The block's preview is drawn with the Runs list's own rows: your most recent Run, plus a parent
+  with its child, or a sample Run without extension marks when you see no Run. Hovering or focusing
+  a switch rings its element in the preview; a hidden element comes back faded, with a dashed
+  outline. A switch that differs from its default says "changed", with the default in its tooltip,
+  and "Modified only" finds it.
+- New seams in the interface: the core's table of default visibilities for each surface, and the
+  filtering of the contributions an Appearance hides at the `run/item` and `run/item/people`
+  locations. The extension API is unchanged.
 
 ## 2.70.0
 

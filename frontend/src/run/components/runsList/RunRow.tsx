@@ -10,12 +10,17 @@ import type { DecorationContext } from "../../../shared/extensions/contract";
 import { StatusIcon } from "../../../shared/ui/kit";
 import StatusMark from "../../../shared/ui/leftList/StatusMark";
 import HoverBar, { RowAction } from "../../../shared/ui/leftList/HoverBar";
-import RunRowMenu from "./RunRowMenu";
-import RunParentLink from "./RunParentLink";
+import RunRowMenu, { type RunRowMenuPane } from "./RunRowMenu";
+import RunParentLink, { type RunParentLinkPane } from "./RunParentLink";
 import RunRowPeople from "./RunRowPeople";
 import { ChildPills, NodePips, RunFigures, TriggerMark } from "./RunRowParts";
 import { shownNodes } from "../../model/runRowNodes";
 import type { RunGesture } from "../../model/runGestures";
+import { hasSecondLine, RUN_ROW, RUN_ROW_LOCATIONS } from "../../model/runRowElements";
+import { useAppearancePreview, useElementMarks } from "../../../hooks/useElementMarks";
+import { useAppearance } from "../../../hooks/useAppearance";
+import { isVisible } from "../../../lib/appearance";
+import { useHideableContributions } from "../../../shared/extensions/hideableContributions";
 
 const RUN_STATUS_WORD: Record<RunListEntry["status"] | "stalled", string> = {
   running: "Running",
@@ -29,15 +34,44 @@ const RUN_STATUS_WORD: Record<RunListEntry["status"] | "stalled", string> = {
   stalled: "Stalled",
 };
 
+/** What a row reads of the Runs tab's state. */
+export type RunRowPane = Pick<
+  RunsPaneState,
+  | "isExpanded"
+  | "setExpanded"
+  | "runSel"
+  | "renamingRunId"
+  | "renameValue"
+  | "setRenameValue"
+  | "renameInputRef"
+  | "commitRename"
+  | "cancelRename"
+  | "startRename"
+  | "handlePause"
+  | "handleResume"
+  | "setConfirmRetryAll"
+  | "setConfirmForget"
+  | "runsScrollRef"
+  | "selectRange"
+  | "toggleSel"
+  | "visibleRunIds"
+  | "runById"
+  | "mayOnRow"
+> &
+  RunParentLinkPane &
+  RunRowMenuPane;
+
 interface Props {
   node: RunTreeNode;
-  pane: RunsPaneState;
+  pane: RunRowPane;
   selectedRunId: string | null;
   triggers: TriggerListEntry[];
   onSelectRun: (runId: string) => void;
   onSelectTrigger?: (triggerId: string) => void;
   /** Switch the left panel to its Triggers tab (the trigger mark's target). */
   onShowTriggers: () => void;
+  /** A sample Run's own cost, in a preview of Settings › Appearance. */
+  sampleCost?: number;
 }
 
 /**
@@ -47,6 +81,13 @@ interface Props {
  * duration and its cost. Indented 12 px per level of the tree, which
  * `model/runTree.ts` computes; this only renders. The hover bar holds the one
  * action its status calls for and the « ⋯ » menu.
+ *
+ * Every element but its status and its name is an Élément masquable
+ * (`model/runRowElements.ts`): one the Apparence hides is not rendered, and the
+ * row takes one line when its whole second line is hidden — the Apparence
+ * decides, not the Run, so every row of the list keeps one height (a ghost of
+ * a preview shows only on a line that is there). In a preview
+ * of Settings › Appearance the row is inert: no hover bar, out of the tab order.
  */
 export default function RunRow({
   node,
@@ -56,6 +97,7 @@ export default function RunRow({
   onSelectRun,
   onSelectTrigger,
   onShowTriggers,
+  sampleCost,
 }: Props) {
   const {
     isExpanded, setExpanded, runSel, renamingRunId, renameValue, setRenameValue, renameInputRef,
@@ -63,6 +105,20 @@ export default function RunRow({
     setConfirmForget, runsScrollRef, selectRange, toggleSel, visibleRunIds, runById, mayOnRow,
   } = pane;
   const run = node.run;
+  const preview = useAppearancePreview();
+  const marksOf = useElementMarks();
+  const contributions = useHideableContributions("runs.list", RUN_ROW_LOCATIONS);
+  // From what the Apparence shows alone: a preview's ghost never keeps a line.
+  const appearance = useAppearance();
+  const secondLine = hasSecondLine(
+    (id) => isVisible(appearance, id),
+    contributions.map((c) => c.id),
+  );
+  const triggerMarks = marksOf(RUN_ROW.trigger);
+  const pillsMarks = marksOf(RUN_ROW.childPills);
+  const pipsMarks = marksOf(RUN_ROW.nodePips);
+  const pipelineMarks = marksOf(RUN_ROW.pipeline);
+  const parentMarks = marksOf(RUN_ROW.parent);
   // A root whose parent sits in the other section (active / archived) links to it.
   const linkedParent = node.sectionParentLink ? runById.get(node.sectionParentLink) : undefined;
   // ADR-0081 (#31): what the `run/item` decorations mark.
@@ -120,9 +176,10 @@ export default function RunRow({
   return (
     <div
       role="button"
-      tabIndex={0}
+      tabIndex={preview ? -1 : 0}
       className="lp-row"
       data-run-row={run.run_id}
+      data-lines={secondLine ? 2 : 1}
       data-depth={node.depth}
       data-open={isOpen || undefined}
       data-checked={rowSelected || undefined}
@@ -221,44 +278,57 @@ export default function RunRow({
             {label}
           </span>
         )}
-        {trigger !== null && (
+        {trigger !== null && triggerMarks && (
           <TriggerMark
             name={trigger}
+            marks={triggerMarks}
             onOpen={() => {
               if (run.triggered_by) onSelectTrigger?.(run.triggered_by);
               onShowTriggers();
             }}
           />
         )}
-        {hasChildren && (
+        {hasChildren && pillsMarks && (
           <ChildPills
             counts={node.counts}
+            marks={pillsMarks}
             // Decision 1 — the pills of a COLLAPSED parent expand it; once open
             // they are inert and the click reaches the row as usual.
             onExpand={expanded ? undefined : () => setExpanded(run.run_id, true)}
           />
         )}
         <span className="lp-end">
-          <NodePips nodes={shownNodes(run)} />
+          {pipsMarks && <NodePips nodes={shownNodes(run)} marks={pipsMarks} />}
         </span>
       </span>
-      <span className="lp-l2">
-        <span className="lp-pipe" title={run.pipeline_name} data-testid="run-pipeline-name">
-          {run.pipeline_name}
-        </span>
-        {linkedParent && <RunParentLink parent={linkedParent} pane={pane} onSelectRun={onSelectRun} />}
-        <span className="lp-end">
-          {/* The extensions' marks (`run/item`, ADR-0081) and people
-              (`run/item/people`, API 0.12), before the figures; nothing at all
-              without a contribution. */}
-          <span className="lp-deco">
-            <ExtensionDecorations<DecorationContext> location="run/item" extra={decorated} nowrap />
-            <RunRowPeople run={run} />
+      {secondLine && (
+        <span className="lp-l2">
+          {pipelineMarks && (
+            <span className="lp-pipe" title={run.pipeline_name} data-testid="run-pipeline-name" {...pipelineMarks}>
+              {run.pipeline_name}
+            </span>
+          )}
+          {linkedParent && parentMarks && (
+            <RunParentLink parent={linkedParent} pane={pane} onSelectRun={onSelectRun} marks={parentMarks} />
+          )}
+          <span className="lp-end">
+            {/* The extensions' marks (`run/item`, ADR-0081) and people
+                (`run/item/people`, API 0.12), before the figures; nothing at all
+                without a contribution, or with every one hidden. */}
+            <span className="lp-deco">
+              <ExtensionDecorations<DecorationContext> location="run/item" extra={decorated} nowrap />
+              <RunRowPeople run={run} />
+            </span>
+            <RunFigures
+              run={run}
+              duration={marksOf(RUN_ROW.duration)}
+              cost={marksOf(RUN_ROW.cost)}
+              sampleCost={sampleCost}
+            />
           </span>
-          <RunFigures run={run} />
         </span>
-      </span>
-      {!isRenaming && (
+      )}
+      {!isRenaming && !preview && (
         <HoverBar testId="run-row-actions">
           {canPause ? (
             <RowAction icon={Pause} label="Pause" testId="pause-run-button" onClick={() => handlePause(run.run_id)} />

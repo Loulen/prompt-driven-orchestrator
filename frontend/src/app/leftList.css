@@ -190,6 +190,11 @@
     cursor: pointer;
     outline: none;
   }
+  /* Its whole second line hidden by the Apparence: one line, on every row alike. */
+  .lp-row[data-lines="1"] {
+    grid-template-rows: 20px;
+    height: calc(var(--h-row) + 6px);
+  }
   .lp-row:hover {
     --row-bg: var(--row-hover);
   }

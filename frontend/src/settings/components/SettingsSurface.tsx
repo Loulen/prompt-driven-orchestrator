@@ -77,6 +77,7 @@ export default function SettingsSurface({
   onStartTour,
   onStartFullTour,
   projects,
+  entities,
 }: SettingsSurfaceProps) {
   const { settings, settled, save, refresh } = useSettings(open);
   const { profiles: agentProfiles, refresh: refreshAgentProfiles } = useAgentProfiles(open);
@@ -289,7 +290,7 @@ export default function SettingsSurface({
                   />
                 )}
 
-                {item.id === "appearance" && <AppearanceCategory sections={item.sections} />}
+                {item.id === "appearance" && <AppearanceCategory sections={item.sections} entities={entities} />}
 
                 {item.id === "agents" &&
                   (formProps && catalog ? (

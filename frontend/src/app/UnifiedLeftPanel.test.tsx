@@ -25,6 +25,8 @@ import { useEditStore } from "../pipeline/store/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
 import { legacyScope } from "../test/legacy";
 import { resetActorsForTests, useActorsStore } from "../shared/actors/store";
+import { resetAppearance } from "../hooks/useAppearance";
+import { ELEMENTS_STORAGE_KEY } from "../lib/appearance";
 
 const mockRenameRun = vi.mocked(renameRun);
 const mockCreatePipeline = vi.mocked(createPipeline);
@@ -2189,6 +2191,12 @@ describe("UnifiedLeftPanel run tree (#783)", () => {
 
   beforeEach(() => {
     localStorage.clear();
+    // The child pills and the parent link, hidden by default, shown here: what the tree draws.
+    localStorage.setItem(
+      ELEMENTS_STORAGE_KEY,
+      JSON.stringify({ "runs.list.child-pills": true, "runs.list.parent": true }),
+    );
+    resetAppearance();
   });
 
   const labels = () => screen.getAllByTestId("run-display-label").map((el) => el.textContent);

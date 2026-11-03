@@ -25,7 +25,9 @@
  * An element id is stable: `<surface>.<element>`, and
  * `<surface>.ext.<extension>:<contribution>` for an extension's contribution.
  * A deviation on an element no surface knows (an extension removed) is kept
- * as it is, never dropped.
+ * as it is, never dropped. {@link ELEMENT_DEFAULTS} holds the core's defaults
+ * per surface; an element it does not name (every extension contribution) is
+ * shown by default.
  */
 
 import type { AppearanceDocument } from "../shared/generated/AppearanceDocument";
@@ -73,6 +75,70 @@ export const DEFAULT_APPEARANCE: Appearance = {
   elements: {},
 };
 
+/** A surface whose Éléments masquables Settings › Appearance lists. */
+export type Surface = "runs.list" | "run.canvas" | "run.info" | "triggers.list" | "pipelines.list";
+
+/**
+ * The core's default of each of its Éléments masquables (the « less loaded »
+ * defaults of the design): visible `true`, hidden `false`. The fixed elements of
+ * a surface (a row's status and name…) are not in it: no switch hides them.
+ */
+export const ELEMENT_DEFAULTS: ElementDeviations = {
+  "runs.list.trigger": true,
+  "runs.list.child-pills": false,
+  "runs.list.node-pips": false,
+  "runs.list.pipeline": true,
+  "runs.list.parent": false,
+  "runs.list.duration": true,
+  "runs.list.cost": false,
+  "run.canvas.agent": false,
+  "run.canvas.iteration": false,
+  "run.canvas.elapsed": true,
+  "run.canvas.cost": true,
+  "run.canvas.isolation": false,
+  "run.canvas.loop": true,
+  "run.canvas.profile": true,
+  "run.info.note": false,
+  "run.info.status": false,
+  "run.info.harness": true,
+  "run.info.repo": true,
+  "run.info.sandbox": true,
+  "run.info.started": true,
+  "run.info.trigger": true,
+  "run.info.source": true,
+  "run.info.duration": true,
+  "run.info.sessions": false,
+  "run.info.changes": true,
+  "run.info.cost": true,
+  "run.info.graph": false,
+  "triggers.list.pipeline": true,
+  "triggers.list.last": false,
+  "triggers.list.next": true,
+  "triggers.list.guard": true,
+  "triggers.list.overlap": false,
+  "pipelines.list.version": true,
+  "pipelines.list.draft": true,
+  "pipelines.list.modified": true,
+  "pipelines.list.validation": true,
+};
+
+/**
+ * The surface whose rendering of a generic UI location filters the hidden
+ * contributions: each contribution there is an Élément masquable of it.
+ */
+export const SURFACE_OF_LOCATION: Readonly<Partial<Record<string, Surface>>> = {
+  "run/item": "runs.list",
+  "run/item/people": "runs.list",
+};
+
+/**
+ * The element id of an extension's contribution on `surface`: `<surface>.ext.<key>`,
+ * `key` being the catalogue's `<extension id>:<contribution id>`.
+ */
+export function contributionElementId(surface: Surface, key: string): string {
+  return `${surface}.ext.${key}`;
+}
+
 const isTheme = (value: unknown): value is Theme => typeof value === "string" && (THEMES as readonly string[]).includes(value);
 
 /**
@@ -101,7 +167,7 @@ export function toDocument(appearance: Appearance): AppearanceDocument {
  * Whether the element `id` shows: its deviation, else its default in
  * `defaults`, else shown (an extension's contribution is shown by default).
  */
-export function isVisible(appearance: Appearance, id: string, defaults: ElementDeviations = {}): boolean {
+export function isVisible(appearance: Appearance, id: string, defaults: ElementDeviations = ELEMENT_DEFAULTS): boolean {
   return appearance.elements[id] ?? defaults[id] ?? true;
 }
 
@@ -113,12 +179,17 @@ export function withElement(
   appearance: Appearance,
   id: string,
   visible: boolean,
-  defaults: ElementDeviations = {},
+  defaults: ElementDeviations = ELEMENT_DEFAULTS,
 ): Appearance {
   const elements = { ...appearance.elements };
   if (visible === (defaults[id] ?? true)) delete elements[id];
   else elements[id] = visible;
   return { ...appearance, elements };
+}
+
+/** Whether the element `id` differs from its default: the user touched it. */
+export function isChanged(appearance: Appearance, id: string): boolean {
+  return id in appearance.elements;
 }
 
 /**

@@ -76,16 +76,20 @@ export function wantRunCost(runId: string, status: RunStatus) {
   queueMicrotask(() => void flush());
 }
 
-/** The cost of `runId` in dollars; `null` while unknown or when none is told. */
-export function useRunCost(runId: string, status: RunStatus): number | null {
+/**
+ * The cost of `runId` in dollars; `null` while unknown or when none is told.
+ * A `null` Run (a sample) asks nothing.
+ */
+export function useRunCost(runId: string | null, status: RunStatus): number | null {
   const usd = useSyncExternalStore(
     (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    () => byRun.get(runId)?.usd ?? null,
+    () => (runId === null ? null : (byRun.get(runId)?.usd ?? null)),
   );
   useEffect(() => {
+    if (runId === null) return;
     wantRunCost(runId, status);
     if (!isLiveRun(status)) return;
     const timer = window.setInterval(() => wantRunCost(runId, status), LIVE_TTL_MS);

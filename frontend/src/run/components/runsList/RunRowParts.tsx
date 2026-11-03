@@ -1,4 +1,5 @@
 import { Zap } from "lucide-react";
+import type { ElementMarks } from "../../../hooks/useElementMarks";
 import type { NodeProgress } from "../../../shared/generated/NodeProgress";
 import type { RunListEntry } from "../../../shared/generated/RunListEntry";
 import { StatusIcon, Tooltip } from "../../../shared/ui/kit";
@@ -13,14 +14,14 @@ import { useRunCost } from "../../store/runCosts";
 const MAX_PIPS = 8;
 
 /** The progress of a Run: one square per working node, the live one pulsing, an awaiting one hollow. */
-export function NodePips({ nodes }: { nodes: NodeProgress[] }) {
+export function NodePips({ nodes, marks }: { nodes: NodeProgress[]; marks?: ElementMarks }) {
   if (nodes.length === 0) return null;
   const done = nodes.filter((n) => n.status === "completed" || n.status === "skipped").length;
   const shown = nodes.slice(0, MAX_PIPS);
   const label = `${done} of ${nodes.length} nodes done`;
   return (
     <Tooltip label={label}>
-      <span className="lp-pips" role="img" aria-label={label} data-testid="run-node-pips">
+      <span className="lp-pips" role="img" aria-label={label} data-testid="run-node-pips" {...marks}>
         {shown.map((n) => (
           <i key={n.id} data-st={n.status} data-node={n.name ?? n.id} aria-hidden="true" />
         ))}
@@ -41,7 +42,15 @@ const PILLS: { key: keyof ChildCounts; tone: StatusTone; word: string }[] = [
  * The counts of a parent's descendants (#783), an icon and a number each, zero
  * ones left out. On a folded parent they unfold it.
  */
-export function ChildPills({ counts, onExpand }: { counts: ChildCounts; onExpand?: () => void }) {
+export function ChildPills({
+  counts,
+  onExpand,
+  marks,
+}: {
+  counts: ChildCounts;
+  onExpand?: () => void;
+  marks?: ElementMarks;
+}) {
   const shown = PILLS.filter((p) => counts[p.key] > 0);
   if (shown.length === 0) return null;
   const label = `${counts.finished} finished, ${counts.failed} failed, ${counts.stale} stale, ${counts.running} running child runs`;
@@ -52,6 +61,7 @@ export function ChildPills({ counts, onExpand }: { counts: ChildCounts; onExpand
       tabIndex={onExpand ? -1 : undefined}
       aria-label={onExpand ? `${label}, expand` : label}
       data-testid="run-child-pills"
+      {...marks}
       onClick={
         onExpand &&
         ((e) => {
@@ -75,7 +85,7 @@ export function ChildPills({ counts, onExpand }: { counts: ChildCounts; onExpand
 }
 
 /** The Trigger that created the Run, as a bolt: the click opens it in the Triggers tab. */
-export function TriggerMark({ name, onOpen }: { name: string; onOpen: () => void }) {
+export function TriggerMark({ name, onOpen, marks }: { name: string; onOpen: () => void; marks?: ElementMarks }) {
   const label = `Trigger: ${name}`;
   return (
     <Tooltip label={label}>
@@ -84,6 +94,7 @@ export function TriggerMark({ name, onOpen }: { name: string; onOpen: () => void
         className="lp-trig"
         aria-label={label}
         data-testid="run-trigger-badge"
+        {...marks}
         onClick={(e) => {
           e.stopPropagation();
           onOpen();
@@ -102,25 +113,41 @@ function endOf(run: RunListEntry): string | null {
   return run.completed_at ?? run.last_activity_at ?? null;
 }
 
-/** Its duration and its cost, at the end of line 2. */
-export function RunFigures({ run }: { run: RunListEntry }) {
-  const usd = useRunCost(run.run_id, run.status);
+/**
+ * Its duration and its cost, at the end of line 2; `null` marks leave one out
+ * (hidden by the Apparence). A sample Run says its own cost (`sampleCost`) and
+ * asks the daemon for none.
+ */
+export function RunFigures({
+  run,
+  duration = {},
+  cost = {},
+  sampleCost,
+}: {
+  run: RunListEntry;
+  duration?: ElementMarks | null;
+  cost?: ElementMarks | null;
+  sampleCost?: number;
+}) {
+  const told = useRunCost(sampleCost === undefined ? run.run_id : null, run.status);
+  const usd = sampleCost ?? told;
   const now = useListClock();
   const ms = spanOf(run.started_at, endOf(run), now);
   const started = run.started_at ? `Started ${new Date(run.started_at).toLocaleString()}` : undefined;
   return (
     <>
-      {ms !== null && (
+      {ms !== null && duration && (
         <span
           className="lp-num"
           title={[isLiveRun(run.status) ? "Elapsed" : "Duration", started].filter(Boolean).join("\n")}
           data-testid="run-duration"
+          {...duration}
         >
           {fmtSpan(ms)}
         </span>
       )}
-      {usd !== null && (
-        <span className="lp-num lp-muted" title="Cost (estimate)" data-testid="run-cost">
+      {usd !== null && cost && (
+        <span className="lp-num lp-muted" title="Cost (estimate)" data-testid="run-cost" {...cost}>
           {fmtCost(usd)}
         </span>
       )}

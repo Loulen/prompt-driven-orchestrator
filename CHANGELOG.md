@@ -72,8 +72,10 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   every element is hidden goes away; the failure and awaiting reasons, the "Reached End" banner,
   the source fetch error and the sandbox preparation always show.
 - Their previews are live: the Run canvas block draws a few cards of your most recent Run with the
-  canvas's own cards, a fork and a join, at 470 px; the Run info tab block draws your most recent
-  Run's Info tab at 360 px. With no Run, both show a sample without extension sections.
+  canvas's own cards, a fork and a join, at 470 px (zoomed out when the column is narrower); the
+  Run info tab block draws your most recent Run's Info tab at 360 px. Both use the most recent Run
+  that no other Run started, not an orchestrator's child. With no Run, both show a sample without
+  extension sections.
 - New seams in the interface: the contributions an Appearance hides are filtered at the `run/info`
   location too. The extension API is unchanged.
 - A **Triggers list** block, "Always shown: Name, enable switch, last result", shows or hides on

@@ -129,6 +129,8 @@ export const ELEMENT_DEFAULTS: ElementDeviations = {
 export const SURFACE_OF_LOCATION: Readonly<Partial<Record<string, Surface>>> = {
   "run/item": "runs.list",
   "run/item/people": "runs.list",
+  "trigger/item": "triggers.list",
+  "pipeline/item": "pipelines.list",
 };
 
 /**

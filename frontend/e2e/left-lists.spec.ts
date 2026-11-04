@@ -194,6 +194,7 @@ test("a Trigger switches from its row, a Pipeline opens from its row: one gestur
   const { id: triggerId } = (await created.json()) as { id: string };
 
   await page.setViewportSize({ width: 1280, height: 800 });
+  await stubAppearance(page, null);
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
@@ -209,6 +210,72 @@ test("a Trigger switches from its row, a Pipeline opens from its row: one gestur
   await page.getByRole("tab", { name: "Pipelines" }).click();
   const pipelineRow = page.getByTestId(`library-row-${PIPELINE}`);
   expect((await box(pipelineRow)).height).toBeCloseTo(46, 0);
+  await pipelineRow.click();
+  await expect(page.getByRole("tab", { name: new RegExp(PIPELINE) }).first()).toBeVisible();
+
+  await page.request.delete(`${baseURL}/triggers/${triggerId}`);
+});
+
+test("a Trigger row and a Pipeline row take one line once Settings › Appearance hides their second line, and work the same", async ({
+  page,
+  baseURL,
+}) => {
+  const created = await page.request.post(`${baseURL}/triggers`, {
+    data: {
+      name: `${PIPELINE}-one-line`,
+      pipeline_id: PIPELINE,
+      cron: "0 3 * * *",
+      target_repo: E2E_TARGET_REPO,
+      guard_command: "true",
+    },
+  });
+  expect(created.status()).toBe(201);
+  const { id: triggerId } = (await created.json()) as { id: string };
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await stubAppearance(page, null);
+  // No extension: none of their marks keeps a second line.
+  await page.route("**/ext", (route) => route.fulfill({ json: [] }));
+  await page.goto("/");
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("settings-category-appearance").click();
+  // Triggers list: hide the next fire, the guard and the pipeline; the preview follows.
+  const triggers = page.getByTestId("appearance-block-triggers-list");
+  await expect(triggers).toContainText("Always shown: Name, enable switch, last result");
+  const triggersPreview = page.getByTestId("appearance-preview-triggers-list");
+  await expect(triggersPreview.locator("[data-trigger-row]").first()).toHaveAttribute("data-lines", "2");
+  for (const name of ["Pipeline", "Next fire", "Guard"]) await triggers.getByRole("switch", { name }).click();
+  await expect(triggersPreview.locator("[data-trigger-row]").first()).toHaveAttribute("data-lines", "1");
+  // Pipelines list: hide its whole second line.
+  const pipelines = page.getByTestId("appearance-block-pipelines-list");
+  for (const name of ["Version", "Draft marker", "Modified"]) await pipelines.getByRole("switch", { name }).click();
+  await expect(page.getByTestId("appearance-preview-pipelines-list").locator(".lp-row").first()).toHaveAttribute(
+    "data-lines",
+    "1",
+  );
+  await page.keyboard.press("Escape");
+
+  // The Triggers list: one line, the last result beside the switch, which still switches.
+  await page.getByRole("tab", { name: "Triggers" }).click();
+  const trigger = page.locator(`[data-trigger-row="${triggerId}"]`);
+  await expect(trigger).toHaveAttribute("data-lines", "1");
+  expect((await box(trigger)).height).toBeCloseTo(30, 0);
+  await expect(trigger.getByTestId("trigger-schedule")).toHaveCount(0);
+  await expect(trigger.getByTestId("trigger-status-dot")).toBeVisible();
+  const toggle = trigger.getByTestId("trigger-toggle");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
+  await trigger.hover();
+  await expect(trigger.getByTestId("trigger-row-actions")).toBeVisible();
+
+  // The Pipelines list: one line, it opens from its row.
+  await page.getByRole("tab", { name: "Pipelines" }).click();
+  const pipelineRow = page.getByTestId(`library-row-${PIPELINE}`);
+  await expect(pipelineRow).toHaveAttribute("data-lines", "1");
+  expect((await box(pipelineRow)).height).toBeCloseTo(30, 0);
   await pipelineRow.click();
   await expect(page.getByRole("tab", { name: new RegExp(PIPELINE) }).first()).toBeVisible();
 

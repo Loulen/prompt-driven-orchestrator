@@ -17,6 +17,10 @@ import { lastOutcomeTooltip, outcomeTone, overlapLabel } from "../../model/outco
 import SuspendedPill from "./SuspendedPill";
 import { suspensionTooltip } from "../../model/suspension";
 import { copyToClipboard } from "../../../shared/lib/clipboard";
+import { useAppearancePreview, useElementMarks } from "../../../hooks/useElementMarks";
+import { useAppearance } from "../../../hooks/useAppearance";
+import { isVisible } from "../../../lib/appearance";
+import { hasSecondLine, isSecondLineElement, TRIGGER_ROW } from "../../model/triggerRowElements";
 
 interface Props {
   trigger: Trigger;
@@ -53,6 +57,15 @@ function nextOf(t: Trigger, paused: boolean, now: number): { text: string; title
  * switch first, its name and its modes (guard, overlap); then its pipeline,
  * its last fire and the next one. Under the switch, its last result, which
  * doubles as the select control.
+ *
+ * Every element but its switch, its name and its last result is an Élément
+ * masquable (`model/triggerRowElements.ts`): one the Apparence hides is not
+ * rendered, and the row takes one line when its whole second line is hidden —
+ * the last result then sits beside the switch. The Apparence decides, not the
+ * Trigger, so every row of the list keeps one height. In a preview of Settings ›
+ * Appearance, pointing to an element of a hidden second line brings that line
+ * back as a ghost (`data-ghost-line`); a preview's row is inert: no hover bar,
+ * out of the tab order.
  */
 export default function TriggerRow({
   trigger: t,
@@ -83,11 +96,49 @@ export default function TriggerRow({
       ? "Disable trigger"
       : "Enable trigger";
   const Overlap = t.overlap_policy === "allow" ? Layers : SkipForward;
+  const preview = useAppearancePreview();
+  const marksOf = useElementMarks();
+  // From what the Apparence shows alone: a preview's ghost never keeps a line.
+  const appearance = useAppearance();
+  const secondLine = hasSecondLine((id) => isVisible(appearance, id));
+  const pointed = preview?.pointed ?? null;
+  // A preview points to an element of a hidden second line this row can draw.
+  const ghostLine =
+    !secondLine &&
+    pointed !== null &&
+    isSecondLineElement(pointed) &&
+    (pointed !== TRIGGER_ROW.last || Boolean(t.last_fired_at));
+  const pipelineMarks = marksOf(TRIGGER_ROW.pipeline);
+  const lastMarks = marksOf(TRIGGER_ROW.last);
+  const nextMarks = marksOf(TRIGGER_ROW.next);
+  const guardMarks = marksOf(TRIGGER_ROW.guard);
+  const overlapMarks = marksOf(TRIGGER_ROW.overlap);
+  // #577 — the last result doubles as the select control.
+  const lastResult = (
+    <StatusMark
+      glyph={
+        <span data-testid="trigger-status-dot" data-outcome={t.last_outcome ?? "never"}>
+          {tone ? (
+            <StatusIcon kind="tone" status={tone} label={last} size={12} />
+          ) : (
+            <Circle size={12} strokeWidth={2} className="lp-dim" role="img" aria-label={last} />
+          )}
+        </span>
+      }
+      selected={rowSelected}
+      selecting={selecting}
+      label={rowSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
+      title={`${last}\nClick to select, Shift+click for a range`}
+      onSelect={(e) => onSelectControl(e.shiftKey)}
+    />
+  );
   return (
     <div
       role="button"
-      tabIndex={0}
+      tabIndex={preview ? -1 : 0}
       className="lp-row"
+      data-lines={secondLine ? 2 : 1}
+      data-ghost-line={ghostLine || undefined}
       data-open={isSelected || undefined}
       data-checked={rowSelected || undefined}
       data-off={!t.enabled || undefined}
@@ -123,6 +174,8 @@ export default function TriggerRow({
         >
           <span className="d-switch__knob" aria-hidden />
         </button>
+        {/* On one line, the last result sits beside the switch. */}
+        {!secondLine && lastResult}
       </span>
       <span className="lp-l1">
         <span className="lp-name" title={t.name} data-testid="trigger-name">
@@ -134,57 +187,55 @@ export default function TriggerRow({
           <span className="lp-deco">
             <ExtensionDecorations<DecorationContext> location="trigger/item" extra={extra} nowrap />
           </span>
-          <span className="lp-modes">
-            {t.guard_command && (
-              <Tooltip label={`Guard: ${t.guard_command}`}>
-                <span role="img" aria-label="Guard">
-                  <ShieldQuestion size={12} strokeWidth={1.5} aria-hidden />
-                </span>
-              </Tooltip>
-            )}
-            <Tooltip label={`Overlap: ${overlapLabel(t)}`}>
-              <span role="img" aria-label={`Overlap: ${t.overlap_policy}`} data-testid="trigger-overlap">
-                <Overlap size={12} strokeWidth={1.5} aria-hidden />
-              </span>
-            </Tooltip>
-          </span>
-        </span>
-      </span>
-      {/* #577 — the last result doubles as the select control. */}
-      <span className="lp-lead lp-lead--l2">
-        <StatusMark
-          glyph={
-            <span data-testid="trigger-status-dot" data-outcome={t.last_outcome ?? "never"}>
-              {tone ? (
-                <StatusIcon kind="tone" status={tone} label={last} size={12} />
-              ) : (
-                <Circle size={12} strokeWidth={2} className="lp-dim" role="img" aria-label={last} />
+          {((t.guard_command && guardMarks) || overlapMarks) && (
+            <span className="lp-modes">
+              {t.guard_command && guardMarks && (
+                <Tooltip label={`Guard: ${t.guard_command}`}>
+                  <span role="img" aria-label="Guard" data-testid="trigger-guard" {...guardMarks}>
+                    <ShieldQuestion size={12} strokeWidth={1.5} aria-hidden />
+                  </span>
+                </Tooltip>
+              )}
+              {overlapMarks && (
+                <Tooltip label={`Overlap: ${overlapLabel(t)}`}>
+                  <span
+                    role="img"
+                    aria-label={`Overlap: ${t.overlap_policy}`}
+                    data-testid="trigger-overlap"
+                    {...overlapMarks}
+                  >
+                    <Overlap size={12} strokeWidth={1.5} aria-hidden />
+                  </span>
+                </Tooltip>
               )}
             </span>
-          }
-          selected={rowSelected}
-          selecting={selecting}
-          label={rowSelected ? `Deselect ${t.name}` : `Select ${t.name}`}
-          title={`${last}\nClick to select, Shift+click for a range`}
-          onSelect={(e) => onSelectControl(e.shiftKey)}
-        />
-      </span>
-      <span className="lp-l2">
-        <span className="lp-pipe" title={t.pipeline_name}>
-          {t.pipeline_name}
+          )}
         </span>
-        <span className="lp-end">
-          {t.last_fired_at && (
-            <span className="lp-num lp-muted lp-hide-narrow" title={last}>
-              {fmtAge(t.last_fired_at, now)}
+      </span>
+      {secondLine && <span className="lp-lead lp-lead--l2">{lastResult}</span>}
+      {(secondLine || ghostLine) && (
+        <span className="lp-l2">
+          {pipelineMarks && (
+            <span className="lp-pipe" title={t.pipeline_name} data-testid="trigger-pipeline" {...pipelineMarks}>
+              {t.pipeline_name}
             </span>
           )}
-          <span className="lp-modes" title={next.title} data-testid="trigger-schedule">
-            <CalendarClock size={11} strokeWidth={1.75} aria-hidden />
-            <span className={next.dim ? "lp-num lp-muted" : "lp-num"}>{next.text}</span>
+          <span className="lp-end">
+            {t.last_fired_at && lastMarks && (
+              <span className="lp-num lp-muted lp-hide-narrow" title={last} data-testid="trigger-last-fired" {...lastMarks}>
+                {fmtAge(t.last_fired_at, now)}
+              </span>
+            )}
+            {nextMarks && (
+              <span className="lp-modes" title={next.title} data-testid="trigger-schedule" {...nextMarks}>
+                <CalendarClock size={11} strokeWidth={1.75} aria-hidden />
+                <span className={next.dim ? "lp-num lp-muted" : "lp-num"}>{next.text}</span>
+              </span>
+            )}
           </span>
         </span>
-      </span>
+      )}
+      {!preview && (
       <HoverBar testId="trigger-row-actions">
         {onRunNow && <RowAction icon={Play} label="Run now" testId="trigger-run-now" onClick={onRunNow} />}
         {onEdit && <RowAction icon={Pencil} label="Edit trigger" testId="trigger-edit" onClick={onEdit} />}
@@ -215,6 +266,7 @@ export default function TriggerRow({
           </RowMenuItem>
         </RowMenu>
       </HoverBar>
+      )}
     </div>
   );
 }

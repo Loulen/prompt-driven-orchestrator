@@ -6,8 +6,10 @@ import type { SettingsSection } from "../../model/settingsCategories";
 import AppearanceBlock from "./AppearanceBlock";
 import { SettingRow } from "./fields";
 import RunCanvasPreview from "./RunCanvasPreview";
+import PipelinesListBlock from "./PipelinesListBlock";
 import RunsListBlock from "./RunsListBlock";
 import Section from "./Section";
+import TriggersListBlock from "./TriggersListBlock";
 import type { AppearanceEntities } from "./surfaceProps";
 
 /**
@@ -62,6 +64,8 @@ export default function AppearanceSection({
           <Switch label="Compact nodes" checked={compactNodes} onChange={setCompactNodes} />
         </SettingRow>
       </AppearanceBlock>
+      <TriggersListBlock triggers={entities?.triggers ?? []} />
+      <PipelinesListBlock projects={entities?.projects ?? []} />
     </Section>
   );
 }

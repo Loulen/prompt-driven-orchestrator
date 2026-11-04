@@ -83,6 +83,7 @@ import PipelineInfoPanel from "./PipelineInfoPanel";
 import TmuxTerminal from "../../session/components/TmuxTerminal";
 import type { TabId } from "./PipelineInfoPanel";
 import type { EditorPipelineDef } from "../model/pipeline";
+import { withElements } from "../../test/appearance";
 
 function makeRun(overrides: Partial<RunState> = {}): RunState {
   return {
@@ -805,6 +806,7 @@ describe("PipelineInfoPanel — Repositories tab and Info header (#752)", () => 
   });
 
   it("Info shows the frozen harness when named (#551) and the editing / archived note (#315)", () => {
+    withElements({ "run.info.note": true });
     const { unmount } = renderPanel(makeRun({ status: "running", harness: "opencode" } as Partial<RunState>));
     expect(screen.getByTestId("run-harness")).toHaveTextContent("opencode");
     expect(screen.getByTestId("run-info-note")).toHaveTextContent("read only");

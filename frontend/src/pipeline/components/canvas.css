@@ -184,6 +184,8 @@
 
 /* « Compact nodes » on a Run canvas: one line of 168 × 30, two on an orchestrator with runs (168 × 52), centred on
    the detailed card's axis. The heights are mirrored in `model/compactCanvas.ts` (COMPACT_CARD): change both together. */
+/* A Run card whose every cell is hidden (Settings › Appearance): its header alone, 26 px. */
+.cv-n:not([data-compact]):not(:has(> .cv-n__grid, > .cv-n__runs)) > .cv-n__head { border-bottom: 0; border-radius: calc(var(--radius-ui) - 1px); }
 .cv-n[data-compact] { width: 168px; }
 .cv-n[data-compact] .cv-n__head { height: 28px; padding: 0 8px; border-bottom: 0; background: none; }
 .cv-n[data-compact] .cv-n__name { min-width: 40px; }

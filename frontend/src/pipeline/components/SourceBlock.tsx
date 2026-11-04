@@ -7,6 +7,7 @@ import { IconButton, KeyValue } from "../../shared/ui/kit";
 import { SourceDriftChip } from "./InspectorPrimitives";
 import { useSourceDrift } from "../../run/store/useSourceDrift";
 import type { RunState } from "../../shared/generated/RunState";
+import type { ElementMarks } from "../../hooks/useElementMarks";
 import { shortAge } from "../../workspace/model/branchSelect";
 
 /** The refresh icon, turning while the fetch runs. */
@@ -14,7 +15,7 @@ function Fetching(props: { size?: number | string; strokeWidth?: number | string
   return <RefreshCw {...props} className="d-spin" />;
 }
 
-export function SourceBlock({ run }: { run: RunState }) {
+export function SourceBlock({ run, marks }: { run: RunState; marks?: ElementMarks }) {
   const { drift, fetching, fetchError, refresh } = useSourceDrift(run);
   if (!drift) return null;
   const available = drift.state === "available";
@@ -22,7 +23,7 @@ export function SourceBlock({ run }: { run: RunState }) {
   const age = available ? shortAge(drift.last_fetch_at) : null;
 
   return (
-    <div data-testid="run-source-block">
+    <div data-testid="run-source-block" {...marks}>
       <KeyValue
         rows={[
           {

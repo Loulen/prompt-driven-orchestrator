@@ -41,7 +41,7 @@ export function sampleRun(now: number): RunListEntry {
 }
 
 /** Newest first: a Run not started yet is the newest; then by start. */
-function newer(a: RunListEntry, b: RunListEntry): number {
+export function newer(a: RunListEntry, b: RunListEntry): number {
   if (a.started_at === b.started_at) return 0;
   if (a.started_at === null) return -1;
   if (b.started_at === null) return 1;
@@ -50,6 +50,12 @@ function newer(a: RunListEntry, b: RunListEntry): number {
 
 function everyNode(tree: RunTreeNode[]): RunTreeNode[] {
   return tree.flatMap((node) => [node, ...everyNode(node.children)]);
+}
+
+/** The most recent Run the user sees, an active one before an archived one; `null` with none. */
+export function mostRecentRun(runs: RunListEntry[]): RunListEntry | null {
+  const active = runs.filter((run) => run.status !== "archived");
+  return [...(active.length > 0 ? active : runs)].sort(newer)[0] ?? null;
 }
 
 /** The rows of the preview, from the Runs the user sees. */

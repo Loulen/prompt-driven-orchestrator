@@ -38,6 +38,7 @@ import PipelineInfoPanel from "./PipelineInfoPanel";
 import { fetchPipelineDocument } from "../api/document";
 import { saveBlob } from "../../shared/lib/download";
 import { copyToClipboard } from "../../shared/lib/clipboard";
+import { withElements } from "../../test/appearance";
 
 function seedTab() {
   useEditStore.setState({
@@ -427,6 +428,7 @@ describe("Pipeline info — Info tab on a Run is read-only (#948)", () => {
   });
 
   it("keeps the Run stats alongside the graph stats", () => {
+    withElements({ "run.info.graph": true });
     render(<StorePanel run={makeRun()} />);
     expect(screen.getByTestId("run-stats")).toBeInTheDocument();
     expect(screen.getByTestId("pipeline-graph-nodes")).toHaveTextContent("2");

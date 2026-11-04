@@ -208,6 +208,8 @@ export interface KeyValueRow {
   mono?: boolean;
   /** The tooltip of the value, when it is not plain text. */
   tip?: string;
+  /** `data-*` attributes of the row (a preview's marks). */
+  attrs?: Readonly<Record<`data-${string}`, string | true | undefined>>;
 }
 
 /** A read-only property grid: a 96 px key column, 24 px rows, ellipsis. */
@@ -215,7 +217,7 @@ export function KeyValue({ rows }: { rows: KeyValueRow[] }) {
   return (
     <dl className="d-kv">
       {rows.map((r) => (
-        <div key={r.k} className="d-kv__row">
+        <div key={r.k} className="d-kv__row" {...r.attrs}>
           <dt title={r.k}>{r.k}</dt>
           <dd className={r.mono ? "d-mono" : undefined} title={r.tip ?? (typeof r.v === "string" ? r.v : undefined)}>
             {r.v}

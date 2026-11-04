@@ -7,9 +7,9 @@ import "./inspect.css";
  * One contributed section, drawn as the host's own: the kit's caps-head
  * Section titled with its label, the extension's name at the right of the head.
  */
-export function inspectorSection({ key, label, extension, body }: RenderedSection) {
+export function inspectorSection({ key, label, extension, body, marks }: RenderedSection) {
   return (
-    <div key={key} data-testid={`extension-section-${key}`}>
+    <div key={key} data-testid={`extension-section-${key}`} {...marks}>
       <Section
         title={label}
         aside={

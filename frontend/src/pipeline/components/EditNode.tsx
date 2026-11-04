@@ -16,20 +16,14 @@ import { useSelectedByOther } from "../store/useDraftPresence";
 import { presenceColor } from "../model/presence";
 import { SelectedByLabel } from "./ParticipantAvatar";
 import NodeRimHandles from "./NodeRimHandles";
-import { NodeTypeIcon, IsolationMarker } from "./NodeTypeIcon";
-import { NodeCard } from "./NodeCard";
+import { NodeTypeIcon } from "./NodeTypeIcon";
+import { WorkNodeCard } from "./WorkNodeCard";
+import { useElementMarks } from "../../hooks/useElementMarks";
 import { useIsDropTarget } from "./DragHighlightContext";
 import { anchorHandleId, landsByDrop } from "../../lib/anchorSide";
-import {
-  Bookmark,
-  CircleCheck,
-  Play,
-  SlidersHorizontal,
-  TriangleAlert,
-} from "lucide-react";
+import { CircleCheck, Play } from "lucide-react";
 import type { NodeCost } from "../../shared/generated/NodeCost";
-import { InputImages, NodeMeta } from "./NodeMeta";
-import { NodeCardHead, OrchestratorRuns } from "./NodeCardParts";
+import { InputImages } from "./NodeMeta";
 import type { NodeAgentLabel } from "../model/nodeAgent";
 import type { ChildCounts } from "../../run/model/orchestration";
 import SearchMatchBadge from "../../run/components/runSearch/SearchMatchBadge";
@@ -82,6 +76,8 @@ export interface EditNodeData {
   agent?: NodeAgentLabel;
   /** « Compact nodes » on a Run canvas: one line (two on an orchestrator with runs). */
   compact?: boolean;
+  /** On a Run canvas not being edited: the card leaves out the elements the Apparence hides. */
+  runCanvas?: boolean;
   /** The node in the Run: its iteration, its time and its cost. */
   run?: {
     iter: number;
@@ -115,6 +111,7 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   const selectedBy = useSelectedByOther("node", id);
   const selectedByColor = selectedBy ? presenceColor(selectedBy) : null;
   const isDropTarget = useIsDropTarget(id);
+  const marks = useElementMarks();
   // A reached start/end marker wears the « done » border and, on End, a check,
   // so the run view signals end-reached like completed work nodes (#105).
   const reached = data.reached ?? false;
@@ -226,8 +223,6 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   }
 
   const inRun = data.inRun === true;
-  const run = data.run;
-  const runs = data.childCounts && <OrchestratorRuns counts={data.childCounts} onOpen={data.onOpenOrchestration} />;
   const play = data.play && data.onPlay && (
     <button
       type="button"
@@ -244,109 +239,33 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
       <Play size={10} strokeWidth={1.75} aria-hidden />
     </button>
   );
-  if (data.compact) {
-    // The harness icon, the name, the status: the detailed header's order. The
-    // iteration, the worktree and profile markers stay in the inspector.
-    return (
-      <>
-        <NodeCard
-          compact
-          status={inRun ? data.status : null}
-          selected={isSelected}
-          idle={awaitingPlay}
-          orchestrator={data.orchestrator === true}
-          style={presenceStyle}
-        >
-          {selectedBy && <SelectedByLabel participant={selectedBy} />}
-          {handles}
-          <NodeCardHead
-            type={
-              <NodeTypeIcon
-                type={data.nodeType}
-                interactive={data.interactive}
-                orchestrator={data.orchestrator === true}
-                size={12}
-                className="cv-n__type"
-              />
-            }
-            name={data.label}
-            status={inRun ? data.status : null}
-          />
-          {runs}
-          {/* The rim carries the source handles every outgoing edge binds to. */}
-          {rim}
-          {inRun && <SearchMatchBadge nodeId={data.nodeId} />}
-        </NodeCard>
-        {play}
-      </>
-    );
-  }
-  // The type icon leads, in the Theme's accent; the status closes the header.
-  const typeIcon = (
-    <>
-      <NodeTypeIcon
-        type={data.nodeType}
-        interactive={data.interactive}
-        orchestrator={data.orchestrator === true}
-        size={12}
-        className="cv-n__type"
-      />
-      {data.agentMode === "profile" && (
-        <Bookmark data-testid="agent-mode-profile" size={8} className="cv-n__mode" aria-label="Agent profile" />
-      )}
-      {data.agentMode === "custom" && (
-        <SlidersHorizontal data-testid="agent-mode-custom" size={8} className="cv-n__mode" aria-label="Custom agent" />
-      )}
-      {data.agentMode === "broken" && (
-        <TriangleAlert data-testid="agent-mode-broken" size={8} className="cv-n__mode" data-broken aria-label="Missing agent profile" />
-      )}
-    </>
-  );
-  const flags = (
-    <>
-      <IsolationMarker isolated={data.isolated === true} />
-      {data.onDemand && !inRun && (
-        <span className="cv-n__flag" title="On demand" data-testid="on-demand-marker">
-          <Play size={10} strokeWidth={1.5} aria-label="On demand" />
-        </span>
-      )}
-      {data.loopBadge && (
-        <span
-          data-testid={data.loopBadge.kind === "collection" ? "collection-badge" : "loop-badge"}
-          className="cv-n__loop"
-          title={data.loopBadge.kind === "collection" ? "Collection region" : "Loop region"}
-        >
-          {data.loopBadge.text}
-        </span>
-      )}
-    </>
-  );
   return (
     <>
-    <NodeCard
-      status={inRun ? data.status : null}
-      selected={isSelected}
-      idle={awaitingPlay}
-      rimHover={rimHover != null}
-      wireTarget={isWireTarget}
-      orchestrator={data.orchestrator === true}
-      style={presenceStyle}
-    >
-      {selectedBy && <SelectedByLabel participant={selectedBy} />}
-      {handles}
-      <NodeCardHead type={typeIcon} name={data.label} flags={flags} status={inRun ? data.status : null} />
-      <NodeMeta data={data} run={run} />
-      {/* #723 — an orchestrator's child runs: « N runs » and the Orchestration
-          tab's pastilles; omitted entirely without children. */}
-      {runs}
-      {rim}
-      {/* While the Run's transcripts are searched: the node's count of hits. */}
-      {inRun && <SearchMatchBadge nodeId={data.nodeId} />}
-    </NodeCard>
-    {/* ADR-0086: the ▶ — start an on-demand node, or run a skipped branch as
-        if it had been taken. Outside the card so the greyed card does not dim
-        it; `nodrag` keeps the click from moving the node. */}
-    {play}
+      <WorkNodeCard
+        data={data}
+        // A Run canvas not being edited leaves out what the Apparence hides; the editor shows everything.
+        marks={data.runCanvas ? marks : undefined}
+        selected={isSelected}
+        idle={awaitingPlay}
+        rimHover={rimHover != null}
+        wireTarget={isWireTarget}
+        style={presenceStyle}
+        lead={
+          <>
+            {selectedBy && <SelectedByLabel participant={selectedBy} />}
+            {handles}
+          </>
+        }
+      >
+        {/* The rim carries the source handles every outgoing edge binds to. */}
+        {rim}
+        {/* While the Run's transcripts are searched: the node's count of hits. */}
+        {inRun && <SearchMatchBadge nodeId={data.nodeId} />}
+      </WorkNodeCard>
+      {/* ADR-0086: the ▶ — start an on-demand node, or run a skipped branch as
+          if it had been taken. Outside the card so the greyed card does not dim
+          it; `nodrag` keeps the click from moving the node. */}
+      {play}
     </>
   );
 }

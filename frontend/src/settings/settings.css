@@ -944,26 +944,45 @@
   .set-preview {
     margin: 0;
   }
+  /* The Run canvas's preview: 470 px, two columns of 222 px; a single card on their
+     middle, a fork's cards on the middle of each, the wires square between the rows. */
   .set-preview__canvas {
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: var(--g-4);
+    width: 470px;
+    max-width: 100%;
+    padding: var(--g-4) 13px;
     background-color: var(--surface-0);
     background-image: radial-gradient(var(--line) 1px, transparent 1px);
     background-size: 16px 16px;
     border: 1px solid var(--line);
     border-radius: var(--radius-ui);
   }
-  .set-preview__step {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
+  .set-preview__row {
+    display: grid;
+    grid-template-columns: 222px 222px;
+    justify-items: center;
+    align-items: start;
   }
-  .set-preview__edge {
-    width: 1px;
-    height: var(--g-5);
-    background: var(--text-3);
+  .set-preview__row > .cv-n {
+    grid-column: 1 / -1;
+  }
+  .set-preview__row[data-fork] > .cv-n {
+    grid-column: auto;
+  }
+  .set-preview__wires {
+    display: block;
+    flex: none;
+  }
+  .set-preview__wires path {
+    fill: none;
+    stroke: var(--text-3);
+    stroke-width: 1;
+  }
+  .set-preview__wires polygon {
+    fill: var(--text-3);
   }
   /* A group of switches in a block (« First line »…), with its note. */
   .set-ablock__group {
@@ -997,6 +1016,16 @@
   }
   .set-preview__list > .lp-rows {
     pointer-events: none;
+  }
+  /* The Run info tab's preview: the tab itself, at the panel's width, inert. */
+  .set-preview__info {
+    width: 360px;
+    max-width: 100%;
+    overflow: hidden;
+    pointer-events: none;
+    background: var(--surface-1);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
   }
   /* Point to see: the pointed element ringed, a hidden one back as a ghost. */
   .set-preview [data-pointed] {

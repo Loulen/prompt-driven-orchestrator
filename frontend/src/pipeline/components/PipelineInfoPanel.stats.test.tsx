@@ -28,6 +28,7 @@ vi.mock("../../workspace/api/repos", async (importOriginal) => ({
 
 import PipelineInfoPanel from "./PipelineInfoPanel";
 import { formatDuration, useRunDuration } from "../../run/model/runDuration";
+import { withElements } from "../../test/appearance";
 
 function makeRun(overrides: Partial<RunState> = {}): RunState {
   return {
@@ -128,6 +129,7 @@ describe("useRunDuration", () => {
 
 describe("PipelineInfoPanel — Stats block (#100)", () => {
   it("renders Duration, Node sessions started and Lines changed", () => {
+    withElements({ "run.info.sessions": true });
     renderPanel(makeRun());
     const stats = screen.getByTestId("run-stats");
     expect(stats).toBeInTheDocument();
@@ -147,6 +149,7 @@ describe("PipelineInfoPanel — Stats block (#100)", () => {
   });
 
   it("labels the sessions stat without the bare word 'Sessions' (no collision)", () => {
+    withElements({ "run.info.sessions": true });
     renderPanel(makeRun());
     expect(screen.queryByText("Sessions")).toBeNull();
     expect(screen.getByText("Node sessions started")).toBeInTheDocument();

@@ -1,11 +1,11 @@
 import { RotateCcw } from "lucide-react";
 import { updateAppearance, useAppearance } from "../../../hooks/useAppearance";
 import { deviationCount, resetToDefaults } from "../../../lib/appearance";
-import { Button, Switch } from "../../../shared/ui/kit";
+import { Button } from "../../../shared/ui/kit";
 import type { SettingsSection } from "../../model/settingsCategories";
-import AppearanceBlock from "./AppearanceBlock";
-import { SettingRow } from "./fields";
-import RunCanvasPreview from "./RunCanvasPreview";
+import { useRecentRun } from "../../store/useRecentRun";
+import RunCanvasBlock from "./RunCanvasBlock";
+import RunInfoBlock from "./RunInfoBlock";
 import RunsListBlock from "./RunsListBlock";
 import Section from "./Section";
 import type { AppearanceEntities } from "./surfaceProps";
@@ -25,8 +25,8 @@ export default function AppearanceSection({
 }) {
   const appearance = useAppearance();
   const deviations = deviationCount(appearance);
-  const { compactNodes } = appearance;
-  const setCompactNodes = (on: boolean) => updateAppearance((current) => ({ ...current, compactNodes: on }));
+  const runs = entities?.runs ?? [];
+  const { recent, none } = useRecentRun(runs);
   return (
     <Section
       section={section}
@@ -44,24 +44,9 @@ export default function AppearanceSection({
         </Button>
       }
     >
-      <RunsListBlock runs={entities?.runs ?? []} triggers={entities?.triggers ?? []} />
-      <AppearanceBlock
-        id="run-canvas"
-        title="Run canvas"
-        alwaysShown="Type icon, name, status, child runs of an orchestrator"
-        note={compactNodes ? "Compact nodes is on: cards show their icon, name and status only." : undefined}
-        preview={<RunCanvasPreview compact={compactNodes} />}
-      >
-        <SettingRow
-          label="Compact nodes"
-          help="Every card of a Run canvas on one line; the pipeline editor keeps them detailed"
-          keywords="cards canvas"
-          changed={compactNodes ? { default: "Off" } : undefined}
-          testId="setting-row-compact-nodes"
-        >
-          <Switch label="Compact nodes" checked={compactNodes} onChange={setCompactNodes} />
-        </SettingRow>
-      </AppearanceBlock>
+      <RunsListBlock runs={runs} triggers={entities?.triggers ?? []} />
+      <RunCanvasBlock recent={recent} none={none} />
+      <RunInfoBlock recent={recent} none={none} />
     </Section>
   );
 }

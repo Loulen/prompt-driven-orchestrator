@@ -21,11 +21,11 @@ export interface AppearancePreview {
 export const AppearancePreviewContext = createContext<AppearancePreview | null>(null);
 
 /** What an element rendered spreads on its root: the preview's marks, nothing in a real surface. */
-export interface ElementMarks {
+export type ElementMarks = {
   "data-element"?: string;
   "data-pointed"?: true;
   "data-ghost"?: true;
-}
+};
 
 const SHOWN: ElementMarks = {};
 

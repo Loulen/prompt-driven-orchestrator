@@ -1,13 +1,16 @@
 /**
- * A Run's canvas with « Compact nodes » on: every work card on one line (two
- * on an orchestrator with child runs), the rest of the pipeline risen by as
- * much (`lib/compactLayout.ts`). Pure: it returns a shifted COPY of the
- * pipeline for the canvas to draw, and never writes it back.
+ * A Run's canvas whose work cards are shorter than the detailed card every
+ * position was placed for, the rest of the pipeline risen by as much
+ * (`lib/compactLayout.ts`): with « Compact nodes » on, every card on one line
+ * (two on an orchestrator with child runs); else each card at the height of
+ * the elements the Apparence shows (`runCardElements.ts`). Pure: it returns a
+ * shifted COPY of the pipeline for the canvas to draw, and never writes it back.
  *
- *  - A compact card keeps the axis of the detailed one: 168 px centred on the
+ *  - A narrower card keeps the axis of the detailed one: 168 px centred on the
  *    208 px card.
- *  - Its side ports fold onto the anchor of its first line; its top and bottom
- *    ports keep their abscissa, so vertical wires and their labels stay put.
+ *  - Its side ports fold onto the middle of its first part (the card without
+ *    an orchestrator's runs row); its top and bottom ports keep their abscissa,
+ *    so vertical wires and their labels stay put.
  *  - Waypoints and pinned labels follow the shift of their own ordinate; a
  *    waypoint level with a folded side port follows the port, so the leg into
  *    it stays horizontal.
@@ -38,16 +41,27 @@ export const COMPACT_CARD = {
   noteWidth: 200,
 } as const;
 
-/** Where a folded side port sits on a compact card: the middle of its first line. */
-export const COMPACT_PORT_Y = COMPACT_CARD.compact / 2;
+/** The drawn size of a shorter work card: its width, its height without an orchestrator's runs row. */
+export interface CardSize {
+  width: number;
+  height: number;
+}
 
-const INSET = (COMPACT_CARD.width - COMPACT_CARD.compactWidth) / 2;
+/** A card on one line (« Compact nodes »). */
+export const COMPACT_SIZE: CardSize = { width: COMPACT_CARD.compactWidth, height: COMPACT_CARD.compact };
+
+/** Where a side port folds on a card of `size`: the middle of its first part, on a whole px. */
+export function foldedPortY(size: CardSize): number {
+  return Math.floor(size.height / 2);
+}
 /** The rounding `useEdgeRoute` applies to an endpoint, so a leg is recognised as such. */
 const LEVEL = 0.5;
 
 export interface CompactCanvasInput {
-  /** The orchestrators that have child runs: their cards carry « N runs » on both sizes. */
+  /** The orchestrators that have child runs: their cards carry « N runs » on every size. */
   withRuns?: ReadonlySet<string>;
+  /** The size every work card is drawn at: one line by default. */
+  card?: CardSize;
 }
 
 export interface CompactCanvas {
@@ -73,6 +87,8 @@ const isMarker = (type: string) => type === "start" || type === "end";
 
 export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasInput = {}): CompactCanvas {
   const withRuns = input.withRuns ?? new Set<string>();
+  const size = input.card ?? COMPACT_SIZE;
+  const portY = foldedPortY(size);
   const byId = new Map(pipeline.nodes.map((n) => [n.id, n]));
   const nodeRects: CompactRect[] = [];
   const detailed = new Map<string, { x: number; y: number; width: number; height: number }>();
@@ -88,7 +104,7 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
     const runs = withRuns.has(n.id) ? COMPACT_CARD.runs : 0;
     const h = COMPACT_CARD.detailed + runs;
     detailed.set(n.id, { x, y, width: COMPACT_CARD.width, height: h });
-    nodeRects.push({ id: n.id, x, y, w: COMPACT_CARD.width, h, hCompact: COMPACT_CARD.compact + runs });
+    nodeRects.push({ id: n.id, x, y, w: COMPACT_CARD.width, h, hCompact: size.height + runs });
   });
 
   const notes = (pipeline.notes ?? []).map((note, i) => ({
@@ -114,7 +130,7 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
     const rects = [...nodeRects, ...notes.filter((n) => holding.has(n.id)).map((n) => ({ id: `n:${n.id}`, x: n.x, y: n.y, w: COMPACT_CARD.noteWidth, h: n.h, hCompact: n.h }))];
     const riders = notes.filter((n) => !holding.has(n.id)).map((n) => ({ id: `n:${n.id}`, x: n.x, y: n.y + n.h }));
     layout = compactLayout(rects, [...points, ...riders]);
-    const boxes = nodeRects.map((r) => cardBox(layout.rects[r.id], isMarker(byId.get(r.id)!.type)));
+    const boxes = nodeRects.map((r) => cardBox(layout.rects[r.id], isMarker(byId.get(r.id)!.type), size));
     const blocked = notes.filter((n) => {
       if (holding.has(n.id)) return false;
       const at = layout.points[`n:${n.id}`];
@@ -128,7 +144,7 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
   const cards: Record<string, Box> = {};
   const nodes = pipeline.nodes.map((n) => {
     const r = layout.rects[n.id];
-    if (!isMarker(n.type)) cards[n.id] = cardBox(r, false);
+    if (!isMarker(n.type)) cards[n.id] = cardBox(r, false, size);
     return { ...n, view: { ...(n.view ?? {}), x: r.x, y: r.y } };
   });
 
@@ -141,8 +157,8 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
     const targetSide: PortSide = landsByDrop(byId.get(e.target.node)?.type ?? "agent")
       ? (e.target_anchor?.side ?? e.target_side ?? "left")
       : "left";
-    const from = foldedPort(source, sourceSide, e.source_anchor, cards[e.source.node]);
-    const to = foldedPort(target, targetSide, e.target_anchor, cards[e.target.node]);
+    const from = foldedPort(source, sourceSide, e.source_anchor, cards[e.source.node], portY);
+    const to = foldedPort(target, targetSide, e.target_anchor, cards[e.target.node], portY);
     let waypoints: EdgeWaypoint[] | null | undefined = e.waypoints?.map((_, j) => ({ ...shifted(`w:${i}:${j}`) }));
     if (waypoints && e.waypoints) {
       waypoints = followFoldedPort(waypoints, e.waypoints, from);
@@ -155,8 +171,8 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
       : e.output_label_pos;
     return {
       ...e,
-      source_anchor: source ? foldAnchor(e.source_anchor, sourceSide) : e.source_anchor,
-      target_anchor: target ? foldAnchor(e.target_anchor, targetSide) : e.target_anchor,
+      source_anchor: source ? foldAnchor(e.source_anchor, sourceSide, size) : e.source_anchor,
+      target_anchor: target ? foldAnchor(e.target_anchor, targetSide, size) : e.target_anchor,
       waypoints,
       condition_label_pos: e.condition_label_pos ? label(`c:${i}`, e.condition_label_pos) : e.condition_label_pos,
       output_label_pos: outputLabels,
@@ -172,22 +188,25 @@ export function compactCanvas(pipeline: EditorPipelineDef, input: CompactCanvasI
   return { pipeline: { ...pipeline, nodes, edges, ...(compactNotes ? { notes: compactNotes } : {}) }, cards };
 }
 
+/** How far a card of `size` sits inside the detailed one, on each side. */
+const inset = (size: CardSize) => (COMPACT_CARD.width - size.width) / 2;
+
 /** The drawn box: a work card narrows around its axis, a marker keeps its size. */
-function cardBox(r: Box, marker: boolean): Box {
-  return marker ? r : { x: r.x + INSET, y: r.y, w: COMPACT_CARD.compactWidth, h: r.h };
+function cardBox(r: Box, marker: boolean, size: CardSize): Box {
+  return marker ? r : { x: r.x + inset(size), y: r.y, w: size.width, h: r.h };
 }
 
 /**
- * The anchor of a compacted card's port: a side port folds onto the first
- * line (written even where the edge had no anchor: the middle of a two-line
- * card is not on its first line), a top or bottom one keeps its abscissa on
- * the narrower card. Within 20 px of a corner of the detailed card there is
+ * The anchor of a shorter card's port: a side port folds onto the middle of
+ * its first part (written even where the edge had no anchor: the middle of a
+ * card with a runs row is not there), a top or bottom one keeps its abscissa
+ * on a narrower card. Within 20 px of a corner of the detailed card there is
  * no such abscissa on the compact one: the port is clamped, and its wire jogs.
  */
-function foldAnchor(anchor: EdgeAnchor | null | undefined, side: PortSide): EdgeAnchor | null | undefined {
-  if (side === "left" || side === "right") return { side, offset: COMPACT_PORT_Y };
-  if (anchor?.offset == null) return anchor;
-  return { ...anchor, offset: anchor.offset - INSET };
+function foldAnchor(anchor: EdgeAnchor | null | undefined, side: PortSide, size: CardSize): EdgeAnchor | null | undefined {
+  if (side === "left" || side === "right") return { side, offset: foldedPortY(size) };
+  if (anchor?.offset == null || inset(size) === 0) return anchor;
+  return { ...anchor, offset: anchor.offset - inset(size) };
 }
 
 /** A side port of a compacted card: its ordinate on the detailed card, and on the compact one. */
@@ -201,9 +220,10 @@ function foldedPort(
   side: PortSide,
   anchor: EdgeAnchor | null | undefined,
   card: Box | undefined,
+  portY: number,
 ): FoldedPort | null {
   if (!rect || !card || (side !== "left" && side !== "right")) return null;
-  return { before: Math.round(anchorPoint(rect, anchor, side).y), after: card.y + COMPACT_PORT_Y };
+  return { before: Math.round(anchorPoint(rect, anchor, side).y), after: card.y + portY };
 }
 
 /** The folded port's new ordinate when `at` ran level with it, else null. */

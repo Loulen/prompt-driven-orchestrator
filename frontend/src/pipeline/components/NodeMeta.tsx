@@ -9,6 +9,8 @@ import type { PortType } from "../../shared/generated/PortType";
 import { formatDuration } from "../../run/model/runDuration";
 import { formatCostAmount } from "../../run/model/costLabel";
 import { useNow } from "../../run/model/iterationDuration";
+import type { ElementMarks } from "../../hooks/useElementMarks";
+import { RUN_CARD } from "../model/runCardElements";
 import type { EditNodeData } from "./EditNode";
 import { nodeTypeGlyph } from "../model/nodeTypeGlyph";
 
@@ -26,9 +28,19 @@ export function InputImages({ names }: { names: string[] }) {
 }
 
 /** One cell of the card's meta grid: an icon, a value, the name in the tooltip. */
-function Cell({ icon: Icon, title, value }: { icon: LucideIcon; title: string; value: string | null | undefined }) {
+function Cell({
+  icon: Icon,
+  title,
+  value,
+  marks,
+}: {
+  icon: LucideIcon;
+  title: string;
+  value: string | null | undefined;
+  marks?: ElementMarks;
+}) {
   return (
-    <span className="cv-n__cell" title={value ? `${title}: ${value}` : title}>
+    <span className="cv-n__cell" title={value ? `${title}: ${value}` : title} {...marks}>
       <Icon size={11} strokeWidth={1.5} aria-hidden />
       <span>{value || "·"}</span>
     </span>
@@ -55,12 +67,23 @@ function OutputLine({ name, type }: { name: string; type: PortType }) {
   );
 }
 
+const SHOWN: ElementMarks = {};
+
 /**
  * The card's meta grid, two columns: what runs the node, then on a template
  * its worktree and one line per output (the card grows with them), in a Run
- * its iteration, time and cost.
+ * its iteration, time and cost. In a Run, `marks` leaves out the cells the
+ * Apparence hides (`null`); with none left, there is no grid.
  */
-export function NodeMeta({ data, run }: { data: EditNodeData; run: EditNodeData["run"] }) {
+export function NodeMeta({
+  data,
+  run,
+  marks = () => SHOWN,
+}: {
+  data: EditNodeData;
+  run: EditNodeData["run"];
+  marks?: (id: string) => ElementMarks | null;
+}) {
   const live = run != null && (data.status === "running" || data.status === "awaiting_user");
   const now = useNow(live && run?.completedAt == null);
   const agent = data.agent ?? { short: "", title: "Agent" };
@@ -87,12 +110,21 @@ export function NodeMeta({ data, run }: { data: EditNodeData; run: EditNodeData[
       ? formatCostAmount(run.cost.usd, run.cost.partial, run.cost.form !== "reported")
       : null;
   const iter = run && run.iter > 0 ? (data.loopBadge || run.iterations > 1 ? `×${run.iter}` : String(run.iter)) : null;
+  const cells = [
+    { id: RUN_CARD.agent, icon: AgentIcon, title: agent.title, value: agent.short },
+    { id: RUN_CARD.iteration, icon: Repeat, title: "Iteration", value: iter },
+    { id: RUN_CARD.elapsed, icon: Timer, title: "Elapsed", value: elapsed },
+    { id: RUN_CARD.cost, icon: Coins, title: "Cost", value: cost },
+  ].flatMap((cell) => {
+    const m = marks(cell.id);
+    return m ? [{ ...cell, marks: m }] : [];
+  });
+  if (cells.length === 0) return null;
   return (
     <div className="cv-n__grid">
-      <Cell icon={AgentIcon} title={agent.title} value={agent.short} />
-      <Cell icon={Repeat} title="Iteration" value={iter} />
-      <Cell icon={Timer} title="Elapsed" value={elapsed} />
-      <Cell icon={Coins} title="Cost" value={cost} />
+      {cells.map(({ id, ...cell }) => (
+        <Cell key={id} {...cell} />
+      ))}
     </div>
   );
 }

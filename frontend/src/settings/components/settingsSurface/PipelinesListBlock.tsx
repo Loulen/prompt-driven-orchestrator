@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { PIPELINE_ROW_ELEMENTS, PIPELINE_ROW_LOCATIONS } from "../../../pipeline/model/pipelineRowElements";
 import { useEditStore } from "../../../pipeline/store/editStore";
-import type { RowElement } from "../../../run/model/runRowElements";
+import type { RowElement } from "../../../lib/appearance";
 import { useHideableContributions } from "../../../shared/extensions/hideableContributions";
 import type { Project } from "../../../workspace/model/project";
 import AppearanceBlock from "./AppearanceBlock";
@@ -22,7 +22,8 @@ export default function PipelinesListBlock({ projects }: { projects: Project[] }
     <ElementSwitch
       key={element.id}
       element={element}
-      surfaceName="Pipelines list"
+      where="on every row of the Pipelines list"
+      keywords="pipelines list row hide show"
       pointed={pointed === element.id}
       onPoint={setPointed}
     />

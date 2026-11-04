@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { ExtensionEntry } from "../generated/ExtensionEntry";
+import type { ElementMarks } from "../../hooks/useElementMarks";
 import ExtensionIcon from "./ExtensionIcon";
 
 export interface RenderedSection {
@@ -8,6 +9,8 @@ export interface RenderedSection {
   extension: ExtensionEntry;
   /** The section's component, behind its error boundary. */
   body: ReactNode;
+  /** At a location of a surface with Éléments masquables: the preview's marks of the section. */
+  marks?: ElementMarks;
 }
 
 /** The icon an extension shows for itself: the one of its first page, if any. */

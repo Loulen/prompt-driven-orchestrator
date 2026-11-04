@@ -6,7 +6,7 @@
  * its second line, one each.
  */
 import type { UiLocation } from "../../shared/generated/UiLocation";
-import type { RowElement } from "../../run/model/runRowElements";
+import type { RowElement } from "../../lib/appearance";
 
 export const PIPELINE_ROW = {
   version: "pipelines.list.version",

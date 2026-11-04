@@ -55,6 +55,29 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - New seams in the interface: the core's table of default visibilities for each surface, and the
   filtering of the contributions an Appearance hides at the `run/item` and `run/item/people`
   locations. The extension API is unchanged.
+- The **Run canvas** block, "Always shown: Type icon, name, status, child runs of an orchestrator",
+  starts with Compact nodes, then shows or hides on every card of a Run canvas the model, the
+  iteration, the elapsed time, the cost, the isolation flag, the loop badge and the agent profile
+  marker. By default a card shows its elapsed time and its cost on one row, so cards are shorter
+  (49 px instead of 65); with every cell hidden, a card is its header alone. Compact nodes stays the
+  master switch: while it is on, a card takes one line and the card's switches are greyed, with a
+  note saying why. The pipeline editor, and a Run edited for itself, keep detailed cards.
+- A Run canvas lifts what lies below a shorter card by as much, from the height of each card's
+  visible elements, the way Compact nodes did: nothing is written to the pipeline, no wire gains a
+  bend, output labels and conditions stay visible.
+- The **Run info tab** block, "Always shown: Name, status, alert banners", shows or hides each
+  field of the Run and Stats sections, the read-only note, the Graph rows (Nodes, Edges) of the
+  Pipeline section and each extension section, named "Extension · label". By default the
+  read-only note, the Status row, Node sessions and the Graph rows are hidden. A section whose
+  every element is hidden goes away; the failure and awaiting reasons, the "Reached End" banner,
+  the source fetch error and the sandbox preparation always show.
+- Their previews are live: the Run canvas block draws a few cards of your most recent Run with the
+  canvas's own cards, a fork and a join, at 470 px (zoomed out when the column is narrower); the
+  Run info tab block draws your most recent Run's Info tab at 360 px. Both use the most recent Run
+  that no other Run started, not an orchestrator's child. With no Run, both show a sample without
+  extension sections.
+- New seams in the interface: the contributions an Appearance hides are filtered at the `run/info`
+  location too. The extension API is unchanged.
 - A **Triggers list** block, "Always shown: Name, enable switch, last result", shows or hides on
   every Trigger row the pipeline, the last fire, the next fire, the guard, the overlap policy and
   each `trigger/item` contribution, under "Extensions". By default the last fire and the overlap

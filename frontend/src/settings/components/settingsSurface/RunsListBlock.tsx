@@ -19,7 +19,8 @@ export default function RunsListBlock({ runs, triggers }: { runs: RunListEntry[]
     <ElementSwitch
       key={element.id}
       element={element}
-      surfaceName="Runs list"
+      where="on every row of the Runs list"
+      keywords="runs list row hide show"
       pointed={pointed === element.id}
       onPoint={setPointed}
     />

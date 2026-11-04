@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { TRIGGER_ROW_ELEMENTS, TRIGGER_ROW_LOCATIONS } from "../../../trigger/model/triggerRowElements";
-import type { RowElement } from "../../../run/model/runRowElements";
+import type { RowElement } from "../../../lib/appearance";
 import { useHideableContributions } from "../../../shared/extensions/hideableContributions";
 import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
 import AppearanceBlock from "./AppearanceBlock";
@@ -19,7 +19,8 @@ export default function TriggersListBlock({ triggers }: { triggers: TriggerListE
     <ElementSwitch
       key={element.id}
       element={element}
-      surfaceName="Triggers list"
+      where="on every row of the Triggers list"
+      keywords="triggers list row hide show"
       pointed={pointed === element.id}
       onPoint={setPointed}
     />

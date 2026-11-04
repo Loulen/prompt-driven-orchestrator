@@ -3,7 +3,7 @@ import type { EdgeDef } from "../../shared/generated/EdgeDef";
 import type { PortSide } from "../../shared/generated/PortSide";
 import { anchorPoint } from "../../lib/anchorSide";
 import { boxesOverlap, type Box } from "../../lib/compactLayout";
-import { COMPACT_CARD, compactCanvas, estimateNoteHeight } from "./compactCanvas";
+import { COMPACT_CARD, compactCanvas, estimateNoteHeight, type CardSize } from "./compactCanvas";
 import type { EditorNodeDef, EditorPipelineDef } from "./pipeline";
 
 const node = (id: string, x: number, y: number, type: EditorNodeDef["type"] = "agent"): EditorNodeDef => ({
@@ -259,5 +259,102 @@ describe("compactCanvas", () => {
       edges: [{ source: { node: "start", port: "out" }, target: { node: "end", port: "result" }, mode: "manual", waypoints: [{ x: 30, y: 50 }] }],
     };
     expect(compactCanvas(pipeline).pipeline).toEqual(pipeline);
+  });
+});
+
+/** The sizes a Run card takes with its elements hidden: one cell row, header only, and with « Compact nodes ». */
+const SIZES: [string, CardSize][] = [
+  ["one row of cells", { width: 208, height: 49 }],
+  ["its header only", { width: 208, height: 26 }],
+  ["one line (Compact nodes)", { width: 168, height: 30 }],
+];
+
+describe.each(SIZES)("compactCanvas, cards at %s", (_, card) => {
+  // Mixed heights: orchestrators with runs on several rows, beside plain cards.
+  const withRuns = new Set(["n32", "n04", "n22"]);
+  const gain = COMPACT_CARD.detailed - card.height;
+
+  it("never touches the pipeline it is given", () => {
+    const pipeline = deepFreeze(catalogue());
+    const before = JSON.stringify(pipeline);
+    compactCanvas(pipeline, { withRuns, card });
+    expect(JSON.stringify(pipeline)).toBe(before);
+  });
+
+  it("draws each card at its own height and width on the axis of the detailed card; Start and End keep theirs", () => {
+    const pipeline = catalogue();
+    const c = compactCanvas(pipeline, { withRuns, card });
+    const fetch = pipeline.nodes.find((n) => n.id === "fetch")!;
+    expect(c.cards.fetch).toEqual({ x: fetch.view!.x + (208 - card.width) / 2, y: fetch.view!.y, w: card.width, h: card.height });
+    expect(c.cards.n32.h).toBe(card.height + COMPACT_CARD.runs);
+    expect(c.cards.start).toBeUndefined();
+    const end = c.pipeline.nodes.find((n) => n.id === "end")!;
+    expect(end.view!.y).toBeLessThan(at(1, 9).y);
+  });
+
+  it("lifts every row by the gain of the rows above it, a row with an orchestrator included", () => {
+    const c = compactCanvas(catalogue(), { withRuns, card });
+    expect(c.cards.n01.y).toBe(at(0, 1).y - gain);
+    expect(c.cards.n06.y).toBe(at(0, 6).y - 6 * gain);
+    expect(c.cards.n36.y).toBe(c.cards.n06.y);
+    // Row 4 holds an orchestrator: the cards beside it rise with it.
+    expect(c.cards.n14.y).toBe(c.cards.n04.y);
+  });
+
+  it("lets no two cards, markers or notes overlap", () => {
+    const c = compactCanvas(catalogue(), { withRuns, card });
+    const boxes: Box[] = c.pipeline.nodes.map((n) => {
+      const r = compactRect(c, n.id);
+      return { x: r.x, y: r.y, w: r.width, h: r.height };
+    });
+    for (const note of c.pipeline.notes ?? []) boxes.push({ x: note.view!.x, y: note.view!.y, w: 200, h: estimateNoteHeight(note.content) });
+    const pairs: [number, number][] = [];
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) if (boxesOverlap(boxes[i], boxes[j])) pairs.push([i, j]);
+    expect(pairs).toEqual([]);
+  });
+
+  it("adds no bend to a manual edge, forks, loops and merges included", () => {
+    const pipeline = catalogue();
+    const c = compactCanvas(pipeline, { withRuns, card });
+    pipeline.edges.forEach((e, i) => {
+      if (e.mode !== "manual") return;
+      const before = polyline(e, detailedRect(pipeline, e.source.node, withRuns), detailedRect(pipeline, e.target.node, withRuns));
+      const ce = c.pipeline.edges[i];
+      const after = polyline(ce, compactRect(c, ce.source.node), compactRect(c, ce.target.node));
+      expect(directions(after), `edge ${i}`).toEqual(directions(before));
+    });
+  });
+
+  it("folds a side port onto the middle of the card's first part, where its edge arrives; a bottom port keeps its abscissa", () => {
+    const pipeline = catalogue();
+    const c = compactCanvas(pipeline, { withRuns, card });
+    const portY = Math.floor(card.height / 2);
+    const merge = c.pipeline.edges.find((e) => e.source.node === "n06" && e.target.node === "approve")!;
+    expect(merge.source_anchor).toEqual({ side: "right", offset: portY });
+    expect(merge.target_anchor).toEqual({ side: "left", offset: portY });
+    expect(merge.waypoints![1].y).toBe(c.cards.approve.y + portY);
+    const fork = pipeline.edges.findIndex((e) => e.source.node === "fetch" && e.target.node === "n31");
+    const before = anchorPoint(detailedRect(pipeline, "fetch"), pipeline.edges[fork].source_anchor, "bottom");
+    const after = anchorPoint(compactRect(c, "fetch"), c.pipeline.edges[fork].source_anchor, "bottom");
+    expect(after.x).toBe(before.x);
+    expect(after.y).toBe(c.cards.fetch.y + card.height);
+  });
+
+  it("puts no pinned label on a card, and keeps every label", () => {
+    const pipeline = catalogue();
+    const c = compactCanvas(pipeline, { withRuns, card });
+    const labelsOf = (p: EditorPipelineDef) =>
+      p.edges.flatMap((e) => [...(e.condition_label_pos ? [e.condition_label_pos] : []), ...Object.values(e.output_label_pos ?? {})]);
+    const labels = labelsOf(c.pipeline);
+    expect(labels).toHaveLength(labelsOf(pipeline).length);
+    const cards = Object.values(c.cards);
+    expect(labels.filter((p) => cards.some((r) => p.x > r.x && p.x < r.x + r.w && p.y > r.y && p.y < r.y + r.h))).toEqual([]);
+  });
+
+  it("lets a note ride beside its row", () => {
+    const c = compactCanvas(catalogue(), { withRuns, card });
+    const note = c.pipeline.notes![0].view!;
+    expect(note.y).toBeLessThan(at(2, 7).y);
+    expect(note.x).toBe(at(2, 7).x);
   });
 });

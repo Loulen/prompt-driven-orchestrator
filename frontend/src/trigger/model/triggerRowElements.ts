@@ -6,7 +6,7 @@
  * first line, one each.
  */
 import type { UiLocation } from "../../shared/generated/UiLocation";
-import type { RowElement } from "../../run/model/runRowElements";
+import type { RowElement } from "../../lib/appearance";
 
 export const TRIGGER_ROW = {
   pipeline: "triggers.list.pipeline",

@@ -10,7 +10,7 @@ import { isLiveRun } from "../../run/model/runStatus";
 import { formatDuration, useRunDuration } from "../../run/model/runDuration";
 import { formatEstCost } from "../../run/model/costLabel";
 import { waitingForStartedNodesLabel } from "../../run/model/nodePlay";
-import { Banner, Chip, KeyValue, Section, StatusIcon } from "../../shared/ui/kit";
+import { Banner, Chip, KeyValue, Section, StatusIcon, type KeyValueRow } from "../../shared/ui/kit";
 import type { EditorPipelineDef } from "../model/pipeline";
 
 import { SourceBlock } from "./SourceBlock";
@@ -22,7 +22,14 @@ import { InfoVersionLine } from "./InfoVersion";
 import { shortSavedAgo, versionLabel } from "../model/versions";
 import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { RunInfoContext } from "../../shared/extensions/contract";
+import { useAppearancePreview, useElementMarks, type ElementMarks } from "../../hooks/useElementMarks";
+import { useSourceDrift } from "../../run/store/useSourceDrift";
+import type { SourceDrift } from "../../shared/generated/SourceDrift";
+import { RUN_INFO } from "../model/runInfoElements";
 import "./inspect.css";
+
+/** How an element renders: its marks, `null` when the Apparence hides it. */
+type Marks = (id: string) => ElementMarks | null;
 
 /** The `run/info` sections of the extensions (ADR-0081, #31), after the Run's stats. */
 function RunInfoSections({ run }: { run: RunState }) {
@@ -49,6 +56,7 @@ function Stat({
   title,
   live,
   testid,
+  marks,
   children,
 }: {
   icon: typeof Clock;
@@ -56,10 +64,11 @@ function Stat({
   title?: string;
   live?: boolean;
   testid: string;
+  marks?: ElementMarks;
   children: React.ReactNode;
 }) {
   return (
-    <span className="pi-stats__cell" title={title ?? label} data-live={live || undefined} data-testid={testid}>
+    <span className="pi-stats__cell" title={title ?? label} data-live={live || undefined} data-testid={testid} {...marks}>
       <Icon size={13} strokeWidth={1.5} aria-hidden />
       <span className="d-sr">{label}</span>
       {children}
@@ -67,7 +76,10 @@ function Stat({
   );
 }
 
-function RunStats({ run, onOpenDiff }: { run: RunState; onOpenDiff: () => void }) {
+/** The ids of the stats strip's cells: the Stats section goes when every one is hidden. */
+const STATS = [RUN_INFO.duration, RUN_INFO.sessions, RUN_INFO.changes, RUN_INFO.cost] as const;
+
+function RunStats({ run, onOpenDiff, marks }: { run: RunState; onOpenDiff: () => void; marks: Marks }) {
   const durationMs = useRunDuration(run.started_at, run.completed_at, run.status);
   const durationLabel = formatDuration(durationMs);
   const ticking = run.completed_at == null && isLiveRun(run.status);
@@ -88,41 +100,50 @@ function RunStats({ run, onOpenDiff }: { run: RunState; onOpenDiff: () => void }
   const slices = cost?.ventilation ?? [];
   const ventilated = cost != null && slices.length > (cost.text === "—" ? 0 : 1);
   const files = run.loc ? `${run.loc.files_changed.toLocaleString()} ${run.loc.files_changed === 1 ? "file" : "files"}` : "";
+  const [duration, sessions, changes, estCost] = STATS.map(marks);
   return (
     <div className="pi-stats" data-testid="run-stats">
-      <Stat icon={Clock} label="Duration" live={ticking} testid="stat-duration">
-        {durationLabel ?? "—"}
-        {ticking && <span className="d-sr" data-testid="stat-duration-live">live</span>}
-      </Stat>
-      <Stat icon={Layers} label="Node sessions started" testid="stat-sessions">
-        {(run.sessions_spawned ?? 0).toLocaleString()}
-      </Stat>
-      <Stat icon={GitCompare} label="Changes" title={run.loc ? `Changes · ${files}` : "Changes"} testid="stat-loc">
-        {run.loc ? (
-          // #748: the LOC stat opens the Diff tab — the count IS what the tab
-          // shows (same endpoint bounds), so the number links to it.
-          <button type="button" className="pi-stats__link" onClick={onOpenDiff} data-testid="stat-loc-open-diff">
-            <span className="ei-add">+{run.loc.insertions.toLocaleString()}</span>
-            <span className="ei-del">−{run.loc.deletions.toLocaleString()}</span>
-            <span className="d-sr">· {files}</span>
-          </button>
-        ) : (
-          "—"
-        )}
-      </Stat>
-      <Stat icon={Coins} label="Est. cost" title={cost?.title ?? "Est. cost"} testid="stat-cost">
-        {cost ? (
-          <span title={cost.title}>
-            {cost.text}
-            {cost.dagger && <span className="ei-warn">†</span>}
-            {ventilated && (
-              <span className="pi-sub"> · {slices.map((v) => `${v.text} via ${v.harness}`).join(" · ")}</span>
-            )}
-          </span>
-        ) : (
-          "—"
-        )}
-      </Stat>
+      {duration && (
+        <Stat icon={Clock} label="Duration" live={ticking} testid="stat-duration" marks={duration}>
+          {durationLabel ?? "—"}
+          {ticking && <span className="d-sr" data-testid="stat-duration-live">live</span>}
+        </Stat>
+      )}
+      {sessions && (
+        <Stat icon={Layers} label="Node sessions started" testid="stat-sessions" marks={sessions}>
+          {(run.sessions_spawned ?? 0).toLocaleString()}
+        </Stat>
+      )}
+      {changes && (
+        <Stat icon={GitCompare} label="Changes" title={run.loc ? `Changes · ${files}` : "Changes"} testid="stat-loc" marks={changes}>
+          {run.loc ? (
+            // #748: the LOC stat opens the Diff tab — the count IS what the tab
+            // shows (same endpoint bounds), so the number links to it.
+            <button type="button" className="pi-stats__link" onClick={onOpenDiff} data-testid="stat-loc-open-diff">
+              <span className="ei-add">+{run.loc.insertions.toLocaleString()}</span>
+              <span className="ei-del">−{run.loc.deletions.toLocaleString()}</span>
+              <span className="d-sr">· {files}</span>
+            </button>
+          ) : (
+            "—"
+          )}
+        </Stat>
+      )}
+      {estCost && (
+        <Stat icon={Coins} label="Est. cost" title={cost?.title ?? "Est. cost"} testid="stat-cost" marks={estCost}>
+          {cost ? (
+            <span title={cost.title}>
+              {cost.text}
+              {cost.dagger && <span className="ei-warn">†</span>}
+              {ventilated && (
+                <span className="pi-sub"> · {slices.map((v) => `${v.text} via ${v.harness}`).join(" · ")}</span>
+              )}
+            </span>
+          ) : (
+            "—"
+          )}
+        </Stat>
+      )}
     </div>
   );
 }
@@ -131,6 +152,64 @@ function RunStats({ run, onOpenDiff }: { run: RunState; onOpenDiff: () => void }
 function startedAgo(iso: string): string {
   const ago = shortSavedAgo(iso);
   return ago === "now" || ago === "" ? ago || "—" : `${ago} ago`;
+}
+
+/** The drift a sample preview shows: no Run to read it from. */
+const SAMPLE_DRIFT: SourceDrift = { state: "available", source_branch: "main", fork: "c2f81a0", ahead: 3, behind: 0 };
+
+/**
+ * The Run section: one row per field the Apparence shows and the Run has, then
+ * its source. Nothing when no row is left and no source shows (hidden, or no
+ * drift to read). A sample preview reads no drift: it shows its own.
+ */
+function RunSection({ run, marks }: { run: RunState; marks: Marks }) {
+  const sample = useAppearancePreview()?.sample === true;
+  const read = useSourceDrift(sample ? null : run);
+  const source = sample ? { ...read, drift: SAMPLE_DRIFT } : read;
+  const row = (id: string, show: unknown, value: () => KeyValueRow): KeyValueRow[] => {
+    const attrs = show ? marks(id) : null;
+    return attrs ? [{ ...value(), attrs }] : [];
+  };
+  const rows = [
+    ...row(RUN_INFO.status, true, () => ({
+      k: "Status",
+      v: (
+        <span className="ei-line" data-testid="run-status">
+          <StatusIcon kind="run" status={run.status} size="sm" />
+          {run.status.replace(/_/g, " ")}
+        </span>
+      ),
+      tip: run.status,
+    })),
+    ...row(RUN_INFO.harness, run.harness, () => ({
+      k: "Harness",
+      v: <span data-testid="run-harness">{run.harness}</span>,
+      mono: true,
+      tip: run.harness,
+    })),
+    ...row(RUN_INFO.repo, run.target_repo, () => ({ k: "Repo", v: run.target_repo, mono: true })),
+    // Sandbox (#410): any sandboxed Run (full/minimal); an `off`/host Run has no row.
+    ...row(RUN_INFO.sandbox, run.sandbox && run.sandbox !== "off", () => ({
+      k: "Sandbox",
+      v: <span data-testid="sandbox-badge">{run.sandbox}</span>,
+      mono: true,
+      tip: `Docker sandbox (${run.sandbox})`,
+    })),
+    ...row(RUN_INFO.started, run.started_at, () => ({
+      k: "Started",
+      v: <span data-testid="run-started">{startedAgo(run.started_at!)}</span>,
+      tip: Number.isNaN(Date.parse(run.started_at!)) ? run.started_at! : new Date(run.started_at!).toLocaleString(),
+    })),
+    ...row(RUN_INFO.trigger, run.triggered_by, () => ({ k: "Trigger", v: run.triggered_by, mono: true })),
+  ];
+  const sourceMarks = source.drift ? marks(RUN_INFO.source) : null;
+  if (rows.length === 0 && !sourceMarks) return null;
+  return (
+    <Section title="Run">
+      {rows.length > 0 && <KeyValue rows={rows} />}
+      {sourceMarks && <SourceBlock run={run} source={source} marks={sourceMarks} />}
+    </Section>
+  );
 }
 
 export function InfoTab({
@@ -158,6 +237,9 @@ export function InfoTab({
   const versionRef = run ? (run.pipeline_version ?? null) : shownVersion;
   const version = versionRef ? versionLabel({ number: versionRef.number, title: versionRef.title }) : null;
   const waiting = run?.waiting_for_started_nodes ?? 0;
+  // A Run's Info leaves out what the Apparence hides; its name, its status and its banners always show.
+  const marks = useElementMarks();
+  const note = marks(RUN_INFO.note);
 
   return (
     <div className="pi-info" data-testid="info-tab">
@@ -178,8 +260,8 @@ export function InfoTab({
           <Chip>template</Chip>
         )}
         {/* #315: a Run's settings are read-only; canvas edits apply to it only. */}
-        {run && (
-          <span className="pi-head__note" data-testid="run-info-note">
+        {run && note && (
+          <span className="pi-head__note" data-testid="run-info-note" {...note}>
             <Chip
               icon={run.status === "archived" ? Archive : Lock}
               title={
@@ -245,54 +327,11 @@ export function InfoTab({
         </div>
       )}
 
-      {run && (
-        <Section title="Run">
-          <KeyValue
-            rows={[
-              {
-                k: "Status",
-                v: (
-                  <span className="ei-line" data-testid="run-status">
-                    <StatusIcon kind="run" status={run.status} size="sm" />
-                    {run.status.replace(/_/g, " ")}
-                  </span>
-                ),
-                tip: run.status,
-              },
-              ...(run.harness
-                ? [{ k: "Harness", v: <span data-testid="run-harness">{run.harness}</span>, mono: true, tip: run.harness }]
-                : []),
-              ...(run.target_repo ? [{ k: "Repo", v: run.target_repo, mono: true }] : []),
-              // Sandbox (#410): any sandboxed Run (full/minimal); an `off`/host Run has no row.
-              ...(run.sandbox && run.sandbox !== "off"
-                ? [
-                    {
-                      k: "Sandbox",
-                      v: <span data-testid="sandbox-badge">{run.sandbox}</span>,
-                      mono: true,
-                      tip: `Docker sandbox (${run.sandbox})`,
-                    },
-                  ]
-                : []),
-              ...(run.started_at
-                ? [
-                    {
-                      k: "Started",
-                      v: <span data-testid="run-started">{startedAgo(run.started_at)}</span>,
-                      tip: Number.isNaN(Date.parse(run.started_at)) ? run.started_at : new Date(run.started_at).toLocaleString(),
-                    },
-                  ]
-                : []),
-              ...(run.triggered_by ? [{ k: "Trigger", v: run.triggered_by, mono: true }] : []),
-            ]}
-          />
-          <SourceBlock run={run} />
-        </Section>
-      )}
+      {run && <RunSection run={run} marks={marks} />}
 
-      {run && (
+      {run && STATS.some((id) => marks(id)) && (
         <Section title="Stats" flush>
-          <RunStats run={run} onOpenDiff={onOpenDiff} />
+          <RunStats run={run} onOpenDiff={onOpenDiff} marks={marks} />
         </Section>
       )}
 
@@ -307,6 +346,7 @@ export function InfoTab({
           readOnly={run != null || viewingVersion}
           version={version}
           received={run?.variables ?? null}
+          graph={run ? marks(RUN_INFO.graph) : undefined}
         />
       )}
 

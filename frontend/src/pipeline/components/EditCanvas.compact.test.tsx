@@ -4,6 +4,8 @@ import EditCanvas from "./EditCanvas";
 import { useEditStore } from "../store/editStore";
 import { type OpenPipeline } from "../store/editState";
 import { resetCompactNodes, setCompactNodes } from "../../hooks/useCompactNodes";
+import { updateAppearance } from "../../hooks/useAppearance";
+import { withElement } from "../../lib/appearance";
 import type { RunState } from "../../shared/generated/RunState";
 import type { EditorPipelineDef } from "../model/pipeline";
 
@@ -178,7 +180,26 @@ describe("Compact nodes on the canvas", () => {
     expect(stored.dirty).toBe(false);
   });
 
-  it("goes back to the detailed layout exactly when turned off", () => {
+  it("draws a followed Run's cards at the height of the cells they show, Elapsed and Cost by default, and lifts what lies below", () => {
+    draw(tab("r1"));
+    // One row of cells: 49 px instead of 65, every row below 16 px higher; full width.
+    expect(at("a")).toEqual({ x: 0, y: 100, compact: false });
+    expect(at("b")).toEqual({ x: 0, y: 224, compact: false });
+    expect(at("c")).toEqual({ x: 300, y: 224, compact: false });
+    expect(at("end")).toEqual({ x: 80, y: 368, compact: false });
+    // The side port folds onto the middle of the shorter card, and the manual route follows it: no bend.
+    expect(JSON.parse(screen.getByTestId("rf-edge-e-1").dataset.route!)).toEqual([
+      { side: "right", offset: 24 },
+      [
+        { x: 240, y: 124 },
+        { x: 240, y: 248 },
+      ],
+    ]);
+    expect(useEditStore.getState().openTabs[0].pipeline).toBe(PIPELINE);
+  });
+
+  it("goes back to the stored layout exactly when Compact nodes is turned off and every cell shows", () => {
+    updateAppearance((a) => withElement(withElement(a, "run.canvas.agent", true), "run.canvas.iteration", true));
     setCompactNodes(true);
     draw(tab("r1"));
     act(() => setCompactNodes(false));

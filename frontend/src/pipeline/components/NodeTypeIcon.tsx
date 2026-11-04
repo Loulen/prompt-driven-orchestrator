@@ -1,5 +1,6 @@
 import { GitFork, Play, Square } from "lucide-react";
 import type { NodeType } from "../../shared/generated/NodeType";
+import type { ElementMarks } from "../../hooks/useElementMarks";
 import { nodeTypeGlyph } from "../model/nodeTypeGlyph";
 
 interface IconProps {
@@ -33,10 +34,10 @@ export function NodeTypeIcon({ type, interactive, orchestrator, size = 14, class
  * without opening the inspector. One glyph, present or absent — it replaced the
  * pair of non-isolated / isolated markers, which read as two pseudo-types.
  */
-export function IsolationMarker({ isolated }: { isolated: boolean }) {
+export function IsolationMarker({ isolated, marks }: { isolated: boolean; marks?: ElementMarks }) {
   if (!isolated) return null;
   return (
-    <span data-testid="isolation-marker" title="Isolated worktree" className="cv-n__flag">
+    <span data-testid="isolation-marker" title="Isolated worktree" className="cv-n__flag" {...marks}>
       <GitFork size={11} strokeWidth={1.5} aria-label="Isolated worktree" />
     </span>
   );

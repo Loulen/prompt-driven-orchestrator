@@ -5,6 +5,7 @@ import { gridStep, resolveGridSize, isGridSize } from "../../lib/wiringGrid";
 import type { VariableDef } from "../../shared/generated/VariableDef";
 import type { VariableType } from "../../shared/generated/VariableType";
 import type { EditorPipelineDef } from "../model/pipeline";
+import type { ElementMarks } from "../../hooks/useElementMarks";
 import { Plus, Variable, X } from "lucide-react";
 import { EmptyState, Field, IconButton, KeyValue, Section, TextInput } from "../../shared/ui/kit";
 import "./inspect.css";
@@ -29,6 +30,7 @@ export default function PipelineMetaSections({
   readOnly,
   version = null,
   received = null,
+  graph = {},
 }: {
   pipeline: EditorPipelineDef;
   readOnly: boolean;
@@ -36,6 +38,8 @@ export default function PipelineMetaSections({
   version?: string | null;
   /** On a Run: the values its launch gave the variables; the others ran on their default. */
   received?: Record<string, unknown> | null;
+  /** Read only: the marks of the Nodes and Edges rows, `null` when the Apparence hides them. */
+  graph?: ElementMarks | null;
 }) {
   const updateMeta = useEditStore((s) => s.updatePipelineMeta);
   const globalGridSize = useWiringStore((s) => s.defaultGridSize);
@@ -107,8 +111,12 @@ export default function PipelineMetaSections({
                   k: "Wiring grid",
                   v: <span data-testid="pipeline-meta-grid-size">{ownGridSize ?? `Global (${globalGridSize})`}</span>,
                 },
-                { k: "Nodes", v: <span data-testid="pipeline-graph-nodes">{pipeline.nodes.length}</span>, mono: true },
-                { k: "Edges", v: <span data-testid="pipeline-graph-edges">{pipeline.edges.length}</span>, mono: true },
+                ...(graph
+                  ? [
+                      { k: "Nodes", v: <span data-testid="pipeline-graph-nodes">{pipeline.nodes.length}</span>, mono: true, attrs: graph },
+                      { k: "Edges", v: <span data-testid="pipeline-graph-edges">{pipeline.edges.length}</span>, mono: true, attrs: graph },
+                    ]
+                  : []),
               ]}
             />
           ) : (

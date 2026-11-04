@@ -4,9 +4,9 @@ import { fetchRunPipeline } from "../../run/api/runPipeline";
 import type { EditorPipelineDef } from "../../pipeline/model/pipeline";
 import type { RunListEntry } from "../../shared/generated/RunListEntry";
 import type { RunState } from "../../shared/generated/RunState";
-import { mostRecentRun } from "../model/runsListPreview";
+import { recentRootRun } from "../model/runCanvasPreview";
 
-/** The most recent Run the user sees, read in full for the previews of Settings › Appearance. */
+/** The most recent root Run the user sees (`recentRootRun`), read in full for the previews of Settings › Appearance. */
 export interface RecentRun {
   run: RunState;
   /** Its own pipeline; `null` when it could not be read. */
@@ -14,12 +14,12 @@ export interface RecentRun {
 }
 
 /**
- * The most recent Run of `runs`, its state and its pipeline, read once per Run:
+ * The most recent root Run of `runs`, its state and its pipeline, read once per Run:
  * `null` while there is none, while it loads, or when its state cannot be read
  * (the previews then show the sample).
  */
 export function useRecentRun(runs: RunListEntry[]): { recent: RecentRun | null; none: boolean } {
-  const runId = mostRecentRun(runs)?.run_id ?? null;
+  const runId = recentRootRun(runs)?.run_id ?? null;
   const [recent, setRecent] = useState<RecentRun | null>(null);
   useEffect(() => {
     if (!runId) return;

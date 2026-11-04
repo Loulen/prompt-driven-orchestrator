@@ -960,6 +960,13 @@
     border: 1px solid var(--line);
     border-radius: var(--radius-ui);
   }
+  /* The two columns, at their width; zoomed out as a whole when the frame is narrower. */
+  .set-preview__stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 444px;
+  }
   .set-preview__row {
     display: grid;
     grid-template-columns: 222px 222px;

@@ -1,7 +1,7 @@
 /**
  * What the previews of the Run canvas and Run info blocks of Settings ›
- * Appearance show: the most recent Run the user sees, or a sample when they
- * see none (`runsListPreview.mostRecentRun`).
+ * Appearance show: the most recent root Run the user sees (`recentRootRun`),
+ * or a sample when they see none.
  *
  * The canvas preview draws a few of its cards in a fixed shape, so a fork and
  * a join show that no edge gains a bend as the cards shorten: one card, a fork
@@ -11,7 +11,19 @@
 import type { EditNodeData } from "../../pipeline/components/EditNode";
 import type { EditorPipelineDef } from "../../pipeline/model/pipeline";
 import type { NodeCost } from "../../shared/generated/NodeCost";
+import type { RunListEntry } from "../../shared/generated/RunListEntry";
 import type { RunState } from "../../shared/generated/RunState";
+import { mostRecentRun } from "./runsListPreview";
+
+/**
+ * The Run the previews draw: the most recent Run that no other Run started
+ * (`mostRecentRun` among them), since an orchestrator's child, often newer than its
+ * parent, is a single node with no fork. Any most recent Run when every Run has a parent.
+ */
+export function recentRootRun(runs: RunListEntry[]): RunListEntry | null {
+  const roots = runs.filter((run) => !run.parent_run_id);
+  return mostRecentRun(roots.length > 0 ? roots : runs);
+}
 
 /** The rows of the canvas preview, top to bottom: one card, or two side by side (a fork). */
 export function canvasPreviewRows(cards: readonly EditNodeData[]): EditNodeData[][] {

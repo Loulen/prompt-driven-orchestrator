@@ -1,4 +1,4 @@
-import { Fragment, useMemo } from "react";
+import { Fragment, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AppearancePreviewContext, useElementMarks } from "../../../hooks/useElementMarks";
 import { deriveEditNodes } from "../../../pipeline/components/editNodeDerivation";
 import type { EditNodeData } from "../../../pipeline/components/EditNode";
@@ -46,6 +46,30 @@ function Wires({ from, to }: { from: number; to: number }) {
   );
 }
 
+/**
+ * The zoom that fits the preview's two columns (`WIDTH`) in its frame: 1 while the
+ * frame keeps its 470 px, less when the block's column is narrower (a laptop
+ * screen), so a fork never overflows the frame.
+ */
+function useFitZoom() {
+  const frame = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState(1);
+  useLayoutEffect(() => {
+    const element = frame.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const fit = () => {
+      const style = getComputedStyle(element);
+      const inner = element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      setZoom(inner > 0 ? Math.min(1, inner / WIDTH) : 1);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  return { frame, zoom };
+}
+
 /** The cards of the most recent Run, as its canvas derives them, with its orchestrators' child runs. */
 function useRecentCards(recent: RecentRun | null): EditNodeData[] | null {
   const { profiles } = useAgentProfiles(recent != null);
@@ -82,7 +106,7 @@ function Cards({ rows, compact }: { rows: EditNodeData[][]; compact: boolean }) 
 
 /**
  * The preview of the Run canvas block: the canvas's own cards (`WorkNodeCard`) for a
- * few nodes of the most recent Run the user sees, with a fork, at 470 px; on a sample
+ * few nodes of the most recent Run the user sees, with a fork, at 470 px (zoomed out to fit a narrower column); on a sample
  * Run when they see none. Detailed or on one line as « Compact nodes » says, each card
  * at the height of what the Apparence shows. Inert: nothing in it reacts. `pointed` is
  * the element whose switch the pointer or the focus is on.
@@ -100,6 +124,7 @@ export default function RunCanvasPreview({
   pointed: string | null;
 }) {
   const cards = useRecentCards(recent);
+  const { frame, zoom } = useFitZoom();
   const sample = cards == null || cards.length === 0;
   const rows = useMemo(() => canvasPreviewRows(sample ? SAMPLE_CARDS : cards), [sample, cards]);
   const context = useMemo(() => ({ pointed, sample }), [pointed, sample]);
@@ -116,8 +141,10 @@ export default function RunCanvasPreview({
         data-compact={compact || undefined}
         data-sample={sample || undefined}
       >
-        <div className="set-preview__canvas" inert>
-          <Cards rows={rows} compact={compact} />
+        <div className="set-preview__canvas" ref={frame} inert>
+          <div className="set-preview__stage" style={zoom < 1 ? { zoom } : undefined}>
+            <Cards rows={rows} compact={compact} />
+          </div>
         </div>
         <figcaption className="set-preview__caption">{caption}</figcaption>
       </figure>

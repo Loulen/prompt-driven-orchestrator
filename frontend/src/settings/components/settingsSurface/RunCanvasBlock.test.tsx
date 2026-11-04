@@ -5,7 +5,7 @@
  * beside them previews drawn with the canvas's own cards and the Info tab itself,
  * on the most recent Run or on a sample. Pointing a switch rings its element.
  */
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionEntry } from "../../../shared/generated/ExtensionEntry";
 import type { RunState } from "../../../shared/generated/RunState";
@@ -193,6 +193,35 @@ describe("the Run canvas block", () => {
     expect(rows).toEqual([["plan"], ["tdd", "docs"], ["dispatch"], ["merge"]]);
     expect(preview.querySelectorAll(".set-preview__wires")).toHaveLength(3);
     await waitFor(() => expect(within(cardOf("dispatch")).getByTestId("node-child-runs")).toHaveTextContent("3 runs"));
+  });
+
+  it("zooms the preview out to fit a frame narrower than its 470 px, never in", () => {
+    let width = 300;
+    const resize: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resize.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("set-preview__canvas") ? width : 0;
+    });
+    try {
+      mount("canvas");
+      const stage = () => canvasPreview().querySelector<HTMLElement>(".set-preview__stage")!;
+      // jsdom reads no padding: the frame's inner width is its whole width.
+      expect(Number(stage().style.zoom)).toBeCloseTo(300 / 444);
+      width = 600;
+      act(() => resize.forEach((fit) => fit()));
+      expect(stage().style.zoom).toBe("");
+    } finally {
+      clientWidth.mockRestore();
+    }
   });
 
   it("draws the preview's cards as the Apparence says: shorter as cells hide, one line with Compact nodes", () => {

@@ -55,6 +55,21 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - New seams in the interface: the core's table of default visibilities for each surface, and the
   filtering of the contributions an Appearance hides at the `run/item` and `run/item/people`
   locations. The extension API is unchanged.
+- A **Triggers list** block, "Always shown: Name, enable switch, last result", shows or hides on
+  every Trigger row the pipeline, the last fire, the next fire, the guard, the overlap policy and
+  each `trigger/item` contribution, under "Extensions". By default the last fire and the overlap
+  are hidden. With the pipeline, the last fire and the next fire all hidden, Trigger rows take one
+  line and the last result moves beside the enable switch.
+- A **Pipelines list** block, "Always shown: Name, select control", shows or hides on every
+  Pipeline row the version, the draft marker (its change count and who has the draft open), the
+  edit date, the validation and each `pipeline/item` contribution, all shown by default. With the
+  version, the draft marker, the edit date and every contribution hidden, Pipeline rows take one
+  line.
+- Their previews use the lists' own rows: the Trigger that fired last, plus a guarded one when it
+  has no guard; the Pipeline edited last, plus one with a draft when it has none; or a sample
+  without extension marks when you see none.
+- New seam in the interface: the `trigger/item` and `pipeline/item` locations filter the
+  contributions an Appearance hides too.
 
 ## 2.70.0
 

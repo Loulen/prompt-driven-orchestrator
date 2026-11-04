@@ -500,6 +500,10 @@
     justify-content: center;
     padding-left: 4px;
   }
+  /* One line: the last result beside the enable switch. */
+  .lp-row[data-lines="1"] > .lp-lead--trigger {
+    gap: var(--g-3);
+  }
   .lp-row > .lp-lead--l2 {
     grid-row: 2;
     grid-column: 1;

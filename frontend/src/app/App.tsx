@@ -375,7 +375,7 @@ export default function App() {
         onStartTour={startTourById}
         onStartFullTour={startFullTour}
         projects={{ projects, runs, onChanged: refreshProjects }}
-        entities={{ runs, triggers }}
+        entities={{ runs, triggers, projects }}
       />
       {/* After the full-window surfaces, which it must paint over. */}
       <UpdateModals updateStatus={updateStatus} flow={updates} openSettings={openSettings} />

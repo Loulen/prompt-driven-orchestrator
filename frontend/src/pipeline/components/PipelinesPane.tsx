@@ -25,39 +25,16 @@ const NO_EXTRA = {};
 
 import ImportWorkflowModal from "./ImportWorkflowModal";
 import NewPipelineModal from "./NewPipelineModal";
-import ExtensionDecorations from "../../shared/extensions/ExtensionDecorations";
+import PipelineItemDecorations from "./PipelineItemDecorations";
 import ExtensionListFilters from "../../shared/extensions/ExtensionListFilters";
 import LeftPaneBar from "../../shared/ui/LeftPaneBar";
 import { IconButton } from "../../shared/ui/kit";
 import ListEmpty from "../../shared/ui/leftList/ListEmpty";
-import type { DecorationContext } from "../../shared/extensions/contract";
 import {
   isAttributeFilterActive,
   matchesAttributes,
   type Attributes,
 } from "../../shared/extensions/attributes";
-
-/** The `pipeline/item` decorations of one row (ADR-0081, #31). */
-function PipelineItemDecorations({ pipeline }: { pipeline: PipelineListEntry }) {
-  const extra = useMemo(
-    () => ({
-      entity: {
-        kind: "pipeline",
-        id: pipeline.id,
-        name: pipeline.name,
-        attributes: pipeline.attributes ?? {},
-      },
-    }),
-    [pipeline.id, pipeline.name, pipeline.attributes],
-  );
-  return (
-    <ExtensionDecorations<DecorationContext>
-      location="pipeline/item"
-      extra={extra}
-      nowrap
-    />
-  );
-}
 
 export default function PipelinesPane({ projects = [] }: { projects?: Project[] } = {}) {
   // #774 — inline rename of a Pipelines-tab row. Same pattern as the run rows

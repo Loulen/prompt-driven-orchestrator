@@ -140,6 +140,9 @@ test("a Run's cards follow Settings › Appearance: shorter by default, one line
   // Run info tab: hide the whole Stats section.
   const info = page.getByTestId("appearance-block-run-info");
   for (const name of ["Duration", "Changes", "Est. cost"]) await info.getByRole("switch", { name }).click();
+  // Pointed, the last one comes back as a ghost: point elsewhere.
+  await page.getByTestId("appearance-block-run-info").locator(".set-ablock__head").hover();
+  await info.getByRole("switch", { name: "Est. cost" }).blur();
   await expect(page.getByTestId("appearance-preview-run-info").getByTestId("run-stats")).toHaveCount(0);
   await page.keyboard.press("Escape");
 

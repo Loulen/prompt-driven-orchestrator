@@ -4,10 +4,12 @@ import { deviationCount, resetToDefaults } from "../../../lib/appearance";
 import { Button } from "../../../shared/ui/kit";
 import type { SettingsSection } from "../../model/settingsCategories";
 import { useRecentRun } from "../../store/useRecentRun";
+import PipelinesListBlock from "./PipelinesListBlock";
 import RunCanvasBlock from "./RunCanvasBlock";
 import RunInfoBlock from "./RunInfoBlock";
 import RunsListBlock from "./RunsListBlock";
 import Section from "./Section";
+import TriggersListBlock from "./TriggersListBlock";
 import type { AppearanceEntities } from "./surfaceProps";
 
 /**
@@ -47,6 +49,8 @@ export default function AppearanceSection({
       <RunsListBlock runs={runs} triggers={entities?.triggers ?? []} />
       <RunCanvasBlock recent={recent} none={none} />
       <RunInfoBlock recent={recent} none={none} />
+      <TriggersListBlock triggers={entities?.triggers ?? []} />
+      <PipelinesListBlock projects={entities?.projects ?? []} />
     </Section>
   );
 }

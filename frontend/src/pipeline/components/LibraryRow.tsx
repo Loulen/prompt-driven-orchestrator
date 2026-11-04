@@ -10,6 +10,11 @@ import HoverBar, { RowAction } from "../../shared/ui/leftList/HoverBar";
 import { fmtEdited } from "../../shared/ui/leftList/format";
 import type { DraftSummary } from "../../shared/generated/DraftSummary";
 import { ParticipantStack } from "./ParticipantAvatar";
+import { useAppearancePreview, useElementMarks } from "../../hooks/useElementMarks";
+import { useAppearance } from "../../hooks/useAppearance";
+import { isVisible } from "../../lib/appearance";
+import { useHideableContributions } from "../../shared/extensions/hideableContributions";
+import { hasSecondLine, isSecondLineElement, PIPELINE_ROW, PIPELINE_ROW_LOCATIONS } from "../model/pipelineRowElements";
 
 interface Props {
   name: string;
@@ -68,6 +73,15 @@ interface Props {
  * is invalid, who has its draft open and its validation; then its version and
  * draft, its marks and its edit date. Rename, Duplicate, Delete
  * and the « ⋯ » menu in the hover bar.
+ *
+ * Every element but its name, its select control and its lint is an Élément
+ * masquable (`model/pipelineRowElements.ts`; who has its draft open goes with
+ * the draft marker): one the Apparence hides is not rendered, and the row takes
+ * one line when its whole second line is hidden — the Apparence decides, not
+ * the Pipeline, so every row of the list keeps one height. In a preview of
+ * Settings › Appearance, pointing to an element of a hidden second line brings
+ * that line back as a ghost (`data-ghost-line`); a preview's row is inert: no
+ * hover bar, out of the tab order.
  */
 export default function LibraryRow({
   name,
@@ -96,11 +110,34 @@ export default function LibraryRow({
   version,
 }: Props) {
   const lead = <Workflow size={14} strokeWidth={1.5} className="lp-dim" aria-hidden />;
+  const preview = useAppearancePreview();
+  const marksOf = useElementMarks();
+  const contributions = useHideableContributions("pipelines.list", PIPELINE_ROW_LOCATIONS);
+  // From what the Apparence shows alone: a preview's ghost never keeps a line.
+  const appearance = useAppearance();
+  const contributionIds = contributions.map((c) => c.id);
+  const secondLine = hasSecondLine((id) => isVisible(appearance, id), contributionIds);
+  const pointed = preview?.pointed ?? null;
+  // A preview points to an element of a hidden second line this row can draw.
+  const ghostLine =
+    !secondLine &&
+    pointed !== null &&
+    isSecondLineElement(pointed, contributionIds) &&
+    (pointed !== PIPELINE_ROW.version || version != null) &&
+    (pointed !== PIPELINE_ROW.draft || (draft?.changes ?? 0) > 0) &&
+    (pointed !== PIPELINE_ROW.modified || Boolean(modified)) &&
+    !(preview?.sample && contributionIds.includes(pointed));
+  const versionMarks = marksOf(PIPELINE_ROW.version);
+  const draftMarks = marksOf(PIPELINE_ROW.draft);
+  const modifiedMarks = marksOf(PIPELINE_ROW.modified);
+  const validationMarks = marksOf(PIPELINE_ROW.validation);
   return (
     <div
       role="button"
-      tabIndex={0}
+      tabIndex={preview ? -1 : 0}
       className="lp-row lp-row--flat"
+      data-lines={secondLine ? 2 : 1}
+      data-ghost-line={ghostLine || undefined}
       data-open={selected || undefined}
       data-checked={checked || undefined}
       data-invalid={invalid ? true : undefined}
@@ -163,36 +200,52 @@ export default function LibraryRow({
           </Tooltip>
         )}
         <span className="lp-end">
-          {draft && <ParticipantStack participants={draft.participants} size="sm" />}
-          {indicator}
-        </span>
-      </span>
-      <span className="lp-l2" data-testid="library-row-meta">
-        {version != null && (
-          <span className="lp-num lp-muted" title={`Version ${version}`} data-testid="library-row-version">
-            v{version}
-          </span>
-        )}
-        {/* ADR-0088: before the date. */}
-        {draft && draft.changes > 0 && (
-          <span className="lp-pipe" data-testid="library-row-draft">
-            draft: {draft.changes === 1 ? "1 change" : `${draft.changes} changes`}
-          </span>
-        )}
-        <span className="lp-end">
-          {decorations && <span className="lp-deco">{decorations}</span>}
-          {modified && (
-            <span
-              className="lp-num lp-muted"
-              title={`Edited ${new Date(modified).toLocaleString()}`}
-              data-testid="library-row-edited"
-            >
-              {fmtEdited(modified)}
+          {draft && draft.participants.length > 0 && draftMarks && (
+            <span className="inline-flex" data-testid="library-row-participants" {...draftMarks}>
+              <ParticipantStack participants={draft.participants} size="sm" />
+            </span>
+          )}
+          {indicator && validationMarks && (
+            <span className="inline-flex" data-testid="library-row-validation" {...validationMarks}>
+              {indicator}
             </span>
           )}
         </span>
       </span>
-      {!renaming && (
+      {(secondLine || ghostLine) && (
+        <span className="lp-l2" data-testid="library-row-meta">
+          {version != null && versionMarks && (
+            <span
+              className="lp-num lp-muted"
+              title={`Version ${version}`}
+              data-testid="library-row-version"
+              {...versionMarks}
+            >
+              v{version}
+            </span>
+          )}
+          {/* ADR-0088: before the date. */}
+          {draft && draft.changes > 0 && draftMarks && (
+            <span className="lp-pipe" data-testid="library-row-draft" {...draftMarks}>
+              draft: {draft.changes === 1 ? "1 change" : `${draft.changes} changes`}
+            </span>
+          )}
+          <span className="lp-end">
+            {decorations && <span className="lp-deco">{decorations}</span>}
+            {modified && modifiedMarks && (
+              <span
+                className="lp-num lp-muted"
+                title={`Edited ${new Date(modified).toLocaleString()}`}
+                data-testid="library-row-edited"
+                {...modifiedMarks}
+              >
+                {fmtEdited(modified)}
+              </span>
+            )}
+          </span>
+        </span>
+      )}
+      {!renaming && !preview && (
         <HoverBar testId="library-row-actions">
           {onRenameStart && (
             <RowAction icon={Pencil} label="Rename pipeline" testId="library-rename-button" onClick={onRenameStart} />

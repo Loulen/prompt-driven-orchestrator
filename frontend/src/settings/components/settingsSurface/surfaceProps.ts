@@ -1,3 +1,4 @@
+import type { Project } from "../../../workspace/model/project";
 import type { ProjectsEntry } from "../../../workspace/model/projectsSettings";
 import type { SettingsCategoryId, SettingsSectionId } from "../../model/settingsCategories";
 import type { ProjectsSource } from "./ProjectsSections";
@@ -8,6 +9,8 @@ import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntr
 export interface AppearanceEntities {
   runs: RunListEntry[];
   triggers: TriggerListEntry[];
+  /** The Projets a Pipeline's validation names. */
+  projects?: Project[];
 }
 
 /** Where the Settings surface opens, and what it asks of its host. */

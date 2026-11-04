@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  contributionElementId,
   DEFAULT_APPEARANCE,
   deviationCount,
+  ELEMENT_DEFAULTS,
   ELEMENTS_STORAGE_KEY,
   fromDocument,
+  isChanged,
   isVisible,
   readLocalCopy,
   resetToDefaults,
@@ -57,6 +60,33 @@ describe("the Apparence module", () => {
     const shown = withElement(DEFAULT_APPEARANCE, "runs.list.cost", true, defaults);
     expect(shown.elements).toEqual({ "runs.list.cost": true });
     expect(withElement(shown, "runs.list.cost", false, defaults).elements).toEqual({});
+  });
+
+  it("holds the core's « less loaded » defaults of the Runs list", () => {
+    const shown = (id: string) => isVisible(DEFAULT_APPEARANCE, `runs.list.${id}`);
+    expect(["trigger", "pipeline", "duration"].filter(shown)).toEqual(["trigger", "pipeline", "duration"]);
+    expect(["child-pills", "node-pips", "parent", "cost"].filter(shown)).toEqual([]);
+    // Every core element of every surface has its default.
+    expect(Object.keys(ELEMENT_DEFAULTS).every((id) => /^(runs\.list|run\.canvas|run\.info|triggers\.list|pipelines\.list)\.[a-z-]+$/.test(id))).toBe(true);
+  });
+
+  it("names an extension contribution `<surface>.ext.<extension>:<contribution>`, shown by default", () => {
+    const id = contributionElementId("runs.list", "test:badge");
+    expect(id).toBe("runs.list.ext.test:badge");
+    expect(isVisible(DEFAULT_APPEARANCE, id)).toBe(true);
+    const hidden = withElement(DEFAULT_APPEARANCE, id, false);
+    expect(hidden.elements).toEqual({ [id]: false });
+    expect(isChanged(hidden, id)).toBe(true);
+  });
+
+  it("stores only what the user touched, against the core's defaults", () => {
+    const shown = withElement(DEFAULT_APPEARANCE, "runs.list.cost", true);
+    expect(shown.elements).toEqual({ "runs.list.cost": true });
+    expect(isChanged(shown, "runs.list.cost")).toBe(true);
+    expect(isChanged(shown, "runs.list.pipeline")).toBe(false);
+    expect(withElement(shown, "runs.list.cost", false).elements).toEqual({});
+    expect(withElement(DEFAULT_APPEARANCE, "runs.list.pipeline", true).elements).toEqual({});
+    expect(resetToDefaults(withElement(shown, "runs.list.pipeline", false)).elements).toEqual({});
   });
 
   it("keeps a deviation on an element nobody knows any more", () => {

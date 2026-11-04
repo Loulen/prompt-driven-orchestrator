@@ -14,6 +14,8 @@ import { NOTHING_REFUSED } from "../../model/runGestures";
 import { useRunsPane } from "../../store/runsList/useRunsPane";
 import { resetRunCosts } from "../../store/runCosts";
 import RunTreeList from "./RunTreeList";
+import { resetAppearance } from "../../../hooks/useAppearance";
+import { ELEMENTS_STORAGE_KEY } from "../../../lib/appearance";
 
 const NOW = Date.now();
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
@@ -58,6 +60,9 @@ function mount(runs: RunListEntry[]) {
 const row = (id: string) => document.querySelector(`[data-run-row="${id}"]`) as HTMLElement;
 
 beforeEach(() => {
+  // Every element of the row shown: what it draws, whatever the defaults hide.
+  localStorage.setItem(ELEMENTS_STORAGE_KEY, JSON.stringify({ "runs.list.cost": true, "runs.list.node-pips": true }));
+  resetAppearance();
   resetExtensions();
   resetRunCosts();
   useGestureRightsStore.setState({ rights: NOTHING_REFUSED, viewed: null, listed: new Set() });

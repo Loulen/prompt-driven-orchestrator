@@ -10,6 +10,18 @@ import { toast } from "../../../shared/ui/toast";
 import type { RunsPaneState } from "../../store/runsList/useRunsPane";
 import { copyToClipboard } from "../../../shared/lib/clipboard";
 
+/** What the menu reads of the Runs tab's state. */
+export type RunRowMenuPane = Pick<
+  RunsPaneState,
+  | "startRename"
+  | "handlePause"
+  | "handleResume"
+  | "setConfirmRetryAll"
+  | "setConfirmCleanup"
+  | "setConfirmForget"
+  | "runShell"
+>;
+
 /**
  * The row's « ⋯ » menu (#30): the row's verbs (those of its hover icons, plus
  * Copy run id), the extensions' `run/item/menu` groups, then the destructive
@@ -27,7 +39,7 @@ export default function RunRowMenu({
   canForget,
 }: {
   run: RunListEntry;
-  pane: RunsPaneState;
+  pane: RunRowMenuPane;
   isRenaming: boolean;
   canPause: boolean;
   canResume: boolean;

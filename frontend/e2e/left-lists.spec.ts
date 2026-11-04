@@ -75,6 +75,18 @@ async function playDecorations(page: Page) {
   await page.route("**/ext/*/ui.js", (route) => route.fulfill({ body: bundle, contentType: "text/javascript" }));
 }
 
+/**
+ * The Actor's Appearance, served to this page only (`elements` its deviations), so the
+ * shared e2e daemon keeps none: a change made here is kept by the stub alone.
+ */
+async function stubAppearance(page: Page, elements: Record<string, boolean> | null) {
+  let stored: unknown = elements && { version: 1, elements };
+  await page.route("**/actors/me/appearance", async (route) => {
+    if (route.request().method() === "PUT") stored = route.request().postDataJSON();
+    await route.fulfill({ json: { appearance: stored } });
+  });
+}
+
 async function box(locator: Locator) {
   const b = await locator.boundingBox();
   if (!b) throw new Error("no box");
@@ -93,6 +105,7 @@ test("a Run row is two lines of 46 px, its hover bar floats, the extensions' mar
 
   await page.setViewportSize({ width: 1280, height: 800 });
   await playDecorations(page);
+  await stubAppearance(page, null);
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   const row = page.locator(`[data-run-row="${runId}"]`);
@@ -123,6 +136,49 @@ test("a Run row is two lines of 46 px, its hover bar floats, the extensions' mar
   expect((await box(row)).height).toBeCloseTo(46, 0);
   const barBox = await box(bar);
   expect(barBox.x + barBox.width).toBeLessThanOrEqual((await box(row)).x + (await box(row)).width);
+
+  await page.request.post(`${baseURL}/runs/${runId}/commands`, { data: { kind: "cleanup_run" } });
+});
+
+test("a Run row takes one line once Settings › Appearance hides its whole second line, and works the same", async ({
+  page,
+  baseURL,
+}) => {
+  const resp = await page.request.post(`${baseURL}/runs`, {
+    data: runBody({ pipeline: PIPELINE, input: "seed", name: "one-line row", auto_name: false }),
+  });
+  expect(resp.status()).toBe(201);
+  const { run_id: runId } = (await resp.json()) as { run_id: string };
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await playDecorations(page);
+  await stubAppearance(page, null);
+  await page.goto("/");
+  await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
+  const row = page.locator(`[data-run-row="${runId}"]`);
+  await expect(row).toBeVisible({ timeout: 10_000 });
+  expect((await box(row)).height).toBeCloseTo(46, 0);
+
+  // The Runs list block: the extension's mark by its name and label, the preview beside.
+  await page.getByTestId("open-settings").click();
+  await page.getByTestId("settings-category-appearance").click();
+  const block = page.getByTestId("appearance-block-runs-list");
+  await expect(block.getByRole("switch", { name: "Marks · Badge" })).toBeVisible({ timeout: 10_000 });
+  const preview = page.getByTestId("appearance-preview-runs-list");
+  await expect(preview.locator("[data-run-row]").first()).toHaveAttribute("data-lines", "2");
+  for (const name of ["Pipeline", "Duration", "Marks · Badge"]) await block.getByRole("switch", { name }).click();
+  await expect(preview.locator("[data-run-row]").first()).toHaveAttribute("data-lines", "1");
+  await page.keyboard.press("Escape");
+
+  // The list: one line, status and name shown; hover bar and selection as before.
+  await expect(row).toHaveAttribute("data-lines", "1");
+  expect((await box(row)).height).toBeCloseTo(30, 0);
+  await expect(row.getByTestId("run-status-dot")).toBeVisible();
+  await expect(row.getByTestId("run-display-label")).toHaveText("one-line row");
+  await row.hover();
+  await expect(row.getByTestId("run-row-actions")).toBeVisible();
+  await row.click();
+  await expect(row).toHaveAttribute("data-open", "true");
 
   await page.request.post(`${baseURL}/runs/${runId}/commands`, { data: { kind: "cleanup_run" } });
 });

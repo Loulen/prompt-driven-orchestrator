@@ -6,15 +6,23 @@ import type { SettingsSection } from "../../model/settingsCategories";
 import AppearanceBlock from "./AppearanceBlock";
 import { SettingRow } from "./fields";
 import RunCanvasPreview from "./RunCanvasPreview";
+import RunsListBlock from "./RunsListBlock";
 import Section from "./Section";
+import type { AppearanceEntities } from "./surfaceProps";
 
 /**
  * Settings › Appearance › Appearance: one block per surface, each with its switches and a
- * preview, and « Reset to defaults · N » in the title bar (greyed while nothing differs).
+ * preview (on the most recent entity the user sees, in `entities`), and « Reset to defaults · N » in the title bar (greyed while nothing differs).
  * Every switch writes the Actor's Apparence at once (`Your account`), out of the
  * instance form; rendered even when `GET /settings` failed.
  */
-export default function AppearanceSection({ section }: { section: SettingsSection }) {
+export default function AppearanceSection({
+  section,
+  entities,
+}: {
+  section: SettingsSection;
+  entities?: AppearanceEntities;
+}) {
   const appearance = useAppearance();
   const deviations = deviationCount(appearance);
   const { compactNodes } = appearance;
@@ -36,6 +44,7 @@ export default function AppearanceSection({ section }: { section: SettingsSectio
         </Button>
       }
     >
+      <RunsListBlock runs={entities?.runs ?? []} triggers={entities?.triggers ?? []} />
       <AppearanceBlock
         id="run-canvas"
         title="Run canvas"

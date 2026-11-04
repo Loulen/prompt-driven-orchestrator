@@ -1,6 +1,14 @@
 import type { ProjectsEntry } from "../../../workspace/model/projectsSettings";
 import type { SettingsCategoryId, SettingsSectionId } from "../../model/settingsCategories";
 import type { ProjectsSource } from "./ProjectsSections";
+import type { RunListEntry } from "../../../shared/generated/RunListEntry";
+import type { TriggerListEntry } from "../../../shared/generated/TriggerListEntry";
+
+/** What the previews of Settings › Appearance render: the entities the user sees. */
+export interface AppearanceEntities {
+  runs: RunListEntry[];
+  triggers: TriggerListEntry[];
+}
 
 /** Where the Settings surface opens, and what it asks of its host. */
 export interface SettingsPosition {
@@ -47,4 +55,6 @@ export interface SettingsSurfaceProps {
   onStartFullTour?: () => void;
   /** CORE-96: the live Projets and the Runs Settings › Projects counts. */
   projects?: ProjectsSource;
+  /** The live Runs and Triggers the previews of Settings › Appearance show. */
+  entities?: AppearanceEntities;
 }

@@ -965,6 +965,55 @@
     height: var(--g-5);
     background: var(--text-3);
   }
+  /* A group of switches in a block (« First line »…), with its note. */
+  .set-ablock__group {
+    display: flex;
+    align-items: baseline;
+    gap: var(--g-3);
+    margin: 0;
+    padding: var(--g-3) var(--g-4) var(--g-1);
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+    font-weight: var(--w-strong);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .set-ablock__group-note {
+    font-weight: normal;
+    letter-spacing: normal;
+    text-transform: none;
+  }
+  /* The switch the pointer or the focus is on: its element is ringed in the preview. */
+  .set-ablock__point[data-pointing] .set-row {
+    background: color-mix(in oklch, var(--surface-1), var(--primary) 8%);
+  }
+  /* A list's preview: its real rows, at the list's width, inert. */
+  .set-preview__list {
+    width: 312px;
+    max-width: 100%;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-ui);
+  }
+  .set-preview__list > .lp-rows {
+    pointer-events: none;
+  }
+  /* Point to see: the pointed element ringed, a hidden one back as a ghost. */
+  .set-preview [data-pointed] {
+    border-radius: var(--radius-ui);
+    outline: 1px solid var(--primary);
+    outline-offset: 1px;
+  }
+  .set-preview [data-ghost] {
+    opacity: 0.4;
+    outline-style: dashed;
+  }
+  /* A hidden second line, back while one of its elements is pointed: the row keeps
+     its two-line height for as long, its line's other elements stay out. */
+  .set-preview .lp-row[data-ghost-line] {
+    grid-template-rows: 20px 18px;
+    height: calc(var(--h-row-2) + 6px);
+  }
   .set-preview__caption {
     padding-top: var(--g-2);
     color: var(--text-3);

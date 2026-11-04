@@ -20,6 +20,12 @@ describe("canvasPreviewRows", () => {
     expect(names(canvasPreviewRows(cards))).toEqual([["a"], ["b", "c"], ["orch"], ["d"]]);
   });
 
+  it("keeps every card with child runs out of the fork, beside a shorter card", () => {
+    const counts = { running: 1, failed: 0, stale: 0, finished: 0 };
+    const cards = [card("a"), card("o1", { childCounts: counts }), card("o2", { childCounts: counts }), card("b"), card("c"), card("d")];
+    expect(names(canvasPreviewRows(cards))).toEqual([["a"], ["b", "c"], ["o1"], ["d"]]);
+  });
+
   it("draws a chain when the Run has fewer than three other cards", () => {
     expect(names(canvasPreviewRows([card("a"), card("b")]))).toEqual([["a"], ["b"]]);
     expect(canvasPreviewRows([])).toEqual([]);

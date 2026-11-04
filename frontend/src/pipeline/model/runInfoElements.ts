@@ -6,7 +6,7 @@
  * {@link RUN_INFO_LOCATIONS} are elements too, one each. A section whose every
  * element is hidden is left out.
  */
-import type { RowElement } from "../../run/model/runRowElements";
+import type { ElementGroup } from "../../lib/appearance";
 import type { UiLocation } from "../../shared/generated/UiLocation";
 
 export const RUN_INFO = {
@@ -24,11 +24,6 @@ export const RUN_INFO = {
   cost: "run.info.cost",
   graph: "run.info.graph",
 } as const;
-
-export interface ElementGroup {
-  label: string;
-  elements: readonly RowElement[];
-}
 
 /** The switches of the Run info block, by group, in the tab's order. */
 export const RUN_INFO_GROUPS: readonly ElementGroup[] = [

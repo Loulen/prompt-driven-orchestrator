@@ -5,7 +5,7 @@
 import { RefreshCw } from "lucide-react";
 import { IconButton, KeyValue } from "../../shared/ui/kit";
 import { SourceDriftChip } from "./InspectorPrimitives";
-import { useSourceDrift } from "../../run/store/useSourceDrift";
+import type { useSourceDrift } from "../../run/store/useSourceDrift";
 import type { RunState } from "../../shared/generated/RunState";
 import type { ElementMarks } from "../../hooks/useElementMarks";
 import { shortAge } from "../../workspace/model/branchSelect";
@@ -15,8 +15,20 @@ function Fetching(props: { size?: number | string; strokeWidth?: number | string
   return <RefreshCw {...props} className="d-spin" />;
 }
 
-export function SourceBlock({ run, marks }: { run: RunState; marks?: ElementMarks }) {
-  const { drift, fetching, fetchError, refresh } = useSourceDrift(run);
+/**
+ * `source` is the Run's drift as {@link useSourceDrift} reads it, read by the
+ * caller so it knows whether anything shows.
+ */
+export function SourceBlock({
+  run,
+  source,
+  marks,
+}: {
+  run: RunState;
+  source: ReturnType<typeof useSourceDrift>;
+  marks?: ElementMarks;
+}) {
+  const { drift, fetching, fetchError, refresh } = source;
   if (!drift) return null;
   const available = drift.state === "available";
   const branch = available ? drift.source_branch : (run.source_branch ?? "—");

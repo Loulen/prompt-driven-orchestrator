@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { RUN_INFO_GROUPS, RUN_INFO_LOCATIONS } from "../../../pipeline/model/runInfoElements";
-import type { RowElement } from "../../../run/model/runRowElements";
+import type { RowElement } from "../../../lib/appearance";
 import { useHideableContributions } from "../../../shared/extensions/hideableContributions";
 import type { RecentRun } from "../../store/useRecentRun";
 import AppearanceBlock from "./AppearanceBlock";

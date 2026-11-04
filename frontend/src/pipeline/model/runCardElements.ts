@@ -9,7 +9,7 @@
  * how many of them show ({@link runCardSize}): the canvas then rises by the
  * difference (`compactCanvas.ts`), as « Compact nodes » does.
  */
-import type { RowElement } from "../../run/model/runRowElements";
+import type { RowElement } from "../../lib/appearance";
 import { COMPACT_CARD, type CardSize } from "./compactCanvas";
 
 export const RUN_CARD = {

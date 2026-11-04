@@ -170,6 +170,18 @@ describe("a Run's Info tab, with an Apparence", () => {
     expect(screen.getByTestId("run-failure-reason")).toBeInTheDocument();
   });
 
+  it("removes the Run section when Source is its only element shown and the Run has no drift to read", async () => {
+    const { fetchSourceDrift } = await import("../../run/api/runs");
+    vi.mocked(fetchSourceDrift).mockRejectedValueOnce(new Error("no drift"));
+    appearance(Object.fromEntries(["harness", "repo", "sandbox", "started", "trigger"].map((k) => [`run.info.${k}`, false])));
+    draw();
+    await waitFor(() => expect(fetchSourceDrift).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByTestId("run-source-block")).toBeNull();
+    expect(sectionTitles()).not.toContain("Run");
+    expect(sectionTitles()).toContain("Stats");
+  });
+
   it("keeps every alert banner whatever the Apparence", () => {
     appearance(Object.fromEntries(["note", "status", "harness", "repo", "sandbox", "started", "trigger", "source"].map((k) => [`run.info.${k}`, false])));
     draw({

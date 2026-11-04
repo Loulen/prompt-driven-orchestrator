@@ -17,7 +17,8 @@ import type { RunState } from "../../shared/generated/RunState";
 export function canvasPreviewRows(cards: readonly EditNodeData[]): EditNodeData[][] {
   const work = cards.filter((card) => card.nodeType !== "start" && card.nodeType !== "end");
   const orchestrator = work.find((card) => card.childCounts != null);
-  const rest = work.filter((card) => card !== orchestrator);
+  // A card with child runs is taller: one never sits in the fork, beside a shorter one.
+  const rest = work.filter((card) => card.childCounts == null);
   if (rest.length < 3) return [...rest, ...(orchestrator ? [orchestrator] : [])].map((card) => [card]);
   const rows: EditNodeData[][] = [[rest[0]], [rest[1], rest[2]]];
   const after = rest.slice(3);

@@ -1,7 +1,7 @@
 import { useContext } from "react";
 import { updateAppearance, useAppearance } from "../../../hooks/useAppearance";
 import { ELEMENT_DEFAULTS, isChanged, isVisible, withElement } from "../../../lib/appearance";
-import type { RowElement } from "../../../run/model/runRowElements";
+import type { RowElement } from "../../../lib/appearance";
 import { Switch } from "../../../shared/ui/kit";
 import { SettingRow } from "./fields";
 import { searching, SearchContext, SectionMatchContext } from "./search";

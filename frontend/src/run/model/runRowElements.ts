@@ -4,6 +4,7 @@
  * name are fixed. The extensions' contributions at {@link RUN_ROW_LOCATIONS} are
  * elements of its second line too, one each.
  */
+import type { RowElement } from "../../lib/appearance";
 import type { UiLocation } from "../../shared/generated/UiLocation";
 
 export const RUN_ROW = {
@@ -16,10 +17,7 @@ export const RUN_ROW = {
   cost: "runs.list.cost",
 } as const;
 
-export interface RowElement {
-  id: string;
-  label: string;
-}
+export type { RowElement } from "../../lib/appearance";
 
 export const RUN_ROW_FIRST_LINE: readonly RowElement[] = [
   { id: RUN_ROW.trigger, label: "Trigger" },

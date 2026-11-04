@@ -75,6 +75,18 @@ export const DEFAULT_APPEARANCE: Appearance = {
   elements: {},
 };
 
+/** An Élément masquable as a switch of Settings › Appearance names it: its id and its label. */
+export interface RowElement {
+  id: string;
+  label: string;
+}
+
+/** A group of a block's switches (« First line », « Stats »…). */
+export interface ElementGroup {
+  label: string;
+  elements: readonly RowElement[];
+}
+
 /** A surface whose Éléments masquables Settings › Appearance lists. */
 export type Surface = "runs.list" | "run.canvas" | "run.info" | "triggers.list" | "pipelines.list";
 

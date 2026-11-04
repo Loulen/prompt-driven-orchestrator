@@ -22,7 +22,9 @@ import { InfoVersionLine } from "./InfoVersion";
 import { shortSavedAgo, versionLabel } from "../model/versions";
 import ExtensionSections from "../../shared/extensions/ExtensionSections";
 import type { RunInfoContext } from "../../shared/extensions/contract";
-import { useElementMarks, type ElementMarks } from "../../hooks/useElementMarks";
+import { useAppearancePreview, useElementMarks, type ElementMarks } from "../../hooks/useElementMarks";
+import { useSourceDrift } from "../../run/store/useSourceDrift";
+import type { SourceDrift } from "../../shared/generated/SourceDrift";
 import { RUN_INFO } from "../model/runInfoElements";
 import "./inspect.css";
 
@@ -152,11 +154,18 @@ function startedAgo(iso: string): string {
   return ago === "now" || ago === "" ? ago || "—" : `${ago} ago`;
 }
 
+/** The drift a sample preview shows: no Run to read it from. */
+const SAMPLE_DRIFT: SourceDrift = { state: "available", source_branch: "main", fork: "c2f81a0", ahead: 3, behind: 0 };
+
 /**
  * The Run section: one row per field the Apparence shows and the Run has, then
- * its source. Nothing when no row is left and the source is hidden.
+ * its source. Nothing when no row is left and no source shows (hidden, or no
+ * drift to read). A sample preview reads no drift: it shows its own.
  */
 function RunSection({ run, marks }: { run: RunState; marks: Marks }) {
+  const sample = useAppearancePreview()?.sample === true;
+  const read = useSourceDrift(sample ? null : run);
+  const source = sample ? { ...read, drift: SAMPLE_DRIFT } : read;
   const row = (id: string, show: unknown, value: () => KeyValueRow): KeyValueRow[] => {
     const attrs = show ? marks(id) : null;
     return attrs ? [{ ...value(), attrs }] : [];
@@ -193,12 +202,12 @@ function RunSection({ run, marks }: { run: RunState; marks: Marks }) {
     })),
     ...row(RUN_INFO.trigger, run.triggered_by, () => ({ k: "Trigger", v: run.triggered_by, mono: true })),
   ];
-  const source = marks(RUN_INFO.source);
-  if (rows.length === 0 && !source) return null;
+  const sourceMarks = source.drift ? marks(RUN_INFO.source) : null;
+  if (rows.length === 0 && !sourceMarks) return null;
   return (
     <Section title="Run">
       {rows.length > 0 && <KeyValue rows={rows} />}
-      {source && <SourceBlock run={run} marks={source} />}
+      {sourceMarks && <SourceBlock run={run} source={source} marks={sourceMarks} />}
     </Section>
   );
 }

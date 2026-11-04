@@ -40,7 +40,7 @@ export default function PipelinesListPreview({
             {shown.pipelines.map((p) => (
               <LibraryRow
                 key={p.id}
-                testId={`library-row-${p.id}`}
+                testId={`preview-library-row-${p.id}`}
                 name={p.name}
                 invalid={p.invalid}
                 showDuplicate={false}

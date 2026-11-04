@@ -106,7 +106,7 @@ function mount(triggers: TriggerListEntry[] = TRIGGERS, pipelines: PipelineListE
 const triggersPreview = () => screen.getByTestId("appearance-preview-triggers-list");
 const pipelinesPreview = () => screen.getByTestId("appearance-preview-pipelines-list");
 const triggerRow = (id: string) => triggersPreview().querySelector(`[data-trigger-row="${id}"]`) as HTMLElement;
-const pipelineRow = (id: string) => within(pipelinesPreview()).getByTestId(`library-row-${id}`);
+const pipelineRow = (id: string) => within(pipelinesPreview()).getByTestId(`preview-library-row-${id}`);
 const point = (id: string) => fireEvent.pointerEnter(rowOf(id).parentElement!);
 
 let pipelinesBefore: PipelineListEntry[];
@@ -150,7 +150,7 @@ describe("the Triggers list block", () => {
 
   it("previews the Trigger that fired last and the next one, as the list draws them, inert", async () => {
     mount();
-    expect(triggersPreview()).toHaveTextContent("Your two most recent triggers");
+    expect(triggersPreview()).toHaveTextContent("Your triggers");
     const rows = triggersPreview().querySelectorAll("[data-trigger-row]");
     expect([...rows].map((r) => r.getAttribute("data-trigger-row"))).toEqual(["recent", "old"]);
     const recent = within(triggerRow("recent"));
@@ -231,7 +231,7 @@ describe("the Pipelines list block", () => {
 
   it("previews the Pipeline edited last and another one, as the list draws them, inert", async () => {
     mount();
-    expect(pipelinesPreview()).toHaveTextContent("Your two most recent pipelines");
+    expect(pipelinesPreview()).toHaveTextContent("Your pipelines");
     const implement = within(pipelineRow("implement"));
     expect(implement.getByTestId("library-row-version")).toHaveTextContent("v14");
     expect(implement.getByTestId("library-row-draft")).toHaveTextContent("draft: 3 changes");

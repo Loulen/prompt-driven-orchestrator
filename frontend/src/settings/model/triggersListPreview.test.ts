@@ -17,7 +17,7 @@ describe("the Triggers list preview", () => {
   it("shows the one Trigger the user sees", () => {
     const shown = triggersListPreview([t("a", undefined)]);
     expect(shown.triggers.map((x) => x.id)).toEqual(["a"]);
-    expect(shown.caption).toBe("Your most recent trigger");
+    expect(shown.caption).toBe("Your triggers");
   });
 
   it("shows the two that fired last, the latest first; one that never fired comes after", () => {
@@ -28,7 +28,7 @@ describe("the Triggers list preview", () => {
     ]);
     expect(shown.sample).toBe(false);
     expect(shown.triggers.map((x) => x.id)).toEqual(["new", "old"]);
-    expect(shown.caption).toBe("Your two most recent triggers");
+    expect(shown.caption).toBe("Your triggers");
   });
 
   it("adds a guarded Trigger when the most recent has no guard", () => {
@@ -38,6 +38,5 @@ describe("the Triggers list preview", () => {
       t("guarded", undefined, { guard_command: "true" }),
     ]);
     expect(shown.triggers.map((x) => x.id)).toEqual(["new", "guarded"]);
-    expect(shown.caption).toBe("Your most recent trigger, and a guarded trigger");
   });
 });

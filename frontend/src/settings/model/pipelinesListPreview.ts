@@ -5,6 +5,7 @@
  * Pipeline when the user sees none.
  */
 import type { PipelineListEntry } from "../../shared/generated/PipelineListEntry";
+import { recentPair } from "./recentPair";
 
 export interface PipelinesListPreview {
   /** The rows, in their order. */
@@ -31,27 +32,14 @@ export function samplePipeline(now: number): PipelineListEntry {
   };
 }
 
-/** The last edited first; one without a date after, in the list's order. */
-function newer(a: PipelineListEntry, b: PipelineListEntry): number {
-  const at = a.modified ?? "";
-  const bt = b.modified ?? "";
-  return at === bt ? 0 : at < bt ? 1 : -1;
-}
-
-const hasDraft = (p: PipelineListEntry) => (p.draft?.changes ?? 0) > 0;
-
 /** The rows of the preview, from the Pipelines the user sees. */
 export function pipelinesListPreview(pipelines: PipelineListEntry[], now: number = Date.now()): PipelinesListPreview {
   if (pipelines.length === 0) {
     return { pipelines: [samplePipeline(now)], sample: true, caption: "Sample pipeline · you see no pipeline yet" };
   }
-  const [recent, ...others] = [...pipelines].sort(newer);
-  const drafted = hasDraft(recent) ? undefined : others.find(hasDraft);
-  const second = drafted ?? others[0];
-  if (!second) return { pipelines: [recent], sample: false, caption: "Your most recent pipeline" };
   return {
-    pipelines: [recent, second],
+    pipelines: recentPair(pipelines, (p) => p.modified, (p) => (p.draft?.changes ?? 0) > 0),
     sample: false,
-    caption: drafted ? "Your most recent pipeline, and one with a draft" : "Your two most recent pipelines",
+    caption: "Your pipelines",
   };
 }

@@ -5,6 +5,7 @@
  * Trigger when the user sees none.
  */
 import type { TriggerListEntry } from "../../shared/generated/TriggerListEntry";
+import { recentPair } from "./recentPair";
 
 export interface TriggersListPreview {
   /** The rows, in their order. */
@@ -37,25 +38,14 @@ export function sampleTrigger(now: number): TriggerListEntry {
   };
 }
 
-/** The last fired first; one that never fired after, in the list's order. */
-function newer(a: TriggerListEntry, b: TriggerListEntry): number {
-  const at = a.last_fired_at ?? "";
-  const bt = b.last_fired_at ?? "";
-  return at === bt ? 0 : at < bt ? 1 : -1;
-}
-
 /** The rows of the preview, from the Triggers the user sees. */
 export function triggersListPreview(triggers: TriggerListEntry[], now: number = Date.now()): TriggersListPreview {
   if (triggers.length === 0) {
     return { triggers: [sampleTrigger(now)], sample: true, caption: "Sample trigger · you see no trigger yet" };
   }
-  const [recent, ...others] = [...triggers].sort(newer);
-  const guarded = recent.guard_command ? undefined : others.find((t) => t.guard_command);
-  const second = guarded ?? others[0];
-  if (!second) return { triggers: [recent], sample: false, caption: "Your most recent trigger" };
   return {
-    triggers: [recent, second],
+    triggers: recentPair(triggers, (t) => t.last_fired_at, (t) => Boolean(t.guard_command)),
     sample: false,
-    caption: guarded ? "Your most recent trigger, and a guarded trigger" : "Your two most recent triggers",
+    caption: "Your triggers",
   };
 }

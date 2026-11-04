@@ -194,6 +194,7 @@ test("a Trigger switches from its row, a Pipeline opens from its row: one gestur
   const { id: triggerId } = (await created.json()) as { id: string };
 
   await page.setViewportSize({ width: 1280, height: 800 });
+  await stubAppearance(page, null);
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 
@@ -233,6 +234,8 @@ test("a Trigger row and a Pipeline row take one line once Settings › Appearanc
 
   await page.setViewportSize({ width: 1280, height: 800 });
   await stubAppearance(page, null);
+  // No extension: none of their marks keeps a second line.
+  await page.route("**/ext", (route) => route.fulfill({ json: [] }));
   await page.goto("/");
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
 

@@ -3,7 +3,7 @@
 > Statut : accepted (grilling du 2026-10-30, CORE-139). Amende ADR-0091. Vocabulaire :
 > CONTEXT.md § *Thème*, *Mode sombre*.
 >
-> **Amendé par ADR draft-l-apparence-est-une-preference-par-acteur-gardee-par-le-daemon** (point
+> **Amendé par ADR-0096** (point
 > 1) : le Thème et le Mode sombre sont des préférences **par Acteur**, gardées par le daemon ; le
 > navigateur en garde une copie sous les mêmes clés, que le script du point 4 lit toujours.
 

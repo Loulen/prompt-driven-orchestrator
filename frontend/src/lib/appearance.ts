@@ -1,6 +1,5 @@
 /**
- * The Apparence of an Actor (CONTEXT.md « Apparence », ADR
- * draft-l-apparence-est-une-preference-par-acteur-gardee-par-le-daemon): the
+ * The Apparence of an Actor (CONTEXT.md « Apparence », ADR-0096): the
  * Theme, the Mode sombre, Nodes compactes and the deviations of the Éléments masquables.
  * Pure: no store, no request. The store is `hooks/useAppearance.ts`.
  *

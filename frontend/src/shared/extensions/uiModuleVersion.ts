@@ -5,5 +5,5 @@
  * test (`crates/tidy/tests/shared_module.rs`, `make fast`) fails when these
  * lines drift from the version of `crates/pdo-extension-api/Cargo.toml`.
  */
-export const UI_MODULE_VERSION = "0.20.2";
+export const UI_MODULE_VERSION = "0.21.0";
 export const UI_MODULE_MAJOR = 0;

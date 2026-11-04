@@ -1,5 +1,4 @@
-//! The Apparence of an Actor (CONTEXT.md → *Apparence*, ADR
-//! draft-l-apparence-est-une-preference-par-acteur-gardee-par-le-daemon): the
+//! The Apparence of an Actor (CONTEXT.md → *Apparence*, ADR-0096): the
 //! document the interface keeps for each Actor, and the shape the daemon
 //! checks.
 //!

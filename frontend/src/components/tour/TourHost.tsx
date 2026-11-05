@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Projecteur from "./Projecteur";
 import TourPopover, { TourAside } from "./TourPopover";
 import { TourEndCard, TourFailedCard, TourIntroCard } from "./TourCards";
@@ -12,8 +12,9 @@ import type { TourController } from "../../hooks/useTour";
  * component ever learns that tours exist (acceptance criterion « Aucune logique de
  * tour dans les composants existants »).
  *
- * It owns three things the machine has no opinion about: the Escape key, the
- * four-second notice after a quit, and the welcome modal's three answers.
+ * It owns three things the machine has no opinion about: the keyboard (Escape,
+ * and ← / → since PDO-10), the four-second notice after a quit, and the welcome
+ * modal's three answers.
  */
 
 interface Props {
@@ -44,6 +45,68 @@ const ESC_OWNERS =
  * screen for four of the tour's steps, and Escape outside it must still quit.
  */
 const ESC_TARGET_OWNERS = '[data-testid="tmux-terminal"]';
+
+/**
+ * Where ← / → belong to whatever has the focus, not to the tour (PDO-10, #1030):
+ * a field moves its caret, the terminal sends the key to the agent, a node or an
+ * edge of the canvas is nudged by it. The same surfaces that keep their Escape,
+ * plus the widgets whose arrows are their own navigation — a radio group, a tab
+ * strip, a slider, a menu's items, the Run tree of the left panel.
+ */
+const ARROW_TARGET_OWNERS = [
+  "input",
+  "textarea",
+  "select",
+  '[contenteditable]:not([contenteditable="false"])',
+  ESC_TARGET_OWNERS,
+  // The whole canvas — its nodes and edges, and its zoom controls and minimap.
+  // A click on the empty pane takes no focus, so this costs the tour nothing.
+  ".react-flow",
+  // A Run row of the left panel walks the Run tree with ← / → (#783), but only
+  // claims the key when it does something: on a row with nothing to open or
+  // close, the tour would otherwise move under a reader who meant the list.
+  "[data-run-row]",
+  '[role="radio"]',
+  '[role="tab"]',
+  '[role="slider"]',
+  '[role="option"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="treeitem"]',
+].join(", ");
+
+/**
+ * Surfaces that own ← / → **while they are up**, wherever the focus is: an open
+ * menu or listbox walks its options with them, and the artifact viewer and the
+ * image lightbox page through files and iterations — on `window`, so the tour
+ * could not tell their keystroke from its own.
+ */
+const ARROW_OWNERS =
+  '[role="menu"], [role="listbox"], [data-testid="artifact-modal"], [data-testid="image-lightbox"]';
+
+/**
+ * What the arrows press right now, read from the latest view by the listener:
+ * the button's own handler while it is shown and live, else `null`.
+ */
+interface ArrowControls {
+  back: (() => void) | null;
+  next: (() => void) | null;
+}
+
+/** ← / → for the tour, or `null` when the keystroke is somebody else's. */
+function arrowOf(event: KeyboardEvent): "back" | "next" | null {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return null;
+  if (event.defaultPrevented) return null;
+  // Alt+← is the browser's Back, Shift+← extends a selection: not ours.
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return null;
+  // A held key would fly through every step that waits for Next.
+  if (event.repeat) return null;
+  const target = event.target;
+  if (target instanceof Element && target.closest(ARROW_TARGET_OWNERS)) return null;
+  if (document.querySelector(ARROW_OWNERS)) return null;
+  return event.key === "ArrowLeft" ? "back" : "next";
+}
 
 /**
  * How far along the **Full tour** the intermediate card sits (#825), or `null`
@@ -104,6 +167,33 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [running, quitWithNotice]);
+
+  // ← = Previous, → = Next (PDO-10, #1030), each only when its button is shown
+  // and live: a key never does what the card does not offer. Same registration
+  // as Escape — bubble phase, keyed on « running » — so the live state is read
+  // through a ref rather than by re-registering on every view.
+  // The handlers are read through the ref too: `next` / `back` change with the
+  // run, and the listener has no reason to follow them.
+  const arrows = useRef<ArrowControls>({ back: null, next: null });
+  const pressBack = running && (view?.stepNumber ?? 0) > 1 && view?.canGoBack ? back : null;
+  const pressNext = running && view?.awaitingConfirm && view?.ready ? next : null;
+  // A layout effect, so a keystroke right after a render never reads the
+  // buttons of the view before it.
+  useLayoutEffect(() => {
+    arrows.current = { back: pressBack, next: pressNext };
+  }, [pressBack, pressNext]);
+  useEffect(() => {
+    if (!running) return;
+    const onKey = (event: KeyboardEvent) => {
+      const action = arrowOf(event);
+      const press = action ? arrows.current[action] : null;
+      if (!press) return;
+      event.preventDefault();
+      press();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [running]);
 
   return (
     <>

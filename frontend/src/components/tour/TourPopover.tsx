@@ -336,7 +336,9 @@ function PreviousButton({ enabled, onBack }: { enabled: boolean; onBack?: () => 
     // Its own provider: the card may be rendered outside the app's (tests, and
     // the Projecteur layer is a sibling of the app tree, not a child of it).
     <TooltipProvider>
-      <Tooltip content={enabled ? PREVIOUS_HINT : PREVIOUS_GONE} side="top" zIndex={TOUR_TOOLTIP_Z}>
+      {/* Below, not above (#1030): the button sits in the card's last row, so a
+          tooltip opening upwards covered the body the reader was reading. */}
+      <Tooltip content={enabled ? PREVIOUS_HINT : PREVIOUS_GONE} side="bottom" zIndex={TOUR_TOOLTIP_Z}>
         <button
           type="button"
           onClick={enabled ? onBack : undefined}

@@ -310,12 +310,14 @@ const STEPS: TourStep[] = [
   {
     id: "create-pipeline",
     title: "Create it",
-    // Entered satisfied when Enter already did the work (see the step above):
-    // the card then says what happened rather than instructing a click that
-    // nobody can make — the button is gone.
+    // Entered satisfied when Enter already did the work (see the step above),
+    // or replayed with `Previous` after the click (PDO-10): the card then says
+    // what happened rather than instructing a click that nobody can make — the
+    // button is gone. It does not say HOW it was created: on a replay that was
+    // the click, and « Enter already created it » was false (#1030).
     body: (o) =>
       pipelineCreated(o)
-        ? "Enter already created it: PDO wrote the file and opened it in the editor, with a Start and an End marker already in place."
+        ? "Already created: PDO wrote the file and opened it in the editor, with a Start and an End marker already in place."
         : "Click Create. PDO writes the file and opens it in the editor, with a Start and an End marker already in place.",
     target: () => ['[data-testid="new-pipeline-create"]'],
     waitingFor: "the Create button",

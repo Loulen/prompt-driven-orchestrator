@@ -369,6 +369,16 @@ function hasSkill(o: TourObservation, id: string): boolean {
  */
 const READING_TIMEOUT_MS = 15_000;
 
+/**
+ * This browser's Launch got an id back since the tour started (#987). Not « the
+ * button was clicked », and not « one more Run in the list » either: on a shared
+ * instance a neighbour's Launch adds a Run too. A replay of the tour launches a
+ * new Run, so a new id.
+ */
+function launched(o: TourObservation): boolean {
+  return o.app.launchedRunId != null && o.app.launchedRunId !== o.baseline.launchedRunId;
+}
+
 // ---- the steps ------------------------------------------------------------
 
 const STEPS: TourStep[] = [
@@ -494,7 +504,14 @@ const STEPS: TourStep[] = [
   {
     id: "launch",
     title: "Launch the Run",
-    body: "Click Launch. PDO creates a worktree of the training repository, starts the node in its own session, and the Run appears in the list on the left.",
+    // Replayed with `Previous` once the Run is launched (PDO-10, #1030), the step
+    // holds and the form is gone: the card says what the click did instead of
+    // asking for a button nobody can see. Opening New Run again and launching
+    // anew is allowed — the tour then follows the new Run (identité de tour).
+    body: (o) =>
+      launched(o)
+        ? "Launched: PDO created a worktree of the training repository, started the node in its own session, and the Run is in the list on the left."
+        : "Click Launch. PDO creates a worktree of the training repository, starts the node in its own session, and the Run appears in the list on the left.",
     target: () => [LAUNCH_BUTTON],
     waitingFor: "the Launch button",
     // The whole tour exists for this click, so there is no Skip on it.
@@ -505,11 +522,7 @@ const STEPS: TourStep[] = [
     refusalTitle: "The Run could not be launched",
     refusalHint:
       "Your form is still open with everything filled. Fix the cause, then press Launch again; the tour will not restart.",
-    // Not "the button was clicked", and not « one more Run in the list » either
-    // (#987): on a shared instance a neighbour's Launch adds a Run too. Done when
-    // the id THIS browser's Launch received differs from the one the tour
-    // started with — a replay of the tour launches a new Run, so a new id.
-    done: (o) => o.app.launchedRunId != null && o.app.launchedRunId !== o.baseline.launchedRunId,
+    done: launched,
   },
 
   // ---- reading the Run (#825) ---------------------------------------------

@@ -21,11 +21,11 @@ use crate::worktree_ops::{
     ensure_sub_worktree, reap_orphan_sub_worktree, sub_worktree_branch, sub_worktree_path,
 };
 use crate::{
-    admission, agent_choice, agent_profile, append_event_with,
-    count_global_live_sessions_excluding, event_log, harness_registry, input_resolution,
-    merge_action, panic_payload_message, pipeline, prompt_augmenter, reload_run_state_with,
-    stored_autocomplete_turn_end, stored_default_harness, stored_default_harness_models,
-    stored_session_cap, tmux_session_manager, transition_guard, AppState,
+    admission, agent_choice, agent_profile, append_event_with, event_log, harness_registry,
+    input_resolution, live_sessions_for_spawn, merge_action, panic_payload_message, pipeline,
+    prompt_augmenter, read_mem_available_kb, reload_run_state_with, stored_autocomplete_turn_end,
+    stored_default_harness, stored_default_harness_models, stored_session_cap,
+    tmux_session_manager, transition_guard, AppState,
 };
 
 pub(crate) struct SpawnContext<'a> {
@@ -464,31 +464,62 @@ pub(crate) async fn spawn_node(
     // the lock exists to close.
     let admission_guard = deps.admission_lock.lock().await;
     let cap = admission::configured_cap_with(stored_session_cap(deps.db).await);
-    let live = count_global_live_sessions_excluding(
+    let (live, replaces_live_slot) = live_sessions_for_spawn(
         deps.db,
-        Some(admission::SlotExclusion {
+        admission::SlotExclusion {
             run_id,
             node_id: &node.id,
             iter,
-        }),
+        },
     )
     .await;
-    if !admission::can_admit(live, cap) {
-        let waiting = event_log::Event {
-            id: None,
-            run_id: run_id.to_string(),
-            ts: event_log::now_iso(),
-            kind: event_log::EventKind::NodeWaiting,
-            node_id: Some(node.id.clone()),
-            iter: Some(iter),
-            payload: Some(serde_json::json!({ "live_sessions": live, "cap": cap })),
-        };
-        if let Err(e) = append_event_with(deps.db, deps.event_tx, &waiting).await {
-            error!("failed to append node_waiting for {}: {e}", node.id);
+    // The free-memory floor (`PDO_MIN_FREE_MEMORY_MB`): the session cap counts
+    // sessions, but what collapses a shared box is the memory their children take
+    // (test suites, browsers, compose stacks). Below the floor the node waits
+    // instead of starting the agent the OOM killer would take next. A restart
+    // replaces a live session and takes no new memory, so it is never held back.
+    let min_free_mb = admission::configured_min_free_memory_mb();
+    let mem_available_kb = read_mem_available_kb();
+    let throttled = if !admission::can_admit(live, cap) {
+        Some(serde_json::json!({ "live_sessions": live, "cap": cap }))
+    } else if !replaces_live_slot && !admission::memory_allows(live, mem_available_kb, min_free_mb)
+    {
+        Some(serde_json::json!({
+            "live_sessions": live,
+            "cap": cap,
+            "reason": "memory",
+            "mem_available_mb": mem_available_kb.map(|kb| kb / 1024),
+            "min_free_mb": min_free_mb,
+        }))
+    } else {
+        None
+    };
+    if let Some(payload) = throttled {
+        // A node already `waiting` at this iteration stays so without a new event:
+        // the stale sweep re-asks every 30 s while memory is short, and one event
+        // per ask would flood the log.
+        let already_waiting = projected
+            .and_then(|s| s.nodes.get(&node.id))
+            .is_some_and(|n| n.status == event_log::NodeStatus::Waiting && n.iter == iter);
+        if !already_waiting {
+            let waiting = event_log::Event {
+                id: None,
+                run_id: run_id.to_string(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::NodeWaiting,
+                node_id: Some(node.id.clone()),
+                iter: Some(iter),
+                payload: Some(payload),
+            };
+            if let Err(e) = append_event_with(deps.db, deps.event_tx, &waiting).await {
+                error!("failed to append node_waiting for {}: {e}", node.id);
+            }
         }
         info!(
-            "node {} throttled into waiting ({live}/{cap} sessions live)",
-            node.id
+            "node {} throttled into waiting ({live}/{cap} sessions live, \
+             MemAvailable {:?} MiB, floor {min_free_mb:?} MiB)",
+            node.id,
+            mem_available_kb.map(|kb| kb / 1024),
         );
         return SpawnOutcome::Throttled;
     }

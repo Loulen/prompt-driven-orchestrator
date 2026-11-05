@@ -72,6 +72,60 @@ pub fn env_cap() -> Option<usize> {
         .filter(|&n| n > 0)
 }
 
+/// Env var for the free-memory floor below which no new NodeRun session is
+/// admitted, in MiB. Default: [`DEFAULT_MIN_FREE_MEMORY_MB`]; `0` turns the floor
+/// off.
+pub const MIN_FREE_MEMORY_ENV: &str = "PDO_MIN_FREE_MEMORY_MB";
+
+/// Default free-memory floor, in MiB.
+///
+/// The session cap counts sessions, but what collapses a shared box is memory:
+/// the agents' own children (test suites, browsers, compose stacks) weigh far
+/// more than the sessions. Below ~1 GiB of `MemAvailable` the kernel is already
+/// evicting code pages and about to OOM-kill — starting one more agent there
+/// only picks the next victim. Waiting costs a delay; the OOM killer costs a run.
+pub const DEFAULT_MIN_FREE_MEMORY_MB: u64 = 1024;
+
+/// The configured free-memory floor in MiB, from [`MIN_FREE_MEMORY_ENV`], else
+/// [`DEFAULT_MIN_FREE_MEMORY_MB`]. `None` = no floor (the env var is `0`). An
+/// unparseable value falls back to the default rather than to "off": a typo must
+/// not silently remove the protection.
+pub fn configured_min_free_memory_mb() -> Option<u64> {
+    min_free_memory_mb_from(std::env::var(MIN_FREE_MEMORY_ENV).ok().as_deref())
+}
+
+/// [`configured_min_free_memory_mb`] over an explicit env value (pure, testable).
+pub fn min_free_memory_mb_from(env: Option<&str>) -> Option<u64> {
+    match env.map(str::trim).map(str::parse::<u64>) {
+        Some(Ok(0)) => None,
+        Some(Ok(n)) => Some(n),
+        Some(Err(_)) | None => Some(DEFAULT_MIN_FREE_MEMORY_MB),
+    }
+}
+
+/// Whether memory allows admitting one more NodeRun session.
+///
+/// - No floor configured, or `MemAvailable` unknown (not Linux): admit — the
+///   floor is a protection, never a new way to block a platform without
+///   `/proc/meminfo`.
+/// - No live session at all: admit. The floor must never starve the instance:
+///   with nothing of ours running, waiting cannot free anything, and the first
+///   session is how work makes progress at all.
+/// - Otherwise admit only while `MemAvailable` stays at or above the floor.
+///
+/// A spawn that **replaces** a live session (a restart) is not asked: it takes
+/// no new memory — the caller skips this check for it.
+pub fn memory_allows(
+    live_sessions: usize,
+    mem_available_kb: Option<u64>,
+    min_free_mb: Option<u64>,
+) -> bool {
+    let (Some(floor_mb), Some(available_kb)) = (min_free_mb, mem_available_kb) else {
+        return true;
+    };
+    live_sessions == 0 || available_kb >= floor_mb * 1024
+}
+
 /// Count the live NodeRun sessions across all known runs.
 ///
 /// Only nodes belonging to a *live* Run ([`RunStatus::is_live`]:
@@ -99,6 +153,7 @@ pub fn count_live_node_sessions<'a>(runs: impl IntoIterator<Item = &'a RunState>
 /// concurrent Runs of the same pipeline both carry an `implementer` at `iter 1` —
 /// and a Run-blind exclusion would discount the *other* Run's live session, letting
 /// the cap be exceeded. That is the very collapse this module exists to prevent.
+#[derive(Clone, Copy)]
 pub struct SlotExclusion<'a> {
     pub run_id: &'a str,
     pub node_id: &'a str,
@@ -146,6 +201,41 @@ pub(crate) fn node_holds_session(status: &NodeStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn min_free_memory_defaults_and_zero_turns_it_off() {
+        assert_eq!(
+            min_free_memory_mb_from(None),
+            Some(DEFAULT_MIN_FREE_MEMORY_MB)
+        );
+        assert_eq!(min_free_memory_mb_from(Some("2048")), Some(2048));
+        assert_eq!(min_free_memory_mb_from(Some(" 512 ")), Some(512));
+        assert_eq!(min_free_memory_mb_from(Some("0")), None);
+        // A typo keeps the protection rather than silently removing it.
+        assert_eq!(
+            min_free_memory_mb_from(Some("2G")),
+            Some(DEFAULT_MIN_FREE_MEMORY_MB)
+        );
+    }
+
+    #[test]
+    fn memory_floor_blocks_only_below_the_floor() {
+        let floor = Some(1024);
+        assert!(memory_allows(3, Some(1024 * 1024), floor));
+        assert!(memory_allows(3, Some(4 * 1024 * 1024), floor));
+        assert!(!memory_allows(3, Some(1024 * 1024 - 1), floor));
+    }
+
+    #[test]
+    fn memory_floor_never_starves_an_idle_instance() {
+        assert!(memory_allows(0, Some(1), Some(1024)));
+    }
+
+    #[test]
+    fn memory_floor_off_or_unknown_memory_admits() {
+        assert!(memory_allows(5, Some(1), None));
+        assert!(memory_allows(5, None, Some(1024)));
+    }
     use crate::event_log::{NodeState, RunStatus};
 
     fn run_with_nodes(run_id: &str, statuses: &[(&str, NodeStatus)]) -> RunState {

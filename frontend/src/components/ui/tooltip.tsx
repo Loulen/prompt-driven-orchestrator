@@ -72,6 +72,7 @@ export function Tooltip({
   delay,
   side = "bottom",
   disabled,
+  zIndex,
 }: {
   /** Plain text (multi-line via `\n`) or, for a structured tooltip, a node. */
   content: ReactNode;
@@ -82,6 +83,14 @@ export function Tooltip({
    *  some states (#867's read-only hint): unwrapping the child instead would
    *  remount it. Passing the prop at all makes the tooltip controlled. */
   disabled?: boolean;
+  /**
+   * Stack the tooltip above `z-50` (PDO-10, #1029): a trigger that lives on a
+   * higher layer — the tour's card, inside the `Projecteur` (`z-[120]`) — would
+   * otherwise open its tooltip *under* the dim, invisible. Radix copies the
+   * content's computed z-index onto its positioning wrapper, so an inline value
+   * here lifts the whole popper.
+   */
+  zIndex?: number;
 }) {
   const [open, setOpen] = useState(false);
   const control =
@@ -96,7 +105,7 @@ export function Tooltip({
           side={side}
           sideOffset={6}
           className="z-50 whitespace-pre-line rounded border border-line bg-bg-4 px-2 py-1 text-fg shadow-lg"
-          style={{ fontSize: "11px", maxWidth: 260, lineHeight: 1.4 }}
+          style={{ fontSize: "11px", maxWidth: 260, lineHeight: 1.4, zIndex }}
           data-testid="tooltip-content"
         >
           {content}

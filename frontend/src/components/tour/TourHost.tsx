@@ -61,7 +61,7 @@ function chainProgress(tourId: string, nextTourId: string | null) {
 }
 
 export default function TourHost({ controller, showWelcome, onWelcomeAnswered, onOpenTutorials }: Props) {
-  const { view, start, quit, next, skip, finish, finishHere, continueChain, begin, retryPrep } =
+  const { view, start, quit, next, back, skip, finish, finishHere, continueChain, begin, retryPrep } =
     controller;
   const [quitNotice, setQuitNotice] = useState(false);
 
@@ -160,7 +160,9 @@ export default function TourHost({ controller, showWelcome, onWelcomeAnswered, o
             ready={view.ready}
             awaitingConfirm={view.awaitingConfirm}
             checklist={view.checklist}
+            canGoBack={view.canGoBack}
             onNext={next}
+            onBack={back}
             onSkip={skip}
             onQuit={quitWithNotice}
           />

@@ -155,4 +155,17 @@ describe("Tooltip accessible name (#397)", () => {
     // Name and description coexist: the name is stable, the description is not.
     expect(screen.getByTestId("t")).toHaveAccessibleName("Pipeline info");
   });
+
+  it("lifts its layer when asked — a tooltip inside the tour's Projecteur (PDO-10, #1029)", async () => {
+    const user = userEvent.setup();
+    renderWithProvider(
+      <Tooltip content="Previous step" delay={0} zIndex={130}>
+        <button>Previous</button>
+      </Tooltip>,
+    );
+    await user.hover(screen.getByRole("button", { name: "Previous" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("tooltip-content")).toHaveStyle({ zIndex: "130" });
+    });
+  });
 });

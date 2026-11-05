@@ -19,8 +19,10 @@ import { canvasNodeIdOf, revealCanvasNode } from "../lib/canvasReveal";
 import {
   beginSteps,
   canAdvance,
+  canGoBack,
   confirmStep,
   currentStep,
+  goBack,
   markTidiedUp,
   needsConfirm,
   observeTour,
@@ -78,6 +80,11 @@ export interface TourView {
   ready: boolean;
   /** The step waits for `Next` instead of advancing on its own. */
   awaitingConfirm: boolean;
+  /**
+   * `Previous` would replay the step before (#1029): recomputed each tick, since
+   * whether that step's screen is still there changes as the user works.
+   */
+  canGoBack: boolean;
   /** The step's body, resolved against what the tour is observing (#825). */
   body: string;
   /** The step's quieter second paragraph, resolved the same way. */
@@ -365,6 +372,8 @@ export interface TourController {
   /** Leave without marking anything: an abandoned tour is not a finished one. */
   quit: () => void;
   next: () => void;
+  /** `Previous` (#1029): replay the step before, when it is replayable. */
+  back: () => void;
   skip: () => void;
   /** The end card's primary — the only thing that writes the "done" key. */
   finish: () => void;
@@ -405,6 +414,7 @@ export function useTour(
   const [asides, setAsides] = useState<TourAsideView[]>(NO_ASIDES);
   const [ready, setReady] = useState(false);
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
+  const [backable, setBackable] = useState(false);
   const [body, setBody] = useState("");
   const [note, setNote] = useState<string | null>(null);
   const [checklist, setChecklist] = useState<TourChecklistItem[]>([]);
@@ -617,6 +627,11 @@ export function useTour(
     commit(tour, confirmStep(tour, run, observe()));
   }, [tour, run, observe, commit]);
 
+  const back = useCallback(() => {
+    if (!tour || !run) return;
+    commit(tour, goBack(tour, run, observe()));
+  }, [tour, run, observe, commit]);
+
   const skip = useCallback(() => {
     if (!tour || !run) return;
     commit(tour, skipStep(tour, run, observe()));
@@ -754,6 +769,7 @@ export function useTour(
 
       setReady(canAdvance(tour, active, obs));
       setAwaitingConfirm(needsConfirm(tour, active, obs));
+      setBackable(canGoBack(tour, active, obs));
       setBody(stepBody(step, obs));
       setNote(stepNote(step, obs));
       // Compared item by item: a fresh array every tick would re-render the
@@ -843,6 +859,7 @@ export function useTour(
       asides,
       ready,
       awaitingConfirm,
+      canGoBack: backable,
       body,
       note,
       checklist,
@@ -850,7 +867,7 @@ export function useTour(
       nextTour: chain[0] ?? null,
       tidyUpFailure,
     };
-  }, [tour, run, hole, zone, wideZone, lit, asides, ready, awaitingConfirm, body, note, checklist, prep, chain, tidyUpFailure]);
+  }, [tour, run, hole, zone, wideZone, lit, asides, ready, awaitingConfirm, backable, body, note, checklist, prep, chain, tidyUpFailure]);
 
-  return { view, start, quit, next, skip, finish, finishHere, continueChain, begin, retryPrep };
+  return { view, start, quit, next, back, skip, finish, finishHere, continueChain, begin, retryPrep };
 }

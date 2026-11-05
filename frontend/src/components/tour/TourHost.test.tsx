@@ -770,3 +770,132 @@ describe("a panel the gesture opened", () => {
     expect(screen.queryByText("Never shown.")).not.toBeInTheDocument();
   });
 });
+
+// ---- PDO-10 (#1029) — Previous replays the step before ---------------------
+
+/** Step one points into a pane the test can take away, as a dialog that closes. */
+const PREV_TOUR: TourDef = {
+  id: "prev",
+  title: "Prev",
+  blurb: "",
+  minutes: 1,
+  recapIntro: "",
+  recap: [],
+  steps: [
+    {
+      id: "one",
+      title: "Click the thing",
+      body: "The first step.",
+      target: () => ["#pane"],
+      waitingFor: "the pane",
+      done: (o) => o.present("#opened"),
+    },
+    { id: "two", title: "Read this", body: "The second step.", target: () => ["#always"], waitingFor: "always" },
+    { id: "three", title: "And this", body: "The third step.", target: () => ["#always"], waitingFor: "always" },
+  ],
+};
+
+function PrevHarness() {
+  const controller = useTour([]);
+  const [pane, setPane] = useState(true);
+  const [opened, setOpened] = useState(false);
+  return (
+    <>
+      <button data-testid="start" onClick={() => controller.start(PREV_TOUR)}>
+        start
+      </button>
+      <div id="always">
+        <button data-testid="undo-it" onClick={() => setOpened(false)}>
+          undo it
+        </button>
+        <button data-testid="close-pane" onClick={() => setPane(false)}>
+          close pane
+        </button>
+      </div>
+      {pane && (
+        <div id="pane">
+          <button data-testid="do-it" onClick={() => setOpened(true)}>
+            do it
+          </button>
+        </div>
+      )}
+      {opened && <div id="opened" />}
+      <TourHost controller={controller} showWelcome={false} onWelcomeAnswered={() => {}} onOpenTutorials={() => {}} />
+    </>
+  );
+}
+
+describe("Previous replays the step before (PDO-10, #1029)", () => {
+  it("is absent on step 1, and replays a satisfied step that waits for Next", async () => {
+    render(<PrevHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("1 / 3");
+    expect(screen.queryByTestId("tour-back")).not.toBeInTheDocument();
+
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("2 / 3");
+    const back = screen.getByTestId("tour-back");
+    expect(back).toHaveTextContent("Previous");
+    expect(back).not.toHaveAttribute("aria-disabled");
+    await user().hover(back);
+    expect(await screen.findByTestId("tooltip-content")).toHaveTextContent("Previous step (←)");
+
+    await user().click(back);
+    tick();
+    expect(screen.getByTestId("tour-popover")).toHaveAttribute("data-step", "one");
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("1 / 3");
+    expect(screen.getByTestId("tour-body")).toHaveTextContent("The first step.");
+    // It holds: shown again, waiting for Next — not sliding past on its own.
+    tick(6_000);
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("1 / 3");
+    expect(screen.queryByTestId("tour-failed-card")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tour-next")).toBeEnabled();
+    expect(screen.getByTestId("tour-next")).toHaveAttribute("title", "Next (→)");
+
+    await user().click(screen.getByTestId("tour-next"));
+    tick();
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("2 / 3");
+  });
+
+  it("is greyed out with a reason when the step before can't be replayed, and does nothing", async () => {
+    render(<PrevHarness />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    // The step's screen goes away and its condition no longer holds.
+    await user().click(screen.getByTestId("undo-it"));
+    await user().click(screen.getByTestId("close-pane"));
+    tick();
+
+    const back = screen.getByTestId("tour-back");
+    expect(back).toHaveAttribute("aria-disabled", "true");
+    // aria-disabled, not disabled: the tooltip saying why must still open.
+    expect(back).not.toBeDisabled();
+    await user().hover(back);
+    expect(await screen.findByTestId("tooltip-content")).toHaveTextContent(
+      "This step's screen is gone — it can't be replayed",
+    );
+
+    await user().click(back);
+    tick();
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("2 / 3");
+    expect(screen.queryByTestId("tour-failed-card")).not.toBeInTheDocument();
+  });
+
+  it("is absent on step 1 of the next leg of a Full tour — no going back into the previous tour", async () => {
+    render(<Harness chain={[NEXT_TOUR]} />);
+    await user().click(screen.getByTestId("start"));
+    tick();
+    await user().click(screen.getByTestId("do-it"));
+    tick();
+    expect(screen.getByTestId("tour-back")).toBeInTheDocument();
+    await user().click(screen.getByTestId("tour-next"));
+    await user().click(screen.getByTestId("tour-finish"));
+    tick();
+    expect(screen.getByTestId("tour-progress")).toHaveTextContent("First run · 1 / 1");
+    expect(screen.queryByTestId("tour-back")).not.toBeInTheDocument();
+  });
+});

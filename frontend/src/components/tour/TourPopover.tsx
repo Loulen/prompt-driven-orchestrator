@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { Check, Circle, Copy, LoaderCircle, X } from "lucide-react";
+import { Check, ChevronLeft, Circle, Copy, LoaderCircle, X } from "lucide-react";
 import { placePopover, type PopoverSide } from "../../lib/tourPlacement";
 import type { TourRect } from "../../hooks/useTour";
 import {
@@ -10,6 +10,7 @@ import {
   type TourStep,
 } from "../../lib/tour";
 import StatusIcon from "../StatusIcon";
+import { Tooltip, TooltipProvider } from "../ui/tooltip";
 
 /**
  * The instruction card of a running tour (#823).
@@ -23,6 +24,11 @@ import StatusIcon from "../StatusIcon";
  * progress and the way out (`✕ quit`, a small grey label — *reachable*, not
  * prominent); the footer carries `Skip` on the left and, on the right, either
  * `Next` or the one grey line that says what the tour is waiting for.
+ *
+ * PDO-10 (#1029, design option B — a wizard layout): from step 2 on, `‹ Previous`
+ * opens the left side of the footer, before `Skip`. It **replays** the step
+ * before (CONTEXT.md « Rejeu d'étape »), and is greyed out with a tooltip saying
+ * why when that step's screen is gone.
  */
 
 interface Props {
@@ -41,12 +47,25 @@ interface Props {
   awaitingConfirm: boolean;
   /** Live sub-conditions of a step that asks for more than one gesture (#824). */
   checklist: TourChecklistItem[];
+  /** `Previous` would replay the step before (#1029). Ignored on step 1. */
+  canGoBack?: boolean;
   onNext: () => void;
+  /** `Previous` (#1029). The button is only rendered from step 2 on. */
+  onBack?: () => void;
   onSkip: () => void;
   onQuit: () => void;
 }
 
 const WIDTH = 266;
+
+/**
+ * The tooltip on `Previous` opens above the Projecteur (`z-[120]`) — at the
+ * design system's default `z-50` it would sit under the dim, invisible (#1029).
+ */
+const TOUR_TOOLTIP_Z = 130;
+
+const PREVIOUS_HINT = "Previous step (←)";
+const PREVIOUS_GONE = "This step's screen is gone — it can't be replayed";
 
 /** The little triangle pointing back at the hole. */
 function arrowClass(side: PopoverSide): string {
@@ -73,7 +92,9 @@ export default function TourPopover({
   ready,
   awaitingConfirm,
   checklist,
+  canGoBack = false,
   onNext,
+  onBack,
   onSkip,
   onQuit,
 }: Props) {
@@ -90,6 +111,9 @@ export default function TourPopover({
   // met there is nothing left to wait for, and a spinner that kept turning under
   // a satisfied checklist would be the card contradicting itself.
   const waiting = step.waitingNote && !ready;
+  // No Previous on step 1: nothing before it, and a Full tour's legs are
+  // independent — there is no going back into the previous tour (#1029).
+  const showBack = stepNumber > 1 && onBack !== undefined;
 
   // Measure after paint and re-place: the card's height depends on its body and
   // on whether it carries a copy block, so a fixed estimate would flip it on the
@@ -249,18 +273,25 @@ export default function TourPopover({
       {/* Not rendered at all when the step has neither: a step that is simply
           waiting for the right click says so in its title, and an empty row
           under the progress bar would be a control that is not there. */}
-      {(step.skippable || awaitingConfirm || step.advanceHint) && (
+      {(showBack || step.skippable || awaitingConfirm || step.advanceHint) && (
         <div className="flex items-center justify-between gap-2">
-          {step.skippable ? (
-            <button
-              type="button"
-              onClick={onSkip}
-              data-testid="tour-skip"
-              className="cursor-pointer text-fg-3 transition-colors hover:text-fg"
-              style={{ fontSize: "10.5px" }}
-            >
-              Skip
-            </button>
+          {showBack || step.skippable ? (
+            <div className="flex items-center gap-2.5">
+              {showBack && (
+                <PreviousButton enabled={canGoBack} onBack={onBack} />
+              )}
+              {step.skippable && (
+                <button
+                  type="button"
+                  onClick={onSkip}
+                  data-testid="tour-skip"
+                  className="cursor-pointer text-fg-3 transition-colors hover:text-fg"
+                  style={{ fontSize: "10.5px" }}
+                >
+                  Skip
+                </button>
+              )}
+            </div>
           ) : (
             <span />
           )}
@@ -270,6 +301,7 @@ export default function TourPopover({
               onClick={onNext}
               disabled={!ready}
               data-testid="tour-next"
+              title="Next (→)"
               className="cursor-pointer rounded bg-acc px-2 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim disabled:cursor-not-allowed disabled:opacity-40"
               style={{ fontSize: "10.5px" }}
             >
@@ -289,6 +321,37 @@ export default function TourPopover({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * `‹ Previous` (#1029): a quiet text link styled like `Skip`.
+ *
+ * Not replayable → `aria-disabled`, **not** `disabled`: a disabled button gets
+ * neither hover nor focus, so the tooltip explaining why it is greyed out would
+ * never open. The click is then a no-op.
+ */
+function PreviousButton({ enabled, onBack }: { enabled: boolean; onBack?: () => void }) {
+  return (
+    // Its own provider: the card may be rendered outside the app's (tests, and
+    // the Projecteur layer is a sibling of the app tree, not a child of it).
+    <TooltipProvider>
+      <Tooltip content={enabled ? PREVIOUS_HINT : PREVIOUS_GONE} side="top" zIndex={TOUR_TOOLTIP_Z}>
+        <button
+          type="button"
+          onClick={enabled ? onBack : undefined}
+          aria-disabled={enabled ? undefined : "true"}
+          data-testid="tour-back"
+          className={`flex items-center gap-0.5 transition-colors ${
+            enabled ? "cursor-pointer text-fg-3 hover:text-fg" : "cursor-not-allowed text-fg-3 opacity-40"
+          }`}
+          style={{ fontSize: "10.5px" }}
+        >
+          <ChevronLeft size={11} />
+          Previous
+        </button>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 

@@ -407,7 +407,9 @@ function AwaitingBanner({
     // `declared` — with or without a message.
     title = awaiting?.message ? "The agent is waiting for your answer" : "The agent is waiting for you";
     body = awaiting?.message ?? null;
-    hint = !terminalLive
+    hint = awaiting?.hibernated
+      ? "The session went to sleep to free memory — opening the terminal wakes it (a few seconds), then reply and press Enter."
+      : !terminalLive
       ? "This pane is a snapshot — reopen the session to reply, or use the buttons below."
       : terminalSpectating
         ? "Another browser has control of the terminal below — take control to reply, then press Enter to resume."
@@ -1263,6 +1265,7 @@ export default function NodeDetailPanel({
                 // selected iter — not `node.iter` — because the IterSelector can be
                 // sitting on an older, long-reaped iteration.
                 paneSource={{ runId, nodeId: node.node_id, iter: selectedIter }}
+                asleep={node.awaiting?.hibernated === true && selectedIter === node.iter}
                 onLiveSocketChange={setTerminalLive}
                 onSpectatingChange={setTerminalSpectating}
                 onImportFiles={isArchived ? undefined : setImportFiles}

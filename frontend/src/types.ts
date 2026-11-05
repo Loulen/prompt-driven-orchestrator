@@ -854,6 +854,9 @@ export interface AwaitingInfo {
   /** When the wait was declared (the banner's « waiting N min »). */
   since: string;
   child_run_id?: string | null;
+  /** #1009 follow-up: the session behind this wait is asleep — closed to free
+   *  memory, resumed on its own session id when the terminal is opened. */
+  hibernated?: boolean;
 }
 
 export interface NodeState {

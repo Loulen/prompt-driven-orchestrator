@@ -33,6 +33,7 @@ mod harness_probes;
 pub mod harness_registry;
 mod harness_resolver;
 pub mod harness_support;
+mod hibernation;
 mod input_resolution;
 mod instance_config;
 mod library_store;
@@ -17212,6 +17213,128 @@ impl stale_detector::NodeProbes for SweepNodeProbes<'_> {
 // Takes `&Arc<AppState>`, not `&AppState`: the turn-end arm calls the shared
 // node-completion body, whose detached tail must own a clone of the state that
 // outlives this sweep.
+/// Put to sleep the declared waits of `run_state` unanswered for longer than the
+/// configured delay (#1009 follow-up, see [`hibernation`]): snapshot the pane, close
+/// the session, record `NodeHibernated`. The node stays `AwaitingUser`; opening it
+/// wakes it ([`ReattachTrace::Wake`]).
+///
+/// A wait is put to sleep only when nothing can be lost and it can be woken:
+/// its session is alive (a dead one is an incident, not ours), nobody has it open,
+/// no answer has been half-typed into it, and [`can_wake`] holds.
+async fn hibernate_due_waits(
+    state: &AppState,
+    events: &[event_log::Event],
+    run_state: &event_log::RunState,
+    repo_root: &std::path::Path,
+) {
+    let Some(after) = hibernation::configured_hibernate_after() else {
+        return;
+    };
+    hibernate_due_waits_at(
+        state,
+        events,
+        run_state,
+        repo_root,
+        after,
+        chrono::Utc::now(),
+    )
+    .await;
+}
+
+/// [`hibernate_due_waits`] with the delay and the clock passed in.
+async fn hibernate_due_waits_at(
+    state: &AppState,
+    events: &[event_log::Event],
+    run_state: &event_log::RunState,
+    repo_root: &std::path::Path,
+    after: chrono::Duration,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    let run_id = run_state.run_id.as_str();
+    let socket = state.tmux_socket();
+    for (node_id, iter) in hibernation::due_for_hibernation(run_state, now, after) {
+        let session = tmux_session_manager::node_session_name(run_id, &node_id, iter);
+        if !tmux_session_manager::session_exists(&socket, &session)
+            || tmux_session_manager::is_attached(&socket, &session)
+            || state.pty_typed.lock().unwrap().contains(&session)
+            || !can_wake(state, events, run_state, repo_root, &node_id, iter)
+        {
+            continue;
+        }
+        let hibernated = event_log::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeHibernated,
+            node_id: Some(node_id.clone()),
+            iter: Some(iter),
+            payload: Some(serde_json::json!({ "after_minutes": after.num_minutes() })),
+        };
+        // Recorded BEFORE the session closes: a failed append leaves it running,
+        // never a closed session the log does not explain.
+        if let Err(e) = append_event(state, &hibernated).await {
+            warn!("hibernation: failed to record the sleep of {node_id} in run {run_id}: {e}");
+            continue;
+        }
+        reap_node_session(
+            state,
+            repo_root,
+            run_id,
+            &node_id,
+            iter,
+            !run_state.sandbox.is_off(),
+        );
+        info!(
+            "Hibernated node {node_id} iter {iter} of run {run_id}: declared wait unanswered \
+             for {} min, session {session} closed (resumed when opened)",
+            after.num_minutes()
+        );
+    }
+}
+
+/// Whether a re-attach could resume this node's session later — the conditions
+/// [`reattach_node_session`] checks before relaunching, admission aside: an agent
+/// node, a pinned session id (a bare `--continue` could re-enter a sibling's
+/// conversation in a shared worktree), its working directory still on disk, and a
+/// frozen harness that still resolves and can resume (ADR-0045).
+fn can_wake(
+    state: &AppState,
+    events: &[event_log::Event],
+    run_state: &event_log::RunState,
+    repo_root: &std::path::Path,
+    node_id: &str,
+    iter: i64,
+) -> bool {
+    let run_id = run_state.run_id.as_str();
+    if find_node_type(run_state, node_id).unwrap_or("agent") == "script" {
+        return false;
+    }
+    if find_launch_session_id(events, node_id, iter).is_none_or(|id| id.is_empty()) {
+        return false;
+    }
+    let working_dir = tmux_session_manager::working_dir_for_node(
+        repo_root,
+        run_id,
+        node_id,
+        iter,
+        node_run_isolation(events, run_state, node_id, iter),
+    );
+    if !working_dir.exists() {
+        return false;
+    }
+    let home_root = sandbox_run::sandbox_home_roots(state)
+        .map(|(home, _)| home)
+        .unwrap_or_default();
+    let descriptor = match find_launch_harness(events, node_id, iter).as_deref() {
+        Some(name) => match harness_registry::HarnessRegistry::load(&home_root).resolve(name) {
+            Some(descriptor) => descriptor,
+            None => return false,
+        },
+        None => harness_registry::claude(),
+    };
+    descriptor.can_resume()
+}
+
 async fn run_stale_detection(state: &Arc<AppState>) {
     // Record liveness at sweep START: a wedged sweep then freezes the value while an
     // isolated panic has already advanced it, so `/stale/health` answers "is the
@@ -17309,6 +17432,9 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             &home_root,
             &sandbox_root,
         );
+
+        // #1009 follow-up: long-unanswered declared waits give their memory back.
+        hibernate_due_waits(state, &events, &run_state, &repo_root).await;
 
         let running = stale_detector::running_nodes(&run_state);
         for (node_id, iter) in &running {
@@ -17685,6 +17811,17 @@ struct PaneResponse {
 /// renderings differ, but the resume mechanics — script exclusion, the
 /// `can_resume()` gate, the admission reservation, the resurrection `NodeStarted`
 /// trace — must not.
+/// What a re-attach writes to the log before relaunching the session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReattachTrace {
+    /// A recovery (ADR-0049 §3a): the resurrection `NodeStarted`, which moves the
+    /// node back to `Running`.
+    Resurrection,
+    /// The wake of a hibernated wait (#1009 follow-up): `NodeWoken`, which leaves
+    /// the node `AwaitingUser` with its question — the agent is still waiting.
+    Wake,
+}
+
 pub(crate) enum ReattachOutcome {
     /// A `script` node is deterministic bash, never an LLM session — not
     /// re-attachable (ADR-0017).
@@ -17727,6 +17864,7 @@ pub(crate) async fn reattach_node_session(
     node_id: &str,
     iter: i64,
     session_name: &str,
+    trace: ReattachTrace,
 ) -> ReattachOutcome {
     let node_type = find_node_type(run_state, node_id).unwrap_or("agent");
     // #248 / ADR-0017: never resume a `script` node via `claude --continue`.
@@ -17797,16 +17935,27 @@ pub(crate) async fn reattach_node_session(
         drop(admission_guard);
         return ReattachOutcome::CapReached { live, cap };
     }
-    let resurrection_started = event_log::Event {
-        id: None,
-        run_id: run_id.to_string(),
-        ts: event_log::now_iso(),
-        kind: event_log::EventKind::NodeStarted,
-        node_id: Some(node_id.to_string()),
-        iter: Some(iter),
-        payload: find_launch_node_started_payload(events, node_id, iter),
+    let trace_event = match trace {
+        ReattachTrace::Resurrection => event_log::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeStarted,
+            node_id: Some(node_id.to_string()),
+            iter: Some(iter),
+            payload: find_launch_node_started_payload(events, node_id, iter),
+        },
+        ReattachTrace::Wake => event_log::Event {
+            id: None,
+            run_id: run_id.to_string(),
+            ts: event_log::now_iso(),
+            kind: event_log::EventKind::NodeWoken,
+            node_id: Some(node_id.to_string()),
+            iter: Some(iter),
+            payload: None,
+        },
     };
-    if let Err(e) = append_event(state, &resurrection_started).await {
+    if let Err(e) = append_event(state, &trace_event).await {
         // The guard also enforces run-liveness on this append; a refusal means the
         // event log has no room for this session, so do not launch it.
         drop(admission_guard);
@@ -17936,6 +18085,13 @@ async fn node_pane(
                 Err(_) => (msg.to_string(), "unavailable"),
             }
         };
+        // #1009 follow-up: a hibernated wait wakes as a wait (`NodeWoken`) — the
+        // user opened it to answer; anything else is a recovery.
+        let trace = if node_state.awaiting.as_ref().is_some_and(|a| a.hibernated) {
+            ReattachTrace::Wake
+        } else {
+            ReattachTrace::Resurrection
+        };
         let outcome = reattach_node_session(
             &state,
             &events,
@@ -17945,6 +18101,7 @@ async fn node_pane(
             &node_id,
             iter,
             &session_name,
+            trace,
         )
         .await;
         match outcome {
@@ -47207,6 +47364,208 @@ edges: []
             payload: None,
         };
         append_event(state, &ev).await.unwrap();
+    }
+
+    /// #1009 follow-up: a run whose `asker` node declared a wait on a live tmux
+    /// session, launched on a pinned session id, in a worktree that exists — every
+    /// condition for a sleep. Returns the session name, or `None` without tmux.
+    async fn seed_declared_wait_on_live_session(
+        state: &Arc<AppState>,
+        repo: &std::path::Path,
+        run_id: &str,
+    ) -> Option<String> {
+        if std::process::Command::new("tmux")
+            .arg("-V")
+            .output()
+            .is_err()
+        {
+            eprintln!("tmux not on PATH — skipping");
+            return None;
+        }
+        seed_run_for_node_control(state, run_id, "grill").await;
+        for (kind, payload) in [
+            (
+                event_log::EventKind::NodeStarted,
+                serde_json::json!({ "session_id": "6f1c0b2e-0000-4000-8000-000000000001" }),
+            ),
+            (
+                event_log::EventKind::NodeAwaitingUser,
+                serde_json::json!({ "cause": "declared", "message": "Q7 ?" }),
+            ),
+        ] {
+            let event = event_log::Event {
+                id: None,
+                run_id: run_id.into(),
+                ts: event_log::now_iso(),
+                kind,
+                node_id: Some("asker".into()),
+                iter: Some(1),
+                payload: Some(payload),
+            };
+            append_event(state, &event).await.unwrap();
+        }
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let run_state = event_log::project(&events).unwrap();
+        let working_dir = tmux_session_manager::working_dir_for_node(
+            repo,
+            run_id,
+            "asker",
+            1,
+            node_run_isolation(&events, &run_state, "asker", 1),
+        );
+        std::fs::create_dir_all(&working_dir).unwrap();
+        let session = tmux_session_manager::node_session_name(run_id, "asker", 1);
+        let started = std::process::Command::new("tmux")
+            .args([
+                "-L",
+                &state.tmux_socket(),
+                "new-session",
+                "-d",
+                "-s",
+                &session,
+            ])
+            .arg("sleep 600")
+            .status()
+            .unwrap();
+        assert!(started.success());
+        Some(session)
+    }
+
+    async fn reload(
+        state: &Arc<AppState>,
+        run_id: &str,
+    ) -> (Vec<event_log::Event>, event_log::RunState) {
+        let events = load_events(&state.db, run_id).await.unwrap();
+        let run_state = event_log::project(&events).unwrap();
+        (events, run_state)
+    }
+
+    fn kill_tmux_server(state: &Arc<AppState>) {
+        let _ = std::process::Command::new("tmux")
+            .args(["-L", &state.tmux_socket(), "kill-server"])
+            .status();
+    }
+
+    #[tokio::test]
+    async fn a_long_declared_wait_sleeps_then_wakes_still_waiting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let state = test_state_with_dir(repo).await;
+        let run_id = "hibernation-run";
+        let Some(session) = seed_declared_wait_on_live_session(&state, repo, run_id).await else {
+            return;
+        };
+        let socket = state.tmux_socket();
+
+        // Not yet due: nothing moves.
+        let (events, run_state) = reload(&state, run_id).await;
+        let two_hours = chrono::Duration::minutes(120);
+        hibernate_due_waits_at(
+            &state,
+            &events,
+            &run_state,
+            repo,
+            two_hours,
+            chrono::Utc::now(),
+        )
+        .await;
+        assert!(tmux_session_manager::session_exists(&socket, &session));
+
+        // Past the delay: pane kept, session closed, the node still waiting on its
+        // question — asleep, and holding no admission slot.
+        let later = chrono::Utc::now() + chrono::Duration::hours(3);
+        hibernate_due_waits_at(&state, &events, &run_state, repo, two_hours, later).await;
+        assert!(!tmux_session_manager::session_exists(&socket, &session));
+        assert!(pane_snapshot_path(repo, run_id, "asker", 1).exists());
+        let (_, run_state) = reload(&state, run_id).await;
+        let node = &run_state.nodes["asker"];
+        assert_eq!(node.status, event_log::NodeStatus::AwaitingUser);
+        let wait = node.awaiting.as_ref().unwrap();
+        assert!(wait.hibernated);
+        assert_eq!(wait.message.as_deref(), Some("Q7 ?"));
+        assert_eq!(admission::count_live_node_sessions([&run_state]), 0);
+
+        // A daemon restart does not take the closed session for an incident.
+        boot_recovery::run_boot_recovery(&state).await;
+        let (events, run_state) = reload(&state, run_id).await;
+        assert_eq!(
+            run_state.nodes["asker"].status,
+            event_log::NodeStatus::AwaitingUser
+        );
+        assert!(!events
+            .iter()
+            .any(|e| e.kind == event_log::EventKind::NodeInterrupted));
+
+        // Opening it wakes it as a wait: `NodeWoken`, no resurrection `NodeStarted`,
+        // the question still there.
+        let started_before = events
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::NodeStarted)
+            .count();
+        let outcome = reattach_node_session(
+            &state,
+            &events,
+            &run_state,
+            repo,
+            run_id,
+            "asker",
+            1,
+            &session,
+            ReattachTrace::Wake,
+        )
+        .await;
+        assert!(matches!(outcome, ReattachOutcome::Resumed));
+        let (events, run_state) = reload(&state, run_id).await;
+        assert_eq!(events.last().unwrap().kind, event_log::EventKind::NodeWoken);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.kind == event_log::EventKind::NodeStarted)
+                .count(),
+            started_before
+        );
+        let node = &run_state.nodes["asker"];
+        assert_eq!(node.status, event_log::NodeStatus::AwaitingUser);
+        let wait = node.awaiting.as_ref().unwrap();
+        assert!(!wait.hibernated);
+        assert_eq!(wait.message.as_deref(), Some("Q7 ?"));
+
+        kill_tmux_server(&state);
+    }
+
+    #[tokio::test]
+    async fn a_half_typed_answer_keeps_the_session_awake() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let state = test_state_with_dir(repo).await;
+        let run_id = "hibernation-typed";
+        let Some(session) = seed_declared_wait_on_live_session(&state, repo, run_id).await else {
+            return;
+        };
+        state.pty_typed.lock().unwrap().insert(session.clone());
+
+        let (events, run_state) = reload(&state, run_id).await;
+        let later = chrono::Utc::now() + chrono::Duration::hours(3);
+        hibernate_due_waits_at(
+            &state,
+            &events,
+            &run_state,
+            repo,
+            chrono::Duration::minutes(120),
+            later,
+        )
+        .await;
+
+        assert!(tmux_session_manager::session_exists(
+            &state.tmux_socket(),
+            &session
+        ));
+        let (events, _) = reload(&state, run_id).await;
+        assert!(!events
+            .iter()
+            .any(|e| e.kind == event_log::EventKind::NodeHibernated));
+
+        kill_tmux_server(&state);
     }
 
     #[tokio::test]

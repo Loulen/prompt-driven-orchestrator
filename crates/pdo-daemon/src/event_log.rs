@@ -89,6 +89,18 @@ pub enum EventKind {
     /// `"node_resumed"`. The other lift — the completion release — has its own
     /// event (`NodeCompletionReleased`).
     NodeResumed,
+    /// A node awaiting its user on a declared wait was put to sleep: its pane was
+    /// snapshotted and its session closed to give the memory back, the agent's
+    /// transcript staying on disk (#1009 follow-up). The node stays `AwaitingUser`
+    /// with its question; only [`AwaitingInfo::hibernated`] flips. Wire form:
+    /// `"node_hibernated"`.
+    NodeHibernated,
+    /// A hibernated node's session was resumed on its pinned session id, typically
+    /// because the user opened its terminal. The wait is untouched — the agent is
+    /// still waiting for the answer — only the flag flips back. Unlike the
+    /// resurrection `NodeStarted` of a recovery, it does not move the node to
+    /// `Running`. Wire form: `"node_woken"`.
+    NodeWoken,
     NodeCompletionReleased,
     NodeCompleted,
     NodeFailed,
@@ -690,6 +702,12 @@ pub struct AwaitingInfo {
     /// The awaiting child run, for the `child_awaiting` overlay only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_run_id: Option<String>,
+    /// The session behind this wait is asleep (`NodeHibernated`): closed to free
+    /// memory, resumed on its pinned session id when the user opens it. Carried by
+    /// the wait itself, so whatever lifts the wait (an answer, a re-spawn, a
+    /// terminal transition) clears it too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hibernated: bool,
 }
 
 /// Cause slugs of [`AwaitingInfo`].
@@ -1737,6 +1755,8 @@ pub(crate) fn project(events: &[Event]) -> Option<RunState> {
             | EventKind::NodeStarted
             | EventKind::NodeCompletionReleased
             | EventKind::NodeResumed
+            | EventKind::NodeHibernated
+            | EventKind::NodeWoken
             | EventKind::NodeCompleted
             | EventKind::NodeAutoCompleted
             | EventKind::NodeAwaitingUser
@@ -2592,7 +2612,23 @@ fn apply_node_event(state: &mut RunState, event: &Event) {
                         message,
                         since: event.ts.clone(),
                         child_run_id: None,
+                        hibernated: false,
                     });
+                }
+            }
+        }
+        EventKind::NodeHibernated | EventKind::NodeWoken => {
+            // #1009 follow-up: only the current iteration's live wait carries the
+            // flag; a late event racing an answer or a re-spawn finds no wait (or
+            // another iteration) and is a no-op on projection.
+            if let Some(ref node_id) = event.node_id {
+                if let Some(node) = state.nodes.get_mut(node_id) {
+                    let iter = event.iter.unwrap_or(node.iter);
+                    if iter == node.iter && node.status == NodeStatus::AwaitingUser {
+                        if let Some(awaiting) = node.awaiting.as_mut() {
+                            awaiting.hibernated = event.kind == EventKind::NodeHibernated;
+                        }
+                    }
                 }
             }
         }

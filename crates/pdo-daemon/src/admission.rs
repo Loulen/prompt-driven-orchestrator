@@ -123,6 +123,12 @@ pub fn count_live_node_sessions_excluding<'a>(
             if !node_holds_session(&node.status) {
                 continue;
             }
+            // #1009 follow-up: a hibernated wait has no session — its memory went
+            // back to the machine, so it holds no slot until it is woken (the wake
+            // passes this gate like any spawn).
+            if node.awaiting.as_ref().is_some_and(|a| a.hibernated) {
+                continue;
+            }
             let is_self = exclude.as_ref().is_some_and(|x| {
                 x.run_id == run.run_id && x.node_id == node.node_id && x.iter == node.iter
             });

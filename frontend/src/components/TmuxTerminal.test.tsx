@@ -702,6 +702,39 @@ describe("TmuxTerminal", () => {
       });
     });
 
+    // #1009 follow-up: a hibernated wait has no session until the pane probe wakes
+    // it on the daemon side — so an `awaiting_user` node that is asleep probes
+    // first, says so, and attaches once the daemon answers `resumed`.
+    it("wakes an asleep node through the pane probe, then attaches", async () => {
+      let answer!: (pane: unknown) => void;
+      fetchPaneMock.mockReturnValue(
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      );
+      render(
+        <TmuxTerminal
+          session="pdo-run-1-cop-iter-1"
+          status="awaiting_user"
+          paneSource={paneSource}
+          asleep
+        />,
+      );
+
+      await waitFor(() => expect(fetchPaneMock).toHaveBeenCalledWith("run-1", "cop", 1));
+      expect(wsInstances).toHaveLength(0);
+      expect(screen.getByText("waking session…")).toBeInTheDocument();
+
+      answer({
+        content: "",
+        session_name: "pdo-run-1-cop-iter-1",
+        resumed: true,
+        stale: false,
+        source: "resumed",
+      });
+      await waitFor(() => expect(wsInstances).toHaveLength(1));
+    });
+
     it("never probes a live node — the live path is untouched", async () => {
       render(
         <TmuxTerminal

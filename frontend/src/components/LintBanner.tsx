@@ -49,7 +49,10 @@ export default function LintBanner({ items, onDismiss, onShow, activeNodeId }: P
         <div
           key={item.kind === "nudge" ? item.id : `lint-${i}`}
           data-testid="lint-banner-row"
-          className="flex items-start gap-2 rounded border border-st-await/30 bg-st-await/5 px-2 py-1.5 text-fg-3"
+          // #1024: the amber wash sits on an OPAQUE base (`bg-bg-1` under a
+          // flat gradient of the tint) — the bare /5 tint let the nodes under
+          // the banner show through.
+          className="flex items-start gap-2 rounded border border-st-await/30 bg-bg-1 bg-linear-to-r from-st-await/5 to-st-await/5 px-2 py-1.5 text-fg-3"
           style={{ fontSize: "10.5px" }}
         >
           <Info size={12} className="mt-0.5 shrink-0 text-st-await" />

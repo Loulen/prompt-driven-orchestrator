@@ -14,7 +14,7 @@ export {
 } from "./overview";
 import { OVERVIEW_TOUR } from "./overview";
 
-export { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID } from "./firstPipeline";
+export { FIRST_PIPELINE_TOUR, TUTORIAL_PIPELINE_ID, teachesWiring } from "./firstPipeline";
 export {
   FIRST_RUN_TOUR,
   TUTORIAL_REPO_PATH,

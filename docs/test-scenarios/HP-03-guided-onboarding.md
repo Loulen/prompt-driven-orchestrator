@@ -107,7 +107,11 @@ Features validated while crossing the tour:
     when it asks you to click it. Every edge is drawn from the **border** of the source card (there is
     no output dot), and the two edges out of the tester carry **`out`**, its first output — if one
     carries another port, the card sends you to the edge's **Outputs** section to tick `out`, and
-    only then advances.
+    only then advances. Before the first edge between the two agents, a card asks to **connect Start
+    to implementer** (Start is the only entry point, ADR-0081) and advances only once that edge
+    exists. While the tour runs, the path-coherence marks on the cards are **amber** and the banner
+    shows no coherence row; at the end the pipeline is **launchable** — no coherence row once the
+    tour is over, and it is selectable in New Run.
 15. Open **Settings › Tutorials** → all three tours are ticked, *Overview* first.
 
 ## Checks

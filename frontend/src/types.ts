@@ -1208,6 +1208,50 @@ export interface RunState {
     uncosted_harnesses?: string[];
     by_harness?: HarnessCost[];
   } | null;
+  /**
+   * The **Coût de l'arbre** (pdo-issues#3, ADR-0081): this Run's own cost (the
+   * Coût du Run parent, `cost` above — unchanged) plus every descendant's,
+   * recursively, archived children included. Derived on read, never persisted.
+   * Absent/null for a Run without descendant: its surfaces stay as they were.
+   */
+  tree_cost?: TreeCost | null;
+}
+
+/** A Run's cost as the daemon folds it (`CostStat`) — the shape of `RunState.cost`. */
+export interface CostStat {
+  usd: number;
+  partial: boolean;
+  unpriced_models?: string[];
+  uncosted_harnesses?: string[];
+  by_harness?: HarnessCost[];
+}
+
+/** One depth level of a run tree (1 = direct children). */
+export interface DepthCost {
+  depth: number;
+  runs: number;
+  /** Null when one Run at this depth has no computable cost ("—"). */
+  cost: CostStat | null;
+}
+
+/**
+ * The Coût de l'arbre of a Run that has descendants (daemon `TreeCost`). Every
+ * slice follows the honesty rule: `null` when a member's cost cannot be computed,
+ * `uncosted_harnesses` non-empty when a member ran a harness with no cost source
+ * (both render "—"), `partial` when a member is a lower bound (`†`).
+ */
+export interface TreeCost {
+  /** Parent run + every descendant. */
+  total: CostStat | null;
+  /** The Run's own cost — « Parent run ». */
+  parent: CostStat | null;
+  /** Every descendant summed — « Child runs (N) ». */
+  children: CostStat | null;
+  /** N: descendants at every depth. */
+  descendants: number;
+  by_depth: DepthCost[];
+  /** Runs of the tree whose cost cannot be computed at all. */
+  unavailable_runs: number;
 }
 
 /** One harness's slice of a Run's cost (#615, ADR-0052 §3). Additive in dollars,

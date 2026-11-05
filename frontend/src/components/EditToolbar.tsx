@@ -13,6 +13,9 @@ import {
 import { useEditStore } from "../stores/editStore";
 
 interface Props {
+  /** pdo-issues#3: the `(i)` button names the panel it opens — « Run info » on
+   *  a run canvas, « Pipeline info » on a template. */
+  infoLabel?: string;
   onAddNode: (type: NodeType) => void;
   onAddNote: () => void;
   // #345: open the "Add node from YAML…" modal (paste/upload a node definition).
@@ -70,7 +73,7 @@ interface Props {
   };
 }
 
-export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, runEdit }: Props) {
+export default function EditToolbar({ infoLabel = "Pipeline info", onAddNode, onAddNote, onAddNodeFromYaml, libraryEntries, onLibraryDelete, getDropPosition, infoOpen, onToggleInfo, assistantAvailable = false, assistantActive = false, onOpenAssistant, reviewHref, reviewPending = 0, reviewTone = "pending", reviewTitle = "Review", readOnly = false, finishedRun = false, onReopen, onRetryAll, onOpenShell, runEdit }: Props) {
   // Read undo/redo straight from the store (ADR-0014 / #226): they have no
   // component-local dependency, unlike the prop-drilled add callbacks, so
   // the point-of-use selector idiom is the right fit. `canUndo`/`canRedo` are
@@ -363,10 +366,10 @@ export default function EditToolbar({ onAddNode, onAddNote, onAddNodeFromYaml, l
           )}
 
           {onToggleInfo && (
-            <Tooltip content="Pipeline info">
+            <Tooltip content={infoLabel}>
               <button
                 data-testid="toolbar-info"
-                aria-label="Pipeline info"
+                aria-label={infoLabel}
                 aria-pressed={infoOpen ?? false}
                 onClick={onToggleInfo}
                 className={`grid h-7 w-7 cursor-pointer place-items-center rounded transition-colors ${

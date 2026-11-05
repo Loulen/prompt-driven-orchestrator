@@ -69,6 +69,7 @@ mod run_advance;
 mod run_command;
 mod run_cost;
 mod run_refs;
+mod run_tree;
 mod sandbox_container;
 mod sandbox_image;
 mod sandbox_profile;
@@ -94,6 +95,7 @@ mod structured_diff;
 mod switch_router;
 pub mod tmux_session_manager;
 mod transition_guard;
+mod tree_cost;
 #[allow(dead_code)]
 mod trigger_scheduler;
 #[allow(dead_code)]
@@ -15078,7 +15080,14 @@ async fn get_run(
                 &repo_root,
                 &prices,
             );
+            // ADR-0081: the Coût de l'arbre, additive — `cost` stays the Coût du
+            // Run parent; absent for a Run without descendant.
+            let tree_cost = derive_tree_cost(&state, &run_state, &events).await;
             let mut response = serde_json::to_value(run_state).expect("RunState serializes");
+            if let Some(tree_cost) = tree_cost {
+                response["tree_cost"] =
+                    serde_json::to_value(tree_cost).expect("TreeCost serializes");
+            }
             inject_frozen_node_provisioning(&mut response, &events);
             // Manager on demand: an OBSERVED fact, not a projected one — the
             // panel must know whether the session really exists, and a live tmux
@@ -15216,6 +15225,11 @@ struct RunChildEntry {
     /// "—", never `$0`.
     #[serde(skip_serializing_if = "Option::is_none")]
     cost: Option<event_log::CostStat>,
+    /// The child's **Coût de l'arbre** (ADR-0081): its own cost plus every one
+    /// of its descendants, grandchildren included. Absent for a child without
+    /// descendant — its tree cost IS `cost`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tree_cost: Option<tree_cost::TreeCost>,
 }
 
 /// One group of `GET /runs/{run_id}/children`: all children spawned by ONE
@@ -15437,11 +15451,40 @@ async fn list_run_children(
     // the Orchestration tab and the run list agree about the same child.
     let mut states: Vec<event_log::RunState> = projected.iter().map(|(_, s)| s.clone()).collect();
     child_awaiting::overlay(&mut states);
-    for ((events, _), child) in projected.into_iter().zip(states) {
+    // ADR-0081: each child shows its Coût de l'arbre. One fold per Run of the
+    // store at most, memoized for the request (a grandchild is folded once even
+    // though it belongs to no other child's tree).
+    let tree = run_tree::RunTree::from_states(&states);
+    let raw_by_id: HashMap<&str, &(Vec<event_log::Event>, event_log::RunState)> = projected
+        .iter()
+        .map(|entry| (entry.1.run_id.as_str(), entry))
+        .collect();
+    let mut member_costs: HashMap<String, Option<event_log::CostStat>> = HashMap::new();
+    let mut member_cost = |id: &str| -> Option<event_log::CostStat> {
+        if let Some(cost) = member_costs.get(id) {
+            return cost.clone();
+        }
+        let cost = raw_by_id
+            .get(id)
+            .and_then(|(events, run)| derive_run_cost(&state, run, events));
+        member_costs.insert(id.to_string(), cost.clone());
+        cost
+    };
+    let mut tree_costs: HashMap<String, tree_cost::TreeCost> = HashMap::new();
+    for child in &states {
         if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
             continue;
         }
-        let cost = derive_run_cost(&state, &child, &events);
+        if let Some(tc) = tree_cost_over(&tree, &child.run_id, &mut member_cost) {
+            tree_costs.insert(child.run_id.clone(), tc);
+        }
+    }
+    for ((events, _), child) in projected.iter().zip(states) {
+        if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
+            continue;
+        }
+        let cost = derive_run_cost(&state, &child, events);
+        let tree_cost = tree_costs.remove(&child.run_id);
         let stalled = event_log::is_stalled(&child);
         let entry = RunChildEntry {
             run_id: child.run_id,
@@ -15454,6 +15497,7 @@ async fn list_run_children(
             failure_reason: child.failure_reason,
             awaiting_reason: child.awaiting_reason,
             cost,
+            tree_cost,
         };
         by_node.entry(child.parent_node_id).or_default().push(entry);
     }
@@ -15499,6 +15543,83 @@ fn derive_run_cost(
     run_state: &event_log::RunState,
     events: &[event_log::Event],
 ) -> Option<event_log::CostStat> {
+    derive_run_cost_breakdown(state, run_state, events).cost
+}
+
+/// The Coût de l'arbre of `run_id` (ADR-0081) over a loaded store: the shared
+/// descendant walk gives each member its depth, `member_cost` folds each Run
+/// independently (memoized per Run). `None` for a Run without descendant.
+fn tree_cost_over(
+    tree: &run_tree::RunTree,
+    run_id: &str,
+    mut member_cost: impl FnMut(&str) -> Option<event_log::CostStat>,
+) -> Option<tree_cost::TreeCost> {
+    let members = tree.descendants(run_id);
+    if members.is_empty() {
+        return None;
+    }
+    let parent = member_cost(run_id);
+    let descendants: Vec<(usize, Option<event_log::CostStat>)> = members
+        .iter()
+        .map(|m| (m.depth, member_cost(&m.run_id)))
+        .collect();
+    tree_cost::tree_cost(parent, &descendants)
+}
+
+/// `GET /runs/{id}`'s `tree_cost`: read the store's parent links (one query
+/// over the `run_started` events, cheap), and only when the Run HAS
+/// descendants load and fold each of them. Never persisted (ADR-0081).
+async fn derive_tree_cost(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    events: &[event_log::Event],
+) -> Option<tree_cost::TreeCost> {
+    // Only child runs carry a parent link: root runs are filtered out in SQL.
+    let links: Vec<(String, Option<String>)> = match sqlx::query_as(
+        "SELECT run_id, json_extract(payload, '$.parent_run_id') FROM events \
+         WHERE kind = 'run_started' AND json_extract(payload, '$.parent_run_id') IS NOT NULL",
+    )
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(links) => links,
+        Err(e) => {
+            warn!(
+                "tree cost of run {}: cannot read the run tree: {e}",
+                run_state.run_id
+            );
+            return None;
+        }
+    };
+    let tree = run_tree::RunTree::from_links(links);
+    let members = tree.descendants(&run_state.run_id);
+    if members.is_empty() {
+        return None;
+    }
+    let mut loaded: HashMap<String, (Vec<event_log::Event>, event_log::RunState)> = HashMap::new();
+    for member in &members {
+        let Ok(member_events) = load_events(&state.db, &member.run_id).await else {
+            continue;
+        };
+        if let Some(member_state) = event_log::project(&member_events) {
+            loaded.insert(member.run_id.clone(), (member_events, member_state));
+        }
+    }
+    tree_cost_over(&tree, &run_state.run_id, |id| {
+        if id == run_state.run_id {
+            return derive_run_cost(state, run_state, events);
+        }
+        let (member_events, member_state) = loaded.get(id)?;
+        derive_run_cost(state, member_state, member_events)
+    })
+}
+
+/// The cost fold of one Run (ADR-0058), through the per-Run memo.
+fn derive_run_cost_breakdown(
+    state: &AppState,
+    run_state: &event_log::RunState,
+    events: &[event_log::Event],
+) -> run_cost::RunCostBreakdown {
     let (home_root, sandbox_root) = sandbox_run::sandbox_home_roots(state).unwrap_or_else(|_| {
         let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
         let sandbox = home.join(".pdo").join("sandbox");
@@ -15525,7 +15646,6 @@ fn derive_run_cost(
         &run_state.run_id,
         &prices,
     )
-    .cost
 }
 
 async fn get_run_events(
@@ -21457,23 +21577,21 @@ fn spawn_terminal_attach(terminal: &str, socket: &str, session_name: &str) -> Re
 }
 
 /// Every descendant of `run_id` (children, grandchildren, …) resolved through
-/// the same mechanical `parent_run_id` link as `list_run_children`, in
-/// **post-order**: a run always comes after all of its own descendants, so a
-/// cascade that walks the list front to back tears grandchildren down before
-/// their parent. Pure over the projected store; `run_id` itself is not listed.
+/// the shared run-tree walk ([`run_tree::RunTree`]), in **post-order**: a run
+/// always comes after all of its own descendants, so a cascade that walks the
+/// list front to back tears grandchildren down before their parent. Pure over
+/// the projected store; `run_id` itself is not listed.
 fn descendant_runs_post_order(
     runs: &[event_log::RunState],
     run_id: &str,
 ) -> Vec<event_log::RunState> {
-    let mut out = Vec::new();
-    for child in runs {
-        if child.parent_run_id.as_deref() != Some(run_id) {
-            continue;
-        }
-        out.extend(descendant_runs_post_order(runs, &child.run_id));
-        out.push(child.clone());
-    }
-    out
+    let by_id: HashMap<&str, &event_log::RunState> =
+        runs.iter().map(|r| (r.run_id.as_str(), r)).collect();
+    run_tree::RunTree::from_states(runs)
+        .descendants_post_order(run_id)
+        .into_iter()
+        .filter_map(|m| by_id.get(m.run_id.as_str()).map(|r| (*r).clone()))
+        .collect()
 }
 
 /// Project every run of the store (the read model behind `list_run_children`).

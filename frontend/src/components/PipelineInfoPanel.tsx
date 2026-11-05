@@ -11,13 +11,14 @@ import { useSourceDrift } from "../hooks/useSourceDrift";
 import type { CollapsedFiles } from "../lib/diffTab";
 import type { LibraryPipelineEntry } from "../api";
 import { fetchPipelineDocument, fetchPipelineSkillsSidecar, fetchRunPipelineDocument, fetchRunPipelineSkillsSidecar, openLibraryAssistant, startRunManager, stopRunManager } from "../api";
-import type { RunState, PipelineDef } from "../types";
+import type { RunState, PipelineDef, TreeCost } from "../types";
 import { isLiveRun } from "../types";
 import StatusIcon from "./StatusIcon";
 import { statusSpec } from "../lib/statusTable";
 import { shortAge } from "../lib/branchSelect";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
-import { formatEstCost } from "../lib/costLabel";
+import { formatCostStat, formatTreeCost } from "../lib/costLabel";
+import type { CostLabel } from "../lib/costLabel";
 import { serializePipeline } from "../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
 import { resolveInfoTab } from "../lib/infoPanelReconcile";
@@ -43,6 +44,108 @@ function StatRow({
     >
       <span className="text-fg-3">{label}</span>
       <span className="font-mono text-fg-4">{children}</span>
+    </div>
+  );
+}
+
+/** A cost figure with its amber `†` when it is a lower bound. */
+function CostFigure({ label, testid }: { label: CostLabel; testid?: string }) {
+  return (
+    <span className="flex items-center gap-1" data-testid={testid}>
+      {label.text}
+      {label.dagger && <span className="text-st-await">†</span>}
+    </span>
+  );
+}
+
+/** The per-harness ventilation line (#615): shown only when it says more than
+ *  the total already does — a genuinely mixed figure (≥2 slices), or, when the
+ *  total is withheld as "—", any slice at all (#617 FP). */
+function CostVentilation({ label, align = false }: { label: CostLabel; align?: boolean }) {
+  const slices = label.ventilation ?? [];
+  const ventilated = slices.length > (label.text === "—" ? 0 : 1);
+  if (!ventilated) return null;
+  return (
+    <span
+      className={`text-fg-4${align ? " self-end font-mono" : ""}`}
+      style={{ fontSize: "10.5px" }}
+      data-testid="stat-cost-ventilation"
+    >
+      {slices.map((v) => `${v.text} via ${v.harness}`).join(" · ")}
+    </span>
+  );
+}
+
+/** One indented sub-line of the tree cost (« Parent run », « Child runs (N) », « Depth N »). */
+function TreeCostLine({
+  label,
+  cost,
+  testid,
+  depthLine = false,
+}: {
+  label: string;
+  cost: CostLabel;
+  testid: string;
+  depthLine?: boolean;
+}) {
+  return (
+    <div
+      className="flex items-center justify-between"
+      style={{ fontSize: depthLine ? "9.5px" : "10px" }}
+      data-testid={testid}
+      title={cost.title}
+    >
+      <span className={depthLine ? "text-fg-4" : "text-fg-3"}>{label}</span>
+      <span className="font-mono text-fg-4">
+        <CostFigure label={cost} />
+      </span>
+    </div>
+  );
+}
+
+/**
+ * « Est. cost » of a Run that has child runs (pdo-issues#3): the **tree cost**
+ * as the main value, always expanded into « Parent run » / « Child runs (N) »,
+ * and a « Depth N (k runs) » level only when the tree is deeper than one level.
+ * A Run without children never reaches this row — its Est. cost is unchanged.
+ */
+function TreeCostRow({ tree }: { tree: TreeCost }) {
+  const total = formatTreeCost(tree);
+  const maxDepth = tree.by_depth.reduce((m, d) => Math.max(m, d.depth), 0);
+  return (
+    <div
+      className="flex flex-col gap-0.5 rounded bg-bg-3 px-2 py-1"
+      style={{ fontSize: "10.5px" }}
+      data-testid="stat-cost"
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-fg-3">Est. cost</span>
+        <span className="font-mono text-fg-4" title={total.title}>
+          <CostFigure label={total} testid="stat-cost-total" />
+        </span>
+      </div>
+      <CostVentilation label={total} align />
+      <div className="ml-1 flex flex-col gap-0.5 border-l border-line-strong pl-2" data-testid="stat-cost-tree">
+        <TreeCostLine label="Parent run" cost={formatCostStat(tree.parent)} testid="stat-cost-parent" />
+        <TreeCostLine
+          label={`Child runs (${tree.descendants})`}
+          cost={formatCostStat(tree.children)}
+          testid="stat-cost-children"
+        />
+        {maxDepth > 1 && (
+          <div className="ml-1 flex flex-col gap-0.5 border-l border-line-strong pl-2" data-testid="stat-cost-depths">
+            {tree.by_depth.map((d) => (
+              <TreeCostLine
+                key={d.depth}
+                label={`Depth ${d.depth} (${d.runs} run${d.runs === 1 ? "" : "s"})`}
+                cost={formatCostStat(d.cost)}
+                testid={`stat-cost-depth-${d.depth}`}
+                depthLine
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -167,14 +270,15 @@ export default function PipelineInfoPanel({
         className="flex h-[36px] items-center justify-between border-b border-line px-3 font-medium text-fg-2"
         style={{ fontSize: "11.5px" }}
       >
-        <span>Pipeline info</span>
+        {/* pdo-issues#3: with a Run selected the panel speaks about that Run. */}
+        <span data-testid="info-panel-title">{run ? "Run info" : "Pipeline info"}</span>
         <button
           onClick={onClose}
           className="grid h-5 w-5 cursor-pointer place-items-center rounded text-fg-3 transition-colors hover:bg-bg-3 hover:text-fg"
           data-testid="info-panel-close"
           // #397: no Tooltip here to borrow a name from — the `X` icon is
           // `aria-hidden`, so the label has to be explicit.
-          aria-label="Close pipeline info"
+          aria-label={run ? "Close run info" : "Close pipeline info"}
         >
           <X size={12} />
         </button>
@@ -889,47 +993,28 @@ function InfoTab({
                 "—"
               )}
             </StatRow>
-            <StatRow label="Est. cost" testid="stat-cost">
-              {run.cost ? (
-                (() => {
-                  // Shared honesty helper (#272/#377): same vocabulary as the
-                  // aggregated Stats charts.
-                  const c = formatEstCost(
-                    run.cost.usd,
-                    run.cost.partial,
-                    run.cost.unpriced_models,
-                    // #553: "—" + reason when a node ran on a harness with no cost
-                    // source (e.g. opencode) — never a misleading $0.
-                    run.cost.uncosted_harnesses ?? [],
-                    // #615: ventilate a mixed Run's total by harness.
-                    run.cost.by_harness ?? [],
-                  );
-                  // Show the per-harness breakdown only when it says more than the
-                  // total already does: a genuinely mixed Run (≥2 slices), or — when
-                  // the total is withheld as "—" — any slice at all, since then even
-                  // one says something the total cannot (#617 FP).
-                  const slices = c.ventilation ?? [];
-                  const ventilated = slices.length > (c.text === "—" ? 0 : 1);
-                  return (
-                    <span className="flex flex-col items-end gap-0.5" title={c.title}>
-                      <span className="flex items-center gap-1">
-                        {c.text}
-                        {c.dagger && <span className="text-st-await">†</span>}
+            {run.tree_cost ? (
+              <TreeCostRow tree={run.tree_cost} />
+            ) : (
+              <StatRow label="Est. cost" testid="stat-cost">
+                {run.cost ? (
+                  (() => {
+                    // Shared honesty helper (#272/#377): same vocabulary as the
+                    // aggregated Stats charts. #553: "—" + reason when a node ran
+                    // on a harness with no cost source; #615: ventilated by harness.
+                    const c = formatCostStat(run.cost);
+                    return (
+                      <span className="flex flex-col items-end gap-0.5" title={c.title}>
+                        <CostFigure label={c} />
+                        <CostVentilation label={c} />
                       </span>
-                      {ventilated && (
-                        <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-                          {slices
-                            .map((v) => `${v.text} via ${v.harness}`)
-                            .join(" · ")}
-                        </span>
-                      )}
-                    </span>
-                  );
-                })()
-              ) : (
-                "—"
-              )}
-            </StatRow>
+                    );
+                  })()
+                ) : (
+                  "—"
+                )}
+              </StatRow>
+            )}
           </div>
           )}
         </div>

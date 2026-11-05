@@ -92,7 +92,7 @@ impl std::fmt::Display for ImportError {
                 write!(f, "`{name}` is already taken: choose replace, rename or skip")
             }
             Self::Archive(error) => write!(f, "{error}"),
-            Self::InvalidUpload(reason) => write!(f, "invalid upload: {reason}"),
+            Self::InvalidUpload(reason) => write!(f, "Invalid upload: {reason}."),
             Self::InvalidScanId(id) => write!(
                 f,
                 "`{id}` is not a valid scan id (letters, digits, `-`, `_` and `.` only)"

@@ -315,18 +315,21 @@ pub(crate) enum ArchiveError {
 impl std::fmt::Display for ArchiveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotAZip(file) => write!(f, "`{file}` is not a .zip"),
-            Self::Corrupt(reason) => write!(f, "the archive is corrupted or truncated: {reason}"),
+            // Shown as is in the import popup: plain sentences, no Markdown.
+            Self::NotAZip(file) => write!(f, "{file} is not a .zip."),
+            Self::Corrupt(reason) => {
+                write!(f, "The archive is corrupted or truncated ({reason}).")
+            }
             Self::UnsafeEntry(entry) => write!(
                 f,
-                "the archive entry `{entry}` points outside its folder: archive refused"
+                "The entry {entry} points outside its folder: archive refused."
             ),
-            Self::TooLarge(reason) => write!(f, "{reason}"),
+            Self::TooLarge(reason) => write!(f, "{reason}."),
             Self::NoSkills(file) => write!(
                 f,
-                "`{file}` holds no SKILL.md: drop a PDO archive, a pipeline's skills sidecar, or a zip of folders holding a SKILL.md"
+                "{file} holds no SKILL.md: drop a PDO archive, a pipeline's skills sidecar, or a zip of folders holding a SKILL.md."
             ),
-            Self::Io(reason) => write!(f, "failed to read the archive: {reason}"),
+            Self::Io(reason) => write!(f, "Failed to read the archive ({reason})."),
         }
     }
 }
@@ -458,7 +461,7 @@ pub(crate) fn extract(
     use std::io::Read;
     if bytes.len() as u64 > MAX_ARCHIVE_BYTES {
         return Err(ArchiveError::TooLarge(format!(
-            "the archive is {} MB, over the {} MB limit",
+            "The archive is {} MB, over the {} MB limit",
             bytes.len() as u64 / (1024 * 1024),
             MAX_ARCHIVE_BYTES / (1024 * 1024)
         )));
@@ -470,7 +473,7 @@ pub(crate) fn extract(
         .map_err(|e| ArchiveError::Corrupt(e.to_string()))?;
     if archive.len() > MAX_ENTRIES {
         return Err(ArchiveError::TooLarge(format!(
-            "the archive holds {} entries, over the {MAX_ENTRIES} limit",
+            "The archive holds {} entries, over the {MAX_ENTRIES} limit",
             archive.len()
         )));
     }
@@ -514,7 +517,7 @@ pub(crate) fn extract(
         (&mut entry)
             .take(skill_bank::MAX_FILE_BYTES + 1)
             .read_to_end(&mut data)
-            .map_err(|e| ArchiveError::Corrupt(format!("`{name}`: {e}")))?;
+            .map_err(|e| ArchiveError::Corrupt(format!("{name}: {e}")))?;
         if data.len() as u64 > skill_bank::MAX_FILE_BYTES {
             oversize.push(OversizeFile {
                 path: rel,
@@ -525,7 +528,7 @@ pub(crate) fn extract(
         total += data.len() as u64;
         if total > MAX_EXTRACTED_BYTES {
             return Err(ArchiveError::TooLarge(format!(
-                "the archive expands over {} MB",
+                "The archive expands over {} MB",
                 MAX_EXTRACTED_BYTES / (1024 * 1024)
             )));
         }
@@ -538,9 +541,9 @@ pub(crate) fn extract(
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| ArchiveError::Corrupt(format!("`{name}`: {e}")))?;
+                .map_err(|e| ArchiveError::Corrupt(format!("{name}: {e}")))?;
         }
-        std::fs::write(&path, &data).map_err(|e| ArchiveError::Io(format!("`{name}`: {e}")))?;
+        std::fs::write(&path, &data).map_err(|e| ArchiveError::Io(format!("{name}: {e}")))?;
     }
     if skill_dirs.is_empty() {
         return Err(ArchiveError::NoSkills(file_name.to_string()));

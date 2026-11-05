@@ -215,9 +215,9 @@ export default function ImportSkillsModal({
         if (isFile) {
           setArchiveFile(null);
           setArchiveRefusal({
-            title: code === "archive_too_large" ? "Archive too large." : "Not a skills archive.",
-            message,
-            advise: code !== "no_skills" && code !== "archive_too_large",
+            title: archiveRefusalTitle(code),
+            message: asSentence(message),
+            advise: code === "not_a_zip" || code === "corrupt_archive" || code === "invalid_upload",
           });
         } else {
           setScanError({ code, message });
@@ -694,6 +694,13 @@ export default function ImportSkillsModal({
                 <div className="my-2 flex items-center gap-2 text-fg-4" style={{ fontSize: "10.5px" }} aria-hidden>
                   <span className="h-px flex-1 bg-line" />
                   or an archive
+                  <span
+                    className="rounded-sm bg-fuchsia-600 px-1 font-medium text-white"
+                    style={{ fontSize: "9px", lineHeight: "13px" }}
+                    data-testid="import-archive-new"
+                  >
+                    new
+                  </span>
                   <span className="h-px flex-1 bg-line" />
                 </div>
                 <SkillFileDropZone
@@ -882,9 +889,16 @@ export default function ImportSkillsModal({
             {(step === "results" || step === "importing") && candidates.length > 0 && (
               <div className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-bg-1">
                 <div className="flex items-center gap-2 border-b border-line px-3 py-2" style={{ fontSize: "11px" }}>
-                  <span className="grid h-3.5 w-3.5 place-items-center rounded-sm bg-acc text-bg-1">
-                    <Check size={9} strokeWidth={3} />
-                  </span>
+                  {summary.willImport.length > 0 ? (
+                    <span
+                      className="grid h-3.5 w-3.5 place-items-center rounded-sm bg-acc text-bg-1"
+                      data-testid="import-found-check"
+                    >
+                      <Check size={9} strokeWidth={3} />
+                    </span>
+                  ) : (
+                    <span className="h-3.5 w-3.5 rounded-sm border border-line-strong" aria-hidden />
+                  )}
                   <span className="font-medium text-fg" data-testid="import-found-count">
                     {candidates.length} skill{candidates.length === 1 ? "" : "s"} found
                   </span>
@@ -1440,6 +1454,28 @@ function Chip({ label, value, accent }: { label: string; value: string; accent?:
       <span className="font-mono text-fg">{value}</span>
     </span>
   );
+}
+
+/** The refusal's bold lead, one per named daemon reason (#1027). */
+function archiveRefusalTitle(code: string): string {
+  switch (code) {
+    case "archive_too_large":
+      return "Archive too large.";
+    case "corrupt_archive":
+      return "Corrupted archive.";
+    case "unsafe_entry":
+      return "Unsafe archive.";
+    case "no_skills":
+      return "No skills in this archive.";
+    default:
+      return "Not a skills archive.";
+  }
+}
+
+/** A message shown after a bold lead reads as a sentence: it ends with a period. */
+function asSentence(message: string): string {
+  const trimmed = message.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 /** `· 1 new · 2 changed · 1 up to date · 1 name taken · 2 not importable` (#1027). */

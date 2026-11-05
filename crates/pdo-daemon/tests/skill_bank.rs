@@ -2877,6 +2877,7 @@ async fn fp1027_unreadable_archives_are_refused_with_a_named_reason() {
     let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
     let cases: Vec<(&str, Vec<u8>, &str)> = vec![
         ("notes.pdf", b"%PDF-1.7 not a zip".to_vec(), "not_a_zip"),
+        ("notes.zip", b"plain text, not a zip".to_vec(), "not_a_zip"),
         (
             "broken.zip",
             b"PK\x03\x04garbage".to_vec(),
@@ -2904,7 +2905,11 @@ async fn fp1027_unreadable_archives_are_refused_with_a_named_reason() {
             "{file_name}: {body}"
         );
         assert_eq!(body["code"], code, "{file_name}: {body}");
-        assert!(body["error"].as_str().unwrap().len() > 10, "{body}");
+        // Shown as is in the import popup: a plain sentence, no Markdown.
+        let error = body["error"].as_str().unwrap();
+        assert!(error.len() > 10, "{body}");
+        assert!(!error.contains('`'), "no Markdown backticks: {error}");
+        assert!(error.ends_with('.'), "a full sentence: {error}");
     }
     let resp = post_json(
         &daemon,

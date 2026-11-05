@@ -605,7 +605,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
                 <MenuItem
                   icon={<Download size={12} />}
                   label="Import from a source…"
-                  hint="repo · folder"
+                  hint="repo · folder · .zip"
                   testid="skill-import"
                   onClick={() => {
                     setAddMenuOpen(false);

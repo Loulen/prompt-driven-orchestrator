@@ -165,6 +165,7 @@ describe("ImportSkillsModal — Import d'archive (#1027)", () => {
     expect(screen.getByTestId("import-archive-name")).toHaveTextContent("team-review.skills.zip");
     expect(screen.getByTestId("import-archive-format")).toHaveTextContent("PDO archive · ids kept");
     expect(screen.getByTestId("import-found-count")).toHaveTextContent("5 skills found");
+    expect(screen.getByTestId("import-found-check")).toBeInTheDocument();
     expect(screen.getByTestId("import-found-breakdown")).toHaveTextContent(
       "· 1 new · 1 changed · 1 up to date · 1 name taken · 1 not importable",
     );
@@ -202,6 +203,8 @@ describe("ImportSkillsModal — Import d'archive (#1027)", () => {
     });
     expect(screen.getByTestId("import-submit")).toBeDisabled();
     expect(screen.getByTestId("import-submit")).toHaveTextContent("Import 0 skills");
+    // Nothing is ticked: the header does not show a check.
+    expect(screen.queryByTestId("import-found-check")).toBeNull();
   });
 
   it("defaults to a new suffixed folder when one exists, and imports into it with the file as source", async () => {
@@ -310,7 +313,7 @@ describe("ImportSkillsModal — Import d'archive (#1027)", () => {
   it("shows the daemon's refusal of a corrupted archive in place", async () => {
     setup();
     scanArchiveMock.mockRejectedValue(
-      new ApiError("the archive is corrupted or truncated: invalid Zip archive", {
+      new ApiError("The archive is corrupted or truncated (invalid Zip archive).", {
         status: 422,
         body: { code: "corrupt_archive" },
       }),
@@ -318,8 +321,25 @@ describe("ImportSkillsModal — Import d'archive (#1027)", () => {
     pick(zip("broken.zip"));
     await waitFor(() => expect(screen.getByTestId("import-archive-error")).toBeInTheDocument());
     expect(screen.getByTestId("import-archive-error")).toHaveTextContent(
-      "Not a skills archive. the archive is corrupted or truncated",
+      "Corrupted archive. The archive is corrupted or truncated (invalid Zip archive). Drop a PDO archive",
     );
     expect(screen.getByTestId("import-skills-modal")).toHaveAttribute("data-step", "source");
+  });
+
+  it("tells a .zip that is not a zip apart, as a sentence before the advice", async () => {
+    setup();
+    scanArchiveMock.mockRejectedValue(
+      new ApiError("notes.zip is not a .zip", { status: 422, body: { code: "not_a_zip" } }),
+    );
+    pick(zip("notes.zip"));
+    await waitFor(() => expect(screen.getByTestId("import-archive-error")).toBeInTheDocument());
+    const alert = screen.getByTestId("import-archive-error");
+    expect(alert).toHaveTextContent("Not a skills archive. notes.zip is not a .zip. Drop a PDO archive");
+    expect(alert.textContent).not.toContain("`");
+  });
+
+  it("marks the archive path as new on the source step", () => {
+    setup();
+    expect(screen.getByTestId("import-archive-new")).toHaveTextContent("new");
   });
 });

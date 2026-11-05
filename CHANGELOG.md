@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.127.0
+**Un Pipeline non lançable est refusé au lancement** (#1021, spec #1020, story gitlab #23,
+ADR-0081). **Cassant** : `Start` devient l'unique point d'entrée.
+
+- Un Pipeline sans chemin `Start` → `End`, avec un **Cul-de-sac** (nœud qui ne mène jamais à
+  `End`) ou un **Nœud orphelin** (nœud que `Start` n'atteint pas) s'enregistre toujours, mais
+  **tout lancement est refusé** (400) : New Run, `POST /runs`, `pdo run create` (Runs enfants
+  compris), Trigger, Retry all. Le message nomme chaque défaut et chaque nœud
+  (`Not launchable: …`). Toutes les arêtes comptent, `when`/`else` et ré-entrées de boucle
+  comprises. Les Runs en cours et le retry d'un nœud ne sont pas concernés.
+- Conséquence à connaître : un nœud **sans port de sortie** (un `script` « effet de bord »
+  pur) ne peut porter aucune arête vers `End` ; c'est un Cul-de-sac. Donnez-lui une sortie.
+- Un Trigger branché sur un Pipeline non lançable est *dangling* : il ne tire plus et affiche
+  la raison ; « Run now » répond 409.
+- `GET`/`PUT /pipelines/{id}` renvoient ces défauts dans `diagnostics` et, structurés, dans
+  `path_defects` (`kind`, `node_id`, `message`) ; l'éditeur rafraîchit la bannière à
+  l'enregistrement, avec un lien « Show » sur le nœud fautif. `GET /pipelines` expose
+  `launchable` et `not_launchable_reasons`.
+
 ## 1.126.0
 **Tours jouables à plusieurs sur une instance partagée** (#986, #987, story PDO-20), validé en
 recette.

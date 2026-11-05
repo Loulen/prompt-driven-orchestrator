@@ -870,6 +870,45 @@ describe("updateNode with name", () => {
 });
 
 describe("editStore.save", () => {
+  // ADR-0081 / #1021: the banner refreshes on Save, not only on reload.
+  it("refreshes the tab's diagnostics from the save's answer", async () => {
+    seedTab("p1", true);
+    const defect = {
+      kind: "orphan" as const,
+      node_id: "aaaaaaaa",
+      node_name: "worker",
+      message: 'Not launchable: orphan node — node "worker" is not reachable from Start.',
+    };
+    mockSavePipeline.mockResolvedValueOnce({
+      ok: true,
+      id: "p1",
+      renamed: false,
+      diagnostics: ["Not launchable: no path from Start to End.", defect.message],
+      path_defects: [
+        { kind: "no_path", message: "Not launchable: no path from Start to End." },
+        defect,
+      ],
+    });
+
+    await useEditStore.getState().save("p1");
+
+    const tab = useEditStore.getState().openTabs.find((t) => t.id === "p1");
+    expect(tab?.diagnostics).toEqual(["Not launchable: no path from Start to End.", defect.message]);
+    expect(tab?.pathDefects?.[1]).toEqual(defect);
+  });
+
+  it("keeps the tab's diagnostics when the save answers none (older daemon)", async () => {
+    seedTab("p1", true);
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({ ...t, diagnostics: ["kept"] })),
+    }));
+    mockSavePipeline.mockResolvedValueOnce({ ok: true });
+
+    await useEditStore.getState().save("p1");
+
+    expect(useEditStore.getState().openTabs[0].diagnostics).toEqual(["kept"]);
+  });
+
   it("resolves with dirty === false after successful save", async () => {
     seedTab("p1", true);
     expect(useEditStore.getState().openTabs[0].dirty).toBe(true);

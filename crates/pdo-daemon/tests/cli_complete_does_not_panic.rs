@@ -44,7 +44,27 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: solo, port: in }
+  - source: { node: solo, port: out }
+    target: { node: end, port: result }
 "#;
+
+/// `solo` feeds a downstream node instead of End, so completing `solo` leaves the
+/// run live: a duplicate completion must meet a live run to be a legal duplicate
+/// (a completion on a terminal run is refused by design, see `transition_guard`).
+/// Launchable (ADR-0081): `after` leads to End.
+const LIVE_AFTER_SOLO_PIPELINE_NAME: &str = "cli-cycle-live";
+fn live_after_solo_pipeline_yaml() -> String {
+    PIPELINE_YAML
+        .replace("name: cli-cycle\n", "name: cli-cycle-live\n")
+        .replace(
+            "  - source: { node: solo, port: out }\n    target: { node: end, port: result }\n",
+            "  - source: { node: solo, port: out }\n    target: { node: after, port: in }\n  - source: { node: after, port: out }\n    target: { node: end, port: result }\n",
+        )
+        .replace(
+            "  - id: end\n",
+            "  - id: after\n    name: after\n    type: agent\n    isolated_worktree: false\n    outputs:\n      - name: out\n  - id: end\n",
+        )
+}
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
@@ -52,6 +72,10 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     std::fs::write(
         pipelines_dir.join(format!("{PIPELINE_NAME}.yaml")),
         PIPELINE_YAML,
+    )?;
+    std::fs::write(
+        pipelines_dir.join(format!("{LIVE_AFTER_SOLO_PIPELINE_NAME}.yaml")),
+        live_after_solo_pipeline_yaml(),
     )?;
     git_init_with_commit(repo)?;
     Ok(())
@@ -276,11 +300,15 @@ async fn pdo_complete_auto_exits_3_on_a_recoverable_refusal() {
 /// is `true`, so the node session exits instantly and neither claude nor a live tmux
 /// is required — the trick that makes the whole exit-code matrix testable in CI.
 async fn daemon_with_run() -> (TestDaemon, String) {
+    daemon_with_run_of(PIPELINE_NAME).await
+}
+
+async fn daemon_with_run_of(pipeline: &str) -> (TestDaemon, String) {
     let daemon = TestDaemon::spawn_with_override(seed, Some("true".to_string()))
         .await
         .unwrap();
     let body = serde_json::json!({
-        "pipeline": PIPELINE_NAME,
+        "pipeline": pipeline,
         "input": "hello",
         // #470 / ADR-0033: required at the create boundary.
         "target_repo": daemon.target_repo(),
@@ -442,7 +470,7 @@ async fn pdo_complete_exits_4_on_a_terminal_refusal() {
 /// unprompted.
 #[tokio::test]
 async fn pdo_complete_exits_0_on_a_legal_duplicate() {
-    let (daemon, run_id) = daemon_with_run().await;
+    let (daemon, run_id) = daemon_with_run_of(LIVE_AFTER_SOLO_PIPELINE_NAME).await;
     write_output_artifact(&daemon, &run_id, "# Output\nDone.");
 
     let (first, stderr) = run_pdo_complete(&daemon.url(), &run_id).await;

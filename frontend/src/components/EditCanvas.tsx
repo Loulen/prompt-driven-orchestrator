@@ -836,11 +836,22 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const { dismissed, dismiss } = useDismissedNudges(tab?.id ?? "");
   const allItems = useMemo<LintBannerItem[]>(() => {
     if (!tab) return [];
-    const lint = (tab.diagnostics ?? []).map((m, i) => ({
-      id: `lint:${i}`,
-      kind: "lint" as const,
-      message: m,
-    }));
+    // ADR-0081: a path-coherence diagnostic naming a node carries its id, so
+    // the row offers « Show ». The daemon appends the path defects last, in
+    // order: pair them BY POSITION, never by text — two nodes may share a name,
+    // hence a message.
+    const diagnostics = tab.diagnostics ?? [];
+    const defects = tab.pathDefects ?? [];
+    const firstDefect = diagnostics.length - defects.length;
+    const lint = diagnostics.map((m, i): LintBannerItem => {
+      const defect = i >= firstDefect ? defects[i - firstDefect] : undefined;
+      return {
+        id: `lint:${i}`,
+        kind: "lint" as const,
+        message: m,
+        ...(defect?.node_id && defect.message === m ? { nodeId: defect.node_id } : {}),
+      };
+    });
     const nudges = collectionFanoutNudges(tab.pipeline).map((n) => ({
       ...n,
       kind: "nudge" as const,
@@ -875,6 +886,20 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const visibleItems = useMemo(
     () => allItems.filter((it) => it.kind === "lint" || !dismissed.has(it.id)),
     [allItems, dismissed],
+  );
+  // gitlab #23 « Show »: select the named node (the inspector follows) and
+  // centre the canvas on it.
+  const showNode = useCallback(
+    (nodeId: string) => {
+      setSelection({ kind: "node", id: nodeId });
+      const node = reactFlow.getInternalNode(nodeId);
+      if (!node) return;
+      const { x, y } = node.internals.positionAbsolute;
+      const w = node.measured.width ?? CARD_WIDTH;
+      const h = node.measured.height ?? CARD_HEIGHT;
+      reactFlow.setCenter(x + w / 2, y + h / 2, { zoom: 1.2, duration: 400 });
+    },
+    [reactFlow, setSelection],
   );
 
   if (!tab || !pipeline) {
@@ -1026,7 +1051,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
       {visibleItems.length > 0 && tab.runId == null && (
         <div className="absolute left-0 right-0 top-10 z-10">
-          <LintBanner items={visibleItems} onDismiss={dismiss} />
+          <LintBanner items={visibleItems} onDismiss={dismiss} onShow={showNode} />
         </div>
       )}
 

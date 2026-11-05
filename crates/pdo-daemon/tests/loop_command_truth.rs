@@ -70,6 +70,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: planner, port: task }
+  - source: { node: planner, port: plan }
+    target: { node: end, port: result }
 "#;
 
 /// A bounded region that exhausts after ONE lap with no route out — the shape
@@ -113,6 +115,12 @@ edges:
   - source: { node: rev, port: review }
     target: { node: impl, port: task }
     else: true
+  # ADR-0081: the exit every launchable pipeline needs. `rev` never writes a
+  # verdict, so it never matches — exhaustion stays unrouted.
+  - source: { node: rev, port: review }
+    target: { node: end, port: result }
+    when:
+      verdict: { eq: pass }
 loops:
   - id: review_loop
     kind: bounded

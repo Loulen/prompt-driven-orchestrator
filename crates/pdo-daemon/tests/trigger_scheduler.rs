@@ -38,6 +38,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: solo, port: in }
+  - source: { node: solo, port: out }
+    target: { node: end, port: result }
 "#;
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
@@ -597,6 +599,62 @@ async fn dangling_pipeline_reference_yields_error_outcome_and_stops_firing() {
         "a dangling-ref Trigger must stop firing (next_fire cleared)"
     );
     assert_eq!(t["last_outcome"].as_str(), Some("error"));
+}
+
+/// ADR-0081 / #1021: a Trigger on a Pipeline non lançable is dangling — an error
+/// outcome naming the defect, dormant (no fire per tick), and « Run now » is a 409.
+#[tokio::test]
+async fn non_launchable_pipeline_makes_the_trigger_dangling_with_the_reason() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+
+    let trigger = create_trigger(&daemon, "audit", "* * * * *").await;
+    let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+    // Broken since the Trigger was created: `solo` no longer reaches End.
+    std::fs::write(
+        daemon
+            .repo_root()
+            .join(".pdo")
+            .join("pipelines")
+            .join(format!("{PIPELINE_NAME}.yaml")),
+        PIPELINE_YAML.replace(
+            "  - source: { node: solo, port: out }\n    target: { node: end, port: result }\n",
+            "",
+        ),
+    )
+    .unwrap();
+
+    daemon.force_trigger_due(&trigger_id).await;
+    daemon.run_trigger_tick().await;
+
+    assert!(
+        list_runs(&daemon).await.is_empty(),
+        "a non-launchable pipeline must not fire a Run"
+    );
+    let fires = list_fires(&daemon, &trigger_id).await;
+    assert_eq!(fires[0]["outcome"].as_str(), Some("error"));
+    assert_eq!(
+        fires[0]["reason"].as_str(),
+        Some("Not launchable: no path from Start to End. Not launchable: dead end — node \"solo\" never leads to End."),
+        "the reason is the launch refusal itself"
+    );
+    let t = get_trigger(&daemon, &trigger_id).await;
+    assert!(t["next_fire_at"].is_null(), "dangling ⇒ dormant: {t:?}");
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/triggers/{}/fire", daemon.url(), trigger_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 409, "Run now on a dangling Trigger is a 409");
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("dead end"),
+        "{body:?}"
+    );
 }
 
 #[tokio::test]

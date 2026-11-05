@@ -1445,6 +1445,13 @@ export interface PipelineListEntry {
    * with no stored validation.
    */
   validation?: PipelineValidation;
+  /**
+   * ADR-0081 — whether a Run may be launched from it (path coherence). Absent (an
+   * older daemon) reads as launchable.
+   */
+  launchable?: boolean;
+  /** Why not: one `Not launchable: …` sentence per defect. Empty when launchable. */
+  not_launchable_reasons?: string[];
 }
 
 /**
@@ -1766,6 +1773,24 @@ export interface PipelineDetail {
   pipeline: PipelineDef;
   prompts: Record<string, string>;
   diagnostics: string[];
+  /**
+   * ADR-0081 — the path-coherence defects among `diagnostics`, structured: the
+   * same `message` strings, plus the culprit node. Absent on a run pipeline and
+   * on an older daemon.
+   */
+  path_defects?: PathDefect[];
+}
+
+/**
+ * One path-coherence defect of a Pipeline non lançable (ADR-0081, CONTEXT.md):
+ * no path Start → End (names no node), a Cul-de-sac or a Nœud orphelin (name the
+ * culprit node). `message` is the exact daemon sentence the banner shows.
+ */
+export interface PathDefect {
+  kind: "no_path" | "dead_end" | "orphan";
+  node_id?: string;
+  node_name?: string;
+  message: string;
 }
 
 // Mirrors the daemon's `GET /stats/overview` (cheap indexed SQL) and

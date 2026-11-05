@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineValidation, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
+import type { PipelineListEntry, PipelineValidation, PipelineDetail, PathDefect, PipelineDef, RunListEntry, RunState, PortDef, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
   ReviewCommentsListResponse,
   ReviewDecisionResponse,
   SendReviewCommentInput,
@@ -1942,17 +1942,27 @@ export function fetchPipeline(id: string, scope?: string): Promise<PipelineDetai
   ).then(foldPipelineDetail);
 }
 
+export interface SavePipelineResult {
+  ok: boolean;
+  id?: string;
+  renamed?: boolean;
+  diagnostics?: string[];
+  path_defects?: PathDefect[];
+}
+
 export function savePipeline(
   id: string,
   yaml: string,
   prompts: Record<string, string>,
   scope?: string,
-): Promise<{ ok: boolean; id?: string; renamed?: boolean }> {
+): Promise<SavePipelineResult> {
   void scope;
   // #774 — the daemon answers with the FINAL id: a save whose `name:` field
   // changed moves the registry entry (`<old>.yaml` + sidecar) and returns the
   // new stem, so the caller can rekey the open tab in the same gesture.
-  return request<{ ok: boolean; id?: string; renamed?: boolean }>(
+  // ADR-0081 — it also answers with the saved graph's fresh diagnostics (a
+  // non-launchable graph saves anyway), so the lint banner refreshes on Save.
+  return request<SavePipelineResult>(
     "PUT",
     `/pipelines/${encodeURIComponent(id)}`,
     { body: { yaml, prompts }, label: `PUT /pipelines/${id}` },

@@ -1,0 +1,21 @@
+name: start-not-wired
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+  - id: implementer
+    name: implementer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+edges:
+  - source: { node: implementer, port: out }
+    target: { node: end, port: result }

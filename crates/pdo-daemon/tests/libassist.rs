@@ -552,6 +552,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: gamma, port: task }
+  - source: { node: gamma, port: result }
+    target: { node: end, port: result }
 "#;
 
 async fn post_save(daemon: &TestDaemon, body: serde_json::Value) -> reqwest::Response {

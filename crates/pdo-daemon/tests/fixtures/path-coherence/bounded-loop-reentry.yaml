@@ -1,0 +1,47 @@
+# A bounded region: the re-entry edge (reviewer -> implementer) is an ordinary edge.
+name: bounded-loop-reentry
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+  - id: implementer
+    name: implementer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: code
+  - id: reviewer
+    name: reviewer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: review
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [pass, fail]
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: implementer, port: task }
+  - source: { node: implementer, port: code }
+    target: { node: reviewer, port: code }
+  - source: { node: reviewer, port: review }
+    target: { node: implementer, port: task }
+    when:
+      verdict: { eq: fail }
+  - source: { node: reviewer, port: review }
+    target: { node: end, port: result }
+    when:
+      verdict: { eq: pass }
+loops:
+  - id: review-loop
+    kind: bounded
+    members: [implementer, reviewer]
+    max_iter: 3

@@ -44,6 +44,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: end, port: result }
 "#;
 
 const CHILD_PIPELINE_NAME: &str = "provenance-child";
@@ -90,6 +92,24 @@ fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// [`PIPELINE_YAML`] with a long-running `script` between `worker` and End, so
+/// completing `worker` leaves the run LIVE — the state in which a claim on the
+/// completed `worker` must be refused for holding no session (not for a terminal
+/// run). Launchable (ADR-0081).
+const HOLD_PIPELINE_NAME: &str = "provenance-hold";
+fn hold_pipeline_yaml() -> String {
+    PIPELINE_YAML
+        .replace("name: provenance-test\n", "name: provenance-hold\n")
+        .replace(
+            "  - id: end\n",
+            "  - id: after\n    name: after\n    type: script\n    outputs:\n      - name: out\n  - id: end\n",
+        )
+        .replace(
+            "  - source: { node: worker, port: result }\n    target: { node: end, port: result }\n",
+            "  - source: { node: worker, port: result }\n    target: { node: after, port: in }\n  - source: { node: after, port: out }\n    target: { node: end, port: result }\n",
+        )
+}
+
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;
@@ -100,6 +120,17 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let prompts_dir = pipelines_dir.join(format!("{PIPELINE_NAME}.prompts"));
     std::fs::create_dir_all(&prompts_dir)?;
     std::fs::write(prompts_dir.join("worker.md"), "You are a worker.\n")?;
+    std::fs::write(
+        pipelines_dir.join(format!("{HOLD_PIPELINE_NAME}.yaml")),
+        hold_pipeline_yaml(),
+    )?;
+    let hold_prompts = pipelines_dir.join(format!("{HOLD_PIPELINE_NAME}.prompts"));
+    std::fs::create_dir_all(&hold_prompts)?;
+    std::fs::write(hold_prompts.join("worker.md"), "You are a worker.\n")?;
+    std::fs::write(
+        hold_prompts.join("after.md"),
+        "#!/usr/bin/env bash\nsleep 600\n",
+    )?;
     std::fs::write(
         pipelines_dir.join(format!("{CHILD_PIPELINE_NAME}.yaml")),
         CHILD_PIPELINE_YAML,
@@ -119,8 +150,12 @@ fn other_repo() -> anyhow::Result<String> {
 }
 
 async fn create_root_run(daemon: &TestDaemon) -> String {
+    create_root_run_of(daemon, PIPELINE_NAME).await
+}
+
+async fn create_root_run_of(daemon: &TestDaemon, pipeline: &str) -> String {
     let body = serde_json::json!({
-        "pipeline": PIPELINE_NAME,
+        "pipeline": pipeline,
         "input": "hello world",
         "target_repo": daemon.target_repo(),
     });
@@ -315,7 +350,7 @@ async fn bogus_or_stale_session_claim_is_refused() {
     let exited = TestDaemon::spawn_with_override(seed, Some("exec true".to_string()))
         .await
         .unwrap();
-    let done_parent = create_root_run(&exited).await;
+    let done_parent = create_root_run_of(&exited, HOLD_PIPELINE_NAME).await;
     wait_node_running(&exited, &done_parent, "worker").await;
     // The completion validator requires the node's declared output; write it
     // into the run worktree like the (already-dead) session would have.

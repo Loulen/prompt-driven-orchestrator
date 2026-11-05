@@ -1,0 +1,48 @@
+# A legacy `type: switch` node routes through its own ports: they are ordinary edges.
+# The `default` route is unwired here, which is not a defect: the node still leads to End.
+name: legacy-switch
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+  - id: triage
+    name: triage
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [bug, feature]
+  - id: router
+    name: router
+    type: switch
+    inputs:
+      - name: in
+    outputs:
+      - name: bug
+        when:
+          verdict: bug
+  - id: fixer
+    name: fixer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: triage, port: task }
+  - source: { node: triage, port: out }
+    target: { node: router, port: in }
+  - source: { node: router, port: bug }
+    target: { node: fixer, port: task }
+  - source: { node: fixer, port: out }
+    target: { node: end, port: result }

@@ -34,6 +34,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: end, port: result }
 "#;
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
@@ -238,6 +240,8 @@ edges:
     target: { node: worker, port: task }
   - source: { node: worker, port: result }
     target: { node: reviewer, port: code }
+  - source: { node: reviewer, port: feedback }
+    target: { node: end, port: result }
 "#;
 
     let resp = reqwest::Client::new()
@@ -293,6 +297,8 @@ edges:
     target: { node: worker, port: task }
   - source: { node: worker, port: result }
     target: { node: reviewer, port: code }
+  - source: { node: reviewer, port: feedback }
+    target: { node: end, port: result }
 "#;
 
     let resp = reqwest::Client::new()

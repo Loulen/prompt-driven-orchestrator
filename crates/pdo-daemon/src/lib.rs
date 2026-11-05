@@ -46,6 +46,7 @@ mod node_primitives;
 mod node_spawn;
 mod outputs_validator;
 mod page_mount;
+mod path_coherence;
 mod pi_session;
 mod pipeline;
 mod pipeline_migrator;
@@ -6761,6 +6762,18 @@ fn trigger_dangling_reason(state: &AppState, trigger: &trigger_store::Trigger) -
     if let Err(msg) = required_target_repo(trigger.target_repo.as_deref()) {
         return Some(msg);
     }
+    // ADR-0081: a Trigger on a Pipeline non lançable is dangling — it goes
+    // dormant with the reason instead of failing one launch per tick. An
+    // unparseable pipeline is left to the launch's own parse refusal.
+    if let Some(parsed) =
+        trigger_pipeline_yaml(state, trigger).and_then(|y| pipeline::parse_pipeline(&y).ok())
+    {
+        if let Some(refusal) =
+            path_coherence::launch_refusal(&path_coherence::path_defects(&parsed.pipeline))
+        {
+            return Some(refusal);
+        }
+    }
     None
 }
 
@@ -7203,6 +7216,12 @@ struct PipelineListEntry {
     /// offer it. Filled by `list_pipelines` from the instance database; the scan
     /// itself only knows the default (no row ⇒ all Projets).
     validation: project_store::PipelineValidation,
+    /// ADR-0081: whether a Run may be launched from it (path coherence). An
+    /// unparseable pipeline is not launchable either.
+    launchable: bool,
+    /// Why not, one sentence per defect (`Not launchable: …`), in the same order
+    /// and wording as the launch refusal. Empty when launchable.
+    not_launchable_reasons: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -7244,35 +7263,53 @@ fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntr
                 dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             });
 
-        let (name, node_count, variables, prompt_required) = match std::fs::read_to_string(&path) {
-            Ok(yaml) => match pipeline::parse_pipeline(&yaml) {
-                Ok(r) => {
-                    let vars: HashMap<String, PipelineVariableInfo> = r
-                        .pipeline
-                        .variables
-                        .iter()
-                        .map(|(k, v)| {
-                            let default = yaml_value_to_json(&v.default);
-                            (
-                                k.clone(),
-                                PipelineVariableInfo {
-                                    var_type: v.var_type.clone(),
-                                    default,
-                                },
-                            )
-                        })
-                        .collect();
-                    (
-                        r.pipeline.name.clone(),
-                        r.pipeline.nodes.len(),
-                        vars,
-                        r.pipeline.prompt_required,
-                    )
-                }
-                Err(_) => (file_stem.clone(), 0, HashMap::new(), true),
-            },
-            Err(_) => (file_stem.clone(), 0, HashMap::new(), true),
-        };
+        let (name, node_count, variables, prompt_required, not_launchable_reasons) =
+            match std::fs::read_to_string(&path) {
+                Ok(yaml) => match pipeline::parse_pipeline(&yaml) {
+                    Ok(r) => {
+                        let vars: HashMap<String, PipelineVariableInfo> = r
+                            .pipeline
+                            .variables
+                            .iter()
+                            .map(|(k, v)| {
+                                let default = yaml_value_to_json(&v.default);
+                                (
+                                    k.clone(),
+                                    PipelineVariableInfo {
+                                        var_type: v.var_type.clone(),
+                                        default,
+                                    },
+                                )
+                            })
+                            .collect();
+                        let reasons = path_coherence::path_defects(&r.pipeline)
+                            .iter()
+                            .map(path_coherence::PathDefect::message)
+                            .collect();
+                        (
+                            r.pipeline.name.clone(),
+                            r.pipeline.nodes.len(),
+                            vars,
+                            r.pipeline.prompt_required,
+                            reasons,
+                        )
+                    }
+                    Err(e) => (
+                        file_stem.clone(),
+                        0,
+                        HashMap::new(),
+                        true,
+                        vec![format!("Not launchable: pipeline parse error: {e}")],
+                    ),
+                },
+                Err(e) => (
+                    file_stem.clone(),
+                    0,
+                    HashMap::new(),
+                    true,
+                    vec![format!("Not launchable: cannot read pipeline: {e}")],
+                ),
+            };
 
         entries.push(PipelineListEntry {
             id: file_stem,
@@ -7284,6 +7321,8 @@ fn scan_pipeline_dir(dir: &std::path::Path, scope: &str) -> Vec<PipelineListEntr
             variables,
             prompt_required,
             validation: project_store::PipelineValidation::default(),
+            launchable: not_launchable_reasons.is_empty(),
+            not_launchable_reasons,
         });
     }
     entries
@@ -7433,11 +7472,7 @@ async fn get_pipeline(
         }
     }
 
-    let diagnostics: Vec<String> = parse_result
-        .diagnostics
-        .iter()
-        .map(|d| d.message.clone())
-        .collect();
+    let (diagnostics, path_defects) = pipeline_diagnostics(&parse_result);
 
     let pipeline = match pipeline_json_with_node_provisioning(&parse_result.pipeline, &yaml) {
         Ok(pipeline) => pipeline,
@@ -7458,8 +7493,27 @@ async fn get_pipeline(
         "pipeline": pipeline,
         "prompts": prompts,
         "diagnostics": diagnostics,
+        "path_defects": path_defects,
     }))
     .into_response()
+}
+
+/// A template pipeline's diagnostics as the endpoints report them: the parse
+/// diagnostics, then the path-coherence defects (ADR-0081 — a correctness
+/// diagnostic, never a save refusal). The flat strings stay the banner's text;
+/// `path_defects` carries the same defects structured, with the culprit node id
+/// the editor's « Show » link and node marks key on.
+fn pipeline_diagnostics(
+    parse_result: &pipeline::ParseResult,
+) -> (Vec<String>, Vec<path_coherence::PathDefectView>) {
+    let defects = path_coherence::path_defects(&parse_result.pipeline);
+    let diagnostics = parse_result
+        .diagnostics
+        .iter()
+        .map(|d| d.message.clone())
+        .chain(defects.iter().map(path_coherence::PathDefect::message))
+        .collect();
+    (diagnostics, path_coherence::defect_views(&defects))
 }
 
 fn pipeline_json_with_node_provisioning(
@@ -7528,8 +7582,13 @@ async fn save_pipeline(
         return (StatusCode::NOT_FOUND, "pipeline not found").into_response();
     }
 
-    let saved = match pipeline::parse_pipeline(&req.yaml) {
-        Ok(parsed) => parsed.pipeline,
+    let (saved, diagnostics, path_defects) = match pipeline::parse_pipeline(&req.yaml) {
+        Ok(parsed) => {
+            // ADR-0081: a non-launchable graph saves freely — the save answers
+            // with fresh diagnostics so the editor's banner refreshes at once.
+            let (diagnostics, path_defects) = pipeline_diagnostics(&parsed);
+            (parsed.pipeline, diagnostics, path_defects)
+        }
         Err(e) => {
             let (message, line) = parse_error_to_structured(&e);
             let mut body =
@@ -7635,7 +7694,13 @@ async fn save_pipeline(
         info!("Pipeline {pipeline_id} saved as {desired_id} (name changed)");
         return (
             StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "id": desired_id, "renamed": true })),
+            Json(serde_json::json!({
+                "ok": true,
+                "id": desired_id,
+                "renamed": true,
+                "diagnostics": diagnostics,
+                "path_defects": path_defects,
+            })),
         )
             .into_response();
     }
@@ -7665,7 +7730,13 @@ async fn save_pipeline(
     info!("Pipeline {pipeline_id} saved");
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "ok": true, "id": pipeline_id, "renamed": false })),
+        Json(serde_json::json!({
+            "ok": true,
+            "id": pipeline_id,
+            "renamed": false,
+            "diagnostics": diagnostics,
+            "path_defects": path_defects,
+        })),
     )
         .into_response()
 }
@@ -10320,6 +10391,33 @@ fn run_name_hint(
     }
 }
 
+/// ADR-0081: the launch refusal body for a Pipeline non lançable — `None` when
+/// it is launchable. The one formulation the create chokepoint and the paths that
+/// must refuse *before* reaching it (`retry_all`, which archives first) share.
+fn path_coherence_refusal(pipeline: &pipeline::PipelineDef) -> Option<serde_json::Value> {
+    let defects = path_coherence::path_defects(pipeline);
+    path_coherence::launch_refusal(&defects).map(|refusal| {
+        serde_json::json!({
+            "error": refusal,
+            "path_defects": path_coherence::defect_views(&defects),
+        })
+    })
+}
+
+/// [`path_coherence_refusal`] for a pipeline resolved the way `create_run_inner`
+/// resolves it (`pipeline_id` first, else the name). An unreadable or unparseable
+/// pipeline yields `None`: the chokepoint owns those refusals.
+pub(crate) fn launch_path_refusal(
+    state: &AppState,
+    pipeline_id: Option<&str>,
+    pipeline_name: &str,
+) -> Option<serde_json::Value> {
+    let path = resolve_pipeline_path(&state.repo_root, pipeline_id.unwrap_or(pipeline_name));
+    let yaml = std::fs::read_to_string(path).ok()?;
+    let parsed = pipeline::parse_pipeline(&yaml).ok()?;
+    path_coherence_refusal(&parsed.pipeline)
+}
+
 async fn create_run_core(
     state: &Arc<AppState>,
     req: CreateRunRequest,
@@ -10473,6 +10571,15 @@ async fn create_run_inner(
                 ),
             }),
         ));
+    }
+
+    // ADR-0081: `Start` is the single entry point. A Pipeline non lançable (no
+    // path Start → End, a Cul-de-sac, a Nœud orphelin) saves freely but never
+    // launches — on every path that creates a Run (New Run, `POST /runs`,
+    // `pdo run create` incl. child Runs, Trigger fire, Retry all). The scheduler
+    // is untouched: refusing here keeps every new Run free of orphans.
+    if let Some(body) = path_coherence_refusal(&pipeline) {
+        return Err((StatusCode::BAD_REQUEST, body));
     }
 
     // A `script` node runs `bash <body>`, and an empty body exits 0 — a silent
@@ -36395,13 +36502,27 @@ mod tests {
         })
     }
 
+    /// The edges that make a lone `worker` launchable (ADR-0081).
+    const WORKER_EDGES_YAML: &str = "edges:\n  - source: { node: start, port: user_prompt }\n    target: { node: worker, port: task }\n  - source: { node: worker, port: result }\n    target: { node: end, port: result }\n";
+
     const START_END_YAML: &str = "  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n";
 
+    /// A lone `worker` with no edges — NOT launchable (ADR-0081): fine for the
+    /// tests that seed a Run's events directly, refused by every launch.
     fn write_test_pipeline(dir: &std::path::Path, name: &str) {
+        write_test_pipeline_with_edges(dir, name, "");
+    }
+
+    /// [`write_test_pipeline`] wired Start → worker → End: launchable.
+    fn write_launchable_test_pipeline(dir: &std::path::Path, name: &str) {
+        write_test_pipeline_with_edges(dir, name, WORKER_EDGES_YAML);
+    }
+
+    fn write_test_pipeline_with_edges(dir: &std::path::Path, name: &str, edges: &str) {
         let pipelines_dir = dir.join(".pdo").join("pipelines");
         std::fs::create_dir_all(&pipelines_dir).unwrap();
         let yaml = format!(
-            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n"
+            "name: {name}\nversion: \"1.0\"\nnodes:\n{START_END_YAML}  - id: worker\n    name: worker\n    type: agent\n    isolated_worktree: false\n    inputs:\n      - name: task\n    outputs:\n      - name: result\n{edges}"
         );
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml).unwrap();
     }
@@ -46991,7 +47112,7 @@ edges: []
         let _home = FakeHome::new();
         let tmp = tempfile::tempdir().unwrap();
         init_test_repo(tmp.path());
-        write_test_pipeline(tmp.path(), "retry-pipe");
+        write_launchable_test_pipeline(tmp.path(), "retry-pipe");
         let state = test_state_with_dir(tmp.path()).await;
 
         let run_event = event_log::Event {
@@ -47069,7 +47190,7 @@ edges: []
         let _home = FakeHome::new();
         let tmp = tempfile::tempdir().unwrap();
         init_test_repo(tmp.path());
-        write_test_pipeline(tmp.path(), "retry-pipe");
+        write_launchable_test_pipeline(tmp.path(), "retry-pipe");
         let state = test_state_with_dir(tmp.path()).await;
 
         for (kind, payload) in [
@@ -49713,6 +49834,345 @@ edges:
             run_name_hint(true, Some("ignored when auto"), "do a thing"),
             RunNameHint::DeriveFromInput
         );
+    }
+
+    // ---- ADR-0081 / #1021: a Pipeline non lançable is refused at launch ----
+
+    /// A corpus case (`tests/fixtures/path-coherence/<case>.yaml`), installed as
+    /// pipeline `<case>` in `dir`'s library.
+    fn write_corpus_pipeline(dir: &std::path::Path, case: &str) {
+        let pipelines_dir = dir.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir).unwrap();
+        let yaml = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/path-coherence")
+                .join(format!("{case}.yaml")),
+        )
+        .unwrap();
+        std::fs::write(pipelines_dir.join(format!("{case}.yaml")), yaml).unwrap();
+    }
+
+    /// The expected messages of a corpus case, from the shared manifest.
+    fn corpus_messages(case: &str) -> Vec<String> {
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/path-coherence/expected.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        manifest[case]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["message"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    async fn json_body(resp: Response) -> serde_json::Value {
+        serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    async fn run_count(state: &Arc<AppState>) -> usize {
+        let resp = build_router(state.clone())
+            .oneshot(Request::builder().uri("/runs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        json_body(resp).await.as_array().unwrap().len()
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_refuses_every_non_launchable_pipeline_with_the_exact_message() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let cases = [
+            "start-not-wired",
+            "end-not-wired",
+            "dead-end-branch",
+            "orphan-to-end",
+            "isolated-node",
+            "when-else-dead-branch",
+            "bounded-loop-never-exits",
+        ];
+        for case in cases {
+            write_corpus_pipeline(tmp.path(), case);
+        }
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+
+        for case in cases {
+            let resp = build_router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/runs")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::json!({
+                                "pipeline": case,
+                                "input": "do the thing",
+                                "target_repo": tmp.path().to_string_lossy(),
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "case {case}");
+            let body = json_body(resp).await;
+            assert_eq!(
+                body["error"].as_str().unwrap(),
+                corpus_messages(case).join(" "),
+                "case {case}: the refusal lists every defect, in the exact wording"
+            );
+            assert!(
+                !body["path_defects"].as_array().unwrap().is_empty(),
+                "case {case}: the refusal carries the structured defects"
+            );
+        }
+        assert_eq!(
+            run_count(&state).await,
+            0,
+            "no run must be created on refusal"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_accepts_a_launchable_pipeline() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_corpus_pipeline(tmp.path(), "linear-valid");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "pipeline": "linear-valid",
+                            "input": "do the thing",
+                            "target_repo": tmp.path().to_string_lossy(),
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn get_pipeline_reports_path_coherence_diagnostics_with_the_culprit_node() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_corpus_pipeline(tmp.path(), "start-not-wired");
+        let state = test_state_with_dir(tmp.path()).await;
+        let resp = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines/start-not-wired")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let detail = json_body(resp).await;
+        let diagnostics: Vec<&str> = detail["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d.as_str().unwrap())
+            .collect();
+        for message in corpus_messages("start-not-wired") {
+            assert!(
+                diagnostics.contains(&message.as_str()),
+                "{message} missing: {diagnostics:?}"
+            );
+        }
+        let defects = detail["path_defects"].as_array().unwrap();
+        assert_eq!(defects[0]["kind"], "no_path");
+        assert!(
+            defects[0].get("node_id").is_none(),
+            "« no path » names no node"
+        );
+        assert_eq!(defects[1]["kind"], "orphan");
+        assert_eq!(defects[1]["node_id"], "implementer");
+        assert_eq!(defects[1]["message"], corpus_messages("start-not-wired")[1]);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn save_pipeline_never_refuses_a_non_launchable_graph_and_answers_fresh_diagnostics() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_corpus_pipeline(tmp.path(), "linear-valid");
+        let state = test_state_with_dir(tmp.path()).await;
+        let broken = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/path-coherence/dead-end-branch.yaml"),
+        )
+        .unwrap()
+        .replace("name: dead-end-branch", "name: linear-valid");
+
+        let put = |yaml: String| {
+            let state = state.clone();
+            async move {
+                build_router(state)
+                    .oneshot(
+                        Request::builder()
+                            .method("PUT")
+                            .uri("/pipelines/linear-valid")
+                            .header("content-type", "application/json")
+                            .body(Body::from(
+                                serde_json::json!({ "yaml": yaml, "prompts": {} }).to_string(),
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+
+        let resp = put(broken.clone()).await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "a non-launchable save succeeds"
+        );
+        let body = json_body(resp).await;
+        assert_eq!(
+            body["diagnostics"],
+            serde_json::json!(corpus_messages("dead-end-branch")),
+            "the save answers the saved graph's diagnostics"
+        );
+        assert_eq!(body["path_defects"][0]["node_id"], "notifier");
+        let on_disk =
+            std::fs::read_to_string(tmp.path().join(".pdo/pipelines/linear-valid.yaml")).unwrap();
+        assert!(on_disk.contains("notifier"), "the broken graph was written");
+
+        // Fixed again: the diagnostics clear on the next save.
+        let valid = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/path-coherence/linear-valid.yaml"),
+        )
+        .unwrap();
+        let body = json_body(put(valid).await).await;
+        assert_eq!(body["diagnostics"], serde_json::json!([]));
+        assert_eq!(body["path_defects"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn list_pipelines_exposes_launchable_and_the_reasons() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_corpus_pipeline(tmp.path(), "linear-valid");
+        write_corpus_pipeline(tmp.path(), "isolated-node");
+        let state = test_state_with_dir(tmp.path()).await;
+        let resp = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/pipelines")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list = json_body(resp).await;
+        let entry = |id: &str| {
+            list.as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == id)
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(entry("linear-valid")["launchable"], true);
+        assert_eq!(
+            entry("linear-valid")["not_launchable_reasons"],
+            serde_json::json!([])
+        );
+        assert_eq!(entry("isolated-node")["launchable"], false);
+        assert_eq!(
+            entry("isolated-node")["not_launchable_reasons"],
+            serde_json::json!(corpus_messages("isolated-node"))
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn retry_all_refuses_a_pipeline_broken_since_and_keeps_the_original_run() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        init_test_repo(tmp.path());
+        write_corpus_pipeline(tmp.path(), "orphan-to-end");
+        let state = test_state_with_dir(tmp.path()).await;
+
+        for kind in [
+            event_log::EventKind::RunStarted,
+            event_log::EventKind::RunFailed,
+        ] {
+            let payload = (kind == event_log::EventKind::RunStarted).then(|| {
+                serde_json::json!({
+                    "pipeline_name": "orphan-to-end",
+                    "input": "do the thing",
+                    "target_repo": tmp.path().to_string_lossy(),
+                    "edges": [],
+                    "node_defs": [],
+                })
+            });
+            let event = event_log::Event {
+                id: None,
+                run_id: "broken-retry".into(),
+                ts: event_log::now_iso(),
+                kind,
+                node_id: None,
+                iter: None,
+                payload,
+            };
+            append_event(&state, &event).await.unwrap();
+        }
+
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/runs/broken-retry/commands")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "kind": "retry_all" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = json_body(resp).await;
+        assert_eq!(
+            body["error"].as_str().unwrap(),
+            corpus_messages("orphan-to-end").join(" ")
+        );
+
+        // Refused BEFORE archiving: the original is still there, still Failed.
+        let events = load_events(&state.db, "broken-retry").await.unwrap();
+        let run_state = event_log::project(&events).unwrap();
+        assert_eq!(run_state.status, event_log::RunStatus::Failed);
+        assert_eq!(run_count(&state).await, 1, "no replacement run was created");
     }
 
     #[tokio::test]

@@ -32,6 +32,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: only, port: task }
+  - source: { node: only, port: out }
+    target: { node: end, port: result }
 "#;
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {

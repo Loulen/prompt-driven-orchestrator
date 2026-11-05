@@ -38,6 +38,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: impl-1, port: task }
+  - source: { node: impl-1, port: summary }
+    target: { node: end, port: result }
 "#;
 
 const ROLE_PROMPT: &str = "You are an implementer. Do the task.\n";

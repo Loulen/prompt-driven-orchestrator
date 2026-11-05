@@ -34,6 +34,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: end, port: result }
 "#;
 
 const UPDATED_YAML: &str = r#"name: editable
@@ -61,6 +63,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: end, port: result }
 "#;
 
 fn seed_pipeline(repo: &std::path::Path) -> anyhow::Result<()> {

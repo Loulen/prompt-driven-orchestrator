@@ -65,4 +65,27 @@ describe("LintBanner", () => {
     fireEvent.click(screen.getByTestId("lint-banner-dismiss-fanout:worker"));
     expect(onDismiss).toHaveBeenCalledExactlyOnceWith("fanout:worker");
   });
+
+  // gitlab #23: a row naming a node offers « Show », which hands the node id back.
+  it("renders Show on a row naming a node, and calls onShow with its id", () => {
+    const onShow = vi.fn();
+    render(
+      <LintBanner
+        items={[
+          lint("Not launchable: no path from Start to End.", 0),
+          { ...lint('Not launchable: orphan node — node "tester" is not reachable from Start.', 1), nodeId: "tester" },
+        ]}
+        onDismiss={noop}
+        onShow={onShow}
+      />,
+    );
+    expect(screen.getAllByRole("button", { name: "Show" })).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("lint-banner-show-tester"));
+    expect(onShow).toHaveBeenCalledExactlyOnceWith("tester");
+  });
+
+  it("renders no Show without an onShow handler", () => {
+    render(<LintBanner items={[{ ...lint("x"), nodeId: "tester" }]} onDismiss={noop} />);
+    expect(screen.queryByRole("button", { name: "Show" })).toBeNull();
+  });
 });

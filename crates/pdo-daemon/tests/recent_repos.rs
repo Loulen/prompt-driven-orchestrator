@@ -28,6 +28,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: end, port: result }
 "#;
 
 fn git_init_with_commit(repo: &std::path::Path) -> anyhow::Result<()> {

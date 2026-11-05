@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import EditCanvas from "./EditCanvas";
 import PipelineInfoPanel from "./PipelineInfoPanel";
 import { useEditStore } from "../stores/editStore";
@@ -127,5 +127,68 @@ describe("LintBanner duplication (#63)", () => {
 
     // The diagnostics surface exactly once — the floating canvas overlay.
     expect(screen.getAllByTestId("lint-banner")).toHaveLength(1);
+  });
+});
+
+// ADR-0081 / gitlab #23: a daemon path-coherence diagnostic naming a node gets
+// « Show », which selects that node; the « no path » row has no link.
+describe("LintBanner Show on path-coherence diagnostics", () => {
+  it("links the culprit node's row to the canvas selection", () => {
+    const orphan = 'Not launchable: orphan node — node "worker" is not reachable from Start.';
+    const noPath = "Not launchable: no path from Start to End.";
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({
+        ...t,
+        diagnostics: [noPath, orphan],
+        pathDefects: [
+          { kind: "no_path", message: noPath },
+          { kind: "orphan", node_id: "worker", node_name: "worker", message: orphan },
+        ],
+      })),
+    }));
+    render(
+      <TooltipProvider>
+        <EditCanvas
+          libraryEntries={[]}
+          libraryPipelines={[]}
+          onLibraryDelete={() => {}}
+          onLibraryPipelinesChanged={() => {}}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText(noPath)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Show" })).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("lint-banner-show-worker"));
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "worker" });
+  });
+
+  it("pairs each row with its own node even when two culprits share a name", () => {
+    const dead = 'Not launchable: dead end — node "worker" never leads to End.';
+    useEditStore.setState((s) => ({
+      openTabs: s.openTabs.map((t) => ({
+        ...t,
+        diagnostics: ["an unrelated parse warning", dead, dead],
+        pathDefects: [
+          { kind: "dead_end", node_id: "w1", node_name: "worker", message: dead },
+          { kind: "dead_end", node_id: "w2", node_name: "worker", message: dead },
+        ],
+      })),
+    }));
+    render(
+      <TooltipProvider>
+        <EditCanvas
+          libraryEntries={[]}
+          libraryPipelines={[]}
+          onLibraryDelete={() => {}}
+          onLibraryPipelinesChanged={() => {}}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByTestId("lint-banner-show-w1"));
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "w1" });
+    fireEvent.click(screen.getByTestId("lint-banner-show-w2"));
+    expect(useEditStore.getState().selection).toEqual({ kind: "node", id: "w2" });
   });
 });

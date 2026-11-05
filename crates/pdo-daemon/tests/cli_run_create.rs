@@ -42,6 +42,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: end, port: result }
 "#;
 
 const CHILD_PIPELINE_NAME: &str = "cli-run-create-child";
@@ -342,6 +344,42 @@ async fn daemon_refusals_surface_readably() {
     .await;
     assert_ne!(code, Some(0));
     assert!(stderr.contains("failed to reach daemon"), "{stderr}");
+}
+
+/// ADR-0081 / #1021: `pdo run create` (child Runs included — it is the same
+/// `POST /runs`) refuses a Pipeline non lançable with the daemon's exact sentence.
+#[tokio::test]
+async fn a_non_launchable_pipeline_is_refused_with_the_exact_message() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    std::fs::write(
+        daemon
+            .repo_root()
+            .join(".pdo/pipelines/cli-run-create-unwired.yaml"),
+        CHILD_PIPELINE_YAML
+            .replace("cli-run-create-child", "cli-run-create-unwired")
+            .replace(
+                "edges:\n  - source: { node: start, port: user_prompt }\n    target: { node: end, port: result }\n",
+                "edges: []\n",
+            ),
+    )
+    .unwrap();
+
+    let (code, stdout, stderr) = run_pdo_run_create(
+        &daemon.url(),
+        &[
+            "cli-run-create-unwired",
+            "--target-repo",
+            &daemon.target_repo(),
+        ],
+        None,
+    )
+    .await;
+    assert_ne!(code, Some(0), "a refused create must exit non-zero");
+    assert!(
+        stderr.contains("Not launchable: no path from Start to End."),
+        "the refusal carries the daemon's sentence: {stderr}"
+    );
+    assert!(stdout.trim().is_empty(), "{stdout}");
 }
 
 /// Fetch a raw artifact of a run (`GET /runs/{id}/artifact?path=…`).

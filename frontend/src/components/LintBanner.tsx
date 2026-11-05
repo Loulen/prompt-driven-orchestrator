@@ -15,15 +15,23 @@ export interface LintBannerItem {
   id: string;
   kind: "lint" | "nudge";
   message: string;
+  /**
+   * ADR-0081 / gitlab #23 — the node the row is about, when it names one (a
+   * Cul-de-sac, a Nœud orphelin). The row then offers a quiet « Show » link that
+   * selects and centres that node. Absent ⇒ no link (e.g. « no path »).
+   */
+  nodeId?: string;
 }
 
 interface Props {
   items: LintBannerItem[];
   /** Called only for `nudge` rows (lint rows render no dismiss affordance). */
   onDismiss: (id: string) => void;
+  /** « Show » on a row naming a node. Without it, no row renders the link. */
+  onShow?: (nodeId: string) => void;
 }
 
-export default function LintBanner({ items, onDismiss }: Props) {
+export default function LintBanner({ items, onDismiss, onShow }: Props) {
   if (items.length === 0) return null;
 
   return (
@@ -39,6 +47,16 @@ export default function LintBanner({ items, onDismiss }: Props) {
         >
           <Info size={12} className="mt-0.5 shrink-0 text-st-await" />
           <span>{item.message}</span>
+          {item.nodeId != null && onShow && (
+            <button
+              type="button"
+              onClick={() => onShow(item.nodeId!)}
+              data-testid={`lint-banner-show-${item.nodeId}`}
+              className="ml-auto shrink-0 text-fg-4 hover:text-acc hover:underline focus-visible:outline focus-visible:outline-1"
+            >
+              Show
+            </button>
+          )}
           {item.kind === "nudge" && (
             <button
               type="button"

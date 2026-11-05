@@ -350,6 +350,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: solo, port: in }
+  - source: { node: solo, port: out }
+    target: { node: end, port: result }
 "#;
 
 fn seed_pipeline(repo: &Path) -> anyhow::Result<()> {

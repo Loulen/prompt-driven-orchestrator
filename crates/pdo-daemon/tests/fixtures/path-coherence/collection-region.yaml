@@ -1,0 +1,49 @@
+# A collection region fanning out over a list: its member is an ordinary node.
+name: collection-region
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+  - id: triage
+    name: triage
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: plan
+        frontmatter:
+          issues:
+            type: list
+  - id: fixer
+    name: fixer
+    type: agent
+    isolated_worktree: true
+    outputs:
+      - name: fix
+  - id: merger
+    name: merger
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: report
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: triage, port: task }
+  - source: { node: triage, port: plan }
+    target: { node: fixer, port: issue }
+  - source: { node: fixer, port: fix }
+    target: { node: merger, port: fixes }
+    repeated: true
+  - source: { node: merger, port: report }
+    target: { node: end, port: result }
+loops:
+  - id: per-issue
+    kind: collection
+    members: [fixer]
+    over: issues

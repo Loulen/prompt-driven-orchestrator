@@ -74,15 +74,17 @@ fn git_out(repo: &std::path::Path, args: &[&str]) -> String {
 /// A `start → worker → end` pipeline whose single worker carries the given type
 /// and isolation. The worker declares no output port: these tests are about the
 /// delivery, not about output validation.
+/// Start → worker → End: launchable (ADR-0081). The worker's one output `out`
+/// lives under the ignored `.pdo/artifacts/`, so it never shows in a delivery.
 fn one_worker_pipeline(name: &str, node_type: &str, isolated: bool) -> String {
     format!(
         "name: {name}\nversion: \"1.0\"\nnodes:\n  \
          - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  \
-         - id: worker\n    name: worker\n    type: {node_type}\n    isolated_worktree: {isolated}\n  \
+         - id: worker\n    name: worker\n    type: {node_type}\n    isolated_worktree: {isolated}\n    outputs:\n      - name: out\n  \
          - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n\
          edges:\n  \
          - source: {{ node: start, port: user_prompt }}\n    target: {{ node: worker, port: in }}\n  \
-         - source: {{ node: start, port: user_prompt }}\n    target: {{ node: end, port: result }}\n"
+         - source: {{ node: worker, port: out }}\n    target: {{ node: end, port: result }}\n"
     )
 }
 
@@ -169,6 +171,13 @@ async fn complete(daemon: &TestDaemon, run_id: &str, node_id: &str) -> reqwest::
         .status()
 }
 
+/// The worker's `out` artifact, as an agent would write it before completing.
+fn write_worker_output(daemon: &TestDaemon, run_id: &str) {
+    let port_dir = run_worktree(daemon, run_id).join(".pdo/artifacts/worker/iter-1/out");
+    std::fs::create_dir_all(&port_dir).unwrap();
+    std::fs::write(port_dir.join("output.md"), "# Output\nDone.\n").unwrap();
+}
+
 fn run_worktree(daemon: &TestDaemon, run_id: &str) -> std::path::PathBuf {
     daemon
         .repo_root()
@@ -200,7 +209,7 @@ async fn a_shared_script_delivers_edits_deletions_and_new_files() {
         printf 'rewritten\\n' > tracked.txt\n\
         rm doomed.txt\n\
         printf 'pub fn added() {}\\n' > added.rs\n\
-        mkdir -p scratch && printf 'noise\\n' > scratch/ignored.txt\n";
+        mkdir -p scratch && printf 'noise\\n' > scratch/ignored.txt\nprintf 'ok\\n' > \"$PDO_OUTPUT_OUT\"\n";
     let daemon = TestDaemon::spawn(seed(
         one_worker_pipeline(name, "script", false),
         "deliver-shared-script",
@@ -253,7 +262,8 @@ async fn a_shared_script_delivers_edits_deletions_and_new_files() {
 async fn a_node_that_leaves_nothing_takes_no_commit() {
     ensure_pdo_on_path();
     let name = "deliver-noop";
-    let body = "#!/usr/bin/env bash\nset -euo pipefail\ntrue\n";
+    let body =
+        "#!/usr/bin/env bash\nset -euo pipefail\ntrue\nprintf 'ok\\n' > \"$PDO_OUTPUT_OUT\"\n";
     let daemon = TestDaemon::spawn(seed(
         one_worker_pipeline(name, "script", false),
         "deliver-noop",
@@ -289,7 +299,7 @@ async fn pre_existing_commits_are_kept_and_topped_by_one_delivery_commit() {
         printf 'mine\\n' > mine.txt\n\
         git add mine.txt\n\
         git commit -q -m 'worker: my own commit'\n\
-        printf 'leftover\\n' > leftover.txt\n";
+        printf 'leftover\\n' > leftover.txt\nprintf 'ok\\n' > \"$PDO_OUTPUT_OUT\"\n";
     let daemon = TestDaemon::spawn(seed(
         one_worker_pipeline(name, "script", false),
         "deliver-own-commits",
@@ -322,7 +332,7 @@ async fn a_node_that_committed_everything_gets_no_extra_commit() {
     let body = "#!/usr/bin/env bash\nset -euo pipefail\n\
         printf 'mine\\n' > mine.txt\n\
         git add -A\n\
-        git commit -q -m 'worker: everything, by hand'\n";
+        git commit -q -m 'worker: everything, by hand'\nprintf 'ok\\n' > \"$PDO_OUTPUT_OUT\"\n";
     let daemon = TestDaemon::spawn(seed(
         one_worker_pipeline(name, "script", false),
         "deliver-all-own",
@@ -353,7 +363,7 @@ async fn an_isolated_script_works_and_delivers_from_its_sub_worktree() {
     ensure_pdo_on_path();
     let name = "deliver-isolated-script";
     let body = "#!/usr/bin/env bash\nset -euo pipefail\n\
-        printf 'pub fn from_the_sub_worktree() {}\\n' > sub.rs\n";
+        printf 'pub fn from_the_sub_worktree() {}\\n' > sub.rs\nprintf 'ok\\n' > \"$PDO_OUTPUT_OUT\"\n";
     let daemon = TestDaemon::spawn(seed(
         one_worker_pipeline(name, "script", true),
         "deliver-isolated-script",
@@ -478,6 +488,7 @@ async fn a_shared_agent_delivers_what_it_left_in_the_run_worktree() {
     std::fs::write(wt.join("tracked.txt"), "edited by the agent\n").unwrap();
     std::fs::write(wt.join("agent_new.rs"), "pub fn agent() {}\n").unwrap();
 
+    write_worker_output(&daemon, &run_id);
     assert_eq!(complete(&daemon, &run_id, "worker").await, 200);
 
     let branch = format!("pdo/run-{run_id}");
@@ -514,6 +525,7 @@ async fn an_isolated_agent_delivers_from_its_sub_worktree() {
     assert!(sub.is_dir(), "an isolated agent gets a sub-worktree");
     std::fs::write(sub.join("forked.rs"), "pub fn forked() {}\n").unwrap();
 
+    write_worker_output(&daemon, &run_id);
     assert_eq!(complete(&daemon, &run_id, "worker").await, 200);
 
     let branch = format!("pdo/run-{run_id}");
@@ -547,6 +559,7 @@ async fn a_git_failure_interrupts_the_node_and_keeps_the_work() {
     let git_dir = git_out(&wt, &["rev-parse", "--absolute-git-dir"]);
     std::fs::write(std::path::Path::new(&git_dir).join("index.lock"), "").unwrap();
 
+    write_worker_output(&daemon, &run_id);
     let status = complete(&daemon, &run_id, "worker").await;
     assert_eq!(
         status, 500,
@@ -727,6 +740,7 @@ async fn the_manual_completion_delivers_like_every_other() {
 
     let sub = sub_worktree(&daemon, &run_id, "worker");
     std::fs::write(sub.join("by_hand.rs"), "pub fn by_hand() {}\n").unwrap();
+    write_worker_output(&daemon, &run_id);
 
     let resp = reqwest::Client::new()
         .post(format!("{}/runs/{run_id}/commands", daemon.url()))

@@ -1,0 +1,49 @@
+# A conditional fan-out: both branches count as edges and both lead to End.
+name: when-else-fanout
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+  - id: triage
+    name: triage
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+        frontmatter:
+          verdict:
+            type: enum
+            allowed: [bug, feature]
+  - id: fixer
+    name: fixer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+  - id: builder
+    name: builder
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: triage, port: task }
+  - source: { node: triage, port: out }
+    target: { node: fixer, port: task }
+    when:
+      verdict: { eq: bug }
+  - source: { node: triage, port: out }
+    target: { node: builder, port: task }
+    else: true
+  - source: { node: fixer, port: out }
+    target: { node: end, port: result }
+  - source: { node: builder, port: out }
+    target: { node: end, port: result }

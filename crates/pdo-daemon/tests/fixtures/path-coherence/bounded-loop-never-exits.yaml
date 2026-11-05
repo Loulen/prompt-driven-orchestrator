@@ -1,0 +1,37 @@
+# A bounded region whose laps never lead out to End: both members are dead ends.
+name: bounded-loop-never-exits
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+  - id: implementer
+    name: implementer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: code
+  - id: reviewer
+    name: reviewer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: review
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: implementer, port: task }
+  - source: { node: implementer, port: code }
+    target: { node: reviewer, port: code }
+  - source: { node: reviewer, port: review }
+    target: { node: implementer, port: task }
+loops:
+  - id: review-loop
+    kind: bounded
+    members: [implementer, reviewer]
+    max_iter: 3

@@ -21,12 +21,12 @@ use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
     append_event, check_output_validation_with_retry, cleanup_run, completion_head_gate,
     completion_refusal, create_run_core, effective_repo_root, event_log, force_spawn_node,
-    load_events, load_projected, loop_region, mark_sandbox_prep_ready, pipeline, reap_node_session,
-    reload_run_state, resolve_completed_frontmatter, resolve_pipeline_path,
-    resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, restart_verdict,
-    retry_waiting_nodes, run_advance, run_is_forgotten, run_scoped_pipeline_path, sandbox_run,
-    scheduler, scheduler_interpreter, tmux_session_manager, transition_guard, AppState,
-    CreateRunRequest, TargetRepoInput,
+    launch_path_refusal, load_events, load_projected, loop_region, mark_sandbox_prep_ready,
+    pipeline, reap_node_session, reload_run_state, resolve_completed_frontmatter,
+    resolve_pipeline_path, resolve_run_pipeline_path, resolve_run_variables,
+    resolve_source_frontmatter, restart_verdict, retry_waiting_nodes, run_advance,
+    run_is_forgotten, run_scoped_pipeline_path, sandbox_run, scheduler, scheduler_interpreter,
+    tmux_session_manager, transition_guard, AppState, CreateRunRequest, TargetRepoInput,
 };
 
 /// The wire shape of a command. `pub(crate)` only because axum's extractor puts
@@ -2067,6 +2067,17 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 }));
                 v
             };
+
+            // ADR-0081: refuse a Pipeline non lançable BEFORE archiving — the
+            // create chokepoint would refuse it too, but only after `cleanup_run`
+            // archived the original, leaving it with no replacement.
+            if let Some(body) = launch_path_refusal(
+                &state,
+                run_state.pipeline_id.as_deref(),
+                &run_state.pipeline_name,
+            ) {
+                return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+            }
 
             let archive_resp = cleanup_run(&state, &run_id).await;
             let archive_status = archive_resp.into_response().status();

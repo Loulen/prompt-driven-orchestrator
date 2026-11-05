@@ -49,8 +49,9 @@ edges:
 "#;
 
 /// A pipeline where the script declares NO output port (the Discord-ping shape:
-/// a pure side effect). `outputs_validator` no-ops for it. `end` is fed straight
-/// from `start` so the run can complete without an output from `notify`.
+/// a pure side effect). `end` is fed straight from `start`, but `notify` can
+/// carry no edge out: since ADR-0081 it is a Cul-de-sac and the pipeline is not
+/// launchable.
 const PIPELINE_YAML_NO_OUTPUT: &str = r#"name: script-noout
 version: "1.0"
 nodes:
@@ -258,30 +259,33 @@ async fn script_node_timeout_exit_code_fails_with_timeout_reason() {
     );
 }
 
+/// ADR-0081 / #1021: the Discord-ping shape — a pure side effect with zero
+/// declared outputs — can carry no edge out, so it never leads to End: a
+/// Cul-de-sac. The launch is refused naming it, before any side effect runs.
 #[tokio::test]
-async fn script_node_with_no_output_completes() {
+async fn script_node_with_no_output_is_a_dead_end_and_refuses_launch() {
     ensure_pdo_on_path();
-    // The Discord-ping shape: a pure side effect, zero declared outputs.
-    // `outputs_validator` no-ops (no ports), so exit 0 ⇒ completed.
     let body = "#!/usr/bin/env bash\nset -euo pipefail\necho pinged > PING_SENTINEL\n";
     let daemon = TestDaemon::spawn(seed_with(PIPELINE_YAML_NO_OUTPUT, "script-noout", body))
         .await
         .unwrap();
 
-    let run_id = start_run(&daemon, "script-noout").await;
-    let run = wait_for_node_status(&daemon, &run_id, NODE_ID, "completed").await;
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs", daemon.url()))
+        .json(&serde_json::json!({
+            "pipeline": "script-noout",
+            "input": "hello",
+            "target_repo": daemon.target_repo(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400, "a dead-end node refuses the launch");
+    let err = resp.json::<serde_json::Value>().await.unwrap();
     assert_eq!(
-        run["nodes"][NODE_ID]["status"], "completed",
-        "a no-output script should complete on exit 0; run was: {run}"
-    );
-    let sentinel = daemon
-        .repo_root()
-        .join(".pdo/runs")
-        .join(&run_id)
-        .join("worktree/PING_SENTINEL");
-    assert!(
-        sentinel.exists(),
-        "side effect should have run at {sentinel:?}"
+        err["error"].as_str().unwrap_or(""),
+        "Not launchable: dead end — node \"notify\" never leads to End.",
+        "the refusal names the dead end; got: {err}"
     );
 }
 

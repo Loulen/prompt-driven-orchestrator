@@ -36,6 +36,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: reviewer, port: task }
+  - source: { node: reviewer, port: review }
+    target: { node: end, port: result }
 "#;
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {

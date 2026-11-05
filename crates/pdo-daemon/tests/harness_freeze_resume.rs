@@ -48,6 +48,8 @@ edges:
     target: { node: bbbbbbbb, port: task }
   - source: { node: aaaaaaaa, port: out }
     target: { node: end, port: result }
+  - source: { node: bbbbbbbb, port: out }
+    target: { node: end, port: result }
 "#;
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {

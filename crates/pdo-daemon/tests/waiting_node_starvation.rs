@@ -69,6 +69,8 @@ edges:
     target: { node: leader, port: task }
   - source: { node: leader, port: plan }
     target: { node: end, port: result }
+  - source: { node: leaf1, port: plan }
+    target: { node: end, port: result }
 "#;
 
 fn tmux_available() -> bool {

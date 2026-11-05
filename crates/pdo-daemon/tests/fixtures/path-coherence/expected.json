@@ -1,0 +1,33 @@
+{
+  "linear-valid": [],
+  "start-not-wired": [
+    { "kind": "no_path", "node": null, "message": "Not launchable: no path from Start to End." },
+    { "kind": "orphan", "node": "implementer", "message": "Not launchable: orphan node — node \"implementer\" is not reachable from Start." }
+  ],
+  "end-not-wired": [
+    { "kind": "no_path", "node": null, "message": "Not launchable: no path from Start to End." },
+    { "kind": "dead_end", "node": "implementer", "message": "Not launchable: dead end — node \"implementer\" never leads to End." }
+  ],
+  "dead-end-branch": [
+    { "kind": "dead_end", "node": "notifier", "message": "Not launchable: dead end — node \"notifier\" never leads to End." }
+  ],
+  "orphan-to-end": [
+    { "kind": "orphan", "node": "stray", "message": "Not launchable: orphan node — node \"stray\" is not reachable from Start." }
+  ],
+  "isolated-node": [
+    { "kind": "dead_end", "node": "lonely", "message": "Not launchable: dead end — node \"lonely\" never leads to End." },
+    { "kind": "orphan", "node": "lonely", "message": "Not launchable: orphan node — node \"lonely\" is not reachable from Start." }
+  ],
+  "when-else-fanout": [],
+  "when-else-dead-branch": [
+    { "kind": "dead_end", "node": "builder", "message": "Not launchable: dead end — node \"builder\" never leads to End." }
+  ],
+  "bounded-loop-reentry": [],
+  "bounded-loop-never-exits": [
+    { "kind": "no_path", "node": null, "message": "Not launchable: no path from Start to End." },
+    { "kind": "dead_end", "node": "implementer", "message": "Not launchable: dead end — node \"implementer\" never leads to End." },
+    { "kind": "dead_end", "node": "reviewer", "message": "Not launchable: dead end — node \"reviewer\" never leads to End." }
+  ],
+  "collection-region": [],
+  "legacy-switch": []
+}

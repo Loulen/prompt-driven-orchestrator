@@ -42,6 +42,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: worker, port: in }
+  - source: { node: worker, port: out }
+    target: { node: end, port: result }
 "#;
 
 fn tmux_available() -> bool {

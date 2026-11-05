@@ -36,9 +36,38 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: planner, port: task }
+  - source: { node: planner, port: plan }
+    target: { node: end, port: result }
 "#;
 
 const PROMPT_CONTENT: &str = "You are a planner. Plan the task.\n";
+
+/// [`PIPELINE_YAML`] plus a `holder` sibling that also feeds End. End is a
+/// convergence barrier, so completing `planner` leaves the run live while
+/// `holder` runs — the state a mid-run « add a downstream node » edit needs.
+const HOLD_PIPELINE_NAME: &str = "run-edit-hold";
+const HOLD_EDGES: &str = "  - source: { node: start, port: user_prompt }
+    target: { node: holder, port: task }
+  - source: { node: holder, port: out }
+    target: { node: end, port: result }
+";
+const HOLDER_NODE: &str = "  - id: holder
+    name: holder
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: out
+    view: { x: 100, y: 300 }
+";
+
+/// `yaml` (a `run-edit-test` graph) with the `holder` sibling grafted on.
+fn with_holder(yaml: &str) -> String {
+    format!(
+        "{}{HOLD_EDGES}",
+        yaml.replace("name: run-edit-test\n", "name: run-edit-hold\n")
+            .replace("  - id: end\n", &format!("{HOLDER_NODE}  - id: end\n"))
+    )
+}
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
@@ -50,6 +79,14 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let prompts_dir = pipelines_dir.join(format!("{PIPELINE_NAME}.prompts"));
     std::fs::create_dir_all(&prompts_dir)?;
     std::fs::write(prompts_dir.join("planner.md"), PROMPT_CONTENT)?;
+    std::fs::write(
+        pipelines_dir.join(format!("{HOLD_PIPELINE_NAME}.yaml")),
+        with_holder(PIPELINE_YAML),
+    )?;
+    let hold_prompts = pipelines_dir.join(format!("{HOLD_PIPELINE_NAME}.prompts"));
+    std::fs::create_dir_all(&hold_prompts)?;
+    std::fs::write(hold_prompts.join("planner.md"), PROMPT_CONTENT)?;
+    std::fs::write(hold_prompts.join("holder.md"), "You hold the run open.\n")?;
     git_init_with_commit(repo)?;
     Ok(())
 }
@@ -116,9 +153,13 @@ async fn next_pipeline_modified_event(
 }
 
 async fn create_run(daemon: &TestDaemon) -> String {
+    create_run_of(daemon, PIPELINE_NAME).await
+}
+
+async fn create_run_of(daemon: &TestDaemon, pipeline: &str) -> String {
     // #470: the target repo is required at the create boundary (ADR-0033).
     let body = serde_json::json!({
-        "pipeline": PIPELINE_NAME,
+        "pipeline": pipeline,
         "input": "test input",
         "variables": {},
         "target_repo": daemon.target_repo(),
@@ -523,7 +564,7 @@ async fn adding_node_to_run_pipeline_triggers_scheduler_spawn() {
     }
 
     let daemon = TestDaemon::spawn(seed).await.unwrap();
-    let run_id = create_run(&daemon).await;
+    let run_id = create_run_of(&daemon, HOLD_PIPELINE_NAME).await;
 
     let mut ws = daemon.connect_ws().await.unwrap();
     // Drain initial messages (ready + node_started for planner)
@@ -579,7 +620,8 @@ async fn adding_node_to_run_pipeline_triggers_scheduler_spawn() {
         .join(&run_id)
         .join("pipeline.yaml");
 
-    let new_yaml = r#"name: run-edit-test
+    let new_yaml = with_holder(
+        r#"name: run-edit-test
 version: "1.0"
 nodes:
   - id: start
@@ -615,7 +657,10 @@ edges:
     target: { node: planner, port: task }
   - source: { node: planner, port: plan }
     target: { node: implementer, port: plan }
-"#;
+  - source: { node: implementer, port: summary }
+    target: { node: end, port: result }
+"#,
+    );
     std::fs::write(&yaml_path, new_yaml).unwrap();
 
     let evt = next_event_for_node(
@@ -820,6 +865,8 @@ edges:
     target: { node: planner, port: task }
   - source: { node: planner, port: plan }
     target: { node: implementer, port: plan }
+  - source: { node: implementer, port: summary }
+    target: { node: end, port: result }
 "#;
 
 fn seed_two_node(repo: &std::path::Path) -> anyhow::Result<()> {
@@ -915,6 +962,8 @@ nodes:
 edges:
   - source: { node: start, port: user_prompt }
     target: { node: planner, port: task }
+  - source: { node: planner, port: plan }
+    target: { node: end, port: result }
 "#;
     std::fs::write(&yaml_path, reduced_yaml).unwrap();
 

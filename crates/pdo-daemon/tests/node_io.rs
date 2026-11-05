@@ -45,6 +45,8 @@ edges:
     target: { node: planner, port: task }
   - source: { node: planner, port: plan }
     target: { node: implementer, port: plan }
+  - source: { node: implementer, port: summary }
+    target: { node: end, port: result }
 "#;
 
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {

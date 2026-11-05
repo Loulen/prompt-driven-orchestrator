@@ -6,7 +6,7 @@ import type {
   NodeDef,
   EdgeDef,
 } from "../types";
-import type { LoopRegion, NoteDef } from "../types";
+import type { LoopRegion, NoteDef, PathDefect } from "../types";
 import {
   ApiError,
   fetchPipeline,
@@ -65,6 +65,7 @@ export interface ConflictData {
   pipeline: PipelineDef;
   prompts: Record<string, string>;
   diagnostics: string[];
+  pathDefects?: PathDefect[];
 }
 
 export interface SaveErrorData {
@@ -78,6 +79,11 @@ export interface OpenPipeline {
   pipeline: PipelineDef;
   prompts: Record<string, string>;
   diagnostics: string[];
+  /**
+   * ADR-0081 — the path-coherence defects among `diagnostics`, structured (the
+   * same message strings + the culprit node id the banner's « Show » keys on).
+   */
+  pathDefects?: PathDefect[];
   dirty: boolean;
   externalDirty: boolean;
   runId?: string;
@@ -93,6 +99,19 @@ export interface OpenPipeline {
   libraryId?: string | null;
   /** @deprecated Pipeline library bindings were removed with scoped pipelines. */
   libraryScope?: "repo" | "user" | null;
+}
+
+/**
+ * ADR-0081 — the fresh diagnostics a template save answers with, as a tab patch.
+ * The banner then reflects what was just saved, not what was last loaded. An
+ * older daemon answers without them: keep the tab's own.
+ */
+function savedDiagnostics(result: {
+  diagnostics?: string[];
+  path_defects?: PathDefect[];
+} | undefined): Partial<OpenPipeline> {
+  if (!result?.diagnostics) return {};
+  return { diagnostics: result.diagnostics, pathDefects: result.path_defects ?? [] };
 }
 
 /**
@@ -550,6 +569,7 @@ export const useEditStore = create<EditState>((set, get) => ({
         pipeline: detail.pipeline,
         prompts: detail.prompts,
         diagnostics: detail.diagnostics ?? [],
+        pathDefects: detail.path_defects ?? [],
         dirty: false,
         externalDirty: false,
         libraryId: null,
@@ -578,6 +598,7 @@ export const useEditStore = create<EditState>((set, get) => ({
         pipeline: detail.pipeline,
         prompts: detail.prompts,
         diagnostics: detail.diagnostics ?? [],
+        pathDefects: detail.path_defects ?? [],
         dirty: false,
         externalDirty: false,
         runId,
@@ -1056,7 +1077,9 @@ export const useEditStore = create<EditState>((set, get) => ({
             return {
               ...patch,
               openTabs: (patch.openTabs ?? s.openTabs).map((t) =>
-                t.id === newId ? { ...t, dirty: false, saveError: undefined } : t,
+                t.id === newId
+                  ? { ...t, ...savedDiagnostics(result), dirty: false, saveError: undefined }
+                  : t,
               ),
               lastSavedAt: { ...patch.lastSavedAt, [newId]: Date.now() },
             };
@@ -1064,7 +1087,9 @@ export const useEditStore = create<EditState>((set, get) => ({
         } else {
           set((s) => ({
             openTabs: s.openTabs.map((t) =>
-              t.id === id ? { ...t, dirty: false, saveError: undefined } : t,
+              t.id === id
+                ? { ...t, ...savedDiagnostics(result), dirty: false, saveError: undefined }
+                : t,
             ),
             lastSavedAt: { ...s.lastSavedAt, [id]: Date.now() },
           }));
@@ -1141,7 +1166,7 @@ export const useEditStore = create<EditState>((set, get) => ({
           ? {
               ...t,
               ...(detail
-                ? { pipeline: detail.pipeline, prompts: detail.prompts, diagnostics: detail.diagnostics ?? [] }
+                ? { pipeline: detail.pipeline, prompts: detail.prompts, diagnostics: detail.diagnostics ?? [], pathDefects: detail.path_defects ?? [] }
                 : {}),
               dirty: false,
               conflict: undefined,
@@ -1203,6 +1228,7 @@ export const useEditStore = create<EditState>((set, get) => ({
                     pipeline: detail.pipeline,
                     prompts: detail.prompts,
                     diagnostics: detail.diagnostics ?? [],
+                    pathDefects: detail.path_defects ?? [],
                   },
                 }
               : t,
@@ -1218,6 +1244,7 @@ export const useEditStore = create<EditState>((set, get) => ({
                 pipeline: detail.pipeline,
                 prompts: detail.prompts,
                 diagnostics: detail.diagnostics ?? [],
+                pathDefects: detail.path_defects ?? [],
                 dirty: false,
                 externalDirty: true,
               }
@@ -1254,6 +1281,7 @@ export const useEditStore = create<EditState>((set, get) => ({
             pipeline: t.conflict.pipeline,
             prompts: t.conflict.prompts,
             diagnostics: t.conflict.diagnostics,
+            pathDefects: t.conflict.pathDefects,
             dirty: false,
             conflict: undefined,
           };
@@ -1291,6 +1319,7 @@ export const useEditStore = create<EditState>((set, get) => ({
                   pipeline: detail.pipeline,
                   prompts: detail.prompts,
                   diagnostics: detail.diagnostics ?? [],
+                  pathDefects: detail.path_defects ?? [],
                   dirty: false,
                   saveError: undefined,
                 }
@@ -1317,6 +1346,7 @@ export const useEditStore = create<EditState>((set, get) => ({
                     pipeline: detail.pipeline,
                     prompts: detail.prompts,
                     diagnostics: detail.diagnostics ?? [],
+                    pathDefects: detail.path_defects ?? [],
                     dirty: false,
                     saveError: undefined,
                   }

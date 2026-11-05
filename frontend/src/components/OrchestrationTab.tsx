@@ -197,7 +197,7 @@ export function OrchestrationTab({
 }: {
   childRuns: RunChildEntry[];
   counts: ChildCounts;
-  /** The orchestrator node's session is still live (children may still appear). */
+  /** The parent node's session is still live (children may still appear). */
   nodeLive: boolean;
   /** The node is `awaiting_user` — with a failed child, the tab says why. */
   nodeAwaiting: boolean;

@@ -159,6 +159,11 @@ tree**: children fold under their parent, with counters for finished, failed, st
 descendants. The node's **Orchestration** tab follows its children to the end, and a child that
 waits for you shows on its parent too.
 
+Any node (agent or script) can launch runs, toggle or not: as soon as it has a child, its card on
+the canvas carries the child counters and its panel grows the **I/O | Orchestration** tabs (I/O
+stays the default). While the node waits for its children, its banner links straight to the
+Orchestration tab. The toggle adds the `pdo-orchestrate` skill and shows the tab from the start.
+
 Decisions: [ADR-0064](adr/0064-la-provenance-parent-enfant-est-mecanique-et-la-liaison-orchestrateur-est-forte.md),
 [ADR-0068](adr/0068-la-liberation-de-la-completion-est-une-garde-du-daemon-pas-un-message-dans-le-pane.md),
 [ADR-0069](adr/0069-l-attente-utilisateur-est-declaree-par-l-agent-et-le-suivi-des-enfants-est-un-pull-bloquant.md).

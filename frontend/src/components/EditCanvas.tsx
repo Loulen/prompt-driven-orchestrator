@@ -108,7 +108,7 @@ interface EditNodeData {
   agentMode?: "inherit" | "profile" | "custom" | "broken";
   /** #723: the node carries the « Orchestrator » toggle (ADR-0064). */
   orchestrator?: boolean;
-  /** #723: child-run counters of an orchestrator node (run view only). */
+  /** #723 / #1019: child-run counters of a parent node (run view only). */
   childCounts?: ChildCounts;
   [key: string]: unknown;
 }
@@ -254,9 +254,9 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           </span>
         )}
       </div>
-      {/* #723 — orchestrator pastilles: a row under the title (the card grows
-          a line); omitted entirely without children, so a node that never
-          orchestrated stays byte-identical. */}
+      {/* #723 / #1019 — child-count pastilles of a parent node: a row under the
+          title (the card grows a line); omitted entirely without children, so
+          a node that never launched a run stays byte-identical. */}
       {data.childCounts && totalChildren(data.childCounts) > 0 && (
         <div className="mt-1.5 flex items-center gap-2 pl-[22px]" data-testid="node-child-pills-row">
           <ChildCountPills counts={data.childCounts} size="xs" testId="node-child-pills" />
@@ -463,14 +463,14 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   // #669: the bank's ids, for the missing-skill lint above the canvas.
   const { bank: skillBank, loaded: skillBankLoaded } = useSkillBank();
   const skillIds = useMemo(() => new Set(skillBank.skills.map((skill) => skill.id)), [skillBank]);
-  // #723 — children of the run, polled with the view; mapped onto the cards of
-  // nodes whose frozen `orchestrator` toggle is on. Template tabs never poll
-  // (no run state → no children) and stay untouched.
+  // #723 / #1019 — children of the run, polled with the view; mapped onto the
+  // card of any parent node (agent or script) that has ≥ 1 child, toggle or
+  // not (ADR-0064). Template tabs never poll (no run state → no children) and
+  // stay untouched.
   const runChildren = useRunChildren(activeRunState?.run_id ?? null, activeRunState != null);
   const derivedNodes = useMemo(() => {
     if (!pipeline) return [];
     const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds).map((card) => {
-      if (!(card.data as { orchestrator?: boolean }).orchestrator) return card;
       const runId = activeRunState?.run_id ?? null;
       if (!runId) return card;
       const nodeChildren = childrenOfNode(runChildren, runId, card.id);

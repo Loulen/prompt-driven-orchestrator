@@ -443,15 +443,17 @@ export default function NodeInspector({
 
         {/* #723/ADR-0064: the « Orchestrator » toggle — a behavior of the node,
             like Interactive, one row under it. Agent nodes only (a script runs
-            no agent, so a child-run contract there would silently do nothing).
-            Turning it on also seeds the `pdo-orchestrate` skill reference and
+            no agent, so the skill would silently do nothing). #1019: any node
+            may create child runs and gets the orchestration UI from its real
+            children; the toggle only announces a parent node (Orchestration tab
+            from the start) and adds the skill. Turning it on also seeds the `pdo-orchestrate` skill reference and
             PDO files the fixed /pdo-orchestrate amendment into the prompt at
             spawn (rendered below the textarea; never editable there). The
             toggle is the single source of intent: removing the skill by hand
             keeps the toggle on and warns, with a one-click re-add. */}
         {!isScript && (
           <Tooltip
-            content="Lets this node create child runs (pdo run create). Adds the pdo-orchestrate skill to the node and a fixed /pdo-orchestrate line to the prompt PDO files at spawn. Frozen once the NodeRun spawns."
+            content="Any node can create child runs (pdo run create). This toggle adds the pdo-orchestrate skill to the node and a fixed /pdo-orchestrate line to the prompt PDO files at spawn, and shows the Orchestration tab from the start. Frozen once the NodeRun spawns."
             side="left"
           >
             <div className="flex flex-col gap-1">

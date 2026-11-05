@@ -256,6 +256,15 @@ export interface TourStep {
    */
   done?: (o: TourObservation) => boolean;
   /**
+   * Replaying this step with `Previous` needs its target on screen, even when its
+   * condition still holds (PDO-10, #1029). For a step whose instruction only makes
+   * sense in a screen that is gone: « Name the pipeline » holds forever once the
+   * pipeline exists, but replayed after the dialog closed it would ask to paste
+   * into a field nobody can see. Without the flag, a satisfied step is replayable
+   * on its condition alone — « Create it » comes back centred, with `Next` live.
+   */
+  replayNeedsTarget?: boolean;
+  /**
    * A live checklist under the body (#824), for the one step that asks for **two**
    * gestures at once (tick both PDO skills). Splitting it in two steps would spend
    * a whole card on "now tick the other one"; showing nothing would make the first
@@ -663,7 +672,8 @@ export function skipStep(tour: TourDef, run: TourRun, o: TourObservation): TourR
  * and the end card have no step to go back to, and step 1 has nothing before it
  * (a Full tour's legs are independent — there is no going back into the previous
  * tour). The previous step must be **replayable**: its condition still holds, or
- * every one of its targets is on screen. Otherwise it would come back pointing at
+ * every one of its targets is on screen — only the latter for a step flagged
+ * {@link TourStep.replayNeedsTarget}. Otherwise it would come back pointing at
  * nothing and stop the tour on a failure card — and Previous must never do that.
  * A step the app is refusing right now is not replayable either, for the same
  * reason. The tour undoes nothing to get there (ADR-0071 §2).
@@ -673,7 +683,7 @@ export function canGoBack(tour: TourDef, run: TourRun, o: TourObservation): bool
   const previous = tour.steps[run.index - 1];
   if (!previous) return false;
   if (previous.refused?.(o)) return false;
-  if (isStepDone(previous, o)) return true;
+  if (!previous.replayNeedsTarget && isStepDone(previous, o)) return true;
   const selectors = previous.target(o);
   return selectors.length > 0 && selectors.every((s) => o.present(s));
 }

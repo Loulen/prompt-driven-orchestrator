@@ -488,6 +488,23 @@ describe("replaying the previous step (PDO-10, #1029)", () => {
     expect(goBack(tour, run, o)).toBe(run);
   });
 
+  it("a step flagged replayNeedsTarget is replayable only with its target on screen, condition or not", () => {
+    // « Name the pipeline »: its condition holds forever once the pipeline exists,
+    // but its field left with the dialog.
+    const tour = tourOf(
+      step("name", { target: () => ["#field"], done: (o) => o.present("#editor"), replayNeedsTarget: true }),
+      step("b"),
+    );
+    const gone = obs(["#editor", "#b"]);
+    expect(canGoBack(tour, at(tour, 1, gone), gone)).toBe(false);
+    expect(goBack(tour, at(tour, 1, gone), gone)).toEqual(at(tour, 1, gone));
+    const shown = obs(["#editor", "#field", "#b"]);
+    expect(canGoBack(tour, at(tour, 1, shown), shown)).toBe(true);
+    const run = goBack(tour, at(tour, 1, shown), shown);
+    expect(run.index).toBe(0);
+    expect(needsConfirm(tour, run, shown)).toBe(true);
+  });
+
   it("needs every target of a multi-target step on screen", () => {
     const tour = tourOf(
       step("a", { target: () => ["#x", "#y"], done: (o) => o.present("#opened") }),

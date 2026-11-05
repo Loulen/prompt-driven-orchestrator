@@ -301,6 +301,11 @@ const STEPS: TourStep[] = [
     // which is entered satisfied and says so.
     confirm: (o) => o.present(NEW_PIPELINE_DIALOG),
     done: (o) => pipelineCreated(o) || filled(o, NEW_PIPELINE_NAME),
+    // That condition holds for good once the pipeline exists, but the step's
+    // whole point is a field that leaves with the dialog: `Previous` from
+    // `Create it` is greyed out rather than replaying « paste the name » over
+    // a screen where there is nothing to paste into (PDO-10 FP, #1029).
+    replayNeedsTarget: true,
   },
   {
     id: "create-pipeline",

@@ -14,8 +14,10 @@
 import { beforeEach, describe, it, expect } from "vitest";
 import {
   canAdvance,
+  canGoBack,
   confirmStep,
   currentStep,
+  goBack,
   needsConfirm,
   observeTour,
   skipStep,
@@ -259,10 +261,18 @@ function gestures(fake: FakeApp): Record<string, () => void> {
   return {
     "pipelines-tab": () => fake.show('[data-testid="new-pipeline-button"]'),
     "new-pipeline": () =>
-      fake.show('[data-testid="new-pipeline-dialog"]', '[data-testid="new-pipeline-create"]'),
+      fake.show(
+        '[data-testid="new-pipeline-dialog"]',
+        '[data-testid="new-pipeline-name"]',
+        '[data-testid="new-pipeline-create"]',
+      ),
     "name-pipeline": () => fake.type('[data-testid="new-pipeline-name"]', MY_PIPELINE),
     "create-pipeline": () => {
-      fake.hide('[data-testid="new-pipeline-dialog"]', '[data-testid="new-pipeline-create"]');
+      fake.hide(
+        '[data-testid="new-pipeline-dialog"]',
+        '[data-testid="new-pipeline-name"]',
+        '[data-testid="new-pipeline-create"]',
+      );
       fake.createPipeline();
       fake.show('[data-testid="toolbar-add"]', '[data-testid="save-button"]');
     },
@@ -520,6 +530,42 @@ describe("the accidents a reader can have", () => {
     expect(run.satisfiedOnEntry).toBe(true);
     expect(needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
     expect(stepBody(currentStep(FIRST_PIPELINE_TOUR, run)!, fake.obs())).toContain("already created");
+  });
+
+  /**
+   * PDO-10 FP (#1029): from `Create it`, once the dialog has closed, Previous is
+   * greyed out — replaying « Name the pipeline » would ask to paste into a field
+   * that is gone, even though its condition (the pipeline exists) still holds.
+   * `Create it` itself stays replayable from the next step, centred with Next.
+   */
+  it("does not replay the naming step once the dialog is gone", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
+    let clock = 0;
+    for (const id of ["pipelines-tab", "new-pipeline", "name-pipeline"]) {
+      script[id]();
+      clock += 200;
+      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock);
+      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
+        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+      }
+    }
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
+    // Dialog still open: the field is on screen, the naming step can be replayed.
+    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
+
+    script["create-pipeline"]();
+    clock += 200;
+    run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock);
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("open-add-menu");
+    // `Create it` is replayable on its condition alone…
+    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(true);
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("create-pipeline");
+    // …but the naming step before it is not: its field left with the dialog.
+    expect(canGoBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(false);
+    expect(goBack(FIRST_PIPELINE_TOUR, run, fake.obs())).toBe(run);
   });
 
   /**

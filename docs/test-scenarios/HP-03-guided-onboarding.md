@@ -100,6 +100,9 @@ Features validated while crossing the tour:
 8. Open the **node** on the canvas → the inspector shows its live terminal.
 9. **Talk to the agent**: the card hands over a line to copy; paste it into the terminal and press
    Enter. **Escape inside the terminal belongs to the agent** — it must not end the tour.
+   ← / → inside the terminal belong to the agent too — **don't use them there**: in Claude Code,
+   ← on an empty prompt switches to its background-agents view, and what is typed next starts
+   another session, which cannot `pdo complete` the node.
 10. Click **Mark ready for completion** → the tour advances on the released guard, not on the click.
 11. The **wait** step lights the whole inspector as a soft zone — the terminal stays readable and
    usable — shows a two-item checklist (released / finished) and says it has **no time limit**. It

@@ -234,6 +234,13 @@ function whenEquals(edge: EdgeDef | undefined, field: string, value: string): bo
  * edge holds some other condition, the body says what the step is waiting for,
  * so a reader whose clause is off by one field or value is not left staring at
  * a card that never moves (#846, FP iteration 1).
+ *
+ * It lights the When editor only while THIS edge is the selected one; otherwise
+ * it lights the edge itself. Replayed with Previous (PDO-10, #1030), the step
+ * comes back with whatever edge the reader last selected — the tester → End one,
+ * for « Only loop back on a failure » — and a generic When editor would have
+ * pointed at the wrong edge's condition. And once the condition holds, the body
+ * says so instead of « Not there yet » next to a live Next.
  */
 function conditionStep(def: {
   id: string;
@@ -247,19 +254,26 @@ function conditionStep(def: {
     const i = edgeIndex(app.pipeline, agent(app, 1), def.to(app), OUT_PORT);
     return i < 0 ? undefined : app.pipeline?.edges[i];
   };
+  const done = (o: TourObservation) => whenEquals(edge(o.app), "verdict", def.value);
   return {
     id: def.id,
     title: def.title,
     body: (o) => {
+      if (done(o)) return `Already set: the condition reads verdict eq ${def.value}. ${def.why}`;
+      if (!edgeSelected(o.app, def.to(o.app)))
+        return `Click the edge first, then add the condition verdict eq ${def.value} in its inspector. ${def.why}`;
       const when = edge(o.app)?.when;
       return !when || Object.keys(when).length === 0
         ? `Add the condition verdict eq ${def.value}. ${def.why}`
         : `Not there yet: the condition must read verdict eq ${def.value}, on the out output. ${def.why}`;
     },
-    target: () => ['[data-testid="when-editor"]'],
-    waitingFor: "the When editor of the selected edge",
-    failureHint: "The edge was deselected before the condition was saved.",
-    done: (o) => whenEquals(edge(o.app), "verdict", def.value),
+    target: (o) =>
+      edgeSelected(o.app, def.to(o.app))
+        ? ['[data-testid="when-editor"]']
+        : edgeSel(o.app, agent(o.app, 1), def.to(o.app), OUT_PORT),
+    waitingFor: "the edge and its When editor",
+    failureHint: "The edge was deleted before the condition was saved.",
+    done,
   };
 }
 
@@ -546,7 +560,7 @@ const STEPS: TourStep[] = [
     title: "Select the edge back to implementer",
     body: (o) =>
       edgeSelected(o.app, agent(o.app, 0))
-        ? "The edge is already selected, since you just fixed its outputs. Its inspector on the right is where a condition is authored."
+        ? "The edge is already selected. Its inspector on the right is where a condition is authored."
         : "Click the edge you just drew. Its inspector opens on the right, where a condition is authored.",
     target: (o) => edgeSel(o.app, agent(o.app, 1), agent(o.app, 0), OUT_PORT),
     waitingFor: "the tester → implementer edge",
@@ -574,7 +588,7 @@ const STEPS: TourStep[] = [
     title: "Select the edge to End",
     body: (o) =>
       edgeSelected(o.app, endNode(o.app))
-        ? "The edge is already selected, since you just fixed its outputs. Same inspector, one more condition to write."
+        ? "The edge is already selected. Same inspector, one more condition to write."
         : "Click that last edge. Same inspector, one more condition to write.",
     target: (o) => edgeSel(o.app, agent(o.app, 1), endNode(o.app), OUT_PORT),
     waitingFor: "the tester → End edge",

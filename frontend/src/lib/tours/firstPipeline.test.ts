@@ -1106,4 +1106,47 @@ describe("replaying a step with Previous (PDO-10, #1030)", () => {
     expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("select-implementer");
     expect(fake.agents()).toHaveLength(1);
   });
+
+  /**
+   * FP of #1030: replayed from later in the walk, with the tester → End edge
+   * selected, « Only loop back on a failure » lit that edge's When editor and
+   * said « Not there yet » next to a live Next. It now lights its own edge and
+   * says the condition is set.
+   */
+  it("replays Only loop back on a failure on its own edge, saying the condition is set", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "save"); // end-condition written, tester → End selected
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // end-condition
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // select-end-edge
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // edge-tester-end
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs()); // loop-condition
+    const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
+    expect(step.id).toBe("loop-condition");
+    expect(run.satisfiedOnEntry).toBe(true);
+    expect(step.target(fake.obs())).toEqual(['.react-flow__edge[data-id="e-1"]']);
+    const body = stepBody(step, fake.obs());
+    expect(body).toMatch(/^Already set: the condition reads verdict eq fail\./);
+    expect(body).not.toContain("Not there yet");
+  });
+
+  it("replays Finish only on a pass on its selected edge, saying the condition is set", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "save");
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
+    const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
+    expect(step.id).toBe("end-condition");
+    expect(step.target(fake.obs())).toEqual(['[data-testid="when-editor"]']);
+    expect(stepBody(step, fake.obs())).toMatch(/^Already set: the condition reads verdict eq pass\./);
+  });
+
+  it("replays Select the edge to End without claiming its outputs were just fixed", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "end-condition");
+    run = goBack(FIRST_PIPELINE_TOUR, run, fake.obs());
+    const step = currentStep(FIRST_PIPELINE_TOUR, run)!;
+    expect(step.id).toBe("select-end-edge");
+    const body = stepBody(step, fake.obs());
+    expect(body).toContain("already selected");
+    expect(body).not.toContain("just fixed");
+  });
 });

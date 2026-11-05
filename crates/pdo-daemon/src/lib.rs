@@ -25548,6 +25548,359 @@ mod tests {
         assert_eq!(pipeline["executions"], 5);
     }
 
+    /// pdo-issues#3 (#1033, ADR-0081) — « Roll up child runs » on
+    /// `GET /stats/cost`: the cohort recomposed by root, every descendant filed
+    /// under its root's Pipeline › Child runs › Depth N, nothing counted twice,
+    /// the « By model » axis and the default response untouched.
+    #[tokio::test]
+    async fn stats_cost_roll_up_files_every_descendant_under_its_root() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut state = test_state().await;
+        let home = state
+            .repo_root
+            .join(".pdo")
+            .join("test-stats-rollup")
+            .join(uuid::Uuid::new_v4().to_string());
+        let _cleanup = Cleanup(home.clone());
+        std::fs::create_dir_all(&home).unwrap();
+        Arc::get_mut(&mut state).unwrap().sandbox_home_override = Some(home.clone());
+        let repo = state.repo_root.to_string_lossy().into_owned();
+
+        async fn insert_event(
+            db: &sqlx::SqlitePool,
+            run: &str,
+            ts: &str,
+            kind: &str,
+            node: Option<&str>,
+            payload: Option<serde_json::Value>,
+        ) {
+            sqlx::query(
+                "INSERT INTO events (run_id, ts, kind, node_id, iter, payload) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(run)
+            .bind(ts)
+            .bind(kind)
+            .bind(node)
+            .bind(node.map(|_| 1_i64))
+            .bind(payload.map(|p| p.to_string()))
+            .execute(db)
+            .await
+            .unwrap();
+        }
+
+        /// A Run of `pipeline` started on `day`, its `worker` session costing
+        /// `mtok` million input tokens of claude-opus-4-8 ($5/MTok).
+        #[allow(clippy::too_many_arguments)]
+        async fn seed(
+            state: &Arc<AppState>,
+            home: &std::path::Path,
+            run: &str,
+            day: &str,
+            pipeline: &str,
+            parent: Option<&str>,
+            target_repo: &str,
+            mtok: f64,
+            completed: bool,
+        ) {
+            let mut payload = serde_json::json!({
+                "pipeline_id": pipeline,
+                "pipeline_name": pipeline,
+                "target_repo": target_repo,
+                "harness": "claude",
+                "node_defs": [{"id": "worker", "name": "Worker", "node_type": "agent", "isolated_worktree": true}],
+            });
+            if let Some(parent) = parent {
+                payload["parent_run_id"] = serde_json::json!(parent);
+                payload["parent_node_id"] = serde_json::json!("worker");
+            }
+            insert_event(
+                &state.db,
+                run,
+                &format!("{day}T09:00:00Z"),
+                "run_started",
+                None,
+                Some(payload),
+            )
+            .await;
+            let session = format!("{run}-session");
+            insert_event(
+                &state.db,
+                run,
+                &format!("{day}T09:01:00Z"),
+                "node_started",
+                Some("worker"),
+                Some(serde_json::json!({"node_type": "agent", "isolated_worktree": true, "harness": "claude", "session_id": session})),
+            )
+            .await;
+            if completed {
+                insert_event(
+                    &state.db,
+                    run,
+                    &format!("{day}T09:30:00Z"),
+                    "run_completed",
+                    None,
+                    None,
+                )
+                .await;
+            }
+            let dir =
+                home.join(".claude")
+                    .join("projects")
+                    .join(stale_detector::encode_working_dir(
+                        &worktree_ops::sub_worktree_path(
+                            std::path::Path::new(target_repo),
+                            run,
+                            "worker",
+                            1,
+                        ),
+                    ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let tokens = (mtok * 1_000_000.0) as u64;
+            std::fs::write(
+                dir.join(format!("{session}.jsonl")),
+                format!(
+                    r#"{{"type":"assistant","requestId":"r-{run}","message":{{"id":"m-{run}","model":"claude-opus-4-8","usage":{{"input_tokens":{tokens},"output_tokens":0}}}}}}"#
+                ),
+            )
+            .unwrap();
+        }
+
+        // Window [07-15, 07-18). The orchestrator `root` ($5) → `child` ($2.50,
+        // started AFTER the window) → `grandchild` ($1, another repo). A lone
+        // `solo` run of the child's Pipeline ($5). `old-root` started BEFORE
+        // the window; its `late-child` ($0.50) started inside it.
+        let other_repo = "/elsewhere/other-repo";
+        seed(
+            &state,
+            &home,
+            "root",
+            "2026-07-15",
+            "orch",
+            None,
+            &repo,
+            1.0,
+            false,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "child",
+            "2026-07-19",
+            "impl",
+            Some("root"),
+            &repo,
+            0.5,
+            true,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "grandchild",
+            "2026-07-16",
+            "review",
+            Some("child"),
+            other_repo,
+            0.2,
+            true,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "solo",
+            "2026-07-16",
+            "impl",
+            None,
+            &repo,
+            1.0,
+            true,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "old-root",
+            "2026-07-10",
+            "orch",
+            None,
+            &repo,
+            1.0,
+            true,
+        )
+        .await;
+        seed(
+            &state,
+            &home,
+            "late-child",
+            "2026-07-17",
+            "review",
+            Some("old-root"),
+            &repo,
+            0.1,
+            true,
+        )
+        .await;
+
+        async fn get(state: &Arc<AppState>, uri: &str) -> serde_json::Value {
+            let response = build_router(state.clone())
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            serde_json::from_slice(
+                &axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+        fn find<'a>(rows: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == id)
+                .unwrap_or_else(|| panic!("no row {id} in {rows:#}"))
+        }
+        fn ids(rows: &serde_json::Value) -> Vec<String> {
+            let mut ids: Vec<String> = rows
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["id"].as_str().unwrap().to_string())
+                .collect();
+            ids.sort();
+            ids
+        }
+        fn usd(row: &serde_json::Value) -> f64 {
+            row["usd"]
+                .as_f64()
+                .unwrap_or_else(|| panic!("a usd in {row:#}"))
+        }
+        fn approx(a: f64, b: f64) -> bool {
+            (a - b).abs() < 1e-6
+        }
+        let base = "/stats/cost?from=2026-07-15T00:00:00Z&to=2026-07-18T00:00:00Z&bucket=day";
+
+        // --- Off: the response is the one without the parameter, no roll-up.
+        let plain = get(&state, base).await;
+        let off = get(&state, &format!("{base}&roll_up_children=false")).await;
+        assert_eq!(plain, off, "roll-up off ⇒ the response is unchanged");
+        assert!(!plain.to_string().contains("roll_up"));
+        // Each Run under its own Pipeline, at its own date.
+        assert_eq!(ids(&plain["by_pipeline"]), vec!["impl", "orch", "review"]);
+        assert!(approx(usd(&plain["total"]), 5.0 + 1.0 + 5.0 + 0.5));
+
+        // --- On: the cohort is the roots started in the period, with their trees.
+        let on = get(&state, &format!("{base}&roll_up_children=true")).await;
+        assert_eq!(
+            ids(&on["by_pipeline"]),
+            vec!["impl", "orch"],
+            "the grandchild leaves its own Pipeline; old-root's tree is out"
+        );
+        let orch = find(&on["by_pipeline"], "orch");
+        assert!(approx(usd(orch), 5.0 + 2.5 + 1.0), "{orch:#}");
+        assert_eq!(orch["runs"], 1, "the Pipeline row counts its root runs");
+        let roll_up = &orch["roll_up"];
+        assert_eq!(roll_up["parent"]["id"], "parent_run");
+        assert_eq!(roll_up["parent"]["name"], "Parent run");
+        assert!(approx(usd(&roll_up["parent"]), 5.0));
+        assert_eq!(roll_up["children"]["name"], "Child runs");
+        assert!(approx(usd(&roll_up["children"]), 3.5));
+        assert_eq!(roll_up["children"]["runs"], 2);
+        assert_eq!(roll_up["levels"], 2);
+        let depths = roll_up["depths"].as_array().unwrap();
+        assert_eq!(depths[0]["depth"], 1);
+        assert_eq!(depths[0]["name"], "Depth 1");
+        assert_eq!(depths[0]["runs"], 1);
+        assert!(approx(usd(&depths[0]), 2.5));
+        assert_eq!(ids(&depths[0]["pipelines"]), vec!["impl"]);
+        assert_eq!(depths[1]["depth"], 2);
+        assert!(approx(usd(&depths[1]), 1.0));
+        let review = find(&depths[1]["pipelines"], "review");
+        assert!(approx(usd(review), 1.0));
+        assert_eq!(review["nodes"][0]["name"], "Worker");
+        // The child's own Pipeline keeps only the run nobody orchestrated.
+        let impl_row = find(&on["by_pipeline"], "impl");
+        assert!(approx(usd(impl_row), 5.0));
+        assert_eq!(impl_row["runs"], 1);
+        assert!(impl_row.get("roll_up").is_none(), "no child run, no split");
+        // Nothing counted twice: the rows sum to the total.
+        let rows_sum: f64 = on["by_pipeline"].as_array().unwrap().iter().map(usd).sum();
+        assert!(approx(rows_sum, usd(&on["total"])));
+        assert!(approx(usd(&on["total"]), 5.0 + 2.5 + 1.0 + 5.0));
+        // The whole tree sits in its root's period bucket.
+        let buckets: Vec<&str> = on["by_period"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["bucket"].as_str().unwrap())
+            .collect();
+        assert_eq!(buckets, vec!["2026-07-15", "2026-07-16"]);
+        assert!(approx(usd(&on["by_period"][0]), 8.5));
+
+        // The orchestrator Node's median stays its own executions'.
+        let own_worker = find(&find(&plain["by_pipeline"], "orch")["nodes"], "worker").clone();
+        let parent_worker = find(&roll_up["parent"]["nodes"], "worker");
+        assert_eq!(parent_worker["median_usd"], own_worker["median_usd"]);
+        assert!(approx(parent_worker["median_usd"].as_f64().unwrap(), 5.0));
+
+        // « By model » ignores the parameter.
+        assert_eq!(on["by_model"], plain["by_model"]);
+
+        // By project: the grandchild follows its root's Project.
+        assert_eq!(on["by_project"].as_array().unwrap().len(), 1);
+        let project = &on["by_project"][0];
+        assert!(approx(usd(project), 13.5));
+        let project_orch = find(&project["pipelines"], "orch");
+        assert_eq!(project_orch["roll_up"], orch["roll_up"]);
+        assert!(plain["by_project"].as_array().unwrap().len() >= 2);
+
+        // « Completed only » is judged on the root: `root` never completed, so
+        // its whole tree is out — its completed children with it.
+        let completed = get(
+            &state,
+            &format!("{base}&roll_up_children=true&completed_only=true"),
+        )
+        .await;
+        assert_eq!(ids(&completed["by_pipeline"]), vec!["impl"]);
+        assert!(approx(usd(&completed["total"]), 5.0));
+
+        // Absorptions hold on the roll-up rows: « review » absorbed into « impl »
+        // files the grandchild under « impl » at Depth 2.
+        let response = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/stats/absorptions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "dimension": "pipeline",
+                            "absorbent": {"key": "impl", "name": "impl"},
+                            "members": [{"key": "review", "name": "review"}],
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let combined = get(&state, &format!("{base}&roll_up_children=true")).await;
+        let depth2 = &find(&combined["by_pipeline"], "orch")["roll_up"]["depths"][1];
+        assert_eq!(ids(&depth2["pipelines"]), vec!["impl"]);
+        assert_eq!(depth2["pipelines"][0]["absorbed"][0]["key"], "review");
+    }
+
     #[tokio::test]
     async fn stats_cost_returns_harness_coverage_and_nested_contribution_hierarchies() {
         struct Cleanup(std::path::PathBuf);

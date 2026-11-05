@@ -360,11 +360,11 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
     await waitFor(() => expect(fetchStatsCostMock).toHaveBeenCalledTimes(2));
 
     // And the reload key never reaches the API: the call keeps its shape (period,
-    // bucket, cohort, uncombined), which `useStats.test.ts` asserts exactly (Vitest
+    // bucket, cohort, uncombined, roll-up), which `useStats.test.ts` asserts exactly (Vitest
     // compares arity strictly). The modal owns the period, so assert the SHAPE, not
     // literal dates.
     const args = fetchStatsCostMock.mock.calls.at(-1)!;
-    expect(args).toHaveLength(5);
+    expect(args).toHaveLength(6);
     expect(args[2]).toBe("day"); // the 30d default preset's bucket
   });
 });
@@ -656,7 +656,8 @@ describe("StatsModal — « Uncombined » (#891)", () => {
 
     // One reading for the four tabs: Cost and Performance fetch uncombined too.
     await user.click(screen.getByTestId("stats-tab-cost"));
-    await waitFor(() => expect(uncombinedOf(fetchStatsCostMock.mock.calls)).toBe(true));
+    // Cost carries the roll-up after it (#1033): uncombined is its 5th argument.
+    await waitFor(() => expect(fetchStatsCostMock.mock.calls.at(-1)![4]).toBe(true));
     expect(screen.getByTestId("stats-uncombined")).toHaveAttribute("aria-checked", "true");
     await user.click(screen.getByTestId("stats-tab-performance"));
     await waitFor(() =>
@@ -810,5 +811,53 @@ describe("StatsModal — Pricing details in the shell's secondary panel (#944)",
     await user.click(await screen.findByTestId("stats-pricing-details-close"));
     expect(screen.queryByTestId("stats-pricing-details")).not.toBeInTheDocument();
     expect(screen.getByTestId("stats-tab-cost")).toHaveAttribute("aria-selected", "true");
+  });
+});
+
+describe("StatsModal — « Roll up child runs » (#1033, ADR-0081)", () => {
+  const rollUpOf = () => fetchStatsCostMock.mock.calls.at(-1)![5];
+
+  it("is off at each open, asks Cost for the roll-up only off « By model », and keeps it across tabs", async () => {
+    realCharts = true;
+    const user = userEvent.setup();
+    const onClose = () => {};
+    const { rerender } = render(<StatsModal open onClose={onClose} initialTab="cost" />);
+
+    const chip = await screen.findByTestId("stats-roll-up-children");
+    expect(chip).toHaveAttribute("aria-checked", "false");
+    await waitFor(() => expect(fetchStatsCostMock).toHaveBeenCalled());
+    expect(rollUpOf()).toBe(false);
+
+    await user.click(chip);
+    await waitFor(() => expect(rollUpOf()).toBe(true));
+    expect(screen.getByTestId("stats-roll-up-children")).toHaveAttribute("aria-checked", "true");
+
+    // « By model » has nothing to roll up: no chip, the plain cohort.
+    await user.selectOptions(screen.getByLabelText("Cost grouping"), "model");
+    expect(screen.queryByTestId("stats-roll-up-children")).not.toBeInTheDocument();
+    await waitFor(() => expect(rollUpOf()).toBe(false));
+
+    // Back on By project: the chip returns as the user left it.
+    await user.selectOptions(screen.getByLabelText("Cost grouping"), "project");
+    expect(screen.getByTestId("stats-roll-up-children")).toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(rollUpOf()).toBe(true));
+
+    // Another tab and back: kept, like every band control while Stats is open.
+    await user.click(screen.getByTestId("stats-tab-runs"));
+    expect(screen.queryByTestId("stats-roll-up-children")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("stats-tab-cost"));
+    expect(await screen.findByTestId("stats-roll-up-children")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+
+    // Closing forgets it.
+    rerender(<StatsModal open={false} onClose={onClose} />);
+    rerender(<StatsModal open onClose={onClose} initialTab="cost" />);
+    expect(await screen.findByTestId("stats-roll-up-children")).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    await waitFor(() => expect(rollUpOf()).toBe(false));
   });
 });

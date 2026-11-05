@@ -1977,6 +1977,28 @@ export interface StatsCostEntity extends StatsCostAggregate, StatsPipelineRowMet
   /** The Node's cost split into model × effort pairs (ADR-0065) — Node leaves
    *  only; the server omits it (never sends an empty array) on other levels. */
   models?: StatsModelEffortPair[];
+  /** « Roll up child runs » (ADR-0081): on a root Pipeline row that
+   *  orchestrated child runs, its Parent run / Child runs split. Absent
+   *  everywhere else, and always when the roll-up is off. */
+  roll_up?: StatsCostRollUp;
+}
+
+/** The roll-up of a root Pipeline row: « Parent run » (the root runs' own
+ *  Nodes, Infrastructure, Unassigned) and « Child runs » › Depth N › child
+ *  Pipeline › Node. */
+export interface StatsCostRollUp {
+  parent: StatsCostEntity;
+  /** Every descendant summed; `runs` = how many child runs, every depth. */
+  children: StatsCostEntity;
+  /** How many depth levels the trees reach. */
+  levels: number;
+  depths: StatsCostDepth[];
+}
+
+/** One depth level of a roll-up (1 = direct children); `runs` = its runs. */
+export interface StatsCostDepth extends StatsCostEntity {
+  depth: number;
+  pipelines: StatsCostEntity[];
 }
 
 /** Where a model/effort value was read from (ADR-0065 §1): the harness's source

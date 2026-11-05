@@ -15,7 +15,11 @@
 //!   3. `GET /runs/{id}/children` exposes each child's tree cost,
 //!      grandchildren included;
 //!   4. a descendant with no cost source makes the total unavailable (slices
-//!      readable), a lower-bound descendant makes the tree a lower bound.
+//!      readable), a lower-bound descendant makes the tree a lower bound;
+//!   5. (#1033) `GET /stats/cost?roll_up_children=true` files the whole tree
+//!      under its root's Pipeline — Parent run / Child runs › Depth N — with
+//!      the Child runs figure Run info shows, and leaves the default response
+//!      and the « By model » axis untouched.
 
 use crate::common::TestDaemon;
 use std::process::Command;
@@ -69,6 +73,7 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(&pipelines)?;
     for (name, harness, model) in [
         ("tree-claude", "claude", Some("claude-sonnet-5")),
+        ("tree-child", "claude", Some("claude-sonnet-5")),
         ("tree-opencode", "opencode", None),
     ] {
         std::fs::write(
@@ -162,7 +167,17 @@ async fn plant_worker(daemon: &TestDaemon, run_id: &str, lines: &[String]) {
 
 /// A claude-sonnet-5 worker run (3 $/M input) costing `input` tokens.
 async fn priced_run(daemon: &TestDaemon, parent: Option<(&str, &str)>, input: u64) -> String {
-    let run_id = create_run(daemon, "tree-claude", parent).await;
+    priced_run_of(daemon, "tree-claude", parent, input).await
+}
+
+/// The same, of Pipeline `pipeline`.
+async fn priced_run_of(
+    daemon: &TestDaemon,
+    pipeline: &str,
+    parent: Option<(&str, &str)>,
+    input: u64,
+) -> String {
+    let run_id = create_run(daemon, pipeline, parent).await;
     wait_worker_running(daemon, &run_id).await;
     plant_worker(
         daemon,
@@ -345,4 +360,69 @@ async fn an_uncosted_descendant_withholds_the_total_and_a_partial_one_marks_a_lo
             .any(|m| m.as_str().is_some_and(|m| m.contains("mystery"))),
         "the offender is named: {tree}"
     );
+}
+
+#[tokio::test]
+async fn stats_cost_roll_up_files_the_tree_under_its_root_pipeline() {
+    if !tmux_available() {
+        return;
+    }
+    let daemon = TestDaemon::spawn_with_home_override(seed, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+
+    // Orchestrator (tree-claude, $3.00) → child (tree-child, $0.30) →
+    // grandchild (tree-child, $0.03).
+    let parent = priced_run(&daemon, None, 1_000_000).await;
+    let child = priced_run_of(&daemon, "tree-child", Some((&parent, "worker")), 100_000).await;
+    let _grandchild = priced_run_of(&daemon, "tree-child", Some((&child, "worker")), 10_000).await;
+
+    let base = "/stats/cost?from=1970-01-01T00:00:00Z&to=2100-01-01T00:00:00Z&bucket=month";
+    let find = |rows: &serde_json::Value, id: &str| -> serde_json::Value {
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no row {id} in {rows}"))
+    };
+
+    // Off: each Run under its own Pipeline; the explicit `false` is the same
+    // response.
+    let plain = get_json(&daemon, base).await;
+    let off = get_json(&daemon, &format!("{base}&roll_up_children=false")).await;
+    assert_eq!(plain, off);
+    assert!(approx(
+        usd(&find(&plain["by_pipeline"], "tree-claude")),
+        3.0
+    ));
+    assert!(approx(
+        usd(&find(&plain["by_pipeline"], "tree-child")),
+        0.33
+    ));
+
+    // On: the child Pipeline's runs were all orchestrated — it leaves the list.
+    let on = get_json(&daemon, &format!("{base}&roll_up_children=true")).await;
+    let rows = on["by_pipeline"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let root = &rows[0];
+    assert_eq!(root["id"], "tree-claude");
+    assert!(approx(usd(root), 3.33), "{root}");
+    let roll_up = &root["roll_up"];
+    assert!(approx(usd(&roll_up["parent"]), 3.0));
+    assert_eq!(roll_up["children"]["runs"], 2);
+    assert_eq!(roll_up["levels"], 2);
+    assert_eq!(roll_up["depths"][0]["pipelines"][0]["id"], "tree-child");
+    assert!(approx(usd(&roll_up["depths"][1]), 0.03));
+    assert!(approx(usd(&on["total"]), usd(&plain["total"])));
+
+    // The Child runs figure is the one Run info shows for the orchestrator.
+    let run = get_json(&daemon, &format!("/runs/{parent}")).await;
+    assert!(approx(
+        usd(&roll_up["children"]),
+        usd(&run["tree_cost"]["children"])
+    ));
+
+    // « By model » is not concerned.
+    assert_eq!(on["by_model"], plain["by_model"]);
 }

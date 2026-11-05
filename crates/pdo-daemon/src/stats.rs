@@ -52,6 +52,13 @@ pub(crate) struct StatsQuery {
     /// absorptions applied.
     #[serde(default)]
     pub uncombined: bool,
+    /// « Roll up child runs » (pdo-issues#3, ADR-0081) — `/stats/cost` only:
+    /// recompose the cohort by **root** Run (roots started in the period, each
+    /// bringing its whole tree) and file every descendant under its root's
+    /// Pipeline and Project. Wire default `false` — the response is then
+    /// strictly the one without the parameter. The « By model » axis ignores it.
+    #[serde(default)]
+    pub roll_up_children: bool,
 }
 
 /// The SQL fragment that narrows a Run-keyed query to the « completed runs
@@ -718,6 +725,38 @@ pub(crate) struct StatsCostEntity {
     pub last_run: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub absorbed: Vec<crate::stats_absorption::AbsorbedMember>,
+    /// « Roll up child runs » (ADR-0081): on a root Pipeline row that
+    /// orchestrated child runs, the split « Parent run » / « Child runs » ›
+    /// Depth N › child Pipeline › Node. Omitted everywhere else — and always
+    /// when the roll-up is off, so that response stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roll_up: Option<Box<StatsCostRollUp>>,
+}
+
+/// The roll-up of a root Pipeline row (ADR-0081). Every figure follows the
+/// rule of a Pipeline headline (its Nodes' work); Infrastructure and
+/// Unassigned stay visible as rows under each Pipeline.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct StatsCostRollUp {
+    /// The root runs' own work — the **Coût du Run parent**; its `nodes` are the
+    /// root Pipeline's Nodes, Infrastructure and Unassigned.
+    pub parent: StatsCostEntity,
+    /// Every descendant summed; `runs` = how many child runs, every depth.
+    pub children: StatsCostEntity,
+    /// How many depth levels the trees reach.
+    pub levels: usize,
+    /// The descendants per depth, shallowest first.
+    pub depths: Vec<StatsCostDepth>,
+}
+
+/// One depth level of a roll-up (1 = direct children): its total, then its
+/// child Pipelines with their Nodes.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct StatsCostDepth {
+    #[serde(flatten)]
+    pub entity: StatsCostEntity,
+    pub depth: usize,
+    pub pipelines: Vec<StatsCostEntity>,
 }
 
 /// Where a model/effort value was read from (ADR-0065 §1): the harness's source
@@ -1078,6 +1117,8 @@ struct CostEntityAcc {
     /// Which raw keys' Runs landed here: Pipeline keys on a Pipeline acc
     /// (#890), Node ids on a Node acc (#892).
     tallies: crate::stats_absorption::PipelineTallies,
+    /// « Roll up child runs » (ADR-0081): filled on a root Pipeline row only.
+    roll_up: Option<Box<RollUpAcc>>,
 }
 
 /// One model × effort bucket, accumulated over the executions that landed in
@@ -1280,6 +1321,7 @@ fn wire_by_model(
                                 &crate::stats_absorption::effort_key(effort.as_deref()),
                                 &effort_acc.tallies,
                             ),
+                            roll_up: None,
                         },
                         provenance: effort.as_ref().map(|_| {
                             provenance(effort_acc.effort_observed, effort_acc.effort_requested)
@@ -1308,6 +1350,7 @@ fn wire_by_model(
                     by_period: wire_periods(acc.periods),
                     nodes: Vec::new(),
                     models: Vec::new(),
+                    roll_up: None,
                 },
                 provenance: provenance(acc.model_observed, acc.model_requested),
                 efforts,
@@ -1371,11 +1414,12 @@ fn wire_cost_entity(
         runs: None,
         last_run: None,
         absorbed: Vec::new(),
+        roll_up: None,
     }
 }
 
 /// A Pipeline row: the entity, plus what its Runs and its absorbed members say
-/// — and the same for each of its Node rows (#892).
+/// — and the same for each of its Node rows (#892), and its roll-up (ADR-0081).
 fn wire_cost_pipeline(
     id: String,
     mut entity: CostEntityAcc,
@@ -1384,6 +1428,10 @@ fn wire_cost_pipeline(
     let runs = entity.tallies.runs();
     let last_run = entity.tallies.last_run();
     let absorbed = resolver.absorbed(&id, &entity.tallies);
+    let roll_up = entity
+        .roll_up
+        .take()
+        .and_then(|roll_up| wire_roll_up(&id, *roll_up, resolver));
     let mut nodes: Vec<StatsCostEntity> = std::mem::take(&mut entity.nodes)
         .into_iter()
         .map(|(node_id, node)| wire_cost_node(&id, node_id, node, resolver))
@@ -1394,8 +1442,71 @@ fn wire_cost_pipeline(
     wired.runs = Some(runs);
     wired.last_run = last_run;
     wired.absorbed = absorbed;
+    wired.roll_up = roll_up.map(Box::new);
     wired
 }
+
+/// Wire a level of Pipeline rows, ranked by cost then id.
+fn wire_cost_pipelines(
+    pipelines: BTreeMap<String, CostEntityAcc>,
+    resolver: &crate::stats_absorption::AbsorptionResolver,
+) -> Vec<StatsCostEntity> {
+    let mut rows: Vec<StatsCostEntity> = pipelines
+        .into_iter()
+        .map(|(id, pipeline)| wire_cost_pipeline(id, pipeline, resolver))
+        .collect();
+    rows.sort_by(|a, b| cost_then_id(a.aggregate.usd, &a.id, b.aggregate.usd, &b.id));
+    rows
+}
+
+/// The roll-up of root Pipeline row `pipeline` — `None` when none of its root
+/// runs orchestrated a child run: such a row reads exactly as without roll-up.
+fn wire_roll_up(
+    pipeline: &str,
+    roll_up: RollUpAcc,
+    resolver: &crate::stats_absorption::AbsorptionResolver,
+) -> Option<StatsCostRollUp> {
+    if roll_up.child_runs.is_empty() {
+        return None;
+    }
+    // The parent's Node rows sit under the root Pipeline's key, so its Node
+    // absorptions apply; the row itself is no Pipeline and combines nothing.
+    let mut parent = wire_cost_pipeline(pipeline.to_string(), roll_up.parent, resolver);
+    parent.id = ROLL_UP_PARENT_ID.to_string();
+    parent.name = "Parent run".to_string();
+    parent.absorbed = Vec::new();
+
+    let mut children_acc = roll_up.children;
+    children_acc.name = "Child runs".to_string();
+    let mut children = wire_cost_entity(ROLL_UP_CHILDREN_ID.to_string(), children_acc, resolver);
+    children.runs = Some(roll_up.child_runs.len() as u64);
+
+    let depths: Vec<StatsCostDepth> = roll_up
+        .depths
+        .into_iter()
+        .map(|(depth, acc)| {
+            let mut entity_acc = acc.entity;
+            entity_acc.name = format!("Depth {depth}");
+            let mut entity = wire_cost_entity(format!("depth:{depth}"), entity_acc, resolver);
+            entity.runs = Some(acc.runs.len() as u64);
+            StatsCostDepth {
+                entity,
+                depth,
+                pipelines: wire_cost_pipelines(acc.pipelines, resolver),
+            }
+        })
+        .collect();
+    Some(StatsCostRollUp {
+        parent,
+        children,
+        levels: depths.len(),
+        depths,
+    })
+}
+
+/// The ids of the two roll-up rows under a root Pipeline (ADR-0081).
+pub(crate) const ROLL_UP_PARENT_ID: &str = "parent_run";
+pub(crate) const ROLL_UP_CHILDREN_ID: &str = "child_runs";
 
 /// A Node row under Pipeline row `pipeline`: its Runs and its absorbed Nodes.
 /// The Infrastructure and Unassigned rows are no Node: they record no Run.
@@ -1456,6 +1567,7 @@ fn cost_project_root(payload: &serde_json::Value, daemon_root: &Path) -> PathBuf
         .unwrap_or_else(|| daemon_root.to_path_buf())
 }
 
+#[derive(Clone)]
 struct CostRunRow {
     run_id: String,
     started_at: String,
@@ -1464,6 +1576,226 @@ struct CostRunRow {
     project_id: String,
     project_name: String,
     contributions: Vec<crate::run_cost::CostContribution>,
+}
+
+/// One root Run of the « Roll up child runs » cohort (ADR-0081) and every one
+/// of its descendants, with its depth. Each member's `bucket` and project are
+/// its root's: the whole tree follows the root.
+struct RolledTree {
+    root: CostRunRow,
+    members: Vec<(usize, CostRunRow)>,
+}
+
+/// The roll-up accumulator of one root Pipeline row (ADR-0081).
+#[derive(Debug, Clone, Default)]
+struct RollUpAcc {
+    /// The root runs, as their own Pipeline row would count them.
+    parent: CostEntityAcc,
+    /// Every descendant, one execution per child run.
+    children: CostEntityAcc,
+    child_runs: BTreeSet<String>,
+    depths: BTreeMap<usize, DepthAcc>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DepthAcc {
+    entity: CostEntityAcc,
+    runs: BTreeSet<String>,
+    pipelines: BTreeMap<String, CostEntityAcc>,
+}
+
+/// A Pipeline's headline is its nodes' work (ADR-0029 as amended by #742): the
+/// Infrastructure bucket — the run's own manager and merge-resolver sessions,
+/// plus attributable leftover transcripts — and the Unassigned orphans stay
+/// visible as node rows below the headline, but they are orchestration
+/// overhead, not pipeline work. The instance totals keep every contribution
+/// (ADR-0058: a run's total is the sum of what it actually spent).
+fn node_work(
+    contributions: &[crate::run_cost::CostContribution],
+) -> Vec<crate::run_cost::CostContribution> {
+    contributions
+        .iter()
+        .filter(|c| c.scope == crate::run_cost::CostScope::Node)
+        .cloned()
+        .collect()
+}
+
+/// The row a contribution lands on under its Pipeline row. #892: a Node
+/// absorbed under this Pipeline row counts under its absorbent Node, in every
+/// tree the Node shows in.
+fn contribution_node_identity(
+    identity: &crate::stats_absorption::RunIdentity,
+    contribution: &crate::run_cost::CostContribution,
+) -> crate::stats_absorption::NodeIdentity {
+    let pipeline_key = &identity.pipeline_key;
+    match contribution.scope {
+        crate::run_cost::CostScope::Node => {
+            identity.node(contribution.node_id.as_deref().unwrap_or("(unknown)"))
+        }
+        crate::run_cost::CostScope::Infrastructure => crate::stats_absorption::NodeIdentity {
+            key: format!("{pipeline_key}:infrastructure"),
+            raw_key: String::new(),
+            name: "Infrastructure".to_string(),
+            own_name: true,
+        },
+        crate::run_cost::CostScope::Unassigned => crate::stats_absorption::NodeIdentity {
+            key: format!("{pipeline_key}:unassigned"),
+            raw_key: String::new(),
+            name: "Unassigned".to_string(),
+            own_name: true,
+        },
+    }
+}
+
+/// Count `run`'s contributions into the Node rows of `pipeline`, with each
+/// Node leaf's model × effort pairs (ADR-0065, #906). A Node's figures are its
+/// own executions, whatever row its Pipeline is filed under.
+fn add_node_rows(pipeline: &mut CostEntityAcc, run: &CostRunRow, bucket: &str) {
+    for contribution in &run.contributions {
+        let node_identity = contribution_node_identity(&run.identity, contribution);
+        let is_node = contribution.scope == crate::run_cost::CostScope::Node;
+        let node = pipeline.nodes.entry(node_identity.key.clone()).or_default();
+        node_identity.adopt_name(&mut node.name);
+        if is_node {
+            node.tallies
+                .record_run_as(&node_identity.raw_key, &run.run_id, &run.started_at);
+        }
+        node.aggregate.add_contribution(contribution);
+        node.periods
+            .entry(bucket.to_string())
+            .or_default()
+            .add_contribution(contribution);
+        for slice in &contribution.model_slices {
+            // #906: the Node's couple goes through the global absorptions
+            // (effort on the raw model, then model), then the couple
+            // absorptions of its raw Node.
+            let couple = run.identity.couple(
+                is_node.then_some(node_identity.raw_key.as_str()),
+                &slice.model,
+                slice.effort.as_deref(),
+            );
+            let pair = node
+                .pairs
+                .entry((couple.model.clone(), couple.effort.clone()))
+                .or_default();
+            pair.add_slice(&contribution.harness, slice);
+            pair.record(&couple, &run.run_id, &run.started_at);
+        }
+    }
+}
+
+/// Count `run` into a Pipeline row: its tally, its headline (`work`), its
+/// period bars and its Node rows.
+fn add_pipeline_run(
+    pipeline: &mut CostEntityAcc,
+    run: &CostRunRow,
+    bucket: &str,
+    work: &[crate::run_cost::CostContribution],
+) {
+    run.identity.adopt_name(&mut pipeline.name);
+    pipeline
+        .tallies
+        .record_run(&run.identity, &run.run_id, &run.started_at);
+    pipeline.aggregate.add_run(work);
+    pipeline
+        .periods
+        .entry(bucket.to_string())
+        .or_default()
+        .add_run(work);
+    add_node_rows(pipeline, run, bucket);
+}
+
+/// Count a whole tree into its root's Pipeline row (ADR-0081): the headline
+/// is one execution per tree — the root's work plus every descendant's —, the
+/// Node rows stay the root's own, and the roll-up splits Parent run / Child
+/// runs › Depth N › child Pipeline.
+fn add_rolled_tree(pipeline: &mut CostEntityAcc, tree: &RolledTree) {
+    let root = &tree.root;
+    let bucket = root.bucket.as_str();
+    let root_work = node_work(&root.contributions);
+    let member_work: Vec<Vec<crate::run_cost::CostContribution>> = tree
+        .members
+        .iter()
+        .map(|(_, member)| node_work(&member.contributions))
+        .collect();
+    let tree_work: Vec<crate::run_cost::CostContribution> = root_work
+        .iter()
+        .chain(member_work.iter().flatten())
+        .cloned()
+        .collect();
+
+    root.identity.adopt_name(&mut pipeline.name);
+    pipeline
+        .tallies
+        .record_run(&root.identity, &root.run_id, &root.started_at);
+    pipeline.aggregate.add_run(&tree_work);
+    pipeline
+        .periods
+        .entry(bucket.to_string())
+        .or_default()
+        .add_run(&tree_work);
+    add_node_rows(pipeline, root, bucket);
+
+    let roll_up = pipeline.roll_up.get_or_insert_with(Default::default);
+    add_pipeline_run(&mut roll_up.parent, root, bucket, &root_work);
+    for ((depth, member), work) in tree.members.iter().zip(&member_work) {
+        roll_up.child_runs.insert(member.run_id.clone());
+        roll_up.children.aggregate.add_run(work);
+        roll_up
+            .children
+            .periods
+            .entry(bucket.to_string())
+            .or_default()
+            .add_run(work);
+        let level = roll_up.depths.entry(*depth).or_default();
+        level.runs.insert(member.run_id.clone());
+        level.entity.aggregate.add_run(work);
+        level
+            .entity
+            .periods
+            .entry(bucket.to_string())
+            .or_default()
+            .add_run(work);
+        let child_pipeline = level
+            .pipelines
+            .entry(member.identity.pipeline_key.clone())
+            .or_default();
+        add_pipeline_run(child_pipeline, member, bucket, work);
+    }
+}
+
+/// Wire the Project rows, ranked by cost then id.
+fn wire_cost_projects(
+    projects: BTreeMap<String, CostProjectAcc>,
+    resolver: &crate::stats_absorption::AbsorptionResolver,
+) -> Vec<StatsProjectCostEntity> {
+    let mut by_project: Vec<_> = projects
+        .into_iter()
+        .map(|(id, project)| StatsProjectCostEntity {
+            entity: StatsCostEntity {
+                id,
+                name: project.name,
+                aggregate: project.aggregate.wire(),
+                by_period: wire_periods(project.periods),
+                nodes: Vec::new(),
+                models: Vec::new(),
+                runs: None,
+                last_run: None,
+                absorbed: Vec::new(),
+                roll_up: None,
+            },
+            pipelines: wire_cost_pipelines(project.pipelines, resolver),
+        })
+        .collect();
+    by_project.sort_by(|a, b| {
+        cost_then_id(
+            a.entity.aggregate.usd,
+            &a.entity.id,
+            b.entity.aggregate.usd,
+            &b.entity.id,
+        )
+    });
+    by_project
 }
 
 fn fold_harness_cost(
@@ -1485,33 +1817,15 @@ fn fold_harness_cost(
             .or_default()
             .add_run(&run.contributions);
 
-        // A pipeline's headline is its nodes' work (ADR-0029 as amended by
-        // #742): the Infrastructure bucket — the run's own manager and
-        // merge-resolver sessions, plus attributable leftover transcripts —
-        // and the Unassigned orphans stay visible as node rows below the
-        // headline, but they are orchestration overhead, not pipeline work.
-        // The instance totals above keep every contribution (ADR-0058: a
-        // run's total is the sum of what it actually spent).
-        let node_contributions: Vec<crate::run_cost::CostContribution> = run
-            .contributions
-            .iter()
-            .filter(|c| c.scope == crate::run_cost::CostScope::Node)
-            .cloned()
-            .collect();
-
+        let node_contributions = node_work(&run.contributions);
         let identity = &run.identity;
         let pipeline_key = &identity.pipeline_key;
-        let pipeline = pipelines.entry(pipeline_key.clone()).or_default();
-        identity.adopt_name(&mut pipeline.name);
-        pipeline
-            .tallies
-            .record_run(identity, &run.run_id, &run.started_at);
-        pipeline.aggregate.add_run(&node_contributions);
-        pipeline
-            .periods
-            .entry(run.bucket.clone())
-            .or_default()
-            .add_run(&node_contributions);
+        add_pipeline_run(
+            pipelines.entry(pipeline_key.clone()).or_default(),
+            run,
+            &run.bucket,
+            &node_contributions,
+        );
 
         let project = projects.entry(run.project_id.clone()).or_default();
         project.name = run.project_name.clone();
@@ -1521,93 +1835,25 @@ fn fold_harness_cost(
             .entry(run.bucket.clone())
             .or_default()
             .add_run(&node_contributions);
-        let project_pipeline = project.pipelines.entry(pipeline_key.clone()).or_default();
-        identity.adopt_name(&mut project_pipeline.name);
-        project_pipeline
-            .tallies
-            .record_run(identity, &run.run_id, &run.started_at);
-        project_pipeline.aggregate.add_run(&node_contributions);
-        project_pipeline
-            .periods
-            .entry(run.bucket.clone())
-            .or_default()
-            .add_run(&node_contributions);
+        add_pipeline_run(
+            project.pipelines.entry(pipeline_key.clone()).or_default(),
+            run,
+            &run.bucket,
+            &node_contributions,
+        );
 
         for contribution in &run.contributions {
             if contribution.executions > 0 {
                 active_harnesses.insert(contribution.harness.clone());
             }
-            // #892: a Node absorbed under this Pipeline row counts under its
-            // absorbent Node, in every tree the Node shows in.
-            let node_identity = match contribution.scope {
-                crate::run_cost::CostScope::Node => {
-                    identity.node(contribution.node_id.as_deref().unwrap_or("(unknown)"))
-                }
-                crate::run_cost::CostScope::Infrastructure => {
-                    crate::stats_absorption::NodeIdentity {
-                        key: format!("{pipeline_key}:infrastructure"),
-                        raw_key: String::new(),
-                        name: "Infrastructure".to_string(),
-                        own_name: true,
-                    }
-                }
-                crate::run_cost::CostScope::Unassigned => crate::stats_absorption::NodeIdentity {
-                    key: format!("{pipeline_key}:unassigned"),
-                    raw_key: String::new(),
-                    name: "Unassigned".to_string(),
-                    own_name: true,
-                },
-            };
+            let node_identity = contribution_node_identity(identity, contribution);
             let id = node_identity.key.clone();
             let is_node = contribution.scope == crate::run_cost::CostScope::Node;
-            let tally = |node: &mut CostEntityAcc| {
-                node_identity.adopt_name(&mut node.name);
-                if is_node {
-                    node.tallies.record_run_as(
-                        &node_identity.raw_key,
-                        &run.run_id,
-                        &run.started_at,
-                    );
-                }
-            };
-            let node = pipeline.nodes.entry(id.clone()).or_default();
-            tally(node);
-            node.aggregate.add_contribution(contribution);
-            node.periods
-                .entry(run.bucket.clone())
-                .or_default()
-                .add_contribution(contribution);
 
-            let project_node = project_pipeline.nodes.entry(id.clone()).or_default();
-            tally(project_node);
-            project_node.aggregate.add_contribution(contribution);
-            project_node
-                .periods
-                .entry(run.bucket.clone())
-                .or_default()
-                .add_contribution(contribution);
-
-            // ADR-0065: the Node leaf's model × effort pairs, plus the whole
-            // « By model » tree — one pass over the same slices, the same node
-            // identity as the axes above. Slices land in every level of both
-            // hierarchies so headline, cards and period bars all re-scope.
+            // ADR-0065: the whole « By model » tree — one pass over the same
+            // slices, the same node identity as the axes above. Slices land in
+            // every level so headline, cards and period bars all re-scope.
             for slice in &contribution.model_slices {
-                // #906: the Node's couple goes through the global absorptions
-                // (effort on the raw model, then model), then the couple
-                // absorptions of its raw Node — the « By model » axis below
-                // stops before that last step.
-                let couple = identity.couple(
-                    is_node.then_some(node_identity.raw_key.as_str()),
-                    &slice.model,
-                    slice.effort.as_deref(),
-                );
-                let pair_key = (couple.model.clone(), couple.effort.clone());
-                for pairs in [&mut node.pairs, &mut project_node.pairs] {
-                    let pair = pairs.entry(pair_key.clone()).or_default();
-                    pair.add_slice(&contribution.harness, slice);
-                    pair.record(&couple, &run.run_id, &run.started_at);
-                }
-
                 // #892: an absorbed model id counts under its absorbent on
                 // this axis only; its efforts meet the absorbent's by effort.
                 let model = models_axis.entry(identity.model(&slice.model)).or_default();
@@ -1667,7 +1913,7 @@ fn fold_harness_cost(
                     .entity
                     .tallies
                     .record_run(identity, &run.run_id, &run.started_at);
-                if contribution.scope == crate::run_cost::CostScope::Node {
+                if is_node {
                     axis_pipeline
                         .entity
                         .aggregate
@@ -1681,7 +1927,14 @@ fn fold_harness_cost(
                 }
 
                 let axis_node = axis_pipeline.nodes.entry(id.clone()).or_default();
-                tally(axis_node);
+                node_identity.adopt_name(&mut axis_node.name);
+                if is_node {
+                    axis_node.tallies.record_run_as(
+                        &node_identity.raw_key,
+                        &run.run_id,
+                        &run.started_at,
+                    );
+                }
                 axis_node.aggregate.add_slice(&contribution.harness, slice);
                 axis_node
                     .periods
@@ -1692,70 +1945,235 @@ fn fold_harness_cost(
         }
     }
 
-    let mut by_pipeline: Vec<_> = pipelines
-        .into_iter()
-        .map(|(id, pipeline)| wire_cost_pipeline(id, pipeline, resolver))
-        .collect();
-    by_pipeline.sort_by(|a, b| {
-        b.aggregate
-            .usd
-            .unwrap_or(-1.0)
-            .partial_cmp(&a.aggregate.usd.unwrap_or(-1.0))
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.id.cmp(&b.id))
-    });
+    StatsCost {
+        harnesses: active_harnesses.into_iter().collect(),
+        total: total.wire(),
+        by_period: wire_periods(periods),
+        by_pipeline: wire_cost_pipelines(pipelines, resolver),
+        by_project: wire_cost_projects(projects, resolver),
+        by_model: wire_by_model(models_axis, resolver),
+        resolved,
+    }
+}
 
-    let mut by_project: Vec<_> = projects
-        .into_iter()
-        .map(|(id, project)| {
-            let mut pipelines: Vec<_> = project
-                .pipelines
-                .into_iter()
-                .map(|(id, pipeline)| wire_cost_pipeline(id, pipeline, resolver))
-                .collect();
-            pipelines.sort_by(|a, b| {
-                b.aggregate
-                    .usd
-                    .unwrap_or(-1.0)
-                    .partial_cmp(&a.aggregate.usd.unwrap_or(-1.0))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.id.cmp(&b.id))
-            });
-            StatsProjectCostEntity {
-                entity: StatsCostEntity {
-                    id,
-                    name: project.name,
-                    aggregate: project.aggregate.wire(),
-                    by_period: wire_periods(project.periods),
-                    nodes: Vec::new(),
-                    models: Vec::new(),
-                    runs: None,
-                    last_run: None,
-                    absorbed: Vec::new(),
-                },
-                pipelines,
-            }
-        })
-        .collect();
-    by_project.sort_by(|a, b| {
-        b.entity
-            .aggregate
-            .usd
-            .unwrap_or(-1.0)
-            .partial_cmp(&a.entity.aggregate.usd.unwrap_or(-1.0))
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.entity.id.cmp(&b.entity.id))
-    });
+/// « Roll up child runs » (ADR-0081): the same response, every tree filed
+/// under its root. Total and period bars count every Run of every tree in its
+/// root's period bucket; Pipeline and Project rows are the roots' (a child
+/// Pipeline keeps only the runs nobody orchestrated). The « By model » axis is
+/// not concerned: it is `regular`'s, the fold of the unchanged cohort.
+fn fold_rolled_up_cost(
+    trees: &[RolledTree],
+    regular: StatsCost,
+    resolver: &crate::stats_absorption::AbsorptionResolver,
+) -> StatsCost {
+    let mut total = CostAggregateAcc::default();
+    let mut periods = BTreeMap::<String, CostAggregateAcc>::new();
+    let mut pipelines = BTreeMap::<String, CostEntityAcc>::new();
+    let mut projects = BTreeMap::<String, CostProjectAcc>::new();
+    let mut active_harnesses: BTreeSet<String> = regular.harnesses.into_iter().collect();
+
+    for tree in trees {
+        let root = &tree.root;
+        let runs = std::iter::once(root).chain(tree.members.iter().map(|(_, member)| member));
+        let mut tree_work = Vec::new();
+        for run in runs {
+            total.add_run(&run.contributions);
+            periods
+                .entry(root.bucket.clone())
+                .or_default()
+                .add_run(&run.contributions);
+            tree_work.extend(node_work(&run.contributions));
+            active_harnesses.extend(
+                run.contributions
+                    .iter()
+                    .filter(|c| c.executions > 0)
+                    .map(|c| c.harness.clone()),
+            );
+        }
+
+        let pipeline_key = &root.identity.pipeline_key;
+        add_rolled_tree(pipelines.entry(pipeline_key.clone()).or_default(), tree);
+
+        let project = projects.entry(root.project_id.clone()).or_default();
+        project.name = root.project_name.clone();
+        project.aggregate.add_run(&tree_work);
+        project
+            .periods
+            .entry(root.bucket.clone())
+            .or_default()
+            .add_run(&tree_work);
+        add_rolled_tree(
+            project.pipelines.entry(pipeline_key.clone()).or_default(),
+            tree,
+        );
+    }
 
     StatsCost {
         harnesses: active_harnesses.into_iter().collect(),
         total: total.wire(),
         by_period: wire_periods(periods),
-        by_pipeline,
-        by_project,
-        by_model: wire_by_model(models_axis, resolver),
-        resolved,
+        by_pipeline: wire_cost_pipelines(pipelines, resolver),
+        by_project: wire_cost_projects(projects, resolver),
+        by_model: regular.by_model,
+        resolved: regular.resolved,
     }
+}
+
+/// What every Run row of one `/stats/cost` fold is read with — resolved once
+/// per request, never inside the per-Run loop.
+struct CostReadContext<'a> {
+    state: &'a AppState,
+    resolver: &'a crate::stats_absorption::AbsorptionResolver,
+    prices: &'a crate::price_table::PriceTable,
+    stored_projects: &'a [crate::project_store::Project],
+    home_root: PathBuf,
+    sandbox_root: PathBuf,
+}
+
+impl CostReadContext<'_> {
+    /// One Run of the cohort, folded through the per-Run memo.
+    async fn row(
+        &self,
+        run_id: String,
+        started_at: String,
+        bucket: String,
+        payload: Option<String>,
+    ) -> anyhow::Result<CostRunRow> {
+        let state = self.state;
+        let payload: serde_json::Value = payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str(p).ok())
+            .unwrap_or(serde_json::Value::Null);
+
+        // Pipeline key: `pipeline_id` going forward (#377), else the (always
+        // present) `pipeline_name`, absorptions applied (#890).
+        let identity = self.resolver.run_identity(&payload);
+
+        let repo_root = cost_project_root(&payload, &state.repo_root);
+        let (project_id, project_name) =
+            project_identity(&payload, &state.repo_root, self.stored_projects);
+
+        // #408: read the transcripts from the sandboxed Run's staged home while it
+        // is live (else `~/.claude/projects/`). Read `sandbox` straight off the
+        // `run_started` payload (like `target_repo`/`pipeline_id`) — no full
+        // RunState projection, so the SQL stays cheap (no fan-out regression).
+        //
+        // #432: this stops being a *decoder*. It used to `from_value::<SandboxMode>`,
+        // which silently swallowed any token the closed enum did not know; all this
+        // fold ever needed is the off-ness, and asking the profile store whether the
+        // name resolves would be an N+1 inside a per-row loop of a SQL fan-out.
+        let sandboxed = payload
+            .get("sandbox")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| {
+                let t = s.trim();
+                !t.is_empty() && !t.eq_ignore_ascii_case(crate::event_log::SandboxMode::OFF_WIRE)
+            });
+        let projects_root = crate::sandbox_run::transcripts_root(
+            sandboxed,
+            &run_id,
+            &self.home_root,
+            &self.sandbox_root,
+        );
+        // #708: pi's store follows the same sandbox-aware seam as the Claude root.
+        let stores = crate::sandbox_run::HarnessStores::for_run(
+            sandboxed,
+            &run_id,
+            &self.home_root,
+            &self.sandbox_root,
+        );
+        let events = crate::load_events(&state.db, &run_id).await?;
+        let breakdown = crate::run_cost::compute_run_cost_breakdown_cached(
+            &events,
+            &projects_root,
+            &stores,
+            &repo_root,
+            &run_id,
+            self.prices,
+        );
+        Ok(CostRunRow {
+            run_id,
+            started_at,
+            bucket,
+            identity,
+            project_id,
+            project_name,
+            contributions: breakdown.contributions,
+        })
+    }
+}
+
+/// The « Roll up child runs » cohort (ADR-0081): every **root** Run — no
+/// parent, or a parent the store no longer knows (forgotten: the child went
+/// back to being a root) — started in the period, « completed only » judged on
+/// the root; each brings its whole tree (the shared walk of the run tree,
+/// archived runs included), every member in its root's period bucket and
+/// Project.
+async fn rolled_up_trees(
+    ctx: &CostReadContext<'_>,
+    fmt: &str,
+    q: &StatsQuery,
+) -> anyhow::Result<Vec<RolledTree>> {
+    let db = &ctx.state.db;
+    let roots = sqlx::query_as::<_, (String, String, String, Option<String>)>(&format!(
+        "SELECT e.run_id, e.ts, strftime(?, e.ts) AS bucket, e.payload \
+         FROM events e WHERE e.kind = 'run_started' AND e.ts >= ? AND e.ts < ? \
+         AND (json_extract(e.payload, '$.parent_run_id') IS NULL \
+              OR NOT EXISTS (SELECT 1 FROM events p WHERE p.kind = 'run_started' \
+                             AND p.run_id = json_extract(e.payload, '$.parent_run_id'))){} \
+         ORDER BY e.ts",
+        completed_only_sql(q.completed_only, "e")
+    ))
+    .bind(fmt)
+    .bind(&q.from)
+    .bind(&q.to)
+    .fetch_all(db)
+    .await?;
+
+    // Only child runs carry a parent link: root runs are filtered out in SQL.
+    let links: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT run_id, json_extract(payload, '$.parent_run_id') FROM events \
+         WHERE kind = 'run_started' AND json_extract(payload, '$.parent_run_id') IS NOT NULL",
+    )
+    .fetch_all(db)
+    .await?;
+    let tree = crate::run_tree::RunTree::from_links(links);
+
+    let mut trees = Vec::with_capacity(roots.len());
+    for (run_id, started_at, bucket, payload) in roots {
+        let descendants = tree.descendants(&run_id);
+        let root = ctx.row(run_id, started_at, bucket, payload).await?;
+        let mut members = Vec::with_capacity(descendants.len());
+        for member in descendants {
+            let Some((started_at, payload)) = sqlx::query_as::<_, (String, Option<String>)>(
+                "SELECT ts, payload FROM events WHERE run_id = ? AND kind = 'run_started' \
+                 ORDER BY id LIMIT 1",
+            )
+            .bind(&member.run_id)
+            .fetch_optional(db)
+            .await?
+            else {
+                continue;
+            };
+            let mut row = ctx
+                .row(member.run_id, started_at, root.bucket.clone(), payload)
+                .await?;
+            // By project: a child follows its root's Project.
+            row.project_id = root.project_id.clone();
+            row.project_name = root.project_name.clone();
+            members.push((member.depth, row));
+        }
+        trees.push(RolledTree { root, members });
+    }
+    Ok(trees)
+}
+
+fn stats_cost_failed(error: impl std::fmt::Display) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": format!("stats cost failed: {error}") })),
+    )
+        .into_response()
 }
 
 /// `GET /stats/cost` — Class B, memo + app-side fold. Heavy (fans over the
@@ -1779,13 +2197,7 @@ pub(crate) async fn stats_cost(
     let resolver =
         match crate::stats_absorption::AbsorptionResolver::load(&state.db, q.uncombined).await {
             Ok(resolver) => resolver,
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("stats cost failed: {e}") })),
-                )
-                    .into_response();
-            }
+            Err(e) => return stats_cost_failed(e),
         };
 
     let rows = match sqlx::query_as::<_, (String, String, String, Option<String>)>(&format!(
@@ -1800,13 +2212,7 @@ pub(crate) async fn stats_cost(
     .await
     {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("stats cost failed: {e}") })),
-            )
-                .into_response();
-        }
+        Err(e) => return stats_cost_failed(e),
     };
 
     // #408: resolve the sandbox home roots once for the whole fold. HOME absent →
@@ -1826,89 +2232,39 @@ pub(crate) async fn stats_cost(
     let prices = crate::price_table::PriceTable::load(&home_root);
     // `copilot`'s store is always the host journal (no staging set); `pi`'s moves per
     // Run (#708) — the staged sink while a sandboxed Run lives, the host store after
-    // merge-back — so `stores` is rebuilt inside the per-Run loop below, not here.
+    // merge-back — so `stores` is rebuilt per Run, not here.
     let stored_projects = match crate::project_store::list(&state.db).await {
         Ok(projects) => projects,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("stats cost failed: {error}") })),
-            )
-                .into_response();
-        }
+        Err(error) => return stats_cost_failed(error),
+    };
+    let ctx = CostReadContext {
+        state: &state,
+        resolver: &resolver,
+        prices: &prices,
+        stored_projects: &stored_projects,
+        home_root,
+        sandbox_root,
     };
 
     let mut cost_rows: Vec<CostRunRow> = Vec::with_capacity(rows.len());
     for (run_id, started_at, bucket, payload) in rows {
-        let payload: serde_json::Value = payload
-            .as_deref()
-            .and_then(|p| serde_json::from_str(p).ok())
-            .unwrap_or(serde_json::Value::Null);
-
-        // Pipeline key: `pipeline_id` going forward (#377), else the (always
-        // present) `pipeline_name`, absorptions applied (#890).
-        let identity = resolver.run_identity(&payload);
-
-        let repo_root = cost_project_root(&payload, &state.repo_root);
-        let (project_id, project_name) =
-            project_identity(&payload, &state.repo_root, &stored_projects);
-
-        // #408: read the transcripts from the sandboxed Run's staged home while it
-        // is live (else `~/.claude/projects/`). Read `sandbox` straight off the
-        // `run_started` payload (like `target_repo`/`pipeline_id`) — no full
-        // RunState projection, so the SQL stays cheap (no fan-out regression).
-        //
-        // #432: this stops being a *decoder*. It used to `from_value::<SandboxMode>`,
-        // which silently swallowed any token the closed enum did not know; all this
-        // fold ever needed is the off-ness, and asking the profile store whether the
-        // name resolves would be an N+1 inside a per-row loop of a SQL fan-out.
-        let sandboxed = payload
-            .get("sandbox")
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| {
-                let t = s.trim();
-                !t.is_empty() && !t.eq_ignore_ascii_case(crate::event_log::SandboxMode::OFF_WIRE)
-            });
-        let projects_root =
-            crate::sandbox_run::transcripts_root(sandboxed, &run_id, &home_root, &sandbox_root);
-        // #708: pi's store follows the same sandbox-aware seam as the Claude root.
-        let stores = crate::sandbox_run::HarnessStores::for_run(
-            sandboxed,
-            &run_id,
-            &home_root,
-            &sandbox_root,
-        );
-        let events = match crate::load_events(&state.db, &run_id).await {
-            Ok(events) => events,
-            Err(error) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": format!("stats cost failed: {error}") })),
-                )
-                    .into_response();
-            }
-        };
-        let breakdown = crate::run_cost::compute_run_cost_breakdown_cached(
-            &events,
-            &projects_root,
-            &stores,
-            &repo_root,
-            &run_id,
-            &prices,
-        );
-        cost_rows.push(CostRunRow {
-            run_id,
-            started_at,
-            bucket,
-            identity,
-            project_id,
-            project_name,
-            contributions: breakdown.contributions,
-        });
+        match ctx.row(run_id, started_at, bucket, payload).await {
+            Ok(row) => cost_rows.push(row),
+            Err(error) => return stats_cost_failed(error),
+        }
     }
 
     let stats = fold_harness_cost(&cost_rows, resolved_price_rows(&prices), &resolver);
-    Json(stats).into_response()
+    if !q.roll_up_children {
+        return Json(stats).into_response();
+    }
+    // ADR-0081: the roll-up recomposes the cohort by root; « By model » keeps
+    // the fold of the unchanged cohort above.
+    let trees = match rolled_up_trees(&ctx, fmt, &q).await {
+        Ok(trees) => trees,
+        Err(error) => return stats_cost_failed(error),
+    };
+    Json(fold_rolled_up_cost(&trees, stats, &resolver)).into_response()
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ import ReviewPage from './pages/ReviewPage.tsx'
 import { reviewRunIdFromPath } from './lib/runRefs'
 import { initTheme } from './hooks/useTheme'
 import { initColourBlindStatus } from './hooks/useColourBlindStatus'
+import { initWaitingAlertSettings } from './hooks/useWaitingAlertSettings'
 
 // #759: adopt the stored theme and start following the OS. The inline guard in
 // `index.html` already stamped the same value before first paint; this call
@@ -15,6 +16,9 @@ initTheme()
 // #1005: same for the colour-blind status palette, which also follows a switch
 // made in another tab (the `storage` event).
 initColourBlindStatus()
+// #1011: the waiting-alert switches (this browser's) and the notification
+// permission, followed across tabs and across a permission change.
+initWaitingAlertSettings()
 
 // The app has no router: navigation is state (selected run, pane owner). The
 // Review page (#749) is its first real URL — `/runs/<id>/review` — rendered

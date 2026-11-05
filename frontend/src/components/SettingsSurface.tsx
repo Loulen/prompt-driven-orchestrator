@@ -55,6 +55,7 @@ import AgentProfilesPanel from "./AgentProfilesPanel";
 import StagingProfilesPanel from "./StagingProfilesPanel";
 import StatsAbsorptionsPanel from "./StatsAbsorptionsPanel";
 import TutorialsSection from "./tour/TutorialsSection";
+import NotificationsSection from "./NotificationsSection";
 import {
   SETTINGS_CATEGORIES,
   findCategory,
@@ -689,9 +690,12 @@ export default function SettingsSurface({
               <>
                 <InterfaceSection section={item.sections[0]} />
                 <AccessibilitySection section={item.sections[1]} />
+                <Section section={item.sections[2]}>
+                  <NotificationsSection />
+                </Section>
                 {values && settings ? (
                   <>
-                    <Section section={item.sections[2]}>
+                    <Section section={item.sections[3]}>
                       <SettingRow
                         id="session-cap"
                         label="Concurrent session cap"
@@ -759,7 +763,7 @@ export default function SettingsSurface({
                         unit=" MB"
                       />
                     </Section>
-                    <Section section={item.sections[3]}>
+                    <Section section={item.sections[4]}>
                       {/* Default Run auto-naming (#338). On by default — the pre-#338
                           behaviour. */}
                       <CheckboxRow
@@ -834,20 +838,20 @@ export default function SettingsSurface({
                     or the surface covers them. */}
                 <VersionUpdateSection
                   onRequestUpdate={onRequestUpdate && (() => exitThen(onRequestUpdate))}
-                  section={item.sections[4]}
+                  section={item.sections[5]}
                   active={open}
                   onOpenChangelog={onOpenChangelog && (() => exitThen(onOpenChangelog))}
                 />
                 {/* #823 — guided tours. Every entry closes this surface first:
                     a tour points at the app, which is underneath it. */}
-                <Section section={item.sections[5]}>
+                <Section section={item.sections[6]}>
                   <TutorialsSection
                     onStartTour={(tourId) => exitThen(() => onStartTour?.(tourId))}
                     onStartFullTour={() => exitThen(() => onStartFullTour?.())}
                   />
                 </Section>
                 {/* #891 — Stats absorptions: saves as you go, whatever `GET /settings` said. */}
-                <Section section={item.sections[6]}>
+                <Section section={item.sections[7]}>
                   <StatsAbsorptionsPanel active={open} />
                 </Section>
               </>

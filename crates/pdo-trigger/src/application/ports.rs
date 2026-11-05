@@ -7,6 +7,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use pdo_platform::domain::audit::NewAuditEntry;
+use pdo_skill::domain::selection::SkillRef;
 use pdo_workspace::domain::branches::FetchError;
 
 use crate::domain::fire_decision::GuardResult;
@@ -112,6 +113,17 @@ pub trait TriggerProjects: Send + Sync {
         project: &'a str,
         repo: Option<&'a str>,
     ) -> BoxFuture<'a, Option<String>>;
+}
+
+/// The bank a Trigger's skills come from (the skill context).
+pub trait TriggerSkills: Send + Sync {
+    /// The first skill of `next` neither the bank holds nor `current` already
+    /// selects; `None` when `next` may replace `current`.
+    fn foreign<'a>(
+        &'a self,
+        current: &'a [SkillRef],
+        next: &'a [SkillRef],
+    ) -> BoxFuture<'a, Result<Option<String>, String>>;
 }
 
 /// The staging profiles a Trigger's `sandbox` may name (the sandbox context).

@@ -1,7 +1,7 @@
 //! What the trigger context reads of the other contexts, behind its own ports:
 //! the Runs a fire starts (`runs`), the repositories it names
 //! (`repositories`), the pipelines it fires, the staging profiles its `sandbox`
-//! names and the audit journal (here); and the Triggers as the run context
+//! names, the skill bank and the audit journal (here); and the Triggers as the run context
 //! reads them (`pipeline_triggers`).
 
 mod pipeline_triggers;
@@ -16,13 +16,15 @@ use pdo_platform::domain::audit::NewAuditEntry;
 use pdo_platform::Platform;
 use pdo_run::application::paths::resolve_pipeline_path;
 use pdo_sandbox::application::ports::SandboxProfileRepository;
+use pdo_skill::domain::selection::SkillRef;
+use pdo_skill::Skills;
 
 pub use pipeline_triggers::TriggersOfRuns;
 pub use repositories::GitRepositories;
 pub use runs::{ProjectsOfRuns, RunsOfTriggers};
 
 use crate::application::ports::{
-    AuditTrail, BoxFuture, PipelineFacts, SandboxProfiles, TriggerPipelines,
+    AuditTrail, BoxFuture, PipelineFacts, SandboxProfiles, TriggerPipelines, TriggerSkills,
 };
 
 /// The pipelines of the instance's library (falling back to the repo's own
@@ -65,5 +67,23 @@ pub struct PlatformAudit(pub Arc<Platform>);
 impl AuditTrail for PlatformAudit {
     fn record(&self, entry: NewAuditEntry) -> BoxFuture<'_, ()> {
         Box::pin(async move { self.0.record_audit().execute(entry).await })
+    }
+}
+
+/// The skill context's bank: a Trigger only gains skills it holds.
+pub struct BankSkills(pub Arc<Skills>);
+
+impl TriggerSkills for BankSkills {
+    fn foreign<'a>(
+        &'a self,
+        current: &'a [SkillRef],
+        next: &'a [SkillRef],
+    ) -> BoxFuture<'a, Result<Option<String>, String>> {
+        Box::pin(async move {
+            self.0
+                .foreign_skill(current, next)
+                .await
+                .map_err(|e| e.to_string())
+        })
     }
 }

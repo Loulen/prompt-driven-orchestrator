@@ -209,3 +209,46 @@ async fn an_unknown_trigger_is_a_404_and_a_refused_edit_changes_nothing() {
 fn an_empty_edit_is_empty() {
     assert!(UpdateTrigger::default().is_empty());
 }
+
+#[tokio::test]
+async fn new_skills_come_from_the_bank_and_one_already_carried_stays() {
+    let w = world();
+    let id = w.create_standard().await;
+    update(
+        &w,
+        &id,
+        json!({ "skills": [{ "id": "tdd", "name": "TDD" }] }),
+    )
+    .await
+    .unwrap();
+    // `tdd` since deleted from the bank: the Trigger keeps it, gains no ghost.
+    w.bank
+        .unknown
+        .lock()
+        .unwrap()
+        .extend(["tdd".to_string(), "ghost".to_string()]);
+    let kept = update(
+        &w,
+        &id,
+        json!({ "skills": [{ "id": "tdd", "name": "TDD" }] }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(kept.skills.len(), 1);
+    let err = update(
+        &w,
+        &id,
+        json!({ "skills": [{ "id": "tdd" }, { "id": "ghost" }] }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err,
+        TriggerError::Invalid("not a skill of the bank: ghost".into())
+    );
+    assert_eq!(
+        w.store.one(&id).unwrap().skills,
+        kept.skills,
+        "nothing written"
+    );
+}

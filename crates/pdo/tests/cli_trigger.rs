@@ -106,6 +106,52 @@ async fn a_trigger_is_created_fired_paused_and_deleted_by_the_cli() {
         "{unguarded}"
     );
 
+    // A skill of the bank goes on the Trigger; one the bank does not hold is
+    // refused, and one the Trigger already carries is kept as the UI keeps it.
+    let skilled = pdo(
+        &daemon,
+        &[
+            "trigger",
+            "update",
+            &id,
+            "--skill",
+            "pdo-interactive=Interactif",
+            "--json",
+        ],
+    )
+    .await
+    .json();
+    assert_eq!(
+        skilled["skills"],
+        serde_json::json!([{ "id": "pdo-interactive", "name": "Interactif" }])
+    );
+    let unknown = pdo(
+        &daemon,
+        &[
+            "trigger",
+            "update",
+            &id,
+            "--skill",
+            "pdo-interactive",
+            "--skill",
+            "no-such-skill",
+        ],
+    )
+    .await;
+    assert_eq!(unknown.code, Some(1), "{}", unknown.stderr);
+    assert!(
+        unknown
+            .stderr
+            .contains("not a skill of the bank: no-such-skill"),
+        "{}",
+        unknown.stderr
+    );
+    let kept = daemon.get_json(&format!("/triggers/{id}")).await;
+    assert_eq!(
+        kept["skills"], skilled["skills"],
+        "a refusal writes nothing"
+    );
+
     // Paused: the UI's toggle, and a paused Trigger does not fire.
     let paused = pdo(&daemon, &["trigger", "pause", &id]).await;
     assert_eq!(paused.ok(), format!("{id}\tnightly paused\n"));
@@ -246,6 +292,39 @@ async fn a_trigger_the_daemon_refuses_exits_1_with_its_reason() {
         bad_cron.stderr.contains("invalid cron expression"),
         "{}",
         bad_cron.stderr
+    );
+
+    let unknown_skill = pdo(
+        &daemon,
+        &[
+            "trigger",
+            "create",
+            "n",
+            "--pipeline",
+            "solo",
+            "--cron",
+            "0 3 * * *",
+            "--repo",
+            &daemon.target_repo(),
+            "--input",
+            "go",
+            "--skill",
+            "no-such-skill",
+        ],
+    )
+    .await;
+    assert_eq!(unknown_skill.code, Some(1), "{}", unknown_skill.stderr);
+    assert!(
+        unknown_skill
+            .stderr
+            .contains("not a skill of the bank: no-such-skill"),
+        "{}",
+        unknown_skill.stderr
+    );
+    assert_eq!(
+        daemon.get_json("/triggers").await.as_array().map(Vec::len),
+        Some(0),
+        "a refused Trigger is not created"
     );
 
     let missing = pdo(&daemon, &["trigger", "pause"]).await;

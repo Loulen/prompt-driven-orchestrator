@@ -28,6 +28,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   session's detail: `show`, `events`, `terminate`, `relaunch`, `configure`. **`pdo audit`**
   reads the journal of the mutations made outside a Run, **`pdo whoami`** the Actor the daemon
   names you.
+- A Projet and a Trigger only gain skills of the bank: the daemon refuses another one (400, so
+  `pdo project skill add|set` and `pdo trigger create|update --skill` exit 1), as the selectors
+  only offer the bank's skills. A skill already selected and since deleted from the bank stays.
 - These commands print text by default and the daemon's answer with `--json`. They exit 0 on
   success, 1 when the daemon is unreachable or refuses the call (with its reason), 2 for an
   unreadable command line, 4 when the daemon knows no such Projet, Trigger or session.

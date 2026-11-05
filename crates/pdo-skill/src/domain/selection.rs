@@ -25,6 +25,12 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+/// Why a selection may not gain the skill `id`: the bank does not hold it
+/// (`Skills::foreign_skill`). One sentence for every context that asks.
+pub fn foreign_skill_refusal(id: &str) -> String {
+    format!("not a skill of the bank: {id}")
+}
+
 /// One selected skill as a tier stores it: the stable id, and the label the
 /// selector showed when the choice was made. `name` is informative only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -263,3 +263,34 @@ async fn the_bank_names_snapshot_maps_ids_to_labels() {
     assert_eq!(bank.skills.len(), 1);
     assert_eq!(bank.root_path.to_str(), Some("/bank/.pdo/skills"));
 }
+
+#[tokio::test]
+async fn a_selection_gains_only_skills_of_the_bank_and_keeps_a_deleted_one() {
+    use pdo_skill::domain::selection::SkillRef;
+    let f = fixture();
+    let tdd = f
+        .skills
+        .create_skill(&op(), &skill_md("tdd"), None, None)
+        .await
+        .unwrap();
+    let skill = |id: &str| SkillRef {
+        id: id.to_string(),
+        name: id.to_string(),
+    };
+    let foreign = |current: Vec<SkillRef>, next: Vec<SkillRef>| {
+        let skills = &f.skills;
+        async move { skills.foreign_skill(&current, &next).await.unwrap() }
+    };
+    assert_eq!(foreign(vec![], vec![skill(&tdd.id)]).await, None);
+    assert_eq!(foreign(vec![], vec![]).await, None);
+    assert_eq!(
+        foreign(vec![], vec![skill(&tdd.id), skill("ghost"), skill("other")]).await,
+        Some("ghost".to_string()),
+        "the first skill the bank does not hold"
+    );
+    assert_eq!(
+        foreign(vec![skill("ghost")], vec![skill("ghost"), skill(&tdd.id)]).await,
+        None,
+        "a skill already selected stays, though the bank no longer holds it"
+    );
+}

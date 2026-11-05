@@ -10,11 +10,12 @@ use pdo_kernel::event_bus::{BroadcastEventBus, EventBus};
 use pdo_kernel::extension_host::{ExtensionHost, TriggerSuspension};
 use pdo_kernel::{Actor, Operation};
 use pdo_platform::domain::audit::{ActorHint, NewAuditEntry};
+use pdo_skill::domain::selection::SkillRef;
 use pdo_trigger::application::create_trigger::CreateTriggerRequest;
 use pdo_trigger::application::ports::{
     AuditTrail, BoxFuture, GuardRunner, PipelineFacts, Repositories, RunFromTrigger,
     SandboxProfiles, Stored, TriggerPipelines, TriggerProjects, TriggerRepository, TriggerRuns,
-    TriggerSettings,
+    TriggerSettings, TriggerSkills,
 };
 use pdo_trigger::domain::fire_decision::GuardResult;
 use pdo_trigger::domain::trigger::{FireRecord, NewTrigger, Trigger, TriggerFire, UpdateTrigger};
@@ -363,6 +364,26 @@ impl TriggerProjects for Projets {
 /// The staging profiles: `off`, `minimal`, `full`, and `team`.
 pub struct Profiles;
 
+/// The skill bank: holds every skill but those listed as unknown.
+#[derive(Default)]
+pub struct Bank {
+    pub unknown: Mutex<Vec<String>>,
+}
+
+impl TriggerSkills for Bank {
+    fn foreign<'a>(
+        &'a self,
+        current: &'a [SkillRef],
+        next: &'a [SkillRef],
+    ) -> BoxFuture<'a, Result<Option<String>, String>> {
+        let unknown = self.unknown.lock().unwrap();
+        ready(Ok(next
+            .iter()
+            .find(|s| !current.iter().any(|c| c.id == s.id) && unknown.contains(&s.id))
+            .map(|s| s.id.clone())))
+    }
+}
+
 impl SandboxProfiles for Profiles {
     fn validate<'a>(&'a self, raw: &'a str) -> BoxFuture<'a, Result<(), String>> {
         let raw = raw.trim();
@@ -477,6 +498,7 @@ pub struct World {
     pub repos: Arc<Repos>,
     pub projets: Arc<Projets>,
     pub runs: Arc<Runs>,
+    pub bank: Arc<Bank>,
     pub audit: Arc<Audit>,
     pub host: Arc<Host>,
     pub bus: broadcast::Receiver<serde_json::Value>,
@@ -507,6 +529,7 @@ pub fn world_with(options: TriggersOptions) -> World {
     let repos = Arc::new(Repos::default());
     let projets = Arc::new(Projets::default());
     let runs = Arc::new(Runs::default());
+    let bank = Arc::new(Bank::default());
     let audit = Arc::new(Audit::default());
     let host = Arc::new(Host::default());
     let bus = Arc::new(BroadcastEventBus::new(64));
@@ -520,6 +543,7 @@ pub fn world_with(options: TriggersOptions) -> World {
             repositories: repos.clone(),
             projects: projets.clone(),
             sandbox_profiles: Arc::new(Profiles),
+            skills: bank.clone(),
             runs: runs.clone(),
             audit: audit.clone(),
             bus,
@@ -536,6 +560,7 @@ pub fn world_with(options: TriggersOptions) -> World {
         repos,
         projets,
         runs,
+        bank,
         audit,
         host,
         bus: rx,

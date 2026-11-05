@@ -155,24 +155,72 @@ async fn a_projet_is_created_changed_and_deleted_by_the_cli_as_the_ui_does() {
     assert!(cleared.get("auto_fail").is_none(), "{cleared}");
 
     // A skill added, then a second, then one removed: the route keeps the whole
-    // selection.
+    // selection. Only a skill of the bank goes in, as the UI offers no other.
     let skills = pdo(
         &daemon,
-        &["project", "skill", "add", &id, "tdd", "--name", "TDD"],
+        &[
+            "project",
+            "skill",
+            "add",
+            &id,
+            "pdo-interactive",
+            "--name",
+            "Interactif",
+        ],
     )
     .await;
-    assert_eq!(skills.ok(), "tdd\tTDD\n");
-    pdo(&daemon, &["project", "skill", "add", &id, "review"])
-        .await
-        .ok();
+    assert_eq!(skills.ok(), "pdo-interactive\tInteractif\n");
+    pdo(
+        &daemon,
+        &["project", "skill", "add", &id, "pdo-orchestrate"],
+    )
+    .await
+    .ok();
     let stored = daemon.get_json(&format!("/projects/{id}")).await;
     assert_eq!(
         stored["skills"],
-        serde_json::json!([{ "id": "tdd", "name": "TDD" }, { "id": "review", "name": "review" }])
+        serde_json::json!([
+            { "id": "pdo-interactive", "name": "Interactif" },
+            { "id": "pdo-orchestrate", "name": "pdo-orchestrate" }
+        ])
     );
-    let skills = pdo(&daemon, &["project", "skill", "remove", &id, "tdd"]).await;
-    assert_eq!(skills.ok(), "review\treview\n");
-    let absent = pdo(&daemon, &["project", "skill", "remove", &id, "tdd"]).await;
+    for args in [
+        &["project", "skill", "add", &id, "no-such-skill"][..],
+        &[
+            "project",
+            "skill",
+            "set",
+            &id,
+            "pdo-orchestrate",
+            "no-such-skill",
+        ][..],
+    ] {
+        let refused = pdo(&daemon, args).await;
+        assert_eq!(refused.code, Some(1), "{args:?}: {}", refused.stderr);
+        assert!(
+            refused
+                .stderr
+                .contains("not a skill of the bank: no-such-skill"),
+            "{}",
+            refused.stderr
+        );
+    }
+    let unchanged = daemon.get_json(&format!("/projects/{id}")).await;
+    assert_eq!(
+        unchanged["skills"], stored["skills"],
+        "a refusal writes nothing"
+    );
+    let skills = pdo(
+        &daemon,
+        &["project", "skill", "remove", &id, "pdo-interactive"],
+    )
+    .await;
+    assert_eq!(skills.ok(), "pdo-orchestrate\tpdo-orchestrate\n");
+    let absent = pdo(
+        &daemon,
+        &["project", "skill", "remove", &id, "pdo-interactive"],
+    )
+    .await;
     assert_eq!(absent.code, Some(1), "{}", absent.stderr);
     pdo(&daemon, &["project", "skill", "set", &id]).await.ok();
     let listed = pdo(&daemon, &["project", "skill", "list", &id, "--json"])

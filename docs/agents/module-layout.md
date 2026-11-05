@@ -208,8 +208,9 @@ The logs of each context and the `RUST_LOG` target of each module are in the
   offer yet is added on the owner's side.
 - **Settings a downstream context owns.** A Projet carries the agentic profile and the skills
   selection, which belong to contexts downstream of the workspace. The workspace stores them as
-  opaque JSON (`StoredSetting`) and never reads them; its HTTP adapter is generic over a
-  `ProjectSettings` trait that names their real types, so the wire keeps its shape and the
+  opaque JSON (`StoredSetting`) and never reads them: whether a skills selection may replace a
+  Projet's is the skill context's word, through the workspace's `SkillSelections` port. Its HTTP
+  adapter is generic over a `ProjectSettings` trait that names their real types, so the wire keeps its shape and the
   generated TypeScript type is `Project<A, S>` (the front aliases it in
   `workspace/model/project.ts`).
 - **Reads a downstream context answers.** Who selects a skill (instance, Projets, Triggers,

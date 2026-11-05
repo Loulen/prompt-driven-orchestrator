@@ -146,3 +146,23 @@ async fn a_refused_creation_checks_and_stores_nothing() {
     assert!(w.announced().is_empty());
     assert!(w.audit.entries.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn a_skill_the_bank_does_not_hold_is_refused_and_nothing_is_stored() {
+    let w = world();
+    w.bank.unknown.lock().unwrap().push("ghost".into());
+    let err = w
+        .triggers
+        .create(
+            &Actor::LocalOperator,
+            ActorHint::Ui,
+            request(json!({ "skills": [{ "id": "tdd" }, { "id": "ghost" }] })),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        TriggerError::Invalid("not a skill of the bank: ghost".into())
+    );
+    assert!(w.store.all().is_empty());
+}

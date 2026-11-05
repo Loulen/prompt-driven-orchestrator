@@ -68,6 +68,7 @@ pub struct Fixture {
     pub deletions: Arc<RecordingDeletions>,
     pub git: Arc<FakeGit>,
     pub source_tree: Arc<RecordingSourceTree>,
+    pub skills: Arc<ScriptedSkills>,
     pub host: Arc<RecordingHost>,
 }
 
@@ -86,6 +87,7 @@ fn build_with(host: RecordingHost) -> Fixture {
     let deletions = Arc::new(RecordingDeletions::default());
     let git = Arc::new(FakeGit::default());
     let source_tree = Arc::new(RecordingSourceTree::default());
+    let skills = Arc::new(ScriptedSkills::default());
     let host = Arc::new(host);
     let workspace = Workspace::new(
         WorkspacePorts {
@@ -98,6 +100,7 @@ fn build_with(host: RecordingHost) -> Fixture {
             source_tree: source_tree.clone(),
             files: Arc::new(NoFiles),
             clones_folder: Arc::new(FixedClonesFolder),
+            skills: skills.clone(),
         },
         host.clone(),
     );
@@ -110,6 +113,7 @@ fn build_with(host: RecordingHost) -> Fixture {
         deletions,
         git,
         source_tree,
+        skills,
         host,
     }
 }

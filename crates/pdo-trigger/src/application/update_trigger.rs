@@ -280,6 +280,9 @@ impl Triggers {
             rules::validate_max_concurrent(Some(n))
                 .map_err(|msg| TriggerError::Invalid(msg.to_string()))?;
         }
+        if let Some(skills) = &req.skills {
+            self.refuse_foreign_skills(&existing.skills, skills).await?;
+        }
         // Same shared existence gate as create and `PUT /settings`.
         if let Some(Some(mode)) = &req.sandbox {
             self.sandbox_profiles

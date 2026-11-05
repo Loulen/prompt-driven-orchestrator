@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reframeOnPaneResize } from "./paneResizeViewport";
+import { centreOn, reframeOnPaneResize } from "./paneResizeViewport";
 
 describe("reframeOnPaneResize (#949)", () => {
   it("keeps the graph's visual centre when the pane unfolds", () => {
@@ -80,5 +80,15 @@ describe("reframeOnPaneResize (#949)", () => {
   it("does not bound the pan when the pane folds back", () => {
     const graph = { x: 0, y: 0, width: 500, height: 100 };
     expect(reframeOnPaneResize({ x: 0, y: 0, zoom: 1 }, 800, 1400, 600, null, graph).x).toBe(300);
+  });
+});
+
+describe("centreOn (gitlab #23 Show)", () => {
+  it("puts the card's centre at the canvas centre, at the given zoom", () => {
+    const card = { x: 100, y: 40, width: 160, height: 80 };
+    const v = centreOn(card, 800, 600, 1.2);
+    expect(v.zoom).toBe(1.2);
+    expect((card.x + card.width / 2) * v.zoom + v.x).toBeCloseTo(400);
+    expect((card.y + card.height / 2) * v.zoom + v.y).toBeCloseTo(300);
   });
 });

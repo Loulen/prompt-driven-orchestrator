@@ -30,7 +30,7 @@ import { buildLoopRegionNodes, buildNoteNodes, deriveEditEdges, deriveEditNodes,
 import { hasUnsavedWork, isRunTabLocked, useEditStore } from "../stores/editStore";
 import { generateNodeId } from "../lib/nanoid";
 import { CARD_HEIGHT, CARD_WIDTH, fallbackNodeSpot, freeDropSpot } from "../lib/nodePlacement";
-import { reframeOnPaneResize } from "../lib/paneResizeViewport";
+import { centreOn, reframeOnPaneResize } from "../lib/paneResizeViewport";
 import { registerCanvasReveal } from "../lib/canvasReveal";
 import { collectionFanoutFields, collectionFanoutNudges, regionsDestroyedByEdgeRemoval } from "../lib/loopRegions";
 import DestroyLoopModal from "./DestroyLoopModal";
@@ -532,6 +532,20 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     [reactFlow],
   );
 
+  // A card's box in flow coordinates, or null when it is not on the canvas.
+  const flowRectOf = useCallback(
+    (nodeId: string) => {
+      const node = reactFlow.getInternalNode(nodeId);
+      if (!node) return null;
+      return {
+        ...node.internals.positionAbsolute,
+        width: node.measured.width ?? CARD_WIDTH,
+        height: node.measured.height ?? CARD_HEIGHT,
+      };
+    },
+    [reactFlow],
+  );
+
   // #949 (FP iteration 1): the right pane folding or unfolding resizes the
   // canvas from the right; without this, a graph fit-viewed on the full-width
   // canvas slides under the unfolded pane, clicked card included. The toggle
@@ -543,6 +557,10 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   const hasCanvas = tab != null && pipeline != null;
   const lastCanvasWidthRef = useRef<number | null>(null);
   const paneToggledRef = useRef(false);
+  // gitlab #23 « Show » (FP iteration 1): the node « Show » is centring on. The
+  // selection it makes unfolds the inspector, which shrinks the canvas WHILE the
+  // centring animation runs; the ResizeObserver re-centres on the new width.
+  const pendingShowRef = useRef<{ nodeId: string; zoom: number } | null>(null);
   const prevRightCollapsedRef = useRef(rightPaneCollapsed);
   useLayoutEffect(() => {
     if (prevRightCollapsedRef.current === rightPaneCollapsed) return;
@@ -561,6 +579,16 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       const { width, height } = wrapper.getBoundingClientRect();
       const prevWidth = lastCanvasWidthRef.current;
       lastCanvasWidthRef.current = width;
+      const show = pendingShowRef.current;
+      if (show && prevWidth != null && width > 0 && width !== prevWidth) {
+        const rect = flowRectOf(show.nodeId);
+        if (rect) {
+          // The Show re-centre supersedes the #949 reframe for this resize.
+          paneToggledRef.current = false;
+          reactFlow.setViewport(centreOn(rect, width, height, show.zoom), { duration: 250 });
+          return;
+        }
+      }
       if (!paneToggledRef.current || prevWidth == null || prevWidth <= 0 || width <= 0) return;
       if (width === prevWidth) return;
       paneToggledRef.current = false;
@@ -579,7 +607,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     });
     observer.observe(wrapper);
     return () => observer.disconnect();
-  }, [hasCanvas, reactFlow]);
+  }, [hasCanvas, reactFlow, flowRectOf]);
 
   // Index the just-drawn edge will occupy, captured at `onConnect` and consumed
   // by `onConnectEnd` to stamp the drop-position anchor side (#168). The edge is
@@ -891,15 +919,23 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   // centre the canvas on it.
   const showNode = useCallback(
     (nodeId: string) => {
+      const zoom = 1.2;
+      // Armed BEFORE the selection: the inspector it unfolds resizes the canvas
+      // before paint, and the ResizeObserver re-centres on the new width. Disarms
+      // itself when no resize follows (the inspector was already open).
+      pendingShowRef.current = { nodeId, zoom };
+      setTimeout(() => {
+        if (pendingShowRef.current?.nodeId === nodeId) pendingShowRef.current = null;
+      }, 500);
       setSelection({ kind: "node", id: nodeId });
-      const node = reactFlow.getInternalNode(nodeId);
-      if (!node) return;
-      const { x, y } = node.internals.positionAbsolute;
-      const w = node.measured.width ?? CARD_WIDTH;
-      const h = node.measured.height ?? CARD_HEIGHT;
-      reactFlow.setCenter(x + w / 2, y + h / 2, { zoom: 1.2, duration: 400 });
+      const rect = flowRectOf(nodeId);
+      const wrapper = reactFlowRef.current;
+      if (!rect || !wrapper) return;
+      const { width, height } = wrapper.getBoundingClientRect();
+      if (width <= 0 || height <= 0) return;
+      reactFlow.setViewport(centreOn(rect, width, height, zoom), { duration: 400 });
     },
-    [reactFlow, setSelection],
+    [reactFlow, setSelection, flowRectOf],
   );
 
   if (!tab || !pipeline) {

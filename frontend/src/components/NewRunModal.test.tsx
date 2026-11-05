@@ -3011,6 +3011,35 @@ describe("NewRunModal — the target repo is required at the boundary (#470)", (
       expect(screen.getByTestId("launch-error")).toHaveTextContent(/target_repo is required/i);
     });
   });
+
+  // gitlab #23 (FP #1021): the refusal sits under Provisioning, below the fold
+  // of a tall modal — it is scrolled into view when it appears.
+  it("scrolls the launch refusal into view", async () => {
+    const scrollIntoView = vi.fn();
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    try {
+      vi.mocked(fetchPipelines).mockResolvedValue([
+        makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+      ]);
+      vi.mocked(createRun).mockRejectedValueOnce(
+        new Error("Not launchable: no path from Start to End."),
+      );
+
+      renderModal();
+      await enterValidRepo();
+      await waitFor(() => expect(selectedPipeline()).toBe("Auditor"));
+      vi.useRealTimers();
+      await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+      fireEvent.click(screen.getByTestId("launch-button"));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("Not launchable: no path from Start to End.");
+      expect(scrollIntoView.mock.contexts).toContain(alert);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
 });
 
 // #465 (ADR-0042): multi-repo create. The primary stays `target_repo`; each added

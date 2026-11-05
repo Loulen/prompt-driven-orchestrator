@@ -174,6 +174,13 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   const [pipelineChosen, setPipelineChosen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // gitlab #23 (FP #1021): the launch refusal sits below Provisioning, under
+  // the fold of a tall modal — bring it into view when it appears, or Launch
+  // looks like it did nothing.
+  const errorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [error]);
   const [provisioning, setProvisioning] = useState<ProvisioningRules>(
     EMPTY_PROVISIONING_RULES,
   );
@@ -1923,6 +1930,8 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
 
           {error && (
             <div
+              ref={errorRef}
+              role="alert"
               className="mt-3 rounded-md border border-st-failed/30 bg-st-failed-bg px-3 py-2 text-st-failed"
               style={{ fontSize: "11.5px" }}
               data-testid="launch-error"

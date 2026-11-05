@@ -28,6 +28,11 @@ ADR-0081). **Cassant** : `Start` devient l'unique point d'entrée.
   `path_defects` (`kind`, `node_id`, `message`) ; l'éditeur rafraîchit la bannière à
   l'enregistrement, avec un lien « Show » sur le nœud fautif. `GET /pipelines` expose
   `launchable` et `not_launchable_reasons`.
+- **À la mise à jour** : des Pipelines d'instance existants peuvent devenir non lançables —
+  typiquement les `tutorial-implement-test-*` laissés par le tour « First pipeline » (le tour
+  ne relie pas encore `Start` au premier nœud ; l'étape arrive avec #1024) ou un brouillon
+  réduit à `Start` + `End` sans arête. Ouvrez-les dans l'éditeur : la bannière nomme chaque
+  défaut et « Show » mène au nœud fautif ; reliez-le ou supprimez le Pipeline.
 
 ## 1.126.0
 **Tours jouables à plusieurs sur une instance partagée** (#986, #987, story PDO-20), validé en

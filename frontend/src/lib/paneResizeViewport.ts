@@ -59,3 +59,17 @@ export function reframeOnPaneResize(
     zoom,
   };
 }
+
+/**
+ * gitlab #23 « Show »: the viewport that centres `rect` on a canvas of
+ * `width` × `height` at `zoom`. Computed from the canvas's measured size, not
+ * React Flow's stored one, so it holds when the inspector unfolding has just
+ * shrunk the canvas and React Flow has not caught up yet.
+ */
+export function centreOn(rect: FlowRect, width: number, height: number, zoom: number): Viewport {
+  return {
+    x: width / 2 - (rect.x + rect.width / 2) * zoom,
+    y: height / 2 - (rect.y + rect.height / 2) * zoom,
+    zoom,
+  };
+}

@@ -76,7 +76,7 @@ function NotificationStatus({
         <span>
           Browsers only allow notifications on https or localhost. You opened PDO at{" "}
           <code className="font-mono">{currentOrigin()}</code> — open it through localhost (an SSH
-          tunnel works) to turn this on. Sound still works.
+          tunnel works) to turn this on.
         </span>
       </div>
     );
@@ -90,7 +90,7 @@ function NotificationStatus({
         data-state="unavailable"
       >
         <TriangleAlert size={11} className="mt-px shrink-0" />
-        <span>This browser has no notification support. Sound still works.</span>
+        <span>This browser has no notification support.</span>
       </div>
     );
   }

@@ -87,12 +87,15 @@ describe("Settings › Notifications (#1011)", () => {
     expect(status()).toHaveTextContent(
       `Browsers only allow notifications on https or localhost. You opened PDO at ${window.location.origin}`,
     );
+    // No Sound row ships yet (#1012): the copy must not promise one.
+    expect(status()).not.toHaveTextContent(/sound/i);
   });
 
   it("no Notification API: greyed with its reason", () => {
     boot();
     expect(toggle()).toBeDisabled();
     expect(status()).toHaveAttribute("data-state", "unavailable");
+    expect(status()).not.toHaveTextContent(/sound/i);
   });
 
   it("Send a test fires a notification even with the tab in view; its click opens no Run", async () => {

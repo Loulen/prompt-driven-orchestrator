@@ -68,6 +68,7 @@ mod review_comments;
 mod run_advance;
 mod run_command;
 mod run_cost;
+mod run_projection_cache;
 mod run_refs;
 mod sandbox_container;
 mod sandbox_image;
@@ -648,6 +649,9 @@ struct AppState {
     /// and in between the assistant is a session nobody is attached to — precisely
     /// what the sweep should reap.
     libassist_focus: Mutex<Option<LibassistFocus>>,
+    /// #1009: the projection of every Run, rebuilt only when the event store
+    /// changes — see [`run_projection_cache`].
+    run_projections: run_projection_cache::RunProjectionCache,
 }
 
 /// The library assistant's focus: the instance pipeline the UI is editing now.
@@ -3501,6 +3505,7 @@ pub async fn serve_with_config(
         update_apply_lock: tokio::sync::Mutex::new(()),
         allowed_ws_origins: config.allowed_ws_origins,
         libassist_focus: Mutex::new(None),
+        run_projections: run_projection_cache::RunProjectionCache::default(),
     });
 
     // A nested daemon suppresses every AUTOMATIC cleanup pathway, so a Tester or
@@ -6599,16 +6604,12 @@ pub(crate) async fn load_all_run_ids(db: &sqlx::SqlitePool) -> Result<Vec<String
     Ok(rows.into_iter().map(|r| r.0).collect())
 }
 
-/// Count the live NodeRun sessions across *all* runs (admission control). Pipeline
-/// Manager sessions are not nodes, so they are excluded by construction.
-async fn count_global_live_sessions(db: &sqlx::SqlitePool) -> usize {
-    count_global_live_sessions_excluding(db, None).await
-}
-
-/// [`count_global_live_sessions`], minus the one slot the calling spawn is taking
-/// back. Only `spawn_node`'s admission gate may pass an exclusion: every other
-/// reader must call the plain form, because an observability endpoint has to report
-/// the **true** count.
+/// Count the live NodeRun sessions across *all* runs (admission control), minus
+/// the one slot the calling spawn is taking back. Pipeline Manager sessions are not
+/// nodes, so they are excluded by construction. Only an admission gate may pass an
+/// exclusion: every other reader passes `None`, because an observability endpoint
+/// has to report the **true** count. Callers holding the daemon state go through
+/// [`count_live_sessions_cached`] instead (#1009).
 async fn count_global_live_sessions_excluding(
     db: &sqlx::SqlitePool,
     exclude: Option<admission::SlotExclusion<'_>>,
@@ -6629,6 +6630,25 @@ async fn count_global_live_sessions_excluding(
         }
     }
     admission::count_live_node_sessions_excluding(states.iter(), exclude)
+}
+
+/// [`count_global_live_sessions_excluding`] over the shared run projection
+/// (#1009), for the callers that hold the daemon state — `GET /sessions` is
+/// fetched by every open tab on every WebSocket event. Same count, same freshness:
+/// the cache re-reads the store's signature on every call.
+async fn count_live_sessions_cached(
+    state: &AppState,
+    exclude: Option<admission::SlotExclusion<'_>>,
+) -> usize {
+    match state.run_projections.get(&state.db).await {
+        Ok(projected) => {
+            admission::count_live_node_sessions_excluding(projected.runs.iter(), exclude)
+        }
+        Err(e) => {
+            warn!("admission: failed to project the runs: {e:#}");
+            0
+        }
+    }
 }
 
 /// The stored session cap from `instance_config`, resolved FRESH so a UI change
@@ -8090,27 +8110,21 @@ fn pipeline_name_conflict(
 /// silently orphan the completion path of a live run (its fallback resolves the
 /// pipeline by stem), so the gate is a refusal, not a migration.
 async fn active_runs_using_pipeline(state: &AppState, pipeline_id: &str) -> usize {
-    let mut active_count: usize = 0;
-    if let Ok(run_ids) = load_all_run_ids(&state.db).await {
-        for run_id in &run_ids {
-            let Ok(events) = load_events(&state.db, run_id).await else {
-                continue;
-            };
-            let Some(run_state) = event_log::project(&events) else {
-                continue;
-            };
-            // A third "active run" predicate, deliberately distinct from
-            // `RunStatus::is_terminal()`, which also treats Failed/Skipped/Halted as
-            // non-active.
-            if run_state.pipeline_name == pipeline_id
+    let Ok(projected) = state.run_projections.get(&state.db).await else {
+        return 0;
+    };
+    // A third "active run" predicate, deliberately distinct from
+    // `RunStatus::is_terminal()`, which also treats Failed/Skipped/Halted as
+    // non-active.
+    projected
+        .runs
+        .iter()
+        .filter(|run_state| {
+            run_state.pipeline_name == pipeline_id
                 && run_state.status != event_log::RunStatus::Completed
                 && run_state.status != event_log::RunStatus::Archived
-            {
-                active_count += 1;
-            }
-        }
-    }
-    active_count
+        })
+        .count()
 }
 
 /// #774 — move one registry entry to a new stem: the YAML (written from
@@ -9238,8 +9252,21 @@ async fn spawn_ready_after_event(state: &AppState, run_id: &str) {
 /// over every run. `spawn_node` re-checks admission per node, so a node that still
 /// can't get a slot simply stays `waiting`.
 pub(crate) async fn retry_waiting_nodes(state: &AppState) {
-    let run_ids = match load_all_run_ids(&state.db).await {
-        Ok(ids) => ids,
+    // #1009: the shared projection only picks the candidates — live runs with a
+    // `waiting` node, a handful out of hundreds. Each one is still reloaded below,
+    // so the decision always reads the run's latest events.
+    let run_ids: Vec<String> = match state.run_projections.get(&state.db).await {
+        Ok(projected) => projected
+            .runs
+            .iter()
+            .filter(|run_state| {
+                matches!(
+                    run_state.status,
+                    event_log::RunStatus::Running | event_log::RunStatus::AwaitingUser
+                ) && !scheduler_dispatcher::waiting_nodes(run_state).is_empty()
+            })
+            .map(|run_state| run_state.run_id.clone())
+            .collect(),
         Err(e) => {
             warn!("retry_waiting_nodes: failed to load run ids: {e}");
             return;
@@ -11474,7 +11501,7 @@ fn yaml_value_to_json(val: &serde_yaml::Value) -> serde_json::Value {
 /// answer "who killed *my* node": it is instance-wide, and a per-run answer needs an
 /// event plus an events UI that does not exist yet.
 async fn sessions(State(state): State<Arc<AppState>>) -> Response {
-    let live = count_global_live_sessions(&state.db).await;
+    let live = count_live_sessions_cached(&state, None).await;
     let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
     let ord = std::sync::atomic::Ordering::Relaxed;
     let sweep_ms = state.reaper_last_sweep_ms.load(ord);
@@ -12631,21 +12658,14 @@ fn effective_supervision(state: &AppState) -> update_check::Supervision {
 /// counts. Informational only: an update is never refused for active Runs (the
 /// daemon restarts, tmux sessions survive — `KillMode=process`).
 async fn count_live_runs(state: &AppState) -> usize {
-    let Ok(run_ids) = load_all_run_ids(&state.db).await else {
+    let Ok(projected) = state.run_projections.get(&state.db).await else {
         return 0;
     };
-    let mut live = 0;
-    for run_id in run_ids {
-        let Ok(events) = load_events(&state.db, &run_id).await else {
-            continue;
-        };
-        if let Some(run_state) = event_log::project(&events) {
-            if run_state.status.is_live() {
-                live += 1;
-            }
-        }
-    }
-    live
+    projected
+        .runs
+        .iter()
+        .filter(|run_state| run_state.status.is_live())
+        .count()
 }
 
 /// The last attempt record, from `<home>/.pdo/update/last-attempt.json`.
@@ -14825,51 +14845,35 @@ async fn stale_health(State(state): State<Arc<AppState>>) -> Response {
 }
 
 async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
-    let run_ids = match load_all_run_ids(&state.db).await {
-        Ok(ids) => ids,
+    // #588 / ADR-0069 §4: a child awaiting its user lifts its parent on read —
+    // the overlaid projection. #1009: served from the shared cache, since every
+    // open tab calls this on every WebSocket event.
+    let states = match state.run_projections.get(&state.db).await {
+        Ok(projected) => projected.overlaid,
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
         }
     };
 
-    let mut states = Vec::new();
-    for run_id in run_ids {
-        let events = match load_events(&state.db, &run_id).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        if let Some(run_state) = event_log::project(&events) {
-            states.push(run_state);
-        }
-    }
-    // #588 / ADR-0069 §4: a child awaiting its user lifts its parent on read.
-    child_awaiting::overlay(&mut states);
-
-    let mut runs = Vec::new();
-    for run_state in states {
-        {
-            let stalled = event_log::is_stalled(&run_state);
-            // Must be computed before `run_state`'s fields move into the literal:
-            // `effective_repo_root` borrows `&run_state`.
-            let effective_repo = effective_repo_root(&state, &run_state)
+    let mut runs = Vec::with_capacity(states.len());
+    for run_state in states.iter() {
+        runs.push(RunListEntry {
+            run_id: run_state.run_id.clone(),
+            pipeline_name: run_state.pipeline_name.clone(),
+            status: run_state.status.clone(),
+            stalled: event_log::is_stalled(run_state),
+            started_at: run_state.started_at.clone(),
+            failure_reason: run_state.failure_reason.clone(),
+            awaiting_reason: run_state.awaiting_reason.clone(),
+            awaiting_reason_code: run_state.awaiting_reason_code.clone(),
+            name: run_state.name.clone(),
+            triggered_by: run_state.triggered_by.clone(),
+            parent_run_id: run_state.parent_run_id.clone(),
+            parent_node_id: run_state.parent_node_id.clone(),
+            effective_repo: effective_repo_root(&state, run_state)
                 .to_string_lossy()
-                .into_owned();
-            runs.push(RunListEntry {
-                run_id: run_state.run_id,
-                pipeline_name: run_state.pipeline_name,
-                status: run_state.status,
-                stalled,
-                started_at: run_state.started_at,
-                failure_reason: run_state.failure_reason,
-                awaiting_reason: run_state.awaiting_reason,
-                awaiting_reason_code: run_state.awaiting_reason_code,
-                name: run_state.name,
-                triggered_by: run_state.triggered_by,
-                parent_run_id: run_state.parent_run_id,
-                parent_node_id: run_state.parent_node_id,
-                effective_repo,
-            });
-        }
+                .into_owned(),
+        });
     }
 
     Json(runs).into_response()
@@ -15099,23 +15103,18 @@ async fn get_run(
     }
 }
 
-/// Project every run of the store and hand back the projections with the
-/// child-awaiting overlay applied ([`child_awaiting::overlay`]).
-async fn project_all_runs_overlaid(state: &AppState) -> Vec<event_log::RunState> {
-    let Ok(run_ids) = load_all_run_ids(&state.db).await else {
-        return Vec::new();
-    };
-    let mut states = Vec::new();
-    for run_id in run_ids {
-        let Ok(events) = load_events(&state.db, &run_id).await else {
-            continue;
-        };
-        if let Some(run_state) = event_log::project(&events) {
-            states.push(run_state);
+/// Every run of the store, projected, with the child-awaiting overlay applied
+/// ([`child_awaiting::overlay`]). Served from the shared cache (#1009): the
+/// `pdo run wait` long-poll calls this every 500 ms. An unreadable store reads as
+/// empty, as it always did here.
+async fn project_all_runs_overlaid(state: &AppState) -> Arc<Vec<event_log::RunState>> {
+    match state.run_projections.get(&state.db).await {
+        Ok(projected) => projected.overlaid,
+        Err(e) => {
+            warn!("failed to project the runs: {e:#}");
+            Arc::new(Vec::new())
         }
     }
-    child_awaiting::overlay(&mut states);
-    states
 }
 
 /// Replace `run_state` by its overlaid twin when the run has a descendant
@@ -15138,8 +15137,8 @@ async fn apply_child_awaiting_overlay(state: &AppState, run_state: &mut event_lo
         return;
     }
     let overlaid = project_all_runs_overlaid(state).await;
-    if let Some(found) = overlaid.into_iter().find(|r| r.run_id == run_state.run_id) {
-        *run_state = found;
+    if let Some(found) = overlaid.iter().find(|r| r.run_id == run_state.run_id) {
+        *run_state = found.clone();
     }
 }
 
@@ -15411,37 +15410,49 @@ async fn list_run_children(
         return (StatusCode::NOT_FOUND, "run not found").into_response();
     };
 
-    let run_ids = match load_all_run_ids(&state.db).await {
-        Ok(ids) => ids,
+    // #588 / ADR-0069 §4: a grandchild's wait shows on the child row too, so
+    // the Orchestration tab and the run list agree about the same child — the
+    // overlaid projection. #1009: from the shared cache (this read is polled every
+    // 3 s), and only the direct children's events are loaded, for their cost.
+    let projected = match state.run_projections.get(&state.db).await {
+        Ok(projected) => projected.overlaid,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
+        }
+    };
+    let mut children: Vec<(event_log::RunState, Vec<event_log::Event>)> = Vec::new();
+    for child in projected
+        .iter()
+        .filter(|r| r.parent_run_id.as_deref() == Some(run_id.as_str()))
+    {
+        let Ok(events) = load_events(&state.db, &child.run_id).await else {
+            continue;
+        };
+        children.push((child.clone(), events));
+    }
+    // #1009: the cost fold reads the children's transcripts from disk,
+    // synchronously — off the async workers, so a slow disk stalls this read only,
+    // not every request the runtime is serving.
+    let cost_state = state.clone();
+    let costed = tokio::task::spawn_blocking(move || {
+        children
+            .into_iter()
+            .map(|(child, events)| {
+                let cost = derive_run_cost(&cost_state, &child, &events);
+                (child, cost)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
+    let costed = match costed {
+        Ok(costed) => costed,
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("error: {e}")).into_response();
         }
     };
 
     let mut by_node: HashMap<Option<String>, Vec<RunChildEntry>> = HashMap::new();
-    let mut projected: Vec<(Vec<event_log::Event>, event_log::RunState)> = Vec::new();
-    for child_id in run_ids {
-        if child_id == run_id {
-            continue;
-        }
-        let events = match load_events(&state.db, &child_id).await {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let Some(child) = event_log::project(&events) else {
-            continue;
-        };
-        projected.push((events, child));
-    }
-    // #588 / ADR-0069 §4: a grandchild's wait shows on the child row too, so
-    // the Orchestration tab and the run list agree about the same child.
-    let mut states: Vec<event_log::RunState> = projected.iter().map(|(_, s)| s.clone()).collect();
-    child_awaiting::overlay(&mut states);
-    for ((events, _), child) in projected.into_iter().zip(states) {
-        if child.parent_run_id.as_deref() != Some(run_id.as_str()) {
-            continue;
-        }
-        let cost = derive_run_cost(&state, &child, &events);
+    for (child, cost) in costed {
         let stalled = event_log::is_stalled(&child);
         let entry = RunChildEntry {
             run_id: child.run_id,
@@ -17230,7 +17241,22 @@ async fn run_stale_detection(state: &Arc<AppState>) {
         panic!("PDO_DEBUG_PANIC_STALE fault injection (#251)");
     }
 
-    let run_ids = match load_all_run_ids(&state.db).await {
+    // #1009: the shared projection only picks the live runs — the sweep skips
+    // every other status anyway. Each one is still reloaded below, so the sweep
+    // reads the run's latest events.
+    let run_ids: Result<Vec<String>> = state.run_projections.get(&state.db).await.map(|p| {
+        p.runs
+            .iter()
+            .filter(|run_state| {
+                matches!(
+                    run_state.status,
+                    event_log::RunStatus::Running | event_log::RunStatus::AwaitingUser
+                )
+            })
+            .map(|run_state| run_state.run_id.clone())
+            .collect()
+    });
+    let run_ids = match run_ids {
         Ok(ids) => ids,
         Err(e) => {
             warn!("Stale detector: failed to load run ids: {e}");
@@ -17784,8 +17810,8 @@ pub(crate) async fn reattach_node_session(
     // before the slower tmux relaunch, exactly as `spawn_node` orders it.
     let admission_guard = state.admission_lock.lock().await;
     let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
-    let live = count_global_live_sessions_excluding(
-        &state.db,
+    let live = count_live_sessions_cached(
+        state,
         Some(admission::SlotExclusion {
             run_id,
             node_id,
@@ -20080,7 +20106,7 @@ async fn force_spawn_node(
     // and overshoot the cap toward the tmux-server collapse point.
     let _admission_guard = state.admission_lock.lock().await;
     let cap = admission::configured_cap_with(stored_session_cap(&state.db).await);
-    let live = count_global_live_sessions(&state.db).await;
+    let live = count_live_sessions_cached(state, None).await;
     if !admission::can_admit(live, cap) {
         return (
             StatusCode::CONFLICT,
@@ -25229,6 +25255,7 @@ mod tests {
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
+            run_projections: run_projection_cache::RunProjectionCache::default(),
         })
     }
 
@@ -30456,6 +30483,7 @@ mod tests {
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
+            run_projections: run_projection_cache::RunProjectionCache::default(),
         })
     }
 
@@ -36392,6 +36420,7 @@ mod tests {
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
+            run_projections: run_projection_cache::RunProjectionCache::default(),
         })
     }
 
@@ -43919,6 +43948,7 @@ edges: []
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
+            run_projections: run_projection_cache::RunProjectionCache::default(),
         });
         let app = build_router(state);
 
@@ -44133,6 +44163,7 @@ edges: []
             update_apply_lock: tokio::sync::Mutex::new(()),
             allowed_ws_origins: Vec::new(),
             libassist_focus: Mutex::new(None),
+            run_projections: run_projection_cache::RunProjectionCache::default(),
         });
         let app = build_router(state);
 
@@ -47546,7 +47577,7 @@ edges: []
             seed_node_started(&state, filler, &format!("filler-{i}"), 1).await;
         }
         assert_eq!(
-            count_global_live_sessions(&state.db).await,
+            count_live_sessions_cached(&state, None).await,
             admission::DEFAULT_SESSION_CAP
         );
 
@@ -47645,7 +47676,7 @@ edges: []
         // Saturate the global cap with live sessions in a filler run.
         saturate_session_cap(&state).await;
         assert_eq!(
-            count_global_live_sessions(&state.db).await,
+            count_live_sessions_cached(&state, None).await,
             admission::DEFAULT_SESSION_CAP
         );
 

@@ -39,6 +39,7 @@ fn main() -> ExitCode {
                 )
                 .with_writer(std::io::stderr)
                 .init();
+            cap_malloc_arenas();
             // Only the daemon needs a tokio runtime. `run_complete` / `run_fail`
             // use `reqwest::blocking` and panic on shutdown if invoked from
             // within `#[tokio::main]`'s runtime context.
@@ -75,4 +76,22 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+/// Cap glibc at two malloc arenas for the daemon (#1009).
+///
+/// glibc gives every thread that allocates its own 64 MB arena (up to 8 per core)
+/// and seldom hands the pages back. On the multi-thread runtime that kept ~550 MB
+/// of a 640 MB RSS resident in production; with two arenas the same daemon sat at
+/// ~140 MB. Must run before the runtime spawns its workers. An explicit
+/// `MALLOC_ARENA_MAX` in the environment wins: glibc already read it.
+fn cap_malloc_arenas() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+        // SAFETY: `mallopt` only adjusts allocator tuning; it is called once,
+        // before any other thread exists.
+        unsafe {
+            libc::mallopt(libc::M_ARENA_MAX, 2);
+        }
+    }
 }

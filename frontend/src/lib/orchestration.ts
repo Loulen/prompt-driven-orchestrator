@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { HarnessCost, RunStatus } from "../types";
 import { isLiveRun } from "../types";
 import { formatEstCost } from "./costLabel";
+import { pollAfterResponse } from "./singleFlight";
 
 /** One child of `GET /runs/{id}/children` (daemon `RunChildEntry`). */
 export interface RunChildEntry {
@@ -130,11 +131,12 @@ export function useRunChildren(runId: string | null, enabled: boolean): RunChild
         /* keep the last good read */
       }
     };
-    void load();
-    const id = setInterval(load, 3000);
+    // #1009: 3 s after each answer, not every 3 s — a slow daemon must not
+    // collect overlapping reads of this (costly) endpoint.
+    const stop = pollAfterResponse(load, 3000);
     return () => {
       cancelled = true;
-      clearInterval(id);
+      stop();
     };
   }, [runId, enabled]);
   return data;

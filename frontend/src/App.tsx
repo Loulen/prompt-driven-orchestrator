@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { ArrowLeft, GitFork, Settings, BarChart3 } from "lucide-react";
 import { useDaemonSocket } from "./hooks/useDaemonSocket";
@@ -7,6 +7,7 @@ import { useResizableLayout } from "./hooks/useResizableLayout";
 import { useLibrary } from "./hooks/useLibrary";
 import { fetchRuns, fetchRun, fetchTriggers, fetchProjects, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
+import { singleFlight } from "./lib/singleFlight";
 import { useRightPaneRouter } from "./hooks/useRightPaneRouter";
 import { useLibassistLifecycle } from "./hooks/useLibassistLifecycle";
 import type { RunListEntry, RunState, Trigger, Project, DaemonStatus } from "./types";
@@ -74,14 +75,20 @@ function useRuns() {
   // Without this flag the modal would flash on every load, everywhere.
   const [loaded, setLoaded] = useState(false);
 
-  const refresh = useCallback(async () => {
-    try {
-      setRuns(await fetchRuns());
-      setLoaded(true);
-    } catch {
-      // ignore
-    }
-  }, []);
+  // #1009: called on every WebSocket event — one request in flight at most, a
+  // burst of events folded into one trailing re-fetch.
+  const refresh = useMemo(
+    () =>
+      singleFlight(async () => {
+        try {
+          setRuns(await fetchRuns());
+          setLoaded(true);
+        } catch {
+          // ignore
+        }
+      }),
+    [],
+  );
 
   return { runs, runsLoaded: loaded, refresh };
 }
@@ -89,13 +96,18 @@ function useRuns() {
 function useSessions() {
   const [sessions, setSessions] = useState<DaemonStatus>({ live: 0, cap: 0 });
 
-  const refresh = useCallback(async () => {
-    try {
-      setSessions(await fetchSessions());
-    } catch {
-      // ignore
-    }
-  }, []);
+  // #1009: called on every WebSocket event, see `useRuns`.
+  const refresh = useMemo(
+    () =>
+      singleFlight(async () => {
+        try {
+          setSessions(await fetchSessions());
+        } catch {
+          // ignore
+        }
+      }),
+    [],
+  );
 
   return { sessions, refresh };
 }
@@ -134,15 +146,22 @@ function useSelectedRun() {
   const [run, setRun] = useState<RunState | null>(null);
   const currentIdRef = useRef<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    const id = currentIdRef.current;
-    if (!id) return;
-    try {
-      const data = await fetchRun(id);
-      if (currentIdRef.current === id) setRun(data);
-    } catch {
-      // ignore
-    }
+  // #1009: called on every WebSocket event, see `useRuns`. The trailing call
+  // re-reads `currentIdRef`, so a selection made meanwhile is the one fetched.
+  // Built on first use, inside the callback: the ref is only read off-render.
+  const flightRef = useRef<(() => Promise<void>) | null>(null);
+  const refresh = useCallback(() => {
+    flightRef.current ??= singleFlight(async () => {
+      const id = currentIdRef.current;
+      if (!id) return;
+      try {
+        const data = await fetchRun(id);
+        if (currentIdRef.current === id) setRun(data);
+      } catch {
+        // ignore
+      }
+    });
+    return flightRef.current();
   }, []);
 
   const select = useCallback(

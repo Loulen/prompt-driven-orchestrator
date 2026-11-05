@@ -115,8 +115,11 @@ describe.each([
       expect(fetchPage).toHaveBeenCalledWith("r1", "worker", 2, 20, 50);
       expect(fetchPage).toHaveBeenCalledWith("r1", "worker", 2, 0, 20);
     }
-    expect(card.dataset.focused).toBe("true");
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    // The focus and the scroll follow the load: under a busy machine, a beat later.
+    await waitFor(() => {
+      expect(card.dataset.focused).toBe("true");
+      expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+    });
     expect(document.querySelectorAll("[data-focused]").length).toBe(1);
   });
 

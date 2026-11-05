@@ -114,6 +114,32 @@ export function openProbedSocket(
  *  never rejects. Since 0.11. */
 export function copyToClipboard(text: string): Promise<boolean>;
 
+/** What the core's New Run form opens with (since 0.22): every field optional,
+ *  each shown and left editable. A Projet the form does not offer is ignored
+ *  (its default applies); `repositories[0]` is the primary repository, the
+ *  others its secondaries. The Pipeline stays the operator's choice. */
+export interface NewRunPrefill {
+  /** The id of the Projet to launch in. */
+  project?: string;
+  /** The target repositories, the primary first. */
+  repositories?: string[];
+  /** The Run's name (auto-naming is turned off). */
+  name?: string;
+  /** The prompt of the entry node. */
+  input?: string;
+  /** The id of the calling extension: only its `run/new` sections receive `data`
+   *  (declared, not checked: its `validate_create` is the boundary). */
+  extension?: string;
+  /** Handed to the caller's `run/new` sections as `context.prefill`; they
+   *  provide it to the creation as usual (`form.provide`). */
+  data?: unknown;
+}
+
+/** Open the core's New Run form, prefilled with `prefill`; without one, as the
+ *  core's New Run button opens it. `false` where no New Run can open (the
+ *  Review page), and while one is already open. Since 0.22. */
+export function openNewRun(prefill?: NewRunPrefill): boolean;
+
 // ---------------------------------------------------------------- the command field (since 0.18)
 // What a Source de recherche (`type: "search"` at `palette`) exports and
 // answers. Types only: the core calls the function, groups the results under
@@ -673,6 +699,7 @@ declare const ExtensionUi: {
   useActorDisplays: typeof useActorDisplays;
   openProbedSocket: typeof openProbedSocket;
   copyToClipboard: typeof copyToClipboard;
+  openNewRun: typeof openNewRun;
   Avatar: typeof Avatar;
   AvatarStack: typeof AvatarStack;
   personColor: typeof personColor;

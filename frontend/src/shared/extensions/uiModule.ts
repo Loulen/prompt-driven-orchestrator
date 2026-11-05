@@ -19,7 +19,10 @@
  * `SessionInfo`, `SessionConfig`, `SessionEvents`), with their live state
  * (`useHostedSession`). Since 0.20 a person is one round avatar in its hue
  * everywhere (`Avatar` follows its Actor, `AvatarStack`, `personColor` for
- * the marks), and `useActorDisplays` names a list of Actors at once.
+ * the marks), and `useActorDisplays` names a list of Actors at once. Since
+ * 0.22 it opens the core's New Run form prefilled (`openNewRun`, the
+ * `NewRunPrefill` of `contract.ts`): the caller names itself in `extension`
+ * for its `run/new` sections to receive `data`.
  */
 
 import { useActorDisplay, useActorDisplays, useCurrentActor } from "../actors/store";
@@ -40,6 +43,7 @@ import SessionWaiting from "../../session/components/hosted/SessionWaiting";
 import * as kit from "../ui/kit";
 import { HostedContribution, HostedContributions } from "./HostedContributions";
 import { runHostedCommand, useHostedContributions } from "./hosted";
+import { openNewRun } from "./newRun";
 import { UI_MODULE_MAJOR, UI_MODULE_VERSION } from "./uiModuleVersion";
 
 export const extensionUiModule = {
@@ -54,6 +58,7 @@ export const extensionUiModule = {
   useActorDisplays,
   openProbedSocket,
   copyToClipboard,
+  openNewRun,
   Avatar: kit.Avatar,
   AvatarStack: kit.AvatarStack,
   personColor: kit.personColor,

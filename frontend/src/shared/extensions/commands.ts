@@ -9,11 +9,17 @@ import { toast } from "../ui/toast";
 import type { ContributionElement } from "./catalogue";
 import type { CommandContext, CommandFunction, CommandHost, LocationContext } from "./contract";
 import { followDeepLink } from "./deepLink";
+import { openNewRun } from "./newRun";
 
-const host: CommandHost = {
-  notify: (message, kind = "info") => toast(String(message), kind === "error" ? "error" : "info"),
-  open: (link) => followDeepLink(link),
-};
+/** What a command of `extension` may do back. */
+export function commandHost(extension: string): CommandHost {
+  return {
+    notify: (message, kind = "info") => toast(String(message), kind === "error" ? "error" : "info"),
+    open: (link) => followDeepLink(link),
+    // API 0.22: the data goes to the command's own extension, whatever it says.
+    openNewRun: (prefill) => openNewRun({ ...(prefill ?? {}), extension }),
+  };
+}
 
 /** Call the command of the action `element`, on its location's `context`. */
 export async function runCommand(element: ContributionElement, context: LocationContext): Promise<void> {
@@ -30,7 +36,7 @@ export async function runCommand(element: ContributionElement, context: Location
     contribution: contribution.id,
   };
   try {
-    await (fn as CommandFunction)(commandContext, host);
+    await (fn as CommandFunction)(commandContext, commandHost(extension.id));
   } catch (cause) {
     console.warn(`extension ${extension.id}: the command ${command.id} failed`, cause);
     const reason = cause instanceof Error ? cause.message : String(cause);

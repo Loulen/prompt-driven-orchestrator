@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { OpenIntent } from "../../model/openIntent";
+import { prefillOf, type OpenIntent } from "../../model/openIntent";
 import {
   initialProject,
   launchesInProject,
@@ -15,8 +15,9 @@ import type { NewRunState } from "./useNewRunState";
 
 /**
  * The Projet of New Run / Trigger (ADR-0087): which ones are offered, the one
- * the form opens on (the last one chosen in this browser, else the first one
- * offered), and what choosing one does — its default primary repository is
+ * the form opens on (the one an extension opened it with, if offered; else the
+ * last one chosen in this browser, else the first one offered), and what
+ * choosing one does — its default primary repository is
  * preselected, and the secondaries of the Projet left are dropped.
  */
 export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRunState) {
@@ -42,11 +43,11 @@ export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRu
   // Switch to `next`: its default primary repository, and none of the
   // secondaries the Projet left offered.
   const apply = useCallback(
-    (next: string | null) => {
+    (next: string | null, keepPrimary = false) => {
       setProjectId(next);
       setSecondaryRepos((prev) => prev.filter((r) => !r.fromProject));
       const primary = next ? offered.find((p) => p.id === next)?.primary_repo : undefined;
-      if (primary) handleRepoChange(primary);
+      if (primary && !keepPrimary) handleRepoChange(primary);
     },
     [offered, setProjectId, setSecondaryRepos, handleRepoChange],
   );
@@ -72,12 +73,23 @@ export function useLaunchProject(open: boolean, openIntent: OpenIntent, s: NewRu
     const stillOffered = projectId === null ? allowNone : offered.some((p) => p.id === projectId);
     if (seeded.current && (projectChosen || stillOffered)) return;
     seeded.current = true;
-    const initial = initialProject(offered, rights, readLastProject());
-    if (initial !== projectId || !stillOffered) apply(initial);
+    // API 0.22: the Projet an extension opened the form with, if offered, else
+    // the first offered one holding its primary repository; its repositories,
+    // if any, stay the form's.
+    const prefill = prefillOf(openIntent);
+    const wanted = prefill?.project;
+    const primary = prefill?.repositories?.[0];
+    const initial =
+      wanted && offered.some((p) => p.id === wanted)
+        ? wanted
+        : ((primary ? offered.find((p) => p.members.includes(primary))?.id : undefined) ??
+          initialProject(offered, rights, readLastProject()));
+    const keepPrimary = primary !== undefined;
+    if (initial !== projectId || !stillOffered) apply(initial, keepPrimary);
     else if (initial) {
       // Reopened on the same Projet: its default primary still leads.
       const primary = offered.find((p) => p.id === initial)?.primary_repo;
-      if (primary && !targetRepo.trim()) handleRepoChange(primary);
+      if (primary && !keepPrimary && !targetRepo.trim()) handleRepoChange(primary);
     }
   }, [open, openIntent, projects, offered, rights, allowNone, projectId, projectChosen, apply, targetRepo, handleRepoChange]);
 

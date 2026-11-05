@@ -791,3 +791,38 @@ cartes devaient suivre.
   (`node/detail`, `node/toolbar`, `port/item`) et dans le menu de la carte (`canvas/node/menu`).
 - **Version** : `pdo-extension-api` **0.20.0**, rupture : une extension qui contribuait à
   `canvas/node` ne compile plus et retire cette contribution.
+
+## Amendement CORE-182 : l'UI d'une extension ouvre New Run prérempli
+
+Une extension qui lance des Runs depuis son interface (un lot d'éléments qu'elle suit, par exemple)
+recopiait le formulaire de lancement : un second formulaire, sans le Projet, les dépôts ni les
+Pipelines du core. L'ADR-0027 a retiré le seul préremplissage de New Run (depuis un Trigger) ; ce
+point d'ouverture en est un autre, propre à l'API d'UI.
+
+- **Point d'ouverture** : `openNewRun(prefill?)`, exporté par le module partagé
+  `@pdo/extension-ui`, et `CommandHost.openNewRun(prefill?)` pour une Commande d'extension. Il
+  ouvre la fenêtre New Run du core, en mode Run. `NewRunPrefill` est partiel : `project`,
+  `repositories` (le primaire d'abord, les autres en secondaires modifiables), `name` (le nommage
+  automatique se coupe), `input`, et `data` pour l'extension appelante, nommée par `extension`
+  (la Commande la fixe d'elle-même). Sans préremplissage, la fenêtre s'ouvre comme depuis le
+  bouton du core. Réponse `false` là où aucun New Run ne s'ouvre (la page Review) et quand la
+  fenêtre est déjà ouverte : son brouillon n'est jamais remplacé à moitié.
+- **Ce qui est prérempli reste modifiable** ; le Pipeline n'est jamais prérempli. Un Projet que
+  la fenêtre n'offre pas (inconnu, ou sans le Droit de créer un Run) est ignoré ; sans Projet, la
+  fenêtre prend le premier Projet offert qui contient le dépôt primaire prérempli, sinon son choix
+  par défaut.
+- **La donnée d'extension va à la seule Section `run/new` de l'appelante**, dans son contexte
+  (`RunNewContext.prefill`) ; aucune autre extension ne la voit. La Section s'initialise avec, puis
+  la fournit à la création par `provide`, comme à toute ouverture : la donnée passe donc par
+  `validate_create`, dont le refus garde la fenêtre ouverte et ne crée rien. Le core n'envoie rien
+  à la place d'une Section absente. `extension` est déclaré par l'appelant, sans contrôle : la
+  frontière reste le `validate_create` de l'extension destinataire.
+- **Version** : `pdo-extension-api` **0.22.0**, par ajout (une fonction du module partagé, une
+  méthode de `CommandHost`, un champ optionnel de `RunNewContext`). Une extension 0.21 compile et
+  tourne sans changement.
+
+Écartés : une route du daemon qui créerait le Run à partir d'un préremplissage (l'opérateur ne
+verrait ni ne corrigerait rien avant le lancement) ; une donnée d'extension envoyée par le core sans
+passer par la Section (deux chemins pour la même valeur, et une Section qui n'en saurait rien) ; un
+lien profond `#/new-run?…` (une donnée d'extension arbitraire ne tient pas dans une URL, et
+n'importe quelle page pourrait l'ouvrir au nom d'une extension).

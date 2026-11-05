@@ -8,9 +8,10 @@ import type { CommandOperation } from "./CommandOperation";
  * The bundle exports a function under [`UiCommand::export`]; the core calls it
  * as `fn(context, host)`, where `context` is the one of the location the
  * action sits in (at least the selected Run and its Projet) and `host` lets it
- * answer the operator (`host.notify(message)`) or open a deep link
- * (`host.open("#/ext/…")`). It may return a promise; a throw or a rejection
- * reaches the operator in an error toast.
+ * answer the operator (`host.notify(message)`), open a deep link
+ * (`host.open("#/ext/…")`) or open New Run prefilled (0.22,
+ * `host.openNewRun(prefill)`). It may return a promise; a throw or a
+ * rejection reaches the operator in an error toast.
  */
 export type UiCommand = { 
 /**

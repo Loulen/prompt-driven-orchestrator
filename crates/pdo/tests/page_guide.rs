@@ -277,7 +277,12 @@ async fn a_node_launched_after_the_setting_receives_the_public_url() {
     ));
     let daemon = TestDaemon::spawn_with_override(
         |repo| seed_solo(repo, &[("solo", false)]),
-        Some(format!("env > '{}'; exec sleep 600", env_file.display())),
+        // Written aside then renamed: the file appears whole, never half
+        // written to a reader polling for it.
+        Some(format!(
+            "env > '{0}.part' && mv '{0}.part' '{0}'; exec sleep 600",
+            env_file.display()
+        )),
     )
     .await
     .unwrap();

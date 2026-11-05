@@ -574,7 +574,9 @@ The surfaces that fill `extensions`:
 - `pdo run create … --ext <id>.<key>=<value>` (repeatable): `extensions.<id>.<key>` = the string
   `<value>` (split at the first `=`; the same key twice is refused);
 - the New Run form: a `run/new` section that `provide`s a value
-  ([extension-ui.md](extension-ui.md#sections));
+  ([extension-ui.md](extension-ui.md#sections)); since 0.22 the extension's UI may open that form
+  prefilled, its section starting from the data it passed
+  ([extension-ui.md](extension-ui.md#opening-new-run-prefilled));
 - `Host::create_run(actor, run)`: `NewRun::new(pipeline, input).in_repo(RunRepo::new(path))
   .in_project(project_id).named(name).with_extension(id, value)`; the first repository is the
   primary (its `from_branch` is the source branch), the others are secondaries. `in_project`

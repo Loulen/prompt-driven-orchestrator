@@ -16,6 +16,7 @@ import type { TriggerSuspension } from "../generated/TriggerSuspension";
 import type { Attributes } from "./attributes";
 import type { BaseContext, ProjectContext } from "./context";
 import type { PaletteContext } from "./paletteContract";
+import type { NewRunPrefill } from "./newRunContract";
 
 export type { BaseContext, ProjectContext, RunContext } from "./context";
 // API 0.14: the sources of completion of `review/composer`.
@@ -24,6 +25,8 @@ export type * from "./completionContract";
 export type * from "./paletteContract";
 // The pages and the panels of `topbar/end` (API 0.20).
 export type * from "./pageContract";
+// API 0.22: New Run, opened prefilled by an extension's UI.
+export type * from "./newRunContract";
 
 /** Who the element belongs to. */
 export interface ExtensionRef {
@@ -138,6 +141,13 @@ export interface RunNewContext extends LocationContext {
   targetProject: ProjectContext | null;
   /** The Trigger being edited, when the form edits one. */
   trigger: string | null;
+  /**
+   * The `data` the section's own extension opened the form with (API 0.22,
+   * `NewRunPrefill`); absent otherwise, and for every other extension's
+   * sections. A section initialises its draft with it, then provides the
+   * value at Launch as usual (`SectionForm.provide`).
+   */
+  prefill?: unknown;
 }
 
 /** `node/config`: the node of a pipeline the inspector shows. */
@@ -365,6 +375,13 @@ export interface CommandHost {
    * or a Run (`#/runs/<run_id>`, which closes the open page and selects it).
    */
   open(link: string): void;
+  /**
+   * Open New Run, prefilled with `prefill` (API 0.22, `NewRunPrefill`): its
+   * `data` goes to this command's extension's `run/new` sections. Without a
+   * prefill, the form opens as the core's New Run button opens it. `false`
+   * where no New Run can open (the Review page), and while one is open.
+   */
+  openNewRun(prefill?: Omit<NewRunPrefill, "extension">): boolean;
 }
 
 export type CommandFunction = (context: CommandContext, host: CommandHost) => unknown;

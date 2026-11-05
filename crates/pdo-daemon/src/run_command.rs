@@ -1853,6 +1853,17 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                     let repo_root = effective_repo_root(&state, &run_state);
                     let session_name =
                         tmux_session_manager::node_session_name(&run_id, &node_id, iter);
+                    // #1009 follow-up: recovering a hibernated wait wakes it as a wait.
+                    let trace = if run_state
+                        .nodes
+                        .get(&node_id)
+                        .and_then(|n| n.awaiting.as_ref())
+                        .is_some_and(|a| a.hibernated)
+                    {
+                        crate::ReattachTrace::Wake
+                    } else {
+                        crate::ReattachTrace::Resurrection
+                    };
                     let outcome = crate::reattach_node_session(
                         &state,
                         &events,
@@ -1862,6 +1873,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                         &node_id,
                         iter,
                         &session_name,
+                        trace,
                     )
                     .await;
                     recover_response(mechanism, &run_id, &node_id, iter, outcome)

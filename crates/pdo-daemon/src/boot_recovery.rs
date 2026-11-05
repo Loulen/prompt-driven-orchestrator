@@ -181,6 +181,9 @@ pub(crate) async fn run_boot_recovery(state: &AppState) {
                     event_log::NodeStatus::Running | event_log::NodeStatus::AwaitingUser
                 )
             })
+            // #1009 follow-up: a hibernated wait has no session BY DESIGN — its
+            // absence across a restart is not an incident, and the wake resumes it.
+            .filter(|(_, ns)| !ns.awaiting.as_ref().is_some_and(|a| a.hibernated))
             .filter_map(|(id, ns)| {
                 let session = tmux_session_manager::node_session_name(run_id, id, ns.iter);
                 (!tmux_session_manager::session_exists(&socket, &session))

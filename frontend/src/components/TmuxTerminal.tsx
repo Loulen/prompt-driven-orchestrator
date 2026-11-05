@@ -51,6 +51,10 @@ interface Props {
   /** #617: where to read the post-mortem pane once the node's iteration is
    *  terminal. Omit ⇒ live attach only (the Run shell has no node identity). */
   paneSource?: PaneSource;
+  /** #1009 follow-up: the node's session is asleep (hibernated wait). Opening the
+   *  terminal goes through the pane probe, which wakes it on the daemon side
+   *  (`resumed`), then attaches live. */
+  asleep?: boolean;
   /** #588: tells the parent whether a live PTY socket is open (`true`) or the
    *  pane is a frozen snapshot / disconnected (`false`), so the awaiting banner
    *  can say « reply below and press Enter » only when Enter can reach anything. */
@@ -151,6 +155,7 @@ export default function TmuxTerminal({
   onExpand,
   status,
   paneSource,
+  asleep = false,
   onLiveSocketChange,
   onSpectatingChange,
   toolbarIdentity,
@@ -195,8 +200,7 @@ export default function TmuxTerminal({
 
   const reaped =
     paneSource !== undefined &&
-    status !== undefined &&
-    REAPED_STATUSES.has(status);
+    ((status !== undefined && REAPED_STATUSES.has(status)) || asleep);
 
   // Decided **once per session identity**, not on every status change: a node that
   // settles under the user's eyes keeps the live buffer it already has (the daemon
@@ -667,7 +671,7 @@ export default function TmuxTerminal({
   let statusLabel: string;
   if (mode === "probing") {
     dotClass = "bg-fg-5";
-    statusLabel = "reading pane…";
+    statusLabel = asleep ? "waking session…" : "reading pane…";
   } else if (mode === "frozen") {
     // Named, not dressed up as a connection: what is on screen is the pane PDO
     // froze when it reaped the session, and the reap is the invariant, not a fault.

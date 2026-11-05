@@ -175,9 +175,12 @@ describe("ImportSkillsModal — Import d'archive (#1027)", () => {
     expect(within(row("security-scan")).getByRole("checkbox")).toBeChecked();
     expect(row("review-checklist")).toHaveTextContent("already up to date · in “team-review”");
     expect(row("code-review")).toHaveTextContent("changed · in “team-review”");
-    expect(screen.getByTestId("import-kept-code-review")).toHaveTextContent("stays untouched");
+    // #1028: a changed row is checked, with « Keep as is » preselected.
+    expect(within(row("code-review")).getByRole("checkbox")).toBeChecked();
+    expect(within(row("code-review")).getByRole("radio", { name: "Keep as is" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByTestId("import-id-explain-code-review")).toHaveTextContent("stays untouched");
     expect(row("pdo-interactive")).toHaveTextContent("managed by PDO");
-    for (const name of ["review-checklist", "code-review", "pdo-interactive"]) {
+    for (const name of ["review-checklist", "pdo-interactive"]) {
       const box = within(row(name)).getByRole("checkbox");
       expect(box).not.toBeChecked();
       expect(box).toBeDisabled();
@@ -186,7 +189,7 @@ describe("ImportSkillsModal — Import d'archive (#1027)", () => {
     expect(row("spec-reader")).toHaveTextContent("name taken · in “inbox”");
     expect(screen.getByTestId("import-resolution-spec-reader")).toBeInTheDocument();
     expect(screen.getByTestId("import-not-touched")).toHaveTextContent(
-      "0 unchecked · 1 already up to date · 1 kept as is · 1 managed by PDO · 0 invalid.",
+      "1 kept as is · 1 already up to date · 0 unchecked · 1 managed by PDO · 0 invalid.",
     );
 
     // Select all never checks a row the bank already has by id.
@@ -207,7 +210,7 @@ describe("ImportSkillsModal — Import d'archive (#1027)", () => {
     expect(screen.queryByTestId("import-found-check")).toBeNull();
   });
 
-  it("defaults to a new suffixed folder when one exists, and imports into it with the file as source", async () => {
+  it("defaults to a new suffixed folder when one exists, imports into it with the file as source, and stays on the report", async () => {
     const { onImported, onClose } = setup();
     await listed();
     const dest = screen.getByTestId("import-archive-destination");
@@ -246,10 +249,16 @@ describe("ImportSkillsModal — Import d'archive (#1027)", () => {
       source: "team-review.skills.zip",
       kind: "file",
       folder: { name: "team-review 2", parent_id: null },
-      items: [{ path: "security-scan", action: "import" }],
+      items: [
+        { path: "security-scan", action: "import" },
+        { path: "code-review", action: "keep" },
+        { path: "review-checklist", action: "keep" },
+      ],
     });
-    await waitFor(() => expect(onImported).toHaveBeenCalledWith(expect.anything(), true));
-    expect(onClose).toHaveBeenCalled();
+    await waitFor(() => expect(onImported).toHaveBeenCalledWith(expect.anything(), true, true));
+    // #1028: the popup stays open on the per-line report.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("import-skills-modal")).toHaveAttribute("data-step", "report");
   });
 
   it("merging sends the existing folder's id", async () => {

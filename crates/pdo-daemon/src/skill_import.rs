@@ -847,8 +847,8 @@ pub(crate) enum CandidateStatus {
     /// The archive's id is in the bank with identical `SKILL.md` and files:
     /// « already up to date », left as is (#1027).
     IdUpToDate,
-    /// The archive's id is in the bank with a different content: left as is
-    /// here (the per-row keep / replace / move / duplicate is #1028).
+    /// The archive's id is in the bank with a different content: the row offers
+    /// keep (default) / replace / move / duplicate (#1028, ADR-0082).
     IdChanged,
     /// The archive carries the id of a seeded skill: « Managed by PDO », never
     /// importable.
@@ -983,18 +983,29 @@ pub(crate) async fn with_collisions(
 pub(crate) enum ImportAction {
     /// Take it as a new skill (status `new`).
     Import,
-    /// Overwrite the content of the existing skill of that name (id kept).
+    /// Overwrite the content of the existing skill of that name (id kept). On
+    /// an id collision (#1028): overwrite the skill of that **id** — content,
+    /// files and name (when free) — which stays in its folder.
     Replace,
     /// Take it as a new skill under another label.
     Rename,
     Skip,
+    /// Id collision (#1028): leave the bank's skill as is — nothing is written.
+    Keep,
+    /// Id collision (#1028): [`ImportAction::Replace`], then file the skill in
+    /// the import's folder.
+    Move,
+    /// Id collision (#1028): a copy under a **new id** in the import's folder,
+    /// named `name` (or the archive's name, suffixed `-2`, `-3`… when taken);
+    /// the original is untouched.
+    Duplicate,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ImportItem {
     pub path: String,
     pub action: ImportAction,
-    /// The new label for `rename`.
+    /// The new label for `rename`, the copy's label for `duplicate`.
     #[serde(default)]
     pub name: Option<String>,
 }
@@ -1003,7 +1014,15 @@ pub(crate) struct ImportItem {
 pub(crate) struct ImportedRow {
     pub path: String,
     pub skill: Skill,
+    /// `imported` / `renamed` / `replaced` / `moved` / `duplicated`.
     pub action: &'static str,
+    /// The folder the skill lived in before a `moved` (#1028); `None` = root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_folder_id: Option<String>,
+    /// Something the row did not do as asked, the import went on (#1028: a
+    /// replaced skill keeps its current name when the archive's is taken).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1111,6 +1130,76 @@ pub(crate) struct ImportFolder {
     pub parent_id: Option<String>,
 }
 
+/// *Replace* (and *Move*) on an id collision (#1028, ADR-0082): the skill of
+/// that id gets the archive's `SKILL.md` and files, and the archive's name when
+/// it is free — otherwise it keeps its current name and the row says so. Its id
+/// and referents never change; `move_to` then files it in the import's folder.
+async fn replace_by_id(
+    db: &SqlitePool,
+    repo_root: &Path,
+    existing: &Skill,
+    dir: &Path,
+    provenance: &Provenance,
+    move_to: Option<&str>,
+) -> Result<(Skill, &'static str, Option<String>), ImportError> {
+    let content = std::fs::read_to_string(dir.join(skill_bank::SKILL_MD))?;
+    let parsed = skill_bank::validate_skill_md(&content)?;
+    let mut skill =
+        skill_bank::replace_content_from_dir(db, repo_root, &existing.id, dir, provenance).await?;
+    let mut warning = None;
+    if parsed.name != skill.name {
+        match skill_bank::update(db, &existing.id, Some(&parsed.name), None).await {
+            Ok(renamed) => skill = renamed,
+            Err(SkillError::DuplicateName { .. }) => {
+                warning = Some(format!(
+                    "the name \u{201c}{}\u{201d} is taken in the bank: kept \u{201c}{}\u{201d}",
+                    parsed.name, skill.name
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let action = match move_to {
+        Some(folder) => {
+            skill = skill_bank::update(db, &existing.id, None, Some(Some(folder))).await?;
+            "moved"
+        }
+        None => "replaced",
+    };
+    Ok((skill, action, warning))
+}
+
+/// *Duplicate* (#1028): a copy of the archive's skill under a **new id** in
+/// the import's folder. A typed `name` must be free; without one, the archive's
+/// name is suffixed `-2`, `-3`… when taken. The original is left untouched.
+async fn duplicate(
+    db: &SqlitePool,
+    repo_root: &Path,
+    dir: &Path,
+    name: Option<&str>,
+    folder_id: &str,
+    provenance: &Provenance,
+) -> Result<Skill, ImportError> {
+    let label = match name.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(name) => name.to_string(),
+        None => {
+            let content = std::fs::read_to_string(dir.join(skill_bank::SKILL_MD))?;
+            let parsed = skill_bank::validate_skill_md(&content)?;
+            crate::skill_sidecar::free_label(db, &parsed.name).await?
+        }
+    };
+    Ok(skill_bank::create_from_dir_with_id(
+        db,
+        repo_root,
+        None,
+        dir,
+        Some(&label),
+        Some(folder_id),
+        provenance,
+    )
+    .await?)
+}
+
 /// Perform an import: every checked candidate with its resolution. Per-row
 /// failures are reported, not fatal (the popup keeps the rows red and the
 /// successes ticked). The folder receives the source's provenance at the end.
@@ -1134,7 +1223,7 @@ pub(crate) async fn import(
     }
     // Refuse before any write: every non-skip row must be resolvable.
     for item in &items {
-        if item.action == ImportAction::Skip {
+        if matches!(item.action, ImportAction::Skip | ImportAction::Keep) {
             continue;
         }
         candidate_dir(&root, &item.path)?;
@@ -1167,7 +1256,7 @@ pub(crate) async fn import(
     let mut imported = Vec::new();
     let mut failures = Vec::new();
     for item in items {
-        if item.action == ImportAction::Skip {
+        if matches!(item.action, ImportAction::Skip | ImportAction::Keep) {
             continue;
         }
         let dir = match candidate_dir(&root, &item.path) {
@@ -1189,28 +1278,69 @@ pub(crate) async fn import(
             continue;
         }
         let carried_id = candidate.and_then(|c| c.id.clone());
-        // An id the bank already has is never created over (#1027): it stays as is.
-        if let Some(id) = &carried_id {
-            if item.action != ImportAction::Replace {
-                if skill_bank::is_seeded(id) {
-                    failures.push(FailedRow {
-                        path: item.path.clone(),
-                        error: SkillError::Locked { id: id.clone() }.to_string(),
-                        code: "locked".to_string(),
-                    });
-                    continue;
+        // A seeded id is never written over, whatever the action.
+        if let Some(id) = carried_id.as_deref().filter(|id| skill_bank::is_seeded(id)) {
+            failures.push(FailedRow {
+                path: item.path.clone(),
+                error: SkillError::Locked { id: id.to_string() }.to_string(),
+                code: "locked".to_string(),
+            });
+            continue;
+        }
+        let known = match carried_id.as_deref() {
+            Some(id) => skill_bank::get(db, id).await?,
+            None => None,
+        };
+        // An id the bank already has (#1028): the row's keep / replace / move /
+        // duplicate decides; it is never created over.
+        if let Some(existing) = known {
+            let row = match item.action {
+                ImportAction::Replace | ImportAction::Move => {
+                    replace_by_id(
+                        db,
+                        repo_root,
+                        &existing,
+                        &dir,
+                        &provenance,
+                        (item.action == ImportAction::Move).then_some(target.id.as_str()),
+                    )
+                    .await
                 }
-                if skill_bank::get(db, id).await?.is_some() {
+                ImportAction::Duplicate => duplicate(
+                    db,
+                    repo_root,
+                    &dir,
+                    item.name.as_deref(),
+                    &target.id,
+                    &provenance,
+                )
+                .await
+                .map(|skill| (skill, "duplicated", None)),
+                _ => {
                     failures.push(FailedRow {
                         path: item.path.clone(),
                         error: format!(
-                            "the bank already has this skill (id `{id}`): it is left as is"
+                            "the bank already has this skill (id `{}`): it is left as is",
+                            existing.id
                         ),
                         code: "id_known".to_string(),
                     });
                     continue;
                 }
+            };
+            match row {
+                Ok((skill, action, warning)) => imported.push(ImportedRow {
+                    path: item.path,
+                    previous_folder_id: (action == "moved")
+                        .then(|| existing.folder_id.clone())
+                        .flatten(),
+                    skill,
+                    action,
+                    warning,
+                }),
+                Err(error) => failures.push(failed(&item.path, error)),
             }
+            continue;
         }
         let result: Result<(Skill, &'static str), ImportError> = match item.action {
             ImportAction::Import => skill_bank::create_from_dir_with_id(
@@ -1270,13 +1400,31 @@ pub(crate) async fn import(
                     },
                 }
             }
-            ImportAction::Skip => unreachable!(),
+            // Not an id collision: a copy is simply a new skill, suffixed when
+            // its name is taken.
+            ImportAction::Duplicate => duplicate(
+                db,
+                repo_root,
+                &dir,
+                item.name.as_deref(),
+                &target.id,
+                &provenance,
+            )
+            .await
+            .map(|s| (s, "duplicated")),
+            ImportAction::Move => Err(ImportError::UnknownCandidate(format!(
+                "{}: no skill of this id in the bank to move",
+                item.path
+            ))),
+            ImportAction::Skip | ImportAction::Keep => unreachable!(),
         };
         match result {
             Ok((skill, action)) => imported.push(ImportedRow {
                 path: item.path,
                 skill,
                 action,
+                previous_folder_id: None,
+                warning: None,
             }),
             Err(error) => failures.push(failed(&item.path, error)),
         }
@@ -1679,6 +1827,8 @@ pub(crate) async fn update(
                 path: item.path,
                 skill,
                 action,
+                previous_folder_id: None,
+                warning: None,
             }),
             Err(error) => failures.push(failed(&item.path, error)),
         }

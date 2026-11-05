@@ -2260,7 +2260,13 @@ export interface SkillScanResult {
   archive?: SkillArchiveScan;
 }
 
-export type SkillImportAction = "import" | "replace" | "rename" | "skip";
+/**
+ * `keep` / `move` / `duplicate` (#1028) answer a row whose **id** the bank
+ * already has (`id_changed`); `replace` then overwrites the skill of that id
+ * (it stays in its folder). On a name collision `replace` / `rename` / `skip`
+ * keep their meaning.
+ */
+export type SkillImportAction = "import" | "replace" | "rename" | "skip" | "keep" | "move" | "duplicate";
 
 export interface SkillImportItem {
   path: string;
@@ -2270,7 +2276,16 @@ export interface SkillImportItem {
 
 export interface SkillImportReport {
   folder: SkillFolder;
-  imported: { path: string; skill: Skill; action: string }[];
+  imported: {
+    path: string;
+    skill: Skill;
+    /** `imported` / `renamed` / `replaced` / `moved` / `duplicated`. */
+    action: string;
+    /** Folder the skill lived in before a `moved` (#1028); absent = root. */
+    previous_folder_id?: string;
+    /** What the row did not do as asked (#1028: the archive's name was taken). */
+    warning?: string;
+  }[];
   failed: { path: string; error: string; code: string }[];
   commit: string | null;
 }

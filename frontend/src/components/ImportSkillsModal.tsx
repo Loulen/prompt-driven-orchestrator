@@ -1,5 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Download, FileArchive, Folder, FolderOpen, GitBranch, HardDrive, Lock, Pencil, Search, X } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  Copy,
+  Download,
+  Equal,
+  FileArchive,
+  Folder,
+  FolderOpen,
+  GitBranch,
+  HardDrive,
+  Lock,
+  Minus,
+  Pencil,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
 import {
   ApiError,
   cancelSkillScan,
@@ -37,20 +54,40 @@ interface Props {
   onClose: () => void;
   /**
    * Called after an import wrote something. `complete` is false on a partial
-   * failure: the popup stays open with the failed rows in red.
+   * failure: the popup stays open with the failed rows in red. `reported` is
+   * true for an archive (#1028): the popup stays open on its per-line report,
+   * which replaces the host's toast.
    */
-  onImported: (report: SkillImportReport, complete: boolean) => void | Promise<void>;
+  onImported: (report: SkillImportReport, complete: boolean, reported?: boolean) => void | Promise<void>;
+  /** « Show “<folder>” in the bank » from the report (#1028); closes the popup. */
+  onShowFolder?: (folderId: string) => void;
 }
 
-type Step = "source" | "scanning" | "results" | "importing";
+type Step = "source" | "scanning" | "results" | "importing" | "report";
 
 type Resolution = "replace" | "rename" | "skip";
+
+/** The four answers to a row whose id the bank already has, content changed (#1028). */
+type IdChoice = "keep" | "replace" | "move" | "duplicate";
+const ID_CHOICES: { value: IdChoice; label: string }[] = [
+  { value: "keep", label: "Keep as is" },
+  { value: "replace", label: "Replace" },
+  { value: "move", label: "Move" },
+  { value: "duplicate", label: "Duplicate" },
+];
 
 interface RowState {
   checked: boolean;
   resolution: Resolution | null;
   renameTo: string;
+  /** `id_changed` rows only (#1028); « Keep as is » by default. */
+  idChoice: IdChoice;
+  /** The copy's name for « Duplicate ». */
+  duplicateAs: string;
 }
+
+/** What a write row of the import will do. */
+type WriteAction = "import" | "replace" | "rename" | "replace_id" | "move" | "duplicate";
 
 interface ScanError {
   code: string;
@@ -91,10 +128,11 @@ function needsResolution(candidate: SkillCandidate): boolean {
 
 /**
  * Statuses of an archive row whose **id** the bank already has (#1027): left
- * as is, greyed and never checkable — « already up to date », « changed » (the
- * per-row choice is #1028) or « managed by PDO ».
+ * as is, greyed and never checkable — « already up to date » or « managed by
+ * PDO ». A « changed » row is checkable and offers keep / replace / move /
+ * duplicate (#1028).
  */
-const KEPT_BY_ID: ReadonlySet<SkillCandidateStatus> = new Set(["id_up_to_date", "id_changed", "locked"]);
+const KEPT_BY_ID: ReadonlySet<SkillCandidateStatus> = new Set(["id_up_to_date", "locked"]);
 
 /** Can the row be checked at all? */
 function isSelectable(candidate: SkillCandidate): boolean {
@@ -112,10 +150,21 @@ interface ArchiveRefusal {
 }
 function defaultRow(candidate: SkillCandidate): RowState {
   return {
-    checked: candidate.status === "new" || candidate.status === "name_taken",
+    checked: candidate.status === "new" || candidate.status === "name_taken" || candidate.status === "id_changed",
     resolution: null,
     renameTo: "",
+    idChoice: "keep",
+    duplicateAs: "",
   };
+}
+
+/** `<name>-2`, `-3`… : the first label free among `taken` (lower-cased). */
+function freeSuffixedName(name: string, taken: Set<string>): string {
+  for (let n = 2; n < 10_000; n += 1) {
+    const next = `${name}-${n}`;
+    if (!taken.has(next.toLowerCase())) return next;
+  }
+  return `${name}-copy`;
 }
 
 /**
@@ -133,6 +182,7 @@ export default function ImportSkillsModal({
   home = null,
   onClose,
   onImported,
+  onShowFolder,
 }: Props) {
   const [step, setStep] = useState<Step>("source");
   const [text, setText] = useState("");
@@ -158,6 +208,10 @@ export default function ImportSkillsModal({
   /** Destination of an archive whose folder already exists: merge or new (default). */
   const [destChoice, setDestChoice] = useState<"new" | "merge">("new");
   const [dropName, setDropName] = useState<string | null>(null);
+  /** The import's outcome, shown line by line for an archive (#1028). */
+  const [report, setReport] = useState<SkillImportReport | null>(null);
+  /** The rows as they were sent, for the report's « kept » / « unchecked » lines. */
+  const [sentRows, setSentRows] = useState<Map<string, RowState>>(new Map());
   const scanIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -319,6 +373,9 @@ export default function ImportSkillsModal({
       if (row?.checked && row.resolution === "rename" && row.renameTo.trim()) {
         out.set(candidate.path, row.renameTo.trim().toLowerCase());
       }
+      if (row?.checked && candidate.status === "id_changed" && row.idChoice === "duplicate" && row.duplicateAs.trim()) {
+        out.set(candidate.path, row.duplicateAs.trim().toLowerCase());
+      }
     }
     return out;
   }, [candidates, rows]);
@@ -337,9 +394,11 @@ export default function ImportSkillsModal({
   };
 
   const summary = useMemo(() => {
-    const willImport: { candidate: SkillCandidate; as: string; action: "import" | "replace" | "rename" }[] = [];
+    const willImport: { candidate: SkillCandidate; as: string; action: WriteAction }[] = [];
     let unresolved = 0;
+    let unresolvedDuplicates = 0;
     let unchecked = 0;
+    let kept = 0;
     let files = 0;
     for (const candidate of candidates) {
       const row = rows.get(candidate.path);
@@ -347,6 +406,24 @@ export default function ImportSkillsModal({
       if (!row.checked) {
         // A same-commit duplicate is "already present", not "unchecked".
         if (candidate.status !== "same_commit") unchecked += 1;
+        continue;
+      }
+      if (candidate.status === "id_changed") {
+        // #1028: the bank has this id with another content.
+        if (row.idChoice === "keep") {
+          kept += 1;
+          continue;
+        }
+        if (row.idChoice === "duplicate") {
+          if (!renameIsFree(candidate.path, row.duplicateAs)) {
+            unresolvedDuplicates += 1;
+            continue;
+          }
+          willImport.push({ candidate, as: row.duplicateAs.trim(), action: "duplicate" });
+        } else {
+          willImport.push({ candidate, as: candidate.name, action: row.idChoice === "move" ? "move" : "replace_id" });
+        }
+        files += candidate.file_count;
         continue;
       }
       if (needsResolution(candidate)) {
@@ -372,9 +449,8 @@ export default function ImportSkillsModal({
     const invalid = candidates.filter((c) => !c.valid && c.status !== "locked").length;
     const sameCommit = candidates.filter((c) => c.status === "same_commit").length;
     const upToDate = candidates.filter((c) => c.status === "id_up_to_date").length;
-    const changed = candidates.filter((c) => c.status === "id_changed").length;
     const locked = candidates.filter((c) => c.status === "locked").length;
-    return { willImport, unresolved, unchecked, invalid, sameCommit, upToDate, changed, locked, files };
+    return { willImport, unresolved, unresolvedDuplicates, unchecked, kept, invalid, sameCommit, upToDate, locked, files };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidates, rows, doneRows, existingNames, renameTargets]);
 
@@ -403,8 +479,11 @@ export default function ImportSkillsModal({
     step === "results" &&
     summary.willImport.length > 0 &&
     summary.unresolved === 0 &&
+    summary.unresolvedDuplicates === 0 &&
     (intoFolder !== null || mergeInto !== null || folderName.trim() !== "");
   const destinationName = mergeInto?.name ?? intoFolder?.name ?? folderName;
+  /** The existing folder the import writes into, if any (merge / reuse). */
+  const destinationId = mergeInto?.id ?? intoFolder?.id ?? null;
 
   // ---- import -------------------------------------------------------------
 
@@ -414,9 +493,17 @@ export default function ImportSkillsModal({
     setImportError(null);
     const items: SkillImportItem[] = summary.willImport.map(({ candidate, as, action }) => ({
       path: candidate.path,
-      action,
-      ...(action === "rename" ? { name: as } : {}),
+      action: action === "replace_id" ? "replace" : action,
+      ...(action === "rename" || action === "duplicate" ? { name: as } : {}),
     }));
+    if (isArchive) {
+      // #1028: a known id is left as is unless the row says otherwise — say so.
+      for (const candidate of candidates) {
+        const row = rows.get(candidate.path);
+        const keepChanged = candidate.status === "id_changed" && row?.checked && row.idChoice === "keep";
+        if (keepChanged || candidate.status === "id_up_to_date") items.push({ path: candidate.path, action: "keep" });
+      }
+    }
     try {
       const folder = mergeInto
         ? { id: mergeInto.id }
@@ -429,6 +516,14 @@ export default function ImportSkillsModal({
           : { scan_id: scan.scan_id, source: text, folder, items },
       );
       const complete = report.failed.length === 0;
+      if (isArchive) {
+        // #1028: an archive ends on its per-line report, not on a toast.
+        setSentRows(new Map(rows));
+        setReport(report);
+        setStep("report");
+        await onImported(report, complete, true);
+        return;
+      }
       if (complete) {
         await onImported(report, true);
         onClose();
@@ -461,7 +556,7 @@ export default function ImportSkillsModal({
       cancelScan();
       return;
     }
-    const wrote = doneRows.size > 0 || failedRows.size > 0;
+    const wrote = doneRows.size > 0 || failedRows.size > 0 || step === "report";
     if (step === "results" && touched && !confirmDiscard && !wrote) {
       setConfirmDiscard(true);
       return;
@@ -546,7 +641,7 @@ export default function ImportSkillsModal({
         <div className="flex min-h-0 flex-1 gap-4 p-4">
           {/* Left column */}
           <div className="flex min-w-0 flex-1 flex-col gap-3">
-            {step === "results" || step === "importing" ? (
+            {step === "results" || step === "importing" || step === "report" ? (
               <div
                 className="flex items-center gap-2 rounded-md border border-acc/50 bg-bg-1 px-3 py-2"
                 data-testid="import-source-line"
@@ -585,16 +680,18 @@ export default function ImportSkillsModal({
                     @ {shortCommit(scan.commit)}
                   </span>
                 )}
-                <button
-                  type="button"
-                  onClick={changeSource}
-                  disabled={step === "importing"}
-                  data-testid="import-change-source"
-                  className="rounded-md border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 hover:border-acc disabled:opacity-40"
-                  style={{ fontSize: "11px" }}
-                >
-                  Change
-                </button>
+                {step !== "report" && (
+                  <button
+                    type="button"
+                    onClick={changeSource}
+                    disabled={step === "importing"}
+                    data-testid="import-change-source"
+                    className="rounded-md border border-line-strong bg-bg-3 px-2 py-0.5 text-fg-2 hover:border-acc disabled:opacity-40"
+                    style={{ fontSize: "11px" }}
+                  >
+                    Change
+                  </button>
+                )}
               </div>
             ) : (
               <section>
@@ -886,6 +983,10 @@ export default function ImportSkillsModal({
               </div>
             )}
 
+            {step === "report" && report && (
+              <ImportReportList report={report} candidates={candidates} rows={sentRows} folders={folders} />
+            )}
+
             {(step === "results" || step === "importing") && candidates.length > 0 && (
               <div className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-bg-1">
                 <div className="flex items-center gap-2 border-b border-line px-3 py-2" style={{ fontSize: "11px" }}>
@@ -995,12 +1096,33 @@ export default function ImportSkillsModal({
                                 </>
                               )}
                             </div>
-                            {candidate.status === "id_changed" && (
-                              <div className="mt-1 text-fg-4" style={{ fontSize: "10.5px" }} data-testid={`import-kept-${candidate.name}`}>
-                                The bank's copy
-                                {candidate.existing?.folder_name ? ` in “${candidate.existing.folder_name}”` : ""} stays untouched; the
-                                archive's version is ignored.
-                              </div>
+                            {candidate.status === "id_changed" && row.checked && !done && (
+                              <IdChoiceControl
+                                candidate={candidate}
+                                row={row}
+                                disabled={step === "importing"}
+                                destinationName={destinationName}
+                                destinationId={destinationId}
+                                nameTaken={(name) => !renameIsFree(candidate.path, name)}
+                                onChoose={(choice) =>
+                                  setRow(candidate.path, {
+                                    idChoice: choice,
+                                    duplicateAs:
+                                      choice === "duplicate" && !row.duplicateAs
+                                        ? freeSuffixedName(
+                                            candidate.name,
+                                            new Set([
+                                              ...existingNames.map((n) => n.toLowerCase()),
+                                              ...[...renameTargets.entries()]
+                                                .filter(([p]) => p !== candidate.path)
+                                                .map(([, n]) => n),
+                                            ]),
+                                          )
+                                        : row.duplicateAs,
+                                  })
+                                }
+                                onRename={(name) => setRow(candidate.path, { duplicateAs: name })}
+                              />
                             )}
                             {failure && (
                               <div className="mt-1 text-st-failed" style={{ fontSize: "11px" }} data-testid="import-row-error">
@@ -1126,6 +1248,39 @@ export default function ImportSkillsModal({
                   )}
                 </p>
               </section>
+            )}
+
+            {step === "report" && report && scan && (
+              <>
+                <section data-testid="import-report-destination">
+                  <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+                    Destination
+                  </h4>
+                  <div className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5">
+                    <FolderOpen size={12} className="shrink-0 text-st-await" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-fg" style={{ fontSize: "11.5px" }}>
+                      {report.folder.name}
+                    </span>
+                    <span className="rounded border border-line bg-bg-1 px-1.5 py-0.5 text-fg-4" style={{ fontSize: "9.5px" }}>
+                      {destinationId ? "existing" : "new"}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-fg-4" style={{ fontSize: "10.5px" }}>
+                    {destinationId
+                      ? `The skills it created are tagged “imported from ${scan.source.url}”; the folder keeps its own provenance.`
+                      : `Tagged “imported from ${scan.source.url}” — a file has no update: re-import a newer archive instead.`}
+                  </p>
+                </section>
+                <section>
+                  <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+                    Next
+                  </h4>
+                  <p className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="import-report-next">
+                    Pipelines referencing these ids find them now. Replaced skills kept their id, so their referents are
+                    untouched.
+                  </p>
+                </section>
+              </>
             )}
 
             {(step === "results" || step === "importing") && scan && (
@@ -1272,6 +1427,10 @@ export default function ImportSkillsModal({
                     Will import
                   </h4>
                   <div className="overflow-hidden rounded-md border border-line" style={{ fontSize: "11px" }} data-testid="import-summary">
+                    {isArchive ? (
+                      <ArchiveSummaryRows willImport={summary.willImport} />
+                    ) : (
+                    <>
                     <SummaryRow label={`${summary.willImport.length} skill${summary.willImport.length === 1 ? "" : "s"}`}>
                       {summary.willImport.length === 0 ? (
                         <span className="text-fg-4">nothing checked</span>
@@ -1299,6 +1458,8 @@ export default function ImportSkillsModal({
                       SKILL.md{summary.files > 0 ? ` + ${summary.files} reference file${summary.files === 1 ? "" : "s"}` : ""} copied
                       verbatim
                     </SummaryRow>
+                    </>
+                    )}
                   </div>
                 </section>
 
@@ -1308,7 +1469,7 @@ export default function ImportSkillsModal({
                   </h4>
                   <p className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="import-not-touched">
                     {isArchive
-                      ? `${summary.unchecked} unchecked · ${summary.upToDate} already up to date · ${summary.changed} kept as is · ${summary.locked} managed by PDO · ${summary.invalid} invalid.`
+                      ? `${summary.kept} kept as is · ${summary.upToDate} already up to date · ${summary.unchecked} unchecked · ${summary.locked} managed by PDO · ${summary.invalid} invalid.`
                       : `${summary.unchecked} unchecked · ${summary.invalid} invalid · ${summary.sameCommit} already present at the same commit.`}
                     {candidates
                       .filter((c) => needsResolution(c) && rows.get(c.path)?.resolution === "skip" && rows.get(c.path)?.checked)
@@ -1334,6 +1495,17 @@ export default function ImportSkillsModal({
                   </div>
                 )}
 
+                {summary.unresolvedDuplicates > 0 && (
+                  <div
+                    role="alert"
+                    className="rounded-md border border-st-blocked/50 bg-st-blocked-bg px-3 py-2 text-fg-2"
+                    style={{ fontSize: "11px" }}
+                    data-testid="import-duplicate-unresolved"
+                  >
+                    Give each <strong className="text-fg">duplicate</strong> a name that is free in the bank before importing.
+                  </div>
+                )}
+
                 {importError && (
                   <div role="alert" className="rounded-md border border-st-failed/50 bg-st-failed-bg px-3 py-2 text-fg-2" style={{ fontSize: "11px" }} data-testid="import-error">
                     {importError}
@@ -1352,14 +1524,42 @@ export default function ImportSkillsModal({
 
         <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-3">
           <span className="text-fg-4" style={{ fontSize: "10.5px" }}>
-            {step === "scanning"
+            {step === "report"
+              ? "Esc closes · the report stays until you close it"
+              : step === "scanning"
               ? "Esc cancels the scan"
               : step === "source"
                 ? "Enter to scan · drop a .zip to read it · nothing touches disk until Import"
                 : "Space toggles · ⌘A selects all valid · nothing touches disk until Import"}
           </span>
           <div className="flex items-center gap-2">
-            {confirmDiscard ? (
+            {step === "report" && report ? (
+              <>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  data-testid="import-report-close"
+                  className="rounded-md border border-line-strong bg-bg-3 px-3 py-1.5 text-fg-2 hover:bg-bg-4"
+                  style={{ fontSize: "11.5px" }}
+                >
+                  Close
+                </button>
+                {report.imported.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onShowFolder?.(report.folder.id);
+                      onClose();
+                    }}
+                    data-testid="import-report-show-folder"
+                    className="rounded-md bg-acc px-3 py-1.5 font-medium text-bg-1 transition-opacity hover:opacity-90"
+                    style={{ fontSize: "11.5px" }}
+                  >
+                    Show “{report.folder.name}” in the bank
+                  </button>
+                )}
+              </>
+            ) : confirmDiscard ? (
               <>
                 <span className="text-fg-2" style={{ fontSize: "11px" }} data-testid="import-discard-prompt">
                   Leave without importing?
@@ -1690,5 +1890,305 @@ function ParentSelect({
         ))}
       </select>
     </label>
+  );
+}
+
+/** `in “ops”`, or `at the root of the bank` for a skill outside any folder. */
+function whereLabel(folderName: string | null | undefined): string {
+  return folderName ? `in “${folderName}”` : "at the root of the bank";
+}
+
+/**
+ * The four-way choice of a row whose id the bank already has with another
+ * content (#1028, ADR-0082): Keep as is (default) · Replace · Move · Duplicate,
+ * with a line saying what the choice does here, given the destination.
+ */
+function IdChoiceControl({
+  candidate,
+  row,
+  disabled,
+  destinationName,
+  destinationId,
+  nameTaken,
+  onChoose,
+  onRename,
+}: {
+  candidate: SkillCandidate;
+  row: RowState;
+  disabled: boolean;
+  destinationName: string;
+  destinationId: string | null;
+  nameTaken: (name: string) => boolean;
+  onChoose: (choice: IdChoice) => void;
+  onRename: (name: string) => void;
+}) {
+  const existing = candidate.existing;
+  const where = whereLabel(existing?.folder_name);
+  const dest = `“${destinationName.trim() || "the new folder"}”`;
+  const renamed = existing && existing.name.toLowerCase() !== candidate.name.toLowerCase();
+  const nameNote = !renamed
+    ? ""
+    : nameTaken(candidate.name)
+      ? ` The name “${candidate.name}” is taken in the bank: it keeps “${existing.name}”.`
+      : ` It is renamed “${candidate.name}”.`;
+  const sameFolder = destinationId !== null && destinationId === (existing?.folder_id ?? null);
+  let explanation: string;
+  switch (row.idChoice) {
+    case "replace":
+      explanation = `The bank's copy ${where} takes the archive's content and files; it keeps its id and stays ${where}.${nameNote}`;
+      break;
+    case "move":
+      explanation = sameFolder
+        ? `Same as Replace here: the skill already lives in ${dest}.${nameNote}`
+        : `Replaced, then moved from ${existing?.folder_name ? `“${existing.folder_name}”` : "the root"} to ${dest}; its id is kept.${nameNote}`;
+      break;
+    case "duplicate":
+      explanation = `A copy under a new id lands in ${dest}; the bank's copy ${where} stays untouched — pipelines keep referencing it.`;
+      break;
+    default:
+      explanation = `The bank's copy ${where} stays untouched; the archive's version is ignored.`;
+  }
+  const dupTrimmed = row.duplicateAs.trim();
+  return (
+    <div className="mt-1.5" data-testid={`import-id-choice-${candidate.name}`} data-choice={row.idChoice}>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex overflow-hidden rounded-md border border-line-strong" role="radiogroup" aria-label={`Known skill ${candidate.name}`}>
+          {ID_CHOICES.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={row.idChoice === option.value}
+              disabled={disabled}
+              onClick={() => onChoose(option.value)}
+              className={`px-2.5 py-1 ${row.idChoice === option.value ? "bg-bg-5 text-fg" : "text-fg-3 hover:bg-bg-3"}`}
+              style={{ fontSize: "11px" }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        {row.idChoice === "duplicate" && (
+          <>
+            <span className="text-fg-4" style={{ fontSize: "11px" }}>
+              as
+            </span>
+            <input
+              value={row.duplicateAs}
+              onChange={(event) => onRename(event.target.value)}
+              disabled={disabled}
+              aria-label={`Name of the copy of ${candidate.name}`}
+              data-testid={`import-duplicate-${candidate.name}`}
+              spellCheck={false}
+              className="w-52 rounded-md border border-line-strong bg-bg-1 px-2 py-0.5 font-mono text-fg outline-none focus:border-acc"
+              style={{ fontSize: "11px" }}
+            />
+            {dupTrimmed && !nameTaken(dupTrimmed) ? (
+              <span className="flex items-center gap-1 text-acc" style={{ fontSize: "10.5px" }} data-testid={`import-duplicate-free-${candidate.name}`}>
+                <Check size={10} strokeWidth={3} /> free
+              </span>
+            ) : (
+              <span className="text-st-failed" style={{ fontSize: "10.5px" }} data-testid={`import-duplicate-taken-${candidate.name}`}>
+                {dupTrimmed ? "taken" : "name required"}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      <div className="mt-1 text-fg-4" style={{ fontSize: "10.5px" }} data-testid={`import-id-explain-${candidate.name}`}>
+        {explanation}
+      </div>
+    </div>
+  );
+}
+
+/** « Will import » of an archive (#1028): new / replaced / moved / duplicated / renamed. */
+function ArchiveSummaryRows({
+  willImport,
+}: {
+  willImport: { candidate: SkillCandidate; as: string; action: WriteAction }[];
+}) {
+  const groups: { label: string; items: string[] }[] = [
+    { label: "new", items: willImport.filter((i) => i.action === "import").map((i) => i.as) },
+    {
+      label: "replaced",
+      items: willImport.filter((i) => i.action === "replace" || i.action === "replace_id").map((i) => i.as),
+    },
+    { label: "moved", items: willImport.filter((i) => i.action === "move").map((i) => i.as) },
+    {
+      label: "duplicated",
+      items: willImport.filter((i) => i.action === "duplicate").map((i) => `${i.candidate.name} → ${i.as}`),
+    },
+    {
+      label: "renamed",
+      items: willImport.filter((i) => i.action === "rename").map((i) => `${i.candidate.name} → ${i.as}`),
+    },
+  ].filter((group) => group.items.length > 0);
+  if (groups.length === 0) {
+    return (
+      <SummaryRow label="0 skills">
+        <span className="text-fg-4">nothing would be written</span>
+      </SummaryRow>
+    );
+  }
+  return (
+    <>
+      {groups.map((group) => (
+        <SummaryRow key={group.label} label={`${group.items.length} ${group.label}`}>
+          {group.items.join(" · ")}
+        </SummaryRow>
+      ))}
+    </>
+  );
+}
+
+interface ReportLine {
+  path: string;
+  name: string;
+  icon: React.ReactNode;
+  text: string;
+  tone: "ok" | "dim" | "failed";
+  warning?: string;
+}
+
+/** One line per skill of the archive, after the import (#1028). */
+function reportLines(
+  report: SkillImportReport,
+  candidates: SkillCandidate[],
+  rows: Map<string, RowState>,
+  folders: SkillFolder[],
+): ReportLine[] {
+  const folderName = (id: string | null | undefined) =>
+    id ? folders.find((f) => f.id === id)?.name ?? (id === report.folder.id ? report.folder.name : null) : null;
+  const quote = (name: string | null) => (name ? `“${name}”` : "the root");
+  const into = `“${report.folder.name}”`;
+  return candidates.map((candidate): ReportLine => {
+    const base = { path: candidate.path, name: candidate.name };
+    const failed = report.failed.find((f) => f.path === candidate.path);
+    if (failed) return { ...base, icon: <X size={12} />, text: `failed: ${failed.error}`, tone: "failed" };
+    const done = report.imported.find((r) => r.path === candidate.path);
+    if (done) {
+      const warning = done.warning;
+      switch (done.action) {
+        case "replaced":
+          return {
+            ...base,
+            icon: <RefreshCw size={12} />,
+            text: `replaced, stays ${whereLabel(folderName(done.skill.folder_id))}`,
+            tone: "ok",
+            warning,
+          };
+        case "moved": {
+          const from = folderName(done.previous_folder_id) ?? candidate.existing?.folder_name ?? null;
+          return {
+            ...base,
+            icon: <ArrowRight size={12} />,
+            text: `replaced, moved ${quote(from)} → ${into}`,
+            tone: "ok",
+            warning,
+          };
+        }
+        case "duplicated":
+          return {
+            ...base,
+            icon: <Copy size={12} />,
+            text: `duplicated as “${done.skill.name}” · new id, in ${into}`,
+            tone: "ok",
+            warning,
+          };
+        case "renamed":
+          return { ...base, icon: <Check size={12} />, text: `imported as “${done.skill.name}”`, tone: "ok", warning };
+        default:
+          return {
+            ...base,
+            icon: <Check size={12} />,
+            text: candidate.id && done.skill.id === candidate.id ? "imported, id kept" : "imported",
+            tone: "ok",
+            warning,
+          };
+      }
+    }
+    const where = whereLabel(candidate.existing?.folder_name);
+    const row = rows.get(candidate.path);
+    switch (candidate.status) {
+      case "id_up_to_date":
+        return { ...base, icon: <Equal size={12} />, text: `already up to date ${where}`, tone: "dim" };
+      case "locked":
+        return { ...base, icon: <Lock size={12} />, text: "managed by PDO here — not imported", tone: "dim" };
+      case "invalid":
+        return {
+          ...base,
+          icon: <X size={12} />,
+          text: candidate.code === "file_too_large" ? `invalid: ${candidate.reason}` : `invalid: ${candidate.reason ?? "not a valid SKILL.md"}`,
+          tone: "failed",
+        };
+      case "id_changed":
+        if (row?.checked) return { ...base, icon: <Equal size={12} />, text: `kept as is ${where}`, tone: "dim" };
+        break;
+      case "same_commit":
+        return { ...base, icon: <Equal size={12} />, text: "already present at the same commit", tone: "dim" };
+      default:
+        if (row?.checked && row.resolution === "skip") {
+          return { ...base, icon: <Minus size={12} />, text: `skipped — the existing “${candidate.existing?.name ?? candidate.name}” stays as is`, tone: "dim" };
+        }
+    }
+    return { ...base, icon: <Minus size={12} />, text: "unchecked — not imported", tone: "dim" };
+  });
+}
+
+function ImportReportList({
+  report,
+  candidates,
+  rows,
+  folders,
+}: {
+  report: SkillImportReport;
+  candidates: SkillCandidate[];
+  rows: Map<string, RowState>;
+  folders: SkillFolder[];
+}) {
+  const lines = reportLines(report, candidates, rows, folders);
+  const written = report.imported.length;
+  const failed = report.failed.length;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-bg-1" data-testid="import-report">
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2" style={{ fontSize: "11px" }}>
+        <span
+          className={`grid h-3.5 w-3.5 place-items-center rounded-sm ${failed > 0 ? "bg-st-failed" : "bg-acc"} text-bg-1`}
+          aria-hidden
+        >
+          {failed > 0 ? <X size={9} strokeWidth={3} /> : <Check size={9} strokeWidth={3} />}
+        </span>
+        <span className="font-medium text-fg" data-testid="import-report-title">
+          Import done · {written} written{failed > 0 ? ` · ${failed} failed` : ""}
+        </span>
+        <span className="text-fg-4">into “{report.folder.name}” · one line per skill of the archive</span>
+      </div>
+      <ul className="min-h-0 flex-1 overflow-y-auto">
+        {lines.map((line) => (
+          <li
+            key={line.path}
+            className="flex items-start gap-3 border-b border-line px-3 py-2 last:border-b-0"
+            data-testid={`import-report-${line.name}`}
+            data-tone={line.tone}
+          >
+            <span className={`mt-0.5 shrink-0 ${line.tone === "ok" ? "text-acc" : line.tone === "failed" ? "text-st-failed" : "text-fg-4"}`}>
+              {line.icon}
+            </span>
+            <span className={`w-[160px] shrink-0 truncate font-mono ${line.tone === "dim" ? "text-fg-3" : "text-fg"}`} style={{ fontSize: "11.5px" }}>
+              {line.name}
+            </span>
+            <span className="min-w-0 flex-1" style={{ fontSize: "11px" }}>
+              <span className={line.tone === "failed" ? "text-st-failed" : "text-fg-2"}>{line.text}</span>
+              {line.warning && (
+                <span className="block text-st-blocked" style={{ fontSize: "10.5px" }} data-testid={`import-report-warning-${line.name}`}>
+                  {line.warning}
+                </span>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

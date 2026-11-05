@@ -812,12 +812,19 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
           initialFolderId={selectedFolder?.id ?? selectedSkill?.folder_id ?? null}
           home={home}
           onClose={() => setImportOpen(false)}
-          onImported={async (report, complete) => {
+          onShowFolder={(folderId) => {
+            expandTo(folderId);
+            setSelected({ kind: "folder", id: folderId });
+          }}
+          onImported={async (report, complete, reported) => {
             await onChanged();
-            expandTo(report.folder.id);
-            setSelected({ kind: "folder", id: report.folder.id });
+            if (report.imported.length > 0) {
+              expandTo(report.folder.id);
+              setSelected({ kind: "folder", id: report.folder.id });
+            }
             setPending(null);
-            if (complete) {
+            // An archive ends on its per-line report in the popup (#1028): no toast.
+            if (complete && !reported) {
               const n = report.imported.length;
               showToast({ message: `Imported ${n} skill${n === 1 ? "" : "s"} into ${report.folder.name}` });
             }

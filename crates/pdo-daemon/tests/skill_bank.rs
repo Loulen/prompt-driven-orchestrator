@@ -3081,3 +3081,277 @@ async fn fp1027_round_trip_a_to_b_keeps_ids_and_pipelines_resolve_them() {
     assert_eq!(body["warnings"], serde_json::json!([]), "{body}");
     assert_eq!(body["skills"]["missing"], serde_json::json!([]), "{body}");
 }
+
+// ---------------------------------------------------------------------------
+// Known id, different content (pdo-issues#2, #1028, ADR-0082): keep / replace /
+// move / duplicate, row by row
+// ---------------------------------------------------------------------------
+
+async fn create_folder(daemon: &TestDaemon, name: &str) -> String {
+    let folder: serde_json::Value = post_json(
+        daemon,
+        "/settings/skill-folders",
+        serde_json::json!({ "name": name }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    folder["id"].as_str().unwrap().to_string()
+}
+
+async fn file_in_folder(daemon: &TestDaemon, id: &str, folder_id: &str) {
+    let resp = put_json(
+        daemon,
+        &format!("/settings/skills/{id}"),
+        serde_json::json!({ "folder_id": folder_id }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+async fn edit_text(daemon: &TestDaemon, id: &str, content: &str) {
+    let resp = put_text(
+        daemon,
+        &format!("/settings/skills/{id}/files/SKILL.md"),
+        content,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+fn edited_md_of(name: &str) -> String {
+    format!("---\nname: {name}\ndescription: The {name} method.\n---\n\n# {name}\n\nEdited in the bank.\n")
+}
+
+/// FP: four skills of one folder exported, edited in the bank, the archive
+/// dropped back → four `changed · in "ops"` rows; keep / replace / move /
+/// duplicate each have their effect on content, files, name, folder and id.
+#[tokio::test]
+async fn fp1028_keep_replace_move_duplicate_each_have_their_effect_on_the_bank() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let ops = create_folder(&daemon, "ops").await;
+    let mut ids = Vec::new();
+    for name in ["kept-one", "replaced-one", "moved-one", "duplicated-one"] {
+        let skill = create_named_skill(&daemon, name).await;
+        let id = skill["id"].as_str().unwrap().to_string();
+        file_in_folder(&daemon, &id, &ops).await;
+        ids.push(id);
+    }
+    let (kept, replaced, moved, duplicated) = (&ids[0], &ids[1], &ids[2], &ids[3]);
+    // A reference file that the replace must bring back.
+    upload(
+        &daemon,
+        replaced,
+        &[
+            ("path", None, b"scripts/run.sh"),
+            ("file", Some("run.sh"), b"#!/bin/sh\necho ok\n"),
+        ],
+    )
+    .await;
+    let id_refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let bytes = export_bytes(&daemon, &id_refs, "team-review").await;
+
+    // Step 2: edit the four in the bank; drop the reference file.
+    for (id, name) in ids
+        .iter()
+        .zip(["kept-one", "replaced-one", "moved-one", "duplicated-one"])
+    {
+        edit_text(&daemon, id, &edited_md_of(name)).await;
+    }
+    let resp = reqwest::Client::new()
+        .delete(format!(
+            "{}/settings/skills/{replaced}/files/scripts/run.sh",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "{}", resp.status());
+
+    // Step 3: four rows `id_changed`, each pointing at its skill in « ops ».
+    let (status, scan) = scan_archive(&daemon, "c-1", "team-review.zip", &bytes).await;
+    assert_eq!(status, StatusCode::OK, "{scan}");
+    for (id, name) in ids
+        .iter()
+        .zip(["kept-one", "replaced-one", "moved-one", "duplicated-one"])
+    {
+        let row = candidate(&scan, name);
+        assert_eq!(row["status"], "id_changed", "{scan}");
+        assert_eq!(row["existing"]["id"], id.as_str());
+        assert_eq!(row["existing"]["folder_id"], ops.as_str());
+        assert_eq!(row["existing"]["folder_name"], "ops");
+    }
+
+    // Step 4: keep / replace / move / duplicate.
+    let (status, report) = import_archive(
+        &daemon,
+        "c-1",
+        "team-review.zip",
+        serde_json::json!({ "name": "team-review" }),
+        serde_json::json!([
+            { "path": "kept-one", "action": "keep" },
+            { "path": "replaced-one", "action": "replace" },
+            { "path": "moved-one", "action": "move" },
+            { "path": "duplicated-one", "action": "duplicate" },
+        ]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["failed"], serde_json::json!([]), "{report}");
+    let target = report["folder"]["id"].as_str().unwrap().to_string();
+    assert_eq!(report["folder"]["name"], "team-review");
+    let rows = report["imported"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "keep writes nothing: {report}");
+    let row = |path: &str| rows.iter().find(|r| r["path"] == path).unwrap();
+    assert_eq!(row("replaced-one")["action"], "replaced");
+    assert_eq!(row("replaced-one")["skill"]["id"], replaced.as_str());
+    assert_eq!(row("replaced-one")["skill"]["folder_id"], ops.as_str());
+    assert!(row("replaced-one").get("warning").is_none(), "{report}");
+    assert_eq!(row("moved-one")["action"], "moved");
+    assert_eq!(row("moved-one")["skill"]["id"], moved.as_str());
+    assert_eq!(row("moved-one")["skill"]["folder_id"], target.as_str());
+    assert_eq!(row("moved-one")["previous_folder_id"], ops.as_str());
+    assert_eq!(row("duplicated-one")["action"], "duplicated");
+    let copy_id = row("duplicated-one")["skill"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(&copy_id, duplicated, "a duplicate gets a new id");
+    assert_eq!(row("duplicated-one")["skill"]["name"], "duplicated-one-2");
+    assert_eq!(row("duplicated-one")["skill"]["folder_id"], target.as_str());
+
+    // Step 5: the bank.
+    let detail = |id: String| {
+        let daemon = &daemon;
+        async move { get_json(daemon, &format!("/settings/skills/{id}")).await }
+    };
+    let k = detail(kept.clone()).await;
+    assert_eq!(k["content"], edited_md_of("kept-one"), "kept as is");
+    assert_eq!(k["folder_id"], ops.as_str());
+    let r = detail(replaced.clone()).await;
+    assert_eq!(
+        r["content"],
+        skill_md_of("replaced-one"),
+        "exported text back"
+    );
+    assert_eq!(r["folder_id"], ops.as_str(), "replace stays in its folder");
+    assert_eq!(
+        r["files"],
+        serde_json::json!([{ "path": "scripts/run.sh", "size": 18 }]),
+        "reference files replaced too"
+    );
+    let m = detail(moved.clone()).await;
+    assert_eq!(m["content"], skill_md_of("moved-one"));
+    assert_eq!(
+        m["folder_id"],
+        target.as_str(),
+        "move files it in the import folder"
+    );
+    let original = detail(duplicated.clone()).await;
+    assert_eq!(
+        original["content"],
+        edited_md_of("duplicated-one"),
+        "original intact"
+    );
+    assert_eq!(original["name"], "duplicated-one");
+    assert_eq!(original["folder_id"], ops.as_str());
+    let copy = detail(copy_id.clone()).await;
+    assert_eq!(copy["content"], skill_md_of("duplicated-one"));
+    assert_eq!(copy["name"], "duplicated-one-2");
+}
+
+/// Replace takes the archive's name only when it is free (else keeps the
+/// current one and says so on the row); a typed duplicate name must be free;
+/// keep alone writes nothing and leaves no empty folder behind.
+#[tokio::test]
+async fn fp1028_replace_takes_a_free_name_only_and_duplicate_honours_the_typed_name() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let alpha = create_named_skill(&daemon, "alpha").await;
+    let beta = create_named_skill(&daemon, "beta").await;
+    create_named_skill(&daemon, "taken-name").await;
+    let alpha_id = alpha["id"].as_str().unwrap();
+    let beta_id = beta["id"].as_str().unwrap();
+    let manifest = serde_json::json!({
+        "format": "pdo-skills",
+        "version": 1,
+        "exported_at": "2026-11-05T10:00:00Z",
+        "skills": [
+            { "folder": "alpha", "id": alpha_id, "name": "alpha-renamed" },
+            { "folder": "beta", "id": beta_id, "name": "taken-name" },
+        ],
+    })
+    .to_string();
+    let bytes = zip_of(&[
+        ("alpha/SKILL.md", skill_md_of("alpha-renamed").as_bytes()),
+        ("beta/SKILL.md", skill_md_of("taken-name").as_bytes()),
+        ("pdo-skills.json", manifest.as_bytes()),
+    ]);
+
+    // Keep only: nothing written, no folder left behind.
+    let (_, scan) = scan_archive(&daemon, "n-1", "names.zip", &bytes).await;
+    assert_eq!(candidate(&scan, "alpha-renamed")["status"], "id_changed");
+    assert_eq!(candidate(&scan, "taken-name")["status"], "id_changed");
+    let (status, report) = import_archive(
+        &daemon,
+        "n-1",
+        "names.zip",
+        serde_json::json!({ "name": "names" }),
+        serde_json::json!([
+            { "path": "alpha", "action": "keep" },
+            { "path": "beta", "action": "keep" },
+        ]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["imported"], serde_json::json!([]));
+    let folders = get_json(&daemon, "/settings/skill-folders").await;
+    assert!(
+        !folders.to_string().contains("\"names\""),
+        "no empty folder: {folders}"
+    );
+
+    // Replace: alpha takes its free new name; beta keeps « beta ».
+    let (status, report) = import_archive(
+        &daemon,
+        "n-1",
+        "names.zip",
+        serde_json::json!({ "name": "names" }),
+        serde_json::json!([
+            { "path": "alpha", "action": "replace" },
+            { "path": "beta", "action": "replace" },
+        ]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    let rows = report["imported"].as_array().unwrap();
+    let row = |path: &str| rows.iter().find(|r| r["path"] == path).unwrap();
+    assert_eq!(row("alpha")["skill"]["id"], alpha_id);
+    assert_eq!(row("alpha")["skill"]["name"], "alpha-renamed");
+    assert!(row("alpha").get("warning").is_none());
+    assert_eq!(row("beta")["skill"]["id"], beta_id);
+    assert_eq!(row("beta")["skill"]["name"], "beta");
+    let warning = row("beta")["warning"].as_str().unwrap();
+    assert!(warning.contains("taken-name"), "{warning}");
+    let detail = get_json(&daemon, &format!("/settings/skills/{beta_id}")).await;
+    assert_eq!(detail["content"], skill_md_of("taken-name"));
+
+    // Duplicate with a typed name: taken → failed row; free → used.
+    let (_, _) = scan_archive(&daemon, "n-2", "names.zip", &bytes).await;
+    let (status, report) = import_archive(
+        &daemon,
+        "n-2",
+        "names.zip",
+        serde_json::json!({ "name": "names" }),
+        serde_json::json!([
+            { "path": "alpha", "action": "duplicate", "name": "taken-name" },
+            { "path": "beta", "action": "duplicate", "name": "beta-copy" },
+        ]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["failed"][0]["path"], "alpha", "{report}");
+    assert_eq!(report["failed"][0]["code"], "duplicate_name");
+    assert_eq!(report["imported"][0]["skill"]["name"], "beta-copy");
+    assert_ne!(report["imported"][0]["skill"]["id"], beta_id);
+}

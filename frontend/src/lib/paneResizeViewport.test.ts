@@ -91,4 +91,10 @@ describe("centreOn (gitlab #23 Show)", () => {
     expect((card.x + card.width / 2) * v.zoom + v.x).toBeCloseTo(400);
     expect((card.y + card.height / 2) * v.zoom + v.y).toBeCloseTo(300);
   });
+
+  it("centres the card in the band left visible below a top inset (#1022)", () => {
+    const card = { x: 100, y: 40, width: 160, height: 80 };
+    const v = centreOn(card, 800, 600, 1, 200);
+    expect((card.y + card.height / 2) * v.zoom + v.y).toBeCloseTo(400);
+  });
 });

@@ -8,9 +8,15 @@ interface NodeCardProps {
   className?: string;
   style?: React.CSSProperties;
   children: React.ReactNode;
+  /**
+   * gitlab #23 (ADR-0081) — content for the corner slot when the card shows no
+   * Status icon (edit mode): the path-coherence defect badge. Same pastille,
+   * same geometry; a Status icon, when there is one, keeps the slot.
+   */
+  cornerBadge?: React.ReactNode;
 }
 
-export function NodeCard({ status, selected, className, style, children }: NodeCardProps) {
+export function NodeCard({ status, selected, className, style, children, cornerBadge }: NodeCardProps) {
   const borderColor = STATUS_BORDER[status];
   const bgColor = STATUS_BG[status];
 
@@ -28,6 +34,15 @@ export function NodeCard({ status, selected, className, style, children }: NodeC
           reads on any status fill, in both themes (where the failed badge sat).
           Pending wears none — nor does a library template, whose nodes have no
           run status and so read as pending. */}
+      {status === "pending" && cornerBadge != null && (
+        <span
+          data-testid="node-corner-badge"
+          className="absolute z-[3] grid place-items-center rounded-full bg-bg-1"
+          style={{ top: -9, right: -9, width: 20, height: 20 }}
+        >
+          {cornerBadge}
+        </span>
+      )}
       {status !== "pending" && (
         <span
           data-testid="node-status-badge"

@@ -10,6 +10,26 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.128.0
+**La cohérence de chemin en direct dans l'éditeur, et New Run grise les Pipelines non
+lançables** (#1022, spec #1020, story gitlab #23, ADR-0081).
+
+- L'éditeur vérifie la règle d'ADR-0081 **pendant que vous dessinez**, sans enregistrer : la
+  bannière de lint affiche les défauts (une ligne par défaut et par nœud, sans plafond), avec
+  les mêmes phrases que le daemon ; à l'enregistrement, la réponse du daemon les remplace, sans
+  doublon. Le contrôle TypeScript est un miroir testé sur le **même corpus de fixtures** que le
+  daemon, qui reste l'autorité.
+- Chaque **Cul-de-sac** et chaque **Nœud orphelin** porte une marque rouge dans le canvas : un
+  `TriangleAlert` dans le coin de la carte (infobulle) et une légende sous le nom. « No path
+  from Start to End » se pose sur `Start` seulement quand `Start` n'a aucune arête sortante. La
+  marque disparaît dès que le nœud est bien relié.
+- « Show » sur une ligne de la bannière reste allumé tant que son nœud est sélectionné, et le
+  centrage laisse le nœud **sous** la bannière, plus derrière elle.
+- New Run : un Pipeline non lançable reste à sa place, grisé et non sélectionnable, avec la
+  raison sous son nom ; les flèches et Entrée le sautent, la présélection l'ignore. Un Pipeline
+  tenu devenu non lançable (Trigger, cassé depuis) affiche la raison sous le champ, et Launch
+  est désactivé avec la même raison.
+
 ## 1.127.0
 **Un Pipeline non lançable est refusé au lancement** (#1021, spec #1020, story gitlab #23,
 ADR-0081). **Cassant** : `Start` devient l'unique point d'entrée.

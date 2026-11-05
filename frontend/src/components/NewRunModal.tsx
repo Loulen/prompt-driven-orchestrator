@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Clock, FolderGit2, GitBranch, Paperclip, Plus, Save, Search, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Clock, FolderGit2, GitBranch, Paperclip, Plus, Save, Search, Sparkles, TriangleAlert, X } from "lucide-react";
 import type { InstanceSettings, PipelineListEntry, Project, Trigger } from "../types";
 import type { TestGuardResponse } from "../api";
 import { createRun, createTrigger, updateTrigger, fetchSettings, testGuard } from "../api";
@@ -570,7 +570,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // Auto-select the first offered pipeline: the Projet's, else a global one. A test
   // Pipeline is never chosen for you. Until the user picks one, the selection keeps
   // following this default (another repository, a Pipeline validated meanwhile).
-  const defaultPipeline = sections.project[0] ?? sections.global[0];
+  // ADR-0081 (#1022): a Pipeline non lançable is never chosen for you either.
+  const defaultPipeline =
+    sections.project.find(newRunForm.isLaunchable) ?? sections.global.find(newRunForm.isLaunchable);
   const shouldAutoSelect =
     open &&
     repoValid &&
@@ -809,7 +811,11 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     secondariesReady,
   });
   // Notion #7: the provisioning reason is the one the disabled Launch spells out.
-  const launchBlockReason = provisioningValid ? undefined : provisioningBlockReason;
+  // ADR-0081 (#1022): a HELD Pipeline non lançable (a Trigger's, one broken
+  // since it was picked) stays shown, and its reason is the one Launch gives.
+  const heldNotLaunchable = newRunForm.notLaunchableReason(selectedPipeline);
+  const launchBlockReason =
+    heldNotLaunchable ?? (provisioningValid ? undefined : provisioningBlockReason);
 
   // The cron the Trigger will be created with: a compiled preset, or the raw escape hatch.
   // Memoized (like `selectedPipeline`/`overrideCount` above) so the compiler can
@@ -1200,6 +1206,16 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   }
                 />
               </div>
+              {heldNotLaunchable && (
+                <span
+                  data-testid="pipeline-not-launchable"
+                  className="flex items-start gap-1 text-st-failed"
+                  style={{ fontSize: "10.5px" }}
+                >
+                  <TriangleAlert size={11} className="mt-[2px] shrink-0" aria-hidden />
+                  <span>{heldNotLaunchable}</span>
+                </span>
+              )}
               {selectedPipeline?.scope === "instance" && (
                 <span className="inline-flex items-center gap-1 text-fg-4" style={{ fontSize: "10.5px" }}>
                   {selectedPipeline.path}
@@ -2090,6 +2106,9 @@ function PipelineSelect({
     () => [...shown.project, ...shown.global, ...(showTests ? shown.test : [])],
     [shown, showTests],
   );
+  // ADR-0081 (#1022): a Pipeline non lançable stays in its section and order,
+  // greyed and disabled. The keyboard walks, and Enter takes from, the rest.
+  const choosable = useMemo(() => visible.filter(newRunForm.isLaunchable), [visible]);
 
   // Derived, never a stored "should I still be open?": a repo change empties the list
   // and reselects from scratch, and a menu left hanging over that would be offering a
@@ -2099,6 +2118,30 @@ function PipelineSelect({
   const choose = (id: string) => {
     onChange(id);
     setOpen(false);
+  };
+
+  // ADR-0081 (#1022): Base UI keeps a disabled item focusable (ARIA practice), so
+  // its list navigation would land on a greyed Pipeline non lançable. The arrows
+  // are walked here instead, over the rows that can be taken (and the tests
+  // toggle), in screen order; ↑ from the first goes back to the field.
+  const onMenuKeyDownCapture = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    const menu = e.currentTarget;
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>('[role="menuitem"]:not([data-not-launchable])'),
+    );
+    const active = document.activeElement as HTMLElement | null;
+    const fromField = active === filterRef.current;
+    const at = active ? items.findIndex((el) => el === active || el.contains(active)) : -1;
+    let next: HTMLElement | null | undefined;
+    if (e.key === "Home") next = items[0];
+    else if (e.key === "End") next = items[items.length - 1];
+    else if (e.key === "ArrowDown") next = fromField || at < 0 ? items[0] : items[(at + 1) % items.length];
+    else if (fromField) next = null; // ↑ in the field: nowhere to go.
+    else next = at <= 0 ? filterRef.current : items[at - 1];
+    e.preventDefault();
+    e.stopPropagation();
+    next?.focus();
   };
 
   const onFilterKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -2111,7 +2154,7 @@ function PipelineSelect({
       // The fragment narrowed to what you meant: take it without a second gesture.
       e.preventDefault();
       e.stopPropagation();
-      const first = visible[0];
+      const first = choosable[0];
       if (first) choose(first.id);
       return;
     }
@@ -2130,15 +2173,7 @@ function PipelineSelect({
     e.stopPropagation();
   };
 
-  const onOptionKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, index: number) => {
-    if (e.key === "ArrowUp" && index === 0) {
-      // The field is above the first row on screen; `↑` should go there, not wrap to
-      // the bottom of the list.
-      e.preventDefault();
-      e.stopPropagation();
-      filterRef.current?.focus();
-      return;
-    }
+  const onOptionKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     // One filtering gesture, not two: a letter typed on a row goes to the field
     // instead of driving the typeahead, which would highlight a row the visible
     // fragment does not explain.
@@ -2151,8 +2186,37 @@ function PipelineSelect({
   };
 
   const renderRow = (pipeline: PipelineListEntry) => {
-    const index = visible.indexOf(pipeline);
+    const launchable = newRunForm.isLaunchable(pipeline);
     const isSelected = pipeline.id === value;
+    if (!launchable) {
+      // Design Q3 = B: greyed, unselectable, the reason on a second line (the
+      // full sentences in the native tooltip). The arrows skip it
+      // (`onMenuKeyDownCapture`), Enter from the field never takes it.
+      const reason = newRunForm.notLaunchableRowReason(pipeline);
+      return (
+        <DropdownMenuItem
+          key={pipeline.id}
+          disabled
+          data-testid={`pipeline-select-option-${pipeline.id}`}
+          data-pipeline-id={pipeline.id}
+          data-not-launchable=""
+          title={newRunForm.notLaunchableReason(pipeline) ?? undefined}
+          className="relative flex-col items-start gap-0 pl-6 font-mono data-disabled:pointer-events-auto data-disabled:cursor-not-allowed"
+        >
+          {isSelected && <SelectedMarker />}
+          <span className="max-w-full truncate">{pipeline.name}</span>
+          {reason && (
+            <span
+              data-testid={`pipeline-select-reason-${pipeline.id}`}
+              className="max-w-full truncate font-sans text-st-failed"
+              style={{ fontSize: "10px" }}
+            >
+              {reason}
+            </span>
+          )}
+        </DropdownMenuItem>
+      );
+    }
     return (
       <DropdownMenuItem
         key={pipeline.id}
@@ -2164,7 +2228,7 @@ function PipelineSelect({
         data-pipeline-id={pipeline.id}
         className={`relative pl-6 font-mono ${isSelected ? "bg-acc-bg text-acc" : ""}`}
         onClick={() => choose(pipeline.id)}
-        onKeyDown={(e) => onOptionKeyDown(e, index)}
+        onKeyDown={onOptionKeyDown}
       >
         {isSelected && <SelectedMarker />}
         <span className="truncate">
@@ -2240,6 +2304,7 @@ function PipelineSelect({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         data-testid="pipeline-select-menu"
+        onKeyDownCapture={onMenuKeyDownCapture}
         className="text-fg"
         side="bottom"
         align="start"

@@ -45,6 +45,12 @@ import EditToolbar from "./EditToolbar";
 import ExportNodeYamlModal from "./ExportNodeYamlModal";
 import AddNodeFromYamlModal from "./AddNodeFromYamlModal";
 import LintBanner, { type LintBannerItem } from "./LintBanner";
+import { Tooltip } from "./ui/tooltip";
+import { NODE_MARK_CAPTION, nodeMarks, pathDefects, type NodeMarkKind } from "../lib/pathCoherence";
+import type { PathDefect } from "../types";
+
+/** The colour of the path-coherence marks (design Q1 red; Q4 amber in a tour). */
+export type PathMarkTone = "failed" | "await";
 import DragConnectionLine from "./DragConnectionLine";
 import { DragHighlightProvider, useIsDropTarget } from "./DragHighlightContext";
 import { useDismissedNudges } from "../hooks/useDismissedNudges";
@@ -110,8 +116,32 @@ interface EditNodeData {
   orchestrator?: boolean;
   /** #723: child-run counters of an orchestrator node (run view only). */
   childCounts?: ChildCounts;
+  /**
+   * gitlab #23 (ADR-0081): the path-coherence defects this node carries — a
+   * Cul-de-sac, a Nœud orphelin, « no path » pinned on an unwired Start. Absent
+   * or empty ⇒ no mark. Template tabs only.
+   */
+  pathMarks?: NodeMarkKind[];
+  /** Red by default; amber while a guided tour teaches the wiring (Q4). */
+  pathMarkTone?: PathMarkTone;
   [key: string]: unknown;
 }
+
+/**
+ * #1022: how much of the canvas's top the toolbar and the lint banner cover —
+ * the bottom of the lowest top overlay, relative to the canvas. « Show »
+ * centres the node in the band below, so the banner never hides it.
+ */
+function topInsetOf(wrapper: HTMLElement): number {
+  const top = wrapper.getBoundingClientRect().top;
+  let inset = TOOLBAR_HEIGHT;
+  wrapper.querySelectorAll("[data-canvas-top-overlay]").forEach((el) => {
+    inset = Math.max(inset, el.getBoundingClientRect().bottom - top);
+  });
+  return inset;
+}
+// The edit toolbar's height (`top-10`, the banner's offset).
+const TOOLBAR_HEIGHT = 40;
 
 // Exported for unit tests; co-located with the canvas it renders.
 // `isConnectable` mirrors the canvas's `nodesConnectable` (false while a run is
@@ -149,10 +179,32 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
   // mistaken for a fixed-side declared port.
   const emergent = landsByDrop(data.nodeType);
 
+  // gitlab #23 (design Q1 = B): a faulty node wears a TriangleAlert in the
+  // corner slot (tooltip + accessible name listing its defects) and one caption
+  // line per defect under its name. No border, no ring: those mean selection
+  // and a failed run node.
+  const pathMarks = data.pathMarks ?? [];
+  const markColor = data.pathMarkTone === "await" ? "text-st-await" : "text-st-failed";
+  const markText = pathMarks.map((kind) => NODE_MARK_CAPTION[kind]).join("\n");
+  const pathBadge =
+    pathMarks.length > 0 ? (
+      <Tooltip content={markText} side="top">
+        <span
+          role="img"
+          aria-label={markText}
+          data-testid="node-path-mark"
+          className={`grid place-items-center ${markColor}`}
+        >
+          <TriangleAlert size={13} aria-hidden />
+        </span>
+      </Tooltip>
+    ) : undefined;
+
   return (
     <NodeCard
       status={cardStatus}
       selected={isSelected}
+      cornerBadge={pathBadge}
       style={{
         minWidth: 160,
         fontSize: "12px",
@@ -254,6 +306,20 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
           </span>
         )}
       </div>
+      {pathMarks.length > 0 && (
+        <div className="mt-1 flex flex-col pl-[22px]" data-testid="node-path-captions">
+          {pathMarks.map((kind) => (
+            <span
+              key={kind}
+              data-testid={`node-path-caption-${kind}`}
+              className={markColor}
+              style={{ fontSize: 10, lineHeight: "15px" }}
+            >
+              {NODE_MARK_CAPTION[kind]}
+            </span>
+          ))}
+        </div>
+      )}
       {/* #723 — orchestrator pastilles: a row under the title (the card grows
           a line); omitted entirely without children, so a node that never
           orchestrated stays byte-identical. */}
@@ -300,9 +366,15 @@ interface EditCanvasProps {
   // #949: whether App's right pane is folded. Its toggling resizes the canvas;
   // the canvas re-frames itself on that resize only (not on a handle drag).
   rightPaneCollapsed?: boolean;
+  /**
+   * gitlab #23 design Q4 (wired by the First pipeline tour, #1024): the wiring
+   * is being TAUGHT — path-coherence marks turn amber (a teaching aid, not an
+   * error) and the banner drops its coherence rows. Default: red marks, rows shown.
+   */
+  coherenceTeaching?: boolean;
 }
 
-function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState, onSelectRun, rightPaneCollapsed = false }: EditCanvasProps) {
+function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleInfo, onCloseInfo, assistantActive, onOpenAssistant, runState, onSelectRun, rightPaneCollapsed = false, coherenceTeaching = false }: EditCanvasProps) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setSelection = useEditStore((s) => s.setSelection);
@@ -467,9 +539,29 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   // nodes whose frozen `orchestrator` toggle is on. Template tabs never poll
   // (no run state → no children) and stay untouched.
   const runChildren = useRunChildren(activeRunState?.run_id ?? null, activeRunState != null);
+  // gitlab #23 (ADR-0081): path coherence, live. The TS mirror recomputes on
+  // every graph change, without saving; a CLEAN tab shows what the daemon (the
+  // authority) answered at load or Save — the same sentences, so the swap is
+  // invisible. Run tabs carry none (the scheduler owns their graph).
+  const tabRunId = tab?.runId;
+  const tabDirty = tab?.dirty ?? false;
+  const serverDefects = tab?.pathDefects;
+  const liveDefects = useMemo(() => (pipeline ? pathDefects(pipeline) : []), [pipeline]);
+  const coherenceDefects = useMemo<PathDefect[]>(() => {
+    if (!pipeline || tabRunId != null) return [];
+    if (!tabDirty && serverDefects != null) return serverDefects;
+    return liveDefects;
+  }, [pipeline, tabRunId, tabDirty, serverDefects, liveDefects]);
+  const coherenceMarks = useMemo(
+    () => (pipeline && coherenceDefects.length > 0 ? nodeMarks(pipeline, coherenceDefects) : null),
+    [pipeline, coherenceDefects],
+  );
+  const pathMarkTone: PathMarkTone = coherenceTeaching ? "await" : "failed";
   const derivedNodes = useMemo(() => {
     if (!pipeline) return [];
     const cards = deriveEditNodes(pipeline, activeRunState, agentProfileIds).map((card) => {
+      const marks = coherenceMarks?.get(card.id);
+      if (marks) card = { ...card, data: { ...card.data, pathMarks: marks, pathMarkTone } };
       if (!(card.data as { orchestrator?: boolean }).orchestrator) return card;
       const runId = activeRunState?.run_id ?? null;
       if (!runId) return card;
@@ -490,7 +582,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
     // pipeline alone (independent of run state).
     const noteNodes: Node[] = buildNoteNodes(pipeline);
     return [...regionNodes, ...cards, ...noteNodes];
-  }, [pipeline, activeRunState, agentProfileIds, runChildren]);
+  }, [pipeline, activeRunState, agentProfileIds, runChildren, coherenceMarks, pathMarkTone]);
   const derivedEdges = useMemo(
     () => (pipeline ? deriveEditEdges(pipeline) : []),
     [pipeline],
@@ -585,7 +677,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
         if (rect) {
           // The Show re-centre supersedes the #949 reframe for this resize.
           paneToggledRef.current = false;
-          reactFlow.setViewport(centreOn(rect, width, height, show.zoom), { duration: 250 });
+          reactFlow.setViewport(centreOn(rect, width, height, show.zoom, topInsetOf(wrapper)), { duration: 250 });
           return;
         }
       }
@@ -862,24 +954,41 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
   // correctness lint is not. `tab?.id ?? ""` keeps the hook call unconditional
   // (rules of hooks) ahead of the early return below; "" is never rendered.
   const { dismissed, dismiss } = useDismissedNudges(tab?.id ?? "");
+  const selectedNodeId = useEditStore((s) => (s.selection.kind === "node" ? s.selection.id : null));
   const allItems = useMemo<LintBannerItem[]>(() => {
     if (!tab) return [];
-    // ADR-0081: a path-coherence diagnostic naming a node carries its id, so
-    // the row offers « Show ». The daemon appends the path defects last, in
-    // order: pair them BY POSITION, never by text — two nodes may share a name,
-    // hence a message.
+    // ADR-0081: the daemon appends its path defects LAST, in order — pair them
+    // BY POSITION, never by text (two nodes may share a name, hence a message),
+    // and replace them with the effective defects (live while dirty). Every
+    // other daemon diagnostic stays as answered.
     const diagnostics = tab.diagnostics ?? [];
-    const defects = tab.pathDefects ?? [];
-    const firstDefect = diagnostics.length - defects.length;
-    const lint = diagnostics.map((m, i): LintBannerItem => {
-      const defect = i >= firstDefect ? defects[i - firstDefect] : undefined;
-      return {
-        id: `lint:${i}`,
-        kind: "lint" as const,
-        message: m,
-        ...(defect?.node_id && defect.message === m ? { nodeId: defect.node_id } : {}),
-      };
+    const answered = tab.pathDefects ?? [];
+    const firstDefect = diagnostics.length - answered.length;
+    const isAnsweredDefect = (m: string, i: number) =>
+      i >= firstDefect && answered[i - firstDefect]?.message === m;
+    const pathRows = coherenceTeaching ? [] : coherenceDefects;
+    const pathMessages = new Set(pathRows.map((d) => d.message));
+    const seen = new Set<string>();
+    const lint: LintBannerItem[] = [];
+    const push = (item: LintBannerItem) => {
+      // One row per defect × node (Q2, no cap), never twice (LintBannerDuplication).
+      const key = `${item.message}\u0000${item.nodeId ?? ""}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      lint.push(item);
+    };
+    diagnostics.forEach((m, i) => {
+      if (isAnsweredDefect(m, i) || pathMessages.has(m)) return;
+      push({ id: `lint:${i}`, kind: "lint", message: m });
     });
+    pathRows.forEach((d, i) =>
+      push({
+        id: `path:${i}`,
+        kind: "lint",
+        message: d.message,
+        ...(d.node_id ? { nodeId: d.node_id } : {}),
+      }),
+    );
     const nudges = collectionFanoutNudges(tab.pipeline).map((n) => ({
       ...n,
       kind: "nudge" as const,
@@ -908,7 +1017,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
             })),
         );
     return [...lint, ...missingProfiles, ...missingSkills, ...nudges];
-  }, [tab, agentProfileIds, skillIds, skillBankLoaded]);
+  }, [tab, agentProfileIds, skillIds, skillBankLoaded, coherenceDefects, coherenceTeaching]);
   // Filter BEFORE the render gate so dismissing the last nudge (with no lint)
   // collapses the whole overlay. MUST depend on `dismissed` or it won't update.
   const visibleItems = useMemo(
@@ -933,7 +1042,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       if (!rect || !wrapper) return;
       const { width, height } = wrapper.getBoundingClientRect();
       if (width <= 0 || height <= 0) return;
-      reactFlow.setViewport(centreOn(rect, width, height, zoom), { duration: 400 });
+      reactFlow.setViewport(centreOn(rect, width, height, zoom, topInsetOf(wrapper)), { duration: 400 });
     },
     [reactFlow, setSelection, flowRectOf],
   );
@@ -1086,8 +1195,13 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
           deliberate trade-off ratified at PR time. `tab` is non-null here (early
           return above). `tab.runId == null` ⇔ not a run tab (≡ tab.scope !== "run"). */}
       {visibleItems.length > 0 && tab.runId == null && (
-        <div className="absolute left-0 right-0 top-10 z-10">
-          <LintBanner items={visibleItems} onDismiss={dismiss} onShow={showNode} />
+        <div className="absolute left-0 right-0 top-10 z-10" data-canvas-top-overlay>
+          <LintBanner
+            items={visibleItems}
+            onDismiss={dismiss}
+            onShow={showNode}
+            activeNodeId={selectedNodeId}
+          />
         </div>
       )}
 

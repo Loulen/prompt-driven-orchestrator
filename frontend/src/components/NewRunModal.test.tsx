@@ -3490,3 +3490,148 @@ describe("NewRunModal — a Trigger's source branch warns on a local one (#804)"
     expect(screen.queryByTestId("source-branch-local-warning")).not.toBeInTheDocument();
   });
 });
+
+// ADR-0081 / #1022 (design Q3 = B): a Pipeline non lançable (`launchable: false`
+// in the daemon's list) is greyed and disabled in its section, with the reason
+// under its name; it is never auto-selected nor taken by the keyboard, and a
+// HELD one says why under the field while Launch stays disabled.
+describe("NewRunModal — a Pipeline non lançable is greyed (#1022)", () => {
+  const DEAD_END = 'Not launchable: dead end — node "notifier" never leads to End.';
+  const broken = (id: string, reasons = [DEAD_END]) =>
+    makePipeline({ id, name: id, scope: "instance", launchable: false, not_launchable_reasons: reasons });
+  const ok = (id: string) => makePipeline({ id, name: id, scope: "instance", launchable: true });
+
+  it("greys the row, keeps it in order, and shows the reason without its prefix", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([ok("alpha"), broken("bugfix-loop"), ok("omega")]);
+    renderModal();
+    await enterValidRepo();
+
+    await openPipelineMenu();
+    expect(pipelineOptions().map((o) => o.id)).toEqual(["alpha", "bugfix-loop", "omega"]);
+    const row = screen.getByTestId("pipeline-select-option-bugfix-loop");
+    expect(row).toHaveAttribute("data-disabled");
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveAttribute("title", DEAD_END);
+    expect(screen.getByTestId("pipeline-select-reason-bugfix-loop")).toHaveTextContent(
+      /^dead end — node "notifier" never leads to End\.$/,
+    );
+    expect(screen.queryByTestId("pipeline-select-reason-alpha")).toBeNull();
+  });
+
+  it("cannot be chosen by a click", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([ok("alpha"), broken("bugfix-loop")]);
+    renderModal();
+    await enterValidRepo();
+    await waitFor(() => expect(selectedPipeline()).toBe("alpha"));
+
+    await openPipelineMenu();
+    fireEvent.click(screen.getByTestId("pipeline-select-option-bugfix-loop"));
+    expect(selectedPipeline()).toBe("alpha");
+  });
+
+  it("auto-selects the first LAUNCHABLE pipeline", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([broken("draft-docs"), ok("spec-to-tickets")]);
+    renderModal();
+    await enterValidRepo();
+
+    await waitFor(() => expect(selectedPipeline()).toBe("spec-to-tickets"));
+  });
+
+  it("takes the first launchable row on Enter, and ↓ skips the disabled ones", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([broken("loop-a"), ok("loop-b"), broken("loop-c"), ok("loop-d")]);
+    renderModal();
+    await enterValidRepo();
+    await waitFor(() => expect(selectedPipeline()).toBe("loop-b"));
+
+    await openPipelineMenu();
+    const user = menuUser();
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => expect(screen.getByTestId("pipeline-select-option-loop-b")).toHaveFocus());
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => expect(screen.getByTestId("pipeline-select-option-loop-d")).toHaveFocus());
+    // ↑ from the first launchable row goes back to the field.
+    await user.keyboard("{ArrowUp}");
+    await waitFor(() => expect(screen.getByTestId("pipeline-select-option-loop-b")).toHaveFocus());
+    await user.keyboard("{ArrowUp}");
+    await waitFor(() => expect(screen.getByTestId("pipeline-select-filter")).toHaveFocus());
+
+    await user.type(screen.getByTestId("pipeline-select-filter"), "loop");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(selectedPipeline()).toBe("loop-b"));
+  });
+
+  it("holds a pipeline broken since it was picked: reason under the field, Launch disabled", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "auditor", name: "auditor", scope: "repo", prompt_required: false }),
+      ok("bugfix-loop"),
+    ]);
+    const { rerender } = renderModal();
+    await enterValidRepo();
+    await pickPipeline("bugfix-loop");
+    await waitFor(() => expect(selectedPipeline()).toBe("bugfix-loop"));
+    expect(screen.queryByTestId("pipeline-not-launchable")).toBeNull();
+
+    // Saved broken meanwhile: the next open reads the fresh list.
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "auditor", name: "auditor", scope: "repo", prompt_required: false }),
+      { ...broken("bugfix-loop"), prompt_required: false },
+    ]);
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+
+    await waitFor(() => expect(screen.getByTestId("pipeline-not-launchable")).toHaveTextContent(DEAD_END));
+    // The choice is held, not silently swapped for another.
+    expect(selectedPipeline()).toBe("bugfix-loop");
+    expect(screen.getByTestId("launch-button")).toBeDisabled();
+    expect(screen.getByTestId("launch-button-wrapper")).toHaveAttribute("tabindex", "0");
+    expect(screen.getByTestId("launch-button")).toHaveAccessibleDescription(DEAD_END);
+
+    // Fixed and saved again: selectable and launchable once more.
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "auditor", name: "auditor", scope: "repo", prompt_required: false }),
+      { ...ok("bugfix-loop"), prompt_required: false },
+    ]);
+    rerender(<NewRunModal open={false} onClose={noop} onCreated={noop} />);
+    rerender(<NewRunModal open={true} onClose={noop} onCreated={noop} />);
+    await waitFor(() => expect(screen.queryByTestId("pipeline-not-launchable")).toBeNull());
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("launch-button")).toBeEnabled());
+  });
+
+  it("shows a Trigger's broken pipeline with its reason", async () => {
+    vi.mocked(fetchPipelines).mockResolvedValue([ok("alpha"), broken("nightly", ["Not launchable: no path from Start to End."])]);
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        openIntent={{
+          kind: "edit-trigger",
+          trigger: {
+            id: "trg-1",
+            name: "Nightly",
+            pipeline_id: "nightly",
+            pipeline_name: "nightly",
+            target_repo: "/home/user/project",
+            source_branch: "main",
+            input_template: "go",
+            variables: {},
+            cron: "0 * * * *",
+            guard_command: null,
+            overlap_policy: "allow",
+            auto_name: true,
+            enabled: true,
+            next_fire_at: null,
+            last_fired_at: null,
+            last_outcome: null,
+          },
+        }}
+      />,
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(selectedPipeline()).toBe("nightly"));
+    expect(screen.getByTestId("pipeline-not-launchable")).toHaveTextContent(
+      "Not launchable: no path from Start to End.",
+    );
+  });
+});

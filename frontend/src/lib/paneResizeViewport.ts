@@ -65,11 +65,22 @@ export function reframeOnPaneResize(
  * `width` × `height` at `zoom`. Computed from the canvas's measured size, not
  * React Flow's stored one, so it holds when the inspector unfolding has just
  * shrunk the canvas and React Flow has not caught up yet.
+ *
+ * `topInset` (#1022): the height the toolbar and the lint banner cover at the
+ * top of the canvas — the card is centred in the band left visible below them,
+ * so the banner never sits over the node « Show » just brought into view.
  */
-export function centreOn(rect: FlowRect, width: number, height: number, zoom: number): Viewport {
+export function centreOn(
+  rect: FlowRect,
+  width: number,
+  height: number,
+  zoom: number,
+  topInset = 0,
+): Viewport {
+  const inset = Math.min(Math.max(topInset, 0), height);
   return {
     x: width / 2 - (rect.x + rect.width / 2) * zoom,
-    y: height / 2 - (rect.y + rect.height / 2) * zoom,
+    y: inset + (height - inset) / 2 - (rect.y + rect.height / 2) * zoom,
     zoom,
   };
 }

@@ -142,8 +142,35 @@ describe("useNodeRun — IO reads", () => {
     expect(api.fetchNodeIO).toHaveBeenCalledTimes(1);
     await advance(1);
     expect(api.fetchNodeIO).toHaveBeenCalledTimes(2);
-    await advance(2000);
+    // The next read is scheduled from each answer (#1009), so the clock moves
+    // one interval at a time.
+    await advance(1000);
+    expect(api.fetchNodeIO).toHaveBeenCalledTimes(3);
+    await advance(1000);
     expect(api.fetchNodeIO).toHaveBeenCalledTimes(4);
+  });
+
+  it("never starts a read while the previous one is unanswered (#1009)", async () => {
+    let answer!: (io: NodeIO) => void;
+    vi.mocked(api.fetchNodeIO).mockImplementationOnce(
+      () =>
+        new Promise<NodeIO>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    renderHook(() => useNodeRun("run-1", makeNode({ status: "running" }), 1, {}));
+    await flush();
+    expect(api.fetchNodeIO).toHaveBeenCalledTimes(1);
+
+    // A slow daemon: 10 intervals pass without an answer — no pile-up.
+    await advance(10_000);
+    expect(api.fetchNodeIO).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      answer(IO);
+    });
+    await advance(1000);
+    expect(api.fetchNodeIO).toHaveBeenCalledTimes(2);
   });
 
   it("polls IO every 1000ms for awaiting_user and stale too", async () => {

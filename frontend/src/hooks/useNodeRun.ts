@@ -17,6 +17,7 @@ import type {
   ReleaseNodeCompletionOutcome,
 } from "../api";
 import type { NodeState, NodeStatus } from "../types";
+import { pollAfterResponse } from "../lib/singleFlight";
 
 function pollInterval(status: NodeStatus): number | null {
   switch (status) {
@@ -194,11 +195,11 @@ export function useNodeRun(
       }
     }
 
-    pollIO();
-    const timer = setInterval(pollIO, interval);
+    // #1009: `interval` after each answer, never two reads in flight.
+    const stop = pollAfterResponse(pollIO, interval);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stop();
     };
   }, [interval, node.node_id, selectedIter, runId, isStaleIter, node.status]);
 

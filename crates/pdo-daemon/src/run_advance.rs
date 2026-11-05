@@ -27,9 +27,9 @@ use crate::scheduler_interpreter::{self, SpawnDedup};
 use crate::transition_guard;
 use crate::worktree_ops::worktree_dir_for_run;
 use crate::{
-    append_event, effective_repo_root, handle_node_completion, load_all_run_ids, load_events,
-    reload_run_state_with, resolve_completed_frontmatter, resolve_run_pipeline_path,
-    resolve_run_variables, retry_waiting_nodes, run_is_forgotten, AppState,
+    append_event, effective_repo_root, handle_node_completion, load_events, reload_run_state_with,
+    resolve_completed_frontmatter, resolve_run_pipeline_path, resolve_run_variables,
+    retry_waiting_nodes, run_is_forgotten, AppState,
 };
 
 /// Advance one Run by a single tick: spawn whatever the scheduler says is ready
@@ -552,42 +552,39 @@ impl ChildrenSnapshot {
 }
 
 /// Lit les runs enfants du nœud `node_id` du Run `run_id` : tout Run dont le
-/// `RunStarted` mécanique porte ces deux valeurs de provenance. Recharge tout
-/// à chaque appel — c’est ce qui rend la ré-adoption au restart gratuite.
+/// `RunStarted` mécanique porte ces deux valeurs de provenance. Relit le
+/// magasin à chaque appel — c’est ce qui rend la ré-adoption au restart
+/// gratuite — via la projection partagée (#1009), reconstruite seulement quand
+/// le journal a changé.
 pub(crate) async fn children_snapshot(
     state: &AppState,
     run_id: &str,
     node_id: &str,
 ) -> ChildrenSnapshot {
     let mut snapshot = ChildrenSnapshot::default();
-    let Ok(run_ids) = load_all_run_ids(&state.db).await else {
-        error!("binding: failed to list runs for children of {node_id} in {run_id}");
-        return snapshot;
-    };
-    for child_id in run_ids {
-        if child_id == run_id {
-            continue;
+    let projected = match state.run_projections.get(&state.db).await {
+        Ok(projected) => projected,
+        Err(_) => {
+            error!("binding: failed to list runs for children of {node_id} in {run_id}");
+            return snapshot;
         }
-        let Ok(events) = load_events(&state.db, &child_id).await else {
-            continue;
-        };
-        let Some(child) = event_log::project(&events) else {
-            continue;
-        };
-        if child.parent_run_id.as_deref() != Some(run_id)
+    };
+    for child in projected.runs.iter() {
+        if child.run_id == run_id
+            || child.parent_run_id.as_deref() != Some(run_id)
             || child.parent_node_id.as_deref() != Some(node_id)
         {
             continue;
         }
         snapshot.total += 1;
-        match child.status {
-            event_log::RunStatus::Failed => snapshot.failed.push(child.run_id),
+        match &child.status {
+            event_log::RunStatus::Failed => snapshot.failed.push(child.run_id.clone()),
             status if status.is_live() => {
                 // Un enfant oublié (tombstoné, ADR-0024) ne retient pas la
                 // liaison : il ne projetera jamais d’état terminal.
                 match run_is_forgotten(&state.db, &child.run_id).await {
                     Ok(true) => {}
-                    _ => snapshot.active.push(child.run_id),
+                    _ => snapshot.active.push(child.run_id.clone()),
                 }
             }
             _ => {}

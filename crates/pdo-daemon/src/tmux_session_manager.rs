@@ -457,15 +457,22 @@ fn forced_ccr_env() -> Vec<(String, String)> {
 /// `NodeFailed` **and** an unguarded second `RunFailed` carrying a false reason
 /// ("after script success", on a script whose output validation just failed). The
 /// fallback therefore fires only on a code that is neither `0` (granted or legal
-/// duplicate) nor `4` (already ruled). A `3`
-/// (refused, still your turn) cannot reach a script node: the fail-fast branch
-/// intercepts before the interactive retry loop.
+/// duplicate) nor `4` (already ruled).
+///
+/// **One `3` is legal too: `children_pending`** (#1018 / ADR-0064). A script that
+/// created child runs is a *parent node*, held by them: the daemon parked the
+/// node (`AwaitingUser`, binding marker) and its watcher completes it once every
+/// child is terminal. Failing the node there would lie — so the tail reads the
+/// refusal's slug off `pdo complete`'s output (still echoed to the pane) and
+/// leaves a held node alone. Any OTHER `3` keeps failing: the script cannot take
+/// another turn (output refusals fail-fast to `4` for a script anyway).
 fn build_script_tail(prompt_path: &Path, timeout_secs: u64) -> String {
     let body = sh_single_quote(&prompt_path.to_string_lossy());
     format!(
         "timeout {timeout_secs}s bash {body} ; ec=$? ; \
-         if [ $ec -eq 0 ]; then pdo complete ; cc=$? ; \
-         if [ $cc -ne 0 ] && [ $cc -ne 4 ]; then pdo fail --reason \"pdo complete refused with exit $cc after script success\" ; fi ; \
+         if [ $ec -eq 0 ]; then co=$(pdo complete 2>&1) ; cc=$? ; printf '%s\\n' \"$co\" ; \
+         case \"$cc:$co\" in 0:*|4:*|3:*children_pending*) ;; \
+         *) pdo fail --reason \"pdo complete refused with exit $cc after script success\" ;; esac ; \
          elif [ $ec -eq 124 ]; then pdo fail --reason \"script timed out after {timeout_secs}s\" ; \
          else pdo fail --reason \"script exited $ec\" ; fi"
     )
@@ -4305,7 +4312,7 @@ mod tests {
             "the bare `||` doubles a failure the daemon already recorded: {script}"
         );
         assert!(
-            script.contains("-ne 4"),
+            script.contains("4:*"),
             "the tail must discriminate exit code 4 (refused, already ruled): {script}"
         );
         assert!(
@@ -4314,18 +4321,93 @@ mod tests {
         );
     }
 
+    /// Run the REAL script tail in bash against a fake `pdo` whose `complete`
+    /// prints `complete_out` and exits `complete_code`; return the `pdo fail`
+    /// calls it recorded (one line each, empty when none).
+    fn run_script_tail_with_fake_pdo(complete_code: i32, complete_out: &str) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let body = dir.path().join("body.sh");
+        std::fs::write(&body, "exit 0\n").unwrap();
+        let log = dir.path().join("fail.log");
+        let fake = dir.path().join("pdo");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/usr/bin/env bash\n\
+                 if [ \"$1\" = complete ]; then printf '%s\\n' {out} >&2 ; exit {complete_code} ; fi\n\
+                 if [ \"$1\" = fail ]; then echo \"$*\" >> {log} ; fi\n",
+                out = sh_single_quote(complete_out),
+                log = sh_single_quote(&log.to_string_lossy()),
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tail = build_script_tail(&body, 60);
+        let status = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&tail)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    dir.path().display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .status()
+            .unwrap();
+        assert!(status.success(), "the tail itself must not error: {tail}");
+        std::fs::read_to_string(&log).unwrap_or_default()
+    }
+
+    /// #1018 / ADR-0064 — a script that created child runs is a parent node,
+    /// held by them: `pdo complete` answers `3` + `children_pending`, the daemon
+    /// parked the node and its watcher completes it. The tail must NOT fail it.
+    #[test]
+    fn script_tail_leaves_a_node_held_by_its_children_alone() {
+        let fails = run_script_tail_with_fake_pdo(
+            3,
+            "pdo complete REFUSED (children_pending) — node `s` is held by its child runs",
+        );
+        assert_eq!(fails, "", "a held parent node is not failed");
+    }
+
+    /// Every other arm keeps its pre-#1018 behaviour: `0` and `4` stay silent,
+    /// any other `3` (the script cannot take another turn) and any other code
+    /// still fail the node.
+    #[test]
+    fn script_tail_still_fails_on_any_other_refusal() {
+        assert_eq!(
+            run_script_tail_with_fake_pdo(0, "Node s marked complete."),
+            ""
+        );
+        assert_eq!(
+            run_script_tail_with_fake_pdo(4, "pdo complete REFUSED and the node is now FAILED"),
+            ""
+        );
+        let fails = run_script_tail_with_fake_pdo(3, "pdo complete REFUSED — missing_outputs");
+        assert!(
+            fails.contains("pdo complete refused with exit 3 after script success"),
+            "{fails:?}"
+        );
+        let fails = run_script_tail_with_fake_pdo(1, "failed to reach daemon");
+        assert!(fails.contains("exit 1"), "{fails:?}");
+    }
+
     /// The full arm matrix of the tail, so a future edit cannot quietly drop one.
     /// `ec` is the author's bash exit code, `cc` is `pdo complete`'s.
     #[test]
     fn build_script_tail_covers_every_arm() {
         let script = build_script_tail(Path::new("/tmp/body.md"), 60);
         for needle in [
-            // ec = 0 → try to complete
-            "if [ $ec -eq 0 ]; then pdo complete",
-            // cc = 0 (granted or legal duplicate) and cc = 4 (already ruled) → do
-            // nothing. Anything else → signal the failure ourselves.
-            "if [ $cc -ne 0 ] && [ $cc -ne 4 ]",
-            "pdo complete refused with exit $cc after script success",
+            // ec = 0 → try to complete, keeping the CLI's output for the slug
+            "if [ $ec -eq 0 ]; then co=$(pdo complete 2>&1) ; cc=$?",
+            // cc = 0 (granted or legal duplicate), cc = 4 (already ruled) and a
+            // `children_pending` 3 (held by its child runs, #1018) → do nothing.
+            // Anything else → signal the failure ourselves.
+            "case \"$cc:$co\" in 0:*|4:*|3:*children_pending*) ;;",
+            "*) pdo fail --reason \"pdo complete refused with exit $cc after script success\" ;; esac",
             // ec = 124 → the `timeout` verdict
             "elif [ $ec -eq 124 ]; then pdo fail --reason \"script timed out after 60s\"",
             // any other ec → the author's own failure

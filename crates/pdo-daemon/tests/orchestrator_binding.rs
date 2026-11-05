@@ -1,8 +1,9 @@
-//! Layer 3a — la liaison forte orchestrateur ↔ enfants (issue #724, ADR-0064).
-//! Sibling of `run_provenance.rs` (qui pose la provenance mécanique) : ici, la
-//! provenance EXISTE et le toggle « Orchestrator » la rend contractuelle.
+//! Layer 3a — la liaison forte nœud parent ↔ enfants (issues #724, #1018,
+//! ADR-0064). Sibling of `run_provenance.rs` (qui pose la provenance
+//! mécanique) : ici, la provenance EXISTE et elle est contractuelle pour TOUT
+//! nœud parent — agent ou `script`, toggle « Orchestrator » ou non (#1018).
 //!
-//! - `pdo complete` sur un nœud orchestrator est refusé tant que ses runs
+//! - `pdo complete` sur un nœud parent est refusé tant que ses runs
 //!   enfants (mêmes `parent_run_id` + `parent_node_id`) sont non terminaux,
 //!   avec un message qui COMPTE (`children_pending`, `active`/`failed`) ;
 //! - tous les enfants terminaux → le nœud se complète de lui-même (le watcher
@@ -12,7 +13,10 @@
 //!   et le retry de l'enfant fonctionnent ;
 //! - aucun effet des gestes parent (stop du nœud, forget du run) sur les
 //!   enfants ; un restart ré-adopte les enfants vivants et reprend l'attente ;
-//! - un nœud SANS toggle n'est jamais retenu.
+//! - un nœud SANS toggle qui a des enfants est retenu de la même façon (#1018),
+//!   y compris par l'auto-complétion de fin de tour et en fin de `script` (le
+//!   refus ne fait pas échouer le script) ; un nœud sans enfant, ou dont
+//!   l'enfant est oublié, se complète comme avant.
 
 use crate::common::TestDaemon;
 
@@ -510,12 +514,113 @@ async fn retrying_the_failed_child_lets_the_node_complete_itself() {
     wait_node_status(&daemon, &parent, "worker", "completed").await;
 }
 
+/// #1018 — the binding follows the REAL children, not the toggle: a node
+/// WITHOUT the Orchestrator toggle that created a child run is held exactly like
+/// an orchestrator, with a generic refusal that names `pdo run wait --all`, and
+/// completes itself (`children_settled`) once its child is terminal.
 #[tokio::test]
-async fn a_node_without_the_toggle_is_never_held() {
+async fn a_node_without_the_toggle_is_held_by_its_children() {
     let daemon = TestDaemon::spawn(seed_plain).await.unwrap();
     let parent = create_run(&daemon, "binding-plain", None, serde_json::json!({})).await;
     start_worker(&daemon, &parent).await;
 
+    let child = create_run(
+        &daemon,
+        CHILD_PIPELINE_NAME,
+        Some((&parent, "worker")),
+        serde_json::json!({}),
+    )
+    .await;
+
+    write_output(&daemon, &parent, "worker", "result");
+    let (status, body) = complete_node(&daemon, &parent, "worker").await;
+    assert_eq!(status, 409, "a parent node is held by its child: {body:?}");
+    assert_eq!(body["error"], "children_pending", "{body:?}");
+    assert_eq!(body["active"], 1, "{body:?}");
+    assert_eq!(body["recoverable"], true, "still the agent's turn (exit 3)");
+    let message = body["message"].as_str().unwrap();
+    assert_eq!(
+        message,
+        "node `worker` is held by its child runs: 1 active — wait for them with \
+         `pdo run wait --all`, then complete again"
+    );
+    assert!(!message.contains("orchestrator"), "{message}");
+    wait_node_status(&daemon, &parent, "worker", "awaiting_user").await;
+
+    // The child settles → the parent completes itself, signed by the binding.
+    settle_child(&daemon, &child).await;
+    wait_node_status(&daemon, &parent, "worker", "completed").await;
+    let (status, events) = get_json(&daemon, &format!("/runs/{parent}/events")).await;
+    assert_eq!(status, 200);
+    let raw = serde_json::to_string(&events).unwrap();
+    assert!(raw.contains("children_settled"), "{raw}");
+}
+
+/// #1018 — a non-toggle parent node whose child FAILED is parked awaiting the
+/// user (the failed variant of the refusal, without « orchestrator »), and the
+/// force (`mark_node_done`) stays ungated.
+#[tokio::test]
+async fn a_failed_child_parks_a_node_without_the_toggle() {
+    let daemon = TestDaemon::spawn(seed_plain).await.unwrap();
+    let parent = create_run(&daemon, "binding-plain", None, serde_json::json!({})).await;
+    start_worker(&daemon, &parent).await;
+
+    let child = create_run(
+        &daemon,
+        CHILD_PIPELINE_NAME,
+        Some((&parent, "worker")),
+        serde_json::json!({ "auto_fail": true }),
+    )
+    .await;
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{child}/nodes/doer/fail", daemon.url()))
+        .json(&serde_json::json!({ "reason": "broken", "iter": 1 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the child fails");
+    for _ in 0..600 {
+        let (status, run) = get_json(&daemon, &format!("/runs/{child}")).await;
+        assert_eq!(status, 200);
+        if run["status"] == "failed" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    let (status, body) = complete_node(&daemon, &parent, "worker").await;
+    assert_eq!(status, 409, "{body:?}");
+    assert_eq!(body["error"], "children_pending");
+    assert_eq!(body["failed"], 1, "{body:?}");
+    assert_eq!(body["recoverable"], false, "the user decides (exit 4)");
+    let message = body["message"].as_str().unwrap();
+    assert!(message.starts_with("node `worker` is held"), "{message}");
+    assert!(message.contains("force-complete the node"), "{message}");
+    assert!(!message.contains("orchestrator"), "{message}");
+    wait_node_status(&daemon, &parent, "worker", "awaiting_user").await;
+
+    write_output(&daemon, &parent, "worker", "result");
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{parent}/commands", daemon.url()))
+        .json(&serde_json::json!({
+            "kind": "mark_node_done",
+            "node_id": "worker",
+            "iter": 1,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "forcing stays ungated");
+    wait_node_status(&daemon, &parent, "worker", "completed").await;
+}
+
+/// #1018 — the turn-end auto-completion (`pdo complete --auto`, the Stop hook
+/// source) of a parent node goes through the same gate: held, not completed.
+#[tokio::test]
+async fn the_turn_end_auto_completion_of_a_parent_node_is_held() {
+    let daemon = TestDaemon::spawn(seed_plain).await.unwrap();
+    let parent = create_run(&daemon, "binding-plain", None, serde_json::json!({})).await;
+    start_worker(&daemon, &parent).await;
     let _child = create_run(
         &daemon,
         CHILD_PIPELINE_NAME,
@@ -524,13 +629,173 @@ async fn a_node_without_the_toggle_is_never_held() {
     )
     .await;
 
-    // No toggle, no binding: the completion goes through even though a child
-    // is still running. « Un agent sans toggle qui spawne des enfants n'est
-    // pas retenu — la liaison est le contrat du toggle. »
+    write_output(&daemon, &parent, "worker", "result");
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{parent}/nodes/worker/done", daemon.url()))
+        .json(&serde_json::json!({ "iter": 1, "auto": true }))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status().as_u16();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(status, 409, "the Stop hook is held too: {body:?}");
+    assert_eq!(body["error"], "children_pending");
+    wait_node_status(&daemon, &parent, "worker", "awaiting_user").await;
+}
+
+/// Non-regression (#1018): a node without children completes as before — with
+/// or without the toggle.
+#[tokio::test]
+async fn a_node_without_children_completes_as_before() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    for pipeline in ["binding-plain", PIPELINE_NAME] {
+        let run = create_run(&daemon, pipeline, None, serde_json::json!({})).await;
+        start_worker(&daemon, &run).await;
+        write_output(&daemon, &run, "worker", "result");
+        let (status, body) = complete_node(&daemon, &run, "worker").await;
+        assert_eq!(status, 200, "{pipeline}: no child, no retention: {body:?}");
+        wait_node_status(&daemon, &run, "worker", "completed").await;
+    }
+}
+
+/// A forgotten (tombstoned) child never holds its parent node (ADR-0024).
+#[tokio::test]
+async fn a_forgotten_child_does_not_hold_the_parent_node() {
+    let daemon = TestDaemon::spawn(seed_plain).await.unwrap();
+    let parent = create_run(&daemon, "binding-plain", None, serde_json::json!({})).await;
+    start_worker(&daemon, &parent).await;
+    let child = create_run(
+        &daemon,
+        CHILD_PIPELINE_NAME,
+        Some((&parent, "worker")),
+        serde_json::json!({}),
+    )
+    .await;
+    // Archive, then forget the still-running child.
+    let resp = reqwest::Client::new()
+        .post(format!("{}/runs/{child}/commands", daemon.url()))
+        .json(&serde_json::json!({ "kind": "cleanup_run" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "archive the child");
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/runs/{child}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success(), "forget the child");
+
     write_output(&daemon, &parent, "worker", "result");
     let (status, body) = complete_node(&daemon, &parent, "worker").await;
-    assert_eq!(status, 200, "no toggle → no retention: {body:?}");
+    assert_eq!(status, 200, "a forgotten child holds nothing: {body:?}");
     wait_node_status(&daemon, &parent, "worker", "completed").await;
+}
+
+/// A `script` parent node: its body creates a child run (`pdo run create`), so
+/// it is held; its output feeds `end`, so the run only completes once the held
+/// node does.
+const SCRIPT_PIPELINE_YAML: &str = r#"name: binding-script
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: spawner
+    name: spawner
+    type: script
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: spawner, port: in }
+  - source: { node: spawner, port: out }
+    target: { node: end, port: result }
+"#;
+
+/// #1018 — a `script` node that created a child run is held like any parent
+/// node: the `children_pending` refusal of its end-of-script `pdo complete`
+/// (exit 3) does NOT fail it; PDO completes it once the child is terminal.
+#[tokio::test]
+async fn a_script_node_with_a_child_is_held_then_completed_without_failing() {
+    crate::common::ensure_pdo_on_path();
+    let daemon = TestDaemon::spawn(|repo: &std::path::Path| {
+        let pipelines_dir = repo.join(".pdo").join("pipelines");
+        std::fs::create_dir_all(&pipelines_dir)?;
+        std::fs::write(
+            pipelines_dir.join("binding-script.yaml"),
+            SCRIPT_PIPELINE_YAML,
+        )?;
+        let prompts = pipelines_dir.join("binding-script.prompts");
+        std::fs::create_dir_all(&prompts)?;
+        std::fs::write(
+            prompts.join("spawner.md"),
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\n\
+                 pdo run create {CHILD_PIPELINE_NAME} --input work --target-repo '{}' \
+                 > child.json\n\
+                 printf 'spawned\\n' > \"$PDO_OUTPUT_OUT\"\n",
+                repo.display()
+            ),
+        )?;
+        seed_pipelines(repo)
+    })
+    .await
+    .unwrap();
+    let parent = create_run(&daemon, "binding-script", None, serde_json::json!({})).await;
+
+    // The script ran, created its child, and its `pdo complete` was refused:
+    // the node is parked by the binding — NOT failed.
+    wait_node_status(&daemon, &parent, "spawner", "awaiting_user").await;
+    let child = find_child_run_id(&daemon, &parent).await;
+    // Give the tail time to have acted on the refusal: still held, not failed.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert_eq!(
+        node_status(&daemon, &parent, "spawner").await,
+        "awaiting_user",
+        "the refusal at the end of the script must not fail the node"
+    );
+
+    settle_child(&daemon, &child).await;
+    wait_node_status(&daemon, &parent, "spawner", "completed").await;
+    let mut last = serde_json::Value::Null;
+    for _ in 0..600 {
+        let (_, run) = get_json(&daemon, &format!("/runs/{parent}")).await;
+        if run["status"] == "completed" {
+            return;
+        }
+        last = run;
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("the parent run never completed: {last}");
+}
+
+/// The run id of the (single) child run of `parent`, from the run list.
+async fn find_child_run_id(daemon: &TestDaemon, parent: &str) -> String {
+    for _ in 0..600 {
+        let (status, runs) = get_json(daemon, "/runs").await;
+        assert_eq!(status, 200);
+        let list = runs
+            .as_array()
+            .cloned()
+            .or_else(|| runs["runs"].as_array().cloned())
+            .unwrap_or_default();
+        if let Some(child) = list
+            .iter()
+            .find(|r| r["parent_run_id"].as_str() == Some(parent))
+        {
+            return child["run_id"].as_str().unwrap().to_string();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("no child run of {parent} appeared");
 }
 
 #[tokio::test]

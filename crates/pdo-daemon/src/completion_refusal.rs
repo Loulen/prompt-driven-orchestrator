@@ -78,9 +78,10 @@ pub(crate) enum CompletionRefusal {
     AppendFailed {
         error: String,
     },
-    /// Liaison forte orchestrateur ↔ enfants (#724 / ADR-0064) : le nœud est
-    /// orchestrator (toggle gelé au démarrage du Run) et ses runs enfants (mêmes
-    /// `parent_run_id` + `parent_node_id`) ne sont pas tous terminaux. Le nœud
+    /// Liaison forte nœud parent ↔ enfants (#724, #1018 / ADR-0064) : le nœud
+    /// est un nœud parent (sa session a créé des runs enfants — mêmes
+    /// `parent_run_id` + `parent_node_id` —, toggle Orchestrator ou non) et ses
+    /// runs enfants non oubliés ne sont pas tous terminaux. Le nœud
     /// reste vivant : aucun événement terminal n'est appendé, la livraison n'a
     /// pas lieu. Avec au moins un enfant `failed`, le NodeRun est parqué
     /// `AwaitingUser` (le `NodeAwaitingUser` porte `reason: "children_pending"`)
@@ -242,18 +243,20 @@ impl CompletionRefusal {
 
 /// Le message « avec compteur » du refus de liaison (#724) : l'agent (et la
 /// surface) voient COMBIEN d'enfants retiennent encore le nœud, et lesquels
-/// réclament l'utilisateur.
+/// réclament l'utilisateur. Générique (#1018) : il vaut pour tout nœud parent,
+/// ne parle jamais d'« orchestrator » et suffit à un agent qui n'a pas le skill
+/// `pdo-orchestrate` — il nomme le geste d'attente, `pdo run wait --all`.
 fn children_pending_message(node_id: &str, active: usize, failed: usize) -> String {
     if failed > 0 {
         format!(
-            "orchestrator node `{node_id}` is held by its child runs: {active} active, \
-             {failed} failed — the node is awaiting the user: retry the failed child run or \
-             force-complete the node"
+            "node `{node_id}` is held by its child runs: {active} active, {failed} failed \
+             — the node is awaiting the user: retry the failed child run or force-complete \
+             the node"
         )
     } else {
         format!(
-            "orchestrator node `{node_id}` is held by its child runs: {active} active — \
-             complete again once every child run is terminal"
+            "node `{node_id}` is held by its child runs: {active} active — wait for them \
+             with `pdo run wait --all`, then complete again"
         )
     }
 }
@@ -452,6 +455,47 @@ mod tests {
         let reason = r.reason();
         assert!(reason.contains("1 active"), "{reason}");
         assert!(reason.contains("3 failed"), "{reason}");
+    }
+
+    /// #1018 : le refus vaut pour tout nœud parent — il ne dit jamais
+    /// « orchestrator » et indique lui-même le geste d'attente, pour un agent
+    /// qui n'a pas le skill `pdo-orchestrate`. La variante `failed` renvoie à
+    /// l'utilisateur, pas à `pdo run wait`.
+    #[test]
+    fn children_pending_message_is_generic_and_names_pdo_run_wait() {
+        let active = CompletionRefusal::ChildrenPending {
+            node_id: "worker".into(),
+            active: 2,
+            failed: 0,
+        }
+        .reason();
+        assert_eq!(
+            active,
+            "node `worker` is held by its child runs: 2 active — wait for them with \
+             `pdo run wait --all`, then complete again"
+        );
+
+        let failed = CompletionRefusal::ChildrenPending {
+            node_id: "worker".into(),
+            active: 0,
+            failed: 1,
+        }
+        .reason();
+        assert_eq!(
+            failed,
+            "node `worker` is held by its child runs: 0 active, 1 failed — the node is \
+             awaiting the user: retry the failed child run or force-complete the node"
+        );
+        for message in [&active, &failed] {
+            assert!(!message.contains("orchestrator"), "{message}");
+        }
+        // The HTTP body carries the same message (ADR-0035 §3 shape unchanged).
+        let r = CompletionRefusal::ChildrenPending {
+            node_id: "worker".into(),
+            active: 2,
+            failed: 0,
+        };
+        assert_eq!(r.detail()["message"], serde_json::json!(active));
     }
 
     /// « Jamais `2xx` » **≠** « toujours `409` ».

@@ -57,9 +57,11 @@ pub struct NodeDefInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolated_worktree: Option<bool>,
     /// The « Orchestrator » toggle (#723/#724, ADR-0064) as the Run's snapshot
-    /// froze it at start: `true` ⇒ the strong orchestrator↔children binding
-    /// holds this node's NodeRun. `false` (default) keeps every pre-#723 run
-    /// unbound; `skip_serializing_if` keeps the wire byte-identical when unset.
+    /// froze it at start. Since #1018 it only adds the `pdo-orchestrate` skill
+    /// and its invocation line, and announces a parent node: the strong
+    /// binding follows the node's REAL child runs, toggle or not. Still read by
+    /// the Stats node kind. `skip_serializing_if` keeps the wire byte-identical
+    /// when unset.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub orchestrator: bool,
     pub view_x: Option<f64>,
@@ -676,7 +678,7 @@ pub struct NodeState {
 pub struct AwaitingInfo {
     /// `declared` (`pdo wait-user`), `completion_not_released` (a refused
     /// `pdo complete` on an unreleased interactive node), `children_pending`
-    /// (the orchestrator binding marker, ADR-0064) or `child_awaiting` (derived
+    /// (the parent-node binding marker, ADR-0064) or `child_awaiting` (derived
     /// on read from an awaiting child run, never written to this run's log).
     pub cause: String,
     /// The prose the banner shows: the agent's question (capped at
@@ -1600,7 +1602,7 @@ fn upsert_iteration(iterations: &mut Vec<IterationInfo>, new: IterationInfo) {
 // --- Declared wait rule (#810, ADR-0069; shared since #980) -------------------
 
 /// The cause a `NodeAwaitingUser` carries. `declared_wait` writes `cause`; the
-/// orchestrator binding's marker writes `reason` (ADR-0064) — read both keys.
+/// parent-node binding's marker writes `reason` (ADR-0064) — read both keys.
 /// `None` = an event with no cause at all: **ignored**, never a wait. Only a
 /// pre-#810 spawn event could be in that shape (the primitive no longer writes
 /// one), and counting it as a wait would subtract time nobody waited.

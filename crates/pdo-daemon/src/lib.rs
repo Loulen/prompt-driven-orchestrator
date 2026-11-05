@@ -1122,26 +1122,54 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
     };
     let recoverable = body.get("recoverable").and_then(|v| v.as_bool());
 
+    let out = complete_refusal_text(slug, recoverable, status, &body);
+    eprintln!("{out}");
+
+    match recoverable {
+        Some(true) => std::process::ExitCode::from(EXIT_REFUSED_RECOVERABLE),
+        // Unknown recoverability is treated as terminal: the expensive mistake is
+        // appending a second failure, not skipping a retry.
+        Some(false) | None => std::process::ExitCode::from(EXIT_REFUSED_TERMINAL),
+    }
+}
+
+/// What `pdo complete` prints on a refusal (#490, ADR-0035 §4): the headline
+/// says whose turn it is, the middle what is wrong, the tail what to do. Pure, so
+/// the wording an agent acts on is pinned by unit tests.
+///
+/// `children_pending` (#724, #1018 / ADR-0064) gets its own wording: the node is
+/// held by its child runs, never FAILED — with a failed child it is parked
+/// awaiting the user — and the agent of ANY parent node (no `pdo-orchestrate`
+/// skill needed) is told to wait with `pdo run wait --all`.
+fn complete_refusal_text(
+    slug: &str,
+    recoverable: Option<bool>,
+    status: reqwest::StatusCode,
+    body: &serde_json::Value,
+) -> String {
+    if slug == "children_pending" && recoverable.is_some() {
+        return children_pending_refusal_text(recoverable == Some(true), body);
+    }
     let mut out = String::new();
     match recoverable {
         Some(true) => out.push_str(&format!(
             "pdo complete REFUSED — {}. The node is still running; it is still your turn.\n",
-            refusal_headline(slug, &body)
+            refusal_headline(slug, body)
         )),
         Some(false) => out.push_str(&format!(
             "pdo complete REFUSED and the node is now FAILED — {}.\n\
              The daemon has already recorded the terminal event. `resume_run` is the only lever.\n",
-            refusal_headline(slug, &body)
+            refusal_headline(slug, body)
         )),
         // No `recoverable` key: an older daemon. Say so instead of guessing which
         // side of the fence we are on.
         None => out.push_str(&format!(
             "pdo complete REFUSED — {} (daemon returned {status} without a `recoverable` \
              flag, so whether the node is still yours is unknown).\n",
-            refusal_headline(slug, &body)
+            refusal_headline(slug, body)
         )),
     }
-    out.push_str(&refusal_detail_lines(slug, &body));
+    out.push_str(&refusal_detail_lines(slug, body));
     out.push_str(match (slug, recoverable) {
         ("completion_not_released", Some(true)) => {
             "The node and its run are now awaiting the user (the daemon declared the \
@@ -1159,13 +1187,32 @@ pub fn run_complete(auto: bool) -> std::process::ExitCode {
         }
         (_, None) => "Re-read the run state before acting. Do NOT run `pdo fail` blindly.",
     });
-    eprintln!("{out}");
+    out
+}
 
-    match recoverable {
-        Some(true) => std::process::ExitCode::from(EXIT_REFUSED_RECOVERABLE),
-        // Unknown recoverability is treated as terminal: the expensive mistake is
-        // appending a second failure, not skipping a retry.
-        Some(false) | None => std::process::ExitCode::from(EXIT_REFUSED_TERMINAL),
+/// The `children_pending` arm of [`complete_refusal_text`].
+fn children_pending_refusal_text(still_your_turn: bool, body: &serde_json::Value) -> String {
+    let message = body
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("this node is held by its child runs");
+    if still_your_turn {
+        format!(
+            "pdo complete REFUSED (children_pending) — {message}.\n\
+             The node is NOT failed: it is held until every child run it created is \
+             terminal.\n\
+             Run `pdo run wait --all` (it returns when your child runs have settled), then run \
+             `pdo complete` again — once they are all terminal without failure, PDO also \
+             completes the node by itself.\n\
+             Do NOT run `pdo fail`."
+        )
+    } else {
+        format!(
+            "pdo complete REFUSED (children_pending) — {message}.\n\
+             The node is NOT failed: it is now awaiting the user, who decides — retry the \
+             failed child run, or force-complete the node.\n\
+             Say which child failed and stop here. Do NOT run `pdo fail`."
+        )
     }
 }
 
@@ -18430,8 +18477,8 @@ pub(crate) enum CompletionSource {
     /// fallback. Records `NodeAutoCompleted` like `TurnEnded`, differing only in the
     /// log label. The two are idempotent: whichever arrives second gets a `NoOp`.
     StopHook,
-    /// The strong binding settled (#724 / ADR-0064): the binding-parked
-    /// orchestrator node's watcher saw every child run terminal with no failure
+    /// The strong binding settled (#724, #1018 / ADR-0064): the binding-parked
+    /// parent node's watcher saw every child run terminal with no failure
     /// and completed the node itself — « le nœud se complète ». Goes through the
     /// SAME body as every other source (`complete_node_iteration`); the payload
     /// signs WHO decided: the binding, not the agent.
@@ -19304,22 +19351,18 @@ pub(crate) async fn complete_node_iteration(
         return CompletionAttempt::refused(refusal);
     }
 
-    // Liaison forte orchestrateur ↔ enfants (#724 / ADR-0064): a node with the
-    // « Orchestrator » toggle does not terminate while its child runs are
-    // non-terminal. The gate sits after the transition guard but BEFORE any
-    // effect (delivery, validation): a refusal leaves the node alive and its
-    // session intact — and, with a `failed` child, parks the node
-    // `AwaitingUser` for the user's arbitration (retry the child, or force
-    // through `mark_node_done`, which is deliberately NOT gated).
-    if let Some(refusal) = run_advance::orchestrator_binding_refusal(
-        state,
-        &events,
-        &pre_run_state,
-        &run_id,
-        &node_id,
-        iter,
-    )
-    .await
+    // Liaison forte nœud parent ↔ enfants (#724, #1018 / ADR-0064): ANY node
+    // whose session created child runs (agent or `script`, Orchestrator toggle
+    // or not) does not terminate while those children are non-terminal — the
+    // gate reads the real children, never the toggle. It holds every source
+    // that reaches this body (explicit, Stop hook, TurnEnded, end of script).
+    // The gate sits after the transition guard but BEFORE any effect
+    // (delivery, validation): a refusal leaves the node alive and its session
+    // intact — and, with a `failed` child, parks the node `AwaitingUser` for
+    // the user's arbitration (retry the child, or force through
+    // `mark_node_done`, which is deliberately NOT gated).
+    if let Some(refusal) =
+        run_advance::parent_node_binding_refusal(state, &events, &run_id, &node_id, iter).await
     {
         return CompletionAttempt::refused(refusal);
     }
@@ -24480,6 +24523,77 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use tower::util::ServiceExt;
+
+    /// #1018 — what `pdo complete` prints on a `children_pending` refusal is
+    /// enough for an agent WITHOUT the `pdo-orchestrate` skill: it names
+    /// `pdo run wait --all`, never says « orchestrator », and never claims the
+    /// node FAILED — it is held, or (failed child) awaiting the user.
+    #[test]
+    fn the_children_pending_cli_text_points_to_pdo_run_wait_and_never_says_failed() {
+        let active = serde_json::json!({
+            "error": "children_pending",
+            "recoverable": true,
+            "message": "node `worker` is held by its child runs: 1 active — wait for them \
+                        with `pdo run wait --all`, then complete again",
+        });
+        let text = complete_refusal_text(
+            "children_pending",
+            Some(true),
+            reqwest::StatusCode::CONFLICT,
+            &active,
+        );
+        assert!(text.contains("pdo run wait --all"), "{text}");
+        assert!(text.contains("pdo complete` again"), "{text}");
+        assert!(text.contains("Do NOT run `pdo fail`"), "{text}");
+        assert!(
+            text.contains("children_pending"),
+            "the slug is visible: {text}"
+        );
+        assert!(!text.contains("orchestrator"), "{text}");
+        assert!(!text.contains("now FAILED"), "{text}");
+
+        let failed = serde_json::json!({
+            "error": "children_pending",
+            "recoverable": false,
+            "message": "node `worker` is held by its child runs: 0 active, 1 failed — the node \
+                        is awaiting the user: retry the failed child run or force-complete the node",
+        });
+        let text = complete_refusal_text(
+            "children_pending",
+            Some(false),
+            reqwest::StatusCode::CONFLICT,
+            &failed,
+        );
+        assert!(
+            !text.contains("now FAILED"),
+            "the node is NOT failed: {text}"
+        );
+        assert!(text.contains("awaiting the user"), "{text}");
+        assert!(text.contains("Do NOT run `pdo fail`"), "{text}");
+        assert!(!text.contains("orchestrator"), "{text}");
+    }
+
+    /// The other slugs keep their pre-#1018 text.
+    #[test]
+    fn other_refusals_keep_their_cli_text() {
+        let body = serde_json::json!({ "error": "missing_outputs", "missing": ["out"] });
+        let text = complete_refusal_text(
+            "missing_outputs",
+            Some(true),
+            reqwest::StatusCode::CONFLICT,
+            &body,
+        );
+        assert!(text.contains("it is still your turn"), "{text}");
+        assert!(text.contains("  - out"), "{text}");
+        let body = serde_json::json!({ "error": "frontmatter_retry_exhausted" });
+        let text = complete_refusal_text(
+            "frontmatter_retry_exhausted",
+            Some(false),
+            reqwest::StatusCode::CONFLICT,
+            &body,
+        );
+        assert!(text.contains("the node is now FAILED"), "{text}");
+    }
 
     /// #541 — the startup banner must hand the user a URL the WS Origin guard
     /// accepts. `0.0.0.0` (and `::`) are listen-only and map to `localhost`;

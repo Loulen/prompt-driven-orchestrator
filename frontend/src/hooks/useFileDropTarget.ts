@@ -12,7 +12,11 @@ import { draggedFileCount, isFileDrag } from "../lib/skillFiles";
  * loses the session. Only file drags are claimed (the tree's own row drags keep
  * their `DataTransfer` types and are ignored here).
  */
-export function useFileDropTarget(onDrop: (dataTransfer: DataTransfer) => void, onEnter?: () => void) {
+export function useFileDropTarget(
+  onDrop: (dataTransfer: DataTransfer) => void,
+  onEnter?: (dataTransfer: DataTransfer) => void,
+  enabled = true,
+) {
   const [dragging, setDragging] = useState<number | null>(null);
   const depth = useRef(0);
 
@@ -30,35 +34,41 @@ export function useFileDropTarget(onDrop: (dataTransfer: DataTransfer) => void, 
 
   const onDragEnter = useCallback(
     (event: React.DragEvent) => {
-      if (!isFileDrag(event.dataTransfer)) return;
+      if (!enabled || !isFileDrag(event.dataTransfer)) return;
       event.preventDefault();
       depth.current += 1;
       if (depth.current === 1) {
         setDragging(draggedFileCount(event.dataTransfer));
-        onEnter?.();
+        onEnter?.(event.dataTransfer);
       }
     },
-    [onEnter],
+    [onEnter, enabled],
   );
-  const onDragOver = useCallback((event: React.DragEvent) => {
-    if (!isFileDrag(event.dataTransfer)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
-  }, []);
-  const onDragLeave = useCallback((event: React.DragEvent) => {
-    if (!isFileDrag(event.dataTransfer)) return;
-    depth.current = Math.max(0, depth.current - 1);
-    if (depth.current === 0) setDragging(null);
-  }, []);
+  const onDragOver = useCallback(
+    (event: React.DragEvent) => {
+      if (!enabled || !isFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    },
+    [enabled],
+  );
+  const onDragLeave = useCallback(
+    (event: React.DragEvent) => {
+      if (!enabled || !isFileDrag(event.dataTransfer)) return;
+      depth.current = Math.max(0, depth.current - 1);
+      if (depth.current === 0) setDragging(null);
+    },
+    [enabled],
+  );
   const handleDrop = useCallback(
     (event: React.DragEvent) => {
-      if (!isFileDrag(event.dataTransfer)) return;
+      if (!enabled || !isFileDrag(event.dataTransfer)) return;
       event.preventDefault();
       depth.current = 0;
       setDragging(null);
       onDrop(event.dataTransfer);
     },
-    [onDrop],
+    [onDrop, enabled],
   );
 
   return {

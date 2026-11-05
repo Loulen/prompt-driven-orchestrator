@@ -2540,9 +2540,35 @@ export function cancelSkillScan(scanId: string): Promise<{ cancelled: boolean }>
   return request("POST", `/settings/skills/scan/${encodeURIComponent(scanId)}/cancel`);
 }
 
+/**
+ * Scan an uploaded `.zip` (#1027, the **file** Source): an Archive de skills,
+ * a pipeline's skills sidecar, or any zip of `SKILL.md` folders. The bytes go
+ * to the daemon (which may run on another machine) as base64 — the bank's file
+ * convention for the pipeline sidecar — and are read in the scan's temp folder.
+ */
+export async function scanSkillArchive(scanId: string, file: Blob, fileName: string): Promise<SkillScanResult> {
+  const data = await blobToBase64(file);
+  return request("POST", "/settings/skills/scan", {
+    body: { scan_id: scanId, archive: { file_name: fileName, data } },
+  });
+}
+
+/** The base64 of a blob, without the `data:` prefix. */
+export async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < buffer.length; i += chunk) {
+    binary += String.fromCharCode(...buffer.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 export function importSkills(body: {
   scan_id: string;
+  /** The typed source, or the archive's file name with `kind: "file"`. */
   source: string;
+  kind?: "file";
   folder?: { id?: string | null; name?: string | null; parent_id?: string | null };
   items: SkillImportItem[];
 }): Promise<SkillImportReport> {

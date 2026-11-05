@@ -2497,3 +2497,582 @@ async fn fp1026_an_unzipped_archive_is_a_valid_local_folder_source() {
     let pdf_row = candidates.iter().find(|c| c["name"] == "pdf").unwrap();
     assert_eq!(pdf_row["file_count"], 1, "{body}");
 }
+
+// ---------------------------------------------------------------------------
+// Import d'archive (pdo-issues#2, #1027, ADR-0082): a dropped `.zip` is a Source
+// ---------------------------------------------------------------------------
+
+/// Scan an uploaded archive, as the import popup does (base64 in the body).
+async fn scan_archive(
+    daemon: &TestDaemon,
+    scan_id: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> (StatusCode, serde_json::Value) {
+    use base64::Engine as _;
+    let resp = post_json(
+        daemon,
+        "/settings/skills/scan",
+        serde_json::json!({
+            "scan_id": scan_id,
+            "archive": {
+                "file_name": file_name,
+                "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+            },
+        }),
+    )
+    .await;
+    let status = resp.status();
+    (status, resp.json().await.unwrap())
+}
+
+async fn import_archive(
+    daemon: &TestDaemon,
+    scan_id: &str,
+    file_name: &str,
+    folder: serde_json::Value,
+    items: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let resp = post_json(
+        daemon,
+        "/settings/skills/import",
+        serde_json::json!({
+            "scan_id": scan_id,
+            "source": file_name,
+            "kind": "file",
+            "folder": folder,
+            "items": items,
+        }),
+    )
+    .await;
+    let status = resp.status();
+    (status, resp.json().await.unwrap())
+}
+
+fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in entries {
+        zip.start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+fn skill_md_of(name: &str) -> String {
+    format!("---\nname: {name}\ndescription: The {name} method.\n---\n\n# {name}\n\nBody.\n")
+}
+
+fn candidate<'a>(scan: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    scan["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == name)
+        .unwrap_or_else(|| panic!("no candidate `{name}` in {scan}"))
+}
+
+async fn export_bytes(daemon: &TestDaemon, ids: &[&str], file_name: &str) -> Vec<u8> {
+    let resp = export_archive(
+        daemon,
+        serde_json::json!({ "ids": ids, "file_name": file_name }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    resp.bytes().await.unwrap().to_vec()
+}
+
+/// FP steps 1–3: export two skills → the archive dropped back is « already up to
+/// date »; one of them deleted → it is offered for creation **with its id**, and
+/// lands in a new folder named after the file, tagged « file », with no update.
+#[tokio::test]
+async fn fp1027_reimport_is_up_to_date_then_a_deleted_skill_comes_back_with_its_id() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let review = create_named_skill(&daemon, "code-review").await;
+    let checklist = create_named_skill(&daemon, "review-checklist").await;
+    let review_id = review["id"].as_str().unwrap().to_string();
+    let checklist_id = checklist["id"].as_str().unwrap().to_string();
+    upload(
+        &daemon,
+        &review_id,
+        &[
+            ("path", None, b"scripts/run.sh"),
+            ("file", Some("run.sh"), b"#!/bin/sh\necho ok\n"),
+        ],
+    )
+    .await;
+    let bytes = export_bytes(&daemon, &[&review_id, &checklist_id], "team-review").await;
+
+    // Step 2: both known with identical content.
+    let (status, scan) = scan_archive(&daemon, "a-1", "team-review.zip", &bytes).await;
+    assert_eq!(status, StatusCode::OK, "{scan}");
+    assert_eq!(scan["source"]["kind"], "file");
+    assert_eq!(scan["source"]["url"], "team-review.zip");
+    assert_eq!(scan["source"]["suggested_folder"], "team-review");
+    assert!(scan["commit"].is_null());
+    assert_eq!(scan["archive"]["format"], "pdo_archive");
+    assert_eq!(scan["archive"]["file_name"], "team-review.zip");
+    assert!(scan["archive"]["existing_folder"].is_null(), "{scan}");
+    assert_eq!(scan["archive"]["new_folder_name"], "team-review");
+    for (name, id) in [
+        ("code-review", &review_id),
+        ("review-checklist", &checklist_id),
+    ] {
+        let row = candidate(&scan, name);
+        assert_eq!(row["status"], "id_up_to_date", "{scan}");
+        assert_eq!(row["id"], id.as_str());
+        assert_eq!(row["existing"]["id"], id.as_str());
+    }
+    // A scan never writes, nor remembers a file as a recent source.
+    let recent = get_json(&daemon, "/settings/skills/sources/recent").await;
+    assert_eq!(recent["sources"], serde_json::json!([]), "{recent}");
+
+    // Step 3: delete one → it is new, id kept.
+    let resp = reqwest::Client::new()
+        .delete(format!("{}/settings/skills/{review_id}", daemon.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let (_, scan) = scan_archive(&daemon, "a-2", "team-review.zip", &bytes).await;
+    let row = candidate(&scan, "code-review");
+    assert_eq!(row["status"], "new", "{scan}");
+    assert_eq!(row["id"], review_id.as_str());
+    assert_eq!(row["file_count"], 1);
+    assert_eq!(
+        candidate(&scan, "review-checklist")["status"],
+        "id_up_to_date"
+    );
+
+    let (status, report) = import_archive(
+        &daemon,
+        "a-2",
+        "team-review.zip",
+        serde_json::json!({ "name": "team-review" }),
+        serde_json::json!([{ "path": "code-review", "action": "import" }]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["failed"], serde_json::json!([]));
+    assert_eq!(report["imported"][0]["skill"]["id"], review_id.as_str());
+    let folder = &report["folder"];
+    assert_eq!(folder["name"], "team-review");
+    assert_eq!(folder["source"]["kind"], "file");
+    assert_eq!(folder["source"]["url"], "team-review.zip");
+    assert!(folder["source"]["commit"].is_null());
+    assert!(folder["source"]["ref"].is_null());
+    let folder_id = folder["id"].as_str().unwrap().to_string();
+
+    let detail = get_json(&daemon, &format!("/settings/skills/{review_id}")).await;
+    assert_eq!(detail["folder_id"], folder_id.as_str(), "{detail}");
+    assert_eq!(detail["source"]["kind"], "file");
+    assert_eq!(detail["source"]["url"], "team-review.zip");
+    assert_eq!(detail["source"]["path"], "code-review");
+    assert_eq!(
+        detail["files"],
+        serde_json::json!([{ "path": "scripts/run.sh", "size": 18 }])
+    );
+
+    // One-shot: no rescan / update on a folder imported from a file.
+    let resp = post_json(
+        &daemon,
+        &format!("/settings/skill-folders/{folder_id}/rescan"),
+        serde_json::json!({ "scan_id": "a-3" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "archive_folder", "{body}");
+}
+
+/// FP step 5: a folder named after the file exists → the scan says so and
+/// proposes a free suffixed name; **merge** files the created skills in it and
+/// leaves its provenance alone; **new folder** creates the suffixed one.
+#[tokio::test]
+async fn fp1027_merge_into_the_existing_folder_or_create_a_new_one() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let existing: serde_json::Value = post_json(
+        &daemon,
+        "/settings/skill-folders",
+        serde_json::json!({ "name": "team-review" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let existing_id = existing["id"].as_str().unwrap();
+    let bytes = zip_of(&[
+        ("alpha/SKILL.md", skill_md_of("alpha").as_bytes()),
+        ("beta/SKILL.md", skill_md_of("beta").as_bytes()),
+    ]);
+
+    let (_, scan) = scan_archive(&daemon, "m-1", "team-review.skills.zip", &bytes).await;
+    assert_eq!(scan["archive"]["format"], "plain_zip");
+    assert_eq!(scan["archive"]["existing_folder"]["id"], existing_id);
+    assert_eq!(scan["archive"]["existing_folder"]["name"], "team-review");
+    assert_eq!(scan["archive"]["new_folder_name"], "team-review 2");
+
+    // Merge: alpha joins the existing folder, which keeps no file provenance.
+    let (status, report) = import_archive(
+        &daemon,
+        "m-1",
+        "team-review.skills.zip",
+        serde_json::json!({ "id": existing_id }),
+        serde_json::json!([{ "path": "alpha", "action": "import" }]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["folder"]["id"], existing_id);
+    assert!(report["folder"].get("source").is_none(), "{report}");
+    let alpha_id = report["imported"][0]["skill"]["id"].as_str().unwrap();
+    assert_ne!(alpha_id, "alpha", "a zip without manifest gets new ids");
+    let bank = get_json(&daemon, "/settings/skills").await;
+    let alpha = user_skills(&bank)
+        .into_iter()
+        .find(|s| s["name"] == "alpha")
+        .unwrap();
+    assert_eq!(alpha["folder_id"], existing_id);
+
+    // New folder: the suffixed name, a second root folder.
+    let (_, scan) = scan_archive(&daemon, "m-2", "team-review.skills.zip", &bytes).await;
+    assert_eq!(candidate(&scan, "alpha")["status"], "name_taken");
+    assert_eq!(candidate(&scan, "beta")["status"], "new");
+    let (status, report) = import_archive(
+        &daemon,
+        "m-2",
+        "team-review.skills.zip",
+        serde_json::json!({ "name": scan["archive"]["new_folder_name"] }),
+        serde_json::json!([{ "path": "beta", "action": "import" }]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["folder"]["name"], "team-review 2");
+    assert_ne!(report["folder"]["id"], existing_id);
+    assert_eq!(report["folder"]["source"]["kind"], "file");
+}
+
+/// FP step 4: the sidecar of a pipeline export is read too — the folder is the
+/// id; a re-zipped `<id>/` sidecar at the root as well.
+#[tokio::test]
+async fn fp1027_a_pipeline_sidecar_lists_its_skills_by_id() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let tdd = create_named_skill(&daemon, "tdd").await;
+    let tdd_id = tdd["id"].as_str().unwrap();
+    let on_disk = std::fs::read(skills_root(&daemon).join(tdd_id).join("SKILL.md")).unwrap();
+    let gone_id = "0b7c5f0e-8a2b-4d0e-9a51-4f1d2c3b4a59";
+    let bytes = zip_of(&[
+        (&format!("with-skills.skills/{tdd_id}/SKILL.md"), &on_disk),
+        (
+            &format!("with-skills.skills/{gone_id}/SKILL.md"),
+            skill_md_of("grilling").as_bytes(),
+        ),
+    ]);
+    let (status, scan) = scan_archive(&daemon, "s-1", "with-skills.skills.zip", &bytes).await;
+    assert_eq!(status, StatusCode::OK, "{scan}");
+    assert_eq!(scan["archive"]["format"], "pipeline_sidecar");
+    assert_eq!(scan["source"]["suggested_folder"], "with-skills");
+    assert_eq!(candidate(&scan, "tdd")["status"], "id_up_to_date");
+    assert_eq!(candidate(&scan, "grilling")["status"], "new");
+    assert_eq!(candidate(&scan, "grilling")["id"], gone_id);
+
+    let (_, report) = import_archive(
+        &daemon,
+        "s-1",
+        "with-skills.skills.zip",
+        serde_json::json!({ "name": "with-skills" }),
+        serde_json::json!([{ "path": format!("with-skills.skills/{gone_id}"), "action": "import" }]),
+    )
+    .await;
+    assert_eq!(report["failed"], serde_json::json!([]), "{report}");
+    assert_eq!(report["imported"][0]["skill"]["id"], gone_id);
+
+    // Re-zipped at the root: `<uuid>/SKILL.md`.
+    let bytes = zip_of(&[(
+        &format!("{gone_id}/SKILL.md"),
+        skill_md_of("grilling").as_bytes(),
+    )]);
+    let (_, scan) = scan_archive(&daemon, "s-2", "sidecar.zip", &bytes).await;
+    assert_eq!(scan["archive"]["format"], "pipeline_sidecar");
+    assert_eq!(candidate(&scan, "grilling")["status"], "id_up_to_date");
+}
+
+/// Statuses by id: a seeded id is `locked` (never importable); a known id with
+/// another content is left as is here (`id_changed`); an unknown id whose name
+/// is taken keeps the name rules; an invalid `SKILL.md` is greyed.
+#[tokio::test]
+async fn fp1027_seeded_ids_are_locked_and_name_rules_still_apply_without_a_known_id() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let tdd = create_named_skill(&daemon, "tdd").await;
+    let tdd_id = tdd["id"].as_str().unwrap();
+    let interactive = std::fs::read(
+        skills_root(&daemon)
+            .join("pdo-interactive")
+            .join("SKILL.md"),
+    )
+    .unwrap();
+    let manifest = serde_json::json!({
+        "format": "pdo-skills",
+        "version": 1,
+        "exported_at": "2026-11-05T10:00:00Z",
+        "skills": [
+            { "folder": "pdo-interactive", "id": "pdo-interactive", "name": "pdo-interactive" },
+            { "folder": "tdd", "id": tdd_id, "name": "tdd" },
+            { "folder": "tdd-copy", "id": "other-id-1", "name": "tdd" },
+            { "folder": "broken", "id": "other-id-2", "name": "broken" },
+        ],
+    })
+    .to_string();
+    let changed = "---\nname: tdd\ndescription: A newer tdd.\n---\n\n# tdd\n\nNew body.\n";
+    let bytes = zip_of(&[
+        ("pdo-interactive/SKILL.md", &interactive),
+        ("tdd/SKILL.md", changed.as_bytes()),
+        ("tdd-copy/SKILL.md", skill_md_of("tdd").as_bytes()),
+        (
+            "broken/SKILL.md",
+            b"---\nname: broken\n---\n\nno description\n",
+        ),
+        ("pdo-skills.json", manifest.as_bytes()),
+    ]);
+    let (status, scan) = scan_archive(&daemon, "l-1", "x.zip", &bytes).await;
+    assert_eq!(status, StatusCode::OK, "{scan}");
+    let rows = scan["candidates"].as_array().unwrap();
+    let by_path = |path: &str| rows.iter().find(|c| c["path"] == path).unwrap();
+    assert_eq!(by_path("pdo-interactive")["status"], "locked");
+    assert_eq!(by_path("tdd")["status"], "id_changed");
+    assert_eq!(by_path("tdd")["existing"]["id"], tdd_id);
+    assert_eq!(by_path("tdd-copy")["status"], "name_taken");
+    assert_eq!(by_path("tdd-copy")["id"], "other-id-1");
+    assert_eq!(by_path("broken")["status"], "invalid");
+
+    // Even sent, neither the locked nor the known id is written over.
+    let (status, report) = import_archive(
+        &daemon,
+        "l-1",
+        "x.zip",
+        serde_json::json!({ "name": "x" }),
+        serde_json::json!([
+            { "path": "pdo-interactive", "action": "import" },
+            { "path": "tdd", "action": "import" },
+            { "path": "tdd-copy", "action": "rename", "name": "tdd-imported" },
+        ]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    let failed = report["failed"].as_array().unwrap();
+    assert_eq!(failed.len(), 2, "{report}");
+    assert_eq!(failed[0]["code"], "locked");
+    assert_eq!(failed[1]["code"], "id_known");
+    // The renamed one is created with the archive's id.
+    assert_eq!(report["imported"][0]["skill"]["id"], "other-id-1");
+    assert_eq!(report["imported"][0]["skill"]["name"], "tdd-imported");
+    let detail = get_json(&daemon, &format!("/settings/skills/{tdd_id}")).await;
+    assert_eq!(detail["content"], skill_md_of("tdd"), "untouched");
+}
+
+/// Clear refusals: not a zip, a corrupted zip, a path-traversal entry, no
+/// `SKILL.md`, bad base64 — all before anything is written.
+#[tokio::test]
+async fn fp1027_unreadable_archives_are_refused_with_a_named_reason() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        ("notes.pdf", b"%PDF-1.7 not a zip".to_vec(), "not_a_zip"),
+        (
+            "broken.zip",
+            b"PK\x03\x04garbage".to_vec(),
+            "corrupt_archive",
+        ),
+        (
+            "evil.zip",
+            zip_of(&[
+                ("a/SKILL.md", skill_md_of("a").as_bytes()),
+                ("../../escape.sh", b"rm -rf /"),
+            ]),
+            "unsafe_entry",
+        ),
+        (
+            "empty.zip",
+            zip_of(&[("readme.txt", b"hello")]),
+            "no_skills",
+        ),
+    ];
+    for (file_name, bytes, code) in cases {
+        let (status, body) = scan_archive(&daemon, "e-1", file_name, &bytes).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{file_name}: {body}"
+        );
+        assert_eq!(body["code"], code, "{file_name}: {body}");
+        assert!(body["error"].as_str().unwrap().len() > 10, "{body}");
+    }
+    let resp = post_json(
+        &daemon,
+        "/settings/skills/scan",
+        serde_json::json!({ "scan_id": "e-2", "archive": { "file_name": "x.zip", "data": "%%%" } }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "invalid_upload");
+    assert!(!daemon.repo_root().join("escape.sh").exists());
+
+    // The client-chosen scan id names a temp folder: a path in it is refused
+    // before anything is deleted or written.
+    let victim = tempfile::tempdir().unwrap();
+    std::fs::write(victim.path().join("keep.txt"), "keep").unwrap();
+    let evil_id = format!("x/../../../../../../..{}", victim.path().display());
+    let (status, body) = scan_archive(
+        &daemon,
+        &evil_id,
+        "ok.zip",
+        &zip_of(&[("a/SKILL.md", skill_md_of("a").as_bytes())]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "invalid_scan_id");
+    assert!(victim.path().join("keep.txt").is_file());
+    assert!(!victim.path().join("a").exists());
+    let bank = get_json(&daemon, "/settings/skills").await;
+    assert_eq!(user_skills(&bank).len(), 0);
+
+    // An import against an unknown archive scan is a 410, never a re-scan.
+    let (status, body) = import_archive(
+        &daemon,
+        "nope",
+        "x.zip",
+        serde_json::json!({ "name": "x" }),
+        serde_json::json!([{ "path": "a", "action": "import" }]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+    assert_eq!(body["code"], "scan_expired");
+}
+
+/// A file over the bank's per-file limit fails its own row; the others import.
+#[tokio::test]
+async fn fp1027_a_file_over_the_per_file_limit_fails_on_its_row_only() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let big = vec![b'x'; 10 * 1024 * 1024 + 1];
+    let bytes = zip_of(&[
+        ("heavy/SKILL.md", skill_md_of("heavy").as_bytes()),
+        ("heavy/data/huge.bin", &big),
+        ("light/SKILL.md", skill_md_of("light").as_bytes()),
+    ]);
+    let (status, scan) = scan_archive(&daemon, "big-1", "mixed.zip", &bytes).await;
+    assert_eq!(status, StatusCode::OK, "{scan}");
+    let heavy = candidate(&scan, "heavy");
+    assert_eq!(heavy["status"], "invalid");
+    assert_eq!(heavy["code"], "file_too_large");
+    assert!(
+        heavy["reason"].as_str().unwrap().contains("data/huge.bin"),
+        "{heavy}"
+    );
+    assert_eq!(candidate(&scan, "light")["status"], "new");
+
+    let (status, report) = import_archive(
+        &daemon,
+        "big-1",
+        "mixed.zip",
+        serde_json::json!({ "name": "mixed" }),
+        serde_json::json!([
+            { "path": "heavy", "action": "import" },
+            { "path": "light", "action": "import" },
+        ]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["failed"][0]["path"], "heavy");
+    assert_eq!(report["failed"][0]["code"], "file_too_large");
+    assert_eq!(report["imported"].as_array().unwrap().len(), 1);
+    assert_eq!(report["imported"][0]["skill"]["name"], "light");
+}
+
+/// The round-trip of the AC: export on daemon A → import on a **fresh** daemon
+/// B, ids preserved → a pipeline referencing those ids then imports on B with no
+/// « skill absent » warning (no sidecar needed: the bank already has them).
+#[tokio::test]
+async fn fp1027_round_trip_a_to_b_keeps_ids_and_pipelines_resolve_them() {
+    let a = TestDaemon::spawn(seed_tier_pipeline).await.unwrap();
+    let tdd = create_named_skill(&a, "tdd").await;
+    let grilling = create_named_skill(&a, "grilling").await;
+    let tdd_id = tdd["id"].as_str().unwrap().to_string();
+    let grilling_id = grilling["id"].as_str().unwrap().to_string();
+    upload(
+        &a,
+        &tdd_id,
+        &[
+            ("path", None, b"examples/login.spec.ts"),
+            ("file", Some("login.spec.ts"), b"it('logs in')\n"),
+        ],
+    )
+    .await;
+    let skills_yaml = format!(
+        "    skills:\n      - id: {tdd_id}\n        name: tdd\n      - id: {grilling_id}\n        name: grilling\n"
+    );
+    let resp = put_json(
+        &a,
+        &format!("/pipelines/{TIER_PIPELINE}"),
+        serde_json::json!({ "yaml": tier_pipeline_yaml(&skills_yaml), "prompts": {} }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let document = reqwest::get(format!("{}/pipelines/{TIER_PIPELINE}/document", a.url()))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let archive = export_bytes(&a, &[&tdd_id, &grilling_id], "team-skills").await;
+
+    let b = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let (status, scan) = scan_archive(&b, "ab-1", "team-skills.zip", &archive).await;
+    assert_eq!(status, StatusCode::OK, "{scan}");
+    let items = scan["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            assert_eq!(c["status"], "new", "{scan}");
+            serde_json::json!({ "path": c["path"], "action": "import" })
+        })
+        .collect::<Vec<_>>();
+    let (status, report) = import_archive(
+        &b,
+        "ab-1",
+        "team-skills.zip",
+        serde_json::json!({ "name": "team-skills" }),
+        serde_json::Value::Array(items),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["failed"], serde_json::json!([]), "{report}");
+    let mut ids = report["imported"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["skill"]["id"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    ids.sort();
+    let mut expected = vec![tdd_id.clone(), grilling_id.clone()];
+    expected.sort();
+    assert_eq!(ids, expected, "ids preserved across instances");
+    let detail = get_json(&b, &format!("/settings/skills/{tdd_id}")).await;
+    assert_eq!(
+        detail["files"],
+        serde_json::json!([{ "path": "examples/login.spec.ts", "size": 14 }])
+    );
+
+    // The pipeline imported afterwards, without any sidecar, finds them.
+    let resp = post_json(
+        &b,
+        "/pipelines/import",
+        serde_json::json!({ "document": document }),
+    )
+    .await;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["warnings"], serde_json::json!([]), "{body}");
+    assert_eq!(body["skills"]["missing"], serde_json::json!([]), "{body}");
+}

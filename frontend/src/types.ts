@@ -2155,6 +2155,11 @@ export interface SkillProvenance {
   commit: string | null;
   /** `/`-separated path inside the source; `""` at its root. */
   path: string;
+  /**
+   * `"file"` for an Import d'archive (pdo-issues#2, #1027): `url` is then the
+   * archive's file name, with neither ref nor commit — one-shot, no update.
+   */
+  kind?: "file";
 }
 
 /** A Source folder's provenance: the scan root plus what the last import saw. */
@@ -2193,7 +2198,8 @@ export interface SkillFolder {
 
 /** The daemon's reading of a typed source (`POST /settings/skills/scan`). */
 export interface ParsedSkillSource {
-  kind: "git" | "local";
+  /** `file`: an uploaded `.zip` (#1027); `url` is its file name. */
+  kind: "git" | "local" | "file";
   url: string;
   ref: string | null;
   path: string;
@@ -2201,7 +2207,18 @@ export interface ParsedSkillSource {
   suggested_folder: string;
 }
 
-export type SkillCandidateStatus = "new" | "name_taken" | "same_commit" | "invalid";
+/**
+ * `id_up_to_date` / `id_changed` / `locked` (#1027) come from an archive whose
+ * candidates carry an id: the collision is judged by id before the name.
+ */
+export type SkillCandidateStatus =
+  | "new"
+  | "name_taken"
+  | "same_commit"
+  | "invalid"
+  | "id_up_to_date"
+  | "id_changed"
+  | "locked";
 
 /** One folder holding a `SKILL.md` at the source, with its collision status. */
 export interface SkillCandidate {
@@ -2212,8 +2229,23 @@ export interface SkillCandidate {
   reason?: string;
   code?: string;
   file_count: number;
+  /** The id an archive carries for this skill (#1027): kept on creation. */
+  id?: string;
   status: SkillCandidateStatus;
   existing?: { id: string; name: string; folder_id: string | null; folder_name: string | null };
+}
+
+/** The three layouts an archive is read as (#1027). */
+export type SkillArchiveFormat = "pdo_archive" | "pipeline_sidecar" | "plain_zip";
+
+/** What a scan of an uploaded archive adds: its layout and where skills land. */
+export interface SkillArchiveScan {
+  file_name: string;
+  format: SkillArchiveFormat;
+  /** A root folder already named after the file: merge into it, or a new one. */
+  existing_folder: { id: string; name: string } | null;
+  /** The first free name (`team-review 2`…), pre-filled for « New folder ». */
+  new_folder_name: string;
 }
 
 export interface SkillScanResult {
@@ -2224,6 +2256,8 @@ export interface SkillScanResult {
   /** When the sub-path held nothing: folders elsewhere in the repo that do. */
   elsewhere: string[];
   elsewhere_count: number;
+  /** Present for an uploaded archive (`source.kind === "file"`). */
+  archive?: SkillArchiveScan;
 }
 
 export type SkillImportAction = "import" | "replace" | "rename" | "skip";

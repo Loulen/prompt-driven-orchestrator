@@ -1,20 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Download, Folder, FolderOpen, GitBranch, HardDrive, Pencil, Search, X } from "lucide-react";
+import { Check, Download, FileArchive, Folder, FolderOpen, GitBranch, HardDrive, Lock, Pencil, Search, X } from "lucide-react";
 import {
   ApiError,
   cancelSkillScan,
   fetchRecentSkillSources,
   importSkills,
+  scanSkillArchive,
   scanSkillSource,
 } from "../api";
 import type {
   RecentSkillSource,
   SkillCandidate,
+  SkillCandidateStatus,
   SkillFolder,
   SkillImportItem,
   SkillImportReport,
   SkillScanResult,
 } from "../types";
+import { ARCHIVE_FORMAT_LABEL, archiveDestination, refuseArchive } from "../lib/skillArchive";
+import { useFileDropTarget } from "../hooks/useFileDropTarget";
+import SkillFileDropZone, { DropOverlay } from "./SkillFileDropZone";
 import { timeAgo } from "../lib/skillMd";
 import { displaySourceUrl, parseSkillSource, shortCommit } from "../lib/skillSource";
 import { folderPathLabel } from "../lib/skillTree";
@@ -53,7 +58,7 @@ interface ScanError {
 }
 
 const HOW_IT_WORKS = [
-  "Point at a source",
+  "Point at a source, or drop a .zip",
   "Scan finds every SKILL.md",
   "Check the skills to import",
   "They land in a folder named after the source",
@@ -84,6 +89,27 @@ function needsResolution(candidate: SkillCandidate): boolean {
   return candidate.status === "name_taken" || candidate.status === "same_commit";
 }
 
+/**
+ * Statuses of an archive row whose **id** the bank already has (#1027): left
+ * as is, greyed and never checkable — « already up to date », « changed » (the
+ * per-row choice is #1028) or « managed by PDO ».
+ */
+const KEPT_BY_ID: ReadonlySet<SkillCandidateStatus> = new Set(["id_up_to_date", "id_changed", "locked"]);
+
+/** Can the row be checked at all? */
+function isSelectable(candidate: SkillCandidate): boolean {
+  return candidate.valid && !KEPT_BY_ID.has(candidate.status);
+}
+
+const ARCHIVE_HINT = "A .zip only — a PDO skills archive, a pipeline's skills sidecar, or any zip of SKILL.md folders";
+
+/** The in-place refusal of a dropped file (never a modal over this modal). */
+interface ArchiveRefusal {
+  title: string;
+  message: string;
+  /** Add the « drop a PDO archive… » advice (the daemon's `no_skills` already says it). */
+  advise: boolean;
+}
 function defaultRow(candidate: SkillCandidate): RowState {
   return {
     checked: candidate.status === "new" || candidate.status === "name_taken",
@@ -126,6 +152,12 @@ export default function ImportSkillsModal({
   const [importError, setImportError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [touched, setTouched] = useState(false);
+  /** The `.zip` being read or listed (#1027); `null` for a typed source. */
+  const [archiveFile, setArchiveFile] = useState<File | null>(null);
+  const [archiveRefusal, setArchiveRefusal] = useState<ArchiveRefusal | null>(null);
+  /** Destination of an archive whose folder already exists: merge or new (default). */
+  const [destChoice, setDestChoice] = useState<"new" | "merge">("new");
+  const [dropName, setDropName] = useState<string | null>(null);
   const scanIdRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -141,21 +173,36 @@ export default function ImportSkillsModal({
   // ---- scan ---------------------------------------------------------------
 
   const runScan = useCallback(
-    async (source: string) => {
+    async (source: string | File) => {
       const id = newScanId();
       scanIdRef.current = id;
+      const isFile = typeof source !== "string";
       setStep("scanning");
       setScanError(null);
+      setArchiveRefusal(null);
+      setArchiveFile(isFile ? source : null);
       setScan(null);
       setFailedRows(new Map());
       setDoneRows(new Set());
       setImportError(null);
+      setTouched(false);
       try {
-        const result = await scanSkillSource(id, source);
+        const result = isFile ? await scanSkillArchive(id, source, source.name) : await scanSkillSource(id, source);
         if (scanIdRef.current !== id) return; // cancelled or superseded
         setScan(result);
         setRows(new Map(result.candidates.map((c) => [c.path, defaultRow(c)])));
-        setFolderName(result.source.suggested_folder);
+        if (result.archive) {
+          // Created skills land in a folder named after the file; when it exists
+          // the default is a new, suffixed one (the user may merge instead).
+          const dest =
+            parentId === null
+              ? { newName: result.archive.new_folder_name }
+              : archiveDestination(result.source.suggested_folder, folders, parentId);
+          setFolderName(dest.newName);
+          setDestChoice("new");
+        } else {
+          setFolderName(result.source.suggested_folder);
+        }
         setIntoFolderId(null);
         setStep("results");
       } catch (cause) {
@@ -164,14 +211,21 @@ export default function ImportSkillsModal({
           cause instanceof ApiError && typeof (cause.body as { code?: unknown } | null)?.code === "string"
             ? ((cause.body as { code: string }).code)
             : "";
-        setScanError({
-          code,
-          message: cause instanceof Error ? cause.message : "Scan failed",
-        });
+        const message = cause instanceof Error ? cause.message : "Scan failed";
+        if (isFile) {
+          setArchiveFile(null);
+          setArchiveRefusal({
+            title: code === "archive_too_large" ? "Archive too large." : "Not a skills archive.",
+            message,
+            advise: code !== "no_skills" && code !== "archive_too_large",
+          });
+        } else {
+          setScanError({ code, message });
+        }
         setStep("source");
       }
     },
-    [],
+    [folders, parentId],
   );
 
   const cancelScan = useCallback(() => {
@@ -188,10 +242,31 @@ export default function ImportSkillsModal({
 
   const changeSource = () => {
     setScan(null);
+    setArchiveFile(null);
     setStep("source");
     setTouched(false);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
+
+  /** A `.zip` dropped anywhere on the popup or picked with Browse… (#1027). */
+  const acceptArchive = (files: ArrayLike<File>) => {
+    if (step === "scanning" || step === "importing" || files.length === 0) return;
+    const refusal = refuseArchive(files);
+    if (refusal) {
+      setScan(null);
+      setArchiveFile(null);
+      setStep("source");
+      setArchiveRefusal({ title: "Not a skills archive.", message: refusal, advise: true });
+      return;
+    }
+    void runScan(files[0]);
+  };
+
+  const { dragging, handlers: dropHandlers } = useFileDropTarget(
+    (dataTransfer) => acceptArchive(dataTransfer.files),
+    (dataTransfer) => setDropName(dataTransfer.files?.[0]?.name ?? null),
+    step === "source" || step === "results",
+  );
 
   // ---- selection ----------------------------------------------------------
 
@@ -212,7 +287,7 @@ export default function ImportSkillsModal({
       const next = new Map(prev);
       for (const candidate of candidates) {
         const current = next.get(candidate.path);
-        if (current && candidate.valid && !doneRows.has(candidate.path)) {
+        if (current && isSelectable(candidate) && !doneRows.has(candidate.path)) {
           next.set(candidate.path, { ...current, checked: true });
         }
       }
@@ -268,7 +343,7 @@ export default function ImportSkillsModal({
     let files = 0;
     for (const candidate of candidates) {
       const row = rows.get(candidate.path);
-      if (!row || !candidate.valid || doneRows.has(candidate.path)) continue;
+      if (!row || !isSelectable(candidate) || doneRows.has(candidate.path)) continue;
       if (!row.checked) {
         // A same-commit duplicate is "already present", not "unchecked".
         if (candidate.status !== "same_commit") unchecked += 1;
@@ -294,25 +369,42 @@ export default function ImportSkillsModal({
       }
       files += candidate.file_count;
     }
-    const invalid = candidates.filter((c) => !c.valid).length;
+    const invalid = candidates.filter((c) => !c.valid && c.status !== "locked").length;
     const sameCommit = candidates.filter((c) => c.status === "same_commit").length;
-    return { willImport, unresolved, unchecked, invalid, sameCommit, files };
+    const upToDate = candidates.filter((c) => c.status === "id_up_to_date").length;
+    const changed = candidates.filter((c) => c.status === "id_changed").length;
+    const locked = candidates.filter((c) => c.status === "locked").length;
+    return { willImport, unresolved, unchecked, invalid, sameCommit, upToDate, changed, locked, files };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidates, rows, doneRows, existingNames, renameTargets]);
+
+  const isArchive = scan?.source.kind === "file";
+  /**
+   * An archive's destination (#1027): the folder already named after the file
+   * under the chosen parent — the daemon reports it at the root — offered for
+   * merge, else a new folder.
+   */
+  const archiveExisting = useMemo((): { id: string; name: string } | null => {
+    if (!scan?.archive) return null;
+    if (parentId === null) return scan.archive.existing_folder;
+    return archiveDestination(scan.source.suggested_folder, folders, parentId).existing;
+  }, [scan, folders, parentId]);
+  const mergeInto = isArchive && destChoice === "merge" ? archiveExisting : null;
 
   const intoFolder = intoFolderId ? folders.find((f) => f.id === intoFolderId) ?? null : null;
   /** A sibling folder already carrying the destination name: warn, offer to reuse it. */
   const homonym = useMemo(() => {
     const needle = folderName.trim().toLowerCase();
-    if (!needle || intoFolderId) return null;
+    if (!needle || intoFolderId || isArchive) return null;
     return folders.find((f) => f.name.toLowerCase() === needle && (f.parent_id ?? null) === parentId) ?? null;
-  }, [folders, folderName, parentId, intoFolderId]);
+  }, [folders, folderName, parentId, intoFolderId, isArchive]);
 
   const canImport =
     step === "results" &&
     summary.willImport.length > 0 &&
     summary.unresolved === 0 &&
-    (intoFolder !== null || folderName.trim() !== "");
+    (intoFolder !== null || mergeInto !== null || folderName.trim() !== "");
+  const destinationName = mergeInto?.name ?? intoFolder?.name ?? folderName;
 
   // ---- import -------------------------------------------------------------
 
@@ -326,12 +418,16 @@ export default function ImportSkillsModal({
       ...(action === "rename" ? { name: as } : {}),
     }));
     try {
-      const report = await importSkills({
-        scan_id: scan.scan_id,
-        source: text,
-        folder: intoFolder ? { id: intoFolder.id } : { name: folderName.trim(), parent_id: parentId },
-        items,
-      });
+      const folder = mergeInto
+        ? { id: mergeInto.id }
+        : intoFolder
+          ? { id: intoFolder.id }
+          : { name: folderName.trim(), parent_id: parentId };
+      const report = await importSkills(
+        isArchive
+          ? { scan_id: scan.scan_id, source: scan.source.url, kind: "file", folder, items }
+          : { scan_id: scan.scan_id, source: text, folder, items },
+      );
       const complete = report.failed.length === 0;
       if (complete) {
         await onImported(report, true);
@@ -420,13 +516,18 @@ export default function ImportSkillsModal({
       data-testid="import-skills-backdrop"
     >
       <div
-        className="flex w-[1020px] max-w-[96vw] max-h-[88vh] flex-col rounded-lg border border-line bg-bg-4 shadow-xl"
+        className="relative flex w-[1020px] max-w-[96vw] max-h-[88vh] flex-col rounded-lg border border-line bg-bg-4 shadow-xl"
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-label="Import skills from a source"
         data-testid="import-skills-modal"
         data-step={step}
+        {...dropHandlers}
       >
+        {/* #1027: the whole popup accepts a dropped .zip. */}
+        {dragging !== null && (
+          <DropOverlay count={dragging} title={`Drop to import ${dropName ?? "the .zip"}`} hint={ARCHIVE_HINT} />
+        )}
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
           <h3 className="flex items-center gap-2 font-semibold text-fg" style={{ fontSize: "13.5px" }}>
             <Download size={14} className="text-fg-3" />
@@ -450,10 +551,31 @@ export default function ImportSkillsModal({
                 className="flex items-center gap-2 rounded-md border border-acc/50 bg-bg-1 px-3 py-2"
                 data-testid="import-source-line"
               >
-                <GitBranch size={12} className="shrink-0 text-fg-4" />
-                <span className="min-w-0 flex-1 truncate text-fg" style={{ fontSize: "11.5px" }}>
-                  {text.trim()}
-                </span>
+                {isArchive && scan ? (
+                  <>
+                    <FileArchive size={12} className="shrink-0 text-fg-4" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-fg" style={{ fontSize: "11.5px" }} data-testid="import-archive-name">
+                      {scan.source.url}
+                    </span>
+                    {scan.archive && (
+                      <span
+                        className="whitespace-nowrap rounded border border-line bg-bg-3 px-1.5 py-0.5 text-fg-3"
+                        style={{ fontSize: "10px" }}
+                        data-testid="import-archive-format"
+                        data-format={scan.archive.format}
+                      >
+                        {ARCHIVE_FORMAT_LABEL[scan.archive.format]}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <GitBranch size={12} className="shrink-0 text-fg-4" />
+                    <span className="min-w-0 flex-1 truncate text-fg" style={{ fontSize: "11.5px" }}>
+                      {text.trim()}
+                    </span>
+                  </>
+                )}
                 {scan?.commit && (
                   <span
                     className="rounded border border-line bg-bg-3 px-1.5 py-0.5 font-mono text-fg-3"
@@ -569,14 +691,54 @@ export default function ImportSkillsModal({
                   </div>
                 )}
 
-                {step === "source" && !scanError && (
+                <div className="my-2 flex items-center gap-2 text-fg-4" style={{ fontSize: "10.5px" }} aria-hidden>
+                  <span className="h-px flex-1 bg-line" />
+                  or an archive
+                  <span className="h-px flex-1 bg-line" />
+                </div>
+                <SkillFileDropZone
+                  label={
+                    <>
+                      <span className="font-mono text-fg-2">.zip</span> · drop it anywhere in this popup, or
+                    </>
+                  }
+                  onPickFiles={acceptArchive}
+                  accept=".zip,application/zip"
+                  multiple={false}
+                  ariaLabel="Import a .zip archive"
+                  testId="import-archive-drop"
+                  disabled={step === "scanning"}
+                />
+
+                {archiveRefusal && step === "source" && (
+                  <div
+                    role="alert"
+                    className="mt-2 rounded-md border border-st-failed/50 bg-st-failed-bg px-3 py-2 text-fg-2"
+                    style={{ fontSize: "11px" }}
+                    data-testid="import-archive-error"
+                  >
+                    <strong className="text-fg">{archiveRefusal.title}</strong> {archiveRefusal.message}
+                    {archiveRefusal.advise && (
+                      <>
+                        {" "}
+                        Drop a PDO archive, a pipeline's skills sidecar, or a zip of folders holding a{" "}
+                        <span className="font-mono">SKILL.md</span>.
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {step === "source" && !scanError && !archiveRefusal && (
                   <p
                     className="mt-2 rounded-md border border-dashed border-line px-3 py-2 text-fg-4"
                     style={{ fontSize: "10.5px" }}
+                    data-testid="import-accepted"
                   >
                     Accepted: a GitHub repo URL (root, branch, or{" "}
-                    <span className="font-mono">/tree/&lt;branch&gt;/&lt;path&gt;</span>), an SSH URL, or a local
-                    folder. PDO clones shallow with your git credentials and scans every folder holding a{" "}
+                    <span className="font-mono">/tree/&lt;branch&gt;/&lt;path&gt;</span>), an SSH URL, a local folder — or
+                    a <span className="font-mono">.zip</span>: an archive exported from a PDO bank (ids kept), a
+                    pipeline's skills sidecar, or any zip of <span className="font-mono">SKILL.md</span> folders (matched by
+                    name). PDO clones shallow with your git credentials and scans every folder holding a{" "}
                     <span className="font-mono">SKILL.md</span>. Nothing is written to the bank until you pick skills.
                   </p>
                 )}
@@ -589,7 +751,11 @@ export default function ImportSkillsModal({
                   <div className="h-full w-1/3 animate-pulse rounded-full bg-st-running" />
                 </div>
                 <div className="text-fg-2" style={{ fontSize: "12px" }}>
-                  {parsed?.kind === "local" ? (
+                  {archiveFile ? (
+                    <>
+                      Reading <span className="font-mono">{archiveFile.name}</span>…
+                    </>
+                  ) : parsed?.kind === "local" ? (
                     <>
                       Scanning <span className="font-mono">{tildify(parsed.url, home)}</span>…
                     </>
@@ -604,7 +770,9 @@ export default function ImportSkillsModal({
                   )}
                 </div>
                 <div className="text-fg-4" style={{ fontSize: "10.5px" }}>
-                  Uses your git credentials · scanning starts when the clone lands
+                  {archiveFile
+                    ? "Uploaded to the daemon and unpacked in a temp folder · nothing touches the bank"
+                    : "Uses your git credentials · scanning starts when the clone lands"}
                 </div>
                 <button
                   type="button"
@@ -720,9 +888,10 @@ export default function ImportSkillsModal({
                   <span className="font-medium text-fg" data-testid="import-found-count">
                     {candidates.length} skill{candidates.length === 1 ? "" : "s"} found
                   </span>
-                  <span className="text-fg-4">
-                    · {validCount} valid · {summary.invalid} invalid
-                    {inBankCount > 0 ? ` · ${inBankCount} already in bank` : ""}
+                  <span className="text-fg-4" data-testid="import-found-breakdown">
+                    {isArchive
+                      ? archiveBreakdown(candidates)
+                      : `· ${validCount} valid · ${summary.invalid} invalid${inBankCount > 0 ? ` · ${inBankCount} already in bank` : ""}`}
                   </span>
                   <span className="flex-1" />
                   <label className="flex items-center gap-1.5 rounded-md border border-line-strong bg-bg-3 px-2 py-1">
@@ -760,8 +929,9 @@ export default function ImportSkillsModal({
                     const row = rows.get(candidate.path) ?? defaultRow(candidate);
                     const failure = failedRows.get(candidate.path);
                     const done = doneRows.has(candidate.path);
-                    const disabled = !candidate.valid || done || step === "importing";
-                    const dim = candidate.status === "same_commit" || !candidate.valid || done;
+                    const keptById = KEPT_BY_ID.has(candidate.status);
+                    const disabled = !isSelectable(candidate) || done || step === "importing";
+                    const dim = candidate.status === "same_commit" || !candidate.valid || keptById || done;
                     return (
                       <li
                         key={candidate.path}
@@ -773,12 +943,12 @@ export default function ImportSkillsModal({
                         <div className="flex items-start gap-2.5">
                           <input
                             type="checkbox"
-                            checked={row.checked && !done}
+                            checked={row.checked && !done && !keptById}
                             disabled={disabled}
                             onChange={(event) => setRow(candidate.path, { checked: event.target.checked })}
                             aria-label={`Import ${candidate.name}`}
                             className={`mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--color-acc)] ${
-                              !candidate.valid ? "opacity-40 [border-style:dashed]" : ""
+                              !isSelectable(candidate) ? "opacity-40 [border-style:dashed]" : ""
                             }`}
                           />
                           <div className="min-w-0 flex-1">
@@ -798,9 +968,9 @@ export default function ImportSkillsModal({
                               <div className={`mt-0.5 ${dim ? "text-fg-4" : "text-fg-3"}`} style={{ fontSize: "11px" }}>
                                 {candidate.description}
                               </div>
-                            ) : (
+                            ) : candidate.status === "locked" ? null : (
                               <div className="mt-0.5 text-st-failed" style={{ fontSize: "11px" }}>
-                                Invalid frontmatter: {candidate.reason}
+                                {candidate.code === "file_too_large" ? candidate.reason : `Invalid frontmatter: ${candidate.reason}`}
                               </div>
                             )}
                             <div className="mt-0.5 font-mono text-fg-4" style={{ fontSize: "10px" }}>
@@ -811,6 +981,13 @@ export default function ImportSkillsModal({
                                 </>
                               )}
                             </div>
+                            {candidate.status === "id_changed" && (
+                              <div className="mt-1 text-fg-4" style={{ fontSize: "10.5px" }} data-testid={`import-kept-${candidate.name}`}>
+                                The bank's copy
+                                {candidate.existing?.folder_name ? ` in “${candidate.existing.folder_name}”` : ""} stays untouched; the
+                                archive's version is ignored.
+                              </div>
+                            )}
                             {failure && (
                               <div className="mt-1 text-st-failed" style={{ fontSize: "11px" }} data-testid="import-row-error">
                                 {failure}
@@ -830,7 +1007,7 @@ export default function ImportSkillsModal({
                                           resolution: option,
                                           renameTo:
                                             option === "rename" && !row.renameTo
-                                              ? `${candidate.name}${owner ? `-${owner}` : "-imported"}`
+                                              ? `${candidate.name}${owner && !isArchive ? `-${owner}` : "-imported"}`
                                               : row.renameTo,
                                         })
                                       }
@@ -939,6 +1116,78 @@ export default function ImportSkillsModal({
 
             {(step === "results" || step === "importing") && scan && (
               <>
+                {isArchive ? (
+                  <section data-testid="import-archive-destination">
+                    <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
+                      Destination
+                    </h4>
+                    {archiveExisting ? (
+                      <>
+                        <p className="mb-2 text-fg-3" style={{ fontSize: "10.5px" }}>
+                          A folder <strong className="text-fg">{archiveExisting.name}</strong> already exists{" "}
+                          {parentId === null ? "at the root of the bank" : `in “${folderPathLabel(parentId, folders)}”`}.
+                        </p>
+                        <div className="flex flex-col gap-2" role="radiogroup" aria-label="Destination folder">
+                          <DestinationOption
+                            selected={destChoice === "new"}
+                            onSelect={() => setDestChoice("new")}
+                            disabled={step === "importing"}
+                            title="New folder"
+                            note="Default. Nothing in the existing folder moves."
+                            testId="import-dest-new"
+                          >
+                            {destChoice === "new" && (
+                              <div className="mt-2">
+                                <NewFolderNameField
+                                  value={folderName}
+                                  onChange={setFolderName}
+                                  editing={editingName}
+                                  onEditingChange={setEditingName}
+                                />
+                              </div>
+                            )}
+                          </DestinationOption>
+                          <DestinationOption
+                            selected={destChoice === "merge"}
+                            onSelect={() => setDestChoice("merge")}
+                            disabled={step === "importing"}
+                            title={`Merge into “${archiveExisting.name}”`}
+                            note="New skills join the existing folder. It keeps its own provenance."
+                            testId="import-dest-merge"
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <NewFolderNameField
+                        value={folderName}
+                        onChange={setFolderName}
+                        editing={editingName}
+                        onEditingChange={setEditingName}
+                      />
+                    )}
+                    {!mergeInto &&
+                      folders.some(
+                        (f) =>
+                          (f.parent_id ?? null) === parentId &&
+                          f.name.trim().toLowerCase() === folderName.trim().toLowerCase(),
+                      ) && (
+                        <div
+                          role="alert"
+                          className="mt-1.5 rounded-md border border-st-blocked/50 bg-st-blocked-bg px-2.5 py-1.5 text-fg-2"
+                          style={{ fontSize: "10.5px" }}
+                          data-testid="import-archive-homonym"
+                        >
+                          A folder named “{folderName.trim()}” already exists here: importing creates a second one next to
+                          it.{archiveExisting ? " Merge into it instead, or pick another name." : " Pick another name."}
+                        </div>
+                      )}
+                    <p className="mt-1.5 text-fg-4" style={{ fontSize: "10.5px" }} data-testid="import-archive-note">
+                      {mergeInto
+                        ? `The skills it creates are tagged “imported from ${scan.source.url}”; the folder keeps its own provenance.`
+                        : `Tagged “imported from ${scan.source.url}” — a file has no update: re-import a newer archive instead.`}
+                    </p>
+                  </section>
+                ) : (
                 <section>
                   <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
                     Destination
@@ -963,40 +1212,12 @@ export default function ImportSkillsModal({
                       </button>
                     </div>
                   ) : (
-                  <div className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5">
-                    <FolderOpen size={12} className="shrink-0 text-st-await" />
-                    {editingName ? (
-                      <input
-                        autoFocus
-                        value={folderName}
-                        onChange={(event) => setFolderName(event.target.value)}
-                        onBlur={() => setEditingName(false)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === "Escape") {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            setEditingName(false);
-                          }
-                        }}
-                        aria-label="Folder name"
-                        data-testid="import-folder-name-input"
-                        className="min-w-0 flex-1 bg-transparent font-mono text-fg outline-none"
-                        style={{ fontSize: "11.5px" }}
-                      />
-                    ) : (
-                      <span className="min-w-0 flex-1 truncate font-mono text-fg" style={{ fontSize: "11.5px" }} data-testid="import-folder-name">
-                        {folderName || <span className="text-st-failed">name required</span>}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setEditingName(true)}
-                      aria-label="Rename destination folder"
-                      className="grid h-5 w-5 place-items-center rounded text-fg-4 hover:text-fg"
-                    >
-                      <Pencil size={11} />
-                    </button>
-                  </div>
+                  <NewFolderNameField
+                    value={folderName}
+                    onChange={setFolderName}
+                    editing={editingName}
+                    onEditingChange={setEditingName}
+                  />
                   )}
                   {!intoFolder && (
                     <div className="mt-1.5">
@@ -1030,6 +1251,7 @@ export default function ImportSkillsModal({
                     </p>
                   )}
                 </section>
+                )}
 
                 <section>
                   <h4 className="mb-2 text-fg-4 uppercase tracking-wide" style={{ fontSize: "10px" }}>
@@ -1071,8 +1293,9 @@ export default function ImportSkillsModal({
                     Not touched
                   </h4>
                   <p className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="import-not-touched">
-                    {summary.unchecked} unchecked · {summary.invalid} invalid · {summary.sameCommit} already present at the
-                    same commit.
+                    {isArchive
+                      ? `${summary.unchecked} unchecked · ${summary.upToDate} already up to date · ${summary.changed} kept as is · ${summary.locked} managed by PDO · ${summary.invalid} invalid.`
+                      : `${summary.unchecked} unchecked · ${summary.invalid} invalid · ${summary.sameCommit} already present at the same commit.`}
                     {candidates
                       .filter((c) => needsResolution(c) && rows.get(c.path)?.resolution === "skip" && rows.get(c.path)?.checked)
                       .map((c) => (
@@ -1105,7 +1328,7 @@ export default function ImportSkillsModal({
                 {failedRows.size > 0 && !importError && (
                   <div role="alert" className="rounded-md border border-st-failed/50 bg-st-failed-bg px-3 py-2 text-fg-2" style={{ fontSize: "11px" }} data-testid="import-partial">
                     {failedRows.size} skill{failedRows.size === 1 ? "" : "s"} could not be imported; the reasons are on the rows. The
-                    others landed in “{intoFolder?.name ?? folderName}”.
+                    others landed in “{destinationName}”.
                   </div>
                 )}
               </>
@@ -1118,7 +1341,7 @@ export default function ImportSkillsModal({
             {step === "scanning"
               ? "Esc cancels the scan"
               : step === "source"
-                ? "Enter to scan · nothing touches disk until Import"
+                ? "Enter to scan · drop a .zip to read it · nothing touches disk until Import"
                 : "Space toggles · ⌘A selects all valid · nothing touches disk until Import"}
           </span>
           <div className="flex items-center gap-2">
@@ -1219,14 +1442,147 @@ function Chip({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
+/** `· 1 new · 2 changed · 1 up to date · 1 name taken · 2 not importable` (#1027). */
+function archiveBreakdown(candidates: SkillCandidate[]): string {
+  const count = (pred: (c: SkillCandidate) => boolean) => candidates.filter(pred).length;
+  const parts: [number, string][] = [
+    [count((c) => c.status === "new"), "new"],
+    [count((c) => c.status === "id_changed"), "changed"],
+    [count((c) => c.status === "id_up_to_date"), "up to date"],
+    [count((c) => c.status === "name_taken" || c.status === "same_commit"), "name taken"],
+    [count((c) => c.status === "invalid" || c.status === "locked"), "not importable"],
+  ];
+  const shown = parts.filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`);
+  return shown.length > 0 ? `· ${shown.join(" · ")}` : "";
+}
+
+function NewFolderNameField({
+  value,
+  onChange,
+  editing,
+  onEditingChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  editing: boolean;
+  onEditingChange: (editing: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5">
+      <FolderOpen size={12} className="shrink-0 text-st-await" />
+      {editing ? (
+        <input
+          autoFocus
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={() => onEditingChange(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              onEditingChange(false);
+            }
+          }}
+          aria-label="Folder name"
+          data-testid="import-folder-name-input"
+          className="min-w-0 flex-1 bg-transparent font-mono text-fg outline-none"
+          style={{ fontSize: "11.5px" }}
+        />
+      ) : (
+        <span className="min-w-0 flex-1 truncate font-mono text-fg" style={{ fontSize: "11.5px" }} data-testid="import-folder-name">
+          {value || <span className="text-st-failed">name required</span>}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => onEditingChange(true)}
+        aria-label="Rename destination folder"
+        className="grid h-5 w-5 place-items-center rounded text-fg-4 hover:text-fg"
+      >
+        <Pencil size={11} />
+      </button>
+    </div>
+  );
+}
+
+/** One card of the merge / new-folder radio group of an archive import (#1027). */
+function DestinationOption({
+  selected,
+  onSelect,
+  disabled,
+  title,
+  note,
+  testId,
+  children,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  disabled?: boolean;
+  title: string;
+  note: string;
+  testId: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div
+      className={`rounded-md border px-3 py-2 ${selected ? "border-acc/60 bg-acc/5" : "border-line bg-bg-3"}`}
+      data-testid={testId}
+      data-selected={selected || undefined}
+    >
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected}
+        disabled={disabled}
+        onClick={onSelect}
+        className="flex w-full items-start gap-2 text-left disabled:opacity-60"
+      >
+        <span
+          className={`mt-0.5 grid h-3 w-3 shrink-0 place-items-center rounded-full border ${selected ? "border-acc" : "border-line-strong"}`}
+        >
+          {selected && <span className="h-1.5 w-1.5 rounded-full bg-acc" />}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-fg" style={{ fontSize: "11.5px" }}>
+            {title}
+          </span>
+          <span className="block text-fg-4" style={{ fontSize: "10.5px" }}>
+            {note}
+          </span>
+        </span>
+      </button>
+      {children}
+    </div>
+  );
+}
+
 function StatusBadge({ candidate }: { candidate: SkillCandidate }) {
   const base = "rounded border px-1.5 py-0.5 whitespace-nowrap";
   const size = { fontSize: "9.5px" };
+  const inFolder = candidate.existing?.folder_name ? ` · in “${candidate.existing.folder_name}”` : "";
   switch (candidate.status) {
     case "new":
       return (
         <span className={`${base} border-acc/40 bg-acc/10 text-acc`} style={size}>
-          new
+          {candidate.id ? "new · id kept" : "new"}
+        </span>
+      );
+    case "id_up_to_date":
+      return (
+        <span className={`${base} border-line bg-bg-3 text-fg-4`} style={size}>
+          already up to date{inFolder}
+        </span>
+      );
+    case "id_changed":
+      return (
+        <span className={`${base} border-st-await/50 bg-st-await/10 text-st-await`} style={size}>
+          changed{inFolder}
+        </span>
+      );
+    case "locked":
+      return (
+        <span className={`${base} flex items-center gap-1 border-line bg-bg-3 text-fg-4`} style={size}>
+          <Lock size={9} aria-hidden /> managed by PDO
         </span>
       );
     case "name_taken":

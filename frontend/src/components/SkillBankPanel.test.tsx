@@ -238,6 +238,30 @@ describe("SkillBankPanel (#668)", () => {
     expect(screen.getByTestId("folder-delete")).toHaveTextContent("the skills keep their own provenance");
   });
 
+  it("a folder imported from an archive file (#1027) shows the file and offers no update", () => {
+    const archiveFolder: SkillFolder = {
+      ...folder("f-arc", "team-review"),
+      source: { url: "team-review.skills.zip", ref: null, commit: null, path: "", imported_at: t, found: 3, invalid: 0, kind: "file" },
+    };
+    setup({
+      root_path: "/home/user/.pdo/skills",
+      folders: [archiveFolder],
+      skills: [
+        {
+          ...skill("s-cr", "code-review", "f-arc", "Two-axis review."),
+          source: { url: "team-review.skills.zip", ref: null, commit: null, path: "code-review", kind: "file" },
+        },
+      ],
+    });
+    fireEvent.click(screen.getByTestId("tree-folder-f-arc"));
+    expect(screen.getByTestId("folder-source-badge")).toHaveTextContent("Archive");
+    expect(screen.getByTestId("folder-provenance-file")).toHaveTextContent("team-review.skills.zip");
+    expect(screen.getByTestId("folder-provenance")).toHaveTextContent("1 of 3 skills found in the archive");
+    expect(screen.getByTestId("folder-no-update")).toHaveTextContent("one-shot import · no update");
+    expect(screen.queryByTestId("folder-update-from-source")).toBeNull();
+    expect(screen.getByTestId("folder-detail")).toHaveTextContent("a file has no update");
+  });
+
   it("an imported skill links its provenance to the Source folder", async () => {
     setup(WITH_SOURCE);
     fireEvent.click(screen.getByLabelText("Expand anthropics/skills"));

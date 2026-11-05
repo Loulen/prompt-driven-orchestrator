@@ -1,4 +1,4 @@
-import type { Skill, SkillFolder } from "../types";
+import type { Skill, SkillArchiveFormat, SkillFolder } from "../types";
 import { descendantFolderIds } from "./skillTree";
 
 /**
@@ -92,4 +92,71 @@ export function defaultArchiveName(
   const folder = folderOfSelection(checked, folders, skills);
   if (folder) return `${sanitiseArchiveName(folder.name)}.skills.zip`;
   return `pdo-skills-${archiveStamp(now)}.zip`;
+}
+
+// ---- Import d'archive (#1027) ----------------------------------------------
+
+/** Archive-level ceiling, mirrored from the daemon (`skill_archive::MAX_ARCHIVE_BYTES`). */
+export const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
+
+/** The chip next to the file name on the results' source line. */
+export const ARCHIVE_FORMAT_LABEL: Record<SkillArchiveFormat, string> = {
+  pdo_archive: "PDO archive · ids kept",
+  pipeline_sidecar: "pipeline sidecar · ids kept",
+  plain_zip: "zip without manifest · by name",
+};
+
+/**
+ * Why a dropped / picked file is refused in place before any upload, or `null`
+ * when it may go to the daemon (which has the last word: corrupted, no
+ * `SKILL.md`…). Only one `.zip` at a time.
+ */
+export function refuseArchive(files: ArrayLike<File>): string | null {
+  if (files.length === 0) return null;
+  if (files.length > 1) return `${files.length} files dropped: drop one .zip at a time.`;
+  const file = files[0];
+  if (!/\.zip$/i.test(file.name)) return `${file.name} is not a .zip.`;
+  if (file.size > MAX_ARCHIVE_BYTES) {
+    return `${file.name} is ${(file.size / (1024 * 1024)).toFixed(1)} MB, over the ${MAX_ARCHIVE_BYTES / (1024 * 1024)} MB limit.`;
+  }
+  return null;
+}
+
+/** `team-review.skills.zip` → `team-review` (mirror of `skill_archive::folder_stem`). */
+export function archiveFolderStem(fileName: string): string {
+  const last = (fileName.split(/[/\\]/).pop() ?? fileName).trim();
+  const stem = last.replace(/\.zip$/i, "").replace(/\.skills$/i, "").trim();
+  return stem === "" ? "archive" : stem;
+}
+
+/** `stem`, else `stem 2`, `stem 3`… — the first name none of `taken` carries. */
+export function freeFolderName(stem: string, taken: string[]): string {
+  const lower = new Set(taken.map((name) => name.trim().toLowerCase()));
+  if (!lower.has(stem.toLowerCase())) return stem;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${stem} ${n}`;
+    if (!lower.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+/**
+ * Where an archive's created skills land under `parentId`: the folder already
+ * named after the file there (offered for **merge**), and the free name the
+ * **New folder** choice is pre-filled with. At the root it matches what the
+ * daemon's scan reports.
+ */
+export function archiveDestination(
+  stem: string,
+  folders: SkillFolder[],
+  parentId: string | null,
+): { existing: SkillFolder | null; newName: string } {
+  const siblings = folders.filter((folder) => (folder.parent_id ?? null) === parentId);
+  const existing = siblings.find((folder) => folder.name.trim().toLowerCase() === stem.toLowerCase()) ?? null;
+  return {
+    existing,
+    newName: freeFolderName(
+      stem,
+      siblings.map((folder) => folder.name),
+    ),
+  };
 }

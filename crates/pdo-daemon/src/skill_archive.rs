@@ -268,10 +268,460 @@ pub(crate) fn content_disposition(file_name: &str) -> String {
     format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")
 }
 
+// ---------------------------------------------------------------------------
+// Import d'archive — the reader (pdo-issues#2, #1027)
+// ---------------------------------------------------------------------------
+
+/// The archive-level ceiling of an uploaded `.zip`: the body limit of the
+/// bank's other upload routes (`SKILL_UPLOAD_BODY_LIMIT`, 64 MB).
+pub(crate) const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
+/// What an archive may expand to on disk, all entries together: a zip bomb is
+/// refused before it fills the temp directory.
+pub(crate) const MAX_EXTRACTED_BYTES: u64 = 512 * 1024 * 1024;
+/// Entries an archive may carry (files and folders).
+pub(crate) const MAX_ENTRIES: usize = 20_000;
+
+/// Which of the three layouts the reader recognised (CONTEXT.md §*Import
+/// d'archive*). Drives where the ids come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ArchiveFormat {
+    /// An Archive de skills: the `pdo-skills.json` manifest maps folder → id.
+    PdoArchive,
+    /// The `<pipeline>.skills.zip` of a pipeline export: the folder is the id.
+    PipelineSidecar,
+    /// Any zip of `SKILL.md` folders, without manifest: imported by name.
+    PlainZip,
+}
+
+/// Why an uploaded file is not read. Every variant names what is wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ArchiveError {
+    /// Not a zip at all (no `PK` signature): a PDF, an image…
+    NotAZip(String),
+    /// A zip signature, but the central directory cannot be read.
+    Corrupt(String),
+    /// An entry that would land outside the extraction folder (`../`, an
+    /// absolute path, a drive letter): the whole archive is refused.
+    UnsafeEntry(String),
+    /// Over [`MAX_ARCHIVE_BYTES`] (or expanding over [`MAX_EXTRACTED_BYTES`] /
+    /// [`MAX_ENTRIES`]).
+    TooLarge(String),
+    /// A readable zip with no `SKILL.md` anywhere.
+    NoSkills(String),
+    Io(String),
+}
+
+impl std::fmt::Display for ArchiveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAZip(file) => write!(f, "`{file}` is not a .zip"),
+            Self::Corrupt(reason) => write!(f, "the archive is corrupted or truncated: {reason}"),
+            Self::UnsafeEntry(entry) => write!(
+                f,
+                "the archive entry `{entry}` points outside its folder: archive refused"
+            ),
+            Self::TooLarge(reason) => write!(f, "{reason}"),
+            Self::NoSkills(file) => write!(
+                f,
+                "`{file}` holds no SKILL.md: drop a PDO archive, a pipeline's skills sidecar, or a zip of folders holding a SKILL.md"
+            ),
+            Self::Io(reason) => write!(f, "failed to read the archive: {reason}"),
+        }
+    }
+}
+
+/// A reference file the reader left out because it is over the bank's
+/// per-file limit: its skill fails on its own row, not the whole import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OversizeFile {
+    /// `/`-separated path from the archive root.
+    pub path: String,
+    pub size: u64,
+}
+
+/// What an extraction produced, beside the files written under `dest`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Extracted {
+    pub format: ArchiveFormat,
+    /// Manifest folder → id (PDO archive only).
+    manifest_ids: std::collections::HashMap<String, String>,
+    pub oversize: Vec<OversizeFile>,
+}
+
+impl Extracted {
+    /// The id the archive carries for the skill folder at `path` (`/`-separated,
+    /// from the archive root), or `None` when it is imported by name.
+    pub(crate) fn id_of(&self, path: &str) -> Option<String> {
+        let id = match self.format {
+            ArchiveFormat::PdoArchive => self.manifest_ids.get(path).cloned(),
+            ArchiveFormat::PipelineSidecar => path
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            ArchiveFormat::PlainZip => None,
+        }?;
+        skill_bank::is_safe_skill_id(&id).then_some(id)
+    }
+
+    /// The files over the per-file limit inside the skill folder at `path`.
+    pub(crate) fn oversize_in(&self, path: &str) -> Vec<&OversizeFile> {
+        self.oversize
+            .iter()
+            .filter(|file| {
+                path.is_empty()
+                    || file
+                        .path
+                        .strip_prefix(path)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+            .collect()
+    }
+}
+
+/// `team-review.skills.zip` → `team-review`: the name of the folder the
+/// created skills land in (`.zip`, then `.skills`, dropped).
+pub(crate) fn folder_stem(file_name: &str) -> String {
+    let last = file_name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(file_name)
+        .trim();
+    fn strip_suffix_ci<'a>(s: &'a str, suffix: &str) -> &'a str {
+        match s
+            .len()
+            .checked_sub(suffix.len())
+            .and_then(|at| s.get(at..).map(|tail| (at, tail)))
+        {
+            Some((at, tail)) if tail.eq_ignore_ascii_case(suffix) => &s[..at],
+            _ => s,
+        }
+    }
+    let stem = strip_suffix_ci(strip_suffix_ci(last, ".zip"), ".skills").trim();
+    if stem.is_empty() {
+        "archive".to_string()
+    } else {
+        stem.to_string()
+    }
+}
+
+/// `stem`, or `stem 2`, `stem 3`… — the first name no folder of `taken` carries
+/// (case-insensitively): the pre-filled « New folder » of an archive import.
+pub(crate) fn free_folder_name(stem: &str, taken: &[&str]) -> String {
+    let is_taken = |name: &str| taken.iter().any(|t| t.trim().eq_ignore_ascii_case(name));
+    if !is_taken(stem) {
+        return stem.to_string();
+    }
+    (2u32..)
+        .map(|n| format!("{stem} {n}"))
+        .find(|name| !is_taken(name))
+        .expect("an unbounded range always yields a free name")
+}
+
+/// Split an entry name into safe, plain segments. `None` for an entry to ignore
+/// silently (macOS resource forks); an error for one that would escape.
+fn entry_segments(name: &str) -> Result<Option<Vec<String>>, ArchiveError> {
+    let unsafe_entry = || ArchiveError::UnsafeEntry(name.to_string());
+    if name.starts_with('/') || name.starts_with('\\') || name.contains('\0') {
+        return Err(unsafe_entry());
+    }
+    let mut segments = Vec::new();
+    for segment in name.split(['/', '\\']) {
+        match segment {
+            "" | "." => continue,
+            ".." => return Err(unsafe_entry()),
+            s if segments.is_empty() && s.len() == 2 && s.ends_with(':') => {
+                // `C:` — a Windows absolute path.
+                return Err(unsafe_entry());
+            }
+            s => segments.push(s.to_string()),
+        }
+    }
+    if segments.iter().any(|s| s == "__MACOSX" || s == ".DS_Store") {
+        return Ok(None);
+    }
+    Ok(Some(segments))
+}
+
+/// Read an uploaded archive into `dest` (created, expected empty): every safe
+/// entry is written verbatim; an entry over the per-file limit is **left out**
+/// and reported in [`Extracted::oversize`]; an entry escaping the folder refuses
+/// the whole archive. The layout is recognised from what was read: the manifest
+/// (PDO archive), a `<pipeline>.skills/` folder or UUID folders (pipeline
+/// sidecar), or neither (plain zip, by name).
+pub(crate) fn extract(
+    bytes: &[u8],
+    file_name: &str,
+    dest: &Path,
+) -> Result<Extracted, ArchiveError> {
+    use std::io::Read;
+    if bytes.len() as u64 > MAX_ARCHIVE_BYTES {
+        return Err(ArchiveError::TooLarge(format!(
+            "the archive is {} MB, over the {} MB limit",
+            bytes.len() as u64 / (1024 * 1024),
+            MAX_ARCHIVE_BYTES / (1024 * 1024)
+        )));
+    }
+    if !bytes.starts_with(b"PK") {
+        return Err(ArchiveError::NotAZip(file_name.to_string()));
+    }
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| ArchiveError::Corrupt(e.to_string()))?;
+    if archive.len() > MAX_ENTRIES {
+        return Err(ArchiveError::TooLarge(format!(
+            "the archive holds {} entries, over the {MAX_ENTRIES} limit",
+            archive.len()
+        )));
+    }
+    let mut oversize = Vec::new();
+    let mut manifest_bytes = None;
+    let mut skill_dirs: Vec<Vec<String>> = Vec::new();
+    let mut total: u64 = 0;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|e| ArchiveError::Corrupt(e.to_string()))?;
+        let name = entry.name().to_string();
+        let Some(segments) = entry_segments(&name)? else {
+            continue;
+        };
+        if segments.is_empty() || entry.is_dir() {
+            continue;
+        }
+        // A symlink entry is skipped: the bank stores plain files only.
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            continue;
+        }
+        let rel = segments.join("/");
+        // A skill folder is a skill even when its own SKILL.md is oversized: it
+        // is listed and fails on its row, never vanishes from the list.
+        if segments.last().map(String::as_str) == Some(SKILL_MD) {
+            skill_dirs.push(segments[..segments.len() - 1].to_vec());
+        }
+        if entry.size() > skill_bank::MAX_FILE_BYTES {
+            oversize.push(OversizeFile {
+                path: rel,
+                size: entry.size(),
+            });
+            continue;
+        }
+        // Never trust the declared size: read one byte past the limit.
+        let mut data = Vec::new();
+        (&mut entry)
+            .take(skill_bank::MAX_FILE_BYTES + 1)
+            .read_to_end(&mut data)
+            .map_err(|e| ArchiveError::Corrupt(format!("`{name}`: {e}")))?;
+        if data.len() as u64 > skill_bank::MAX_FILE_BYTES {
+            oversize.push(OversizeFile {
+                path: rel,
+                size: data.len() as u64,
+            });
+            continue;
+        }
+        total += data.len() as u64;
+        if total > MAX_EXTRACTED_BYTES {
+            return Err(ArchiveError::TooLarge(format!(
+                "the archive expands over {} MB",
+                MAX_EXTRACTED_BYTES / (1024 * 1024)
+            )));
+        }
+        if segments.len() == 1 && segments[0] == MANIFEST {
+            manifest_bytes = Some(data.clone());
+        }
+        let mut path = dest.to_path_buf();
+        for segment in &segments {
+            path.push(segment);
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ArchiveError::Corrupt(format!("`{name}`: {e}")))?;
+        }
+        std::fs::write(&path, &data).map_err(|e| ArchiveError::Io(format!("`{name}`: {e}")))?;
+    }
+    if skill_dirs.is_empty() {
+        return Err(ArchiveError::NoSkills(file_name.to_string()));
+    }
+
+    let manifest = manifest_bytes
+        .and_then(|bytes| serde_json::from_slice::<Manifest>(&bytes).ok())
+        .filter(|manifest| manifest.format == FORMAT);
+    if let Some(manifest) = manifest {
+        let manifest_ids = manifest
+            .skills
+            .into_iter()
+            .filter(|entry| skill_bank::is_safe_skill_id(&entry.id))
+            .filter_map(|entry| {
+                let folder = entry_segments(&entry.folder).ok().flatten()?.join("/");
+                (!folder.is_empty()).then_some((folder, entry.id))
+            })
+            .collect();
+        return Ok(Extracted {
+            format: ArchiveFormat::PdoArchive,
+            manifest_ids,
+            oversize,
+        });
+    }
+    // A sidecar's folders are skill ids: the bank's UUIDs, or a seeded id. A
+    // hand-made `my.skills/tdd/` stays a plain zip, imported by name.
+    let is_id = |name: &str| uuid::Uuid::parse_str(name).is_ok() || skill_bank::is_seeded(name);
+    let under_sidecar = |dir: &Vec<String>| {
+        dir.len() >= 2
+            && dir[dir.len() - 2].ends_with(crate::skill_sidecar::SIDECAR_SUFFIX)
+            && is_id(&dir[dir.len() - 1])
+    };
+    let uuid_folder = |dir: &Vec<String>| dir.len() == 1 && is_id(&dir[0]);
+    let format = if skill_dirs
+        .iter()
+        .all(|dir| under_sidecar(dir) || uuid_folder(dir))
+    {
+        ArchiveFormat::PipelineSidecar
+    } else {
+        ArchiveFormat::PlainZip
+    };
+    Ok(Extracted {
+        format,
+        manifest_ids: Default::default(),
+        oversize,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, data) in entries {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    const MD: &[u8] = b"---\nname: a\ndescription: d\n---\n\nbody\n";
+
+    #[test]
+    fn the_three_layouts_are_recognised_and_carry_their_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = br#"{"format":"pdo-skills","version":1,"exported_at":"x","skills":[{"folder":"a","id":"id-a","name":"a"}]}"#;
+        let pdo = zip_of(&[
+            ("a/SKILL.md", MD),
+            ("b/SKILL.md", MD),
+            ("pdo-skills.json", manifest),
+        ]);
+        let read = extract(&pdo, "x.zip", dir.path()).unwrap();
+        assert_eq!(read.format, ArchiveFormat::PdoArchive);
+        assert_eq!(read.id_of("a").as_deref(), Some("id-a"));
+        assert_eq!(
+            read.id_of("b"),
+            None,
+            "a folder the manifest omits goes by name"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let id = "0b7c5f0e-8a2b-4d0e-9a51-4f1d2c3b4a59";
+        let sidecar = zip_of(&[
+            (&format!("p.skills/{id}/SKILL.md"), MD),
+            (&format!("p.skills/{id}/ref.md"), b"r"),
+            ("p.skills/pdo-interactive/SKILL.md", MD),
+        ]);
+        let read = extract(&sidecar, "p.skills.zip", dir.path()).unwrap();
+        assert_eq!(read.format, ArchiveFormat::PipelineSidecar);
+        assert_eq!(read.id_of(&format!("p.skills/{id}")).as_deref(), Some(id));
+        assert_eq!(
+            read.id_of("p.skills/pdo-interactive").as_deref(),
+            Some("pdo-interactive")
+        );
+        assert!(dir.path().join(format!("p.skills/{id}/ref.md")).is_file());
+
+        // A hand-made folder that merely ends in `.skills` is not a sidecar.
+        let dir = tempfile::tempdir().unwrap();
+        let named = zip_of(&[("my.skills/tdd/SKILL.md", MD)]);
+        let read = extract(&named, "my.zip", dir.path()).unwrap();
+        assert_eq!(read.format, ArchiveFormat::PlainZip);
+        assert_eq!(read.id_of("my.skills/tdd"), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let id = "0b7c5f0e-8a2b-4d0e-9a51-4f1d2c3b4a59";
+        let rezipped = zip_of(&[(&format!("{id}/SKILL.md"), MD)]);
+        let read = extract(&rezipped, "s.zip", dir.path()).unwrap();
+        assert_eq!(read.format, ArchiveFormat::PipelineSidecar);
+        assert_eq!(read.id_of(id).as_deref(), Some(id));
+
+        let dir = tempfile::tempdir().unwrap();
+        let plain = zip_of(&[("tdd/SKILL.md", MD), ("__MACOSX/tdd/._SKILL.md", b"junk")]);
+        let read = extract(&plain, "s.zip", dir.path()).unwrap();
+        assert_eq!(read.format, ArchiveFormat::PlainZip);
+        assert_eq!(read.id_of("tdd"), None);
+        assert!(!dir.path().join("__MACOSX").exists());
+    }
+
+    #[test]
+    fn garbage_traversal_and_empty_archives_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            extract(b"%PDF-1.7", "notes.pdf", dir.path()).unwrap_err(),
+            ArchiveError::NotAZip("notes.pdf".into())
+        );
+        assert!(matches!(
+            extract(b"PK\x03\x04truncated", "x.zip", dir.path()).unwrap_err(),
+            ArchiveError::Corrupt(_)
+        ));
+        let evil = zip_of(&[("a/SKILL.md", MD), ("../../evil.sh", b"x")]);
+        assert_eq!(
+            extract(&evil, "x.zip", dir.path()).unwrap_err(),
+            ArchiveError::UnsafeEntry("../../evil.sh".into())
+        );
+        let empty = zip_of(&[("readme.txt", b"hi")]);
+        assert_eq!(
+            extract(&empty, "x.zip", dir.path()).unwrap_err(),
+            ArchiveError::NoSkills("x.zip".into())
+        );
+    }
+
+    #[test]
+    fn an_archive_over_the_upload_limit_is_refused_before_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bytes = vec![0u8; (MAX_ARCHIVE_BYTES + 1) as usize];
+        bytes[..2].copy_from_slice(b"PK");
+        assert!(matches!(
+            extract(&bytes, "huge.zip", dir.path()).unwrap_err(),
+            ArchiveError::TooLarge(_)
+        ));
+    }
+
+    #[test]
+    fn a_file_over_the_per_file_limit_is_left_out_and_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = vec![0u8; (skill_bank::MAX_FILE_BYTES + 1) as usize];
+        let bytes = zip_of(&[("a/SKILL.md", MD), ("a/data.bin", &big), ("b/SKILL.md", MD)]);
+        let read = extract(&bytes, "x.zip", dir.path()).unwrap();
+        assert_eq!(read.oversize.len(), 1);
+        assert_eq!(read.oversize_in("a").len(), 1);
+        assert!(read.oversize_in("b").is_empty());
+        assert!(!dir.path().join("a/data.bin").exists());
+
+        // An oversized SKILL.md still lists its skill, which then fails its row.
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = zip_of(&[("c/SKILL.md", &big)]);
+        let read = extract(&bytes, "x.zip", dir.path()).unwrap();
+        assert_eq!(read.oversize_in("c").len(), 1);
+    }
+
+    #[test]
+    fn folder_names_follow_the_file_and_get_a_free_suffix() {
+        assert_eq!(folder_stem("team-review.skills.zip"), "team-review");
+        assert_eq!(folder_stem("Team.ZIP"), "Team");
+        assert_eq!(folder_stem(".zip"), "archive");
+        assert_eq!(free_folder_name("team", &["ops"]), "team");
+        assert_eq!(free_folder_name("team", &["Team", "team 2"]), "team 3");
+    }
 
     fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> DateTime<Local> {
         Local.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap()

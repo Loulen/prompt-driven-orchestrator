@@ -1342,6 +1342,8 @@ function FolderDetailView({
   const [picker, setPicker] = useState(false);
   const exclude = useMemo(() => descendantFolderIds(folder.id, folders), [folder.id, folders]);
   const source = folder.source ?? null;
+  /** Imported from an archive file (#1027): one-shot, nothing to update from. */
+  const fromFile = source?.kind === "file";
   const importedHere = source
     ? skills.filter((skill) => skill.folder_id === folder.id && skill.source?.url === source.url).length
     : 0;
@@ -1358,7 +1360,7 @@ function FolderDetailView({
             style={{ fontSize: "9.5px" }}
             data-testid="folder-source-badge"
           >
-            Source
+            {fromFile ? "Archive" : "Source"}
           </span>
         )}
       </div>
@@ -1395,18 +1397,43 @@ function FolderDetailView({
               <span className="text-fg-4 uppercase tracking-wide" style={{ fontSize: "9.5px" }}>
                 Provenance
               </span>
-              <button
-                type="button"
-                onClick={onUpdateFromSource}
-                data-testid="folder-update-from-source"
-                className="flex items-center gap-1 text-acc hover:underline"
-                style={{ fontSize: "11px" }}
-              >
-                <RefreshCw size={10} />
-                Update from source…
-              </button>
+              {fromFile ? (
+                <span className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="folder-no-update">
+                  one-shot import · no update
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onUpdateFromSource}
+                  data-testid="folder-update-from-source"
+                  className="flex items-center gap-1 text-acc hover:underline"
+                  style={{ fontSize: "11px" }}
+                >
+                  <RefreshCw size={10} />
+                  Update from source…
+                </button>
+              )}
             </div>
             <table className="w-full" style={{ fontSize: "11.5px" }}>
+              {fromFile ? (
+              <tbody>
+                <ProvenanceRow label="file">
+                  <span className="font-mono text-fg" data-testid="folder-provenance-file">
+                    {source.url}
+                  </span>
+                  {source.imported_at && (
+                    <span className="ml-2 font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+                      · imported {timeAgo(source.imported_at)}
+                    </span>
+                  )}
+                </ProvenanceRow>
+                <ProvenanceRow label="imported">
+                  <span className="text-fg">
+                    {importedHere} of {source.found} skill{source.found === 1 ? "" : "s"} found in the archive
+                  </span>
+                </ProvenanceRow>
+              </tbody>
+              ) : (
               <tbody>
                 <ProvenanceRow label="source">
                   <span className="font-mono text-fg" title={source.url}>
@@ -1438,11 +1465,13 @@ function FolderDetailView({
                   )}
                 </ProvenanceRow>
               </tbody>
+              )}
             </table>
           </div>
           <p className="mt-3 rounded-md border border-dashed border-line px-3 py-2 text-fg-4" style={{ fontSize: "10.5px" }}>
-            Renaming or moving this folder keeps its provenance. Deleting it moves its skills to the parent and drops the
-            link to the source; the skills keep their own provenance.
+            {fromFile
+              ? "Imported from an archive file: a file has no update — re-import a newer archive instead. Renaming or moving this folder keeps its provenance; the skills keep their own."
+              : "Renaming or moving this folder keeps its provenance. Deleting it moves its skills to the parent and drops the link to the source; the skills keep their own provenance."}
           </p>
         </>
       )}

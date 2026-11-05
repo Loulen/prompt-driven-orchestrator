@@ -13,6 +13,29 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### Command line
+
+- **`pdo project`** makes every gesture of Settings › Projects: `list` (and `--deleted`), `show`,
+  `create` with its member repositories, `update` (name, harness or agentic profile, auto-fail,
+  primary repository), `member add|remove`, `skill list|add|remove|set`, `provisioning` (show, or
+  replace with `--file`) and `delete`.
+- **`pdo trigger`** makes every gesture of the Triggers surface: `list`, `show`, `create`,
+  `update`, `fire` (Run now), `pause` and `resume` of one Trigger or of all (`--all`), `fires`,
+  `test-guard` (a guard's dry run), `health` and `delete`.
+- **`pdo session`** reads the status bar's gauges (`status`) and makes the gestures of a hosted
+  session's detail: `show`, `events`, `terminate`, `relaunch`, `configure`. **`pdo audit`**
+  reads the journal of the mutations made outside a Run, **`pdo whoami`** the Actor the daemon
+  names you.
+- These commands print text by default and the daemon's answer with `--json`. They exit 0 on
+  success, 1 when the daemon is unreachable or refuses the call (with its reason), 2 for an
+  unreadable command line, 4 when the daemon knows no such Projet, Trigger or session.
+- Every route of the daemon has its command or an exclusion written with its reason: a
+  structural test fails on a route added without either. The routes of Runs, Nodes, Pipelines,
+  Settings, Stats, the skill bank and the Review are provisional exclusions, until their
+  commands exist.
+
 ## 2.71.0
 
 ### Settings › Appearance

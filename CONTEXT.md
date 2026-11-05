@@ -384,6 +384,17 @@ Conséquences :
 
 ---
 
+## Principe — Tout geste a son équivalent en ligne de commande
+
+Ce que l'UI fait, un agent ou un script le fait avec `pdo`, sans `curl` ni corps de requête écrit à la main (ADR draft « chaque route a sa commande CLI, un test le vérifie »).
+
+- **La logique reste côté serveur** : une commande d'opérateur (`pdo project`, `pdo trigger`, `pdo session`…) est un *client mince* d'une route, qui envoie ce que l'UI envoie et affiche ce que le daemon répond, en texte ou en `--json`. Une règle n'est jamais réécrite dans la CLI.
+- **Chaque route a sa commande, ou une exclusion motivée** *(terme)* : écrite avec sa raison quand la ligne de commande n'a rien à y faire (WebSocket, terminal, présence, ressource avec laquelle l'UI dessine, outil que le shell a déjà), ou **provisoire** et datée tant que la commande d'un geste n'est pas écrite. Un test structurel le vérifie.
+
+_Éviter_ : un passe-plat générique (« appelle la route X ») présenté comme la commande d'un geste.
+
+---
+
 ## Édition pendant un Run
 
 Suivre un Run et modifier un Pipeline sont deux gestes distincts (ADR-0085, amende ADR-0007).

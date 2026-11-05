@@ -1,6 +1,10 @@
 //! The CLI of the platform context: `pdo page` (a client of the daemon's
-//! `/pages`) and `pdo service` (runs on the host, no daemon involved).
+//! `/pages`), `pdo audit` (its journal), `pdo service` (runs on the host, no
+//! daemon involved), and [`daemon`], the client every operator command of the
+//! other contexts reaches the daemon with.
 
+mod audit;
+pub mod daemon;
 mod page;
 mod service;
 
@@ -9,6 +13,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
+pub use audit::{run_audit, AuditArgs};
 pub use page::run_page;
 pub use service::run_service;
 

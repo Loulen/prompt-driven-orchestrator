@@ -76,6 +76,8 @@ export interface LoopRegionNodeData {
 
 export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
   const setSelection = useEditStore((s) => s.setSelection);
+  const startRunEditing = useEditStore((s) => s.startRunEditing);
+  const activeTabId = useEditStore((s) => s.activeTabId);
 
   const accent = data.budgetReached
     ? "var(--color-st-await)"
@@ -87,14 +89,19 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
 
   const openInspector = () =>
     setSelection({ kind: "region", id: null, regionId: data.regionId });
-  // #1016: `raise cap` opens the inspector with the cost cap focused.
-  const raiseCap = () =>
+  // #1016/#1017: `raise cap` opens the inspector in « Edit for this run »
+  // (ADR-0080) with the cost cap focused and editable — on a followed Run the
+  // fields are otherwise locked. Both updates land in one render, so the
+  // inspector mounts unlocked and the focus takes.
+  const raiseCap = () => {
+    if (data.runId != null && activeTabId) startRunEditing(activeTabId);
     setSelection({
       kind: "region",
       id: null,
       regionId: data.regionId,
       focusField: "max_cost_usd",
     });
+  };
 
   // The grouping layer: border + faint fill, nothing interactive. Sits behind
   // the member cards and lets every click through (#167).

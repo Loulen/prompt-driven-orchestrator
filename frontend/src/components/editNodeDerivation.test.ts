@@ -695,6 +695,38 @@ describe("deriveLoopRegions — Plafond de coût (#1016)", () => {
     expect(badge.costWarn).toBe(true);
   });
 
+  // ---- #1017: the live override, and the way back to normal ----
+
+  it("shows the live override as the effective cap, even without a YAML cap", () => {
+    // Raised to $8 in flight: the header reads the override, not the YAML $5.
+    const raised = run(3, { L: cost(1.2) }, { region_max_cost_overrides: { L: 8 } });
+    expect(regionCostText(deriveLoopRegions(pipeline, raised)[0])).toBe("~$1.20 / $8");
+    // A region with no YAML cap, capped live by the Manager.
+    const bare: PipelineDef = {
+      ...pipeline,
+      loops: [{ id: "L", kind: "bounded", members: ["write", "review"], max_iter: 5 }],
+    };
+    expect(regionCostText(deriveLoopRegions(bare, raised)[0])).toBe("~$1.20 / $8");
+  });
+
+  it("drops the cap when the override removed it", () => {
+    const removed = run(3, { L: cost(9) }, { region_max_cost_overrides: { L: null } });
+    const [box] = deriveLoopRegions(pipeline, removed);
+    expect(box.cap).toBeNull();
+    expect(regionCostText(box)).toBe("~$9.00");
+    expect(box.costWarn).toBe(false);
+  });
+
+  it("returns to normal once a raised cap resumed the Run", () => {
+    // The park lifted (running again), the new cap is served: no amber state.
+    const resumed = run(5, { L: cost(5.12, 10) }, { region_max_cost_overrides: { L: 10 } });
+    const [box] = deriveLoopRegions(pipeline, resumed);
+    expect(box.budgetReached).toBe(false);
+    expect(box.exhausted).toBe(false);
+    expect(box.costWarn).toBe(false);
+    expect(regionCostText(box)).toBe("~$5.12 / $10");
+  });
+
   it("never caps a collection region (Q10)", () => {
     const coll: PipelineDef = {
       ...pipeline,
@@ -910,5 +942,92 @@ describe("deriveEditEdges — labels and draw order (#845)", () => {
     );
     expect(edges[0].data!.outputLabelPos).toEqual({ spec: { x: 40, y: 50 } });
     expect(edges[0].data!.conditionLabelPos).toEqual({ x: 12, y: 13 });
+  });
+});
+
+// #1017 — « exhausted — unrouted » is the daemon's `region_exhausted` PARK on
+// that region, not `iter >= max_iter`: the last lap reads `max/max` while it
+// runs, and so does a region that left by its exit.
+describe("deriveLoopRegions — exhausted is a park, not a lap count (#1017)", () => {
+  function node(id: string): NodeDef {
+    return {
+      id,
+      name: id,
+      type: "agent",
+      inputs: [],
+      outputs: [{ name: "out" }],
+      interactive: false,
+      view: { x: 200, y: 200 },
+    };
+  }
+  const pipeline: PipelineDef = {
+    name: "p",
+    variables: {},
+    nodes: [node("write"), node("review")],
+    edges: [],
+    loops: [
+      { id: "L", kind: "bounded", members: ["write", "review"], max_iter: 3 },
+      { id: "M", kind: "bounded", members: ["review"], max_iter: 3 },
+    ],
+  };
+  function run(status: "running" | "completed" | "awaiting_user", extra?: Partial<RunState>): RunState {
+    const member = (id: string, st: "running" | "completed") => ({
+      node_id: id,
+      status: st,
+      iter: 3,
+      started_at: null,
+      completed_at: null,
+      failure_reason: null,
+      iterations: [],
+    });
+    return {
+      run_id: "run-1",
+      pipeline_name: "p",
+      status,
+      input: null,
+      started_at: null,
+      completed_at: null,
+      nodes: {
+        write: member("write", "completed"),
+        review: member("review", status === "running" ? "running" : "completed"),
+      },
+      edges: [],
+      node_defs: [],
+      start_node: null,
+      end_node: null,
+      merge_resolver: null,
+      ...extra,
+    };
+  }
+
+  it("is not exhausted while the last lap runs", () => {
+    expect(deriveLoopRegions(pipeline, run("running"))[0].exhausted).toBe(false);
+  });
+
+  it("is not exhausted after a normal exit", () => {
+    expect(deriveLoopRegions(pipeline, run("completed"))[0].exhausted).toBe(false);
+  });
+
+  it("is exhausted on the region_exhausted park of THAT region only", () => {
+    const parked = run("awaiting_user", {
+      awaiting_reason_code: "region_exhausted",
+      awaiting_region_id: "L",
+    });
+    const [l, m] = deriveLoopRegions(pipeline, parked);
+    expect(l.exhausted).toBe(true);
+    expect(m.exhausted).toBe(false);
+  });
+
+  it("is not exhausted on another kind of park", () => {
+    const parked = run("awaiting_user", {
+      awaiting_reason_code: "session_died",
+      awaiting_region_id: null,
+    });
+    expect(deriveLoopRegions(pipeline, parked)[0].exhausted).toBe(false);
+  });
+
+  it("falls back to the counter on a historical park without a region id", () => {
+    const parked = run("awaiting_user", { awaiting_reason_code: "region_exhausted" });
+    expect(deriveLoopRegions(pipeline, parked)[0].exhausted).toBe(true);
   });
 });

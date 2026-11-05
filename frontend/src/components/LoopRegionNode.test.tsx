@@ -402,6 +402,21 @@ describe("LoopRegionNode — Plafond de coût (#1016)", () => {
     });
   });
 
+  it("`raise cap` unlocks « Edit for this run » on a followed run tab (#1017)", () => {
+    // A run tab in « pilotage »: locked until the user edits for this run.
+    useEditStore.setState((st) => ({
+      openTabs: st.openTabs.map((t) => ({ ...t, scope: "run", runId: "run-1", runEditing: false })),
+    }));
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ budgetReached: true, runId: "run-1" })} />
+      </Wrapper>,
+    );
+    fireEvent.click(screen.getByTestId("loop-region-raise-cap"));
+    expect(useEditStore.getState().openTabs[0].runEditing).toBe(true);
+    expect(useEditStore.getState().selection.focusField).toBe("max_cost_usd");
+  });
+
   it("`end region` ends the region by id", () => {
     render(
       <Wrapper>

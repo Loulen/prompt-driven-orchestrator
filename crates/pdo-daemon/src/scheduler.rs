@@ -563,15 +563,25 @@ pub(crate) fn effective_region_max_iter(
         .unwrap_or_else(|| crate::loop_region::resolve_region_max_iter(region, resolved_vars))
 }
 
-/// The bounded region's **effective** cost cap (#1016, ADR-0081): the declared
+/// The bounded region's **effective** cost cap (#1016/#1017, ADR-0081): the live
+/// `set_region_max_cost` override first — read off `run_state` (folded from the
+/// append-only log), so it beats a literal and a `$var` cap alike and survives a
+/// reopen; an override of `null` means the cap was removed — else the declared
 /// `max_cost_usd`, resolved against the Run's variables. `None` = no cap (also
 /// for a cap that does not resolve — the launch refuses those, so this only
 /// guards a hand-edited snapshot; parking on an unreadable value would be worse).
+/// A `collection` is never capped (Q10), whatever the log says.
 pub(crate) fn effective_region_max_cost(
-    _run_state: &RunState,
+    run_state: &RunState,
     region: &crate::pipeline::LoopRegion,
     resolved_vars: &HashMap<String, serde_yaml::Value>,
 ) -> Option<f64> {
+    if region.kind != crate::pipeline::LoopKind::Bounded {
+        return None;
+    }
+    if let Some(over) = run_state.region_max_cost_overrides.get(region.id.as_str()) {
+        return *over;
+    }
     crate::loop_region::resolve_region_max_cost(region, resolved_vars)
         .ok()
         .flatten()
@@ -620,7 +630,7 @@ fn budget_exhausted(
         message: format!(
             "budget reached: bounded region '{id}' reached its cost cap: \
              {approx}{spent} spent of {cap} after lap {current_iter}/{max_iter}{partial}. Its exit was not followed. \
-             Raise max_cost_usd and resume, route the exit with force_route \
+             Raise the cap with set_region_max_cost (max_cost_usd), route the exit with force_route \
              (source '{id}' -> a target), or end the region with end_region.",
             id = region.id,
             spent = usd_text(spent),
@@ -6582,6 +6592,92 @@ loops:
         assert!(budget_park(&reenter(&pipeline, &rs, &vars)).is_some());
         vars.insert("budget".to_string(), usd(10.0));
         assert!(budget_park(&reenter(&pipeline, &rs, &vars)).is_none());
+    }
+
+    // ---- #1017: the live `set_region_max_cost` override ----
+
+    #[test]
+    fn a_raised_cost_override_lets_the_next_lap_start() {
+        // Parked « budget reached » at $5.12 of $5; the operator raises the cap
+        // to $10 ⇒ the re-entry takes lap 5.
+        let (pipeline, mut rs) = capped_loop_at_lap(5, usd(5.0), 4, Some(5.12), false);
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_some());
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(10.0));
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+        assert!(
+            actions.contains(&SchedulerAction::Spawn {
+                node_id: "implementer".into(),
+                iter: 5
+            }),
+            "the raised cap lets lap 5 start: {actions:?}"
+        );
+    }
+
+    #[test]
+    fn a_cost_override_below_the_spend_parks_at_the_next_reentry() {
+        // Q8: no floor — lowering under what is already spent is legal and stops
+        // the loop at the next re-entry, never mid-lap.
+        let (pipeline, mut rs) = capped_loop_at_lap(5, usd(5.0), 2, Some(1.20), false);
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_none());
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(1.0));
+        let (message, _) =
+            budget_park(&reenter(&pipeline, &rs, &HashMap::new())).expect("parks on the lowered cap");
+        assert!(message.contains("$1.0000") || message.contains("$1.00"), "{message}");
+    }
+
+    #[test]
+    fn a_cost_override_caps_a_region_with_no_declared_cap() {
+        let (mut pipeline, mut rs) = capped_loop_at_lap(5, usd(5.0), 2, Some(0.75), false);
+        pipeline.loops[0].max_cost_usd = None;
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(0.5));
+        assert!(budget_park(&reenter(&pipeline, &rs, &HashMap::new())).is_some());
+    }
+
+    #[test]
+    fn a_null_cost_override_removes_the_declared_cap() {
+        let (pipeline, mut rs) = capped_loop_at_lap(5, usd(1.0), 2, Some(9.0), false);
+        rs.region_max_cost_overrides.insert("review_loop".into(), None);
+        let actions = reenter(&pipeline, &rs, &HashMap::new());
+        assert!(budget_park(&actions).is_none(), "{actions:?}");
+        assert!(actions.contains(&SchedulerAction::Spawn {
+            node_id: "implementer".into(),
+            iter: 3
+        }));
+    }
+
+    #[test]
+    fn a_cost_override_beats_a_var_cap_too() {
+        let (pipeline, mut rs) = capped_loop_at_lap(
+            5,
+            serde_yaml::Value::String("$budget".into()),
+            2,
+            Some(3.0),
+            false,
+        );
+        let mut vars = HashMap::new();
+        vars.insert("budget".to_string(), usd(2.5));
+        let region = &pipeline.loops[0];
+        assert_eq!(effective_region_max_cost(&rs, region, &vars), Some(2.5));
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(12.0));
+        assert_eq!(effective_region_max_cost(&rs, region, &vars), Some(12.0));
+        assert!(budget_park(&reenter(&pipeline, &rs, &vars)).is_none());
+    }
+
+    #[test]
+    fn a_collection_is_never_cost_capped_even_by_an_override() {
+        let (mut pipeline, mut rs) = capped_loop_at_lap(5, usd(1.0), 2, Some(9.0), false);
+        pipeline.loops[0].kind = crate::pipeline::LoopKind::Collection;
+        rs.region_max_cost_overrides
+            .insert("review_loop".into(), Some(1.0));
+        assert_eq!(
+            effective_region_max_cost(&rs, &pipeline.loops[0], &HashMap::new()),
+            None
+        );
     }
 
     #[test]

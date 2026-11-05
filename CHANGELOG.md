@@ -10,6 +10,25 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.129.0
+**Plafond de coût d'une boucle : édition à chaud et reprise** (#1017, spec #1014, story pdo-issues#5,
+ADR-0081).
+
+- Nouvelle commande de Run `set_region_max_cost` (`max_cost_usd` en dollars, ou `null` pour retirer
+le plafond), sœur de `set_region_max_iter`. L'override est porté par l'event log et prime sur le YAML
+(littéral ou `$var`) ; il survit à une réouverture. Aucun plancher : un plafond sous le coût déjà
+dépensé est accepté et arrête la boucle à la re-entry suivante, sans tuer le lap en cours. Refusée
+(400, sans trace) sur une `collection`, pour une valeur ≤ 0 ou une région inconnue. Sur un Run arrêté
+« budget reached », la commande lève l'arrêt et relance la re-entry : un plafond relevé démarre le lap
+suivant. Documentée dans les outils du Pipeline Manager.
+- Front : en « Edit for this run », sauver un `max_cost_usd` modifié passe par la commande (et reprend
+le Run). L'inspecteur montre l'encart « Budget reached · Run awaiting you », une note ambre si la
+valeur est sous le coût déjà dépensé, et un bouton `end region`. Le bouton `raise cap` ouvre
+l'inspecteur en « Edit for this run » avec le champ focalisé. Le header affiche le plafond effectif.
+- Correctif : « exhausted — unrouted » ne s'affiche plus pendant le dernier lap ni après une sortie
+normale ; il suit l'arrêt `region_exhausted` de la région.
+- Additif sur l'API : `region_max_cost_overrides` sur le Run.
+
 ## 1.128.0
 **Plafond de coût d'une boucle** (#1016, spec #1014, story pdo-issues#5, ADR-0081).
 

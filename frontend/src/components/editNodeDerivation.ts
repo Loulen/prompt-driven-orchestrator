@@ -144,10 +144,26 @@ export function regionCostText(
 }
 
 /**
+ * #1017 — the live `set_region_max_cost` override of a region on this run:
+ * `undefined` = none (the YAML cap applies), `null` = the cap was removed, a
+ * number = the cap in dollars.
+ */
+export function regionCapOverride(
+  region: LoopRegion,
+  runState: RunState | null | undefined,
+): number | null | undefined {
+  const overrides = runState?.region_max_cost_overrides;
+  if (!overrides || !(region.id in overrides)) return undefined;
+  return overrides[region.id] ?? null;
+}
+
+/**
  * #1016 — the effective cost cap of a region, in dollars, as far as the client
- * can tell: the daemon's resolved `cap_usd` on a live run (a `$var` is fixed at
- * launch, which only the daemon knows), else the YAML literal, else the `$var`'s
- * declared default. `null` = uncapped (or a collection: never capped, Q10).
+ * can tell: a live `set_region_max_cost` override first (#1017 — `null` there
+ * means removed), then the daemon's resolved `cap_usd` on a live run (a `$var`
+ * is fixed at launch, which only the daemon knows), else the YAML literal, else
+ * the `$var`'s declared default. `null` = uncapped (or a collection: never
+ * capped, Q10).
  */
 export function regionCapUsd(
   region: LoopRegion,
@@ -155,6 +171,8 @@ export function regionCapUsd(
   runState: RunState | null | undefined,
 ): number | null {
   if (region.kind !== "bounded") return null;
+  const override = regionCapOverride(region, runState);
+  if (override !== undefined) return override;
   const served = runState?.loop_costs?.[region.id]?.cap_usd;
   if (served != null) return served;
   const cap = region.max_cost_usd;
@@ -264,8 +282,21 @@ export function deriveLoopRegions(
     // A collection region (#151) never "exhausts" — the lap count is the
     // collection size, not a bounded cap. Idle shows the `over` driver.
     const isCollection = region.kind === "collection";
+    // « exhausted — unrouted » is a PARK, not a lap count: the last lap is
+    // `max/max` while it runs, and a region that left by its exit also reads
+    // `max/max`. Only the daemon's `region_exhausted` park on THIS region marks
+    // it (#1017 — a region resumed by a raised cap must read normal again). A
+    // historical run without `awaiting_region_id` falls back to the counter.
+    const exhaustedPark =
+      runState?.status === "awaiting_user" &&
+      runState?.awaiting_reason_code === "region_exhausted";
     const exhausted =
-      !isCollection && live && maxNum != null && currentIter >= maxNum;
+      !isCollection &&
+      live &&
+      exhaustedPark &&
+      (runState?.awaiting_region_id != null
+        ? runState.awaiting_region_id === region.id
+        : maxNum != null && currentIter >= maxNum);
     // #453: on a live run the collection badge reads `laps/total`, where the
     // total is the region's RESOLVED size (`collection_states[id].total_items`),
     // not `max(iter)` across members. `max(iter)` is the last lap *reached*, so
@@ -304,12 +335,16 @@ export function deriveLoopRegions(
     // #1016: the Plafond de coût — bounded regions only (Q10).
     const capUsd = regionCapUsd(region, pipeline, runState);
     const capRaw = region.max_cost_usd;
-    const cap =
-      isCollection || capRaw == null || capRaw === ""
-        ? null
-        : capUsd != null
-          ? { text: formatCostCap(capUsd), usd: capUsd }
-          : { text: String(capRaw), usd: null };
+    // A live override (#1017) caps even a region whose YAML declares none, and
+    // a removal (`null`) uncaps one that does.
+    const capOverridden = regionCapOverride(region, runState) !== undefined;
+    const cap = isCollection
+      ? null
+      : capUsd != null
+        ? { text: formatCostCap(capUsd), usd: capUsd }
+        : !capOverridden && capRaw != null && capRaw !== ""
+          ? { text: String(capRaw), usd: null }
+          : null;
     const spent = loopCost?.usd ?? null;
     const budgetReached =
       live &&

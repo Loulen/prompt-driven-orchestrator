@@ -8997,7 +8997,8 @@ fn run_cost_sources(
 }
 
 /// #1016 / ADR-0081: the scheduler's **cost input**. When the pipeline caps at
-/// least one bounded region (`max_cost_usd`), fold the **Coût de boucle** of each
+/// least one bounded region (`max_cost_usd`, or a live `set_region_max_cost`
+/// override — #1017), fold the **Coût de boucle** of each
 /// region from the SAME attributed breakdown as the Run total (ADR-0058) onto a
 /// copy of the Run state, so the pure scheduler reads it at re-entry
 /// (`scheduler::budget_exhausted`). Never persisted (ADR-0022/0029); a pipeline
@@ -9009,10 +9010,16 @@ pub(crate) fn with_loop_costs_for_caps<'a>(
     pipeline: &pipeline::PipelineDef,
     repo_root: &std::path::Path,
 ) -> std::borrow::Cow<'a, event_log::RunState> {
-    let capped = pipeline
-        .loops
-        .iter()
-        .any(|r| r.kind == pipeline::LoopKind::Bounded && r.max_cost_usd.is_some());
+    // #1017: a live `set_region_max_cost` override caps a region too, even one
+    // whose YAML declares none.
+    let capped = pipeline.loops.iter().any(|r| {
+        r.kind == pipeline::LoopKind::Bounded
+            && (r.max_cost_usd.is_some()
+                || run_state
+                    .region_max_cost_overrides
+                    .get(r.id.as_str())
+                    .is_some_and(|o| o.is_some()))
+    });
     if !capped {
         return std::borrow::Cow::Borrowed(run_state);
     }

@@ -1024,7 +1024,8 @@ On `curl {daemon_url}/runs/{run_id}` a parked run carries:
   schedulable); `unrouted` / `region_exhausted` / `region_ended_unrouted` (routing left no
   live path — route it with `end_region`/`bump_region` or the exit edge);
   `region_budget_exhausted` (a loop reached its `max_cost_usd` cost cap at re-entry, its exit
-  NOT followed — `awaiting_region_id` names it; raise the cap, `force_route` or `end_region`);
+  NOT followed — `awaiting_region_id` names it; raise the cap with `set_region_max_cost`,
+  `force_route` or `end_region`);
   `merge_conflict`,
   `merge_resolution_failed`, `script_validation_failed`, `frontmatter_retry_exhausted`,
   `delivery_failed` (a completion give-up); `agent_fail_awaiting` (an agent `pdo fail`
@@ -1067,7 +1068,25 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"end_region","region_id":"<region-id>"}}'
 ```
 
-### 3. resume_run
+### 3. set_region_max_iter / set_region_max_cost
+
+Edit a bounded loop region's caps **in flight**, without editing the pipeline or restarting. Both are **absolute** (the new total, not a delta), last write wins, and the override is kept in the event log (it survives a reopen) and beats the declared value — a literal or a `$var` alike.
+
+- `set_region_max_iter` — the region's iteration cap (`max_iter`, a positive integer). It cannot drop below the lap the region is already on.
+- `set_region_max_cost` — the region's **cost cap** in dollars (`max_cost_usd`, ADR-0081): a positive amount, or `null` to **remove** the cap. **No floor**: a cap below what the loop already spent is accepted — the lap in progress always finishes, and the loop stops (« budget reached ») at its next re-entry. Refused (400, nothing recorded) on a `collection` region and for a value ≤ 0.
+
+```bash
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"set_region_max_cost","region_id":"<region-id>","max_cost_usd":<USD>|null}}'
+curl -X POST {daemon_url}/runs/{run_id}/commands \
+  -H 'Content-Type: application/json' \
+  -d '{{"kind":"set_region_max_iter","region_id":"<region-id>","max_iter":<N>}}'
+```
+
+On a run parked `region_budget_exhausted` (or `region_exhausted`), the command lifts the park itself and re-checks the re-entry: raising the cap starts the next lap at once, a cap still under the spend parks it again. The loop's spend and its effective cap are in `loop_costs.<region-id>` (`usd`, `cap_usd`) of `curl {daemon_url}/runs/{run_id}`. Same `region_id` discovery and same truthful response body as `bump_region`.
+
+### 4. resume_run
 
 Re-run the scheduler from the current state. Use after a manual conflict resolution or after extending a cycle on a halted run.
 
@@ -1077,7 +1096,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"resume_run"}}'
 ```
 
-### 4. kill_node
+### 5. kill_node
 
 Kill a running NodeRun's tmux session and emit `node_failed`.
 
@@ -1087,7 +1106,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"kill_node","node_id":"<node-id>","iter":<N>}}'
 ```
 
-### 5. restart_node
+### 6. restart_node
 
 Kill a NodeRun and re-spawn it on the **same iter** with a new session. On an isolated node the sub-worktree is **reused in place**, so the dead session's uncommitted work is still there.
 
@@ -1101,7 +1120,7 @@ The response tells you what actually happened; it never blanket-claims success (
 
 Every knowable refusal is raised **before** the session is killed: an error body with `session_killed:false` means nothing was touched, so fix the cause and re-issue. `session_killed:true` means the session is gone and nothing replaced it — that node needs a different lever, not a retry of this one.
 
-### 6. mark_node_done
+### 7. mark_node_done
 
 Force-complete a NodeRun (typically an interactive node the user has finished with).
 
@@ -1113,7 +1132,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
 
 This goes through the same shared completion body as `pdo complete`, so it answers truthfully (#490): `200 {{"ok":true}}` when the node completed, `200 {{"ok":true,"noop":true,"reason":"…"}}` on a legal duplicate, and **`409 {{"error":"<slug>","recoverable":<bool>, …}}`** when the completion is refused — `missing_outputs`, `frontmatter_retry_pending`, `frontmatter_retry_exhausted`, `script_validation_failed`, `completion_rejected`, … Discriminate on `error`, never on the status. `recoverable:false` means the runtime already recorded the terminal event: do not try to record it again.
 
-### 7. release_node_completion
+### 8. release_node_completion
 
 Release the daemon completion guard for one live interactive NodeRun. The agent may then call `pdo complete` when ready. This is idempotent and does not inject text into the node session.
 
@@ -1125,7 +1144,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
 
 Returns `200 {{"ok":true,"released":true}}`, with `"noop":true` when already released. Named `409` refusals include `node_not_interactive` and `node_session_not_live`; discriminate on `error`, never on the status.
 
-### 8. inject_artifact
+### 9. inject_artifact
 
 Write an artifact directly into the Blackboard.
 
@@ -1135,7 +1154,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"inject_artifact","path":"<node-id>/iter-<N>/<port>/output.md","content":"<markdown content>"}}'
 ```
 
-### 9. cleanup_run
+### 10. cleanup_run
 
 Archive the run: remove worktrees, branches, and artifacts from disk. Events are preserved.
 
@@ -1147,7 +1166,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
 
 **Never call `cleanup_run` on your own initiative.** It is destructive and irreversible: it kills every active node session and removes the run's worktrees, branches, and artifacts from disk. Always check with the user first and wait for explicit confirmation before issuing it — even if you believe the run is stuck or finished.
 
-### 10. rename_run
+### 11. rename_run
 
 Set or update the display name of this run.
 
@@ -1157,7 +1176,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"rename_run","name":"<display name>"}}'
 ```
 
-### 11. start_node
+### 12. start_node
 
 Force-spawn a node now, without waiting for its upstream producers to complete. Use when you deliberately want to start a node ahead of its dependencies. Inputs resolve best-effort: any not-yet-produced upstream artifact resolves to the path where it *will* appear, so the node may run against missing or stale inputs. This is reversible — `restart_node` or `kill_node` it if it ran too early.
 
@@ -1167,7 +1186,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
   -d '{{"kind":"start_node","node_id":"<node-id>"}}'
 ```
 
-### 12. extend_cycle (legacy)
+### 13. extend_cycle (legacy)
 
 Increment the iteration ceiling of a *legacy drawn cycle* (a pipeline without a `loops:` block) and re-evaluate. `node_id` is the node whose **outgoing exit condition** references the `$max_iter`-style variable to bump — never the cycle's head/entry node. For any node that belongs to a bounded loop region this command is rejected with 409 — use `bump_region` instead. An unknown `node_id` is rejected with 400. Same truthful response body as `bump_region`.
 
@@ -2518,6 +2537,8 @@ mod tests {
         for cmd in [
             "bump_region",
             "end_region",
+            "set_region_max_iter",
+            "set_region_max_cost",
             "extend_cycle",
             "resume_run",
             "kill_node",
@@ -2626,14 +2647,14 @@ mod tests {
         let preamble =
             build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
         let section = preamble
-            .split("### 9. cleanup_run")
+            .split("### 10. cleanup_run")
             .nth(1)
             .expect("preamble should contain the cleanup_run section")
-            .split("### 10.")
+            .split("### 11.")
             .next()
             .expect("cleanup_run section should be delimited by section 10");
         assert!(
-            preamble.contains("### 10. rename_run"),
+            preamble.contains("### 11. rename_run"),
             "renumbering drifted: section 10 should be rename_run"
         );
         assert!(

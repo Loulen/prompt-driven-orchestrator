@@ -1136,6 +1136,13 @@ export interface RunState {
    * THAT region. Absent on historical runs and non-region parks.
    */
   awaiting_region_id?: string | null;
+  /**
+   * #1017 — live Plafond de coût overrides set by `set_region_max_cost`, keyed
+   * by region id: a dollar cap, or `null` when the cap was REMOVED (the region
+   * is uncapped even if its YAML declares one). Absent when none was ever set.
+   * They beat the YAML `max_cost_usd` (ADR-0081).
+   */
+  region_max_cost_overrides?: Record<string, number | null>;
   nodes: Record<string, NodeState>;
   edges: EdgeInfo[];
   node_defs: NodeDefInfo[];

@@ -4,7 +4,7 @@ import { serializePipeline } from "../lib/serializePipeline";
 import type { OpenPipeline, Selection } from "./editStore";
 import { generatedRegionId } from "../lib/loopRegions";
 import { pipelinesEquivalent } from "../hooks/useLibraryPipelines";
-import { ApiError, savePipeline, fetchPipeline, fetchPipelines, fetchRunPipeline, saveRunPipeline, deletePipeline, renamePipeline, overwriteDefaultPipelineFromRun } from "../api";
+import { ApiError, savePipeline, fetchPipeline, fetchPipelines, fetchRunPipeline, saveRunPipeline, setRegionMaxCost, deletePipeline, renamePipeline, overwriteDefaultPipelineFromRun } from "../api";
 import type { PipelineDef, NodeDef, EdgeDef } from "../types";
 
 vi.mock("../api", async (importOriginal) => ({
@@ -38,6 +38,7 @@ vi.mock("../api", async (importOriginal) => ({
   }),
   savePipeline: vi.fn().mockResolvedValue({ ok: true }),
   saveRunPipeline: vi.fn().mockResolvedValue(undefined),
+  setRegionMaxCost: vi.fn().mockResolvedValue(undefined),
   overwriteDefaultPipelineFromRun: vi.fn().mockResolvedValue({ pipeline_id: "source-pipe" }),
   deletePipeline: vi.fn().mockResolvedValue(undefined),
   renamePipeline: vi.fn().mockResolvedValue({ ok: true }),
@@ -2684,6 +2685,80 @@ describe("ADR-0080 run tab: « pilotage » locked, « Edit for this run » unloc
     const saveOrder = vi.mocked(saveRunPipeline).mock.invocationCallOrder[0];
     const overwriteOrder = vi.mocked(overwriteDefaultPipelineFromRun).mock.invocationCallOrder[0];
     expect(saveOrder).toBeLessThan(overwriteOrder);
+  });
+
+  // #1017 — hot editing a loop's cost cap goes through `set_region_max_cost`
+  // (an override in the event log), which also resumes a Run parked « budget
+  // reached »; the YAML snapshot is saved first so the daemon validates the
+  // region against it.
+  describe("cost cap — « Save for this run » issues set_region_max_cost (#1017)", () => {
+    const capped = (cap: number | string | null) => ({
+      ...makePipeline([makeNode({ id: "worker" })]),
+      loops: [
+        {
+          id: "review_loop",
+          kind: "bounded" as const,
+          members: ["worker"],
+          max_iter: 3,
+          ...(cap != null ? { max_cost_usd: cap } : {}),
+        },
+      ],
+    });
+    function snapshot(cap: number | string | null) {
+      vi.mocked(fetchRunPipeline).mockResolvedValueOnce({
+        scope: "run",
+        pipeline: capped(cap),
+        prompts: {},
+        diagnostics: [],
+      } as unknown as Awaited<ReturnType<typeof fetchRunPipeline>>);
+    }
+
+    beforeEach(() => {
+      vi.mocked(setRegionMaxCost).mockClear();
+      vi.mocked(setRegionMaxCost).mockResolvedValue(undefined);
+    });
+
+    it("raises the cap through the command, after the snapshot save", async () => {
+      seedRunTab({ pipeline: capped(0.01) });
+      useEditStore.getState().startRunEditing(tabId);
+      useEditStore.getState().updateRegion("review_loop", { max_cost_usd: 5 });
+      snapshot(0.01);
+      await useEditStore.getState().save(tabId);
+      expect(setRegionMaxCost).toHaveBeenCalledWith("r1", "review_loop", 5);
+      expect(vi.mocked(saveRunPipeline).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(setRegionMaxCost).mock.invocationCallOrder[0],
+      );
+      expect(tab().dirty).toBe(false);
+      expect(tab().saveError).toBeUndefined();
+    });
+
+    it("removes the cap with null", async () => {
+      seedRunTab({ pipeline: capped(5) });
+      useEditStore.getState().startRunEditing(tabId);
+      useEditStore.getState().updateRegion("review_loop", { max_cost_usd: null });
+      snapshot(5);
+      await useEditStore.getState().save(tabId);
+      expect(setRegionMaxCost).toHaveBeenCalledWith("r1", "review_loop", null);
+    });
+
+    it("issues no command when the cap did not change", async () => {
+      seedRunTab({ pipeline: capped(5) });
+      useEditStore.getState().startRunEditing(tabId);
+      useEditStore.getState().updatePrompt("worker", "new prompt");
+      snapshot(5);
+      await useEditStore.getState().save(tabId);
+      expect(setRegionMaxCost).not.toHaveBeenCalled();
+    });
+
+    it("says so when the run refused the cap", async () => {
+      seedRunTab({ pipeline: capped(0.01) });
+      useEditStore.getState().startRunEditing(tabId);
+      useEditStore.getState().updateRegion("review_loop", { max_cost_usd: 5 });
+      snapshot(0.01);
+      vi.mocked(setRegionMaxCost).mockRejectedValueOnce(new Error("boom"));
+      await useEditStore.getState().save(tabId);
+      expect(tab().saveError?.message).toContain("review_loop");
+    });
   });
 
   it("does not overwrite when the save for the run fails", async () => {

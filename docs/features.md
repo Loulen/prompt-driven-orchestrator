@@ -62,7 +62,11 @@ parallel.
 Each loop's header shows its running cost (`↻ 3/5 · ~$1.20`). A bounded loop can also carry a
 **cost cap** (`max_cost_usd`, set in the region inspector): once the loop's cost reaches it, the next
 lap does not start and the run waits for you (« budget reached »). The lap in progress always
-finishes. You can raise the cap and resume, route the exit, or end the region.
+finishes. While the run goes on, « Edit for this run » lets you change the cap live: raise it and
+save to run the next lap, lower it (even under what was already spent) to stop the loop at the end of
+the current lap, or clear it. The `raise cap` button on a stopped region opens that field directly,
+and the Pipeline Manager has the same lever (`set_region_max_cost`). You can also route the exit or
+end the region.
 
 Branches converge on any node: wire several edges into an `agent` and it waits until each incoming
 edge has fired or died, receives only the outputs of the branches that fired (same-named edges group

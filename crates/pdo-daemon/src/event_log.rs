@@ -1118,6 +1118,17 @@ pub struct RunState {
     /// byte-identically), which is every historical run.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub region_max_iter_overrides: HashMap<String, i64>,
+    /// Live **Plafond de coût** overrides folded from `set_region_max_cost`
+    /// commands (#1017, ADR-0081), keyed by region id. Absolute, last-write-wins,
+    /// consulted by the scheduler at re-entry in place of the region's declared
+    /// `max_cost_usd` — for a literal and a `$var` cap alike. `Some(usd)` = the
+    /// cap in dollars (NO floor: below the spend already is legal, it stops the
+    /// loop at the next re-entry); `None` = the cap was **removed** (the region is
+    /// uncapped even if its YAML declares one). Folded from the append-only log,
+    /// so it survives a reopen re-projection; empty (and absent on the wire) for
+    /// every Run that never set one.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub region_max_cost_overrides: HashMap<String, Option<f64>>,
     /// Forced routes folded from `force_route` commands (ADR-0011 / #600), keyed by
     /// **source** — a node id OR a region id — mapping to the target node id. The
     /// scheduler spawns the target (or completes, if it is `End`) when the source
@@ -1377,6 +1388,7 @@ impl RunState {
             collection_states: HashMap::new(),
             switch_states: HashMap::new(),
             region_max_iter_overrides: HashMap::new(),
+            region_max_cost_overrides: HashMap::new(),
             forced_routes: HashMap::new(),
             target_repo: None,
             target_repos: Vec::new(),
@@ -3322,6 +3334,30 @@ fn apply_command_event(state: &mut RunState, event: &Event) {
                     state
                         .region_max_iter_overrides
                         .insert(region_id.to_string(), n);
+                }
+            }
+        }
+        // #1017 / ADR-0081: `set_region_max_cost` edits a bounded region's cost cap
+        // in flight. Absolute and last-write-wins like `set_region_max_iter`, but
+        // with NO floor (a cap under the spend is legal: the loop stops at the next
+        // re-entry) and `null` meaning « remove the cap ». A non-positive or
+        // non-numeric value is ignored (the handler refuses it before appending).
+        if cmd == Some("set_region_max_cost") {
+            if let Some(region_id) = payload.get("region_id").and_then(|v| v.as_str()) {
+                match payload.get("max_cost_usd") {
+                    Some(serde_json::Value::Null) => {
+                        state
+                            .region_max_cost_overrides
+                            .insert(region_id.to_string(), None);
+                    }
+                    Some(v) => {
+                        if let Some(usd) = v.as_f64().filter(|u| u.is_finite() && *u > 0.0) {
+                            state
+                                .region_max_cost_overrides
+                                .insert(region_id.to_string(), Some(usd));
+                        }
+                    }
+                    None => {}
                 }
             }
         }
@@ -8369,6 +8405,67 @@ mod tests {
             ),
         );
         assert!(state.region_max_iter_overrides.is_empty());
+    }
+
+    fn set_cost(state: &mut RunState, value: serde_json::Value) {
+        apply_command_event(
+            state,
+            &make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_cost", "region_id": "R", "max_cost_usd": value }),
+            ),
+        );
+    }
+
+    #[test]
+    fn set_region_max_cost_folds_an_absolute_override_last_write_wins_and_null_removes() {
+        // #1017: absolute, last-write-wins, `null` = the cap is removed.
+        let mut state = RunState::new("r".into(), String::new());
+        set_cost(&mut state, serde_json::json!(5));
+        assert_eq!(state.region_max_cost_overrides.get("R"), Some(&Some(5.0)));
+        set_cost(&mut state, serde_json::json!(0.25));
+        assert_eq!(state.region_max_cost_overrides.get("R"), Some(&Some(0.25)));
+        set_cost(&mut state, serde_json::Value::Null);
+        assert_eq!(state.region_max_cost_overrides.get("R"), Some(&None));
+    }
+
+    #[test]
+    fn set_region_max_cost_ignores_a_non_positive_cap() {
+        let mut state = RunState::new("r".into(), String::new());
+        set_cost(&mut state, serde_json::json!(0));
+        set_cost(&mut state, serde_json::json!(-1.5));
+        set_cost(&mut state, serde_json::json!("lots"));
+        assert!(state.region_max_cost_overrides.is_empty());
+    }
+
+    #[test]
+    fn set_region_max_cost_override_survives_a_reprojection_and_rides_the_wire() {
+        // The override lives in the log, so a fresh projection (reopen) keeps it;
+        // a removal is serialized as an explicit `null`.
+        let events = vec![
+            make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_cost", "region_id": "R", "max_cost_usd": 5 }),
+            ),
+            make_event_with_payload(
+                EventKind::CommandIssued,
+                None,
+                serde_json::json!({ "command": "set_region_max_cost", "region_id": "S", "max_cost_usd": null }),
+            ),
+        ];
+        let mut state = RunState::new("r".into(), String::new());
+        for e in &events {
+            apply_command_event(&mut state, e);
+        }
+        let wire = serde_json::to_value(&state).unwrap();
+        assert_eq!(wire["region_max_cost_overrides"]["R"], serde_json::json!(5.0));
+        assert!(wire["region_max_cost_overrides"]["S"].is_null());
+        assert!(wire["region_max_cost_overrides"].as_object().unwrap().contains_key("S"));
+        let fresh = RunState::new("r".into(), String::new());
+        let fresh_wire = serde_json::to_value(&fresh).unwrap();
+        assert!(fresh_wire.get("region_max_cost_overrides").is_none(), "absent when never set");
     }
 
     #[test]

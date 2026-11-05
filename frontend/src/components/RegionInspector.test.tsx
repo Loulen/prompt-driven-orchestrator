@@ -3,11 +3,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import RegionInspector from "./RegionInspector";
 import { useEditStore } from "../stores/editStore";
 import type { PipelineDef, NodeDef, LoopRegion, RunState } from "../types";
+import { endRegion } from "../api";
 
 // The harness catalogue is served by `GET /settings`; the inspector falls back
 // to the embedded floor (claude: costable, opencode: no cost source).
 vi.mock("../api", () => ({
   fetchSettings: vi.fn().mockRejectedValue(new Error("offline")),
+  endRegion: vi.fn().mockResolvedValue(undefined),
 }));
 
 function makeNode(id: string, name: string): NodeDef {
@@ -281,5 +283,80 @@ describe("RegionInspector — Plafond de coût (#1016)", () => {
     selectWith([{ ...reviewLoop, max_cost_usd: 5 }]);
     render(<RegionInspector />);
     expect(screen.queryByTestId("region-loop-cost")).toBeNull();
+  });
+
+  // ---- #1017: « Edit for this run » — hot editing the cap ----
+
+  const budgetPark = (run: RunState): RunState => ({
+    ...run,
+    status: "awaiting_user",
+    awaiting_reason_code: "region_budget_exhausted",
+    awaiting_reason: "budget reached: …",
+    awaiting_region_id: "review_loop",
+  });
+
+  it("in « Edit for this run », says the budget was reached and that saving resumes", () => {
+    selectWith([{ ...reviewLoop, max_iter: 5, max_cost_usd: 5 }]);
+    render(<RegionInspector run={budgetPark(liveRun(5.12))} />);
+    expect(screen.getByTestId("region-budget-reached")).toHaveTextContent(
+      "Budget reached · Run awaiting you",
+    );
+    expect(screen.getByTestId("region-loop-cost")).toBeInTheDocument();
+    expect(screen.getByTestId("region-run-edit-note")).toHaveTextContent(
+      "Saving resumes the Run at the next lap",
+    );
+    expect(screen.getByTestId("region-inspector")).toHaveAttribute("data-run-editing", "true");
+    // The field is editable and the edit lands in the run tab.
+    fireEvent.change(screen.getByTestId("region-max-cost"), { target: { value: "8" } });
+    expect(region().max_cost_usd).toBe(8);
+  });
+
+  it("offers `end region` once the budget is reached", () => {
+    vi.mocked(endRegion).mockClear();
+    selectWith([{ ...reviewLoop, max_iter: 5, max_cost_usd: 5 }]);
+    render(<RegionInspector run={budgetPark(liveRun(5.12))} />);
+    fireEvent.click(screen.getByTestId("region-end-region"));
+    expect(endRegion).toHaveBeenCalledWith("a1b2c3d4e5", "review_loop");
+  });
+
+  it("accepts a cap below the spend with an amber note (Q8)", () => {
+    selectWith([{ ...reviewLoop, max_iter: 5, max_cost_usd: 1 }]);
+    render(<RegionInspector run={liveRun(1.2)} />);
+    expect(screen.getByTestId("region-cost-below-spent")).toHaveTextContent(
+      "Below the ~$1.20 already spent: the loop will stop at the next re-entry.",
+    );
+    expect(screen.queryByTestId("region-budget-reached")).toBeNull();
+  });
+
+  it("does not show the below-spent note for a cap above the spend", () => {
+    selectWith([{ ...reviewLoop, max_iter: 5, max_cost_usd: 5 }]);
+    render(<RegionInspector run={liveRun(1.2)} />);
+    expect(screen.queryByTestId("region-cost-below-spent")).toBeNull();
+  });
+
+  it("while following, the budget box points to « Edit for this run » and offers no end button", () => {
+    selectWith([{ ...reviewLoop, max_iter: 5, max_cost_usd: 5 }]);
+    render(<RegionInspector run={budgetPark(liveRun(5.12))} locked />);
+    expect(screen.getByTestId("region-budget-reached")).toHaveTextContent("Edit for this run");
+    expect(screen.queryByTestId("region-end-region")).toBeNull();
+  });
+
+  it("focuses the cap once « Edit for this run » unlocks it (`raise cap`)", () => {
+    selectWith([{ ...reviewLoop, max_iter: 5, max_cost_usd: 5 }]);
+    useEditStore.setState({
+      selection: { kind: "region", id: null, regionId: "review_loop", focusField: "max_cost_usd" },
+    });
+    const { rerender } = render(
+      <fieldset disabled>
+        <RegionInspector run={budgetPark(liveRun(5.12))} locked />
+      </fieldset>,
+    );
+    expect(screen.getByTestId("region-max-cost")).not.toHaveFocus();
+    rerender(
+      <fieldset disabled={false}>
+        <RegionInspector run={budgetPark(liveRun(5.12))} locked={false} />
+      </fieldset>,
+    );
+    expect(screen.getByTestId("region-max-cost")).toHaveFocus();
   });
 });

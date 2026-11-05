@@ -120,6 +120,55 @@ loops:
     max_iter: $max_laps
 "#;
 
+/// #1017: a `collection` region — never cost-capped (Q10), so
+/// `set_region_max_cost` on it is refused.
+const COLLECTION_PIPELINE_NAME: &str = "collection-truth-test";
+const COLLECTION_PIPELINE_YAML: &str = r#"name: collection-truth-test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: lister
+    name: lister
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: task
+    outputs:
+      - name: plan
+        frontmatter:
+          issues:
+            type: list
+  - id: worker
+    name: worker
+    type: agent
+    isolated_worktree: false
+    inputs:
+      - name: in
+    outputs:
+      - name: out
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: lister, port: task }
+  - source: { node: lister, port: plan }
+    target: { node: worker, port: in }
+  - source: { node: worker, port: out }
+    target: { node: end, port: result }
+loops:
+  - id: per_issue
+    kind: collection
+    over: issues
+    members: [worker]
+"#;
+
 fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;
@@ -127,6 +176,7 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
         (LOOP_PIPELINE_NAME, LOOP_PIPELINE_YAML, "worker"),
         (LEGACY_PIPELINE_NAME, LEGACY_PIPELINE_YAML, "planner"),
         (EXHAUST_PIPELINE_NAME, EXHAUST_PIPELINE_YAML, "impl"),
+        (COLLECTION_PIPELINE_NAME, COLLECTION_PIPELINE_YAML, "lister"),
     ] {
         std::fs::write(pipelines_dir.join(format!("{name}.yaml")), yaml)?;
         let prompts_dir = pipelines_dir.join(format!("{name}.prompts"));
@@ -392,6 +442,139 @@ async fn set_region_max_iter_on_a_known_region_appends_the_command() {
             .await
             .is_empty(),
         "an accepted set_region_max_iter appends its CommandIssued"
+    );
+}
+
+// ---- #1017: `set_region_max_cost` — the live Plafond de coût override ----
+
+async fn run_json(daemon_url: &str, run_id: &str) -> serde_json::Value {
+    reqwest::Client::new()
+        .get(format!("{daemon_url}/runs/{run_id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn set_region_max_cost_unknown_region_is_400_and_leaves_no_trace() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "ghost", "max_cost_usd": 5 }),
+    )
+    .await;
+
+    assert_eq!(status, 400, "unknown region must be rejected, got {body}");
+    assert_eq!(body["error"], "region 'ghost' not found in pipeline");
+    assert!(
+        command_events(&daemon.url(), &run_id, "set_region_max_cost")
+            .await
+            .is_empty(),
+        "rejected set_region_max_cost must not append a CommandIssued"
+    );
+}
+
+#[tokio::test]
+async fn set_region_max_cost_is_refused_on_a_collection_and_for_a_non_positive_cap() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, COLLECTION_PIPELINE_NAME).await;
+
+    let (status, body) = post_command(
+        &daemon.url(),
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "per_issue", "max_cost_usd": 5 }),
+    )
+    .await;
+    assert_eq!(status, 400, "a collection is never cost-capped, got {body}");
+    assert!(
+        body["error"].as_str().unwrap_or_default().contains("bounded"),
+        "says why: {body}"
+    );
+
+    let loop_run = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+    for bad in [serde_json::json!(0), serde_json::json!(-1)] {
+        let (status, body) = post_command(
+            &daemon.url(),
+            &loop_run,
+            serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": bad }),
+        )
+        .await;
+        assert_eq!(status, 400, "≤ 0 is refused, got {body}");
+    }
+    for run in [&run_id, &loop_run] {
+        assert!(
+            command_events(&daemon.url(), run, "set_region_max_cost")
+                .await
+                .is_empty(),
+            "a refused set_region_max_cost leaves no trace"
+        );
+    }
+}
+
+#[tokio::test]
+async fn set_region_max_cost_sets_raises_lowers_and_removes_the_override_and_survives_a_reopen() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = create_run(&daemon, LOOP_PIPELINE_NAME).await;
+    let url = daemon.url();
+
+    // Set, then raise, then lower (no floor: any positive amount is accepted).
+    for cap in [1.0, 5.0, 0.01] {
+        let (status, body) = post_command(
+            &url,
+            &run_id,
+            serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": cap }),
+        )
+        .await;
+        assert_eq!(status, 200, "cap {cap} accepted, got {body}");
+        assert_eq!(body["ok"], true, "truthful body (ADR-0025): {body}");
+        let run = run_json(&url, &run_id).await;
+        assert_eq!(
+            run["region_max_cost_overrides"]["review_loop"].as_f64(),
+            Some(cap),
+            "the override is the last write: {run}"
+        );
+    }
+
+    // `null` removes the cap — explicitly, on the wire too.
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": null }),
+    )
+    .await;
+    assert_eq!(status, 200, "null removal accepted, got {body}");
+    let run = run_json(&url, &run_id).await;
+    assert!(
+        run["region_max_cost_overrides"]
+            .as_object()
+            .is_some_and(|o| o.contains_key("review_loop") && o["review_loop"].is_null()),
+        "removal is an explicit null override: {run}"
+    );
+    assert_eq!(
+        command_events(&url, &run_id, "set_region_max_cost").await.len(),
+        4,
+        "every accepted edit is in the event log"
+    );
+
+    // The override lives in the log: re-cap, reopen, it is still there.
+    post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 2.5 }),
+    )
+    .await;
+    let _ = post_command(&url, &run_id, serde_json::json!({ "kind": "reopen_run" })).await;
+    let run = run_json(&url, &run_id).await;
+    assert_eq!(
+        run["region_max_cost_overrides"]["review_loop"].as_f64(),
+        Some(2.5),
+        "the override survives a reopen re-projection: {run}"
     );
 }
 
@@ -691,4 +874,194 @@ async fn bump_region_that_actually_reschedules_reports_the_spawn() {
         1,
         "routing a halted region lifts the Halt"
     );
+}
+
+// ---- #1017: resume after « budget reached » (ADR-0081), end to end ----
+
+const BUDGET_PIPELINE_NAME: &str = "budget-truth-test";
+/// A single-member bounded self-loop capped at $0.01: one lap of `worker` costs
+/// far more (its planted transcript), so the re-entry after lap 1 parks the Run
+/// « budget reached ». No exit edge: at max_iter the region parks
+/// `region_exhausted`, which tells the two bounds apart.
+const BUDGET_PIPELINE_YAML: &str = r#"name: budget-truth-test
+version: "1.0"
+nodes:
+  - id: start
+    name: Start
+    type: start
+    outputs:
+      - name: user_prompt
+  - id: worker
+    name: worker
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: result
+  - id: end
+    name: End
+    type: end
+    inputs:
+      - name: result
+edges:
+  - source: { node: start, port: user_prompt }
+    target: { node: worker, port: task }
+  - source: { node: worker, port: result }
+    target: { node: worker, port: task }
+    else: true
+loops:
+  - id: review_loop
+    kind: bounded
+    members: [worker]
+    max_iter: 3
+    max_cost_usd: 0.01
+"#;
+
+fn seed_budget(repo: &std::path::Path) -> anyhow::Result<()> {
+    let pipelines_dir = repo.join(".pdo").join("pipelines");
+    std::fs::create_dir_all(&pipelines_dir)?;
+    std::fs::write(
+        pipelines_dir.join(format!("{BUDGET_PIPELINE_NAME}.yaml")),
+        BUDGET_PIPELINE_YAML,
+    )?;
+    let prompts_dir = pipelines_dir.join(format!("{BUDGET_PIPELINE_NAME}.prompts"));
+    std::fs::create_dir_all(&prompts_dir)?;
+    std::fs::write(prompts_dir.join("worker.md"), "You are a test node.\n")?;
+    git_init_with_commit(repo)
+}
+
+/// Plant `worker`'s Claude transcript for its latest session (1M input tokens of
+/// a priced model ⇒ several dollars), under the daemon's home override.
+async fn plant_worker_transcript(daemon: &TestDaemon, run_id: &str) {
+    let sid = daemon.pinned_session_id(run_id, "worker").await;
+    let worktree = daemon
+        .repo_root()
+        .join(".pdo/runs")
+        .join(run_id)
+        .join("worktree");
+    let enc = pdo_daemon::stale_detector::encode_working_dir(&worktree);
+    let proj = daemon.repo_root().join(".claude/projects").join(enc);
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(
+        proj.join(format!("{sid}.jsonl")),
+        format!(
+            "{{\"type\":\"assistant\",\"requestId\":\"{sid}\",\"message\":{{\"id\":\"{sid}\",\
+             \"model\":\"claude-opus-4-8\",\"usage\":{{\"input_tokens\":1000000,\"output_tokens\":0}}}}}}\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// Finish `worker`'s lap `iter` through the command surface.
+async fn finish_worker_lap(url: &str, run_id: &str, iter: i64) {
+    let (status, body) = post_command(
+        url,
+        run_id,
+        serde_json::json!({
+            "kind": "inject_artifact",
+            "path": format!("worker/iter-{iter}/result/output.md"),
+            "content": "# done\n",
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "inject_artifact lap {iter}: {body}");
+    let (status, body) = post_command(
+        url,
+        run_id,
+        serde_json::json!({ "kind": "mark_node_done", "node_id": "worker", "iter": iter }),
+    )
+    .await;
+    assert_eq!(status, 200, "mark_node_done lap {iter}: {body}");
+}
+
+async fn worker_started(url: &str, run_id: &str, iter: i64) -> bool {
+    started_pairs(url, run_id)
+        .await
+        .contains(&("worker".to_string(), iter))
+}
+
+async fn awaiting_reason_code(url: &str, run_id: &str) -> Option<String> {
+    run_json(url, run_id).await["awaiting_reason_code"]
+        .as_str()
+        .map(str::to_string)
+}
+
+#[tokio::test]
+async fn raising_the_cost_cap_resumes_the_next_lap_lowering_it_stops_at_the_next_reentry_and_removing_it_runs_to_max_iter(
+) {
+    let daemon = TestDaemon::spawn_with_home_override(seed_budget, Some("exec sleep 600".to_string()))
+        .await
+        .unwrap();
+    let url = daemon.url();
+    let run_id = create_run(&daemon, BUDGET_PIPELINE_NAME).await;
+
+    // Lap 1 spends dollars against a $0.01 cap ⇒ the re-entry parks the Run.
+    wait_until("worker lap 1 to start", || async { worker_started(&url, &run_id, 1).await }).await;
+    plant_worker_transcript(&daemon, &run_id).await;
+    finish_worker_lap(&url, &run_id, 1).await;
+    wait_until("the Run to park « budget reached »", || async {
+        awaiting_reason_code(&url, &run_id).await.as_deref() == Some("region_budget_exhausted")
+    })
+    .await;
+    assert_eq!(run_status(&url, &run_id).await, "awaiting_user");
+    assert!(!worker_started(&url, &run_id, 2).await, "lap 2 must not start on budget");
+
+    // FP 1 — raise the cap: the command itself resumes the Run at lap 2.
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 100 }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let spawned = body["spawned"]
+        .as_array()
+        .unwrap_or_else(|| panic!("raising the cap must report the lap-2 spawn: {body}"));
+    assert!(
+        spawned
+            .iter()
+            .any(|s| s["node_id"] == "worker" && s["iter"] == 2),
+        "lap 2 spawned: {body}"
+    );
+    wait_until("lap 2 to start", || async { worker_started(&url, &run_id, 2).await }).await;
+    assert_eq!(run_status(&url, &run_id).await, "running");
+    let run = run_json(&url, &run_id).await;
+    assert_eq!(run["loop_costs"]["review_loop"]["cap_usd"].as_f64(), Some(100.0), "effective cap served: {run}");
+
+    // FP 2 — lower the cap under the spend DURING lap 2: accepted, nothing is
+    // killed, the Run keeps running until the next re-entry.
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": 1 }),
+    )
+    .await;
+    assert_eq!(status, 200, "a cap under the spend is accepted (no floor): {body}");
+    assert_eq!(run_status(&url, &run_id).await, "running", "the lap in progress is not stopped");
+    let run = run_json(&url, &run_id).await;
+    assert_eq!(run["nodes"]["worker"]["status"], "running", "lap 2 is not killed: {run}");
+    plant_worker_transcript(&daemon, &run_id).await;
+    finish_worker_lap(&url, &run_id, 2).await;
+    wait_until("the Run to park again at the next re-entry", || async {
+        awaiting_reason_code(&url, &run_id).await.as_deref() == Some("region_budget_exhausted")
+    })
+    .await;
+    assert!(!worker_started(&url, &run_id, 3).await, "lap 3 must not start on budget");
+
+    // FP 3 — remove the cap: the loop resumes and runs to max_iter.
+    let (status, body) = post_command(
+        &url,
+        &run_id,
+        serde_json::json!({ "kind": "set_region_max_cost", "region_id": "review_loop", "max_cost_usd": null }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    wait_until("lap 3 to start", || async { worker_started(&url, &run_id, 3).await }).await;
+    finish_worker_lap(&url, &run_id, 3).await;
+    // Uncapped, the loop runs to max_iter: lap 3/3 ends on the max_iter
+    // exhaustion (no exit is wired here), never on the budget.
+    wait_until("the loop to run out at max_iter", || async {
+        awaiting_reason_code(&url, &run_id).await.as_deref() == Some("region_exhausted")
+    })
+    .await;
+    assert!(!worker_started(&url, &run_id, 4).await, "max_iter still bounds the loop");
 }

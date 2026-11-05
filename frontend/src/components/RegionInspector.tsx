@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { RefreshCw, TriangleAlert, X } from "lucide-react";
+import { RefreshCw, TriangleAlert, Wallet, X } from "lucide-react";
 import { useEditStore } from "../stores/editStore";
 import { SectionHead, Field } from "./InspectorPrimitives";
 import type { LoopRegion, NodeDef, RunState } from "../types";
@@ -11,6 +11,7 @@ import {
   formatCostCap,
 } from "../lib/costLabel";
 import { regionCapUsd } from "./editNodeDerivation";
+import { endRegion } from "../api";
 
 const INPUT_CLASS =
   "w-full rounded border border-line-strong bg-bg-3 px-2 py-1 font-mono text-fg outline-none focus:border-acc";
@@ -56,10 +57,11 @@ export default function RegionInspector({ run = null, locked = false }: RegionIn
 
   const focusCost =
     selection.kind === "region" && selection.focusField === "max_cost_usd";
-  // `raise cap` (the « budget reached » chip) opens the inspector on the cap.
+  // `raise cap` (the « budget reached » chip) opens the inspector on the cap,
+  // in « Edit for this run » (#1017): refocus once the fieldset unlocks.
   useEffect(() => {
-    if (focusCost) costInputRef.current?.focus();
-  }, [focusCost, selection.regionId]);
+    if (focusCost && !locked) costInputRef.current?.focus();
+  }, [focusCost, selection.regionId, locked]);
 
   const tab = openTabs.find((t) => t.id === activeTabId);
   if (!tab || selection.kind !== "region" || !selection.regionId) return null;
@@ -100,9 +102,23 @@ export default function RegionInspector({ run = null, locked = false }: RegionIn
   };
   const showCapWarning = isBounded && capSet && (uncosted.length > 0 || loopCost?.partial === true);
 
+  // ── #1017: « Edit for this run » — hot editing the cap of a live Run ──────
+  const runEditing = run != null && !locked;
+  const budgetReached =
+    run != null &&
+    isBounded &&
+    run.status === "awaiting_user" &&
+    run.awaiting_reason_code === "region_budget_exhausted" &&
+    (run.awaiting_region_id == null || run.awaiting_region_id === region.id);
+  // The cap being typed (not yet saved): a literal under the spend is accepted
+  // (Q8, no floor) — the loop stops at its next re-entry; say so.
+  const typedCap = typeof capRaw === "number" ? capRaw : null;
+  const spent = loopCost?.usd ?? null;
+  const belowSpent = runEditing && isBounded && typedCap != null && spent != null && typedCap < spent;
+
   const subtitle = [
     isBounded ? "bounded loop region" : "collection region",
-    run ? `run ${run.run_id.slice(0, 8)}` : "template",
+    run ? (runEditing ? "editing for this run" : `run ${run.run_id.slice(0, 8)}`) : "template",
     ...(run && isBounded && lap > 0 ? [`lap ${lap}/${maxIterText(region.max_iter)}`] : []),
   ].join(" · ");
 
@@ -110,9 +126,16 @@ export default function RegionInspector({ run = null, locked = false }: RegionIn
     <aside
       className="flex h-full flex-col bg-bg-2 overflow-y-auto"
       data-testid="region-inspector"
+      data-run-editing={runEditing ? "true" : undefined}
+      // #1017 — « Edit for this run » wears the purple edit tint (ADR-0080).
+      style={runEditing ? { boxShadow: "inset 0 0 0 1px var(--color-edit-tint)" } : undefined}
     >
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <RefreshCw size={14} className="shrink-0 text-acc" />
+        <RefreshCw
+          size={14}
+          className="shrink-0"
+          style={{ color: runEditing ? "var(--color-edit-tint)" : "var(--color-acc)" }}
+        />
         <div className="min-w-0">
           <div
             className="truncate font-medium text-fg"
@@ -128,6 +151,28 @@ export default function RegionInspector({ run = null, locked = false }: RegionIn
       </div>
 
       <div className="flex flex-col gap-3 p-3" style={{ fontSize: "11.5px" }}>
+        {budgetReached && (
+          <div
+            className="rounded border border-st-await-border bg-st-await-bg px-2 py-1.5 text-fg-2"
+            style={{ fontSize: "10px", lineHeight: 1.6 }}
+            data-testid="region-budget-reached"
+          >
+            <div className="flex items-center gap-1 font-medium text-st-await">
+              <Wallet size={11} /> Budget reached · Run awaiting you
+            </div>
+            {runEditing ? (
+              <div>
+                Raise <span className="font-mono">max_cost_usd</span> and save to run the next
+                lap, or end the region.
+              </div>
+            ) : (
+              <div>
+                Use Edit › <span className="text-acc">Edit for this run</span> to raise{" "}
+                <span className="font-mono">max_cost_usd</span>, or end the region.
+              </div>
+            )}
+          </div>
+        )}
         {run && (
           <LoopCostSection
             region={region}
@@ -263,7 +308,41 @@ export default function RegionInspector({ run = null, locked = false }: RegionIn
             <span className="text-acc">Edit for this run</span>.
           </div>
         )}
-        {isBounded && !locked && (
+        {belowSpent && (
+          <div
+            className="text-st-await"
+            style={{ fontSize: "10px", lineHeight: 1.6 }}
+            data-testid="region-cost-below-spent"
+          >
+            Below the{" "}
+            {formatCostAmount(spent, loopCost?.partial === true, loopCost?.estimated ?? true)} already
+            spent: the loop will stop at the next re-entry.
+          </div>
+        )}
+        {isBounded && runEditing && (
+          <div className="text-fg-4" style={{ fontSize: "10px", lineHeight: 1.6 }} data-testid="region-run-edit-note">
+            Applies <span className="text-acc">live</span>.{" "}
+            {budgetReached
+              ? "Saving resumes the Run at the next lap."
+              : "A cap under the spend stops the loop at its next re-entry; the lap in progress always finishes."}
+          </div>
+        )}
+        {isBounded && runEditing && budgetReached && (
+          <div>
+            <button
+              type="button"
+              className="cursor-pointer rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg-2 transition-colors hover:bg-bg-4"
+              style={{ fontSize: "11px" }}
+              data-testid="region-end-region"
+              onClick={() => {
+                if (run) void endRegion(run.run_id, region.id);
+              }}
+            >
+              end region
+            </button>
+          </div>
+        )}
+        {isBounded && !locked && !run && (
           <div className="text-fg-4" style={{ fontSize: "10px", lineHeight: 1.6 }}>
             Editing the bound applies <span className="text-acc">live</span> to a
             running region — equivalent to extending the loop. It cannot be

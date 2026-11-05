@@ -48,6 +48,12 @@ pub(crate) struct RunCommandRequest {
     /// the region now allows, not a delta like `additional_iter`.
     #[serde(default)]
     max_iter: Option<i64>,
+    /// The **absolute** cost cap of a `set_region_max_cost`, in dollars (#1017).
+    /// Outer `None` = the field is absent (refused); `Some(Null)` = remove the cap.
+    /// Kept as a raw JSON value so a non-numeric cap answers a 400 in our words,
+    /// not axum's 422.
+    #[serde(default, deserialize_with = "present_value")]
+    max_cost_usd: Option<serde_json::Value>,
     /// The **source** of a `force_route`: a node id OR a region id whose `when:`
     /// edges are short-circuited. Separate from `node_id`/`region_id` so it can name
     /// either kind without overloading their meaning.
@@ -70,13 +76,24 @@ pub(crate) struct RunCommandRequest {
     name: Option<String>,
 }
 
+/// `#[serde(default)]` alone folds `"field": null` into `None`, which would make a
+/// removal (`null`) indistinguishable from a forgotten field. Any PRESENT value —
+/// `null` included — becomes `Some(value)`.
+fn present_value<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
 /// A command from the Pipeline Manager, already validated. The only way to build
 /// one is [`parse_run_command`], so no arm re-validates presence, applies a
 /// default, or re-inspects a path.
 ///
 /// One variant per accepted `kind`, except `bump_region`/`end_region`, which share
 /// [`RunCommand::Region`] because they share their whole I/O tail.
-#[derive(Debug, Clone, PartialEq, Eq)]
+// `PartialEq` only: `SetRegionMaxCost` carries an `f64` (#1017).
+#[derive(Debug, Clone, PartialEq)]
 enum RunCommand {
     MarkNodeDone {
         node_id: String,
@@ -104,6 +121,14 @@ enum RunCommand {
     SetRegionMaxIter {
         region_id: String,
         max_iter: i64,
+    },
+    /// Edit a bounded region's **Plafond de coût** in flight (#1017, ADR-0081):
+    /// absolute, NO floor (under the spend is legal — the loop stops at the next
+    /// re-entry), `None` removes the cap. The scheduler reads the folded override
+    /// in place of the declared `max_cost_usd`.
+    SetRegionMaxCost {
+        region_id: String,
+        max_cost_usd: Option<f64>,
     },
     /// An explicit exit from a node or region to a target, short-circuiting the
     /// source's `when:` edges — the lever for a run wedged `unrouted`. `target` may
@@ -206,6 +231,7 @@ impl RunCommand {
                 ..
             } => "end_region",
             RunCommand::SetRegionMaxIter { .. } => "set_region_max_iter",
+            RunCommand::SetRegionMaxCost { .. } => "set_region_max_cost",
             RunCommand::ForceRoute { .. } => "force_route",
             RunCommand::SkipNode { .. } => "skip_node",
             RunCommand::PauseRun => "pause_run",
@@ -299,6 +325,37 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
             Ok(RunCommand::SetRegionMaxIter {
                 region_id,
                 max_iter,
+            })
+        }
+        "set_region_max_cost" => {
+            // `region_id` first, then the cap. `null` is a legal value (remove the
+            // cap); absent, non-numeric or non-positive is refused before any event.
+            let region_id = required(req.region_id, "region_id", "set_region_max_cost")?;
+            let raw = req.max_cost_usd.ok_or_else(|| {
+                CommandParseError(
+                    "max_cost_usd required for set_region_max_cost (a positive amount in dollars, or null to remove the cap)"
+                        .into(),
+                )
+            })?;
+            let max_cost_usd = match raw {
+                serde_json::Value::Null => None,
+                serde_json::Value::Number(n) => match n.as_f64() {
+                    Some(usd) if usd.is_finite() && usd > 0.0 => Some(usd),
+                    _ => {
+                        return Err(CommandParseError(
+                            "max_cost_usd must be a positive amount in dollars".to_string(),
+                        ))
+                    }
+                },
+                _ => {
+                    return Err(CommandParseError(
+                        "max_cost_usd must be a positive amount in dollars, or null".to_string(),
+                    ))
+                }
+            };
+            Ok(RunCommand::SetRegionMaxCost {
+                region_id,
+                max_cost_usd,
             })
         }
         "force_route" => {
@@ -918,6 +975,105 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
 
             let summary = re_evaluate_after_command(&state, &run_id).await;
             info!("set_region_max_iter: region {region_id} -> {max_iter} in run {run_id}");
+            (StatusCode::OK, Json(summary.into_response_body())).into_response()
+        }
+        // #1017: edit a bounded region's cost cap in flight. Same shape as
+        // `set_region_max_iter`: validate against the snapshot (unknown region and
+        // `collection` refused, no trace), append the `CommandIssued` (folded into
+        // `region_max_cost_overrides`), lift a parked Run, re-evaluate — so raising
+        // the cap of a Run parked « budget reached » starts the next lap now, and a
+        // cap still under the spend re-parks it truthfully.
+        RunCommand::SetRegionMaxCost {
+            region_id,
+            max_cost_usd,
+        } => {
+            let (_, run_state) = match load_projected(&state, &run_id).await {
+                Ok(v) => v,
+                Err(resp) => return *resp,
+            };
+            let repo_root = effective_repo_root(&state, &run_state);
+            let pipeline_path =
+                resolve_run_pipeline_path(&repo_root, &run_id, &run_state.pipeline_name);
+            if let Some(pipeline) = std::fs::read_to_string(&pipeline_path)
+                .ok()
+                .and_then(|yaml| pipeline::parse_pipeline(&yaml).ok())
+                .map(|p| p.pipeline)
+            {
+                let Some(region) = pipeline.loops.iter().find(|r| r.id == region_id) else {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!("region '{region_id}' not found in pipeline")
+                        })),
+                    )
+                        .into_response();
+                };
+                if region.kind != pipeline::LoopKind::Bounded {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "region '{region_id}' is a collection: cost caps apply to bounded loops only"
+                            )
+                        })),
+                    )
+                        .into_response();
+                }
+            } else {
+                warn!("set_region_max_cost: pipeline snapshot unreadable for run {run_id}; skipping region validation");
+            }
+
+            let cmd_event = event_log::Event {
+                id: None,
+                run_id: run_id.clone(),
+                ts: event_log::now_iso(),
+                kind: event_log::EventKind::CommandIssued,
+                node_id: None,
+                iter: None,
+                payload: Some(serde_json::json!({
+                    "command": "set_region_max_cost",
+                    "region_id": region_id,
+                    "max_cost_usd": max_cost_usd,
+                })),
+            };
+            if let Err(e) = append_event(&state, &cmd_event).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("error: {e}") })),
+                )
+                    .into_response();
+            }
+
+            // Lift a parked Run (« budget reached » is an incident park with a
+            // reason) so the new cap is re-checked at the re-entry now. A running
+            // Run is left alone: a lowered cap applies at the next re-entry and
+            // never kills the lap in progress. An interactive `AwaitingUser` (no
+            // incident reason) is never overridden.
+            let needs_reopen = matches!(
+                run_state.status,
+                event_log::RunStatus::Halted | event_log::RunStatus::Failed
+            ) || (run_state.status == event_log::RunStatus::AwaitingUser
+                && run_state.awaiting_reason.is_some());
+            if needs_reopen {
+                let resume_event = event_log::Event {
+                    id: None,
+                    run_id: run_id.clone(),
+                    ts: event_log::now_iso(),
+                    kind: event_log::EventKind::CommandIssued,
+                    node_id: None,
+                    iter: None,
+                    payload: Some(serde_json::json!({ "command": "resume_run" })),
+                };
+                if let Err(e) = append_event(&state, &resume_event).await {
+                    error!("failed to append resume_run after set_region_max_cost: {e}");
+                }
+            }
+
+            let summary = re_evaluate_after_command(&state, &run_id).await;
+            info!(
+                "set_region_max_cost: region {region_id} -> {} in run {run_id}",
+                max_cost_usd.map_or_else(|| "uncapped".to_string(), |u| format!("${u}"))
+            );
             (StatusCode::OK, Json(summary.into_response_body())).into_response()
         }
         // Force an explicit exit from a node or region, short-circuiting the
@@ -2616,6 +2772,53 @@ mod tests {
                 serde_json::json!({ "kind": "set_region_max_iter", "region_id": "R", "max_iter": 0 })
             ),
             "max_iter must be positive"
+        );
+    }
+
+    #[test]
+    fn set_region_max_cost_parses_a_cap_and_a_null_removal() {
+        // #1017: an absolute dollar cap, or `null` = remove the cap.
+        assert_eq!(
+            parse(serde_json::json!({ "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": 5 })),
+            Ok(RunCommand::SetRegionMaxCost {
+                region_id: "R".into(),
+                max_cost_usd: Some(5.0)
+            })
+        );
+        assert_eq!(
+            parse(serde_json::json!({ "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": 0.01 })),
+            Ok(RunCommand::SetRegionMaxCost {
+                region_id: "R".into(),
+                max_cost_usd: Some(0.01)
+            })
+        );
+        assert_eq!(
+            parse(serde_json::json!({ "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": null })),
+            Ok(RunCommand::SetRegionMaxCost {
+                region_id: "R".into(),
+                max_cost_usd: None
+            })
+        );
+    }
+
+    #[test]
+    fn set_region_max_cost_refuses_a_missing_non_positive_or_non_numeric_cap() {
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "set_region_max_cost", "max_cost_usd": 5 })),
+            "region_id required for set_region_max_cost"
+        );
+        // Absent is NOT a removal: only an explicit `null` removes the cap.
+        assert!(reject(serde_json::json!({ "kind": "set_region_max_cost", "region_id": "R" }))
+            .starts_with("max_cost_usd required for set_region_max_cost"));
+        for bad in [serde_json::json!(0), serde_json::json!(-2.5)] {
+            assert_eq!(
+                reject(serde_json::json!({ "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": bad })),
+                "max_cost_usd must be a positive amount in dollars"
+            );
+        }
+        assert_eq!(
+            reject(serde_json::json!({ "kind": "set_region_max_cost", "region_id": "R", "max_cost_usd": "$budget" })),
+            "max_cost_usd must be a positive amount in dollars, or null"
         );
     }
 

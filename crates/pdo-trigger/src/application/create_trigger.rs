@@ -111,6 +111,7 @@ impl Triggers {
                 .await
                 .map_err(TriggerError::Invalid)?;
         }
+        self.refuse_foreign_skills(&[], &req.skills).await?;
         let pipeline = match self.pipelines.resolve(&req.pipeline_id) {
             None => {
                 return Err(TriggerError::Invalid(format!(

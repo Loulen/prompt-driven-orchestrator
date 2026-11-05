@@ -8,6 +8,7 @@ use crate::domain::branches::{BranchEntry, BranchKind, BranchList, FetchError};
 use crate::domain::browse::BrowseRootError;
 use crate::domain::clone::CloneFailure;
 use crate::domain::fast_forward::{FastForwardDone, FastForwardRefusal, FastForwardRefused};
+use crate::domain::project::StoredSetting;
 use crate::domain::provisioning::{ProvisioningPlan, ScopedRules};
 use crate::domain::scaffold::{ScaffoldFile, ScaffoldOutcome};
 
@@ -195,5 +196,27 @@ pub struct NoFiles;
 impl FileBrowser for NoFiles {
     fn browse(&self, _: Option<&str>, _: bool, _: bool) -> Result<Listing, BrowseRootError> {
         Err(BrowseRootError::NoDefault)
+    }
+}
+
+/// The skill context's word, scripted: refuses with `refusal` when set, and
+/// records each `(current, next)` it was asked about.
+#[derive(Default)]
+pub struct ScriptedSkills {
+    pub refusal: Mutex<Option<String>>,
+    pub asked: Mutex<Vec<(Option<String>, String)>>,
+}
+
+impl SkillSelections for ScriptedSkills {
+    fn refusal<'a>(
+        &'a self,
+        current: Option<&'a StoredSetting>,
+        next: &'a StoredSetting,
+    ) -> BoxFuture<'a, StoreResult<Option<String>>> {
+        self.asked.lock().unwrap().push((
+            current.map(|s| s.as_str().to_string()),
+            next.as_str().to_string(),
+        ));
+        ready(Ok(self.refusal.lock().unwrap().clone()))
     }
 }

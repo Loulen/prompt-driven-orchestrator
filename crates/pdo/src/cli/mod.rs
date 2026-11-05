@@ -1,22 +1,32 @@
 //! The `pdo` command line: the daemon, the agent CLI of a node session, and the
 //! one-shot commands of an operator. Each subcommand lives with its context
 //! (`pdo_run::adapters::cli`, `pdo_platform::adapters::cli`, …); this module only
-//! declares them, plus the two that belong to no context (`docs`, `migrate`).
+//! declares them, plus those that belong to no context (`docs`, `migrate`,
+//! `whoami`).
+//!
+//! Every route of the daemon has its command, or an exclusion written down
+//! with its reason (`crates/tidy/src/cli_parity`): a gesture of the UI is also
+//! a command line.
 
 mod docs;
 mod ext;
 mod migrate;
+mod whoami;
 
 use std::net::IpAddr;
 
 use clap::{Parser, Subcommand};
-use pdo_platform::adapters::cli::{PageAction, ServiceAction};
+use pdo_platform::adapters::cli::{AuditArgs, PageAction, ServiceAction};
 use pdo_review::adapters::cli::ReviewAction;
 use pdo_run::adapters::cli::RunAction;
+use pdo_session::adapters::cli::SessionAction;
+use pdo_trigger::adapters::cli::TriggerAction;
+use pdo_workspace::adapters::cli::ProjectAction;
 
 pub use docs::run_docs;
 pub use ext::run_ext;
 pub use migrate::run_migrate;
+pub use whoami::run_whoami;
 
 const DEFAULT_PORT: u16 = pdo_platform::domain::service_unit::DEFAULT_PORT;
 
@@ -156,6 +166,35 @@ pub enum Commands {
     Review {
         #[command(subcommand)]
         action: ReviewAction,
+    },
+    /// The Projets: list, show, create, update, their member repositories,
+    /// their skills, their provisioning rules, delete. Exits 4 when the daemon
+    /// knows no such Projet.
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
+    /// The Triggers: list, show, create, update, fire, pause and resume (one or
+    /// all), their fires, a guard's dry run, the heartbeat, delete. Exits 4
+    /// when the daemon knows no such Trigger.
+    Trigger {
+        #[command(subcommand)]
+        action: Box<TriggerAction>,
+    },
+    /// The sessions: the status bar's gauges, and the gestures of a Session
+    /// hébergée (show, events, terminate, relaunch, configure). Exits 4 when
+    /// the daemon knows no such session.
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
+    /// The journal of the mutations made outside a Run, newest first.
+    Audit(AuditArgs),
+    /// The Actor the daemon names you: the local operator, the agent of your
+    /// node session, or the one your `PDO_TOKEN` establishes.
+    Whoami {
+        #[arg(long)]
+        json: bool,
     },
 }
 

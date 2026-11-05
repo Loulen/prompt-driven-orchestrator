@@ -160,14 +160,13 @@ pub fn run_run_status(run_id: &str, json: bool) -> ExitCode {
 
 /// The status of the Run `run_id`; `None` when the daemon knows no such Run.
 fn status_of(run_id: &str) -> anyhow::Result<Option<RunStatusLine>> {
-    let base = format!("/runs/{run_id}");
-    let Read::Found(detail) = read(&base)? else {
+    let Read::Found(detail) = read(&format!("/runs/{run_id}"))? else {
         return Ok(None);
     };
     let run: RunState = serde_json::from_str(&detail)
         .map_err(|e| anyhow::anyhow!("unreadable run detail from the daemon: {e}"))?;
     // A Run forgotten between the two reads has no children left to count.
-    let children_active = match read(&format!("{base}/children"))? {
+    let children_active = match read(&format!("/runs/{run_id}/children"))? {
         Read::Found(body) => serde_json::from_str::<Children>(&body)
             .map_err(|e| anyhow::anyhow!("unreadable children list from the daemon: {e}"))?
             .active(),

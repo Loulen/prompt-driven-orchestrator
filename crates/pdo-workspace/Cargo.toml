@@ -18,7 +18,10 @@ path = "src/lib.rs"
 
 [dependencies]
 pdo-kernel.workspace = true
+# `pdo project` reaches the daemon with the platform's CLI client.
+pdo-platform.workspace = true
 anyhow.workspace = true
+clap.workspace = true
 axum.workspace = true
 chrono.workspace = true
 ignore.workspace = true

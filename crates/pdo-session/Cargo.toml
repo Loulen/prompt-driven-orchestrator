@@ -17,7 +17,10 @@ publish = false
 pdo-kernel.workspace = true
 pdo-extension-api = { workspace = true, features = ["ts"] }
 pdo-harness.workspace = true
+# `pdo session` reaches the daemon with the platform's CLI client.
+pdo-platform.workspace = true
 anyhow.workspace = true
+clap.workspace = true
 axum.workspace = true
 chrono.workspace = true
 futures-util = "0.3"

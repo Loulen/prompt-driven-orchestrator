@@ -1,6 +1,8 @@
 //! The adapters of the trigger context: the driving side (the routes, the
-//! heartbeat) and the driven side (SQLite, `sh`, and the other contexts).
+//! heartbeat, the `pdo trigger` command line) and the driven side (SQLite,
+//! `sh`, and the other contexts).
 
+pub mod cli;
 pub mod contexts;
 pub mod env;
 pub mod guard_shell;

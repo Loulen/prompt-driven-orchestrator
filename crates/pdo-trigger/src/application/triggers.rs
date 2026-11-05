@@ -13,7 +13,7 @@ use pdo_platform::domain::audit::{ActorHint, NewAuditEntry};
 
 use super::ports::{
     AuditTrail, GuardRunner, Repositories, SandboxProfiles, StorageError, TriggerPipelines,
-    TriggerProjects, TriggerRepository, TriggerRuns, TriggerSettings,
+    TriggerProjects, TriggerRepository, TriggerRuns, TriggerSettings, TriggerSkills,
 };
 
 /// Every port the context needs, as the composition root plugs them in.
@@ -28,6 +28,8 @@ pub struct TriggersPorts {
     /// and its reads are in.
     pub projects: Arc<dyn TriggerProjects>,
     pub sandbox_profiles: Arc<dyn SandboxProfiles>,
+    /// The bank its skills come from (the skill context).
+    pub skills: Arc<dyn TriggerSkills>,
     /// The Runs a fire starts (implemented over the run context).
     pub runs: Arc<dyn TriggerRuns>,
     pub audit: Arc<dyn AuditTrail>,
@@ -57,6 +59,7 @@ pub struct Triggers {
     pub(crate) repositories: Arc<dyn Repositories>,
     pub(crate) projects: Arc<dyn TriggerProjects>,
     pub(crate) sandbox_profiles: Arc<dyn SandboxProfiles>,
+    pub(crate) skills: Arc<dyn TriggerSkills>,
     pub(crate) runs: Arc<dyn TriggerRuns>,
     audit: Arc<dyn AuditTrail>,
     bus: Arc<dyn EventBus>,
@@ -83,6 +86,7 @@ impl Triggers {
             repositories,
             projects,
             sandbox_profiles,
+            skills,
             runs,
             audit,
             bus,
@@ -96,6 +100,7 @@ impl Triggers {
             repositories,
             projects,
             sandbox_profiles,
+            skills,
             runs,
             audit,
             bus,
@@ -163,5 +168,27 @@ impl Triggers {
                 after,
             })
             .await;
+    }
+}
+
+impl Triggers {
+    /// Refuses `next` when it gains a skill the bank does not hold: the
+    /// selector offers none other. One `current` already carries stays.
+    pub(crate) async fn refuse_foreign_skills(
+        &self,
+        current: &[pdo_skill::domain::selection::SkillRef],
+        next: &[pdo_skill::domain::selection::SkillRef],
+    ) -> Result<(), super::TriggerError> {
+        use pdo_skill::domain::selection::foreign_skill_refusal;
+        match self.skills.foreign(current, next).await {
+            Ok(None) => Ok(()),
+            Ok(Some(id)) => Err(super::TriggerError::Invalid(foreign_skill_refusal(&id))),
+            Err(e) => {
+                tracing::error!("failed to read the skill bank: {e}");
+                Err(super::TriggerError::Storage(
+                    "failed to read the skill bank".to_string(),
+                ))
+            }
+        }
     }
 }

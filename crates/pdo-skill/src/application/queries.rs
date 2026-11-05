@@ -61,6 +61,27 @@ impl Skills {
         self.skills.get(id).await
     }
 
+    /// The first skill of `next` that neither the bank holds nor `current`
+    /// already selects: a selection (a Projet's, a Trigger's) only gains skills
+    /// of the bank, the ones the selectors offer. A skill selected and since
+    /// deleted from the bank stays, as the selectors keep it. `None`: `next`
+    /// may replace `current`.
+    pub async fn foreign_skill(
+        &self,
+        current: &[SkillRef],
+        next: &[SkillRef],
+    ) -> Result<Option<String>, SkillError> {
+        for skill in next {
+            if current.iter().any(|held| held.id == skill.id) {
+                continue;
+            }
+            if self.skills.get(&skill.id).await?.is_none() {
+                return Ok(Some(skill.id.clone()));
+            }
+        }
+        Ok(None)
+    }
+
     pub async fn skill_detail(&self, id: &str) -> Result<SkillDetail, SkillError> {
         let skill = self.skills.get(id).await?.ok_or(SkillError::NotFound)?;
         let content = self.content.read_skill_md(id).ok();

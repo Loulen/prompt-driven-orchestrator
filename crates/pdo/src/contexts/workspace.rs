@@ -2,8 +2,8 @@
 //! repositories over SQLite, git through its CLI, the source tree and the file
 //! browser of the daemon's repo root, the Projets' announcements on the bus
 //! and their names for the extensions, and the pipelines' validations and
-//! Triggers a deleted Projet leaves, and the clones folder of the stored
-//! settings.
+//! Triggers a deleted Projet leaves, the clones folder of the stored
+//! settings, and the skill bank a Projet's skills come from.
 
 use std::sync::Arc;
 
@@ -11,6 +11,8 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_pipeline::Pipelines;
 use pdo_settings::adapters::contexts::ClonesFolderOfWorkspace;
 use pdo_settings::adapters::sections::HostHome;
+use pdo_skill::adapters::projects::ProjectSkillSelections;
+use pdo_skill::Skills;
 use pdo_workspace::adapters::{fs, git, sqlite};
 use pdo_workspace::application::{Workspace, WorkspacePorts};
 
@@ -23,6 +25,7 @@ pub(super) fn workspace(
     r: &ContextResources,
     pipelines: &Late<Pipelines>,
     stored: &StoredSettings,
+    skills: &Arc<Skills>,
     host: Arc<dyn ExtensionHost>,
 ) -> Arc<Workspace> {
     // `~` of the clones folder: the home the settings page names.
@@ -53,6 +56,7 @@ pub(super) fn workspace(
                 config: stored.config.clone(),
                 home,
             }),
+            skills: Arc::new(ProjectSkillSelections(skills.clone())),
         },
         host,
     ))

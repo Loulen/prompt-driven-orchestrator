@@ -130,8 +130,8 @@ pub(crate) fn wire_over(
     let late_runs = Late::new();
     let late_platform = Late::new();
     let late_pipelines = Late::new();
-    let workspace = workspace::workspace(&r, &late_pipelines, &stored, host.clone());
     let skills = skill::skills(&r.db, &r.repo_root, host.clone());
+    let workspace = workspace::workspace(&r, &late_pipelines, &stored, &skills, host.clone());
     let sandbox = sandbox::router(&r, host.clone());
     let session = session::session(
         &r,
@@ -162,6 +162,7 @@ pub(crate) fn wire_over(
         settings: stored.config.clone(),
         run: &run,
         platform: &platform,
+        skills: &skills,
         host: host.clone(),
     });
     let (telemetry, telemetry_runs) =

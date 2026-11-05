@@ -63,6 +63,16 @@ impl Workspace {
             },
             None => None,
         };
+        if let Some(Some(next)) = &update.skills {
+            let refusal = self
+                .skills
+                .refusal(current.skills.as_ref(), next)
+                .await
+                .map_err(failed("check the skills of"))?;
+            if let Some(refusal) = refusal {
+                return Err(WorkspaceError::Invalid(refusal));
+            }
+        }
         self.authorize(
             actor,
             Operation::new(ResourceKind::Project, Verb::Update).on(id),
@@ -270,5 +280,58 @@ mod tests {
         let asked = f.host.asked();
         assert_eq!(asked[0].target.as_deref(), Some("p1"));
         assert_eq!(asked[0].verb, Verb::Update);
+    }
+
+    #[tokio::test]
+    async fn a_selection_the_skill_context_refuses_writes_nothing() {
+        let (f, id) = seeded().await;
+        let actor = Actor::LocalOperator;
+        let select = |skills: &str| ProjectUpdate {
+            skills: Some(Some(StoredSetting(skills.into()))),
+            ..Default::default()
+        };
+        f.workspace
+            .update_project(&actor, &id, select("[{\"id\":\"tdd\"}]"))
+            .await
+            .unwrap();
+        *f.skills.refusal.lock().unwrap() = Some("not a skill of the bank: ghost".into());
+        let update = ProjectUpdate {
+            name: Some("Back".into()),
+            ..select("[{\"id\":\"ghost\"}]")
+        };
+        let err = f
+            .workspace
+            .update_project(&actor, &id, update)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            WorkspaceError::Invalid("not a skill of the bank: ghost".into())
+        );
+        let project = &f.projects.all()[0];
+        assert_eq!(project.name, "Front", "nothing written");
+        assert_eq!(
+            project.skills,
+            Some(StoredSetting("[{\"id\":\"tdd\"}]".into()))
+        );
+        // Asked with the selection the Projet carries, the one it keeps.
+        assert_eq!(
+            f.skills.asked.lock().unwrap().last().cloned(),
+            Some((
+                Some("[{\"id\":\"tdd\"}]".to_string()),
+                "[{\"id\":\"ghost\"}]".to_string()
+            ))
+        );
+        // A clear is never refused: it gains no skill.
+        let clear = ProjectUpdate {
+            skills: Some(None),
+            ..Default::default()
+        };
+        let project = f
+            .workspace
+            .update_project(&actor, &id, clear)
+            .await
+            .unwrap();
+        assert_eq!(project.skills, None);
     }
 }

@@ -29,11 +29,20 @@ mod extension_identity;
 #[path = "actor_appearance.rs"]
 mod actor_appearance;
 
+#[path = "cli_operator.rs"]
+mod cli_operator;
+
 #[path = "cli_run_create.rs"]
 mod cli_run_create;
 
 #[path = "cli_run_status.rs"]
 mod cli_run_status;
+
+#[path = "cli_session.rs"]
+mod cli_session;
+
+#[path = "cli_trigger.rs"]
+mod cli_trigger;
 
 #[path = "cli_wait_exit_codes.rs"]
 mod cli_wait_exit_codes;

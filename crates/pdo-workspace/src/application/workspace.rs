@@ -11,7 +11,7 @@ use pdo_kernel::{Actor, Operation, ResourceKind};
 use super::clone_jobs::CloneJobs;
 use super::ports::{
     ClonesFolder, FileBrowser, Git, ProjectDeletions, ProjectEvents, ProjectRepository,
-    ProvisioningRulesRepository, RecentRepositories, SourceTree,
+    ProvisioningRulesRepository, RecentRepositories, SkillSelections, SourceTree,
 };
 
 /// One adapter per port.
@@ -25,6 +25,8 @@ pub struct WorkspacePorts {
     pub source_tree: Arc<dyn SourceTree>,
     pub files: Arc<dyn FileBrowser>,
     pub clones_folder: Arc<dyn ClonesFolder>,
+    /// Whether a skills selection may replace a Projet's (the skill context).
+    pub skills: Arc<dyn SkillSelections>,
 }
 
 /// The workspace context: every use case is a method.
@@ -38,6 +40,7 @@ pub struct Workspace {
     pub(crate) source_tree: Arc<dyn SourceTree>,
     pub(crate) files: Arc<dyn FileBrowser>,
     pub(crate) clones_folder: Arc<dyn ClonesFolder>,
+    pub(crate) skills: Arc<dyn SkillSelections>,
     /// The clones running in the background, and the last ones finished.
     pub(crate) clones: Arc<CloneJobs>,
     host: Arc<dyn ExtensionHost>,
@@ -55,6 +58,7 @@ impl Workspace {
             source_tree: ports.source_tree,
             files: ports.files,
             clones_folder: ports.clones_folder,
+            skills: ports.skills,
             clones: Arc::new(CloneJobs::default()),
             host,
         }

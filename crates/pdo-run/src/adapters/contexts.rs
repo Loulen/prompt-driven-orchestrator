@@ -86,7 +86,8 @@ mod tests {
     use crate::application::ports::Projects;
     use pdo_workspace::adapters::{fs, git, sqlite};
     use pdo_workspace::application::ports::{
-        ClonesFolder, ProjectDeletions, ProjectEvents, ProjectRepository,
+        ClonesFolder, ProjectDeletions, ProjectEvents, ProjectRepository, SkillSelections,
+        StoreResult,
     };
     use pdo_workspace::application::WorkspacePorts;
     use pdo_workspace::domain::project::StoredSetting;
@@ -102,6 +103,16 @@ mod tests {
             Box::pin(async {})
         }
     }
+    impl SkillSelections for Silent {
+        fn refusal<'a>(
+            &'a self,
+            _current: Option<&'a StoredSetting>,
+            _next: &'a StoredSetting,
+        ) -> BoxFuture<'a, StoreResult<Option<String>>> {
+            Box::pin(async { Ok(None) })
+        }
+    }
+
     impl ClonesFolder for Silent {
         fn folder(&self) -> BoxFuture<'_, Result<std::path::PathBuf, String>> {
             Box::pin(async { Err("no clones here".into()) })
@@ -129,6 +140,7 @@ mod tests {
                 source_tree: Arc::new(fs::FsSourceTree),
                 files: Arc::new(fs::FsBrowser::new("/")),
                 clones_folder: Arc::new(Silent),
+                skills: Arc::new(Silent),
             },
             Arc::new(pdo_kernel::extension_host::NoExtensions),
         ));

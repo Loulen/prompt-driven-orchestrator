@@ -78,6 +78,18 @@ pub trait ProjectRepository: Send + Sync {
     fn deleted(&self) -> BoxFuture<'_, StoreResult<Vec<DeletedProject>>>;
 }
 
+/// The skill context's word on a Projet's skills selection, which the
+/// workspace keeps without reading it.
+pub trait SkillSelections: Send + Sync {
+    /// Why `next` may not replace `current` (a skill it gains the bank does
+    /// not hold); `None` when it may.
+    fn refusal<'a>(
+        &'a self,
+        current: Option<&'a StoredSetting>,
+        next: &'a StoredSetting,
+    ) -> BoxFuture<'a, StoreResult<Option<String>>>;
+}
+
 /// Where the provisioning rules of each scope live.
 pub trait ProvisioningRulesRepository: Send + Sync {
     /// The stored rules, empty when none are stored.

@@ -967,8 +967,9 @@ export interface NodeDefInfo {
   node_type: NodeType;
   /** #653: where the node works, as the Run's pipeline snapshot froze it. */
   isolated_worktree?: boolean | null;
-  /** #723/ADR-0064: the « Orchestrator » toggle, frozen at run start — drives
-   *  the Orchestration tab, the pastilles and the binding in the run view. */
+  /** #723/ADR-0064: the « Orchestrator » toggle, frozen at run start. #1019:
+   *  the pastilles and the Orchestration tab follow the node's real children;
+   *  the toggle only shows the tab from the start (empty state). */
   orchestrator?: boolean;
   view_x: number | null;
   view_y: number | null;

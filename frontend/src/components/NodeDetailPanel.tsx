@@ -80,13 +80,15 @@ interface Props {
   provisioningRepository?: string;
   inheritedProvisioning?: ScopedProvisioningRules[];
   provisioningGitRef?: string;
-  /** #723: the node's frozen « Orchestrator » toggle (ADR-0064) — mounts the
-   *  I/O | Orchestration tab pair and the pastilles. Absent ⇒ plain I/O pane,
-   *  byte-identical to the pre-#723 panel. */
+  /** #723: the node's frozen « Orchestrator » toggle (ADR-0064). #1019: the
+   *  I/O | Orchestration tab pair mounts for any parent node (≥ 1 child run);
+   *  the toggle only announces one, so its tab shows from the start (empty
+   *  state). Neither ⇒ plain I/O pane, byte-identical to the pre-#723 panel. */
   isOrchestratorNode?: boolean;
   /** #723: open a child run listed in the Orchestration tab (App records the way back). */
   onOpenChildRun?: (childRunId: string) => void;
-  /** #723: land on the Orchestration tab (the back arrow from a child run). */
+  /** #723: land on the Orchestration tab (the back arrow from a child run, any
+   *  parent node — #1019). */
   initialDetailTab?: "io" | "orchestration";
 }
 
@@ -324,7 +326,8 @@ function useWaitingLabel(since: string | undefined): string | null {
  *   the daemon's sentence with the two buttons as inline links;
  * - `child_awaiting` (C): « A child run is waiting for you » + « Open <child> → »,
  *   and explicitly NO Enter hint — Enter in the parent's pane lifts nothing;
- * - `children_pending`: the orchestrator gave its turn back (ADR-0064).
+ * - `children_pending`: a parent node gave its turn back (ADR-0064), with
+ *   « Open Orchestration → » switching the panel to its Orchestration tab (#1019).
  * `data-cause` is the assertion surface, the copy may move.
  */
 function AwaitingBanner({
@@ -335,6 +338,7 @@ function AwaitingBanner({
   onRelease,
   onMarkComplete,
   onOpenChildRun,
+  onOpenOrchestration,
 }: {
   awaiting: AwaitingInfo | null | undefined;
   /** A live PTY socket is open below: Enter can reach the agent. */
@@ -346,6 +350,8 @@ function AwaitingBanner({
   onRelease: () => void;
   onMarkComplete: () => void;
   onOpenChildRun?: (childRunId: string) => void;
+  /** #1019: switch the panel to its Orchestration tab (`children_pending`). */
+  onOpenOrchestration?: () => void;
 }) {
   const cause = awaiting?.cause ?? "declared";
   const waitingLabel = useWaitingLabel(awaiting?.since);
@@ -402,7 +408,24 @@ function AwaitingBanner({
     );
   } else if (cause === "children_pending") {
     title = "Waiting for child runs";
-    body = "This node gave its turn back and completes once every child run is terminal.";
+    body = (
+      <>
+        This node gave its turn back and completes once every child run is terminal.
+        {onOpenOrchestration && (
+          <>
+            {" "}
+            <button
+              type="button"
+              data-testid="awaiting-open-orchestration"
+              className={linkClass}
+              onClick={onOpenOrchestration}
+            >
+              Open Orchestration →
+            </button>
+          </>
+        )}
+      </>
+    );
   } else {
     // `declared` — with or without a message.
     title = awaiting?.message ? "The agent is waiting for your answer" : "The agent is waiting for you";
@@ -509,14 +532,19 @@ export default function NodeDetailPanel({
   const [terminalLive, setTerminalLive] = useState<boolean | null>(null);
   // #870: whether this browser only watches the inline terminal.
   const [terminalSpectating, setTerminalSpectating] = useState(false);
-  // #723 — an orchestrator NodeRun splits its lower pane into I/O | Orchestration.
+  // #723 / #1019 — a parent node splits its lower pane into I/O | Orchestration.
   // I/O stays the default; the choice is per mounted node (remount = back to I/O).
   const [detailTab, setDetailTab] = useState<"io" | "orchestration">(initialDetailTab);
-  // The children read polls with the run view cadence (never pushed), whether or
-  // not the tab is open — the tab-header pastilles count from the same read.
-  const childrenData = useRunChildren(runId, isOrchestratorNode);
+  // The children read polls with the run view cadence (never pushed), for ANY
+  // node (#1019: the tab follows the real children, not the toggle) and whether
+  // or not the tab is open — the tab-header pastilles count from the same read.
+  const childrenData = useRunChildren(runId, true);
   const nodeChildren = childrenOfNode(childrenData, runId, node.node_id);
   const childCounts = countChildren(nodeChildren);
+  // #1019 (Q3) — the tab pair shows on ≥ 1 child OR the toggle (which announces
+  // a parent node: empty state from the start). The first child appearing
+  // mid-session mounts the bar silently; the active tab stays where it was.
+  const showOrchestration = isOrchestratorNode || nodeChildren.length > 0;
   // #749: what the Review shortcut opens, if anything.
   const reviewTarget = nodeReviewTarget(node);
   // Seed at mount only (no reactive effect on status): the issue trigger is
@@ -589,7 +617,7 @@ export default function NodeDetailPanel({
     node.iterations?.find((i) => i.iter === selectedIter)?.status ?? node.status;
   const selectedIteration = node.iterations?.find((i) => i.iter === selectedIter);
   // #980: the declared wait still open, if any — it belongs to the node's
-  // current iteration. `children_pending` is an orchestrator at work, not a wait.
+  // current iteration. `children_pending` is a parent node at work, not a wait.
   const openWaitSince =
     node.awaiting && isDeclaredWaitCause(node.awaiting.cause) ? node.awaiting.since : null;
   // #979: the current iteration's entry may lack its times (a pre-#616 daemon,
@@ -1023,6 +1051,7 @@ export default function NodeDetailPanel({
           onRelease={releaseCompletion}
           onMarkComplete={markComplete}
           onOpenChildRun={onOpenChildRun}
+          onOpenOrchestration={showOrchestration ? () => setDetailTab("orchestration") : undefined}
         />
       )}
 
@@ -1404,10 +1433,10 @@ export default function NodeDetailPanel({
               )}
             </div>
 
-            {/* #723 — I/O | Orchestration tabs, only for an orchestrator node.
+            {/* #723 / #1019 — I/O | Orchestration tabs, only for a parent node.
                 Below « Mark complete » (the escape hatch stays reachable from
                 both tabs), above the I/O content. */}
-            {isOrchestratorNode && (
+            {showOrchestration && (
               <div className="flex shrink-0 border-b border-line" data-testid="detail-tabs">
                 {(["io", "orchestration"] as const).map((tab) => {
                   const active = detailTab === tab;
@@ -1430,7 +1459,7 @@ export default function NodeDetailPanel({
                 })}
               </div>
             )}
-            {isOrchestratorNode && detailTab === "orchestration" ? (
+            {showOrchestration && detailTab === "orchestration" ? (
               <OrchestrationTab
                 childRuns={nodeChildren}
                 counts={childCounts}

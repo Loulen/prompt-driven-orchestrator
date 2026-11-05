@@ -680,7 +680,7 @@ export default function App() {
   }, [selectedRun, selection.kind, selection.id, setSelection]);
 
   // #723 — the way back from a child run opened in an Orchestration tab: parent
-  // run + orchestrator node. Declared before `handleSelectRun`, which clears
+  // run + parent node (any node with child runs, #1019). Declared before `handleSelectRun`, which clears
   // both on any navigation — the bar's visibility is derived (child run
   // selected), so no effect ever needs to reconcile them.
   const [orchestratorReturn, setOrchestratorReturn] = useState<{
@@ -691,7 +691,8 @@ export default function App() {
     childRunId: string;
   } | null>(null);
   // One-shot landing: set by the back gesture, consumed by the remount of the
-  // orchestrator's NodeDetailPanel (I/O stays the default everywhere else).
+  // parent node's NodeDetailPanel, toggle or not (#1019; I/O stays the default
+  // everywhere else).
   const [landOnOrchestration, setLandOnOrchestration] = useState<string | null>(null);
 
   const handleSelectRun = useCallback(
@@ -720,7 +721,7 @@ export default function App() {
   );
 
   // #723 — opening a child run from the Orchestration tab: record the way back
-  // (parent run + orchestrator node) AFTER the navigation, so the shared
+  // (parent run + parent node) AFTER the navigation, so the shared
   // `handleSelectRun`'s clear does not wipe it.
   const handleOpenChildRun = useCallback(
     async (childRunId: string) => {
@@ -989,7 +990,7 @@ export default function App() {
                     onClick={handleBackToOrchestrator}
                     className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-line bg-bg-2 px-3 py-1 text-fg-3 transition-colors hover:text-fg"
                     style={{ fontSize: "11px" }}
-                    title="Back to the orchestrator node, on its Orchestration tab"
+                    title="Back to the parent node, on its Orchestration tab"
                   >
                     <ArrowLeft size={12} />
                     <span>

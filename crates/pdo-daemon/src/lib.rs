@@ -68,6 +68,7 @@ mod review_comments;
 mod run_advance;
 mod run_command;
 mod run_cost;
+mod run_orphans;
 mod run_refs;
 mod sandbox_container;
 mod sandbox_image;
@@ -21618,6 +21619,17 @@ async fn archive_single_run(
     // Kill any ad-hoc run shell before the worktree is torn down.
     let shell_session = tmux_session_manager::shell_session_name(run_id);
     tmux_session_manager::kill(&socket, &shell_session);
+    // What the agents detached from those sessions (dev servers, watchers, `nohup`
+    // jobs) outlives them; it carries the Run's `PDO_RUN_ID`. Stopped here, before
+    // the worktree it runs in is removed (see `run_orphans`).
+    let orphans_run_id = run_id.to_string();
+    match tokio::task::spawn_blocking(move || run_orphans::terminate_run_processes(&orphans_run_id))
+        .await
+    {
+        Ok(0) => {}
+        Ok(stopped) => info!("cleanup_run: stopped {stopped} leftover process(es) of run {run_id}"),
+        Err(e) => warn!("cleanup_run: leftover-process sweep for run {run_id} failed: {e}"),
+    }
 
     // Merge the transcripts back, then destroy the container and purge its staging,
     // all BEFORE any `git worktree remove` below: the container bind-mounts the repo,

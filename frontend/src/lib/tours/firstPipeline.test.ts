@@ -223,11 +223,18 @@ class FakeApp {
   }
 
   /** What confirming the trash does: the row and its dialog go, and so does the
-   *  entry the last step watches. */
-  deleteFromLibrary() {
+   *  entry the last step watches. `editStore.removePipeline` also closes the
+   *  pipeline's tab in the same update: the active tab becomes `nextActive` (the
+   *  last tab left open), or nothing when it was the only one (#1030 FP, F1). */
+  deleteFromLibrary(nextActive: string | null = null) {
     this.hide(DELETE_CONFIRM, `[data-testid="library-row-${MY_PIPELINE}"]`);
     this.app = {
       ...this.app,
+      pipelineId: nextActive,
+      pipeline: null,
+      prompts: {},
+      selection: { kind: "none", id: null, edgeIndex: null },
+      dirty: false,
       libraryPipelineIds: this.app.libraryPipelineIds.filter((id) => id !== MY_PIPELINE),
     };
   }
@@ -789,6 +796,69 @@ describe("the last step, and the confirmation its trash opens", () => {
     fake.deleteFromLibrary();
     run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), clock + 200);
     expect(run.phase).toBe("finished");
+  });
+});
+
+/**
+ * #1030 FP, F1 — deleting the pipeline closes its editor tab in the same store
+ * update. When it was the only open tab, the active tab is gone with it: the last
+ * step must still see the pipeline leave the Library, not wait on a null tab and
+ * stop the tour on a failure card five seconds later.
+ */
+describe("the last step, once the pipeline's tab closes with it (#1030)", () => {
+  const step = STEPS.find((s) => s.id === "keep-or-delete")!;
+
+  function walkToTheLastStep(fake: FakeApp) {
+    const script = gestures(fake);
+    let run = startTour(FIRST_PIPELINE_TOUR, fake.obs());
+    let clock = 0;
+    for (const s of STEPS) {
+      if (s.id === "keep-or-delete") break;
+      script[s.id]();
+      run = observeTour(FIRST_PIPELINE_TOUR, run, fake.obs(), (clock += 200));
+      if (needsConfirm(FIRST_PIPELINE_TOUR, run, fake.obs())) {
+        run = confirmStep(FIRST_PIPELINE_TOUR, run, fake.obs());
+      }
+    }
+    expect(currentStep(FIRST_PIPELINE_TOUR, run)?.id).toBe("keep-or-delete");
+    return { run, clock };
+  }
+
+  it("ends on the recap when the tutorial pipeline was the only open tab", () => {
+    const fake = new FakeApp();
+    const { run: atLast, clock } = walkToTheLastStep(fake);
+    fake.show(DELETE_CONFIRM);
+    fake.deleteFromLibrary(null);
+    expect(fake.app.pipelineId).toBeNull();
+    expect(step.done!(fake.obs())).toBe(true);
+    const run = observeTour(FIRST_PIPELINE_TOUR, atLast, fake.obs(), clock + 200);
+    expect(run.phase).toBe("finished");
+    expect(run.failure).toBeNull();
+  });
+
+  it("ends on the recap when another Library pipeline's tab becomes the active one", () => {
+    const fake = new FakeApp();
+    fake.app = { ...fake.app, libraryPipelineIds: ["tutorial-overview"] };
+    const { run: atLast, clock } = walkToTheLastStep(fake);
+    fake.show(DELETE_CONFIRM);
+    fake.deleteFromLibrary("tutorial-overview");
+    expect(step.done!(fake.obs())).toBe(true);
+    const run = observeTour(FIRST_PIPELINE_TOUR, atLast, fake.obs(), clock + 200);
+    expect(run.phase).toBe("finished");
+  });
+
+  it("follows a pipeline the reader named themselves, by its tab", () => {
+    const fake = new FakeApp();
+    walkToTheLastStep(fake);
+    const custom = "my-own-loop";
+    // The same loop, saved under a name of the reader's own.
+    fake.app = { ...fake.app, pipelineId: custom, libraryPipelineIds: [custom] };
+    expect(step.target(fake.obs())).toEqual([`[data-testid="library-row-${custom}"]`]);
+    expect(step.done!(fake.obs())).toBe(false);
+
+    fake.app = { ...fake.app, pipelineId: null, pipeline: null, libraryPipelineIds: [] };
+    expect(step.target(fake.obs())).toEqual([]);
+    expect(step.done!(fake.obs())).toBe(true);
   });
 });
 

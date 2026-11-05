@@ -202,6 +202,27 @@ function pipelineCreated(o: TourObservation): boolean {
   return !o.present(NEW_PIPELINE_DIALOG) && o.app.pipeline != null;
 }
 
+/**
+ * The pipeline this tour built, while the Library still lists it: the name the
+ * tour handed out to paste, or — for a reader who typed a name of their own —
+ * the active tab, as long as it holds the tour's loop (tester → implementer and
+ * tester → End). Deleting the pipeline closes its tab and activates whichever is
+ * left; that one is not the tour's, even when the Library lists it. `null` once
+ * the built pipeline is gone from the Library.
+ */
+function builtPipelineId(o: TourObservation): string | null {
+  const library = o.app.libraryPipelineIds;
+  const mine = tutorialPipelineName();
+  if (library.includes(mine)) return mine;
+  const active = o.app.pipelineId;
+  if (!active || !library.includes(active)) return null;
+  const [implementer, tester] = [agent(o.app, 0), agent(o.app, 1)];
+  const isTheLoop =
+    edgeIndex(o.app.pipeline, tester, implementer) >= 0 &&
+    edgeIndex(o.app.pipeline, tester, endNode(o.app)) >= 0;
+  return isTheLoop ? active : null;
+}
+
 function selected(app: TourAppState, node: NodeDef | null): boolean {
   return !!node && app.selection.kind === "node" && app.selection.id === node.id;
 }
@@ -646,13 +667,16 @@ const STEPS: TourStep[] = [
     // back as the projecteur's blocker (FP finding, #825).
     target: (o) => {
       if (o.present(DELETE_CONFIRM)) return [DELETE_CONFIRM];
-      return o.app.pipelineId
-        ? [`[data-testid="library-row-${cssEscape(o.app.pipelineId)}"]`]
-        : [];
+      const id = builtPipelineId(o);
+      return id ? [`[data-testid="library-row-${cssEscape(id)}"]`] : [];
     },
     waitingFor: "the pipeline's row in the Library",
     skippable: true,
-    done: (o) => !!o.app.pipelineId && !o.app.libraryPipelineIds.includes(o.app.pipelineId),
+    // Gone from the Library. Not read off the active tab: deleting the pipeline
+    // closes its tab in the same store update, so a tour whose pipeline was the
+    // only open tab saw `pipelineId` go null and waited five seconds on a row
+    // that was already gone (#1030 FP, F1).
+    done: (o) => builtPipelineId(o) === null,
   },
 ];
 

@@ -18,6 +18,10 @@ Un **Pipeline** est un DAG nommé, à **orchestration déterministe**, qui décr
 
 - **Pipeline validé** : Pipeline rendu disponible au lancement pour un ou plusieurs **Projets**, pour **tous les Projets** (actuels et futurs), ou **les deux** : validé pour tous et aussi pour certains Projets, il est proposé partout et **en tête** chez ces Projets (c'est ainsi qu'on dit qu'un Pipeline générique convient bien à un Projet). Un Pipeline que PDO crée, duplique ou importe naît **non validé** — c'est un **Pipeline de test** : il n'est proposé au lancement (New Run, Trigger) que derrière « Afficher les Pipelines de test ». Un Pipeline sans validation enregistrée vaut « tous les Projets ». La validation est une donnée de l'instance, pas du YAML : un export n'emporte pas ses Projets. _Éviter_ : « favori », « accès rapide », « publié » (pas de modèle draft/published).
 
+- **Pipeline non lançable** *(terme, ADR-0081)* : Pipeline dont le graphe n'a pas la **cohérence de chemin** — `End` inatteignable depuis `Start`, ou au moins un **Cul-de-sac** ou un **Nœud orphelin** (arêtes conditionnelles et ré-entrées de boucle comptent comme des arêtes ordinaires). Il s'enregistre librement mais **tout lancement est refusé** (New Run, `pdo run create`, Trigger, Retry all, Run enfant) ; New Run le grise, l'éditeur affiche les défauts comme diagnostic de correction. `Start` est l'**unique point d'entrée** d'un Pipeline. _Éviter_ : « pipeline invalide » (ambigu avec un YAML qui ne parse pas), « pipeline non validé » (c'est un *Pipeline de test*, sans rapport).
+  - **Cul-de-sac** *(terme)* : nœud, autre que `End`, d'où aucun chemin ne mène à `End`. _Éviter_ : « impasse », « dead branch ».
+  - **Nœud orphelin** *(terme)* : nœud qu'aucun chemin ne relie depuis `Start` (un nœud isolé est à la fois orphelin et Cul-de-sac). _Éviter_ : « nœud racine », « nœud déconnecté ».
+
 Contrairement à : Liza (pipelines YAML), Langgraph (conditional edges + LLM-router), TPM workflow (orchestrateur LLM qui décide quand spawner).
 
 ---
@@ -345,7 +349,7 @@ L'outil ne contraint pas l'utilisateur à dessiner des pipelines « sains ». Pa
 
 Conséquences :
 - Schéma déclaratif côté output uniquement ; pas de typage côté input.
-- Pas de « lint pipeline » bloquant. Au max, un lint info-only.
+- Pas de « lint pipeline » bloquant à l'enregistrement. Au max, un lint info-only — sauf les diagnostics de correction ; la cohérence de chemin (*Pipeline non lançable*) en est un, et elle refuse le lancement (ADR-0081).
 - L'éditeur permet des graphes exotiques. Le runtime se débrouille ou halt explicitement.
 
 ---

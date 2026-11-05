@@ -10,6 +10,21 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.129.0
+**Le tour *First pipeline* fait relier Start et aboutit à un Pipeline lançable** (#1024, spec
+#1020, story gitlab #23, ADR-0081).
+
+- Nouvelle étape **Connect Start to implementer**, juste avant « Connect implementer to
+  tester » : elle allume le marqueur Start (et implementer, où le geste se pose) et n'avance
+  qu'une fois l'arête Start → implementer créée. Le tour ne s'appuie plus sur « sans entrée, un
+  nœud démarre seul » : il aboutit à un Pipeline sans défaut de cohérence, sélectionnable dans
+  New Run. Le récapitulatif nomme cette arête.
+- Pendant le tour, les marques de cohérence sur les nœuds passent en **ambre** (une aide, pas
+  une erreur) et la bannière ne montre plus ses lignes de cohérence ; elles reviennent à la fin
+  du tour.
+- Les lignes de la bannière de lint reposent sur un fond opaque : les nœuds du canvas ne se
+  voient plus au travers.
+
 ## 1.128.0
 **La cohérence de chemin en direct dans l'éditeur, et New Run grise les Pipelines non
 lançables** (#1022, spec #1020, story gitlab #23, ADR-0081).

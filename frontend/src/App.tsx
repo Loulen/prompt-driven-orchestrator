@@ -55,7 +55,7 @@ import { isRunTabLocked, useEditStore } from "./stores/editStore";
 import TourHost from "./components/tour/TourHost";
 import { useTour } from "./hooks/useTour";
 import { loadTourOffered, markTourOffered, shouldOfferWelcome } from "./lib/tourMemory";
-import { findTour, fullTourSequence } from "./lib/tours";
+import { findTour, fullTourSequence, teachesWiring } from "./lib/tours";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -1016,6 +1016,9 @@ export default function App() {
                   runState={selectedRun}
                   onSelectRun={handleSelectRun}
                   rightPaneCollapsed={rightPaneCollapsed}
+                  // #1024 (gitlab #23 Q4 = A): amber marks, no coherence rows
+                  // while First pipeline teaches the wiring.
+                  coherenceTeaching={teachesWiring(tour.view)}
                 />
               </div>
             ) : (

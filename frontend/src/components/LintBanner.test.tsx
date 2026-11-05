@@ -88,4 +88,14 @@ describe("LintBanner", () => {
     render(<LintBanner items={[{ ...lint("x"), nodeId: "tester" }]} onDismiss={noop} />);
     expect(screen.queryByRole("button", { name: "Show" })).toBeNull();
   });
+
+  // #1024: the banner floats over the canvas — its rows sit on an opaque base,
+  // so the nodes underneath no longer show through the amber wash.
+  it("paints every row on an opaque base under the amber tint", () => {
+    render(<LintBanner items={[lint("x"), nudge("fanout:w", "y")]} onDismiss={noop} />);
+    for (const row of screen.getAllByTestId("lint-banner-row")) {
+      expect(row.className).toContain("bg-bg-1");
+      expect(row.className).toContain("from-st-await/5");
+    }
+  });
 });

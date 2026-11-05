@@ -61,6 +61,11 @@ function endNode(app: TourAppState): NodeDef | null {
   return (app.pipeline?.nodes ?? []).find((n) => n.type === "end") ?? null;
 }
 
+/** The Start marker — the one entry point of every Run (ADR-0081). */
+function startNode(app: TourAppState): NodeDef | null {
+  return (app.pipeline?.nodes ?? []).find((n) => n.type === "start") ?? null;
+}
+
 /** xyflow stamps `data-id` with the node id — the one canvas target that is stable. */
 function nodeSel(node: NodeDef | null): string[] {
   return node ? [`.react-flow__node[data-id="${cssEscape(node.id)}"]`] : [];
@@ -513,6 +518,24 @@ const STEPS: TourStep[] = [
     done: (o) => !!agent(o.app, 1)?.outputs[1]?.instructions?.trim(),
   },
   {
+    // gitlab #23 / #1024 (ADR-0081): Start is the ONLY entry point. A node
+    // Start cannot reach is a Nœud orphelin, and the pipeline is not launchable
+    // — the tour used to rely on « no input = starts alone », and ended on a
+    // pipeline New Run refuses. While the tour runs the path marks are amber
+    // and the coherence rows of the banner are hidden (design Q4 = A, see
+    // `teachesWiring`), hence the note.
+    id: "edge-start-implementer",
+    title: "Connect Start to implementer",
+    body: "Press on the border of the Start marker and drag onto implementer. Start is where every Run begins: a node Start cannot reach never runs.",
+    note: "The amber marks show what is not wired yet. They clear as you connect.",
+    // Start is the step's subject; implementer is lit with it because the drop
+    // has to land there — outside the hole the blockers would swallow it.
+    target: (o) => [...nodeSel(startNode(o.app)), ...nodeSel(agent(o.app, 0))],
+    waitingFor: "the Start marker and the implementer card",
+    advanceHint: "advances once the edge exists",
+    done: (o) => edgeIndex(o.app.pipeline, startNode(o.app), agent(o.app, 0)) >= 0,
+  },
+  {
     id: "edge-implementer-tester",
     title: "Connect implementer to tester",
     // #846 — there is no output dot any more (#844, ADR-0071): the whole border
@@ -635,8 +658,22 @@ const STEPS: TourStep[] = [
   },
 ];
 
+const FIRST_PIPELINE_TOUR_ID = "first-pipeline";
+
+/**
+ * gitlab #23 design Q4 = A (#1024): while *First pipeline* runs, the pipeline
+ * is EXPECTED to be incomplete — the editor's path marks turn amber (a teaching
+ * aid, « not done yet ») and the banner drops its coherence rows. They come
+ * back once the tour is over; by then the pipeline is launchable.
+ */
+export function teachesWiring(
+  view: { tour: { id: string }; run: { phase: string } } | null | undefined,
+): boolean {
+  return view?.tour.id === FIRST_PIPELINE_TOUR_ID && view.run.phase === "running";
+}
+
 export const FIRST_PIPELINE_TOUR: TourDef = {
-  id: "first-pipeline",
+  id: FIRST_PIPELINE_TOUR_ID,
   title: "First pipeline",
   blurb: "Two agents in a loop: an implementer and a tester that hands back a verdict.",
   minutes: 8,
@@ -651,6 +688,10 @@ export const FIRST_PIPELINE_TOUR: TourDef = {
     {
       label: "tester",
       text: "agent in an isolated worktree, also interactive, returns a verdict (pass | fail) and an annotated screenshot.",
+    },
+    {
+      label: "Start",
+      text: "Start → implementer: every Run enters there, so the whole graph is reachable and New Run can launch it.",
     },
     {
       label: "Loop",

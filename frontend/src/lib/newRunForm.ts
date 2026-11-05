@@ -7,6 +7,7 @@ import type {
 import type { InstanceSettings, PipelineListEntry, SandboxProfileRef, SkillRef } from "../types";
 import { presetToCron, type CronPresetId } from "../cronPresets";
 import { HARNESS_FLOOR, harnessCatalog, type HarnessCatalog } from "./harness";
+import { NOT_LAUNCHABLE_PREFIX } from "./pathCoherence";
 
 /**
  * The New Run / Trigger form's pure logic (#359), lifted out of `NewRunModal.tsx`.
@@ -162,6 +163,35 @@ export function triggerInputRejectReason({
     : null;
 }
 
+/**
+ * ADR-0081 (#1022): whether a Run may be launched from this pipeline, per the
+ * daemon's list (`launchable`). Absent (an older daemon) reads as launchable.
+ */
+export function isLaunchable(pipeline: PipelineListEntry): boolean {
+  return pipeline.launchable !== false;
+}
+
+/**
+ * The daemon's reasons a pipeline is not launchable, space-joined — the full
+ * `Not launchable: …` sentences (the held-selection line, Launch's tooltip).
+ * Null when it is launchable.
+ */
+export function notLaunchableReason(pipeline: PipelineListEntry | undefined): string | null {
+  if (!pipeline || isLaunchable(pipeline)) return null;
+  const reasons = pipeline.not_launchable_reasons ?? [];
+  return reasons.length > 0 ? reasons.join(" ") : "Not launchable.";
+}
+
+/**
+ * The menu row's reason line (design Q3 = B): the same sentences without their
+ * `Not launchable: ` prefix — the greyed row already says it.
+ */
+export function notLaunchableRowReason(pipeline: PipelineListEntry): string {
+  return (pipeline.not_launchable_reasons ?? [])
+    .map((r) => (r.startsWith(NOT_LAUNCHABLE_PREFIX) ? r.slice(NOT_LAUNCHABLE_PREFIX.length) : r))
+    .join(" ");
+}
+
 export function canLaunch({
   repoValid,
   selectedPipeline,
@@ -183,6 +213,8 @@ export function canLaunch({
   return Boolean(
     repoValid &&
       selectedPipeline &&
+      // ADR-0081 / #1022: a held Pipeline non lançable would only meet a 400.
+      isLaunchable(selectedPipeline) &&
       hasRequiredPrompt &&
       !missingProfile &&
       !sandboxDoomed &&

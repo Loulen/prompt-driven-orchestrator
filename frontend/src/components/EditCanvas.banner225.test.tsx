@@ -157,12 +157,14 @@ describe("#225 Part 1 — lint banner is gated to non-run tabs", () => {
 
 // A pipeline whose `triage` node emits a list-typed output into `fixer`, which
 // is not a collection member — exactly the shape that produces a fan-out nudge
-// (`collectionFanoutNudges` → id `fanout:fixer`).
+// (`collectionFanoutNudges` → id `fanout:fixer`). Wired Start → … → End so it is
+// launchable (ADR-0081): no path-coherence row joins the banner under test.
 const NUDGE_PIPELINE = {
   name: "Nudge Pipeline",
   version: "1.0",
   variables: {},
   nodes: [
+    ...PIPELINE.nodes,
     {
       id: "triage",
       name: "Triage",
@@ -184,13 +186,21 @@ const NUDGE_PIPELINE = {
       type: "agent" as const,
       interactive: false,
       inputs: [{ name: "in", repeated: false, side: "left" as const }],
-      outputs: [],
+      outputs: [{ name: "out", repeated: false, side: "right" as const }],
     },
   ],
   edges: [
     {
+      source: { node: "start", port: "user_prompt" },
+      target: { node: "triage", port: "task" },
+    },
+    {
       source: { node: "triage", port: "issues" },
       target: { node: "fixer", port: "in" },
+    },
+    {
+      source: { node: "fixer", port: "out" },
+      target: { node: "end", port: "result" },
     },
   ],
 };

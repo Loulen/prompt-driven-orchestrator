@@ -29,9 +29,15 @@ interface Props {
   onDismiss: (id: string) => void;
   /** « Show » on a row naming a node. Without it, no row renders the link. */
   onShow?: (nodeId: string) => void;
+  /**
+   * #1022: the node currently selected on the canvas. The « Show » of a row
+   * naming it stays lit (accent + underline), so the clicked link reads as the
+   * one in effect instead of falling back to grey.
+   */
+  activeNodeId?: string | null;
 }
 
-export default function LintBanner({ items, onDismiss, onShow }: Props) {
+export default function LintBanner({ items, onDismiss, onShow, activeNodeId }: Props) {
   if (items.length === 0) return null;
 
   return (
@@ -42,6 +48,7 @@ export default function LintBanner({ items, onDismiss, onShow }: Props) {
       {items.map((item, i) => (
         <div
           key={item.kind === "nudge" ? item.id : `lint-${i}`}
+          data-testid="lint-banner-row"
           className="flex items-start gap-2 rounded border border-st-await/30 bg-st-await/5 px-2 py-1.5 text-fg-3"
           style={{ fontSize: "10.5px" }}
         >
@@ -52,7 +59,10 @@ export default function LintBanner({ items, onDismiss, onShow }: Props) {
               type="button"
               onClick={() => onShow(item.nodeId!)}
               data-testid={`lint-banner-show-${item.nodeId}`}
-              className="ml-auto shrink-0 text-fg-4 hover:text-acc hover:underline focus-visible:outline focus-visible:outline-1"
+              aria-current={item.nodeId === activeNodeId ? "true" : undefined}
+              className={`ml-auto shrink-0 hover:text-acc hover:underline focus-visible:outline focus-visible:outline-1 ${
+                item.nodeId === activeNodeId ? "text-acc underline" : "text-fg-4"
+              }`}
             >
               Show
             </button>

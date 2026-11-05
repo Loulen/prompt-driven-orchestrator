@@ -7,6 +7,8 @@ import {
 } from "../hooks/useWaitingAlertSettings";
 import { WAITING_ALERT_PREFS_STORAGE_KEY } from "../lib/waitingAlertPrefs";
 import { installFakeNotification, uninstallFakeNotification } from "../test/fakeNotification";
+import { installFakeAudioContext, uninstallFakeAudioContext } from "../test/fakeAudioContext";
+import { resetSoundAdapter } from "../lib/soundAdapter";
 
 function boot() {
   act(() => void initWaitingAlertSettings());
@@ -16,12 +18,15 @@ function boot() {
 const toggle = () => screen.getByTestId("setting-browser-notification");
 const status = () => screen.getByTestId("setting-browser-notification-status");
 const testButton = () => screen.getByTestId("setting-waiting-alert-test");
+const soundToggle = () => screen.getByTestId("setting-sound");
 
 beforeEach(() => localStorage.clear());
 
 afterEach(() => {
   disposeWaitingAlertSettings();
   uninstallFakeNotification();
+  uninstallFakeAudioContext();
+  resetSoundAdapter();
   Reflect.deleteProperty(window, "isSecureContext");
   localStorage.clear();
 });
@@ -87,15 +92,16 @@ describe("Settings › Notifications (#1011)", () => {
     expect(status()).toHaveTextContent(
       `Browsers only allow notifications on https or localhost. You opened PDO at ${window.location.origin}`,
     );
-    // No Sound row ships yet (#1012): the copy must not promise one.
-    expect(status()).not.toHaveTextContent(/sound/i);
+    expect(status()).toHaveTextContent("Sound still works.");
+    // …and it does: the Sound switch stays usable.
+    expect(soundToggle()).toBeEnabled();
   });
 
   it("no Notification API: greyed with its reason", () => {
     boot();
     expect(toggle()).toBeDisabled();
     expect(status()).toHaveAttribute("data-state", "unavailable");
-    expect(status()).not.toHaveTextContent(/sound/i);
+    expect(status()).toHaveTextContent("This browser has no notification support. Sound still works.");
   });
 
   it("Send a test fires a notification even with the tab in view; its click opens no Run", async () => {
@@ -121,6 +127,69 @@ describe("Settings › Notifications (#1011)", () => {
     await waitFor(() => expect(toggle()).toHaveAttribute("aria-checked", "false"));
     expect(JSON.parse(localStorage.getItem(WAITING_ALERT_PREFS_STORAGE_KEY)!)).toMatchObject({
       notification: false,
+    });
+  });
+
+  describe("Sound (#1012)", () => {
+    it("off by default, with its help; independent of the notification permission", () => {
+      installFakeNotification("denied");
+      boot();
+      expect(soundToggle()).toHaveAttribute("role", "switch");
+      expect(soundToggle()).toHaveAttribute("aria-checked", "false");
+      expect(soundToggle()).toBeEnabled();
+      expect(screen.getByTestId("setting-sound-status")).toHaveTextContent(
+        "A short chime, at most once every 10 s. Needs no permission.",
+      );
+      expect(document.getElementById("setting-sound-help")).toHaveTextContent(
+        "A short chime under the same conditions. At most one every 10 seconds, however many nodes start waiting.",
+      );
+    });
+
+    it("turning it on stores it at once, asks for nothing, and enables Send a test", () => {
+      const fake = installFakeNotification("default");
+      boot();
+      fireEvent.click(soundToggle());
+      expect(soundToggle()).toHaveAttribute("aria-checked", "true");
+      expect(fake.requests).toBe(0);
+      expect(JSON.parse(localStorage.getItem(WAITING_ALERT_PREFS_STORAGE_KEY)!)).toEqual({
+        notification: false,
+        sound: true,
+      });
+      expect(testButton()).toBeEnabled();
+      expect(testButton()).not.toHaveAttribute("title");
+    });
+
+    it("restored at load, and followed when another tab flips it", () => {
+      localStorage.setItem(WAITING_ALERT_PREFS_STORAGE_KEY, JSON.stringify({ notification: false, sound: true }));
+      boot();
+      expect(soundToggle()).toHaveAttribute("aria-checked", "true");
+      act(() => {
+        localStorage.setItem(WAITING_ALERT_PREFS_STORAGE_KEY, JSON.stringify({ notification: false, sound: false }));
+        window.dispatchEvent(new StorageEvent("storage", { key: WAITING_ALERT_PREFS_STORAGE_KEY }));
+      });
+      expect(soundToggle()).toHaveAttribute("aria-checked", "false");
+    });
+
+    it("Send a test with the sound on plays the Celesta (and only the sound when the notification is off)", () => {
+      const fake = installFakeNotification("granted");
+      const audio = installFakeAudioContext();
+      localStorage.setItem(WAITING_ALERT_PREFS_STORAGE_KEY, JSON.stringify({ notification: false, sound: true }));
+      boot();
+      fireEvent.click(testButton());
+      expect(audio.chimes).toHaveLength(1);
+      expect(audio.chimes[0].frequencies).toEqual([1046.5, 783.99]);
+      expect(fake.shown).toHaveLength(0);
+    });
+
+    it("Send a test with both on fires both, every click (a test is not throttled)", () => {
+      const fake = installFakeNotification("granted");
+      const audio = installFakeAudioContext();
+      localStorage.setItem(WAITING_ALERT_PREFS_STORAGE_KEY, JSON.stringify({ notification: true, sound: true }));
+      boot();
+      fireEvent.click(testButton());
+      fireEvent.click(testButton());
+      expect(fake.shown).toHaveLength(2);
+      expect(audio.chimes).toHaveLength(2);
     });
   });
 });

@@ -5,6 +5,7 @@ import {
   decideWaitingAlert,
   notificationTag,
   SOUND_THROTTLE_MS,
+  soundWindowOpen,
   waitingTransitionOf,
   type AlertPermission,
   type WaitingAlertInput,
@@ -187,6 +188,40 @@ describe("decideWaitingAlert — the matrix (#1011)", () => {
         input({ prefs: { notification: false, sound: true }, now: 100_000, lastSoundAt: 95_000 }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("decideWaitingAlert — the sound (#1012)", () => {
+  it("each reason has its own chime", () => {
+    const cases: Array<[WsMessage, string]> = [
+      [declaredWithMessage, "celesta"],
+      [event("node_awaiting_user", { payload: { cause: "declared" } }), "softGong"],
+      [event("node_awaiting_user", { payload: { cause: "completion_not_released" } }), "kalimbaTriad"],
+      [event("node_interrupted", { payload: { reason: "boom" } }), "glassPing"],
+      [event("run_interrupted", { node: null, payload: { reason: "stalled" } }), "glassPing"],
+    ];
+    for (const [message, chime] of cases) {
+      expect(decideWaitingAlert(input({ message }))?.chime).toBe(chime);
+    }
+  });
+
+  it("no chime when the sound is off or its window is closed", () => {
+    expect(decideWaitingAlert(input({ prefs: { notification: true, sound: false } }))?.chime).toBeNull();
+    expect(decideWaitingAlert(input({ now: 100_000, lastSoundAt: 95_000 }))?.chime).toBeNull();
+  });
+
+  it("a sound alone works with the notification refused or impossible", () => {
+    for (const permission of ["denied", "insecure", "unavailable"] as AlertPermission[]) {
+      expect(
+        decideWaitingAlert(input({ permission, prefs: { notification: false, sound: true } })),
+      ).toMatchObject({ notify: false, sound: true, chime: "celesta" });
+    }
+  });
+
+  it("soundWindowOpen: never played, or 10 s ago or more", () => {
+    expect(soundWindowOpen(null, 0)).toBe(true);
+    expect(soundWindowOpen(0, 9_999)).toBe(false);
+    expect(soundWindowOpen(0, 10_000)).toBe(true);
   });
 });
 

@@ -5,7 +5,9 @@
  * preferences + the clock → an alert (a notification and/or a sound) or
  * nothing. No DOM, no Notification API, no timer — the adapters
  * (`notificationAdapter`, and the sound one of #1012) only carry out what this
- * module decided, so the whole matrix is unit-tested here.
+ * module decided, so the whole matrix is unit-tested here. #1012 adds the
+ * chime of each reason (`chimes.ts`) and the visibility of every PDO tab of the
+ * browser (`tabCoordinator.ts`).
  *
  * Alert on a **live** transition to a human wait:
  * - `node_awaiting_user` of cause `declared` (the agent ran `pdo wait-user`) or
@@ -19,6 +21,7 @@
  * PDO tab is in view (the dot already says it).
  */
 import type { WsMessage } from "../types";
+import { chimeForReason, type ChimeName } from "./chimes";
 
 /** At most one sound per window, every cause together (ADR-0081 §4). */
 export const SOUND_THROTTLE_MS = 10_000;
@@ -96,7 +99,7 @@ export function waitingTransitionOf(msg: WsMessage): WaitingTransition | null {
 
 export interface WaitingAlertInput {
   message: WsMessage;
-  /** Is a PDO tab in view? (#1012 aggregates every tab; T1 reads this one.) */
+  /** Is a PDO tab of this browser in view — any of them (#1012)? */
   anyTabVisible: boolean;
   prefs: WaitingAlertPrefs;
   permission: AlertPermission;
@@ -112,6 +115,13 @@ export interface WaitingAlertDecision {
   notify: boolean;
   /** Play the sound — already throttled to one per {@link SOUND_THROTTLE_MS}. */
   sound: boolean;
+  /** The chime of the transition's reason (`null` when no sound). */
+  chime: ChimeName | null;
+}
+
+/** Is the sound window open — no chime yet, or the last one 10 s ago or more? */
+export function soundWindowOpen(lastSoundAt: number | null, now: number): boolean {
+  return lastSoundAt === null || now - lastSoundAt >= SOUND_THROTTLE_MS;
 }
 
 /** The decider. `null` = nothing to do. */
@@ -120,11 +130,9 @@ export function decideWaitingAlert(input: WaitingAlertInput): WaitingAlertDecisi
   if (!transition) return null;
   if (input.anyTabVisible) return null;
   const notify = input.prefs.notification && input.permission === "granted";
-  const sound =
-    input.prefs.sound &&
-    (input.lastSoundAt === null || input.now - input.lastSoundAt >= SOUND_THROTTLE_MS);
+  const sound = input.prefs.sound && soundWindowOpen(input.lastSoundAt, input.now);
   if (!notify && !sound) return null;
-  return { transition, notify, sound };
+  return { transition, notify, sound, chime: sound ? chimeForReason(transition.reason) : null };
 }
 
 /** The names the notification shows, resolved by the caller. */

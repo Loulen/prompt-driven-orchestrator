@@ -7,6 +7,8 @@ import { reviewRunIdFromPath } from './lib/runRefs'
 import { initTheme } from './hooks/useTheme'
 import { initColourBlindStatus } from './hooks/useColourBlindStatus'
 import { initWaitingAlertSettings } from './hooks/useWaitingAlertSettings'
+import { initTabCoordinator } from './lib/tabCoordinator'
+import { canPlaySoundNow } from './lib/soundAdapter'
 
 // #759: adopt the stored theme and start following the OS. The inline guard in
 // `index.html` already stamped the same value before first paint; this call
@@ -19,6 +21,9 @@ initColourBlindStatus()
 // #1011: the waiting-alert switches (this browser's) and the notification
 // permission, followed across tabs and across a permission change.
 initWaitingAlertSettings()
+// #1012: this tab joins the other PDO tabs of the browser — the visibility of
+// all of them decides, and one tab only emits each waiting alert.
+initTabCoordinator({ canPlaySound: canPlaySoundNow })
 
 // The app has no router: navigation is state (selected run, pane owner). The
 // Review page (#749) is its first real URL — `/runs/<id>/review` — rendered

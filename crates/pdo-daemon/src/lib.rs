@@ -80,6 +80,7 @@ mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
 mod shared_terminal;
+mod skill_archive;
 mod skill_bank;
 mod skill_delivery;
 mod skill_import;
@@ -5443,6 +5444,9 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(cancel_skill_scan),
         )
         .route("/settings/skills/import", post(import_skills))
+        // Archive de skills (pdo-issues#2, ADR-0082): a flat zip of the checked
+        // skills plus the `pdo-skills.json` manifest carrying their ids.
+        .route("/settings/skills/export", post(export_skills))
         .route("/settings/skills/sources/recent", get(recent_skill_sources))
         .route(
             "/settings/skill-folders/{id}/rescan",
@@ -14086,6 +14090,63 @@ async fn delete_skill_folder(
 // ---------------------------------------------------------------------------
 // Import from a Source (#670)
 // ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct ExportSkillsRequest {
+    ids: Vec<String>,
+    /// Optional; defaulted and `.zip`-completed by the daemon (pdo-issues#2).
+    #[serde(default)]
+    file_name: Option<String>,
+}
+
+/// `POST /settings/skills/export` — the **Archive de skills** (pdo-issues#2,
+/// ADR-0082): `{ ids, file_name? }` → a zip download named by
+/// `Content-Disposition`. An unknown id is a 404 naming it, a seeded one a 403;
+/// the whole export is refused, never a partial archive. The bank is read only.
+async fn export_skills(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ExportSkillsRequest>,
+) -> Response {
+    use skill_archive::ExportError as E;
+    match skill_archive::export(
+        &state.db,
+        &state.repo_root,
+        &req.ids,
+        req.file_name.as_deref(),
+        chrono::Utc::now(),
+    )
+    .await
+    {
+        Ok(export) => (
+            [
+                (header::CONTENT_TYPE, "application/zip".to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    skill_archive::content_disposition(&export.file_name),
+                ),
+                (
+                    header::HeaderName::from_static("x-pdo-skills"),
+                    export.manifest.skills.len().to_string(),
+                ),
+            ],
+            export.bytes,
+        )
+            .into_response(),
+        Err(error) => {
+            let (status, code, id) = match &error {
+                E::EmptySelection => (StatusCode::BAD_REQUEST, "empty_selection", None),
+                E::UnknownSkill(id) => (StatusCode::NOT_FOUND, "unknown_skill", Some(id.clone())),
+                E::Locked(id) => (StatusCode::FORBIDDEN, "locked", Some(id.clone())),
+                E::Storage(_) => (StatusCode::INTERNAL_SERVER_ERROR, "storage", None),
+            };
+            let mut body = serde_json::json!({ "error": error.to_string(), "code": code });
+            if let Some(id) = id {
+                body["id"] = serde_json::Value::String(id);
+            }
+            (status, Json(body)).into_response()
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct ScanSkillSourceRequest {

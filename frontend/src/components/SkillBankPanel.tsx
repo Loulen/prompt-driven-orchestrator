@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  Upload,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -53,6 +54,8 @@ import {
 import SkillTree from "./SkillTree";
 import PasteSkillModal from "./PasteSkillModal";
 import ImportSkillsModal from "./ImportSkillsModal";
+import ExportSkillsModal from "./ExportSkillsModal";
+import { exportableInFolder } from "../lib/skillArchive";
 import SkillFilesTab from "./SkillFilesTab";
 import { useSkillFiles } from "../hooks/useSkillFiles";
 import { useFileDropTarget } from "../hooks/useFileDropTarget";
@@ -80,6 +83,8 @@ type Pending =
 
 interface Toast {
   message: string;
+  /** A quieter second half, after the message. */
+  detail?: string;
   undo?: () => Promise<void>;
 }
 
@@ -106,6 +111,8 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
   const [filter, setFilter] = useState("");
   const [pasteOpen, setPasteOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  /** The export modal (pdo-issues#2): `null` closed, else the skill ids pre-checked. */
+  const [exportChecked, setExportChecked] = useState<string[] | null>(null);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [detailTab, setDetailTab] = useState<"skill" | "files">("skill");
@@ -468,6 +475,15 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
                 <>
                   <MenuItem icon={<FolderPlus size={12} />} label="New subfolder" onClick={() => void newFolder(ref.id)} />
                   <MenuItem icon={<Pencil size={12} />} label="Rename" hint="F2" onClick={() => startRename(ref)} />
+                  <MenuItem
+                    icon={<Upload size={12} />}
+                    label="Export folder…"
+                    testid="tree-menu-export-folder"
+                    onClick={() => {
+                      setMenuFor(null);
+                      setExportChecked(exportableInFolder(ref.id, folders, skills));
+                    }}
+                  />
                   <MenuSeparator />
                   <MenuItem icon={<Trash2 size={12} />} label="Delete folder" hint="⌫" danger onClick={() => void askDelete(ref)} />
                 </>
@@ -537,6 +553,20 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
           >
             <Folder size={12} />
             <span style={{ fontSize: "12px", lineHeight: 1 }}>+</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAddMenuOpen(false);
+              setMenuFor(null);
+              setExportChecked([]);
+            }}
+            aria-label="Export skills"
+            title="Export skills to a .zip…"
+            data-testid="skill-export"
+            className="flex shrink-0 items-center rounded-md border border-line-strong bg-bg-3 px-2 py-1.5 text-fg-2 hover:border-acc"
+          >
+            <Upload size={12} />
           </button>
           <span className="relative">
             <button
@@ -709,6 +739,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             onCopyId={() => void copyId(selectedSkill.id)}
             onRename={() => startRename({ kind: "skill", id: selectedSkill.id })}
             onMove={() => setMovePickerFor(selectedSkill.id)}
+            onExport={() => setExportChecked([selectedSkill.id])}
             onDelete={() => void askDelete({ kind: "skill", id: selectedSkill.id })}
             movePickerOpen={movePickerFor === selectedSkill.id}
             onMoveTo={(folderId) => {
@@ -754,6 +785,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             style={{ fontSize: "11.5px" }}
           >
             <span>{toast.message}</span>
+            {toast.detail && <span className="text-fg-4">· {toast.detail}</span>}
             {toast.undo && (
               <button
                 type="button"
@@ -789,6 +821,22 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
               const n = report.imported.length;
               showToast({ message: `Imported ${n} skill${n === 1 ? "" : "s"} into ${report.folder.name}` });
             }
+          }}
+        />
+      )}
+
+      {exportChecked !== null && (
+        <ExportSkillsModal
+          folders={folders}
+          skills={skills}
+          initialChecked={exportChecked}
+          onClose={() => setExportChecked(null)}
+          onExported={(download) => {
+            setExportChecked(null);
+            showToast({
+              message: `Exported ${download.count} skill${download.count === 1 ? "" : "s"} to ${download.fileName}`,
+              detail: "saved to your Downloads by the browser",
+            });
           }}
         />
       )}
@@ -1013,6 +1061,7 @@ function SkillDetailView({
   onCopyId,
   onRename,
   onMove,
+  onExport,
   onDelete,
   movePickerOpen,
   onMoveTo,
@@ -1038,6 +1087,7 @@ function SkillDetailView({
   onCopyId: () => void;
   onRename: () => void;
   onMove: () => void;
+  onExport: () => void;
   onDelete: () => void;
   movePickerOpen: boolean;
   onMoveTo: (folderId: string | null) => void;
@@ -1165,7 +1215,7 @@ function SkillDetailView({
       <div className="mt-3 flex items-center gap-2">
         {locked ? (
           <span className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="skill-detail-locked-note">
-            Seeded by PDO at startup — it updates itself; editing and deletion are refused.
+            Seeded by PDO at startup — it updates itself; editing, deletion and export are refused.
           </span>
         ) : (
           <>
@@ -1181,6 +1231,7 @@ function SkillDetailView({
                 />
               )}
             </span>
+            <ActionButton icon={<Upload size={11} />} label="Export…" onClick={onExport} testid="skill-detail-export" />
           </>
         )}
         <span className="flex-1" />

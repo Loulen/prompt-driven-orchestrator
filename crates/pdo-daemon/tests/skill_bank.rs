@@ -2232,3 +2232,268 @@ async fn scanning_a_sub_path_without_skills_points_at_where_they_are() {
     assert_eq!(report["imported"][0]["skill"]["name"], "tdd");
     assert_eq!(report["folder"]["source"]["url"], url);
 }
+
+// ---------------------------------------------------------------------------
+// Archive de skills — export (pdo-issues#2, #1026, ADR-0082)
+// ---------------------------------------------------------------------------
+
+async fn export_archive(daemon: &TestDaemon, body: serde_json::Value) -> reqwest::Response {
+    post_json(daemon, "/settings/skills/export", body).await
+}
+
+/// Every entry of a zip, by name, in archive order.
+fn zip_entries(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    (0..archive.len())
+        .map(|i| {
+            let mut entry = archive.by_index(i).unwrap();
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data).unwrap();
+            (entry.name().to_string(), data)
+        })
+        .collect()
+}
+
+fn disposition(resp: &reqwest::Response) -> String {
+    resp.headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn fp1026_export_is_a_flat_zip_with_reference_files_and_a_manifest_of_ids() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let review = create_named_skill(&daemon, "code-review").await;
+    let checklist = create_named_skill(&daemon, "review-checklist").await;
+    let scan = create_named_skill(&daemon, "security-scan").await;
+    let review_id = review["id"].as_str().unwrap();
+    let checklist_id = checklist["id"].as_str().unwrap();
+    // A folder in the bank: its hierarchy must not leak into the archive.
+    let folder: serde_json::Value = post_json(
+        &daemon,
+        "/settings/skill-folders",
+        serde_json::json!({ "name": "team-review" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let resp = put_json(
+        &daemon,
+        &format!("/settings/skills/{review_id}"),
+        serde_json::json!({ "folder_id": folder["id"] }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = upload(
+        &daemon,
+        review_id,
+        &[
+            ("path", None, b"checklist.md"),
+            ("file", Some("checklist.md"), b"# Checklist\n"),
+            ("path", None, b"scripts/run.sh"),
+            ("file", Some("run.sh"), b"#!/bin/sh\necho ok\n"),
+        ],
+    )
+    .await;
+    assert!(resp.status().is_success(), "{:?}", resp.text().await);
+
+    let resp = export_archive(
+        &daemon,
+        serde_json::json!({ "ids": [review_id, checklist_id], "file_name": "team-skills" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers()["content-type"], "application/zip");
+    assert_eq!(resp.headers()["x-pdo-skills"], "2");
+    assert!(
+        disposition(&resp).contains("filename=\"team-skills.zip\""),
+        "{}",
+        disposition(&resp)
+    );
+    let bytes = resp.bytes().await.unwrap();
+    let entries = zip_entries(&bytes);
+    let names = entries.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            "code-review/SKILL.md",
+            "code-review/checklist.md",
+            "code-review/scripts/run.sh",
+            "review-checklist/SKILL.md",
+            "pdo-skills.json",
+        ],
+        "flat: one folder per skill, no bank folder, no unchecked skill"
+    );
+    // SKILL.md byte for byte as the bank stores it.
+    let on_disk = std::fs::read(skills_root(&daemon).join(review_id).join("SKILL.md")).unwrap();
+    assert_eq!(entries[0].1, on_disk);
+    assert_eq!(entries[2].1, b"#!/bin/sh\necho ok\n");
+    assert!(
+        !names.iter().any(|n| n.starts_with("security-scan")),
+        "{scan}"
+    );
+
+    let manifest: serde_json::Value = serde_json::from_slice(&entries[4].1).unwrap();
+    assert_eq!(manifest["format"], "pdo-skills");
+    assert_eq!(manifest["version"], 1);
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(manifest["exported_at"].as_str().unwrap()).is_ok(),
+        "{manifest}"
+    );
+    assert_eq!(
+        manifest["skills"],
+        serde_json::json!([
+            { "folder": "code-review", "id": review_id, "name": "code-review" },
+            { "folder": "review-checklist", "id": checklist_id, "name": "review-checklist" },
+        ])
+    );
+
+    // The bank is not modified by an export.
+    let bank = get_json(&daemon, "/settings/skills").await;
+    assert_eq!(user_skills(&bank).len(), 3);
+}
+
+#[tokio::test]
+async fn fp1026_export_refuses_unknown_and_seeded_ids_and_an_empty_selection() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let tdd = create_named_skill(&daemon, "tdd").await;
+
+    let resp = export_archive(
+        &daemon,
+        serde_json::json!({ "ids": [tdd["id"], "nope-0000"] }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "unknown_skill");
+    assert_eq!(body["id"], "nope-0000");
+    assert!(
+        body["error"].as_str().unwrap().contains("nope-0000"),
+        "{body}"
+    );
+
+    for seeded in ["pdo-orchestrate", "pdo-interactive"] {
+        let resp = export_archive(&daemon, serde_json::json!({ "ids": [tdd["id"], seeded] })).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN, "{seeded}");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["code"], "locked");
+        assert_eq!(body["id"], seeded);
+    }
+
+    let resp = export_archive(&daemon, serde_json::json!({ "ids": [] })).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["code"], "empty_selection");
+}
+
+#[tokio::test]
+async fn fp1026_export_file_name_defaults_and_gets_zip_appended() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let tdd = create_named_skill(&daemon, "tdd").await;
+    let grilling = create_named_skill(&daemon, "grilling").await;
+
+    // One skill: `<name>.skills.zip`.
+    let resp = export_archive(&daemon, serde_json::json!({ "ids": [tdd["id"]] })).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        disposition(&resp).contains("filename=\"tdd.skills.zip\""),
+        "{}",
+        disposition(&resp)
+    );
+
+    // Several: `pdo-skills-<YYYYMMDD-HHMM>.zip`.
+    let resp = export_archive(
+        &daemon,
+        serde_json::json!({ "ids": [tdd["id"], grilling["id"]], "file_name": "" }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let header = disposition(&resp);
+    let name = header
+        .split("filename=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap();
+    assert!(
+        name.starts_with("pdo-skills-") && name.ends_with(".zip"),
+        "{name}"
+    );
+    let stamp = &name["pdo-skills-".len()..name.len() - ".zip".len()];
+    assert_eq!(stamp.len(), 13, "{name}");
+    assert!(
+        stamp
+            .chars()
+            .enumerate()
+            .all(|(i, c)| if i == 8 { c == '-' } else { c.is_ascii_digit() }),
+        "{name}"
+    );
+
+    // An explicit name keeps its `.zip`, or gets one.
+    let resp = export_archive(
+        &daemon,
+        serde_json::json!({ "ids": [tdd["id"]], "file_name": "mine.zip" }),
+    )
+    .await;
+    assert!(disposition(&resp).contains("filename=\"mine.zip\""));
+    let resp = export_archive(
+        &daemon,
+        serde_json::json!({ "ids": [tdd["id"]], "file_name": "équipe" }),
+    )
+    .await;
+    assert!(
+        disposition(&resp).contains("filename*=UTF-8''%C3%A9quipe.zip"),
+        "{}",
+        disposition(&resp)
+    );
+}
+
+#[tokio::test]
+async fn fp1026_an_unzipped_archive_is_a_valid_local_folder_source() {
+    let daemon = TestDaemon::spawn(|_| Ok(())).await.unwrap();
+    let pdf = create_named_skill(&daemon, "pdf").await;
+    let tdd = create_named_skill(&daemon, "tdd").await;
+    let pdf_id = pdf["id"].as_str().unwrap();
+    upload(
+        &daemon,
+        pdf_id,
+        &[
+            ("path", None, b"reference.md"),
+            ("file", Some("reference.md"), b"# Ref\n"),
+        ],
+    )
+    .await;
+    let resp = export_archive(&daemon, serde_json::json!({ "ids": [pdf_id, tdd["id"]] })).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.bytes().await.unwrap();
+
+    let unzipped = tempfile::tempdir().unwrap();
+    for (name, data) in zip_entries(&bytes) {
+        let path = unzipped.path().join(&name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, data).unwrap();
+    }
+    let resp = post_json(
+        &daemon,
+        "/settings/skills/scan",
+        serde_json::json!({ "scan_id": "scan-archive", "source": unzipped.path().display().to_string() }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["source"]["kind"], "local");
+    let candidates = body["candidates"].as_array().unwrap();
+    let mut names = candidates
+        .iter()
+        .map(|c| c["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, vec!["pdf", "tdd"], "{body}");
+    assert!(candidates.iter().all(|c| c["valid"] == true), "{body}");
+    let pdf_row = candidates.iter().find(|c| c["name"] == "pdf").unwrap();
+    assert_eq!(pdf_row["file_count"], 1, "{body}");
+}

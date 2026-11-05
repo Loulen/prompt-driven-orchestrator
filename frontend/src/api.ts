@@ -2549,6 +2549,60 @@ export function importSkills(body: {
   return request("POST", "/settings/skills/import", { body });
 }
 
+// ---- Archive de skills (pdo-issues#2, #1026, ADR-0082) ---------------------
+
+/** A downloaded archive: the zip, the name the daemon resolved, the skill count. */
+export interface SkillArchiveDownload {
+  blob: Blob;
+  fileName: string;
+  count: number;
+}
+
+/** The file name of a `Content-Disposition` header (`filename*` wins), or `null`. */
+export function dispositionFileName(header: string | null): string | null {
+  if (!header) return null;
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].trim());
+    } catch {
+      // fall through to the ASCII form
+    }
+  }
+  const plain = /filename="([^"]*)"/i.exec(header);
+  return plain ? plain[1] : null;
+}
+
+/**
+ * Export the checked skills as an **Archive de skills**: a flat zip (one folder
+ * per skill) with the `pdo-skills.json` manifest of ids. The daemon defaults and
+ * `.zip`-completes `fileName`; an unknown id (404) or a seeded one (403) is an
+ * `ApiError` naming it. The bank is not modified.
+ */
+export async function exportSkillArchive(ids: string[], fileName?: string): Promise<SkillArchiveDownload> {
+  const label = "POST /settings/skills/export";
+  const resp = await request<Response>("POST", "/settings/skills/export", {
+    body: { ids, file_name: fileName },
+    responseMode: "raw",
+    label,
+  });
+  if (!resp.ok) {
+    const errBody = await resp.json().catch(() => null);
+    throw new ApiError(apiErrorMessage(errBody, `${label} failed: ${resp.status}`), {
+      status: resp.status,
+      body: errBody,
+    });
+  }
+  const blob = await resp.blob();
+  const resolved = dispositionFileName(resp.headers.get("content-disposition"));
+  const count = Number(resp.headers.get("x-pdo-skills") ?? ids.length);
+  return {
+    blob,
+    fileName: resolved ?? fileName ?? "pdo-skills.zip",
+    count: Number.isFinite(count) ? count : ids.length,
+  };
+}
+
 export function fetchRecentSkillSources(): Promise<{ sources: RecentSkillSource[] }> {
   return request("GET", "/settings/skills/sources/recent");
 }

@@ -18,6 +18,7 @@ const deleteSkillFileMock = vi.fn();
 const uploadSkillFilesMock = vi.fn();
 const uploadSkillFileFromPathMock = vi.fn();
 const browseFsMock = vi.fn();
+const exportSkillArchiveMock = vi.fn();
 
 vi.mock("../api", () => ({
   rescanSkillFolder: (...args: unknown[]) => rescanSkillFolderMock(...args),
@@ -40,6 +41,7 @@ vi.mock("../api", () => ({
   uploadSkillFiles: (...args: unknown[]) => uploadSkillFilesMock(...args),
   uploadSkillFileFromPath: (...args: unknown[]) => uploadSkillFileFromPathMock(...args),
   browseFs: (...args: unknown[]) => browseFsMock(...args),
+  exportSkillArchive: (...args: unknown[]) => exportSkillArchiveMock(...args),
   // Defined INSIDE the hoisted factory (a top-level class would not exist yet),
   // with the real constructor signature so tests read like production code.
   ApiError: class ApiError extends Error {
@@ -142,6 +144,7 @@ beforeEach(() => {
     rescanSkillFolderMock,
     updateSkillFolderFromSourceMock,
     fetchRecentSkillSourcesMock,
+    exportSkillArchiveMock,
   ]) {
     mock.mockReset();
   }
@@ -543,6 +546,7 @@ describe("SkillBankPanel (#668)", () => {
     expect(within(folderMenu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual([
       expect.stringContaining("New subfolder"),
       expect.stringContaining("Rename"),
+      expect.stringContaining("Export folder…"),
       expect.stringContaining("Delete folder"),
     ]);
   });
@@ -580,6 +584,11 @@ describe("SkillBankPanel (#668)", () => {
     expect(screen.queryByTestId("skill-detail-rename")).toBeNull();
     expect(screen.queryByTestId("skill-detail-move")).toBeNull();
     expect(screen.queryByTestId("skill-detail-delete")).toBeNull();
+    // Nor exported (pdo-issues#2): every instance seeds it.
+    expect(screen.queryByTestId("skill-detail-export")).toBeNull();
+    expect(screen.getByTestId("skill-detail-locked-note")).toHaveTextContent(
+      "editing, deletion and export are refused",
+    );
 
     // The row has no pencil, and the kebab offers only Copy id + the lock note.
     expect(screen.queryByLabelText("Rename pdo-orchestrate")).toBeNull();
@@ -781,5 +790,52 @@ describe("SkillBankPanel Files tab (#671)", () => {
     await waitFor(() => expect(uploadSkillFileFromPathMock).toHaveBeenCalledTimes(2));
     expect(uploadSkillFileFromPathMock).toHaveBeenCalledWith("s-gr", "/home/user/notes/a.md", "a.md");
     expect(uploadSkillFileFromPathMock).toHaveBeenCalledWith("s-gr", "/home/user/notes/b.md", "b.md");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pdo-issues#2 / #1026 — Export skills to an archive: three entry points
+// ---------------------------------------------------------------------------
+
+describe("SkillBankPanel export (#1026)", () => {
+  const checkedIds = () =>
+    Array.from(document.querySelectorAll<HTMLInputElement>('[data-testid^="export-check-"]'))
+      .filter((box) => box.checked)
+      .map((box) => box.dataset.testid!.replace("export-check-", ""))
+      .sort();
+
+  it("the toolbar icon opens the modal with nothing checked", () => {
+    setup(POPULATED);
+    const button = screen.getByTestId("skill-export");
+    expect(button).toHaveAttribute("title", "Export skills to a .zip…");
+    fireEvent.click(button);
+    expect(screen.getByRole("dialog", { name: "Export skills to an archive" })).toBeInTheDocument();
+    expect(checkedIds()).toEqual([]);
+    expect(screen.getByTestId("export-submit")).toBeDisabled();
+  });
+
+  it("Export folder… in a folder's kebab pre-checks its skills and names the file after it", () => {
+    setup(POPULATED);
+    fireEvent.click(screen.getByTestId("kebab-folder-f-m"));
+    fireEvent.click(screen.getByTestId("tree-menu-export-folder"));
+    expect(checkedIds()).toEqual(["s-tdd"]);
+    expect(screen.getByTestId("export-file-name")).toHaveValue("tdd.skills.zip");
+  });
+
+  it("FP step 5: Export… in a skill's detail pre-checks that skill only, then the toast names the file", async () => {
+    URL.createObjectURL = vi.fn(() => "blob:archive");
+    URL.revokeObjectURL = vi.fn();
+    exportSkillArchiveMock.mockResolvedValue({ blob: new Blob(["zip"]), fileName: "grilling.skills.zip", count: 1 });
+    setup(POPULATED);
+    fireEvent.click(screen.getByTestId("tree-skill-s-gr"));
+    fireEvent.click(await screen.findByTestId("skill-detail-export"));
+    expect(checkedIds()).toEqual(["s-gr"]);
+    expect(screen.getByTestId("export-file-name")).toHaveValue("grilling.skills.zip");
+
+    fireEvent.click(screen.getByTestId("export-submit"));
+    await waitFor(() => expect(screen.queryByTestId("export-skills-modal")).toBeNull());
+    expect(exportSkillArchiveMock).toHaveBeenCalledWith(["s-gr"], "grilling.skills.zip");
+    expect(screen.getByTestId("skill-toast")).toHaveTextContent("Exported 1 skill to grilling.skills.zip");
+    expect(screen.getByTestId("skill-toast")).toHaveTextContent("saved to your Downloads by the browser");
   });
 });

@@ -85,6 +85,18 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     [mode, selectedPipelineId, targetRepo, input, runName, triggerName, editingTriggerId, launchProject],
   );
 
+  // API 0.22: the data an extension opened the form with, for its sections only.
+  const prefill = openIntent.kind === "run" ? openIntent.prefill : undefined;
+  const sectionExtraOf = useMemo<Record<string, Partial<RunNewContext>> | undefined>(
+    () =>
+      // From the intent alone: `mode` still holds the last open's until the
+      // seeding effect runs, after the sections' first render.
+      prefill?.extension && prefill.data !== undefined
+        ? { [prefill.extension]: { prefill: prefill.data } }
+        : undefined,
+    [prefill],
+  );
+
   if (!open) return null;
 
   // Ctrl+Enter: the footer's primary action, on the very conditions that
@@ -154,6 +166,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           <ExtensionSections<RunNewContext>
             location="run/new"
             extra={sectionContext}
+            extraOf={sectionExtraOf}
             form={sections.form}
           />
         </div>

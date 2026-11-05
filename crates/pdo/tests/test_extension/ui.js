@@ -14,6 +14,7 @@ import {
   EmptyState,
   IconButton,
   LiveArtifacts,
+  openNewRun,
   openProbedSocket,
   Segmented,
   SessionActions,
@@ -204,6 +205,7 @@ export function TestPage({ context, navigate, shell }) {
     return h(HostedSessionDemo, { agent: path === "hosted/agent" });
   }
   if (screen) return h(TestScreen, { path, navigate });
+  if (path === "new-run") return h(NewRunDemo);
   return h(TestPageBody, { context, navigate, path });
 }
 
@@ -273,6 +275,59 @@ function TestPageBody({ context, navigate, path }) {
       { type: "button", onClick: () => navigate("screens/alpha"), style: { alignSelf: "flex-start", textDecoration: "underline" } },
       "Screens",
     ),
+    h(
+      "button",
+      { type: "button", onClick: () => navigate("new-run"), style: { alignSelf: "flex-start", textDecoration: "underline" } },
+      "New Run demo",
+    ),
+  );
+}
+
+// The path `new-run` of the test page (API 0.22): opens the core's New Run
+// through `openNewRun` of `@pdo/extension-ui`, prefilled with what the fields
+// hold (an empty field prefills nothing), the `cle` field as the data of the
+// extension's own `run/new` section; or without any prefill.
+function NewRunDemo() {
+  const [fields, setFields] = React.useState({ project: "", repositories: "", name: "", input: "", cle: "" });
+  const [answer, setAnswer] = React.useState(null);
+  const field = (key, label) =>
+    h(
+      "label",
+      { key, style: { display: "flex", gap: "6px", alignItems: "center" } },
+      h("span", { style: { width: "110px" } }, label),
+      h("input", {
+        "data-testid": `test-new-run-${key}`,
+        value: fields[key],
+        onChange: (e) => setFields({ ...fields, [key]: e.target.value }),
+        style: { flex: 1, fontSize: "12px" },
+      }),
+    );
+  const prefilled = () => {
+    const repositories = fields.repositories.split(",").map((r) => r.trim()).filter(Boolean);
+    return {
+      ...(fields.project ? { project: fields.project } : {}),
+      ...(repositories.length > 0 ? { repositories } : {}),
+      ...(fields.name ? { name: fields.name } : {}),
+      ...(fields.input ? { input: fields.input } : {}),
+      ...(fields.cle ? { extension: "test", data: { cle: fields.cle } } : {}),
+    };
+  };
+  const open = (prefill) => setAnswer(openNewRun(prefill) ? "opened" : "no New Run here");
+  return h(
+    "div",
+    { style: { ...box, padding: "20px 28px", maxWidth: "560px" }, "data-testid": "test-new-run-demo" },
+    field("project", "Project id"),
+    field("repositories", "Repositories"),
+    field("name", "Name"),
+    field("input", "Prompt"),
+    field("cle", "Section data (cle)"),
+    h(
+      "div",
+      { style: { display: "flex", gap: "8px" } },
+      h(Button, { size: "sm", tone: "primary", onClick: () => open(prefilled()), "data-testid": "test-open-new-run" }, "Open New Run prefilled"),
+      h(Button, { size: "sm", onClick: () => open(), "data-testid": "test-open-new-run-plain" }, "Open New Run"),
+    ),
+    answer && h("p", { style: muted, "data-testid": "test-new-run-answer" }, answer),
   );
 }
 
@@ -550,7 +605,10 @@ export function EntitySection({ context, entity, form }) {
   // API 0.9: at `run/new`, provides `{ cle: <value> }` to the Run about to be
   // launched (sent as `extensions.test`); a value starting with `refuse` is
   // refused by the extension, and the form stays open with the reason.
-  const [value, setValue] = React.useState("from-the-section");
+  // API 0.22: opened by `openNewRun` with data for this extension, the draft
+  // starts from it (`context.prefill`); no other extension's section sees it.
+  const prefill = context.location === "run/new" ? context.prefill : undefined;
+  const [value, setValue] = React.useState(() => prefill?.cle ?? "from-the-section");
   const provides = context.location === "run/new" && context.mode === "run";
   React.useEffect(() => {
     if (!form?.provide || !provides) return undefined;
@@ -579,6 +637,8 @@ export function EntitySection({ context, entity, form }) {
     h("p", null, describeEntity(entity)),
     extra && h("p", { style: muted }, extra),
     form && h("p", { style: muted }, saved ? `Saved: ${describeEntity(saved)}` : "Takes part in Save"),
+    prefill !== undefined &&
+      h("p", { style: muted, "data-testid": "test-section-prefill" }, `Prefilled with ${JSON.stringify(prefill)}`),
     provides &&
       h(
         "label",

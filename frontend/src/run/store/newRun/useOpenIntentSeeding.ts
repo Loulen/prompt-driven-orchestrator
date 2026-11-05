@@ -3,7 +3,7 @@ import { fetchSettings } from "../../../settings/api/settings";
 import { SETTINGS_CHANGED } from "../../../settings/store/useSettings";
 import { cronToPreset, parseDailyTime } from "../../../trigger/model/cronPresets";
 import { EMPTY_PROVISIONING_RULES } from "../../../workspace/model/provisioning";
-import type { OpenIntent } from "../../model/openIntent";
+import { prefillOf, type NewRunPrefill, type OpenIntent } from "../../model/openIntent";
 import { prefillRepo } from "../../model/runCreationRights";
 import { useRunCreationRightsStore } from "../runCreationRightsStore";
 import type { NewRunState } from "./useNewRunState";
@@ -31,7 +31,7 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     setEditingTriggerId, setTriggerName, setCronPresetId, setDailyHour, setDailyMinute,
     setRawCron, setGuardCommand, setGuardTest, setGuardTestError, setAllowOverlap,
     setMaxConcurrent, setError, setProvisioning, setProvisioningValid, setProvisioningBlockReason,
-    setSecondaryRepos, setProjectId, setProjectChosen,
+    setSecondaryRepos, setProjectId, setProjectChosen, setRunName,
     settings, setSettings, setSettingsFailed, setSandbox, setHarness, setAgentChoice,
     setSkills, setPromptAddedSkills, recentRepos,
   } = s;
@@ -94,6 +94,20 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
       setSecondaryRepos([]); // #465: secondaries belong to the cleared draft
     };
 
+    const applyPrefill = (prefill: NewRunPrefill) => {
+      const [primary, ...secondaries] = prefill.repositories ?? [];
+      if (primary !== undefined) {
+        resetRepo(primary);
+        clearBranches();
+        // Writable, as a secondary added by hand (ADR-0047).
+        setSecondaryRepos(
+          secondaries.map((path) => ({ path, baseBranch: "", valid: null, readOnly: false })),
+        );
+      }
+      if (prefill.name !== undefined) setRunName(prefill.name);
+      if (prefill.input !== undefined) setInput(prefill.input);
+    };
+
     switch (openIntent.kind) {
       case "run":
         setMode("run");
@@ -101,6 +115,10 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
         blankTriggerFields();
         clearSharedIfFromTrigger();
         setProjectChosen(false);
+        // API 0.22: what an extension opened the form with; the rest of the
+        // draft stays as the core's New Run leaves it. The Projet is seeded by
+        // `useLaunchProject`, the auto-naming below.
+        if (openIntent.prefill) applyPrefill(openIntent.prefill);
         break;
 
       case "new-trigger":
@@ -190,6 +208,8 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     // new-trigger); an edit-trigger's own repo wins, so it's excluded.
     const freshEntry = openIntent.kind === "run" || openIntent.kind === "new-trigger";
     if (!freshEntry) return;
+    // API 0.22: the repositories an extension opened the form with win.
+    if (prefillOf(openIntent)?.repositories?.length) return;
     // CORE-5: restricted, only a repository the form offers (`prefillRepo`).
     const repo = prefillRepo(rights, recentRepos, rightsProjects);
     if (!prefillDone.current && repo && !targetRepo) {
@@ -304,6 +324,12 @@ export function useOpenIntentSeeding(open: boolean, openIntent: OpenIntent, s: N
     }
     if (autoNameSeeded.current) return;
     const isEdit = openIntent.kind === "edit-trigger";
+    // API 0.22: a name an extension opened the form with is kept, never auto-named.
+    if (prefillOf(openIntent)?.name !== undefined) {
+      autoNameSeeded.current = true;
+      setAutoName(false);
+      return;
+    }
     // A non-edit intent seeds from the instance default, so wait until `settings`
     // has arrived; an edit-trigger seeds synchronously from its own frozen choice.
     if (!isEdit && !settings) return;

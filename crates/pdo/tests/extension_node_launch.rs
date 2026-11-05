@@ -192,7 +192,11 @@ async fn an_agent_reads_the_extension_preamble_first_and_carries_its_variables()
         let file =
             std::env::temp_dir().join(format!("pdo-agent-env-{}-{nanos}.txt", std::process::id()));
         *seen.lock().unwrap() = file.clone();
-        format!("env > '{}'; exec sleep 600", file.display())
+        // Written aside then renamed: never read half written.
+        format!(
+            "env > '{0}.part' && mv '{0}.part' '{0}'; exec sleep 600",
+            file.display()
+        )
     };
     let (daemon, control) =
         daemon_with(|repo| seed_solo(repo, &[("solo", false)]), Some(tail)).await;

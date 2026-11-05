@@ -13,6 +13,19 @@ The project follows semantic versioning. It has **no backward-compatibility goal
 announced here, never hidden by keeping dead fields. One constraint is not negotiable: **historical
 data stays readable**. An archived Run opens and is costed whatever version wrote its payload.
 
+## Unreleased
+
+### New Run, opened prefilled by an extension
+
+- An extension's interface can open the New Run window prefilled: Projet, repositories, name and
+  prompt show in the form and stay editable, and only the calling extension's `run/new` section
+  receives its own data, to start from (items already checked, say). The Pipeline stays your
+  choice. A Projet the form does not offer you is ignored, and the default one applies.
+- New seam (extension API 0.22, a minor): `openNewRun(prefill?)` in `@pdo/extension-ui` and
+  `CommandHost.openNewRun(prefill?)`, with the type `NewRunPrefill`; `RunNewContext.prefill` hands
+  the data to the caller's `run/new` sections, which provide it to the creation as before. Without
+  a prefill, the form opens as the core's New Run button opens it.
+
 ## 2.71.0
 
 ### Settings › Appearance

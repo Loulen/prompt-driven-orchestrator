@@ -43,7 +43,11 @@
 //!   an action whose `when` never holds. The page, at `screens/alpha` and
 //!   `screens/beta`, sets the title and the icon of the shell's header per
 //!   route; `screens/beta` shows a read-only Banner with a lock (0.20); its
-//!   body shows a text kept in a yjs document, the front's own yjs (0.20). Every Action location (#30) through
+//!   body shows a text kept in a yjs document, the front's own yjs (0.20). At
+//!   the path `new-run` (0.22), it opens the core's New Run through `openNewRun`
+//!   of `@pdo/extension-ui`, prefilled with its fields (Projet, repositories,
+//!   name, prompt, and `cle`, the data of its `run/new` section, which starts
+//!   its draft from it), or without a prefill. Every Action location (#30) through
 //!   one action each ([`ACTION_LOCATIONS`]), titled `Test <location>`, calling
 //!   the same function; the one of `run/item/menu` only while the row's Run is
 //!   not archived, and that menu also offers [`FAIL`], a command that throws.

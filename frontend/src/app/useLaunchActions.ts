@@ -1,8 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RUN_INTENT, type OpenIntent } from "../run/components/NewRunModal";
 import type { Trigger } from "../shared/generated/Trigger";
 import { useEditStore } from "../pipeline/store/editStore";
 import { showToast } from "../shared/ui/toast";
+import { registerNewRunOpener } from "../shared/extensions/newRun";
 
 /** What selecting a Trigger clears and opens. */
 export interface LaunchTargets {
@@ -37,6 +38,23 @@ export function useLaunchActions({
     setOpenIntent(intent);
     setNewRunModalOpen(true);
   }, []);
+
+  // API 0.22: an extension's UI opens this New Run, prefilled or not; never
+  // over one already open, whose draft would be half replaced.
+  const openRef = useRef(newRunModalOpen);
+  useEffect(() => {
+    openRef.current = newRunModalOpen;
+  }, [newRunModalOpen]);
+  useEffect(
+    () =>
+      registerNewRunOpener((prefill) => {
+        if (openRef.current) return false;
+        openRef.current = true;
+        openNewRunModal(prefill ? { kind: "run", prefill } : RUN_INTENT);
+        return true;
+      }),
+    [openNewRunModal],
+  );
 
   const handleSelectTrigger = useCallback(
     (triggerId: string) => {

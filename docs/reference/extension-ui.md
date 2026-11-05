@@ -319,12 +319,19 @@ unchanged.
   (the id picked, or `null`) + `repository` (the target repository, as typed) + `targetProject`
   (the Projet owning that repository, compared verbatim, or `null`; CORE-5) + `input` (the
   prompt, as typed; 0.9) + `name` (the Run's name as typed, the Trigger's in `trigger` mode, `""`
-  for none; 0.9) + `trigger` (the id of the Trigger being edited, or `null`). `form` is present;
+  for none; 0.9) + `trigger` (the id of the Trigger being edited, or `null`) + `prefill` (0.22:
+  the `data` the section's own extension opened the form with, see
+  [Opening New Run prefilled](#opening-new-run-prefilled); absent otherwise, and always absent from
+  another extension's sections). `form` is present;
   `provide` (0.9) sends a value with the Run being launched, see *Sections*; `onSave` receives the Run launched
   (`{ kind: "run", id, name?, attributes }`, read back so it carries the Attributes the
   extensions stamped on the create) or the Trigger saved (`{ kind: "trigger", id, name, attributes }`). The
   Run or the Trigger exists whatever the handlers answer: a failure is an error toast, and the form
   closes.
+- **Opened by an extension** (0.22): a section receives `context.prefill` from the first render
+  of the form; it starts its draft from it (the items it lists already checked, say) and provides
+  the value at Launch through `provide`, as at any other open. The core sends nothing on the
+  section's behalf: an extension with no `run/new` section receives nothing.
 - **Rights** (CORE-5): the form asks the question of authorization (`POST /authorize`) at each
   open. When the disk may not be browsed (`repository` × `read`), the loupe is gone; when a Run
   may not be created somewhere, the field offers the repositories of the Projets that allow it,
@@ -848,6 +855,47 @@ click on its row would; the link then leaves the address bar.
 - Only the written form is recognised as a link: plain text `#/runs/<id>` in a markdown render is
   left as text.
 
+## Opening New Run prefilled
+
+Since 0.22 an extension's UI opens the core's New Run form, prefilled, instead of copying it: a
+page, a panel, a section or any component calls `openNewRun` of `@pdo/extension-ui`, a command
+calls `host.openNewRun` (see [Commands](#commands)).
+
+```ts
+interface NewRunPrefill {
+  project?: string;        // the id of the Projet to launch in
+  repositories?: string[]; // the target repositories, the primary first
+  name?: string;           // the Run's name (auto-naming is turned off)
+  input?: string;          // the prompt of the entry node
+  extension?: string;      // the caller's id: only its `run/new` sections receive `data`
+  data?: unknown;          // handed to those sections as `context.prefill`
+}
+function openNewRun(prefill?: NewRunPrefill): boolean;
+```
+
+- **Partial**: every field is optional, and each one given shows in the form, left editable. A
+  field left out keeps what the core's own New Run would show. Without a prefill (or with an empty
+  one), the form opens exactly as the core's New Run button opens it.
+- **Projet**: one the form does not offer (unknown, or where the operator may not create a Run) is
+  ignored. Without one, the form takes the first Projet offered that holds `repositories[0]`, else
+  its default (the last Projet chosen in this browser, else the first one offered). Without
+  `repositories`, the repository field follows the Projet as at any open of the form.
+- **Repositories**: `repositories[0]` is the primary repository, the others are writable
+  secondaries. The form validates them as if typed.
+- **Pipeline**: never prefilled; the operator picks it, the menu ordered as usual.
+- **Data**: `data` goes to the `run/new` sections of the extension `extension` names, as
+  `context.prefill`, and to no other extension's. The section provides it to the creation
+  (`form.provide`), and the daemon hands it to the extension's `validate_create`, whose refusal
+  keeps the form open with its reason: nothing is created. `data` without `extension` is dropped.
+  `extension` is declared by the caller, not checked: the boundary is the extension's own
+  `validate_create`, which checks the value whoever passed it. A command's `host.openNewRun` names
+  its own extension.
+- **Answer**: `true` once the form opens; `false` where no New Run can open (the Review page), and
+  while New Run is already open (its draft is left whole).
+
+The test extension demonstrates it on its page at the path `new-run`
+(`#/ext/test/topbar/end/new-run`).
+
 ## Commands
 
 ```ts
@@ -855,6 +903,7 @@ interface CommandContext extends LocationContext { extension: ExtensionRef; cont
 interface CommandHost {
   notify(message: string, kind?: "info" | "error"): void; // a toast
   open(link: string): void;                               // follow a deep link: #/ext/… or #/runs/<id>
+  openNewRun(prefill?: Omit<NewRunPrefill, "extension">): boolean; // 0.22, its `data` for this command's extension
 }
 type CommandFunction = (context: CommandContext, host: CommandHost) => unknown;
 ```
@@ -977,6 +1026,7 @@ tabs.map((tab) => <button key={tab.key} onClick={() => select(tab.key)}>{tab.lab
 | `useCurrentActor()`, `useActorDisplay(actor)` | The Actors' names, since 0.8 ([The Actors' names](#the-actors-names)) |
 | `openProbedSocket(path, options?)` | A WebSocket to the daemon, opened through the probe, since 0.10; its delay of silence since 0.11 ([WebSockets](#websockets)) |
 | `copyToClipboard(text)` | Put `text` on the clipboard from a user gesture, as every Copy button of the core does: the Clipboard API, or outside a secure context (an instance served over plain http) `execCommand("copy")` on a hidden textarea. Resolves to whether the text was written, never rejects. Since 0.11 |
+| `openNewRun(prefill?)` | Open the core's New Run form, prefilled; `false` where none can open. Since 0.22 ([Opening New Run prefilled](#opening-new-run-prefilled)) |
 | `Button`, `IconButton`, `Select`, `Menu`, `Modal`, `toast`… | The primitives of the design system, since 0.17 ([The design system](#the-design-system)) |
 | `SessionTerminal`, `TerminalZoom`, `useTerminalZoom(session)` | The core's session terminal and the Zoom du terminal, since 0.19 ([The session terminal](#the-session-terminal)) |
 | `SessionHeader`, `SessionActions`, `SessionWaiting`, `SessionTabs`, `LiveArtifacts`, `SessionInfo`, `SessionConfig`, `SessionEvents`, `useHostedSession(session)` | The bricks of a Session hébergée's detail and its live state, since 0.19 ([The detail of a Session hébergée](#the-detail-of-a-session-hébergée)) |

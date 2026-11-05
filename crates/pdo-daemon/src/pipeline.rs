@@ -544,6 +544,12 @@ pub(crate) struct LoopRegion {
     pub members: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_iter: Option<serde_yaml::Value>,
+    /// The **Plafond de coût** of a `bounded` region (#1016, ADR-0081): a dollar
+    /// cap on its **Coût de boucle**, checked at each re-entry. A positive number
+    /// or a `$var` reference; absent = no cap (no default). Refused on a
+    /// `collection` region (no re-entry to check it at). Serialized only when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd: Option<serde_yaml::Value>,
     /// The frontmatter field naming the list a `collection` region fans out over
     /// (ADR-0011 / #151). `None` for a `bounded` region.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1281,6 +1287,7 @@ pub(crate) fn parse_pipeline(yaml: &str) -> Result<ParseResult, ParseError> {
     }
 
     validate_switch_when_clauses(&pipeline)?;
+    validate_region_cost_caps(&pipeline)?;
 
     // Auto-materialize bounded regions here, at the model boundary rather than in
     // the editor's `addEdge` (ADR-0011 clause (b)): every reader funnels through
@@ -1421,6 +1428,44 @@ pub(crate) fn dangling_edge_references(pipeline: &PipelineDef) -> Vec<String> {
         }
     }
     errors
+}
+
+/// #1016 / ADR-0081: a region's `max_cost_usd` must be a positive dollar amount
+/// or a reference to a declared variable, and only on a `bounded` region — a
+/// `collection` has no re-entry to check it at (deferred, ADR-0081). The `$var`
+/// itself is resolved and checked at run launch
+/// ([`crate::loop_region::resolve_region_max_cost`]).
+fn validate_region_cost_caps(pipeline: &PipelineDef) -> Result<(), ParseError> {
+    for region in &pipeline.loops {
+        let Some(cap) = &region.max_cost_usd else {
+            continue;
+        };
+        if region.kind == LoopKind::Collection {
+            return Err(ParseError::InvalidField(format!(
+                "loop region '{}': max_cost_usd is only allowed on a bounded loop \
+                 (a collection region cannot be capped); remove it",
+                region.id
+            )));
+        }
+        if let serde_yaml::Value::String(s) = cap {
+            if let Some(var_name) = s.strip_prefix('$') {
+                if !pipeline.variables.contains_key(var_name) {
+                    return Err(ParseError::InvalidField(format!(
+                        "loop region '{}': max_cost_usd references undeclared variable '{s}'",
+                        region.id
+                    )));
+                }
+                continue;
+            }
+        }
+        if let Err(why) = crate::loop_region::cost_cap_amount(cap) {
+            return Err(ParseError::InvalidField(format!(
+                "loop region '{}': max_cost_usd {why}",
+                region.id
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_switch_when_clauses(pipeline: &PipelineDef) -> Result<(), ParseError> {
@@ -2593,6 +2638,92 @@ loops:
             region.max_iter,
             Some(serde_yaml::Value::Number(serde_yaml::Number::from(3)))
         );
+    }
+
+    fn capped_region_yaml(cap: &str, kind_and_driver: &str, variables: &str) -> String {
+        with_start_end(&format!(
+            r#"
+name: capped
+{variables}nodes:
+  - id: w
+    name: writer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: draft
+  - id: r
+    name: reviewer
+    type: agent
+    isolated_worktree: false
+    outputs:
+      - name: review
+loops:
+  - id: review_loop
+    {kind_and_driver}
+    members: [w, r]
+    {cap}
+"#
+        ))
+    }
+
+    const BOUNDED: &str = "kind: bounded\n    max_iter: 5";
+
+    #[test]
+    fn max_cost_usd_round_trips_and_is_absent_when_unset() {
+        // #1016: set ⇒ parsed and re-serialized; unset ⇒ no key on the way out.
+        let yaml = capped_region_yaml("max_cost_usd: 2.5", BOUNDED, "");
+        let parsed = parse_pipeline(&yaml).unwrap().pipeline;
+        assert_eq!(parsed.loops[0].max_cost_usd, Some(serde_yaml::to_value(2.5).unwrap()));
+        let out = serde_yaml::to_string(&parsed).unwrap();
+        assert!(out.contains("max_cost_usd: 2.5"), "{out}");
+        let reparsed = parse_pipeline(&out).unwrap().pipeline;
+        assert_eq!(reparsed.loops[0].max_cost_usd, parsed.loops[0].max_cost_usd);
+
+        let uncapped = parse_pipeline(&capped_region_yaml("", BOUNDED, "")).unwrap().pipeline;
+        assert_eq!(uncapped.loops[0].max_cost_usd, None);
+        assert!(!serde_yaml::to_string(&uncapped).unwrap().contains("max_cost_usd"));
+    }
+
+    #[test]
+    fn max_cost_usd_refuses_non_positive_and_non_numeric_values() {
+        for cap in ["max_cost_usd: 0", "max_cost_usd: -1", "max_cost_usd: lots", "max_cost_usd: [1]"] {
+            let err = parse_pipeline(&capped_region_yaml(cap, BOUNDED, ""))
+                .err()
+                .unwrap_or_else(|| panic!("{cap} must be refused"))
+                .to_string();
+            assert!(
+                err.contains("review_loop") && err.contains("max_cost_usd") && err.contains("positive"),
+                "{cap}: clear message naming the region and the field: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn max_cost_usd_is_refused_on_a_collection_region() {
+        let err = parse_pipeline(&capped_region_yaml(
+            "max_cost_usd: 5",
+            "kind: collection\n    over: items",
+            "",
+        ))
+        .err()
+        .expect("a collection cannot be capped")
+        .to_string();
+        assert!(err.contains("bounded"), "{err}");
+    }
+
+    #[test]
+    fn max_cost_usd_accepts_a_declared_variable_and_refuses_an_undeclared_one() {
+        let vars = "variables:\n  budget: {type: float, default: 2.5}\n";
+        let ok = parse_pipeline(&capped_region_yaml("max_cost_usd: $budget", BOUNDED, vars)).unwrap();
+        assert_eq!(
+            ok.pipeline.loops[0].max_cost_usd,
+            Some(serde_yaml::Value::String("$budget".into()))
+        );
+        let err = parse_pipeline(&capped_region_yaml("max_cost_usd: $nope", BOUNDED, vars))
+            .err()
+            .expect("undeclared variable")
+            .to_string();
+        assert!(err.contains("$nope"), "{err}");
     }
 
     #[test]

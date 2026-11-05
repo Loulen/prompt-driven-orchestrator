@@ -235,6 +235,10 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
       };
       if (r.max_iter !== undefined && r.max_iter !== null)
         region.max_iter = r.max_iter;
+      // #1016: the Plafond de coût, emitted only when set (no default) so an
+      // uncapped pipeline round-trips byte-identically.
+      if (r.max_cost_usd !== undefined && r.max_cost_usd !== null && r.max_cost_usd !== "")
+        region.max_cost_usd = r.max_cost_usd;
       // A collection region's iterated field (#151 / #269) — without it, the
       // region round-trips as an over-less shell the daemon can't fan out.
       if (r.over) region.over = r.over;

@@ -10,6 +10,23 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.128.0
+**Plafond de coût d'une boucle** (#1016, spec #1014, story pdo-issues#5, ADR-0081).
+
+- Une boucle `bounded` accepte `max_cost_usd` (nombre ou `$var`, pas de défaut, sérialisé seulement
+s'il est posé). Il est refusé s'il est ≤ 0, non numérique, ou posé sur une `collection`. Une `$var`
+est résolue au lancement du Run. Le plafond se vérifie à la re-entry : une fois le coût de boucle au
+plafond, le lap suivant ne démarre pas. Le Run passe en attente utilisateur avec la raison
+`region_budget_exhausted` (`awaiting_region_id` nomme la région), et la sortie d'épuisement n'est pas
+suivie. Le Run n'est jamais marqué en échec. Si `max_iter` est atteint au même moment, l'épuisement
+`max_iter` l'emporte.
+- Le header affiche `~$1.20 / $5` (`≤ $5` sur un template), avec un texte ambre dès 80 % du plafond.
+L'état « budget reached » est ambre, avec la chip `raise cap` / `end region`, et reste distinct de
+« exhausted ». L'inspecteur de région porte le champ et prévient quand un membre n'a pas de source de
+coût. Il montre aussi une section « Loop cost » sur un Run. Le panneau du Run explique l'arrêt.
+- Additif sur l'API : `loop_costs[id].cap_usd`, `awaiting_region_id` sur le Run, `can_cost` sur les
+harnais de `GET /settings`.
+
 ## 1.127.0
 **Coût de boucle dans le header de région** (#1015, spec #1014, story pdo-issues#5).
 

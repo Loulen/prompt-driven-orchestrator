@@ -18,6 +18,7 @@ import { statusSpec } from "../lib/statusTable";
 import { shortAge } from "../lib/branchSelect";
 import { formatDuration, useRunDuration } from "../lib/runDuration";
 import { formatEstCost } from "../lib/costLabel";
+import { budgetReason } from "../lib/budgetReason";
 import { serializePipeline } from "../lib/serializePipeline";
 import { highlightYaml } from "./yamlHighlight";
 import { resolveInfoTab } from "../lib/infoPanelReconcile";
@@ -651,6 +652,41 @@ function SourceBlock({ run }: { run: RunState }) {
   );
 }
 
+/**
+ * The body of the « Interrupted · awaiting you » box. A `region_budget_exhausted`
+ * park (#1016, ADR-0081) reads in the canvas' cost vocabulary and names the
+ * loop as a link that selects its region; any other reason is the daemon's prose.
+ */
+function AwaitingReasonBody({ run, pipeline }: { run: RunState; pipeline: PipelineDef | null }) {
+  const setSelection = useEditStore((s) => s.setSelection);
+  const budget = budgetReason(run, pipeline);
+  if (!budget) return <div className="mt-0.5 break-words">{run.awaiting_reason}</div>;
+  return (
+    <div className="mt-0.5 break-words" data-testid="run-budget-reason">
+      Loop{" "}
+      <button
+        type="button"
+        className="cursor-pointer font-mono text-acc underline-offset-2 hover:underline"
+        onClick={() =>
+          setSelection({ kind: "region", id: null, regionId: budget.regionId })
+        }
+        data-testid="run-budget-reason-region"
+      >
+        {budget.regionId}
+      </button>{" "}
+      reached its cost cap: <span className="font-mono font-medium">{budget.spent}</span> spent
+      {budget.cap && (
+        <>
+          {" "}of <span className="font-mono font-medium">{budget.cap}</span>
+        </>
+      )}
+      {budget.lap && <> after lap {budget.lap}</>}.
+      {budget.partial && " The cost is partial: a member has no readable cost."} Its
+      exit was not followed. Raise the cap and resume, or end the region.
+    </div>
+  );
+}
+
 function InfoTab({
   run,
   pipeline,
@@ -746,7 +782,7 @@ function InfoTab({
             <div className="font-medium text-st-await">
               {run.awaiting_reason_code ? "Interrupted · awaiting you" : "Awaiting you"}
             </div>
-            <div className="mt-0.5 break-words">{run.awaiting_reason}</div>
+            <AwaitingReasonBody run={run} pipeline={pipeline} />
           </div>
         )}
         {/* #804 / ADR-0070 §1: a Trigger fire that could not refresh the remotes

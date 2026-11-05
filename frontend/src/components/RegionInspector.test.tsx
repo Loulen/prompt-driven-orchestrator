@@ -1,8 +1,14 @@
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import RegionInspector from "./RegionInspector";
 import { useEditStore } from "../stores/editStore";
-import type { PipelineDef, NodeDef, LoopRegion } from "../types";
+import type { PipelineDef, NodeDef, LoopRegion, RunState } from "../types";
+
+// The harness catalogue is served by `GET /settings`; the inspector falls back
+// to the embedded floor (claude: costable, opencode: no cost source).
+vi.mock("../api", () => ({
+  fetchSettings: vi.fn().mockRejectedValue(new Error("offline")),
+}));
 
 function makeNode(id: string, name: string): NodeDef {
   return {
@@ -102,5 +108,178 @@ describe("RegionInspector (#150)", () => {
     fireEvent.change(input, { target: { value: "8" } });
     const tab = useEditStore.getState().openTabs[0];
     expect(tab.pipeline.loops!.find((r) => r.id === "review_loop")!.max_iter).toBe(8);
+  });
+});
+
+describe("RegionInspector — Plafond de coût (#1016)", () => {
+  beforeEach(() => {
+    useEditStore.setState({
+      openTabs: [],
+      activeTabId: null,
+      selection: { kind: "none", id: null },
+    });
+  });
+
+  function selectWith(loops: LoopRegion[], nodes?: NodeDef[]) {
+    selectRegion(loops, loops[0].id);
+    if (nodes) {
+      useEditStore.setState((s) => ({
+        openTabs: s.openTabs.map((t) => ({ ...t, pipeline: { ...t.pipeline, nodes } })),
+      }));
+    }
+  }
+
+  const region = () => useEditStore.getState().openTabs[0].pipeline.loops![0];
+
+  it("exposes max_cost_usd under max_iter, empty = no cap", () => {
+    selectWith([reviewLoop]);
+    render(<RegionInspector />);
+    const input = screen.getByTestId("region-max-cost");
+    expect(input).toHaveValue(null);
+    expect(input).toHaveAttribute("placeholder", "no cap");
+    expect(screen.queryByTestId("region-max-cost-clear")).toBeNull();
+  });
+
+  it("commits a cap, and ✕ removes it", () => {
+    selectWith([reviewLoop]);
+    render(<RegionInspector />);
+    fireEvent.change(screen.getByTestId("region-max-cost"), { target: { value: "2.5" } });
+    expect(region().max_cost_usd).toBe(2.5);
+    fireEvent.click(screen.getByTestId("region-max-cost-clear"));
+    expect(region().max_cost_usd).toBeNull();
+  });
+
+  it("edits a `$var` cap as text", () => {
+    selectWith([{ ...reviewLoop, max_cost_usd: "$budget" }]);
+    render(<RegionInspector />);
+    const input = screen.getByTestId("region-max-cost");
+    expect(input).toHaveAttribute("type", "text");
+    expect(input).toHaveValue("$budget");
+  });
+
+  it("is absent on a collection region, which says caps are bounded-only", () => {
+    selectWith([{ id: "fan", kind: "collection", members: ["impl"], over: "items" }]);
+    render(<RegionInspector />);
+    expect(screen.queryByTestId("region-max-cost")).toBeNull();
+    expect(screen.getByTestId("region-no-cap-note")).toHaveTextContent(
+      "Cost caps apply to bounded loops only.",
+    );
+  });
+
+  it("warns when a capped loop has a member with no cost source", () => {
+    const nodes: NodeDef[] = [
+      { id: "impl", name: "implementer", type: "agent", inputs: [], outputs: [], interactive: false },
+      {
+        id: "rev",
+        name: "reviewer",
+        type: "agent",
+        inputs: [],
+        outputs: [],
+        interactive: false,
+        pin_harness: "opencode",
+      },
+    ];
+    selectWith([{ ...reviewLoop, max_cost_usd: 2 }], nodes);
+    render(<RegionInspector />);
+    const warning = screen.getByTestId("region-cost-warning");
+    expect(warning).toHaveTextContent("Cap may be overshot");
+    expect(warning).toHaveTextContent("reviewer runs on opencode, which has no cost source");
+    expect(screen.getByTestId("region-member-rev")).toHaveTextContent("no cost source");
+    expect(screen.getByTestId("region-member-impl")).not.toHaveTextContent("no cost source");
+  });
+
+  it("does not warn when every member is costable", () => {
+    selectWith([{ ...reviewLoop, max_cost_usd: 2 }]);
+    render(<RegionInspector />);
+    expect(screen.queryByTestId("region-cost-warning")).toBeNull();
+  });
+
+  it("focuses the cap when opened by `raise cap`", () => {
+    selectWith([{ ...reviewLoop, max_cost_usd: 5 }]);
+    useEditStore.setState({
+      selection: { kind: "region", id: null, regionId: "review_loop", focusField: "max_cost_usd" },
+    });
+    render(<RegionInspector />);
+    expect(screen.getByTestId("region-max-cost")).toHaveFocus();
+  });
+
+  function liveRun(usd: number, partial = false): RunState {
+    const member = (id: string) => ({
+      node_id: id,
+      status: "completed" as const,
+      iter: 3,
+      started_at: null,
+      completed_at: null,
+      failure_reason: null,
+      iterations: [],
+      harness: "claude",
+    });
+    return {
+      run_id: "a1b2c3d4e5",
+      pipeline_name: "p",
+      status: "running",
+      input: null,
+      started_at: null,
+      completed_at: null,
+      nodes: { impl: member("impl"), rev: member("rev") },
+      edges: [],
+      node_defs: [],
+      start_node: null,
+      end_node: null,
+      merge_resolver: null,
+      loop_costs: {
+        review_loop: {
+          usd,
+          estimated: true,
+          partial,
+          executions: 6,
+          readable_executions: 6,
+          members: [
+            { node_id: "impl", usd: 0.82, estimated: true, partial: false, executions: 3 },
+            { node_id: "rev", usd: 0.38, estimated: true, partial: false, executions: 3 },
+          ],
+          cap_usd: 5,
+        },
+      },
+    };
+  }
+
+  it("shows the loop cost against the cap on a live run, and each member's share", () => {
+    selectWith([{ ...reviewLoop, max_iter: 5, max_cost_usd: 5 }]);
+    render(<RegionInspector run={liveRun(1.2)} />);
+    expect(screen.getByTestId("region-loop-cost-amount")).toHaveTextContent("~$1.20 / $5");
+    expect(screen.getByTestId("region-loop-cost-window")).toHaveTextContent("24 % of cap · laps 1–3");
+    expect(screen.getByTestId("region-loop-cost-meter").firstElementChild).toHaveAttribute(
+      "data-tone",
+      "normal",
+    );
+    expect(screen.getByTestId("region-member-impl")).toHaveTextContent("~$0.8200");
+  });
+
+  it("turns the meter amber from 80 % of the cap", () => {
+    selectWith([{ ...reviewLoop, max_iter: 5, max_cost_usd: 5 }]);
+    render(<RegionInspector run={liveRun(4.31)} />);
+    expect(screen.getByTestId("region-loop-cost-meter").firstElementChild).toHaveAttribute(
+      "data-tone",
+      "warn",
+    );
+  });
+
+  it("warns when the current loop cost is partial", () => {
+    selectWith([{ ...reviewLoop, max_iter: 5, max_cost_usd: 5 }]);
+    render(<RegionInspector run={liveRun(1.2, true)} />);
+    expect(screen.getByTestId("region-cost-warning")).toHaveTextContent("partial");
+  });
+
+  it("says where editing lives while following a run", () => {
+    selectWith([{ ...reviewLoop, max_cost_usd: 5 }]);
+    render(<RegionInspector run={liveRun(1.2)} locked />);
+    expect(screen.getByTestId("region-locked-note")).toHaveTextContent("Edit for this run");
+  });
+
+  it("shows no loop cost section on a template", () => {
+    selectWith([{ ...reviewLoop, max_cost_usd: 5 }]);
+    render(<RegionInspector />);
+    expect(screen.queryByTestId("region-loop-cost")).toBeNull();
   });
 });

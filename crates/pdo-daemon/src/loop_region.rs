@@ -89,6 +89,7 @@ pub(crate) fn materialize_missing_regions(pipeline: &PipelineDef) -> Vec<LoopReg
             continue;
         }
         out.push(LoopRegion {
+            max_cost_usd: None,
             id: generated_region_id(&cycle),
             kind: LoopKind::Bounded,
             members: cycle,
@@ -273,6 +274,75 @@ pub(crate) fn resolve_region_max_iter(
         }
         _ => DEFAULT_MAX_ITER,
     }
+}
+
+/// The dollar amount of a **literal** `max_cost_usd` (#1016, ADR-0081): a
+/// positive, finite number (a numeric string is accepted, as a YAML author may
+/// quote it). `Err` names why it is refused, worded to follow `max_cost_usd`.
+pub(crate) fn cost_cap_amount(value: &serde_yaml::Value) -> Result<f64, String> {
+    let amount = match value {
+        serde_yaml::Value::Number(n) => n.as_f64(),
+        serde_yaml::Value::String(s) => s.trim().parse::<f64>().ok(),
+        _ => None,
+    };
+    match amount {
+        Some(usd) if usd.is_finite() && usd > 0.0 => Ok(usd),
+        Some(usd) => Err(format!(
+            "must be a positive dollar amount, got {usd} (remove the field for no cap)"
+        )),
+        None => Err(format!(
+            "must be a positive dollar amount or a $variable, got {}",
+            serde_yaml::to_string(value)
+                .unwrap_or_default()
+                .trim()
+        )),
+    }
+}
+
+/// Resolves a bounded region's **Plafond de coût** (#1016, ADR-0081): `Ok(None)`
+/// when no cap is set, the dollar amount otherwise — a `$var` reference reads
+/// `vars` (the Run's resolved variables, so it is fixed at launch). `Err` when
+/// the cap does not resolve to a positive amount; the launch refuses such a Run
+/// (`cap_errors_at_launch`), and the scheduler treats an unresolvable cap as no
+/// cap rather than parking a Run on a value it cannot read.
+pub(crate) fn resolve_region_max_cost(
+    region: &LoopRegion,
+    vars: &std::collections::HashMap<String, serde_yaml::Value>,
+) -> Result<Option<f64>, String> {
+    if region.kind != LoopKind::Bounded {
+        return Ok(None);
+    }
+    let Some(cap) = &region.max_cost_usd else {
+        return Ok(None);
+    };
+    if let serde_yaml::Value::String(s) = cap {
+        if let Some(var_name) = s.strip_prefix('$') {
+            let value = vars
+                .get(var_name)
+                .ok_or_else(|| format!("references undeclared variable '{s}'"))?;
+            return cost_cap_amount(value)
+                .map(Some)
+                .map_err(|why| format!("(from '{s}') {why}"));
+        }
+    }
+    cost_cap_amount(cap).map(Some)
+}
+
+/// The launch-time refusals of the regions' cost caps (#1016): one message per
+/// region whose `max_cost_usd` does not resolve against the Run's variables.
+pub(crate) fn cap_errors_at_launch(
+    pipeline: &PipelineDef,
+    vars: &std::collections::HashMap<String, serde_yaml::Value>,
+) -> Vec<String> {
+    pipeline
+        .loops
+        .iter()
+        .filter_map(|region| {
+            resolve_region_max_cost(region, vars)
+                .err()
+                .map(|why| format!("loop region '{}': max_cost_usd {why}", region.id))
+        })
+        .collect()
 }
 
 /// The bounded region `node_id` is a member of. Membership means the node's
@@ -581,6 +651,7 @@ mod tests {
             grid_size: None,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "review_loop".into(),
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
@@ -715,6 +786,7 @@ mod tests {
             grid_size: None,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "review_loop".into(),
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
@@ -785,6 +857,7 @@ mod tests {
             grid_size: None,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "spin".into(),
             kind: LoopKind::Bounded,
             members: vec!["worker".into()],
@@ -838,6 +911,7 @@ mod tests {
                 edge("mid", "more", "impl", "more"),          // 4 back-edge B
             ],
             loops: vec![LoopRegion {
+                max_cost_usd: None,
                 id: "review_loop".into(),
                 kind: LoopKind::Bounded,
                 members: vec!["impl".into(), "rev".into(), "mid".into()],
@@ -868,6 +942,7 @@ mod tests {
         // edge never pops the bounded-region destroy confirmation.
         let (mut pipeline, _region) = collection_fanout_convergence();
         pipeline.loops = vec![LoopRegion {
+            max_cost_usd: None,
             id: "per-issue".into(),
             kind: LoopKind::Collection,
             members: vec!["fixer".into()],
@@ -921,6 +996,7 @@ mod tests {
             grid_size: None,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "review_loop".into(),
             kind: LoopKind::Bounded,
             members: vec!["impl".into(), "rev".into()],
@@ -1059,6 +1135,7 @@ mod tests {
             grid_size: None,
         };
         let region = LoopRegion {
+            max_cost_usd: None,
             id: "per-issue".into(),
             kind: LoopKind::Collection,
             members: vec!["fixer".into()],
@@ -1255,5 +1332,35 @@ mod tests {
                 "no region may cover a legacy loop node: {region:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_var_cost_cap_is_resolved_and_checked_at_launch() {
+        // #1016: `$var` resolves against the Run's variables (overrides included);
+        // a value that is not a positive amount refuses the launch.
+        let (mut pipeline, region) = migrated_review_loop(3);
+        pipeline.loops = vec![region];
+        pipeline.loops[0].max_cost_usd = Some(serde_yaml::Value::String("$budget".into()));
+        let mut vars = std::collections::HashMap::new();
+        vars.insert("budget".to_string(), serde_yaml::to_value(1.5).unwrap());
+        assert_eq!(resolve_region_max_cost(&pipeline.loops[0], &vars), Ok(Some(1.5)));
+        assert!(cap_errors_at_launch(&pipeline, &vars).is_empty());
+
+        vars.insert("budget".to_string(), serde_yaml::to_value(0).unwrap());
+        let errors = cap_errors_at_launch(&pipeline, &vars);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("$budget") && errors[0].contains("positive"), "{errors:?}");
+
+        vars.insert("budget".to_string(), serde_yaml::Value::String("many".into()));
+        assert_eq!(cap_errors_at_launch(&pipeline, &vars).len(), 1);
+    }
+
+    #[test]
+    fn an_uncapped_or_collection_region_has_no_cost_cap() {
+        let (_, mut region) = migrated_review_loop(3);
+        assert_eq!(resolve_region_max_cost(&region, &Default::default()), Ok(None));
+        region.kind = LoopKind::Collection;
+        region.max_cost_usd = Some(serde_yaml::to_value(1).unwrap());
+        assert_eq!(resolve_region_max_cost(&region, &Default::default()), Ok(None));
     }
 }

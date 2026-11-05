@@ -68,6 +68,9 @@ export interface HarnessOption {
   modelEfforts?: Record<string, string[]>;
   /** The served effort-axis fact — whether to grey the effort picker. */
   hasEffort: boolean;
+  /** #1016: whether PDO can read this harness's cost. Optional so an option
+   *  literal predating #1016 still typechecks; absent ⇒ assumed costable. */
+  canCost?: boolean;
   /** The probed binary version the offer was read at, for the provenance line. */
   version: string | null;
 }
@@ -89,8 +92,8 @@ const FLOOR_CATALOG: HarnessCatalog = {
     // with `GET /settings`. `hasEffort` seeds the two embedded facts so the picker
     // is not mis-greyed for the split-second before the fetch resolves; the served
     // value replaces it. Not a source of truth (the daemon re-resolves at spawn).
-    { name: "claude", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: true, version: null },
-    { name: "opencode", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: false, version: null },
+    { name: "claude", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: true, canCost: true, version: null },
+    { name: "opencode", installed: true, models: [], modelContexts: {}, efforts: [], modelEfforts: {}, hasEffort: false, canCost: false, version: null },
   ],
   descriptors: [],
 };
@@ -121,6 +124,8 @@ export function harnessCatalog(
       // predating #798: absent ⇒ every model falls back to the global efforts.
       modelEfforts: h.model_efforts ?? {},
       hasEffort: h.has_effort ?? true,
+      // #1016: absent (a daemon predating it) ⇒ don't warn on what we can't see.
+      canCost: h.can_cost ?? true,
       version: h.version ?? null,
     });
   }
@@ -148,6 +153,13 @@ export function findHarnessOption(
  *  can't honour anyway. */
 export function harnessHasEffort(catalog: HarnessCatalog, name: string): boolean {
   return findHarnessOption(catalog, name)?.hasEffort ?? true;
+}
+
+/** #1016: whether the harness a node resolves to has a readable cost. An
+ *  unknown harness defaults to `true` — never warn on what we can't see; the
+ *  daemon's loop cost says « partial » once the Run proves otherwise. */
+export function harnessCanCost(catalog: HarnessCatalog, name: string): boolean {
+  return findHarnessOption(catalog, name)?.canCost ?? true;
 }
 
 /** The selected model's offer. Missing capability data falls back to the

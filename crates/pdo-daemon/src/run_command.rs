@@ -2329,6 +2329,11 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
     };
 
     let frontmatter_by_node = resolve_completed_frontmatter(&pipeline, &run_state, &artifacts_dir);
+    // #1016: a capped region's Coût de boucle is the scheduler's input at re-entry
+    // — a `resume_run` on a Run parked « budget reached » re-parks it until the
+    // cap is raised, `force_route`d or the region ended.
+    let scheduler_state =
+        crate::with_loop_costs_for_caps(state, &run_state, &events, &pipeline, &repo_root);
 
     for completed_node_id in &completed_node_ids {
         let source_iter = run_state
@@ -2342,7 +2347,7 @@ async fn re_evaluate_after_command_inner(state: &AppState, run_id: &str) -> ReEv
 
         let actions = scheduler::evaluate_outgoing_edges_full(
             &pipeline,
-            &run_state,
+            &scheduler_state,
             completed_node_id,
             &resolved_vars,
             &frontmatter_fields,

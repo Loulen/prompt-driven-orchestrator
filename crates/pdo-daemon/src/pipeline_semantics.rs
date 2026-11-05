@@ -392,6 +392,10 @@ struct LoopProjection<'a> {
     kind: &'a LoopKind,
     members: &'a [String],
     max_iter: Option<serde_json::Value>,
+    /// #1016: the cost cap is semantic like `max_iter`. Skipped when unset so a
+    /// pipeline that never set one keeps its exact canonical form (and hash).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_cost_usd: Option<serde_json::Value>,
     over: Option<&'a str>,
 }
 
@@ -402,6 +406,7 @@ impl<'a> LoopProjection<'a> {
             kind,
             members,
             max_iter,
+            max_cost_usd,
             over,
         } = region;
         Self {
@@ -409,6 +414,7 @@ impl<'a> LoopProjection<'a> {
             kind,
             members,
             max_iter: max_iter.as_ref().map(canon_yaml),
+            max_cost_usd: max_cost_usd.as_ref().map(canon_yaml),
             over: over.as_deref(),
         }
     }
@@ -743,6 +749,25 @@ mod tests {
             )
         };
         assert_ne!(canonical(&with("[doer]")), canonical(&with("[doer, end]")));
+    }
+
+    #[test]
+    fn loop_region_cost_cap_is_semantic_and_absent_when_unset() {
+        // #1016: `max_cost_usd` enters the semantic diff like `max_iter`; an
+        // unset cap leaves the canonical form of an existing pipeline untouched.
+        let with = |cap: &str| {
+            format!(
+                "{}loops:\n- id: r\n  kind: bounded\n  members: [doer]\n  max_iter: 2\n{cap}",
+                fixture(300.0, "")
+            )
+        };
+        let none = canonical(&with(""));
+        assert!(!none.contains("max_cost_usd"), "unset cap is not projected");
+        assert_ne!(none, canonical(&with("  max_cost_usd: 5\n")));
+        assert_ne!(
+            canonical(&with("  max_cost_usd: 5\n")),
+            canonical(&with("  max_cost_usd: 2.5\n"))
+        );
     }
 
     #[test]

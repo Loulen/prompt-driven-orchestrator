@@ -54,6 +54,11 @@ export interface Selection {
    */
   regionId?: string;
   /**
+   * #1016 — a region inspector field to focus on open: the « budget reached »
+   * chip's `raise cap` opens the inspector on `max_cost_usd`.
+   */
+  focusField?: "max_cost_usd";
+  /**
    * The selected canvas note's `id` when `kind === "note"` (#307). Notes carry
    * a stable `id`, so the id is the selection key the note inspector and
    * `updateNote`/`moveNote`/`deleteNote` use. Undefined for other selections.

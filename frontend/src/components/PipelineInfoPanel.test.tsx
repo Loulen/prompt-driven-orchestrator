@@ -767,6 +767,43 @@ describe("PipelineInfoPanel — Repositories tab and Info header (#752)", () => 
     expect(screen.queryByTestId("run-failure-reason")).toBeNull();
   });
 
+  it("Info names the loop, its spend and its cap on a « budget reached » park (#1016)", async () => {
+    const { useEditStore } = await import("../stores/editStore");
+    renderPanel(
+      makeRun({
+        status: "awaiting_user",
+        awaiting_reason: "budget reached: bounded region 'review-loop' reached its cost cap: …",
+        awaiting_reason_code: "region_budget_exhausted",
+        awaiting_region_id: "review-loop",
+        loop_states: {
+          "review-loop": { loop_node_id: "review-loop", current_iter: 4, max_iter: 5, break_received: false, done: false },
+        },
+        loop_costs: {
+          "review-loop": {
+            usd: 5.12,
+            estimated: true,
+            partial: false,
+            executions: 8,
+            readable_executions: 8,
+            members: [],
+            cap_usd: 5,
+          },
+        },
+      }),
+    );
+    const box = screen.getByTestId("run-awaiting-reason");
+    expect(box).toHaveTextContent("Interrupted · awaiting you");
+    expect(screen.getByTestId("run-budget-reason")).toHaveTextContent(
+      "Loop review-loop reached its cost cap: ~$5.12 spent of $5 after lap 4/5. Its exit was not followed. Raise the cap and resume, or end the region.",
+    );
+    fireEvent.click(screen.getByTestId("run-budget-reason-region"));
+    expect(useEditStore.getState().selection).toEqual({
+      kind: "region",
+      id: null,
+      regionId: "review-loop",
+    });
+  });
+
   it("Info shows the frozen harness when named (#551) and the editing / archived note (#315)", () => {
     const { unmount } = renderPanel(makeRun({ status: "running", harness: "opencode" } as Partial<RunState>));
     expect(screen.getByTestId("run-harness")).toHaveTextContent("opencode");

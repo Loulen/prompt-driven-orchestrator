@@ -7,7 +7,7 @@ import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
 import { carriedPorts, declaredOutputs, primaryPort } from "../lib/edgePorts";
 import { outputLabelSlots, resolveOutputLabels } from "../lib/edgeLabels";
-import { loopCostLabel } from "../lib/costLabel";
+import { COST_CAP_WARN_RATIO, formatCostCap, loopCostLabel } from "../lib/costLabel";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -53,18 +53,20 @@ export function deriveEditNodes(
   // member, e.g. after a member is deleted — #173) reads `↻ <counter>`,
   // mirroring the box header — so a one-member loop is never invisible (it draws
   // no box). Keyed by member id; the kind drives the glyph and the title.
-  const loopBadgeByMember = new Map<
-    string,
-    { text: string; kind: LoopRegion["kind"]; costText?: string; costTitle?: string }
-  >();
+  const loopBadgeByMember = new Map<string, LoopBadge>();
   for (const region of deriveLoopRegions(pipeline, runState)) {
     if (region.badgeMemberId == null) continue;
     const symbol = region.kind === "collection" ? "⇉" : "↻";
+    const costText = regionCostText(region);
     loopBadgeByMember.set(region.badgeMemberId, {
       text: `${symbol} ${region.counterText}`,
       kind: region.kind,
-      // #1015: the Coût de boucle follows the counter, as in the box header.
-      ...(region.cost ? { costText: region.cost.text, costTitle: region.cost.title } : {}),
+      // #1015: the Coût de boucle follows the counter, as in the box header;
+      // #1016: with its `/ $cap` and the « budget reached » state.
+      ...(costText != null ? { costText } : {}),
+      ...(region.cost ? { costTitle: region.cost.title } : {}),
+      ...(region.costWarn ? { costWarn: true } : {}),
+      ...(region.budgetReached ? { budgetReached: true } : {}),
     });
   }
   return pipeline.nodes.map((n, i) => {
@@ -113,6 +115,58 @@ export function deriveEditNodes(
   });
 }
 
+/** The compact badge on a single-member region's card (#151, #173, #1015, #1016). */
+export interface LoopBadge {
+  text: string;
+  kind: LoopRegion["kind"];
+  /** Loop cost (and `/ $cap`) after the counter — see {@link regionCostText}. */
+  costText?: string;
+  costTitle?: string;
+  /** #1016: the cost reached 80 % of the cap — the cost text turns amber. */
+  costWarn?: boolean;
+  /** #1016: the Run is parked on this region's cost cap. */
+  budgetReached?: boolean;
+}
+
+/**
+ * #1016 — what follows the counter in a region header / badge: the Coût de
+ * boucle (#1015), then `/ $cap` when a Plafond de coût is set (`~$1.20 / $5`);
+ * a capped region with no cost yet (template, or before its first member
+ * execution) reads `≤ $5`. `null` = nothing to show.
+ */
+export function regionCostText(
+  region: Pick<LoopRegionLayout, "cost" | "cap">,
+): string | null {
+  if (region.cost && region.cap) return `${region.cost.text} / ${region.cap.text}`;
+  if (region.cost) return region.cost.text;
+  if (region.cap) return `≤ ${region.cap.text}`;
+  return null;
+}
+
+/**
+ * #1016 — the effective cost cap of a region, in dollars, as far as the client
+ * can tell: the daemon's resolved `cap_usd` on a live run (a `$var` is fixed at
+ * launch, which only the daemon knows), else the YAML literal, else the `$var`'s
+ * declared default. `null` = uncapped (or a collection: never capped, Q10).
+ */
+export function regionCapUsd(
+  region: LoopRegion,
+  pipeline: PipelineDef,
+  runState: RunState | null | undefined,
+): number | null {
+  if (region.kind !== "bounded") return null;
+  const served = runState?.loop_costs?.[region.id]?.cap_usd;
+  if (served != null) return served;
+  const cap = region.max_cost_usd;
+  if (cap == null || cap === "") return null;
+  const raw =
+    typeof cap === "string" && cap.startsWith("$")
+      ? pipeline.variables?.[cap.slice(1)]?.default
+      : cap;
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 /**
  * Layout + label for a bounded loop region (ADR-0011 / #148) rendered on the
  * canvas. The region is the named `loops:` entry — NOT a node. A region with
@@ -140,6 +194,19 @@ export interface LoopRegionLayout {
    * execution (nothing shown rather than `$0`).
    */
   cost: { text: string; title: string } | null;
+  /**
+   * #1016 — the region's **Plafond de coût** (`$5`), or `null` when uncapped.
+   * `usd` is `null` for a `$var` cap the client cannot resolve (shown verbatim).
+   */
+  cap: { text: string; usd: number | null } | null;
+  /** #1016 — the loop cost reached {@link COST_CAP_WARN_RATIO} of the cap. */
+  costWarn: boolean;
+  /**
+   * #1016 — the Run is parked `awaiting_user` on THIS region's cost cap
+   * (`region_budget_exhausted`). Distinct from {@link exhausted} (max_iter):
+   * amber « budget reached », never the orange « exhausted — unrouted ».
+   */
+  budgetReached: boolean;
   /** Translucent-box geometry. Present iff `kind` renders as a box (>= 2 members). */
   box: { x: number; y: number; width: number; height: number } | null;
   /** Single-member badge anchor (the member's id). Present iff exactly 1 member. */
@@ -221,6 +288,8 @@ export function deriveLoopRegions(
         ? `${currentIter}/${maxText}`
         : `max ${maxText}`;
     const loopCost = live ? runState?.loop_costs?.[region.id] : undefined;
+    const memberName = (id: string) =>
+      byId.get(id)?.name ?? runState?.node_defs?.find((d) => d.id === id)?.name ?? id;
     const cost = loopCost
       ? loopCostLabel(
           loopCost,
@@ -229,8 +298,30 @@ export function deriveLoopRegions(
             : currentIter > 1
               ? `laps 1–${currentIter}`
               : "lap 1",
+          memberName,
         )
       : null;
+    // #1016: the Plafond de coût — bounded regions only (Q10).
+    const capUsd = regionCapUsd(region, pipeline, runState);
+    const capRaw = region.max_cost_usd;
+    const cap =
+      isCollection || capRaw == null || capRaw === ""
+        ? null
+        : capUsd != null
+          ? { text: formatCostCap(capUsd), usd: capUsd }
+          : { text: String(capRaw), usd: null };
+    const spent = loopCost?.usd ?? null;
+    const budgetReached =
+      live &&
+      !isCollection &&
+      runState?.status === "awaiting_user" &&
+      runState?.awaiting_reason_code === "region_budget_exhausted" &&
+      (runState?.awaiting_region_id != null
+        ? runState.awaiting_region_id === region.id
+        : capUsd != null && spent != null && spent >= capUsd);
+    const costWarn =
+      budgetReached ||
+      (capUsd != null && spent != null && spent >= capUsd * COST_CAP_WARN_RATIO);
 
     if (members.length === 1) {
       layouts.push({
@@ -238,8 +329,12 @@ export function deriveLoopRegions(
         kind: region.kind,
         memberIds: members.map((n) => n.id),
         counterText,
-        exhausted,
+        // « budget reached » and « exhausted » never show together (#1016).
+        exhausted: exhausted && !budgetReached,
         cost,
+        cap,
+        costWarn,
+        budgetReached,
         box: null,
         badgeMemberId: members[0].id,
       });
@@ -263,8 +358,11 @@ export function deriveLoopRegions(
       kind: region.kind,
       memberIds: members.map((n) => n.id),
       counterText,
-      exhausted,
+      exhausted: exhausted && !budgetReached,
       cost,
+      cap,
+      costWarn,
+      budgetReached,
       badgeMemberId: null,
       box: {
         x: minX - REGION_PAD,
@@ -327,8 +425,10 @@ export function buildLoopRegionNodes(
         kind: r.kind,
         counterText: r.counterText,
         exhausted: r.exhausted,
-        costText: r.cost?.text ?? null,
+        costText: regionCostText(r),
         costTitle: r.cost?.title ?? null,
+        costWarn: r.costWarn,
+        budgetReached: r.budgetReached,
         // The live run id (or null in a template view) so an exhausted-unrouted
         // region can offer "route from manager" (ADR-0011 / #152).
         runId: runState?.run_id ?? null,

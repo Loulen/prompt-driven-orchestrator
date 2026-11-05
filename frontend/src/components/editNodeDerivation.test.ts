@@ -7,6 +7,8 @@ import {
   runReachedEnd,
   EDGE_ABOVE_NODES,
   EDGE_UNDER_NODES,
+  regionCostText,
+  type LoopBadge,
 } from "./editNodeDerivation";
 import type {
   LoopRegion,
@@ -547,6 +549,160 @@ describe("deriveLoopRegions — Coût de boucle (#1015)", () => {
 
   it("renders an unknown loop cost as `—`", () => {
     expect(deriveLoopRegions(pipeline, run({ L: cost(null) }))[0].cost?.text).toBe("—");
+  });
+
+  it("names the members in the tooltip, not their ids (#1015 FP)", () => {
+    const named: PipelineDef = {
+      ...pipeline,
+      nodes: pipeline.nodes.map((n) => (n.id === "write" ? { ...n, name: "Writer" } : n)),
+    };
+    const [box] = deriveLoopRegions(named, run({ L: cost(1.2) }));
+    expect(box.cost?.title).toContain("\nWriter ~$1.20");
+    expect(box.cost?.title).not.toContain("\nwrite ");
+  });
+});
+
+describe("deriveLoopRegions — Plafond de coût (#1016)", () => {
+  function node(id: string): NodeDef {
+    return {
+      id,
+      name: id,
+      type: "agent",
+      inputs: [],
+      outputs: [{ name: "out" }],
+      interactive: false,
+      view: { x: 200, y: 200 },
+    };
+  }
+
+  function run(
+    iter: number,
+    loopCosts?: RunState["loop_costs"],
+    park?: Partial<RunState>,
+  ): RunState {
+    const member = (id: string) => ({
+      node_id: id,
+      status: "completed" as const,
+      iter,
+      started_at: null,
+      completed_at: null,
+      failure_reason: null,
+      iterations: [],
+    });
+    return {
+      run_id: "run-1",
+      pipeline_name: "p",
+      status: "running",
+      input: null,
+      started_at: null,
+      completed_at: null,
+      nodes: { write: member("write"), review: member("review"), solo: member("solo") },
+      edges: [],
+      node_defs: [],
+      start_node: null,
+      end_node: null,
+      merge_resolver: null,
+      ...(loopCosts ? { loop_costs: loopCosts } : {}),
+      ...park,
+    };
+  }
+
+  const cost = (usd: number, cap_usd?: number) => ({
+    usd,
+    estimated: true,
+    partial: false,
+    executions: 2,
+    readable_executions: 2,
+    members: [],
+    ...(cap_usd != null ? { cap_usd } : {}),
+  });
+
+  const pipeline: PipelineDef = {
+    name: "p",
+    variables: { budget: { type: "float", default: 2.5 } },
+    nodes: [node("write"), node("review"), node("solo")],
+    edges: [],
+    loops: [
+      { id: "L", kind: "bounded", members: ["write", "review"], max_iter: 5, max_cost_usd: 5 },
+      { id: "S", kind: "bounded", members: ["solo"], max_iter: 3, max_cost_usd: 1 },
+    ],
+  };
+
+  const budgetPark = (regionId: string): Partial<RunState> => ({
+    status: "awaiting_user",
+    awaiting_reason_code: "region_budget_exhausted",
+    awaiting_reason: "budget reached: …",
+    awaiting_region_id: regionId,
+  });
+
+  it("shows `≤ $cap` after `max N` on a template", () => {
+    const [box] = deriveLoopRegions(pipeline, null);
+    expect(box.counterText).toBe("max 5");
+    expect(regionCostText(box)).toBe("≤ $5");
+  });
+
+  it("shows `~$x / $cap` on a live run", () => {
+    const [chrome] = buildLoopRegionNodes(pipeline, run(3, { L: cost(1.2, 5) })).filter(
+      (n) => n.id === "region-chrome-L",
+    );
+    expect(chrome.data.costText).toBe("~$1.20 / $5");
+    expect(chrome.data.costWarn).toBe(false);
+    expect(chrome.data.budgetReached).toBe(false);
+  });
+
+  it("turns the cost amber from 80 % of the cap", () => {
+    expect(deriveLoopRegions(pipeline, run(4, { L: cost(3.99, 5) }))[0].costWarn).toBe(false);
+    expect(deriveLoopRegions(pipeline, run(4, { L: cost(4.0, 5) }))[0].costWarn).toBe(true);
+  });
+
+  it("resolves a `$var` cap from the daemon, else its declared default", () => {
+    const varPipeline: PipelineDef = {
+      ...pipeline,
+      loops: [{ id: "L", kind: "bounded", members: ["write", "review"], max_iter: 5, max_cost_usd: "$budget" }],
+    };
+    expect(regionCostText(deriveLoopRegions(varPipeline, null)[0])).toBe("≤ $2.50");
+    expect(regionCostText(deriveLoopRegions(varPipeline, run(2, { L: cost(1, 9) }))[0])).toBe(
+      "~$1.00 / $9",
+    );
+  });
+
+  it("marks « budget reached » from the park, distinct from exhausted", () => {
+    const [box] = deriveLoopRegions(pipeline, run(4, { L: cost(5.12, 5) }, budgetPark("L")));
+    expect(box.budgetReached).toBe(true);
+    expect(box.exhausted).toBe(false);
+    expect(box.costWarn).toBe(true);
+    // Another region's park leaves this one alone.
+    expect(
+      deriveLoopRegions(pipeline, run(4, { L: cost(5.12, 5) }, budgetPark("S")))[0].budgetReached,
+    ).toBe(false);
+    // Over the cap but still running (the lap in progress): not parked yet.
+    expect(deriveLoopRegions(pipeline, run(4, { L: cost(5.12, 5) }))[0].budgetReached).toBe(false);
+  });
+
+  it("never marks « budget reached » together with « exhausted »", () => {
+    // Lap 5/5 with a budget park (e.g. a lowered max_iter): budget wins the look.
+    const [box] = deriveLoopRegions(pipeline, run(5, { L: cost(9, 5) }, budgetPark("L")));
+    expect(box.budgetReached).toBe(true);
+    expect(box.exhausted).toBe(false);
+  });
+
+  it("carries « budget reached » on a single-member region's badge", () => {
+    const cards = deriveEditNodes(pipeline, run(2, { S: cost(1.04, 1) }, budgetPark("S")));
+    const badge = cards.find((c) => c.id === "solo")!.data.loopBadge as LoopBadge;
+    expect(badge.text).toBe("↻ 2/3");
+    expect(badge.costText).toBe("~$1.04 / $1");
+    expect(badge.budgetReached).toBe(true);
+    expect(badge.costWarn).toBe(true);
+  });
+
+  it("never caps a collection region (Q10)", () => {
+    const coll: PipelineDef = {
+      ...pipeline,
+      loops: [{ id: "C", kind: "collection", members: ["write"], over: "items", max_cost_usd: 5 }],
+    };
+    const [region] = deriveLoopRegions(coll, null);
+    expect(region.cap).toBeNull();
+    expect(regionCostText(region)).toBeNull();
   });
 });
 

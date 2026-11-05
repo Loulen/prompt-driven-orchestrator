@@ -108,6 +108,7 @@ const REGION: Complete<LoopRegion> = {
   kind: "bounded",
   members: ["n1"],
   max_iter: 4,
+  max_cost_usd: 2.5,
   over: "items",
 };
 const NOTE: Complete<NoteDef> = {

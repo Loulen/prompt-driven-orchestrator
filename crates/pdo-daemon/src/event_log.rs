@@ -754,6 +754,12 @@ pub struct LoopCost {
     /// a member with no execution in the window yet is omitted.
     #[serde(default)]
     pub members: Vec<LoopMemberCost>,
+    /// The region's effective **Plafond de coût** in dollars (#1016): its
+    /// `max_cost_usd` resolved against the Run's variables (a `$var` is fixed at
+    /// launch, which only the daemon knows). `None` = uncapped. Read-side only,
+    /// so the header can say `~$1.20 / $5` and warn at 80 %.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap_usd: Option<f64>,
 }
 
 /// One member's share of a [`LoopCost`] (#1015), over the same window.
@@ -1072,6 +1078,13 @@ pub struct RunState {
     /// carries a reason that is machine-branchable, not only prose to grep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub awaiting_reason_code: Option<String>,
+    /// The loop region a region park is about (#1016): projected from the
+    /// `RunInterrupted` payload's `region_id` (`region_exhausted`,
+    /// `region_ended_unrouted`, `region_budget_exhausted`), cleared with
+    /// [`awaiting_reason_code`]. Lets the canvas mark THAT region « budget
+    /// reached » without parsing the prose. Absent on historical logs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_region_id: Option<String>,
     pub nodes: HashMap<String, NodeState>,
     #[serde(default)]
     pub edges: Vec<EdgeInfo>,
@@ -1351,6 +1364,7 @@ impl RunState {
             failure_reason: None,
             awaiting_reason: None,
             awaiting_reason_code: None,
+            awaiting_region_id: None,
             nodes: HashMap::new(),
             edges: Vec::new(),
             node_defs: Vec::new(),
@@ -2288,6 +2302,7 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
             // no longer waiting on that incident.
             state.awaiting_reason = None;
             state.awaiting_reason_code = None;
+            state.awaiting_region_id = None;
         }
         // The runtime gave up on driving the run forward for a non-deliberate
         // reason (ADR-0049): park it `AwaitingUser` with the reason, NEVER
@@ -2301,6 +2316,12 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 state.status = RunStatus::AwaitingUser;
                 state.awaiting_reason = run_event_reason(event);
                 state.awaiting_reason_code = run_event_reason_code(event);
+                state.awaiting_region_id = event
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("region_id"))
+                    .and_then(|v| v.as_str())
+                    .map(String::from);
             }
         }
         EventKind::RunRenamed => {
@@ -3246,6 +3267,7 @@ fn apply_command_event(state: &mut RunState, event: &Event) {
             state.failure_reason = None;
             state.awaiting_reason = None;
             state.awaiting_reason_code = None;
+            state.awaiting_region_id = None;
             // Re-drive the interrupted work (ADR-0049 default: restart with the
             // partial artefacts, which persist in the sub-worktree). Drop each
             // `Interrupted` node from the projection — exactly like
@@ -4600,6 +4622,26 @@ mod tests {
             state.awaiting_reason.as_deref(),
             Some("unrouted: no live branch reaches End")
         );
+    }
+
+    #[test]
+    fn a_budget_park_projects_its_region_and_a_resume_clears_it() {
+        // #1016: `region_budget_exhausted` parks AwaitingUser (never Failed) and
+        // names its region; a resume clears both.
+        let mut payload = interrupt_payload("region_budget_exhausted", "budget reached: …");
+        payload["region_id"] = serde_json::json!("review_loop");
+        let mut events = vec![
+            make_event(EventKind::RunStarted, None, None),
+            make_event_with_payload(EventKind::RunInterrupted, None, payload),
+        ];
+        let state = project(&events).unwrap();
+        assert_eq!(state.status, RunStatus::AwaitingUser);
+        assert_eq!(state.awaiting_reason_code.as_deref(), Some("region_budget_exhausted"));
+        assert_eq!(state.awaiting_region_id.as_deref(), Some("review_loop"));
+        events.push(make_event(EventKind::RunResumed, None, None));
+        let state = project(&events).unwrap();
+        assert_eq!(state.awaiting_region_id, None);
+        assert_eq!(state.awaiting_reason_code, None);
     }
 
     #[test]

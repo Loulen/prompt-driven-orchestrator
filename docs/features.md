@@ -59,6 +59,11 @@ into a named, **bounded loop** (`↻ 1/8` on the canvas) with a `max_iter`, so a
 forever. A **collection loop** fans a node out over a list field of its input, with laps running in
 parallel.
 
+Each loop's header shows its running cost (`↻ 3/5 · ~$1.20`). A bounded loop can also carry a
+**cost cap** (`max_cost_usd`, set in the region inspector): once the loop's cost reaches it, the next
+lap does not start and the run waits for you (« budget reached »). The lap in progress always
+finishes. You can raise the cap and resume, route the exit, or end the region.
+
 Branches converge on any node: wire several edges into an `agent` and it waits until each incoming
 edge has fired or died, receives only the outputs of the branches that fired (same-named edges group
 into one input), and finds each isolated branch's code already merged back on the run's branch. A
@@ -69,7 +74,8 @@ own prompt, so it can do real synthesis work.
 Decisions: [ADR-0002](adr/0002-mechanical-conditionals-only.md),
 [ADR-0011](adr/0011-conditional-edges-and-loop-regions.md),
 [ADR-0026](adr/0026-collection-region-live-wiring.md),
-[ADR-0079](adr/0079-la-convergence-est-portee-par-tout-noeud-le-merge-est-retire.md).
+[ADR-0079](adr/0079-la-convergence-est-portee-par-tout-noeud-le-merge-est-retire.md),
+[ADR-0081](adr/0081-le-plafond-de-cout-d-une-boucle-se-verifie-a-la-re-entry-et-parque-le-run.md).
 
 ## Typed outputs
 

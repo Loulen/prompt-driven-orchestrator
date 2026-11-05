@@ -421,6 +421,10 @@ export interface HarnessListItem {
    *  effort axis at all. Drives the effort-picker greying, replacing the client's
    *  hard-coded map. */
   has_effort?: boolean;
+  /** #1016: whether PDO can read this harness's cost (a cost source AND a
+   *  transcript). `false` ⇒ a capped loop cannot count that member's spend.
+   *  Optional so a daemon predating #1016 still typechecks (assumed `true`). */
+  can_cost?: boolean;
   /** #616/ADR-0053: the probed binary version the catalogue was read at, for the
    *  picker's provenance line. `null` when the binary answered no `--version`. */
   version?: string | null;
@@ -1029,6 +1033,9 @@ export interface LoopCost {
   readable_executions: number;
   /** Each member's share over the same window, in the region's `members` order. */
   members: LoopMemberCost[];
+  /** #1016 — the region's effective Plafond de coût in dollars (`max_cost_usd`
+   *  resolved against the Run's variables); absent = uncapped. */
+  cap_usd?: number | null;
 }
 
 export interface LoopMemberCost {
@@ -1123,6 +1130,12 @@ export interface RunState {
    * (ADR-0035). Absent for an interactive wait.
    */
   awaiting_reason_code?: string | null;
+  /**
+   * #1016 — the loop region a region park is about (`region_exhausted`,
+   * `region_ended_unrouted`, `region_budget_exhausted`), so the canvas marks
+   * THAT region. Absent on historical runs and non-region parks.
+   */
+  awaiting_region_id?: string | null;
   nodes: Record<string, NodeState>;
   edges: EdgeInfo[];
   node_defs: NodeDefInfo[];
@@ -1743,6 +1756,12 @@ export interface LoopRegion {
   kind: LoopKind;
   members: string[];
   max_iter?: number | string | null;
+  /**
+   * #1016 — the **Plafond de coût** of a `bounded` region (ADR-0081): a dollar
+   * cap on its Coût de boucle, checked at each re-entry. A positive number or a
+   * `$var` reference; absent/`null` = no cap. Never on a `collection` region.
+   */
+  max_cost_usd?: number | string | null;
   /** The frontmatter field a `collection` region fans out over (#151). */
   over?: string | null;
 }

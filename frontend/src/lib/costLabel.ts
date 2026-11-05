@@ -254,7 +254,12 @@ export interface LoopCostLabel {
  * (`formatCostAmount`: `~` = estimate, `†` = lower bound, `—` = unknown, never
  * `$0`). `window` names what the cost covers (`laps 1–3`, `2 items`).
  */
-export function loopCostLabel(cost: LoopCost, window: string): LoopCostLabel {
+export function loopCostLabel(
+  cost: LoopCost,
+  window: string,
+  /** Display name of a member node (#1016, FP of #1015: names, not ids). */
+  memberName: (nodeId: string) => string = (id) => id,
+): LoopCostLabel {
   const text = formatCostAmount(cost.usd, cost.partial, cost.estimated);
   const base =
     cost.usd === null
@@ -284,7 +289,7 @@ export function loopCostLabel(cost: LoopCost, window: string): LoopCostLabel {
   const members = cost.members
     .map(
       (m) =>
-        `${m.node_id} ${formatCostAmount(m.usd, m.partial && m.usd !== null, m.estimated ?? cost.estimated)}`,
+        `${memberName(m.node_id)} ${formatCostAmount(m.usd, m.partial && m.usd !== null, m.estimated ?? cost.estimated)}`,
     )
     .join(" · ");
   return {
@@ -292,3 +297,16 @@ export function loopCostLabel(cost: LoopCost, window: string): LoopCostLabel {
     title: `Loop cost, ${window}: ${base}${lowerBound}${unavailable}${members ? `\n${members}` : ""}`,
   };
 }
+
+/**
+ * #1016 — a **Plafond de coût** as the header and the inspector say it: `$5`
+ * for a whole-dollar cap, `$2.50` / `$0.01` otherwise (4 decimals only below a
+ * cent, so a sub-cent cap never reads `$0.00`).
+ */
+export function formatCostCap(usd: number): string {
+  if (Number.isInteger(usd)) return `$${usd}`;
+  return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
+}
+
+/** The share of the cap at which the loop cost turns amber (#1016 design). */
+export const COST_CAP_WARN_RATIO = 0.8;

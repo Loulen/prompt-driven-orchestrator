@@ -8,6 +8,7 @@ import {
   COST_REPORTED_NOTE,
   COST_REPORTED_IN_USD_NOTE,
   loopCostLabel,
+  formatCostCap,
 } from "./costLabel";
 import type { LoopCost, NodeCost } from "../types";
 
@@ -358,5 +359,30 @@ describe("loopCostLabel (#1015, Coût de boucle)", () => {
     );
     expect(title).toContain("unpriced model excluded: gpt-x");
     expect(title).toContain("1 member execution has no readable cost");
+  });
+});
+
+describe("formatCostCap (#1016)", () => {
+  it("says a whole-dollar cap bare and keeps cents otherwise", () => {
+    expect(formatCostCap(5)).toBe("$5");
+    expect(formatCostCap(2.5)).toBe("$2.50");
+    expect(formatCostCap(0.01)).toBe("$0.01");
+    expect(formatCostCap(0.005)).toBe("$0.0050");
+  });
+});
+
+describe("loopCostLabel member names (#1016, FP of #1015)", () => {
+  it("lists each member under the given display name", () => {
+    const cost: LoopCost = {
+      usd: 1.2,
+      estimated: true,
+      partial: false,
+      executions: 2,
+      readable_executions: 2,
+      members: [{ node_id: "ab12", usd: 1.2, estimated: true, partial: false, executions: 2 }],
+    };
+    const { title } = loopCostLabel(cost, "lap 1", (id) => (id === "ab12" ? "Writer" : id));
+    expect(title).toContain("\nWriter ~$1.20");
+    expect(title).not.toContain("ab12");
   });
 });

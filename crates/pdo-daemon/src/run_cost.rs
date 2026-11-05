@@ -1041,6 +1041,7 @@ pub(crate) fn loop_costs(
                 executions,
                 readable_executions: readable,
                 members,
+                cap_usd: None,
             },
         );
     }
@@ -3483,6 +3484,7 @@ mod tests {
         members: &[&str],
     ) -> crate::pipeline::LoopRegion {
         crate::pipeline::LoopRegion {
+            max_cost_usd: None,
             id: id.into(),
             kind,
             members: members.iter().map(|m| m.to_string()).collect(),

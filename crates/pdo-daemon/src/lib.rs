@@ -6631,6 +6631,43 @@ async fn count_global_live_sessions_excluding(
     admission::count_live_node_sessions_excluding(states.iter(), exclude)
 }
 
+/// What a spawn's admission gate needs, from ONE projection of every Run: the
+/// live NodeRun sessions minus the slot this spawn takes back
+/// ([`count_global_live_sessions_excluding`]), and whether that slot is live right
+/// now — i.e. the spawn **replaces** a running session (a restart) and so takes no
+/// new memory.
+async fn live_sessions_for_spawn(
+    db: &sqlx::SqlitePool,
+    exclude: admission::SlotExclusion<'_>,
+) -> (usize, bool) {
+    let run_ids = match load_all_run_ids(db).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!("admission: failed to load run ids: {e}");
+            return (0, false);
+        }
+    };
+    let mut states = Vec::with_capacity(run_ids.len());
+    for run_id in run_ids {
+        if let Ok(events) = load_events(db, &run_id).await {
+            if let Some(state) = event_log::project(&events) {
+                states.push(state);
+            }
+        }
+    }
+    let live = admission::count_live_node_sessions_excluding(states.iter(), Some(exclude));
+    let replaces_live_slot = admission::count_live_node_sessions(states.iter()) > live;
+    (live, replaces_live_slot)
+}
+
+/// `MemAvailable` from `/proc/meminfo`, in KiB — `None` where the file does not
+/// exist (not Linux) or cannot be parsed.
+pub(crate) fn read_mem_available_kb() -> Option<u64> {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|contents| stale_detector::parse_meminfo(&contents).0)
+}
+
 /// The stored session cap from `instance_config`, resolved FRESH so a UI change
 /// takes effect on the next spawn with no restart (ADR-0015,
 /// `stored → env → default`). A DB read error falls back to `None` rather than
@@ -17258,6 +17295,8 @@ async fn run_stale_detection(state: &Arc<AppState>) {
     // Recomputed each sweep, so a node leaving the live set drops out naturally.
     // Published to the `blocked_on_limit` gauge after the loop.
     let mut blocked_on_limit_count: i64 = 0;
+    // A throttled `waiting` node seen this sweep — re-driven after the loop.
+    let mut saw_waiting_node = false;
 
     // Resolved ONCE PER SWEEP, not at boot, so ticking the box takes effect within
     // one sweep interval with no restart — and one read per sweep, not one per node.
@@ -17284,6 +17323,9 @@ async fn run_stale_detection(state: &Arc<AppState>) {
             && run_state.status != event_log::RunStatus::AwaitingUser
         {
             continue;
+        }
+        if !scheduler_dispatcher::waiting_nodes(&run_state).is_empty() {
+            saw_waiting_node = true;
         }
 
         let repo_root = effective_repo_root(state, &run_state);
@@ -17455,6 +17497,16 @@ async fn run_stale_detection(state: &Arc<AppState>) {
     state
         .blocked_on_limit
         .store(blocked_on_limit_count, std::sync::atomic::Ordering::Relaxed);
+
+    // A node held back by the free-memory floor waits on something PDO emits no
+    // event for — memory freed by a stopped stack, a finished test suite, another
+    // process. The slot-release path alone would leave it waiting until some
+    // unrelated session ends, so the sweep re-asks admission every interval while
+    // a node waits. `spawn_node` re-checks both gates and stays silent for a node
+    // already `waiting`.
+    if saw_waiting_node {
+        retry_waiting_nodes(state).await;
+    }
 }
 
 // One orphan-sweep pass: inventory tmux, resolve owners, decide, kill.
@@ -47686,6 +47738,51 @@ edges: []
                     && e.node_id.as_deref() == Some("worker")),
             "a throttled node must not be started"
         );
+    }
+
+    /// A node already `waiting` stays so without a new event when admission is
+    /// asked again: the stale sweep re-drives waiting nodes every interval while
+    /// memory is short, and one `NodeWaiting` per ask would flood the log.
+    #[tokio::test]
+    async fn a_waiting_node_asked_again_appends_no_second_waiting_event() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_with_dir(tmp.path()).await;
+        saturate_session_cap(&state).await;
+
+        let run_id = "spawn-unit-rethrottle";
+        seed_run_for_node_control(&state, run_id, "spawn-unit").await;
+
+        let (pipeline, node, pipeline_path) = spawn_test_fixture(tmp.path(), "worker", false);
+        let artifacts_dir = tmp.path().join("artifacts");
+        let resolved_vars = HashMap::new();
+        let ctx = SpawnContext {
+            pipeline: &pipeline,
+            run_id,
+            pipeline_path: &pipeline_path,
+            worktree_dir: tmp.path(),
+            artifacts_dir: &artifacts_dir,
+            resolved_vars: &resolved_vars,
+            repo_root: tmp.path(),
+        };
+
+        for _ in 0..3 {
+            let outcome = spawn_node(SpawnDeps::from_state(&state), &ctx, &node, 1).await;
+            assert!(
+                matches!(outcome, SpawnOutcome::Throttled),
+                "got {outcome:?}"
+            );
+        }
+
+        let waiting_events = load_events(&state.db, run_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| {
+                e.kind == event_log::EventKind::NodeWaiting
+                    && e.node_id.as_deref() == Some("worker")
+            })
+            .count();
+        assert_eq!(waiting_events, 1);
     }
 
     /// INV-4/5/6: when the spawn window panics *after* the sub-worktree is

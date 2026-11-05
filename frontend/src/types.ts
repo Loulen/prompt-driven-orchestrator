@@ -1010,6 +1010,36 @@ export interface MergeResolverInfo {
   failure_reason: string | null;
 }
 
+/**
+ * #1015 — the **Coût de boucle** of one loop region: the attributed cost (same
+ * fold as the Run total and the node costs, ADR-0058) of its member nodes'
+ * executions, sub-agents included, since the loop's last entry. Unlike
+ * `NodeCost`, an unreadable member keeps the known part and sets `partial`;
+ * `usd` is `null` only when no member execution has a readable cost (`—`).
+ */
+export interface LoopCost {
+  usd: number | null;
+  /** `~` — false only when every readable contribution is exact reported dollars. */
+  estimated: boolean;
+  /** Lower bound (`†`): an unreadable member execution or an unpriced model. */
+  partial: boolean;
+  unpriced_models?: string[];
+  unavailable_reasons?: string[];
+  executions: number;
+  readable_executions: number;
+  /** Each member's share over the same window, in the region's `members` order. */
+  members: LoopMemberCost[];
+}
+
+export interface LoopMemberCost {
+  node_id: string;
+  usd: number | null;
+  /** `~` for this member's own share (false when exact reported dollars). */
+  estimated?: boolean;
+  partial: boolean;
+  executions: number;
+}
+
 export interface LoopStateInfo {
   loop_node_id: string;
   current_iter: number;
@@ -1104,6 +1134,9 @@ export interface RunState {
   loop_states?: Record<string, LoopStateInfo>;
   foreach_states?: Record<string, ForEachStateInfo>;
   collection_states?: Record<string, CollectionStateInfo>;
+  /** #1015 — Coût de boucle per region id, derived on read. Absent for a Run
+   *  with no loop region or before a member's first execution. */
+  loop_costs?: Record<string, LoopCost>;
   target_repo?: string | null;
   /**
    * The Run's read-only secondary repos (#465, ADR-0042). Absent/empty on a

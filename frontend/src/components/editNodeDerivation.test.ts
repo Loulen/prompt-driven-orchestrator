@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   deriveEditEdges,
   deriveEditNodes,
+  buildLoopRegionNodes,
   deriveLoopRegions,
   runReachedEnd,
   EDGE_ABOVE_NODES,
@@ -453,6 +454,99 @@ describe("deriveLoopRegions — collection regions (#151)", () => {
     const cards = deriveEditNodes(p, null);
     const other = cards.find((c) => c.id === "other")!;
     expect(other.data.loopBadge).toBeUndefined();
+  });
+});
+
+describe("deriveLoopRegions — Coût de boucle (#1015)", () => {
+  function node(id: string): NodeDef {
+    return {
+      id,
+      name: id,
+      type: "agent",
+      inputs: [],
+      outputs: [{ name: "out" }],
+      interactive: false,
+      view: { x: 200, y: 200 },
+    };
+  }
+
+  function run(loopCosts?: RunState["loop_costs"]): RunState {
+    const member = (id: string) => ({
+      node_id: id,
+      status: "running" as const,
+      iter: 3,
+      started_at: null,
+      completed_at: null,
+      failure_reason: null,
+      iterations: [],
+    });
+    return {
+      run_id: "run-1",
+      pipeline_name: "p",
+      status: "running",
+      input: null,
+      started_at: null,
+      completed_at: null,
+      nodes: { write: member("write"), review: member("review"), solo: member("solo") },
+      edges: [],
+      node_defs: [],
+      start_node: null,
+      end_node: null,
+      merge_resolver: null,
+      ...(loopCosts ? { loop_costs: loopCosts } : {}),
+    };
+  }
+
+  const cost = (usd: number | null, partial = false) => ({
+    usd,
+    estimated: true,
+    partial,
+    executions: 3,
+    readable_executions: usd === null ? 0 : 3,
+    members: [{ node_id: "write", usd, partial, executions: 3 }],
+  });
+
+  const pipeline: PipelineDef = {
+    name: "p",
+    variables: {},
+    nodes: [node("write"), node("review"), node("solo")],
+    edges: [],
+    loops: [
+      { id: "L", kind: "bounded", members: ["write", "review"], max_iter: 5 },
+      { id: "S", kind: "bounded", members: ["solo"], max_iter: 3 },
+    ],
+  };
+
+  it("carries the live loop cost and its laps tooltip on the box header", () => {
+    const [box] = deriveLoopRegions(pipeline, run({ L: cost(1.2) }));
+    expect(box.counterText).toBe("3/5");
+    expect(box.cost?.text).toBe("~$1.20");
+    expect(box.cost?.title).toMatch(/^Loop cost, laps 1–3: /);
+    const [chrome] = buildLoopRegionNodes(pipeline, run({ L: cost(1.2, true) })).filter(
+      (n) => n.id === "region-chrome-L",
+    );
+    expect(chrome.data.costText).toBe("~$1.20†");
+  });
+
+  it("shows no cost before the first member execution, nor on a template", () => {
+    expect(deriveLoopRegions(pipeline, run())[0].cost).toBeNull();
+    expect(deriveLoopRegions(pipeline, null)[0].cost).toBeNull();
+  });
+
+  it("puts the loop cost on a single-member region's badge", () => {
+    const cards = deriveEditNodes(pipeline, run({ S: cost(0.31) }));
+    const badge = cards.find((c) => c.id === "solo")!.data.loopBadge as {
+      text: string;
+      costText?: string;
+      costTitle?: string;
+    };
+    expect(badge.text).toBe("↻ 3/3");
+    expect(badge.costText).toBe("~$0.3100");
+    expect(badge.costTitle).toMatch(/^Loop cost, laps 1–3: /);
+  });
+
+  it("renders an unknown loop cost as `—`", () => {
+    expect(deriveLoopRegions(pipeline, run({ L: cost(null) }))[0].cost?.text).toBe("—");
   });
 });
 

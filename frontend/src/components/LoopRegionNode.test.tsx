@@ -285,3 +285,45 @@ describe("LoopRegionNode — box / chrome layer split (#455)", () => {
     expect(screen.getByTestId("loop-region-header").className).toContain("pointer-events-auto");
   });
 });
+
+describe("LoopRegionNode header — Coût de boucle (#1015)", () => {
+  beforeEach(() => seedStore([reviewLoop]));
+
+  it.each([
+    ["~$1.20", "estimate"],
+    ["~$1.20†", "partial (lower bound)"],
+    ["—", "unknown"],
+    ["$1.20", "exact reported dollars"],
+  ])("shows `%s` (%s) after the counter", (costText) => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ counterText: "3/5", costText, costTitle: "Loop cost, laps 1–3: …" })} />
+      </Wrapper>,
+    );
+    const header = screen.getByTestId("loop-region-header");
+    expect(header).toHaveTextContent(`3/5·${costText}`);
+    expect(screen.getByTestId("loop-region-cost")).toHaveTextContent(costText);
+    expect(header).toHaveAttribute("title", "Loop cost, laps 1–3: …");
+  });
+
+  it("shows no cost in a template view (no run)", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode {...props({ counterText: "max 5" })} />
+      </Wrapper>,
+    );
+    expect(screen.queryByTestId("loop-region-cost")).toBeNull();
+    expect(screen.getByTestId("loop-region-header")).not.toHaveAttribute("title");
+  });
+
+  it("shows the cost on a collection region too", () => {
+    render(
+      <Wrapper>
+        <LoopRegionNode
+          {...props({ kind: "collection", counterText: "2/4 items", costText: "~$0.8400" })}
+        />
+      </Wrapper>,
+    );
+    expect(screen.getByTestId("loop-region-header")).toHaveTextContent("⇉2/4 items·~$0.8400");
+  });
+});

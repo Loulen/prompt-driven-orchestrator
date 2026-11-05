@@ -7,6 +7,7 @@ import { isNodeIsolated } from "../lib/nodeIsolation";
 import { fallbackNodeSpot } from "../lib/nodePlacement";
 import { carriedPorts, declaredOutputs, primaryPort } from "../lib/edgePorts";
 import { outputLabelSlots, resolveOutputLabels } from "../lib/edgeLabels";
+import { loopCostLabel } from "../lib/costLabel";
 
 /**
  * A run "reaches its end" when it terminates successfully (`completed`). At
@@ -52,13 +53,18 @@ export function deriveEditNodes(
   // member, e.g. after a member is deleted — #173) reads `↻ <counter>`,
   // mirroring the box header — so a one-member loop is never invisible (it draws
   // no box). Keyed by member id; the kind drives the glyph and the title.
-  const loopBadgeByMember = new Map<string, { text: string; kind: LoopRegion["kind"] }>();
+  const loopBadgeByMember = new Map<
+    string,
+    { text: string; kind: LoopRegion["kind"]; costText?: string; costTitle?: string }
+  >();
   for (const region of deriveLoopRegions(pipeline, runState)) {
     if (region.badgeMemberId == null) continue;
     const symbol = region.kind === "collection" ? "⇉" : "↻";
     loopBadgeByMember.set(region.badgeMemberId, {
       text: `${symbol} ${region.counterText}`,
       kind: region.kind,
+      // #1015: the Coût de boucle follows the counter, as in the box header.
+      ...(region.cost ? { costText: region.cost.text, costTitle: region.cost.title } : {}),
     });
   }
   return pipeline.nodes.map((n, i) => {
@@ -128,6 +134,12 @@ export interface LoopRegionLayout {
   counterText: string;
   /** True once the region has reached `max_iter` on a live run. */
   exhausted: boolean;
+  /**
+   * #1015 — the region's **Coût de boucle** on a live run (`~$1.20`, `~$1.20†`,
+   * `—`) with its tooltip; `null` in a template view and before the first member
+   * execution (nothing shown rather than `$0`).
+   */
+  cost: { text: string; title: string } | null;
   /** Translucent-box geometry. Present iff `kind` renders as a box (>= 2 members). */
   box: { x: number; y: number; width: number; height: number } | null;
   /** Single-member badge anchor (the member's id). Present iff exactly 1 member. */
@@ -208,6 +220,17 @@ export function deriveLoopRegions(
       : live
         ? `${currentIter}/${maxText}`
         : `max ${maxText}`;
+    const loopCost = live ? runState?.loop_costs?.[region.id] : undefined;
+    const cost = loopCost
+      ? loopCostLabel(
+          loopCost,
+          isCollection
+            ? `${currentIter} ${currentIter === 1 ? "item" : "items"}`
+            : currentIter > 1
+              ? `laps 1–${currentIter}`
+              : "lap 1",
+        )
+      : null;
 
     if (members.length === 1) {
       layouts.push({
@@ -216,6 +239,7 @@ export function deriveLoopRegions(
         memberIds: members.map((n) => n.id),
         counterText,
         exhausted,
+        cost,
         box: null,
         badgeMemberId: members[0].id,
       });
@@ -240,6 +264,7 @@ export function deriveLoopRegions(
       memberIds: members.map((n) => n.id),
       counterText,
       exhausted,
+      cost,
       badgeMemberId: null,
       box: {
         x: minX - REGION_PAD,
@@ -302,6 +327,8 @@ export function buildLoopRegionNodes(
         kind: r.kind,
         counterText: r.counterText,
         exhausted: r.exhausted,
+        costText: r.cost?.text ?? null,
+        costTitle: r.cost?.title ?? null,
         // The live run id (or null in a template view) so an exhausted-unrouted
         // region can offer "route from manager" (ADR-0011 / #152).
         runId: runState?.run_id ?? null,

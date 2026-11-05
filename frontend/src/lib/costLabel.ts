@@ -7,7 +7,7 @@
 // The vocabulary lives here ONCE so the per-run row and the charts stay
 // byte-identical.
 
-import type { HarnessCost, NodeCost } from "../types";
+import type { HarnessCost, LoopCost, NodeCost } from "../types";
 
 /** Adaptive precision: sub-dollar estimates show 4 decimals, else 2 (#272). */
 export function costPrecision(usd: number): number {
@@ -122,7 +122,7 @@ export const COST_LOWER_BOUND_NOTE = " Lower bound: an unpriced model was exclud
  * (e.g. `" (2 partial runs)."`) is appended by the aggregate bucket and omitted
  * for a single run.
  */
-function lowerBoundClause(unpricedModels: string[], runSuffix = ""): string {
+export function lowerBoundClause(unpricedModels: string[], runSuffix = ""): string {
   const body =
     unpricedModels.length > 0
       ? ` Lower bound: unpriced ${
@@ -238,5 +238,57 @@ export function formatEstCost(
     text,
     dagger: partial,
     title: COST_ESTIMATE_NOTE + (partial ? lowerBoundClause(unpricedModels) : ""),
+  };
+}
+
+/** A loop cost ready to render in a region header or a single-member badge (#1015). */
+export interface LoopCostLabel {
+  /** `~$1.20`, `~$1.20†` (lower bound), `$1.20` (exact reported dollars), `—`. */
+  text: string;
+  /** Tooltip, in the {@link nodeCostTitle} wording, with each member's share. */
+  title: string;
+}
+
+/**
+ * The **Coût de boucle** label (#1015) — the same vocabulary as the Run cost row
+ * (`formatCostAmount`: `~` = estimate, `†` = lower bound, `—` = unknown, never
+ * `$0`). `window` names what the cost covers (`laps 1–3`, `2 items`).
+ */
+export function loopCostLabel(cost: LoopCost, window: string): LoopCostLabel {
+  const text = formatCostAmount(cost.usd, cost.partial, cost.estimated);
+  const base =
+    cost.usd === null
+      ? "Cost projected from attributed harness contributions."
+      : cost.estimated
+        ? COST_ESTIMATE_NOTE
+        : COST_REPORTED_IN_USD_NOTE;
+  const unreadable = cost.executions - cost.readable_executions;
+  const reasons = cost.unavailable_reasons ?? [];
+  const unpriced = cost.unpriced_models ?? [];
+  // A lower bound says every cause it has: unpriced models AND unreadable runs.
+  const unreadableClause =
+    unreadable > 0
+      ? ` Lower bound: ${unreadable} member ${
+          unreadable === 1 ? "execution has" : "executions have"
+        } no readable cost${reasons.length > 0 ? ` (${reasons.join("; ")})` : ""}.`
+      : "";
+  const lowerBound = !cost.partial
+    ? ""
+    : unpriced.length > 0 || unreadableClause
+      ? `${unpriced.length > 0 ? lowerBoundClause(unpriced) : ""}${unreadableClause}`
+      : COST_LOWER_BOUND_NOTE;
+  const unavailable =
+    cost.usd === null && reasons.length > 0
+      ? ` Cost unavailable: ${reasons.join("; ")}.`
+      : "";
+  const members = cost.members
+    .map(
+      (m) =>
+        `${m.node_id} ${formatCostAmount(m.usd, m.partial && m.usd !== null, m.estimated ?? cost.estimated)}`,
+    )
+    .join(" · ");
+  return {
+    text,
+    title: `Loop cost, ${window}: ${base}${lowerBound}${unavailable}${members ? `\n${members}` : ""}`,
   };
 }

@@ -10,6 +10,14 @@ ascendante** : la casse se signale ici et par un bump majeur, jamais en gardant 
 morts. Seule contrainte non négociable — les **données historiques restent lisibles** : un Run
 archivé s'ouvre et se chiffre quelle que soit la version qui a écrit son payload.
 
+## 1.127.0
+**Coût de boucle dans le header de région** (#1015, spec #1014, story pdo-issues#5).
+
+- Le header de chaque région de boucle affiche le coût cumulé de ses nœuds membres depuis l'entrée
+dans la boucle (`↻ 3/5 · ~$1.20`, `⇉ 2/4 items · ~$0.8400`, aussi sur le badge d'une région à un
+membre), au format du coût du Run : `~` estimation, `†` borne basse, `—` inconnu. Le tooltip
+détaille la part de chaque membre. Additif sur l'API : `GET /runs/{id}` gagne `loop_costs`.
+
 ## 1.126.0
 **Tours jouables à plusieurs sur une instance partagée** (#986, #987, story PDO-20), validé en
 recette.

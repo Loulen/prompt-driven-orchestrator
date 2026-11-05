@@ -725,6 +725,49 @@ pub struct NodeCost {
     pub readable_executions: i64,
 }
 
+/// The **Coût de boucle** of one loop region (#1015, CONTEXT.md): the attributed
+/// cost (ADR-0058 — the SAME fold as the Run total and the node costs) of the
+/// executions of the region's **member** nodes, sub-agents included, since the
+/// loop's last entry (its iteration counter back to 1). Derived on read, never
+/// persisted (ADR-0022/0029).
+///
+/// Unlike [`NodeCost`], an unreadable member execution does not blank the figure:
+/// the known part counts and `partial` says it is a lower bound (never `$0` for
+/// the unknown). `usd` is `None` only when no member execution in the window has
+/// a readable cost — the surface renders `—`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoopCost {
+    pub usd: Option<f64>,
+    /// Is the figure an estimate (`~`)? False only when every readable
+    /// contribution is a reported cost already in dollars (`pi`, #707).
+    pub estimated: bool,
+    /// A lower bound: a member execution has no readable cost, or a model was
+    /// unpriced.
+    pub partial: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unpriced_models: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_reasons: Vec<String>,
+    pub executions: i64,
+    pub readable_executions: i64,
+    /// Per-member share of the loop cost, in the region's `members` order;
+    /// a member with no execution in the window yet is omitted.
+    #[serde(default)]
+    pub members: Vec<LoopMemberCost>,
+}
+
+/// One member's share of a [`LoopCost`] (#1015), over the same window.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoopMemberCost {
+    pub node_id: String,
+    pub usd: Option<f64>,
+    /// `~` for this member's share — false when all of it is exact reported dollars.
+    #[serde(default)]
+    pub estimated: bool,
+    pub partial: bool,
+    pub executions: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartNodeInfo {
     pub input_path: String,
@@ -1273,6 +1316,11 @@ pub struct RunState {
     /// `~/.claude/projects/` intact, so an archived Run keeps its cost.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<CostStat>,
+    /// The **Coût de boucle** of each loop region, keyed by region id (#1015).
+    /// Derived on read alongside `cost`, never persisted; additive on the API —
+    /// absent for a Run with no loop region or no member execution yet.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub loop_costs: HashMap<String, LoopCost>,
 }
 
 impl RunState {
@@ -1341,6 +1389,7 @@ impl RunState {
             sessions_spawned: 0,
             loc: None,
             cost: None,
+            loop_costs: HashMap::new(),
         }
     }
 

@@ -29,6 +29,15 @@ export interface LoopRegionNodeData {
   /** True once the region reached `max_iter` with the loop still continuing. */
   exhausted: boolean;
   /**
+   * #1015 — the **Coût de boucle** shown after the counter on a live run
+   * (`~$1.20`, `~$1.20†` lower bound, `—` unknown), formatted by
+   * `lib/costLabel.ts`. `null`/absent in a template view and before the first
+   * member execution.
+   */
+  costText?: string | null;
+  /** Header tooltip for the cost, in the `nodeCostTitle` wording (#1015). */
+  costTitle?: string | null;
+  /**
    * The live run this region belongs to, or `null` in a template view. Present
    * only when a run is active; the "route from manager" affordance (#152) on an
    * exhausted-unrouted region targets this run.
@@ -99,6 +108,7 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
       <div
         data-testid="loop-region-header"
         onClick={openInspector}
+        title={data.costTitle ?? undefined}
         className="pointer-events-auto absolute flex cursor-pointer items-center gap-1.5 rounded bg-bg-1 px-2 font-mono"
         style={{
           top: -13,
@@ -119,6 +129,16 @@ export function LoopRegionNode({ data }: NodeProps<Node<LoopRegionNodeData>>) {
         <span className="loop-region-count" style={{ opacity: 0.85 }}>
           {data.counterText}
         </span>
+        {data.costText != null && (
+          <>
+            <span aria-hidden="true" style={{ opacity: 0.5 }}>
+              ·
+            </span>
+            <span data-testid="loop-region-cost" className="loop-region-cost">
+              {data.costText}
+            </span>
+          </>
+        )}
       </div>
       {data.exhausted && (
         <div

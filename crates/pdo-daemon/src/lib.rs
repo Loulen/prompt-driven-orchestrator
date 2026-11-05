@@ -23832,7 +23832,7 @@ fn augment_run_state_from_disk(
         &run_state.run_id,
         prices,
     );
-    run_state.cost = breakdown.cost;
+    run_state.cost = breakdown.cost.clone();
 
     let mut node_costs: std::collections::HashMap<String, (event_log::NodeCost, bool)> =
         std::collections::HashMap::new();
@@ -23906,6 +23906,9 @@ fn augment_run_state_from_disk(
 
     run_state.node_defs = pipe.nodes.iter().map(node_def_from_pipeline).collect();
     run_state.edges = pipe.edges.iter().map(edge_info_from_pipeline).collect();
+    // #1015: the Coût de boucle of each region, folded from the SAME breakdown
+    // the Run total and the node costs above were read from (ADR-0058).
+    run_state.loop_costs = run_cost::loop_costs(&breakdown, events, &pipe.loops);
 }
 
 fn port_brief(p: &pipeline::Port) -> event_log::PortBrief {
@@ -32366,6 +32369,87 @@ mod tests {
         assert!((node_cost.usd.unwrap() - 5.0).abs() < 1e-9);
         assert_eq!(node_cost.executions, 1);
         assert_eq!(run_state.cost.as_ref().unwrap().usd, node_cost.usd.unwrap());
+    }
+
+    #[test]
+    fn run_detail_projects_the_loop_cost_of_each_region_from_the_same_fold() {
+        // #1015: the Coût de boucle rides the Run state, folded from the same
+        // breakdown as the node cost and the Run total.
+        let home = tempfile::tempdir().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let projects = home.path().join(".claude/projects");
+        let run_id = "loop-cost";
+        let working_dir = worktree_ops::worktree_dir_for_run(repo.path(), run_id);
+        let project = projects.join(run_cost::cc_project_dirname(&working_dir));
+        std::fs::create_dir_all(&project).unwrap();
+        for sid in ["w", "o"] {
+            std::fs::write(
+                project.join(format!("{sid}.jsonl")),
+                format!("{{\"type\":\"assistant\",\"requestId\":\"{sid}\",\"message\":{{\"id\":\"{sid}\",\"model\":\"claude-opus-4-8\",\"usage\":{{\"input_tokens\":1000000}}}}}}\n"),
+            )
+            .unwrap();
+        }
+        let run_dir = repo.path().join(".pdo/runs").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("pipeline.yaml"),
+            "name: test\nnodes:\n  - id: start\n    name: Start\n    type: start\n    outputs:\n      - name: user_prompt\n  - id: end\n    name: End\n    type: end\n    inputs:\n      - name: result\n  - id: worker\n    name: worker\n    type: agent\n  - id: outer\n    name: outer\n    type: agent\nloops:\n  - id: L\n    kind: bounded\n    members: [worker]\n    max_iter: 3\n",
+        )
+        .unwrap();
+        let event = |kind, node: Option<&str>, payload: serde_json::Value| event_log::Event {
+            id: None,
+            run_id: run_id.into(),
+            ts: event_log::now_iso(),
+            kind,
+            node_id: node.map(str::to_string),
+            iter: node.map(|_| 1),
+            payload: Some(payload),
+        };
+        let started = |node: &str, sid: &str| {
+            event(
+                event_log::EventKind::NodeStarted,
+                Some(node),
+                serde_json::json!({
+                    "node_type": "agent", "isolated_worktree": false,
+                    "harness": "claude", "session_id": sid
+                }),
+            )
+        };
+        let events = vec![
+            event(
+                event_log::EventKind::RunStarted,
+                None,
+                serde_json::json!({ "pipeline_name": "test" }),
+            ),
+            started("outer", "o"),
+            event(
+                event_log::EventKind::LoopIterStarted,
+                None,
+                serde_json::json!({ "loop_node_id": "L", "iter": 1, "max_iter": 3 }),
+            ),
+            started("worker", "w"),
+        ];
+        let mut run_state = event_log::project(&events).unwrap();
+
+        augment_run_state_from_disk(
+            &mut run_state,
+            &events,
+            &projects,
+            &sandbox_run::HarnessStores::from_home(home.path()),
+            repo.path(),
+            &price_table::PriceTable::load(home.path()),
+        );
+
+        let loop_cost = &run_state.loop_costs["L"];
+        let node_cost = run_state.nodes["worker"].cost.as_ref().unwrap();
+        assert!((loop_cost.usd.unwrap() - node_cost.usd.unwrap()).abs() < 1e-9);
+        assert!((loop_cost.usd.unwrap() - 5.0).abs() < 1e-9);
+        assert!(
+            (run_state.cost.as_ref().unwrap().usd - 10.0).abs() < 1e-9,
+            "outer excluded"
+        );
+        let wire = serde_json::to_value(&run_state).unwrap();
+        assert_eq!(wire["loop_costs"]["L"]["members"][0]["node_id"], "worker");
     }
 
     #[tokio::test]

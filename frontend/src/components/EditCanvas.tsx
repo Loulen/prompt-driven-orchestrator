@@ -104,7 +104,7 @@ interface EditNodeData {
   // Compact badge when this node is the single member of a loop region: a
   // collection (`⇉ ...`, #151) or a single-member bounded loop (`↻ ...`, #173).
   // Absent on non-member nodes and on multi-member regions (boxed instead).
-  loopBadge?: { text: string; kind: LoopKind };
+  loopBadge?: { text: string; kind: LoopKind; costText?: string; costTitle?: string };
   agentMode?: "inherit" | "profile" | "custom" | "broken";
   /** #723: the node carries the « Orchestrator » toggle (ADR-0064). */
   orchestrator?: boolean;
@@ -245,12 +245,20 @@ export function EditNode({ data, id, selected, isConnectable = true }: NodeProps
             className="ml-auto shrink-0 rounded border border-acc px-1.5 font-mono text-acc"
             style={{ fontSize: 10, lineHeight: "16px" }}
             title={
-              data.loopBadge.kind === "collection"
+              (data.loopBadge.kind === "collection"
                 ? "collection region — fans out one lap per item"
-                : "bounded loop region — one member"
+                : "bounded loop region — one member") +
+              (data.loopBadge.costTitle ? `\n${data.loopBadge.costTitle}` : "")
             }
           >
             {data.loopBadge.text}
+            {/* #1015: the Coût de boucle follows the counter, as in the box header. */}
+            {data.loopBadge.costText != null && (
+              <>
+                <span aria-hidden="true" style={{ opacity: 0.5 }}>{" · "}</span>
+                <span data-testid="loop-badge-cost">{data.loopBadge.costText}</span>
+              </>
+            )}
           </span>
         )}
       </div>

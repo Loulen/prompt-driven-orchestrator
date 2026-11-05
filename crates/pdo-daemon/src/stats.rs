@@ -2237,6 +2237,7 @@ mod tests {
                     partial: true,
                     unpriced_models: vec!["claude-fable-5".to_string()],
                     unavailable_reasons: Vec::new(),
+                    started_event: None,
                     model_slices: Vec::new(),
                 },
                 crate::run_cost::CostContribution {
@@ -2251,6 +2252,7 @@ mod tests {
                     partial: false,
                     unpriced_models: Vec::new(),
                     unavailable_reasons: vec!["harness has no cost source".to_string()],
+                    started_event: None,
                     model_slices: Vec::new(),
                 },
             ],
@@ -2305,6 +2307,7 @@ mod tests {
                         Some(_) => Vec::new(),
                         None => vec!["no readable transcript".to_string()],
                     },
+                    started_event: None,
                     model_slices: Vec::new(),
                 }],
             }
@@ -2364,6 +2367,7 @@ mod tests {
                     partial: false,
                     unpriced_models: Vec::new(),
                     unavailable_reasons: vec!["harness has no cost source".to_string()],
+                    started_event: None,
                     model_slices: Vec::new(),
                 }],
             }],
@@ -2479,6 +2483,7 @@ mod tests {
                 .then(|| "no attributable Claude transcript".to_string())
                 .into_iter()
                 .collect(),
+            started_event: None,
             model_slices: slices,
         }
     }
@@ -2614,6 +2619,7 @@ mod tests {
             ..claude.clone()
         };
         let pi = crate::run_cost::CostContribution {
+            started_event: None,
             model_slices: vec![pi_slice],
             ..pi
         };
@@ -2693,6 +2699,7 @@ mod tests {
             partial: false,
             unpriced_models: Vec::new(),
             unavailable_reasons: Vec::new(),
+            started_event: None,
             model_slices: vec![model_slice("claude-opus-4-8", true, None, Some(2.0))],
         };
         let run = node_run_row("2026-09-01", "n", "Worker", vec![infra]);
@@ -2734,6 +2741,7 @@ mod tests {
                 partial: false,
                 unpriced_models: Vec::new(),
                 unavailable_reasons: vec!["harness has no cost source".to_string()],
+                started_event: None,
                 model_slices: Vec::new(),
             }],
         );
@@ -2815,6 +2823,7 @@ mod tests {
             partial: false,
             unpriced_models: Vec::new(),
             unavailable_reasons: Vec::new(),
+            started_event: None,
             model_slices: vec![model_slice(
                 "claude-opus-4-8",
                 true,
@@ -2827,6 +2836,7 @@ mod tests {
             readable_executions: 1,
             form: Some(crate::event_log::CostForm::Derived),
             scope: crate::run_cost::CostScope::Unassigned,
+            started_event: None,
             model_slices: Vec::new(),
             ..node.clone()
         };

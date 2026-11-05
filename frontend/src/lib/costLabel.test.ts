@@ -7,8 +7,9 @@ import {
   COST_ESTIMATE_NOTE,
   COST_REPORTED_NOTE,
   COST_REPORTED_IN_USD_NOTE,
+  loopCostLabel,
 } from "./costLabel";
-import type { NodeCost } from "../types";
+import type { LoopCost, NodeCost } from "../types";
 
 describe("costPrecision", () => {
   it("uses 4 decimals below $1 and 2 at or above", () => {
@@ -250,5 +251,112 @@ describe("formatEstCost (single run, #272)", () => {
     expect(c.title).toContain("claude-opus-6");
     // The reported slice never contributes an unpriced-model name.
     expect(c.title).toMatch(/via `copilot` \(reported\)/);
+  });
+});
+
+describe("loopCostLabel (#1015, Coût de boucle)", () => {
+  const base: LoopCost = {
+    usd: 1.2,
+    estimated: true,
+    partial: false,
+    executions: 4,
+    readable_executions: 4,
+    members: [
+      { node_id: "write", usd: 0.82, partial: false, executions: 2 },
+      { node_id: "review", usd: 0.38, partial: false, executions: 2 },
+    ],
+  };
+
+  it("reads like the Run cost row: `~$x` for an estimate", () => {
+    expect(loopCostLabel(base, "laps 1–3").text).toBe("~$1.20");
+  });
+
+  it("uses 4 decimals under $1", () => {
+    expect(loopCostLabel({ ...base, usd: 0.84 }, "lap 1").text).toBe("~$0.8400");
+  });
+
+  it("marks a partial cost as a lower bound with `†`", () => {
+    const label = loopCostLabel(
+      { ...base, partial: true, unpriced_models: ["gpt-x"] },
+      "laps 1–3",
+    );
+    expect(label.text).toBe("~$1.20†");
+    expect(label.title).toMatch(/lower bound: unpriced model excluded: gpt-x/i);
+  });
+
+  it("renders an unknown cost as `—`, never `$0`", () => {
+    const label = loopCostLabel(
+      {
+        ...base,
+        usd: null,
+        readable_executions: 0,
+        unavailable_reasons: ["harness has no cost source"],
+        members: [{ node_id: "lint", usd: null, partial: true, executions: 1 }],
+      },
+      "lap 1",
+    );
+    expect(label.text).toBe("—");
+    expect(label.title).toContain("Cost unavailable: harness has no cost source.");
+    expect(label.title).not.toContain(COST_REPORTED_IN_USD_NOTE);
+    expect(label.title).toContain("lint —");
+  });
+
+  it("drops the `~` for exact reported dollars", () => {
+    expect(loopCostLabel({ ...base, estimated: false }, "lap 1").text).toBe("$1.20");
+  });
+
+  it("titles the window in the nodeCostTitle wording and lists each member", () => {
+    const { title } = loopCostLabel(base, "laps 1–3");
+    expect(title.startsWith("Loop cost, laps 1–3: ")).toBe(true);
+    expect(title).toContain(COST_ESTIMATE_NOTE);
+    expect(title).toContain("write ~$0.8200 · review ~$0.3800");
+  });
+
+  it("names the unreadable member executions behind a lower bound", () => {
+    const { title, text } = loopCostLabel(
+      {
+        ...base,
+        partial: true,
+        readable_executions: 3,
+        unavailable_reasons: ["harness has no cost source"],
+        members: [
+          { node_id: "write", usd: 1.2, partial: false, executions: 3 },
+          { node_id: "lint", usd: null, partial: true, executions: 1 },
+        ],
+      },
+      "laps 1–2",
+    );
+    expect(text).toBe("~$1.20†");
+    expect(title).toContain(
+      "Lower bound: 1 member execution has no readable cost (harness has no cost source).",
+    );
+  });
+
+  it("formats each member's share by its own form", () => {
+    const { title } = loopCostLabel(
+      {
+        ...base,
+        members: [
+          { node_id: "pi-node", usd: 0.25, estimated: false, partial: false, executions: 1 },
+          { node_id: "claude-node", usd: 0.95, estimated: true, partial: false, executions: 1 },
+        ],
+      },
+      "lap 1",
+    );
+    expect(title).toContain("pi-node $0.2500 · claude-node ~$0.9500");
+  });
+
+  it("names both an unpriced model and an unreadable execution", () => {
+    const { title } = loopCostLabel(
+      {
+        ...base,
+        partial: true,
+        unpriced_models: ["gpt-x"],
+        readable_executions: 3,
+      },
+      "laps 1–2",
+    );
+    expect(title).toContain("unpriced model excluded: gpt-x");
+    expect(title).toContain("1 member execution has no readable cost");
   });
 });

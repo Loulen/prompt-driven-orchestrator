@@ -225,7 +225,7 @@ async fn every_kind_is_410_on_a_forgotten_run() {
         // Unknown kind — likewise.
         r#"{"kind":"bogus_command"}"#,
         // The tombstone must outrank every NEW projection this arm
-        // gained too — the `409`s, the `400 node_not_found` and the `500`.
+        // gained too — the `409`s, the `404 node_not_found` and the `500`.
         r#"{"kind":"restart_node","node_id":"n1","iter":1}"#,
     ] {
         let (status, ct, body) = command_triplet(&state, run_id, req_body).await;

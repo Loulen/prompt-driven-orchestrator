@@ -1,7 +1,8 @@
-//! The pipeline context's adapters: the HTTP routes (driving), and the
+//! The pipeline context's adapters: the HTTP routes and `pdo pipeline` (driving), and the
 //! registry, the library, the watcher, the live stream, the skill bank and
 //! the validations over SQLite (driven).
 
+pub mod cli;
 pub mod draft_doc;
 pub mod draft_follow;
 pub mod events;

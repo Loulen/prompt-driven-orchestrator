@@ -16,6 +16,7 @@ use pdo_kernel::Actor;
 use serde::Deserialize;
 use tracing::{error, info, warn};
 
+mod cancel;
 mod completion;
 mod lifecycle;
 mod loops;
@@ -42,6 +43,7 @@ use crate::application::events::run_is_forgotten;
 use crate::application::node::output_validation::check_output_validation_with_retry;
 use crate::application::node::reap::reap_node_session;
 use crate::application::node::spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
+use crate::application::node_known::unknown_node;
 use crate::application::paths::effective_repo_root;
 use crate::application::paths::resolve_pipeline_path;
 use crate::application::paths::resolve_run_pipeline_path;
@@ -110,6 +112,14 @@ impl Runs {
             return denied.into_response();
         }
 
+        if let Some(node_id) = cmd.target_node() {
+            if let Ok((_, run_state)) = load_projected(self, &run_id).await {
+                if let Some(refusal) = unknown_node(self, &run_id, &run_state, node_id) {
+                    return refusal;
+                }
+            }
+        }
+
         dispatch(self.clone(), run_id, cmd).await
     }
 }
@@ -165,6 +175,7 @@ async fn dispatch(state: Arc<Runs>, run_id: String, cmd: RunCommand) -> Response
         } => skip::skip_node(state, run_id, node_id, iter, overrides).await,
         RunCommand::PauseRun => lifecycle::pause_run(state, run_id).await,
         RunCommand::ResumeRun => lifecycle::resume_run(state, run_id).await,
+        RunCommand::CancelRun => cancel::cancel_run(state, run_id).await,
         RunCommand::ReopenRun => lifecycle::reopen_run(state, run_id).await,
         RunCommand::KillNode { node_id, iter } => {
             nodes::kill_node(state, run_id, node_id, iter).await
@@ -328,7 +339,7 @@ mod tests {
 
     #[test]
     fn parse_accepts_the_fifteen_kinds() {
-        let cases: [(serde_json::Value, RunCommand); 15] = [
+        let cases: [(serde_json::Value, RunCommand); 16] = [
             (
                 serde_json::json!({ "kind": "mark_node_done", "node_id": "n1", "iter": 3 }),
                 RunCommand::MarkNodeDone {
@@ -371,6 +382,10 @@ mod tests {
             (
                 serde_json::json!({ "kind": "resume_run" }),
                 RunCommand::ResumeRun,
+            ),
+            (
+                serde_json::json!({ "kind": "cancel_run" }),
+                RunCommand::CancelRun,
             ),
             (
                 serde_json::json!({ "kind": "kill_node", "node_id": "n1", "iter": 7 }),
@@ -591,6 +606,7 @@ mod tests {
             "end_region",
             "pause_run",
             "resume_run",
+            "cancel_run",
             "kill_node",
             "restart_node",
             "start_node",

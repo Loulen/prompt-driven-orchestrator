@@ -71,6 +71,53 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo run wait [--all] [--timeout <seconds>]` | From a node session, block until a child run of this node becomes terminal (`--all`: every child). Exit 0 with one JSON line per settled child (`run_id`, `name`, `status`, `reason`, `children_active`), or `{"noop":true}` when no child is active; exit 2 when `--timeout` elapses (nothing on stdout); exit 1 when the daemon is unreachable or outside a node session. Without `--timeout` it waits as long as it takes: run it as a background task of your harness when it offers one, otherwise with a `--timeout` no longer than the harness's tool timeout. |
 | `pdo run status <run-id> [--json]` | Print the state of one run in a single line: `<id> <status> · nodes <done>/<total> done[, <n> running][, <n> awaiting_user][, <n> failed] · children <n> active · $<cost>`. Nodes are the pipeline's agent and script nodes; `running` includes a node waiting for a session slot, `awaiting_user` a node whose session died on an incident and waits for someone to resume it; the cost reads `$—` when unknown and `(lower bound)` when a model had no price. `--json` prints one compact object with the same fields (`run_id`, `status`, `nodes_done`, `nodes_total`, `nodes_running`, `nodes_awaiting_user`, `nodes_failed`, `children_active`, `cost_usd`, `cost_partial`). A read of the run's detail and children, not a wait. Exit 0 when the run is found, 4 when the daemon knows no such run, 1 when the daemon is unreachable or refuses the read. |
 | `pdo run list [--json]` | List the runs the daemon knows, one tab-separated line per run (`run_id`, status, pipeline, name); `--json` prints the daemon's `GET /runs` answer as is. Exit 1 with the daemon's reason when it refuses the call. |
+| `pdo run show <run-id> [--json]` | The Run in a line (id, status, pipeline, name), then one line per node: id, status, iteration. `--json` prints the daemon's detail of the Run. |
+| `pdo run cancel <run-id> [--json]` | Give up on a live Run: no node is launched any more, every node holding a session is stopped (never failed), and the Run ends `halted` with the reason `cancelled`. It can then be retried or reopened. A Run that is not live is refused, exit 1. |
+| `pdo run pause\|resume <run-id> [--json]` | Pause a running Run (nothing new is launched), or resume a paused, halted or failed one, as the Runs list does. |
+| `pdo run retry <run-id> [--json]` | Retry all, as the Runs list does: a finished Run is archived and a new Run starts with the same pipeline, input and repositories; prints `<run-id> retried as <new-id>`. A live Run is refused, exit 1. |
+| `pdo run reopen <run-id> [--json]` | Reopen a finished (or incident-parked) Run: what was done stays done, the rest runs again. An archived Run is refused, as in the run view. |
+| `pdo run archive <run-id> [--json]` | Archive a Run and its finished child Runs (the Runs list's Cleanup): their worktrees go, their history stays. Refused while a child Run is live. |
+| `pdo run forget <run-id> [--json]` | Forget an archived Run. |
+| `pdo run rename <run-id> <name> [--json]` | Rename a Run; an empty name clears it. |
+| `pdo run repos <run-id> [--add <repo>]… [--read-only] [--remove <repo>]… [--json]` | Add or remove secondary repositories of a running Run. Paths are made absolute like `pdo project`'s. |
+| `pdo run inject <run-id> <path> --content <text>\|--file <path> [--json]` | Write an artifact into the Run's blackboard, a path under its artifacts. |
+| `pdo run force-route <run-id> --from <node-or-region> --to <node> [--json]` | Leave a node or a loop region through `--to`, past its conditions (`--to end` completes the Run). |
+| `pdo run region <run-id> <region-id> --end\|--bump <n>\|--max <n> [--json]` | End a loop region, run it `n` more laps, or set its lap cap. |
+| `pdo run manager start\|stop <run-id> [--json]` | Start or stop the Run's Pipeline Manager. |
+| `pdo run events <run-id> [--json]` | The Run's event log, one tab-separated line per event: time, kind, node, iteration. |
+| `pdo run costs <run-id>… [--json]` | The cost of Runs, one line each: id and USD (`?` unknown, `≥` a lower bound). |
+| `pdo run artifact <run-id> <path> [--zip] [-o <file>]` | One artifact of the Run, or with `--zip` a port folder zipped; written to `-o`, else to stdout. |
+| `pdo run file <run-id> <path> [--ref <ref>] [-o <file>]` | A file of the Run's repository at one of its refs (default: its worktree while it exists, else its tip). |
+| `pdo run refs\|source-drift <run-id> [--json]` | The Run's refs (`id`, sha, label), or how far its source branch moved since it forked (JSON). |
+| `pdo run search <run-id> <text> [--json]` | Search the transcripts of the Run's nodes: node, iteration, entry, speaker or tool, excerpt with the match in `[…]`. |
+| `pdo run stale-health [--json]` | The liveness sweep's heartbeat: last tick, interval, nodes blocked on a usage limit. |
+| `pdo run pipeline show <run-id> [--json]` | The Run's own pipeline: its YAML, or with `--json` the YAML, the parsed pipeline, its prompts and its diagnostics. |
+| `pdo run pipeline export <run-id> [-o <file>] [--skills <zip>]` | The Run's pipeline as a portable document, and its skills sidecar when it carries skills. |
+| `pdo run pipeline save <run-id> --yaml <file>\|--file <json> [--json]` | Edit the Run's pipeline mid-run, within what its progress allows: a YAML (its prompts stay), or the `{yaml, prompts}` object `show --json` prints. |
+| `pdo run pipeline overwrite-default <run-id> [--preview] [--json]` | Copy the Run's pipeline over the shared one it was launched from; `--preview` says what it would touch (changed since the launch, the Triggers that fire it). |
+| `pdo node retry <run-id> <node-id> [--preview] [--json]` | Retry a node, as the canvas does: what it fed downstream is invalidated and it runs again, reopening a finished Run. `--preview` only prints what would be invalidated. |
+| `pdo node skip <run-id> <node-id> [--iter <n>] [--output <port>=<content>]… [--json]` | Skip a node: it counts as done with empty outputs (or those given) and the Run goes on. |
+| `pdo node restart\|kill\|recover\|done <run-id> <node-id> [--iter <n>] [--json]` | Restart an iteration from scratch, kill it (it fails), recover an interrupted one, or mark it done. Without `--iter`, the node's latest iteration. |
+| `pdo node start\|stop <run-id> <node-id> [--json]` | The canvas's Start and Stop; a stopped node is `stopped`, never failed. |
+| `pdo node release <run-id> <node-id> [--iter <n>] [--json]` | Release the completion an interactive node holds for its user. |
+| `pdo node extend <run-id> <node-id> <n> [--json]` | Run a cycle node `n` more iterations. |
+| `pdo node attach <run-id> <node-id> <file>… [--iter <n>] [--json]` | Import files into a node that holds a live session (one budget per import, `max_attachments_mb`). |
+| `pdo node prompt\|io <run-id> <node-id> [--iter <n>]` | The prompt an iteration received, or its inputs and outputs (JSON). |
+| `pdo node diff <run-id> <node-id>` | The diff the node made on its branch. |
+| `pdo node transcript <run-id> <node-id> [--iter <n>] [--after <i>] [--limit <n>] [--tool <index>] [--json]` | A page of the node's transcript, one entry a line (`#index`, speaker or tool, text); `--tool` shows one tool call in full (JSON). |
+| `pdo pipeline list [--json]` | The pipelines, one tab-separated line each: id, name, latest version, node count, validation (`all`, `none`, `projects: …`), and why one is invalid. |
+| `pdo pipeline show <id> [--json]` | A pipeline's YAML as stored; its diagnostics go to stderr. |
+| `pdo pipeline create <name> [--json]` | Create an empty pipeline. A name already taken is refused, exit 1. |
+| `pdo pipeline save <id> <file\|-> [--prompt <node>=<file>]… [--json]` | Save a pipeline's YAML and prompts, as the editor's Save does without an open draft: the daemon freezes a new version and prints it. |
+| `pdo pipeline rename\|duplicate\|delete <id> …` | `rename <id> <name>`, `duplicate <id>`, `delete <id>`, as the pipeline editor does. |
+| `pdo pipeline validate <id> [--none\|--project <id>…\|--first <id>…] [--json]` | The Projets whose launch forms offer the pipeline: all (no flag), none, or the ones given. |
+| `pdo pipeline versions <id> [--json]` | The versions a Save froze, newest first: number, title, when, author, Runs launched on it. |
+| `pdo pipeline version <id> <n> [--json]` | One version's YAML. |
+| `pdo pipeline restore <id> <n> [--json]` | Bring version `n` back: its YAML and prompts are saved as a new version, under the pipeline's current name (Restore then Save in the editor). |
+| `pdo pipeline export <id> [-o <file>] [--skills <zip>]` | The pipeline as a portable document, and its skills sidecar when it references skills. |
+| `pdo pipeline import <file\|-> [--skills <zip>] [--json]` | Import a portable document (and its skills sidecar): `export` then `import` gives back the same pipeline. |
+| `pdo pipeline parse-node <file\|->` | Read one node's YAML as the canvas would add it. |
+| `pdo pipeline library list\|save\|delete\|instantiate\|import …` | The node library: `list`, `save <file>` (an entry, JSON or YAML), `delete <name>`, `instantiate <name>` (the node spec and its prompt), `import <workflow.js>` (a Claude Code workflow as a draft pipeline). |
 | `pdo page mount <name> <directory> [--guide <file>]` | Serve a directory under `/pages/<name>/` and print its full address. `--guide` attaches a reading guide (see [below](#reading-guide-of-a-mounted-page)): PDO then shows the page in a tab with the guide beside it, and the command prints that view's address first. |
 | `pdo page list` | List active page mounts. |
 | `pdo page unmount <name>` | Remove a page mount. |
@@ -104,11 +151,13 @@ Run `pdo service install` to start PDO at boot and keep it running after logout.
 | `pdo audit [--from <rfc3339>] [--to <rfc3339>] [--target-kind <kind>] [--target-id <id>] [--limit <n>] [--json]` | The journal of the mutations made outside a Run, newest first, one tab-separated line each: time, action, target kind, target id, actor hint. |
 | `pdo whoami [--json]` | The Actor the daemon names you: `local_operator`, `agent:<run>/<node>` from a node session, or `<namespace>:<id>` when an extension establishes you from `PDO_TOKEN`, followed by its display name. |
 
+The gestures of `pdo run` (all but `create`, `wait` and `list`), `pdo node`, `pdo pipeline`,
 `pdo project`, `pdo trigger`, `pdo session`, `pdo audit` and `pdo whoami` are thin clients of the
 daemon's routes: they send what the UI sends, print what it answers in text or, with `--json`, as
-JSON, and leave every rule to the daemon. Their exit codes: 0 success; 1 when the daemon is
-unreachable or refuses the call (its reason on stderr); 2 for a command line they cannot read; 4
-when the daemon knows no such Projet, Trigger or session. Every route of the daemon has a command
+JSON, and leave every rule to the daemon (who may, which state allows what). Their exit codes: 0
+success; 1 when the daemon is unreachable or refuses the call (its reason on stderr); 2 for a
+command line they cannot read; 4 when the daemon knows no such Run, node, pipeline, Projet, Trigger
+or session. Every route of the daemon has a command
 or a written exclusion: see `crates/tidy/src/cli_parity/exclusions.rs`.
 
 Every command that talks to the daemon reaches it at `PDO_DAEMON_URL` (default

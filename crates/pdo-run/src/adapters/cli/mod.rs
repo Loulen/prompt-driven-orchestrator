@@ -3,13 +3,22 @@
 //! carries the session headers, so `identify` names the caller as the node's
 //! Agent (`Actor::Agent`). `pdo run create` creates a Run (a child of the
 //! node's Run when called from a session, ADR-0064), `pdo run status` reads one
-//! Run in a line, `pdo reap` reclaims the disk of old terminal Runs.
+//! Run in a line, `pdo reap` reclaims the disk of old terminal Runs. The
+//! operator's gestures on a Run (`pdo run cancel|retry|reopen|archive|…`,
+//! [`RunGesture`]) and on a node (`pdo node`, [`NodeAction`]) are thin clients
+//! of the shared one (`pdo_platform::adapters::cli::daemon`).
 
 mod complete;
+mod node;
+mod node_read;
 mod reap;
 mod run_action;
 mod run_create;
+mod run_gesture;
 mod run_list;
+mod run_pipeline_cli;
+mod run_read;
+mod run_render;
 mod run_status;
 mod upload;
 mod wait;
@@ -19,10 +28,13 @@ use anyhow::{Context, Result};
 use pdo_kernel::actor::{SESSION_NODE_HEADER, SESSION_RUN_HEADER};
 
 pub use complete::run_complete;
+pub use node::{run_node, NodeAction};
 pub use reap::run_reap;
 pub use run_action::RunAction;
 pub use run_create::run_run_create;
+pub use run_gesture::{run_run_gesture, RunGesture};
 pub use run_list::run_run_list;
+pub use run_read::{run_run_read, RunRead};
 pub use run_status::{run_run_status, RunStatusLine, EXIT_RUN_NOT_FOUND};
 pub use wait::{run_run_wait, run_wait_user, EXIT_WAIT_TIMEOUT};
 

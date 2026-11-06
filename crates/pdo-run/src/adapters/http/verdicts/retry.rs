@@ -8,8 +8,9 @@ use crate::domain::retry_verdict::*;
 /// pas décidé de son statut.
 fn status(r: &RetryRefusal) -> StatusCode {
     match r {
-        // Requête malformée, pas un conflit d'état.
-        RetryRefusal::NodeNotFound { .. } => StatusCode::BAD_REQUEST,
+        // Un node que le Run ne connaît pas : `404`, comme sur tous les gestes
+        // d'un node.
+        RetryRefusal::NodeNotFound { .. } => StatusCode::NOT_FOUND,
         RetryRefusal::RetryRejected { .. } | RetryRefusal::SandboxPrepNotReady { .. } => {
             StatusCode::CONFLICT
         }
@@ -219,7 +220,7 @@ mod tests {
                 RetryVerdict::Refused(RetryRefusal::NodeNotFound {
                     node_id: "g".into(),
                 }),
-                StatusCode::BAD_REQUEST,
+                StatusCode::NOT_FOUND,
             ),
             (
                 RetryVerdict::Broken {
@@ -337,11 +338,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn node_not_found_is_a_400_naming_the_target() {
+    async fn node_not_found_is_a_404_naming_the_target() {
         let v = RetryVerdict::Refused(RetryRefusal::NodeNotFound {
             node_id: "ghost".into(),
         });
-        assert_eq!(retry_response(&v).status(), StatusCode::BAD_REQUEST);
+        assert_eq!(retry_response(&v).status(), StatusCode::NOT_FOUND);
         let body = body_of(&v).await;
         assert_eq!(body["error"], "node_not_found");
         assert_eq!(body["node_id"], "ghost");

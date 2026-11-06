@@ -12,7 +12,7 @@ use super::ports::Renamed;
 use super::registry_names::lenient_name;
 use super::Created;
 use crate::domain::draft::DraftContent;
-use crate::domain::naming::pipeline_slug;
+use crate::domain::naming::{pipeline_slug, rewrite_pipeline_name_field};
 use crate::domain::pipeline::parse_pipeline;
 use crate::domain::version::{next_version, PipelineVersionRef, SaveAs};
 
@@ -55,6 +55,25 @@ impl Pipelines {
         }
         self.announce_saved(&saved);
         Ok(saved)
+    }
+
+    /// Restore the version `number` of `id` (ADR-0088): its YAML and its
+    /// prompts saved as the next version, as the editor's Restore then Save
+    /// does. The name stays the pipeline's current one: a version from before
+    /// a rename does not rename the pipeline back.
+    pub async fn restore_version(
+        &self,
+        actor: &Actor,
+        id: &str,
+        number: u32,
+    ) -> Result<SaveOutcome, PipelineError> {
+        let version = self.version(id, number).await?;
+        let yaml = self
+            .detail(id)
+            .ok()
+            .and_then(|current| rewrite_pipeline_name_field(&version.yaml, &current.pipeline.name))
+            .unwrap_or(version.yaml);
+        self.save(actor, id, &yaml, &version.prompts).await
     }
 
     /// Save the draft of `id` as the editor serialized it (ADR-0088), as

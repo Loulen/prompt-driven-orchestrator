@@ -117,7 +117,7 @@ impl Pipelines {
             .get(id, number)
             .await
             .map_err(PipelineError::Storage)?
-            .ok_or(PipelineError::NotFound)?;
+            .ok_or(PipelineError::VersionNotFound(number))?;
         let parsed = parse_pipeline(&version.yaml)?;
         let detail = PipelineDetail {
             id: id.to_string(),

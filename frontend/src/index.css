@@ -110,6 +110,20 @@
   --color-chart-axis: #8b949e;
   --color-chart-tooltip-bg: #161b22;
 
+  /* #1041 — the eight colours of an Espace (`lib/spacePalette.ts` names the
+     keys; the daemon stores the key, never the value). Okabe–Ito hues, so the
+     eight stay apart under red-green colour blindness; lightened here to hold
+     3:1 on every dark surface. They only fill (a row stripe, a square swatch),
+     never colour text. The status palette never touches them. */
+  --color-space-blue: #56a0e8;
+  --color-space-orange: #e69f00;
+  --color-space-green: #1fb88a;
+  --color-space-pink: #e08fc0;
+  --color-space-sky: #7cc8f0;
+  --color-space-vermillion: #f07a3a;
+  --color-space-violet: #a98ef0;
+  --color-space-yellow: #f0e442;
+
   /* Drop shadow. Deeper on a dark ground, where a shadow has to fight the
      surface; softer on a light one, where black at 0.4 reads as grime. */
   --color-shadow: rgba(0, 0, 0, 0.4);
@@ -258,6 +272,16 @@
   --color-chart-grid: #d6dae0;
   --color-chart-axis: #4a5261;
   --color-chart-tooltip-bg: #ffffff;
+
+  /* Espaces (#1041) — the same hues, darkened to hold 3:1 on a light ground. */
+  --color-space-blue: #0068a8;
+  --color-space-orange: #a86b00;
+  --color-space-green: #00805c;
+  --color-space-pink: #b0498a;
+  --color-space-sky: #2b7fb3;
+  --color-space-vermillion: #c24e00;
+  --color-space-violet: #6b4fc4;
+  --color-space-yellow: #857600;
 
   /* Shadow */
   --color-shadow: rgba(20, 24, 31, 0.16);

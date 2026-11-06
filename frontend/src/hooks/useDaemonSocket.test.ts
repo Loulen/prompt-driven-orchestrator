@@ -180,6 +180,13 @@ describe("useDaemonSocket (#972)", () => {
     expect(received.map((m) => m.type)).toEqual(["project_changed", "pipeline_validation_changed"]);
   });
 
+  it("forwards Espace changes to the listeners, so a move shows in every browser (#1041)", () => {
+    const { received } = mount();
+    act(() => last().open());
+    act(() => last().receive({ type: "space_changed", space_id: "spc-1", run_id: "r1" }));
+    expect(received.map((m) => m.type)).toEqual(["space_changed"]);
+  });
+
   it("re-reads when the tab becomes visible again", () => {
     const { resyncs } = mount();
     act(() => last().open());

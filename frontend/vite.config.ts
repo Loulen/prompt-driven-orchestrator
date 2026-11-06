@@ -54,6 +54,9 @@ export default defineConfig({
       // GET/POST /projects answers 200 with the SPA and the pencil would silently
       // no-op.
       '/projects': daemonTarget,
+      // #1041: Espaces. New top-level `/spaces` prefix — same trap: without it a
+      // dev GET /spaces answers 200 with the SPA and the run list never groups.
+      '/spaces': daemonTarget,
       // #697: version check (`GET /update`, `POST /update/check`). New top-level
       // prefix — same trap as the others: without it a dev GET /update answers 200
       // with the SPA and the section would render nothing, silently.

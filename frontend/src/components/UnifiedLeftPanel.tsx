@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { ChevronDown, ChevronRight, Copy, FileUp, Pause, Pencil, Play, Plus, RotateCcw, SquareTerminal, Trash2, X, Zap } from "lucide-react";
-import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type Trigger, type Project } from "../types";
+import { isLiveRun, isTerminalRun, type RunListEntry, type RunStatus, type PipelineListEntry, type Trigger, type Project, type Space } from "../types";
 import type { LibraryPipelineEntry } from "../api";
-import { ApiError, cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll } from "../api";
+import { ApiError, cleanupRun, createPipeline, duplicatePipeline, forgetRun, importPipelineDocument, importWorkflow, openRunShell, pauseRun, renameRun, resumeRun, retryAll, setRunSpace } from "../api";
 import { announceSkillsChanged } from "../hooks/useSkillBank";
 import { useEditStore } from "../stores/editStore";
 import { useSelectionStore } from "../stores/selectionStore";
@@ -10,6 +10,8 @@ import { useRecentReposStore } from "../stores/recentReposStore";
 import { handleSelectionKeydown } from "../lib/selectionKeys";
 import { type BulkItem, type BulkOutcome } from "../lib/bulk";
 import { groupByProject, type ProjectRef } from "../lib/groupByRepo";
+import { groupBySpace, NO_SPACE_KEY, spaceLookup } from "../lib/groupBySpace";
+import { spaceColorVar } from "../lib/spacePalette";
 import {
   ancestorIds,
   buildRunTree,
@@ -30,6 +32,8 @@ import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import ForgetRunModal from "./ForgetRunModal";
 import LibraryRow from "./LibraryRow";
 import ProjectEditModal from "./ProjectEditModal";
+import SpaceEditModal from "./SpaceEditModal";
+import SpaceSwatch from "./SpaceSwatch";
 import RunFilters from "./RunFilters";
 import { EMPTY_RUN_FILTER, isFilterActive, runMatchesFilter } from "./runFilter";
 import { ChildCountPills } from "./OrchestrationTab";
@@ -41,6 +45,9 @@ import { validationOf } from "../lib/pipelineValidation";
 import { runStatusKey } from "../lib/statusTable";
 
 type LeftTab = "runs" | "triggers" | "library";
+
+/** #1041 — the drag payload of a Run row moved onto an Espace. */
+export const RUN_DRAG_TYPE = "application/x-pdo-run";
 
 
 /** Runs whose bulk-Retry is valid (mirror of the per-row `canRetryAll`). */
@@ -73,6 +80,11 @@ interface Props {
    *  #258 per-path grouping, unchanged). */
   projects?: Project[];
   onProjectsChanged?: () => void;
+  /** Espaces (#1041) — the first level of the Runs list when any exists. Optional
+   *  so existing callers/tests keep working (no Espace → the list as before). */
+  spaces?: Space[];
+  /** Called after an Espace mutation or a Run move from this panel. */
+  onSpacesChanged?: () => void;
 }
 
 /**
@@ -101,6 +113,8 @@ export default function UnifiedLeftPanel({
   onTogglePause,
   projects = [],
   onProjectsChanged,
+  spaces = [],
+  onSpacesChanged,
 }: Props) {
   const [activeTab, setActiveTab] = useState<LeftTab>("runs");
   const [confirmCleanup, setConfirmCleanup] = useState<
@@ -127,6 +141,13 @@ export default function UnifiedLeftPanel({
     name: string;
     memberPaths: string[];
   } | null>(null);
+  // #1041 — « + Space » (`space: null`) or an Espace header's pencil.
+  const [spaceEditor, setSpaceEditor] = useState<{ space: Space | null } | null>(null);
+  // #1041 — collapsed Espace headers (session only, like the tree toggles) and
+  // the Espace a dragged Run hovers.
+  const [collapsedSpaces, setCollapsedSpaces] = useState<ReadonlySet<string>>(() => new Set());
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const spaceOf = useMemo(() => spaceLookup(spaces), [spaces]);
 
   const pipelines = useEditStore((s) => s.pipelines);
   const loadPipelines = useEditStore((s) => s.loadPipelines);
@@ -178,6 +199,20 @@ export default function UnifiedLeftPanel({
       // event-driven refresh will pick up state change
     }
     setConfirmForget(null);
+  }
+
+  // #1041 — drop a Run on an Espace header (« No space » included). A table
+  // write, not an event (ADR-0083): the daemon broadcasts `space_changed` so
+  // every other browser follows; this one refreshes at once.
+  async function moveRunToSpace(runId: string, spaceId: string | null) {
+    const run = runs.find((r) => r.run_id === runId);
+    if (!run || (run.space_id ?? null) === spaceId) return;
+    try {
+      await setRunSpace(runId, spaceId);
+      onSpacesChanged?.();
+    } catch {
+      // the WS push (or the next refresh) re-syncs the list
+    }
   }
 
   // #110 — Pause/Resume are cheap, reversible, fire-and-forget (silent catch like
@@ -331,11 +366,28 @@ export default function UnifiedLeftPanel({
       run.status === "failed" ||
       run.status === "halted" ||
       run.status === "skipped";
+    // #1041 — the Espace's colour marks the row (a left stripe, the bulk
+    // selection's accent wins), and an archived row, listed outside the Espace
+    // headers, also shows its square swatch. Only a tree root drags: a child
+    // follows its root.
+    const space = spaceOf(run.space_id);
+    const draggable = spaces.length > 0 && node.depth === 0;
 
     return (
       <button
         key={run.run_id}
         data-run-row={run.run_id}
+        data-space-id={space?.id}
+        draggable={draggable || undefined}
+        onDragStart={
+          draggable
+            ? (e) => {
+                e.dataTransfer.setData(RUN_DRAG_TYPE, run.run_id);
+                e.dataTransfer.effectAllowed = "move";
+              }
+            : undefined
+        }
+        onDragEnd={draggable ? () => setDropTarget(null) : undefined}
         data-depth={node.depth}
         aria-level={node.depth + 1}
         aria-expanded={hasChildren ? expanded : undefined}
@@ -359,7 +411,11 @@ export default function UnifiedLeftPanel({
             }
           }
         }}
-        style={{ fontSize: "11.5px", paddingLeft: 12 + node.depth * 14 }}
+        style={{
+          fontSize: "11.5px",
+          paddingLeft: 12 + node.depth * 14,
+          ...(space && !rowSelected ? { borderLeftColor: spaceColorVar(space.color) } : {}),
+        }}
         className={`group flex w-full cursor-pointer items-stretch gap-2 border-b border-l-2 border-line-soft py-2 pr-3 text-left transition-colors ${
           rowSelected
             ? "border-l-acc bg-acc-bg text-fg"
@@ -434,6 +490,7 @@ export default function UnifiedLeftPanel({
             className="flex items-center gap-1.5 truncate font-mono text-fg-4"
             style={{ fontSize: "10px" }}
           >
+            {isArchived && space && <SpaceSwatch space={space} size={7} testId="run-space-swatch" />}
             <span className="truncate" data-testid="run-pipeline-name">
               {run.pipeline_name}
             </span>
@@ -655,6 +712,19 @@ export default function UnifiedLeftPanel({
         });
       }
       if (chain.length > 0) setScrollRequest(selectedRunId);
+      // #1041 — a run selected elsewhere opens its collapsed Espace too.
+      const root = rootOf(runs, selectedRunId);
+      if (root && root.status !== "archived" && collapsedSpaces.size > 0) {
+        const key = spaceOf(root.space_id) ? `space:${root.space_id}` : NO_SPACE_KEY;
+        if (collapsedSpaces.has(key)) {
+          setCollapsedSpaces((prev) => {
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+          setScrollRequest(selectedRunId);
+        }
+      }
     }
   }
   useEffect(() => {
@@ -733,9 +803,28 @@ export default function UnifiedLeftPanel({
   // per-path grouping when nothing is named; `null` ⇒ the flat list. #783: the
   // grouping key is the ROOT's repo — a child follows its parent whatever its
   // own repo.
-  const runGroups = groupByProject(activeTree, (n) => n.run.effective_repo, projectOf);
+  const groupProjects = (nodes: RunTreeNode[]) =>
+    groupByProject(nodes, (n) => n.run.effective_repo, projectOf);
+  const inProjectOrder = (nodes: RunTreeNode[]): RunTreeNode[] => {
+    const groups = groupProjects(nodes);
+    return groups === null ? nodes : groups.flatMap((g) => g.items);
+  };
+  // #1041 — when any Espace exists it is the FIRST level: each Espace, then
+  // « No space »; the Projet grouping above stays as it is inside each. `null`
+  // (no Espace at all) ⇒ the list exactly as before. The daemon already resolves
+  // a child's `space_id` to its root's, so a child follows its root.
+  const spaceGroups = groupBySpace(activeTree, (n) => n.run.space_id, spaces);
   const orderedActive: RunTreeNode[] =
-    runGroups === null ? activeTree : runGroups.flatMap((g) => g.items);
+    spaceGroups === null
+      ? inProjectOrder(activeTree)
+      : spaceGroups.flatMap((g) => (collapsedSpaces.has(g.key) ? [] : inProjectOrder(g.items)));
+  const toggleSpace = (key: string) =>
+    setCollapsedSpaces((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   // #577 — Runs multi-select derivations. `visibleRunIds` is the flattened visible
   // order (grouped active list, then the archived section only when expanded),
@@ -814,6 +903,142 @@ export default function UnifiedLeftPanel({
       });
     }
   };
+
+  // The Projet / repo level of the active list (#552 / #258), rendered as
+  // before — at the top when no Espace exists, inside each Espace otherwise.
+  function renderProjectLevel(nodes: RunTreeNode[]) {
+    const runGroups = groupProjects(nodes);
+    if (runGroups === null) return flattenVisible(nodes, isExpanded).map(renderRunRow);
+    return runGroups.map((group) => (
+      <div
+        key={group.key}
+        data-testid="run-repo-group"
+        data-project={group.kind === "project" ? "true" : "false"}
+      >
+        <div
+          className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
+          style={{ fontSize: "10px" }}
+          title={group.title}
+        >
+          {/* #577 — "select all in this repo" (reveals on header hover). */}
+          <SelectControl
+            selected={
+              group.items.length > 0 &&
+              flattenVisible(group.items, isExpanded).every((n) => runSel.has(n.run.run_id))
+            }
+            label={`Select all in ${group.label}`}
+            onSelect={() =>
+              selectGroup(
+                "runs",
+                flattenVisible(group.items, isExpanded).map((n) => n.run.run_id),
+              )
+            }
+            testId="run-group-select-all"
+          />
+          <span className="truncate" data-testid="run-repo-label">
+            {group.label}
+          </span>
+          {/* #552 — the pencil that names / renames the Projet. */}
+          <button
+            onClick={() => openProjectEditor(group)}
+            className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/hdr:inline-flex"
+            title={group.kind === "project" ? "Edit project" : "Name project"}
+            aria-label={group.kind === "project" ? "Edit project" : "Name project"}
+            data-testid="run-group-pencil"
+          >
+            <Pencil size={10} />
+          </button>
+        </div>
+        {flattenVisible(group.items, isExpanded).map(renderRunRow)}
+      </div>
+    ));
+  }
+
+  // #1041 — one Espace (or « No space ») of the active list: a collapsible
+  // header (square swatch, name, run count, pencil) that is also where a dragged
+  // Run row is dropped, then the Projet level inside.
+  function renderSpaceGroup(group: { key: string; space: Space | null; items: RunTreeNode[] }) {
+    const { key, space } = group;
+    const collapsed = collapsedSpaces.has(key);
+    const count = flattenAll(group.items).length;
+    const label = space ? space.name : "No space";
+    const isDropTarget = dropTarget === key;
+    const accepts = (e: DragEvent) => e.dataTransfer.types.includes(RUN_DRAG_TYPE);
+    return (
+      <div
+        key={key}
+        data-testid="run-space-group"
+        data-space-id={space?.id ?? ""}
+        onDragOver={(e) => {
+          if (!accepts(e)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          if (dropTarget !== key) setDropTarget(key);
+        }}
+        onDragLeave={(e) => {
+          // Leaving for a child of this group is not leaving the group.
+          if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+          if (dropTarget === key) setDropTarget(null);
+        }}
+        onDrop={(e) => {
+          if (!accepts(e)) return;
+          e.preventDefault();
+          setDropTarget(null);
+          const runId = e.dataTransfer.getData(RUN_DRAG_TYPE);
+          if (runId) void moveRunToSpace(runId, space?.id ?? null);
+        }}
+      >
+        <div
+          className={`group/space flex h-[26px] shrink-0 items-center gap-1.5 border-b border-line pl-2 pr-3 font-semibold transition-colors ${
+            isDropTarget ? "bg-acc-bg text-fg" : "bg-bg-3 text-fg-2"
+          }`}
+          style={{
+            fontSize: "10.5px",
+            boxShadow: isDropTarget ? "inset 0 0 0 1px var(--color-acc)" : undefined,
+          }}
+          data-testid="run-space-header"
+          data-drop-target={isDropTarget ? "true" : undefined}
+        >
+          <button
+            type="button"
+            onClick={() => toggleSpace(key)}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? `Expand ${label}` : `Collapse ${label}`}
+            className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 text-left"
+            data-testid="run-space-toggle"
+          >
+            {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+            {space ? (
+              <SpaceSwatch space={space} size={9} testId="run-space-header-swatch" />
+            ) : (
+              <span
+                aria-hidden
+                className="inline-block h-[9px] w-[9px] shrink-0 rounded-[2px] border border-dashed border-fg-4"
+              />
+            )}
+            <span className="truncate" data-testid="run-space-label">
+              {label}
+            </span>
+            <span className="shrink-0 font-normal text-fg-4" data-testid="run-space-count">
+              {count}
+            </span>
+          </button>
+          {space && (
+            <button
+              onClick={() => setSpaceEditor({ space })}
+              className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/space:inline-flex"
+              title="Edit space"
+              aria-label="Edit space"
+              data-testid="run-space-pencil"
+            >
+              <Pencil size={10} />
+            </button>
+          )}
+        </div>
+        {!collapsed && renderProjectLevel(group.items)}
+      </div>
+    );
+  }
 
   const tabs: { id: LeftTab; label: string }[] = [
     { id: "runs", label: "Runs" },
@@ -908,10 +1133,23 @@ export default function UnifiedLeftPanel({
                 Project
               </button>
             )}
+            {/* #1041 — create an Espace (rename / recolour / delete from its
+                header's pencil). */}
+            <button
+              type="button"
+              onClick={() => setSpaceEditor({ space: null })}
+              data-testid="new-space-button"
+              title="New space"
+              className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-0.5 rounded border border-line-strong bg-bg-3 px-1.5 py-0.5 text-fg-3 hover:border-acc hover:text-fg`}
+              style={{ fontSize: "10.5px" }}
+            >
+              <Plus size={10} />
+              Space
+            </button>
             <button
               onClick={onNewRun}
               data-testid="new-run-button"
-              className={`${availableRepos.length > 0 ? "ml-1.5" : "ml-auto"} flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
+              className={`ml-1.5 flex cursor-pointer items-center gap-1 rounded bg-acc px-1.5 py-0.5 font-medium text-on-acc transition-colors hover:bg-acc-dim`}
               style={{ fontSize: "10.5px" }}
             >
               <Plus size={10} />
@@ -972,51 +1210,9 @@ export default function UnifiedLeftPanel({
               </button>
             </div>
           )}
-          {runGroups === null
-            ? flattenVisible(activeTree, isExpanded).map(renderRunRow)
-            : runGroups.map((group) => (
-                <div
-                  key={group.key}
-                  data-testid="run-repo-group"
-                  data-project={group.kind === "project" ? "true" : "false"}
-                >
-                  <div
-                    className="group group/hdr flex h-[22px] shrink-0 items-center gap-1 border-b border-line-soft bg-bg-3/40 px-3 font-medium text-fg-3"
-                    style={{ fontSize: "10px" }}
-                    title={group.title}
-                  >
-                    {/* #577 — "select all in this repo" (reveals on header hover). */}
-                    <SelectControl
-                      selected={
-                        group.items.length > 0 &&
-                        flattenVisible(group.items, isExpanded).every((n) => runSel.has(n.run.run_id))
-                      }
-                      label={`Select all in ${group.label}`}
-                      onSelect={() =>
-                        selectGroup(
-                          "runs",
-                          flattenVisible(group.items, isExpanded).map((n) => n.run.run_id),
-                        )
-                      }
-                      testId="run-group-select-all"
-                    />
-                    <span className="truncate" data-testid="run-repo-label">
-                      {group.label}
-                    </span>
-                    {/* #552 — the pencil that names / renames the Projet. */}
-                    <button
-                      onClick={() => openProjectEditor(group)}
-                      className="ml-auto hidden shrink-0 cursor-pointer rounded p-0.5 text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2 group-hover/hdr:inline-flex"
-                      title={group.kind === "project" ? "Edit project" : "Name project"}
-                      aria-label={group.kind === "project" ? "Edit project" : "Name project"}
-                      data-testid="run-group-pencil"
-                    >
-                      <Pencil size={10} />
-                    </button>
-                  </div>
-                  {flattenVisible(group.items, isExpanded).map(renderRunRow)}
-                </div>
-              ))}
+          {spaceGroups === null
+            ? renderProjectLevel(activeTree)
+            : spaceGroups.map(renderSpaceGroup)}
           {/* #136 — archived runs in their own flat, collapsible section below
               the active list. Reuses renderRunRow verbatim (same archived
               styling / Forget action). The rendered gate is `archivedOpen`
@@ -1334,6 +1530,15 @@ export default function UnifiedLeftPanel({
           projects={projects}
           onClose={() => setProjectEditor(null)}
           onSaved={() => onProjectsChanged?.()}
+        />
+      )}
+
+      {spaceEditor && (
+        <SpaceEditModal
+          space={spaceEditor.space}
+          spaces={spaces}
+          onClose={() => setSpaceEditor(null)}
+          onSaved={() => onSpacesChanged?.()}
         />
       )}
 

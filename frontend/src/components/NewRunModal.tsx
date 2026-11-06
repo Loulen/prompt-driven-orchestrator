@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Clock, FolderGit2, GitBranch, Paperclip, Plus, Save, Search, Sparkles, X } from "lucide-react";
-import type { InstanceSettings, PipelineListEntry, Project, Trigger } from "../types";
+import type { InstanceSettings, PipelineListEntry, Project, Space, Trigger } from "../types";
+import { sortSpaces } from "../lib/groupBySpace";
 import type { TestGuardResponse } from "../api";
 import { createRun, createTrigger, updateTrigger, fetchSettings, testGuard } from "../api";
 import { useEditStore } from "../stores/editStore";
@@ -79,6 +80,9 @@ export type OpenIntent =
 // eslint-disable-next-line react-refresh/only-export-components
 export const RUN_INTENT: OpenIntent = { kind: "run" };
 
+/** #1041: stable default for the `spaces` prop (no fresh array per render). */
+const NO_SPACES: Space[] = [];
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -99,9 +103,14 @@ interface Props {
    * it has no opinion on who is asking or why.
    */
   repoExplorerStartPath?: string;
+  /**
+   * #1041: the instance's Espaces. With none, the Space select is not shown at all
+   * (a single-user instance sees no change) and every Run lands in « Sans espace ».
+   */
+  spaces?: Space[];
 }
 
-export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved, onManageStagingProfiles, repoExplorerStartPath }: Props) {
+export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN_INTENT, onTriggerSaved, onManageStagingProfiles, repoExplorerStartPath, spaces = NO_SPACES }: Props) {
   // What this Run/Trigger can be launched against: the instance's pipelines and the
   // target repo's branches, both served by the daemon (#359).
   const {
@@ -228,6 +237,9 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
   // LABEL, never copied into the field (the #452 prefill trap). `""` omits the key from
   // the request, the only value that lets the daemon resolve its own default.
   const [harness, setHarness] = useState<string>("");
+  // #1041: the Space select — `""` is « Sans espace » (No space), the default.
+  const [space, setSpace] = useState<string>("");
+  const spaceSeeded = useRef(false);
   const [agentChoice, setAgentChoice] = useState<AgentChoice>({ mode: "inherit" });
   // #669/ADR-0062: the Run tier of the skills selection (a Trigger stores the same
   // list for its fired Runs). Inherits the instance and the Projet of the repo.
@@ -533,6 +545,22 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     setAutoName(isEdit ? openIntent.trigger.auto_name : settings!.default_auto_name.effective);
   }, [open, openIntent, settings]);
 
+  // #1041: seed the Space select once per open — the same ref-gated, synchronous seed
+  // as the harness. An `edit-trigger` round-trips the Trigger's Espace; a run / new
+  // trigger starts on « No space », the safety net, never on a guess.
+  useEffect(() => {
+    if (!open) {
+      spaceSeeded.current = false;
+      return;
+    }
+    if (spaceSeeded.current) return;
+    spaceSeeded.current = true;
+    setSpace(openIntent.kind === "edit-trigger" ? (openIntent.trigger.space_id ?? "") : "");
+  }, [open, openIntent]);
+  // An Espace deleted meanwhile (another browser) reads as No space: never send
+  // an id the daemon would refuse.
+  const spaceValue = spaces.some((s) => s.id === space) ? space : "";
+
   // #974 (CONTEXT.md « Pipeline validé »): the menu offers the Pipelines of the
   // primary repository's Projet first, then the global ones; test Pipelines wait
   // behind « Show test pipelines ». The Projet is matched on the path verbatim,
@@ -767,6 +795,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
           // #465: full list ([0] = primary, [1..] = secondaries), or undefined
           // for a mono-repo Run (keeps the request byte-identical).
           targetRepos: buildTargetRepos(),
+          space: spaceValue,
         }),
         ...(agentChoice.mode === "inherit" ? {} : { agent_choice: agentChoice }),
         ...(hasProvisioningRules(provisioning) ? { provisioning } : {}),
@@ -790,7 +819,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     } finally {
       setSubmitting(false);
     }
-  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning]);
+  }, [selectedPipeline, input, hasRequiredPrompt, overrides, onCreated, onClose, flushPendingSaves, repoValid, targetRepo, sourceBranch, buildTargetRepos, autoName, runName, attachments, sandbox, harness, skills, agentChoice, settings, refreshRecentRepos, provisioning, spaceValue]);
 
   const canLaunch = provisioningValid && !attachmentsOverLimit && newRunForm.canLaunch({
     repoValid,
@@ -874,6 +903,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
       // mono-repo. The create builder omits it; the update builder maps it to
       // `null` (clear back to mono-repo).
       targetRepos: buildTargetRepos(),
+      space: spaceValue,
     };
 
     try {
@@ -922,6 +952,7 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
     harness,
     skills,
     autoName,
+    spaceValue,
     flushPendingSaves,
     onTriggerSaved,
     onClose,
@@ -1052,6 +1083,34 @@ export default function NewRunModal({ open, onClose, onCreated, openIntent = RUN
                   : "Auto-generated by manager"}
               </label>
             </div>
+            {/* #1041: the Espace the Run (or each Run the Trigger fires) is filed
+                in. Hidden while the instance has none. */}
+            {spaces.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="space-select"
+                  className="font-medium text-fg-2"
+                  style={{ fontSize: "11.5px" }}
+                >
+                  Space
+                </label>
+                <select
+                  id="space-select"
+                  data-testid="space-select"
+                  value={spaceValue}
+                  onChange={(e) => setSpace(e.target.value)}
+                  className="w-full rounded-md border border-line-strong bg-bg-3 px-2.5 py-1.5 text-fg transition-colors focus:border-acc focus:outline-none"
+                  style={{ fontSize: "12px" }}
+                >
+                  <option value="">No space</option>
+                  {sortSpaces(spaces).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           {/* ── WHERE ── */}

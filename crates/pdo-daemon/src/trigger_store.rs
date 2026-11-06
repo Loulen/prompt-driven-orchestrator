@@ -83,6 +83,11 @@ pub(crate) struct Trigger {
     /// frozen at creation from the instance default and read at fire time.
     #[serde(default = "default_true")]
     pub auto_name: bool,
+    /// The Espace every Run this Trigger fires lands in (#1041, ADR-0083), or
+    /// `None` for « Sans espace ». Read at fire time and folded into the create
+    /// request, like [`Self::harness`]. Deleting the Espace clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<String>,
     pub enabled: bool,
     /// The next scheduled fire, as **canonical UTC RFC3339-millis** (`…Z`).
     /// Every writer (create/edit in `lib.rs`, the scheduler's `set_next_fire`)
@@ -124,6 +129,8 @@ pub(crate) struct NewTrigger {
     pub skills: Vec<crate::skill_selection::SkillRef>,
     /// Seeded from the instance default in the create modal and frozen here.
     pub auto_name: bool,
+    /// #1041: the Espace fired Runs land in; `None` ⇒ « Sans espace ».
+    pub space_id: Option<String>,
     /// First scheduled fire, computed by the caller from the cron expression.
     pub next_fire_at: Option<String>,
 }
@@ -307,6 +314,19 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // #1041: `space_id` — NULLABLE: a NULL row fires into « Sans espace ». An
+    // older binary ignores the column (its INSERT names its own columns).
+    let has_space_id =
+        sqlx::query("SELECT 1 FROM pragma_table_info('triggers') WHERE name = 'space_id'")
+            .fetch_optional(db)
+            .await?
+            .is_some();
+    if !has_space_id {
+        sqlx::query("ALTER TABLE triggers ADD COLUMN space_id TEXT")
+            .execute(db)
+            .await?;
+    }
+
     // Guard-output columns on `trigger_fires`; without them the runtime
     // INSERT/SELECT below would fail.
     for (col, ddl) in [
@@ -366,8 +386,8 @@ pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, 
         "INSERT INTO triggers
             (id, name, pipeline_id, pipeline_name, target_repo, target_repos, source_branch,
              input_template, variables, cron, guard_command, overlap_policy,
-             max_concurrent, sandbox, harness, agent_choice, skills, auto_name, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
+             max_concurrent, sandbox, harness, agent_choice, skills, auto_name, space_id, enabled, next_fire_at, last_fired_at, last_outcome, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)",
     )
     .bind(&id)
     .bind(&new.name)
@@ -393,6 +413,7 @@ pub(crate) async fn create(db: &SqlitePool, new: NewTrigger) -> Result<Trigger, 
         &crate::skill_selection::normalise(new.skills.clone()),
     ))
     .bind(if new.auto_name { 1_i64 } else { 0_i64 })
+    .bind(&new.space_id)
     .bind(&new.next_fire_at)
     .bind(&now)
     .execute(db)
@@ -434,6 +455,8 @@ fn row_to_trigger(row: &sqlx::sqlite::SqliteRow) -> Trigger {
         ),
         // A legacy NULL reads as auto-name ON.
         auto_name: row.try_get::<i64, _>("auto_name").unwrap_or(1) != 0,
+        // #1041: absence (legacy NULL) fires into « Sans espace ».
+        space_id: row.try_get("space_id").unwrap_or(None),
         enabled: row.get::<i64, _>("enabled") != 0,
         next_fire_at: row.get("next_fire_at"),
         last_fired_at: row.get("last_fired_at"),
@@ -612,6 +635,8 @@ pub(crate) struct UpdateTrigger {
     /// A FLAT `Option<bool>`, NOT double-wrapped: there is no "inherit" state to
     /// clear back to; the choice is a plain on/off.
     pub auto_name: Option<bool>,
+    /// #1041: `Some(None)` clears to NULL = « Sans espace ».
+    pub space_id: Option<Option<String>>,
     pub next_fire_at: Option<Option<String>>,
     /// Folded in here so the enable bit and a forward `next_fire_at` land in ONE
     /// atomic UPDATE (it was a separate `set_enabled` write).
@@ -637,6 +662,7 @@ impl UpdateTrigger {
             && self.agent_choice.is_none()
             && self.skills.is_none()
             && self.auto_name.is_none()
+            && self.space_id.is_none()
             && self.next_fire_at.is_none()
             && self.enabled.is_none()
     }
@@ -706,6 +732,9 @@ pub(crate) async fn update(
     if edit.auto_name.is_some() {
         sets.push("auto_name = ?");
     }
+    if edit.space_id.is_some() {
+        sets.push("space_id = ?");
+    }
     if edit.next_fire_at.is_some() {
         sets.push("next_fire_at = ?");
     }
@@ -772,6 +801,9 @@ pub(crate) async fn update(
         // Never NULL: the column is `NOT NULL DEFAULT 1`.
         query = query.bind(if *v { 1_i64 } else { 0_i64 });
     }
+    if let Some(v) = &edit.space_id {
+        query = query.bind(v.clone());
+    }
     if let Some(v) = &edit.next_fire_at {
         query = query.bind(v.clone());
     }
@@ -816,6 +848,7 @@ mod tests {
             agent_choice: None,
             skills: Vec::new(),
             auto_name: true,
+            space_id: None,
             next_fire_at: Some("2026-06-06T10:00:00.000Z".to_string()),
         }
     }
@@ -1882,6 +1915,87 @@ mod tests {
         // The legacy row reads back inheriting (None), the pre-#551 behaviour.
         let migrated = get(&db, "trg-legacy").await.unwrap().unwrap();
         assert_eq!(migrated.harness, None);
+    }
+
+    /// #1041: a Trigger carries an Espace — round-trips on create, moves and clears
+    /// on update.
+    #[tokio::test]
+    async fn space_id_round_trips_and_clears() {
+        let db = test_db().await;
+        let mut new = sample("filed", "0 9 * * *");
+        new.space_id = Some("spc-a".to_string());
+        let t = create(&db, new).await.unwrap();
+        assert_eq!(t.space_id.as_deref(), Some("spc-a"));
+
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                space_id: Some(Some("spc-b".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&db, &t.id).await.unwrap().unwrap().space_id.as_deref(),
+            Some("spc-b")
+        );
+        // Absent leaves it; `Some(None)` clears to « Sans espace ».
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                name: Some("renamed".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get(&db, &t.id).await.unwrap().unwrap().space_id.as_deref(),
+            Some("spc-b")
+        );
+        update(
+            &db,
+            &t.id,
+            UpdateTrigger {
+                space_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(get(&db, &t.id).await.unwrap().unwrap().space_id, None);
+    }
+
+    /// #1041 migration: a `triggers` table from before Espaces gains the column on
+    /// the next `init`, and its rows read back « Sans espace ».
+    #[tokio::test]
+    async fn init_adds_space_id_to_legacy_table() {
+        let db = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init(&db).await.unwrap();
+        sqlx::query("ALTER TABLE triggers DROP COLUMN space_id")
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO triggers (id, name, pipeline_id, cron, created_at)
+             VALUES ('trg-legacy', 'legacy', 'lib-pipe', '0 9 * * *', '2026-01-01T00:00:00.000Z')",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        init(&db).await.unwrap();
+        init(&db).await.unwrap(); // idempotent
+
+        let migrated = get(&db, "trg-legacy").await.unwrap().unwrap();
+        assert_eq!(migrated.space_id, None);
     }
 
     /// #338 migration: a `~/.pdo/pdo.db` created before `auto_name` existed must pick up

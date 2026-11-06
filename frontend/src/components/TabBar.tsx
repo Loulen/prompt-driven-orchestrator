@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { BadgeCheck, ChevronDown, Save, TriangleAlert, X } from "lucide-react";
 import { useEditStore, hasUnsavedWork, isRunTabLocked } from "../stores/editStore";
 import type { OpenPipeline } from "../stores/editStore";
-import type { Project } from "../types";
+import type { Project, Space } from "../types";
+import SpaceSwatch from "./SpaceSwatch";
 import { validationOf } from "../lib/pipelineValidation";
 import { fetchRunPipelineOverwritePreview, type OverwritePreview } from "../api";
 import ConfirmCloseTabsModal from "./ConfirmCloseTabsModal";
@@ -33,7 +34,14 @@ function useRelativeTime(ts: number | undefined): string | null {
   return `Saved ${hrs}h ago`;
 }
 
-export default function TabBar({ projects = [] }: { projects?: Project[] } = {}) {
+export default function TabBar({
+  projects = [],
+  spaceOfRun,
+}: {
+  projects?: Project[];
+  /** #1041: the Espace a Run is listed in — its tab carries the square swatch. */
+  spaceOfRun?: (runId: string) => Space | null;
+} = {}) {
   const openTabs = useEditStore((s) => s.openTabs);
   const activeTabId = useEditStore((s) => s.activeTabId);
   const setActiveTab = useEditStore((s) => s.setActiveTab);
@@ -117,6 +125,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
         {openTabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           const label = tab.dirty ? `• ${tab.id}.yaml` : `${tab.id}.yaml`;
+          const tabSpace = tab.runId != null ? spaceOfRun?.(tab.runId) ?? null : null;
           return (
             <button
               key={tab.id}
@@ -133,6 +142,7 @@ export default function TabBar({ projects = [] }: { projects?: Project[] } = {})
               }`}
               style={{ fontSize: "11px", maxWidth: 180 }}
             >
+              {tabSpace && <SpaceSwatch space={tabSpace} size={7} testId="tab-space-swatch" />}
               <span className="truncate" data-testid={`tab-title-${tab.id}`}>{label}</span>
               {tab.externalDirty && (
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-st-blocked" />

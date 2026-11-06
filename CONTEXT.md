@@ -578,6 +578,26 @@ _Éviter_ : « projet » pour un dépôt seul (c'est le *repo cible*) ou pour le
 
 ---
 
+## Espace
+
+Un **Espace** est un regroupement **nommé et coloré de Runs**, choisi par l'utilisateur pour ranger le travail d'une instance partagée — typiquement un Espace par personne (« l'Espace de Loïc »).
+
+- **Un Run appartient à au plus un Espace**, choisi dans New Run. **Sans espace** est le filet de celui qui a oublié de choisir, pas un rangement : on en sort le Run par glisser-déposer, et un Run peut changer d'Espace à tout moment.
+- **Un Run enfant suit son Run racine** : il s'affiche sous lui, donc dans son Espace.
+- **Un Trigger porte un Espace** : chaque Run qu'il lance y atterrit (à défaut, *Sans espace*).
+- **Partagé par toute l'instance** : chacun voit les mêmes Espaces. On les crée, renomme, recolore et supprime depuis la liste des Runs ; supprimer un Espace renvoie ses Runs *Sans espace*, sans rien perdre.
+- **Couleur tirée d'une palette fixe**, lisible dans les deux thèmes et compatible avec la palette daltonienne ; un nouvel Espace prend la première couleur libre.
+- **Un Run archivé garde son Espace** mais reste dans la section des archivés, où l'Espace se lit à sa pastille.
+- **Dans les listes, l'Espace est le premier niveau** : chaque Espace (sa couleur, repliable), puis *Sans espace* ; à l'intérieur, le regroupement par Projet ou dépôt reste celui d'aujourd'hui.
+- **Orthogonal au Projet** : le Projet d'un Run est *déduit* de son dépôt primaire, son Espace est *choisi*. Un Run a les deux, indépendamment.
+- **Aucune configuration** : ni harnais, ni Pipelines validés, ni skills — un Espace range, il ne règle rien.
+- **Sa couleur marque ses Runs** partout où ils apparaissent.
+- **Pas une identité** : PDO reste sans comptes. Un Espace au nom d'une personne n'est qu'un nom ; l'assignation du travail vit dans le gestionnaire de tickets, pas dans PDO.
+
+_Éviter_ : « projet » (le regroupement de dépôts), « dossier » (pris par les *Dossiers de skills*), « équipe », « membre », « assigné à ».
+
+---
+
 ## Trigger
 
 Un **Trigger** est une liaison nommée et persistée entre une **condition de déclenchement** et un **template de Run**. Quand la condition se réalise, PDO crée un Pipeline Run *ordinaire*.

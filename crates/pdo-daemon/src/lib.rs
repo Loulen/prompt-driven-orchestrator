@@ -85,6 +85,7 @@ mod skill_delivery;
 mod skill_import;
 mod skill_selection;
 mod skill_sidecar;
+mod space_store;
 pub mod stale_detector;
 mod stats;
 mod stats_absorption;
@@ -775,6 +776,12 @@ struct CreateRunRequest {
     /// Run-level provisioning rules, composed and frozen with Instance + Project.
     #[serde(default)]
     provisioning: provisioning::ProvisioningRules,
+    /// The Espace the new Run is filed in (#1041, ADR-0083), or absent/`null`/blank
+    /// for « Sans espace ». An unknown id is a `400` before any effect. Written to
+    /// `run_spaces`, never into `RunStarted`. Ignored for a Run created from a node
+    /// session: a child follows its root, nothing is stored for it.
+    #[serde(default)]
+    space_id: Option<String>,
     /// Why the **pre-cut fetch** of a Trigger fire did not happen (#804,
     /// ADR-0070 §1), frozen into `RunStarted` so the Run can say it started on
     /// local state instead of a refreshed one. `None` on every other path, and on
@@ -816,6 +823,7 @@ const CREATE_RUN_FIELDS: &[&str] = &[
     "auto_name",
     "auto_fail",
     "provisioning",
+    "space_id",
 ];
 
 /// Reject a `POST /runs` body carrying an unknown top-level key. A non-object
@@ -920,6 +928,11 @@ struct RunListEntry {
     /// create boundary (ADR-0033) can be unset — this is a READ, so keep the
     /// fallback forever.
     effective_repo: String,
+    /// The Espace the Run is listed in (#1041, ADR-0083): its own membership,
+    /// else its nearest ancestor's — a child follows its root. Absent ⇒
+    /// « Sans espace ». Read from `run_spaces`, never from the event log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    space_id: Option<String>,
 }
 
 /// A Trigger as returned by `GET /triggers`, wrapping the raw stored Trigger with
@@ -2978,6 +2991,7 @@ impl DaemonHandle {
                 agent_choice: None,
                 skills: Vec::new(),
                 auto_name: true,
+                space_id: None,
                 next_fire_at: Some("2030-01-01T00:00:00.000Z".to_string()),
             },
         )
@@ -4245,6 +4259,10 @@ struct CreateTriggerRequest {
     /// older client that omits the field keeps auto-naming.
     #[serde(default = "default_true")]
     auto_name: bool,
+    /// The Espace every fired Run lands in (#1041, ADR-0083); absent/`null`/blank
+    /// ⇒ « Sans espace ». An unknown id is a `400`.
+    #[serde(default)]
+    space_id: Option<String>,
 }
 
 fn default_overlap_policy() -> String {
@@ -4449,6 +4467,12 @@ async fn create_trigger(
         }
     }
 
+    // #1041: the Trigger's Espace must exist, or the error lands where it can be fixed.
+    let space_id = match validate_space_ref(&state.db, req.space_id.as_deref()).await {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+
     let yaml =
         std::fs::read_to_string(resolve_pipeline_path(&state.repo_root, &req.pipeline_id)).ok();
     let yaml = match yaml {
@@ -4550,6 +4574,7 @@ async fn create_trigger(
         // Frozen on the row, never re-resolved at fire time — the runtime never
         // decides autonomy (ADR-0012 frontier).
         auto_name: req.auto_name,
+        space_id,
         next_fire_at,
     };
 
@@ -4750,6 +4775,11 @@ struct PatchTriggerRequest {
     /// on/off.
     #[serde(default)]
     auto_name: Option<bool>,
+    /// The Espace fired Runs land in (#1041), double-wrapped like `harness`:
+    /// absent leaves it, present `null`/blank clears to « Sans espace », an id sets
+    /// it (an unknown one is a `400`).
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    space_id: Option<Option<String>>,
 }
 
 async fn patch_trigger(
@@ -4786,6 +4816,15 @@ async fn patch_trigger(
                 .into_response();
         }
     }
+
+    // #1041: absent leaves the Espace; `null`/blank clears; an id must exist.
+    let space_id: Option<Option<String>> = match req.space_id.as_ref() {
+        None => None,
+        Some(inner) => match validate_space_ref(&state.db, inner.as_deref()).await {
+            Ok(id) => Some(id),
+            Err(resp) => return *resp,
+        },
+    };
 
     // One `now` for the whole request: a combined enable + cron-edit + repoint PATCH
     // must recompute every slot against the same instant.
@@ -4976,6 +5015,7 @@ async fn patch_trigger(
         agent_choice: req.agent_choice,
         skills: req.skills,
         auto_name: req.auto_name,
+        space_id,
         next_fire_at,
         // The enable bit and the forward next_fire_at must land in ONE atomic UPDATE,
         // or enabled=1 can persist with a stale (past) next_fire_at.
@@ -5231,6 +5271,9 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/runs/reapable", get(list_reapable_runs))
         .route("/sessions", get(sessions))
         .route("/runs/{run_id}", get(get_run).delete(forget_run))
+        // #1041 / ADR-0083: file a Run in an Espace (or back in « Sans espace »).
+        // A table write, never an event.
+        .route("/runs/{run_id}/space", put(put_run_space))
         .route("/runs/{run_id}/children", get(list_run_children))
         .route("/runs/{run_id}/events", get(get_run_events))
         .route("/runs/{run_id}/nodes/{node_id}/done", post(node_done))
@@ -5527,6 +5570,13 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/projects/{project_id}/provisioning",
             get(get_project_provisioning).put(put_project_provisioning),
+        )
+        // Espaces (#1041, ADR-0083) — the run list's « + Space » button and
+        // header pencil. Shared by the whole instance.
+        .route("/spaces", get(list_spaces).post(create_space))
+        .route(
+            "/spaces/{space_id}",
+            axum::routing::patch(patch_space).delete(delete_space),
         )
         .route(
             "/triggers/{trigger_id}",
@@ -6167,6 +6217,236 @@ async fn delete_project(
     }
 }
 
+// ── Espaces (#1041, ADR-0083) ───────────────────────────────────────────────
+//
+// A shared, named and coloured grouping of Runs, stored in `spaces` /
+// `run_spaces` OUTSIDE the event log: no handler below appends an event. Every
+// mutation broadcasts `space_changed` so every open browser re-reads the Espaces
+// and the run list without a reload (five people may share one instance).
+
+/// Body of `POST /spaces`. `color` absent ⇒ the first free colour of the palette.
+#[derive(Deserialize)]
+struct CreateSpaceRequest {
+    name: String,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+/// Body of `PATCH /spaces/{id}` — rename and/or recolour; absent leaves.
+#[derive(Deserialize)]
+struct PatchSpaceRequest {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+/// Body of `PUT /runs/{id}/space` — `null` sends the Run back to « Sans espace ».
+#[derive(Deserialize)]
+struct PutRunSpaceRequest {
+    #[serde(default)]
+    space_id: Option<String>,
+}
+
+fn space_store_error() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "space store unavailable" })),
+    )
+        .into_response()
+}
+
+fn space_bad_request(msg: String) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": msg })),
+    )
+        .into_response()
+}
+
+fn broadcast_space_changed(state: &AppState, space_id: Option<&str>, run_id: Option<&str>) {
+    let _ = state.pipeline_tx.send(serde_json::json!({
+        "type": "space_changed",
+        "space_id": space_id,
+        "run_id": run_id,
+    }));
+}
+
+/// A colour must be a key of the fixed palette (#1041).
+fn validate_space_color(color: &str) -> Result<(), Box<Response>> {
+    if space_store::is_palette_color(color) {
+        Ok(())
+    } else {
+        Err(Box::new(space_bad_request(format!(
+            "unknown space colour `{color}`; expected one of: {}",
+            space_store::PALETTE.join(", ")
+        ))))
+    }
+}
+
+/// Resolve an optional Espace reference: blank/absent ⇒ `None` (« Sans espace »),
+/// an existing id ⇒ itself, an unknown one ⇒ a named `400`.
+async fn validate_space_ref(
+    db: &sqlx::SqlitePool,
+    raw: Option<&str>,
+) -> Result<Option<String>, Box<Response>> {
+    let Some(id) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    match space_store::get(db, id).await {
+        Ok(Some(space)) => Ok(Some(space.id)),
+        Ok(None) => Err(Box::new(space_bad_request(format!("unknown space `{id}`")))),
+        Err(e) => {
+            error!("failed to load space {id}: {e}");
+            Err(Box::new(space_store_error()))
+        }
+    }
+}
+
+/// #1041: the Espace a Run is listed in — its own membership, else its nearest
+/// ancestor's (a child follows its root). Best-effort: a read error reads as
+/// « Sans espace », the safety net.
+pub(crate) async fn run_effective_space(state: &AppState, run_id: &str) -> Option<String> {
+    let memberships = space_store::memberships(&state.db).await.ok()?;
+    let mut parent_of: HashMap<String, Option<String>> = HashMap::new();
+    let mut current = run_id.to_string();
+    for _ in 0..64 {
+        if memberships.contains_key(&current) {
+            break;
+        }
+        let parent = load_events(&state.db, &current)
+            .await
+            .ok()
+            .and_then(|events| event_log::project(&events))
+            .and_then(|s| s.parent_run_id);
+        parent_of.insert(current.clone(), parent.clone());
+        match parent {
+            Some(p) if !parent_of.contains_key(&p) => current = p,
+            _ => break,
+        }
+    }
+    space_store::effective_space(run_id, &parent_of, &memberships)
+}
+
+async fn list_spaces(State(state): State<Arc<AppState>>) -> Response {
+    match space_store::list(&state.db).await {
+        Ok(spaces) => Json(spaces).into_response(),
+        Err(e) => {
+            error!("failed to list spaces: {e}");
+            space_store_error()
+        }
+    }
+}
+
+async fn create_space(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateSpaceRequest>,
+) -> Response {
+    let name = req.name.trim();
+    if name.is_empty() {
+        return space_bad_request("space name is required".to_string());
+    }
+    let color = req
+        .color
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+    if let Some(c) = color {
+        if let Err(resp) = validate_space_color(c) {
+            return *resp;
+        }
+    }
+    match space_store::create(&state.db, name, color).await {
+        Ok(space) => {
+            broadcast_space_changed(&state, Some(&space.id), None);
+            (StatusCode::CREATED, Json(space)).into_response()
+        }
+        Err(e) => {
+            error!("failed to create space: {e}");
+            space_store_error()
+        }
+    }
+}
+
+async fn patch_space(
+    State(state): State<Arc<AppState>>,
+    AxumPath(space_id): AxumPath<String>,
+    Json(req): Json<PatchSpaceRequest>,
+) -> Response {
+    let name = match req.name.as_deref().map(str::trim) {
+        Some("") => return space_bad_request("space name cannot be blank".to_string()),
+        other => other,
+    };
+    let color = req.color.as_deref().map(str::trim);
+    if let Some(c) = color {
+        if let Err(resp) = validate_space_color(c) {
+            return *resp;
+        }
+    }
+    match space_store::update(&state.db, &space_id, name, color).await {
+        Ok(true) => {}
+        Ok(false) => return (StatusCode::NOT_FOUND, "no such space").into_response(),
+        Err(e) => {
+            error!("failed to update space {space_id}: {e}");
+            return space_store_error();
+        }
+    }
+    match space_store::get(&state.db, &space_id).await {
+        Ok(Some(space)) => {
+            broadcast_space_changed(&state, Some(&space_id), None);
+            Json(space).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "no such space").into_response(),
+        Err(e) => {
+            error!("failed to reload space {space_id}: {e}");
+            space_store_error()
+        }
+    }
+}
+
+/// Deleting an Espace loses nothing: its Runs go back to « Sans espace » and a
+/// Trigger that carried it fires there from now on.
+async fn delete_space(
+    State(state): State<Arc<AppState>>,
+    AxumPath(space_id): AxumPath<String>,
+) -> Response {
+    match space_store::delete(&state.db, &space_id).await {
+        Ok(true) => {
+            broadcast_space_changed(&state, Some(&space_id), None);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(false) => (StatusCode::NOT_FOUND, "no such space").into_response(),
+        Err(e) => {
+            error!("failed to delete space {space_id}: {e}");
+            space_store_error()
+        }
+    }
+}
+
+/// `PUT /runs/{id}/space` — file the Run in an Espace, or back in « Sans espace »
+/// (`space_id: null`). A table write, never an event (ADR-0083): the Run's history
+/// is untouched. The membership is stored on the Run itself; its children, which
+/// store nothing, follow it.
+async fn put_run_space(
+    State(state): State<Arc<AppState>>,
+    AxumPath(run_id): AxumPath<String>,
+    Json(req): Json<PutRunSpaceRequest>,
+) -> Response {
+    if let Err(resp) = load_projected(&state, &run_id).await {
+        return *resp;
+    }
+    let space_id = match validate_space_ref(&state.db, req.space_id.as_deref()).await {
+        Ok(id) => id,
+        Err(resp) => return *resp,
+    };
+    if let Err(e) = space_store::assign(&state.db, &run_id, space_id.as_deref()).await {
+        error!("failed to file run {run_id} in a space: {e}");
+        return space_store_error();
+    }
+    broadcast_space_changed(&state, space_id.as_deref(), Some(&run_id));
+    Json(serde_json::json!({ "run_id": run_id, "space_id": space_id })).into_response()
+}
+
 async fn add_project_member(
     State(state): State<Arc<AppState>>,
     AxumPath(project_id): AxumPath<String>,
@@ -6328,6 +6608,12 @@ async fn init_db(db: &sqlx::SqlitePool) -> Result<()> {
     project_store::init(db)
         .await
         .context("failed to create project tables")?;
+
+    // #1041 / ADR-0083: Espaces and the Run → Espace membership, outside the
+    // event log. Nothing seeded: no Espace ⇒ the run list is exactly as before.
+    space_store::init(db)
+        .await
+        .context("failed to create space tables")?;
 
     provisioning::init(db)
         .await
@@ -7086,6 +7372,9 @@ async fn fire_one_trigger(
                 // run-level preference, so `pdo fail` resolves through project/instance.
                 auto_fail: None,
                 provisioning: provisioning::ProvisioningRules::default(),
+                // #1041: the Trigger carries an Espace; each Run it fires lands
+                // there (absent ⇒ « Sans espace »).
+                space_id: trigger.space_id.clone(),
                 source_fetch_error,
             };
             let record = match create_run_inner(state, req, Vec::new(), None).await {
@@ -9844,6 +10133,7 @@ async fn parse_multipart_create_run(
     let mut auto_name: Option<bool> = None;
     let mut auto_fail: Option<bool> = None;
     let mut provisioning = provisioning::ProvisioningRules::default();
+    let mut space_id: Option<String> = None;
     let mut attachments: Vec<InputFile> = Vec::new();
     let mut attachment_bytes: u64 = 0;
 
@@ -10054,6 +10344,15 @@ async fn parse_multipart_create_run(
                 provisioning =
                     serde_json::from_str(&v).map_err(|e| format!("bad field provisioning: {e}"))?;
             }
+            "space_id" => {
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| multipart_field_error("space_id", None, received_bytes, &e))?;
+                if !v.is_empty() {
+                    space_id = Some(v);
+                }
+            }
             "images" => {
                 let raw_filename = field.file_name().unwrap_or("image.png").to_string();
                 let data = field.bytes().await.map_err(|e| {
@@ -10109,6 +10408,7 @@ async fn parse_multipart_create_run(
         auto_name,
         auto_fail,
         provisioning,
+        space_id,
         // A multipart `POST /runs` is a manual launch: the form already fetched
         // before it opened, so nothing is refreshed here (#804, ADR-0070 §3).
         source_fetch_error: None,
@@ -10348,6 +10648,35 @@ async fn create_run_inner(
     // state: the child's project defaults to it when the request names none.
     let parent = match &session {
         Some(claim) => Some(verify_session_claim(state, claim).await?),
+        None => None,
+    };
+
+    // #1041 / ADR-0083: the Espace the Run is filed in, checked BEFORE any effect
+    // (an unknown id is a named 400). A Run created from a node session is a child:
+    // it follows its root, so nothing is stored for it.
+    let space_id: Option<String> = match req
+        .space_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(_) if parent.is_some() => None,
+        Some(id) => match space_store::get(&state.db, id).await {
+            Ok(Some(space)) => Some(space.id),
+            Ok(None) => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({ "error": format!("unknown space `{id}`") }),
+                ));
+            }
+            Err(e) => {
+                error!("failed to load space {id}: {e}");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    serde_json::json!({ "error": "space store unavailable" }),
+                ));
+            }
+        },
         None => None,
     };
 
@@ -11011,8 +11340,20 @@ async fn create_run_inner(
         created_secondary_snapshots.push((pin.repo.clone(), dest));
     }
 
+    // #1041: filed BEFORE `RunStarted` is broadcast, so the list refresh that
+    // event triggers already shows the Run in its Espace. Never fatal: a Run
+    // whose filing failed lands in « Sans espace », the safety net.
+    if let Some(space) = space_id.as_deref() {
+        if let Err(e) = space_store::assign(&state.db, &run_id, Some(space)).await {
+            warn!("failed to file run {run_id} in space {space}: {e}");
+        }
+    }
+
     if let Err(e) = append_event(state, &run_started).await {
         error!("failed to append run_started: {e}");
+        if space_id.is_some() {
+            let _ = space_store::assign(&state.db, &run_id, None).await;
+        }
         for (repo, snapshot) in &created_secondary_snapshots {
             remove_secondary_snapshot(Path::new(repo), snapshot);
         }
@@ -14845,9 +15186,24 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
     // #588 / ADR-0069 §4: a child awaiting its user lifts its parent on read.
     child_awaiting::overlay(&mut states);
 
+    // #1041: one read of every membership; a child resolves through its parents.
+    let memberships = match space_store::memberships(&state.db).await {
+        Ok(m) => m,
+        Err(e) => {
+            error!("failed to read run spaces: {e}");
+            HashMap::new()
+        }
+    };
+    let parent_of: HashMap<String, Option<String>> = states
+        .iter()
+        .map(|s| (s.run_id.clone(), s.parent_run_id.clone()))
+        .collect();
+
     let mut runs = Vec::new();
     for run_state in states {
         {
+            let space_id =
+                space_store::effective_space(&run_state.run_id, &parent_of, &memberships);
             let stalled = event_log::is_stalled(&run_state);
             // Must be computed before `run_state`'s fields move into the literal:
             // `effective_repo_root` borrows `&run_state`.
@@ -14868,6 +15224,7 @@ async fn list_runs(State(state): State<Arc<AppState>>) -> Response {
                 parent_run_id: run_state.parent_run_id,
                 parent_node_id: run_state.parent_node_id,
                 effective_repo,
+                space_id,
             });
         }
     }
@@ -21810,6 +22167,8 @@ async fn forget_run(
             .bind(&run_id)
             .execute(&mut *tx)
             .await?;
+        // #1041: the Run vanishes entirely — its Espace membership too.
+        space_store::forget_run(&mut tx, &run_id).await?;
         tx.commit().await?;
         anyhow::Ok(())
     };
@@ -37681,6 +38040,463 @@ edges:
         assert_eq!(content, "You are a worker agent.");
     }
 
+    // --- #1041 — Espaces (ADR-0083) ---
+
+    /// Every event of a run, as `(kind, payload)` — what "the event log is
+    /// untouched" compares.
+    async fn event_fingerprint(state: &Arc<AppState>, run_id: &str) -> Vec<String> {
+        load_events(&state.db, run_id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|e| format!("{:?} {:?}", e.kind, e.payload))
+            .collect()
+    }
+
+    async fn listed_space(app: &Router, run_id: &str) -> Option<String> {
+        let (status, list) = call_json(app, "GET", "/runs", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let entry = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["run_id"] == run_id)
+            .unwrap_or_else(|| panic!("run {run_id} not listed: {list}"))
+            .clone();
+        entry
+            .get("space_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    }
+
+    async fn post_space(app: &Router, name: &str) -> serde_json::Value {
+        let (status, body) = call_json(
+            app,
+            "POST",
+            "/spaces",
+            Some(serde_json::json!({ "name": name })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        body
+    }
+
+    #[tokio::test]
+    async fn spaces_crud_broadcasts_and_takes_the_first_free_colour() {
+        let state = test_state().await;
+        let mut rx = state.pipeline_tx.subscribe();
+        let app = build_router(state.clone());
+
+        let loic = post_space(&app, "  Loïc ").await;
+        assert_eq!(loic["name"], "Loïc");
+        assert_eq!(loic["color"], "blue");
+        let houss = post_space(&app, "Houss").await;
+        assert_eq!(houss["color"], "orange");
+        let msg = rx.try_recv().unwrap();
+        assert_eq!(msg["type"], "space_changed");
+
+        // Refusals: blank name, a colour outside the palette.
+        let (status, _) = call_json(
+            &app,
+            "POST",
+            "/spaces",
+            Some(serde_json::json!({ "name": "  " })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, body) = call_json(
+            &app,
+            "POST",
+            "/spaces",
+            Some(serde_json::json!({ "name": "X", "color": "#ff0000" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["error"].as_str().unwrap().contains("violet"), "{body}");
+
+        let id = loic["id"].as_str().unwrap();
+        let (status, patched) = call_json(
+            &app,
+            "PATCH",
+            &format!("/spaces/{id}"),
+            Some(serde_json::json!({ "name": "Loïc B.", "color": "green" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            (patched["name"].as_str(), patched["color"].as_str()),
+            (Some("Loïc B."), Some("green"))
+        );
+        let (status, _) = call_json(
+            &app,
+            "PATCH",
+            "/spaces/spc-nope",
+            Some(serde_json::json!({ "name": "x" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, list) = call_json(&app, "GET", "/spaces", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(list.as_array().unwrap().len(), 2);
+
+        let (status, _) = call_json(&app, "DELETE", &format!("/spaces/{id}"), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _) = call_json(&app, "DELETE", &format!("/spaces/{id}"), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (_, list) = call_json(&app, "GET", "/spaces", None).await;
+        assert_eq!(list.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn moving_a_run_between_spaces_writes_no_event() {
+        let state = test_state().await;
+        seed_completed_run(&state, "space-move").await;
+        let before = event_fingerprint(&state, "space-move").await;
+        let mut rx = state.pipeline_tx.subscribe();
+        let app = build_router(state.clone());
+        let a = post_space(&app, "A").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let b = post_space(&app, "B").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // No Espace stored: the list entry carries no `space_id` (« Sans espace »).
+        assert_eq!(listed_space(&app, "space-move").await, None);
+
+        for target in [Some(a.as_str()), Some(b.as_str()), None] {
+            let (status, body) = call_json(
+                &app,
+                "PUT",
+                "/runs/space-move/space",
+                Some(serde_json::json!({ "space_id": target })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["space_id"].as_str(), target);
+            assert_eq!(listed_space(&app, "space-move").await.as_deref(), target);
+        }
+        // Every move reached the other browsers.
+        let mut moves = 0;
+        while let Ok(msg) = rx.try_recv() {
+            if msg["type"] == "space_changed" && msg["run_id"] == "space-move" {
+                moves += 1;
+            }
+        }
+        assert_eq!(moves, 3);
+
+        // ADR-0083: the event log is byte-for-byte what it was.
+        assert_eq!(event_fingerprint(&state, "space-move").await, before);
+
+        // Refusals: an unknown Espace, an unknown Run.
+        let (status, _) = call_json(
+            &app,
+            "PUT",
+            "/runs/space-move/space",
+            Some(serde_json::json!({ "space_id": "spc-nope" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = call_json(
+            &app,
+            "PUT",
+            "/runs/no-such-run/space",
+            Some(serde_json::json!({ "space_id": a })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_child_run_is_listed_in_its_root_space_and_stores_nothing() {
+        let state = test_state().await;
+        seed_completed_run(&state, "space-root").await;
+        seed_child_run(&state, "space-child", "space-root", true).await;
+        seed_child_run(&state, "space-grandchild", "space-child", true).await;
+        let app = build_router(state.clone());
+        let a = post_space(&app, "A").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let (status, _) = call_json(
+            &app,
+            "PUT",
+            "/runs/space-root/space",
+            Some(serde_json::json!({ "space_id": a })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        for run in ["space-root", "space-child", "space-grandchild"] {
+            assert_eq!(
+                listed_space(&app, run).await.as_deref(),
+                Some(a.as_str()),
+                "{run}"
+            );
+        }
+        assert_eq!(
+            space_store::memberships(&state.db).await.unwrap().len(),
+            1,
+            "only the root stores a membership"
+        );
+        assert_eq!(
+            run_effective_space(&state, "space-grandchild")
+                .await
+                .as_deref(),
+            Some(a.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_space_sends_its_runs_back_to_no_space() {
+        let state = test_state().await;
+        seed_completed_run(&state, "space-del-1").await;
+        seed_completed_run(&state, "space-del-2").await;
+        let app = build_router(state.clone());
+        let a = post_space(&app, "A").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let b = post_space(&app, "B").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        for (run, space) in [("space-del-1", &a), ("space-del-2", &b)] {
+            let (status, _) = call_json(
+                &app,
+                "PUT",
+                &format!("/runs/{run}/space"),
+                Some(serde_json::json!({ "space_id": space })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        let (status, _) = call_json(&app, "DELETE", &format!("/spaces/{a}"), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        // Nothing lost: the Run is still listed, in « Sans espace ».
+        assert_eq!(listed_space(&app, "space-del-1").await, None);
+        assert_eq!(
+            listed_space(&app, "space-del-2").await.as_deref(),
+            Some(b.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn forgetting_a_run_drops_its_space_membership() {
+        let state = test_state().await;
+        seed_completed_run(&state, "space-forget").await;
+        let app = build_router(state.clone());
+        let a = post_space(&app, "A").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (status, _) = call_json(
+            &app,
+            "PUT",
+            "/runs/space-forget/space",
+            Some(serde_json::json!({ "space_id": a })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            post_cleanup_run(&state, "space-forget").await,
+            StatusCode::OK
+        );
+        // Archived keeps its Espace (the archived row shows its dot).
+        assert_eq!(
+            listed_space(&app, "space-forget").await.as_deref(),
+            Some(a.as_str())
+        );
+
+        let (status, _) = call_json(&app, "DELETE", "/runs/space-forget", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(space_store::memberships(&state.db)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_run_with_space_id_files_the_run_outside_run_started() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_pipeline(tmp.path(), "filed-pipe");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state.clone());
+        let a = post_space(&app, "A").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // An unknown Espace is refused before any effect.
+        let (status, body) = call_json(
+            &app,
+            "POST",
+            "/runs",
+            Some(serde_json::json!({
+                "pipeline": "filed-pipe",
+                "input": "do the thing",
+                "target_repo": tmp.path().to_string_lossy(),
+                "space_id": "spc-nope",
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body["error"].as_str().unwrap().contains("unknown space"));
+        assert_no_run_and_no_worktree(&state).await;
+
+        let (status, body) = call_json(
+            &app,
+            "POST",
+            "/runs",
+            Some(serde_json::json!({
+                "pipeline": "filed-pipe",
+                "input": "do the thing",
+                "target_repo": tmp.path().to_string_lossy(),
+                "space_id": a,
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let run_id = body["run_id"].as_str().unwrap().to_string();
+        assert_eq!(
+            space_store::space_of(&state.db, &run_id)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(a.as_str())
+        );
+        assert_eq!(
+            listed_space(&app, &run_id).await.as_deref(),
+            Some(a.as_str())
+        );
+        // ADR-0083: the Espace is NOT in the event log — not even in `RunStarted`.
+        let events = load_events(&state.db, &run_id).await.unwrap();
+        for e in &events {
+            let payload = e
+                .payload
+                .as_ref()
+                .map(|p| p.to_string())
+                .unwrap_or_default();
+            assert!(
+                !payload.contains("space_id") && !payload.contains(a.as_str()),
+                "{:?} carries a space: {payload}",
+                e.kind
+            );
+        }
+        // Without a `space_id`, « Sans espace ».
+        let (status, body) = call_json(
+            &app,
+            "POST",
+            "/runs",
+            Some(serde_json::json!({
+                "pipeline": "filed-pipe",
+                "input": "do the thing",
+                "target_repo": tmp.path().to_string_lossy(),
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        assert_eq!(
+            listed_space(&app, body["run_id"].as_str().unwrap()).await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_trigger_fired_run_lands_in_the_trigger_space() {
+        let _home = FakeHome::new();
+        let tmp = tempfile::tempdir().unwrap();
+        write_optional_pipeline(tmp.path(), "space-watch");
+        init_test_repo(tmp.path());
+        let state = test_state_with_dir(tmp.path()).await;
+        let app = build_router(state.clone());
+        let a = post_space(&app, "A").await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let trigger_body = |space: serde_json::Value| {
+            serde_json::json!({
+                "name": "T",
+                "pipeline_id": "space-watch",
+                "cron": "0 4 * * 1",
+                "target_repo": tmp.path().to_string_lossy(),
+                "space_id": space,
+            })
+        };
+        let (status, _) = call_json(
+            &app,
+            "POST",
+            "/triggers",
+            Some(trigger_body(serde_json::json!("spc-nope"))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, trigger) = call_json(
+            &app,
+            "POST",
+            "/triggers",
+            Some(trigger_body(serde_json::json!(a))),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{trigger}");
+        assert_eq!(trigger["space_id"].as_str(), Some(a.as_str()));
+        let trigger_id = trigger["id"].as_str().unwrap().to_string();
+
+        let (status, fired) =
+            call_json(&app, "POST", &format!("/triggers/{trigger_id}/fire"), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(fired["fired"], true, "{fired}");
+        let run_id = fired["run_id"].as_str().unwrap();
+        assert_eq!(
+            listed_space(&app, run_id).await.as_deref(),
+            Some(a.as_str())
+        );
+
+        // PATCH: an unknown Espace is refused, `null` clears to « Sans espace ».
+        let (status, _) = call_json(
+            &app,
+            "PATCH",
+            &format!("/triggers/{trigger_id}"),
+            Some(serde_json::json!({ "space_id": "spc-nope" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, patched) = call_json(
+            &app,
+            "PATCH",
+            &format!("/triggers/{trigger_id}"),
+            Some(serde_json::json!({ "space_id": null })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{patched}");
+        assert!(patched.get("space_id").is_none(), "{patched}");
+
+        // Deleting the Espace clears it from a Trigger that carried it.
+        let (_, _) = call_json(
+            &app,
+            "PATCH",
+            &format!("/triggers/{trigger_id}"),
+            Some(serde_json::json!({ "space_id": a })),
+        )
+        .await;
+        let (status, _) = call_json(&app, "DELETE", &format!("/spaces/{a}"), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let stored = trigger_store::get(&state.db, &trigger_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.space_id, None);
+    }
+
     // --- #974 — Pipelines validés par Projet ---
 
     async fn call_json(
@@ -49990,6 +50806,7 @@ edges:
             "auto_name": null,
             "auto_fail": null,
             "provisioning": {},
+            "space_id": null,
         });
         // The payload's keys are exactly the allow-list (pins the lock-step).
         let keys: std::collections::BTreeSet<String> =

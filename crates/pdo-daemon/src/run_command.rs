@@ -24,9 +24,9 @@ use crate::{
     load_events, load_projected, loop_region, mark_sandbox_prep_ready, pipeline, reap_node_session,
     reload_run_state, resolve_completed_frontmatter, resolve_pipeline_path,
     resolve_run_pipeline_path, resolve_run_variables, resolve_source_frontmatter, restart_verdict,
-    retry_waiting_nodes, run_advance, run_is_forgotten, run_scoped_pipeline_path, sandbox_run,
-    scheduler, scheduler_interpreter, tmux_session_manager, transition_guard, AppState,
-    CreateRunRequest, TargetRepoInput,
+    retry_waiting_nodes, run_advance, run_effective_space, run_is_forgotten,
+    run_scoped_pipeline_path, sandbox_run, scheduler, scheduler_interpreter, tmux_session_manager,
+    transition_guard, AppState, CreateRunRequest, TargetRepoInput,
 };
 
 /// The wire shape of a command. `pub(crate)` only because axum's extractor puts
@@ -2068,6 +2068,10 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 v
             };
 
+            // #1041: the retry lands in the Espace the original is listed in (its
+            // own, or its root's for a child — the retry itself is a root).
+            let space_id = run_effective_space(&state, &run_id).await;
+
             let archive_resp = cleanup_run(&state, &run_id).await;
             let archive_status = archive_resp.into_response().status();
             if !archive_status.is_success() {
@@ -2132,6 +2136,7 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
                 // a retry is a manual gesture — it fetches no more than any other
                 // `POST /runs` does.
                 source_fetch_error: None,
+                space_id,
             };
             // ADR-0064: a retried Run is created by the daemon, not from a node
             // session — it is a root even when the archived original had a parent.

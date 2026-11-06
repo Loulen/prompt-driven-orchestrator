@@ -388,6 +388,8 @@ export interface RunPayloadInput {
   attachments: File[];
   /** #465: `[0]` = primary, `[1..]` = secondaries. Omit / `undefined` for a mono-repo Run. */
   targetRepos?: TargetRepoInput[];
+  /** #1041: the Space select — `""` (No space) or an Espace id. */
+  space?: string;
 }
 
 export function buildRunPayload({
@@ -403,6 +405,7 @@ export function buildRunPayload({
   skills,
   attachments,
   targetRepos,
+  space,
 }: RunPayloadInput): CreateRunRequest {
   const images = attachments.filter(isImageAttachment);
   const files = attachments.filter((f) => !isImageAttachment(f));
@@ -434,6 +437,9 @@ export function buildRunPayload({
     skills: skills && skills.length > 0 ? skills : undefined,
     images: images.length > 0 ? images : undefined,
     files: files.length > 0 ? files : undefined,
+    // #1041: the Espace the Run is filed in. `""` (No space) OMITS the key — the
+    // Run lands in « Sans espace », and the request stays byte-identical.
+    space_id: space || undefined,
   };
 }
 
@@ -462,6 +468,9 @@ export interface TriggerPayloadInput {
   variables: Record<string, unknown>;
   /** #465: `[0]` = primary, `[1..]` = secondaries. Omit / `undefined` for a mono-repo Trigger. */
   targetRepos?: TargetRepoInput[];
+  /** #1041: the Space select — `""` (No space) or an Espace id. `undefined` (a caller
+   *  that has no select) leaves the key out. */
+  space?: string;
 }
 
 /**
@@ -486,6 +495,7 @@ export function buildTriggerUpdatePayload({
   autoName,
   variables,
   targetRepos,
+  space,
 }: TriggerPayloadInput): UpdateTriggerRequest {
   return {
     name: triggerName.trim(),
@@ -513,6 +523,8 @@ export function buildTriggerUpdatePayload({
     // #338: round-trip the auto-naming choice (flat bool, mirror of `enabled`).
     auto_name: autoName,
     variables,
+    // #1041: an id sets the Espace, `""` (No space) clears it with `null`.
+    ...(space === undefined ? {} : { space_id: space || null }),
   };
 }
 
@@ -532,6 +544,7 @@ export function buildTriggerCreatePayload({
   autoName,
   variables,
   targetRepos,
+  space,
 }: TriggerPayloadInput): CreateTriggerRequest {
   return {
     name: triggerName.trim(),
@@ -555,5 +568,7 @@ export function buildTriggerCreatePayload({
     // instance default when the modal opened).
     auto_name: autoName,
     variables,
+    // #1041: the Espace every fired Run lands in; omitted for No space.
+    ...(space ? { space_id: space } : {}),
   };
 }

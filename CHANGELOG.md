@@ -15,6 +15,17 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### Settings, Stats and extension pages open under the top bar
+
+- Settings, Stats and the pages of the top bar's extension entries now open under the top bar
+  instead of covering it: the command field, the icons and the account stay on screen and usable.
+  The icon of the open surface is selected (`aria-pressed`, a 2 px stroke under it); a second click
+  on it closes the surface, as do its ✕ and Escape, and another icon switches to its surface. A deep
+  link toward a page opens it the same way. Settings with unsaved changes still asks before closing,
+  also when another icon replaces it: "Keep editing" keeps Settings on screen.
+- Extension pages: the core's command field stays above every page, so a page no longer needs a
+  search field of its own in its header.
+
 ### New Run, opened prefilled by an extension
 
 - An extension's interface can open the New Run window prefilled: Projet, repositories, name and

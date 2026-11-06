@@ -15,7 +15,7 @@
 // api fixture — also carries the other host-level contracts of those two surfaces
 // (see the #819 block at the bottom).
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // ---------------------------------------------------------------------------
@@ -539,6 +539,59 @@ describe("App — Settings surface closes (#717 sibling-key regression)", () => 
     await user.keyboard("{Escape}");
     await expectClosed();
   }, 20_000);
+});
+
+// ---------------------------------------------------------------------------
+// CORE-183 — Settings and Stats open under the top bar: their icon is selected,
+// a second click closes, the other icon switches.
+// ---------------------------------------------------------------------------
+
+describe("App — the surfaces under the top bar (CORE-183)", () => {
+  beforeEach(() => {
+    localStorage.setItem("pdo.tour.offered", "1");
+  });
+
+  it("selects the icon of the open surface, switches on the other, closes on a second click", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    // The top bar stays there, its gear selected.
+    expect(screen.getByTestId("topbar")).toBeInTheDocument();
+    expect(screen.getByTestId("open-settings")).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(screen.getByTestId("open-stats"));
+    await screen.findByTestId("stats-modal");
+    await waitFor(() => expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument());
+    expect(screen.getByTestId("open-stats")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("open-settings")).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByTestId("open-stats"));
+    await waitFor(() => expect(screen.queryByTestId("stats-modal")).not.toBeInTheDocument());
+    expect(screen.getByTestId("open-stats")).toHaveAttribute("aria-pressed", "false");
+
+    await openSettings(user);
+    await user.click(screen.getByTestId("open-settings"));
+    await expectClosed();
+    expect(screen.getByTestId("open-settings")).toHaveAttribute("aria-pressed", "false");
+  }, 30_000);
+
+  it("switches from a dirty Settings only through its guard: kept, Settings stays; discarded, Stats opens", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await openSettings(user);
+    fireEvent.change(await screen.findByTestId("setting-session-cap"), { target: { value: "12" } });
+
+    await user.click(screen.getByTestId("open-stats"));
+    await user.click(await screen.findByTestId("settings-confirm-keep"));
+    expect(screen.getByTestId("settings-surface")).toBeInTheDocument();
+    expect(screen.queryByTestId("stats-modal")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("open-stats"));
+    await user.click(await screen.findByTestId("settings-confirm-discard"));
+    await screen.findByTestId("stats-modal");
+    expect(screen.queryByTestId("settings-surface")).not.toBeInTheDocument();
+    expect(screen.getByTestId("open-stats")).toHaveAttribute("aria-pressed", "true");
+  }, 30_000);
 });
 
 // ---------------------------------------------------------------------------

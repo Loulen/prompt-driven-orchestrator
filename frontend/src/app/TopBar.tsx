@@ -22,17 +22,26 @@ const ACCOUNT_ITEM: Omit<DecorationContext, "location" | "run" | "project"> = { 
  * entries, the command field in the middle, then the right-hand group: the
  * extensions' `topbar/end` icons, New run, Stats, Settings, the Dark mode, and the
  * extensions' `topbar/account` components (an avatar menu, say). Under it, the
- * banner of the extensions whose interface could not be loaded; over
- * everything, the extension page open (by its entry or its deep link) and the
- * command palette.
+ * banner of the extensions whose interface could not be loaded, and the
+ * extension page open (by its entry or its deep link), under the bar like
+ * Settings and Stats (CORE-183); over everything, the command palette.
+ *
+ * The entry of the surface open under the bar is selected (`aria-pressed`): a
+ * second click on it closes the surface, another entry replaces it.
  */
 export default function TopBar({
   onOpenSettings,
   onOpenStats,
+  settingsOpen = false,
+  statsOpen = false,
   onNewRun,
 }: {
+  /** Settings' icon: opens Settings, or closes it when it is open. */
   onOpenSettings: () => void;
+  /** Stats' icon: opens Stats, or closes it when it is open. */
   onOpenStats: () => void;
+  settingsOpen?: boolean;
+  statsOpen?: boolean;
   /** Absent: no New run in the bar. */
   onNewRun?: () => void;
 }) {
@@ -54,8 +63,22 @@ export default function TopBar({
           {/* The extensions' `topbar/end` icons (#29), before the core's. */}
           <ExtensionTopbarEnd />
           {onNewRun && <NewRunButton onNewRun={onNewRun} />}
-          <IconButton icon={StatsIcon} label="Stats" onClick={onOpenStats} data-testid="open-stats" />
-          <IconButton icon={SettingsIcon} label="Settings" onClick={onOpenSettings} data-testid="open-settings" />
+          <IconButton
+            icon={StatsIcon}
+            label="Stats"
+            pressed={statsOpen}
+            className="sh-tb__surface"
+            onClick={onOpenStats}
+            data-testid="open-stats"
+          />
+          <IconButton
+            icon={SettingsIcon}
+            label="Settings"
+            pressed={settingsOpen}
+            className="sh-tb__surface"
+            onClick={onOpenSettings}
+            data-testid="open-settings"
+          />
           <DarkModeToggle />
           {/* 0.8: the `topbar/account` components, at the far right (none without extension). */}
           <ExtensionDecorations<DecorationContext>

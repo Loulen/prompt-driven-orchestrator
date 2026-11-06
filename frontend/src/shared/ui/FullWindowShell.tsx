@@ -85,8 +85,8 @@ interface Props {
 }
 
 /**
- * The full-window surface Stats, Settings and the extensions' pages share (#690): overlay,
- * header (title + ✕), optional rail (a left column navigated with ↑↓, or a strip of tabs under
+ * The full-window surface Stats, Settings and the extensions' pages share (#690): a layer
+ * under the app's top bar (CORE-183), header (title + ✕), optional rail (a left column navigated with ↑↓, or a strip of tabs under
  * the header navigated with ←→), main slot, optional secondary panel
  * and optional footer.
  *
@@ -214,8 +214,10 @@ export default function FullWindowShell({
   ) : null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-surface-1">
-      <div className="relative flex h-[calc(100dvh/var(--app-zoom,1))] w-[calc(100vw/var(--app-zoom,1))] flex-col bg-surface-2" data-testid={testId}>
+    // CORE-183: under the top bar, never over it — its command field, its icons and the
+    // account stay on screen and usable while a surface is open.
+    <div className="fixed inset-x-0 top-(--h-topbar) bottom-0 z-50 bg-surface-1" data-testid={`${testId}-layer`}>
+      <div className="relative flex h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar))] w-[calc(100vw/var(--app-zoom,1))] flex-col bg-surface-2" data-testid={testId}>
         <header
           className="flex h-(--h-topbar) shrink-0 items-center gap-3 border-b border-line bg-surface-1 pr-2 pl-3"
           data-testid={`${testId}-header`}

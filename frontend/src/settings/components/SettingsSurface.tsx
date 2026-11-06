@@ -33,7 +33,7 @@ import TelemetrySections from "./settingsSurface/TelemetrySections";
 import ProjectsSections from "./settingsSurface/ProjectsSections";
 import { skillBankDrawer } from "./settingsSurface/skillBankDrawer";
 import type { SettingsSurfaceProps } from "./settingsSurface/surfaceProps";
-import { useFound, useSaveShortcut } from "./settingsSurface/hooks";
+import { useCloseRequest, useFound, useSaveShortcut } from "./settingsSurface/hooks";
 
 export type { SettingsPosition, StatsOpenIntent } from "./settingsSurface/surfaceProps";
 
@@ -68,6 +68,8 @@ const EXTENSIONS = "extensions";
 export default function SettingsSurface({
   open,
   onClose,
+  closeRequest = 0,
+  onCloseCancelled,
   liveSessions = 0,
   onSaved,
   initialPosition,
@@ -138,13 +140,16 @@ export default function SettingsSurface({
     else closeNow();
   };
   const extensionPages = useSettingsExtensionPages({ open, category, setCategory, requestClose });
+  useCloseRequest(closeRequest, open, requestClose);
+  /** The confirm answered by staying: a parked tour (#823) or switch (CORE-183) is cancelled. */
+  const keepEditing = () => {
+    setConfirmClose(false);
+    pendingTour.current = null;
+    onCloseCancelled?.();
+  };
 
-  /**
-   * #823 — Tutorials › Start / Replay. The tour goes through the SAME dirty guard
-   * as every other exit: a half-edited instance form is not something to drop
-   * because the reader clicked "Replay". Cancelling the confirm cancels the tour
-   * too, which is why the parked action is cleared on the way out either way.
-   */
+  /** #823 — Tutorials › Start / Replay, through the SAME dirty guard as every exit: a
+   *  half-edited form is not dropped because the reader clicked "Replay" (kept: no tour). */
   const startTourAfterClose = (run: () => void) => {
     pendingTour.current = run;
     requestClose();
@@ -154,7 +159,7 @@ export default function SettingsSurface({
   // → close.
   const onEscape = () => {
     if (confirmClose) {
-      setConfirmClose(false);
+      keepEditing();
       return;
     }
     if (drawerOpen) {
@@ -379,16 +384,12 @@ export default function SettingsSurface({
         <ConfirmCloseDialog
           rollup={rollup}
           saving={form.saveState.status === "saving"}
-          onKeep={() => {
-            setConfirmClose(false);
-            // Staying also cancels a tour parked by Tutorials (#823).
-            pendingTour.current = null;
-          }}
+          onKeep={keepEditing}
           onDiscard={closeNow}
           onSaveAndClose={async () => {
             const ok = await form.handleSave();
             if (ok) closeNow();
-            else setConfirmClose(false);
+            else keepEditing();
           }}
         />
       )}

@@ -2387,10 +2387,14 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
     });
   });
 
-  it("is a full-window overlay with its categories, in order, General selected", async () => {
+  it("is a full-window surface under the top bar, with its categories, in order, General selected", async () => {
     render(<SettingsSurface open onClose={() => {}} />);
     const surface = await screen.findByTestId("settings-surface");
-    expect(surface).toHaveClass("h-[calc(100dvh/var(--app-zoom,1))]", "w-[calc(100vw/var(--app-zoom,1))]");
+    // CORE-183: the window's height less the top bar's, which stays above it.
+    expect(surface).toHaveClass(
+      "h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar))]",
+      "w-[calc(100vw/var(--app-zoom,1))]",
+    );
     const rail = screen.getByRole("tablist", { name: "Settings categories" });
     const tabs = within(rail).getAllByRole("tab");
     expect(tabs.map((tab) => tab.textContent)).toEqual([
@@ -2631,6 +2635,24 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
       expect(updateSettingsMock).toHaveBeenCalledWith({ session_cap: 12 }),
     );
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("a close asked from outside (its top-bar icon, CORE-183) takes the same guard", async () => {
+    const onClose = vi.fn();
+    const { rerender } = render(<SettingsSurface open onClose={onClose} closeRequest={0} />);
+    const cap = await screen.findByTestId("setting-session-cap");
+    // Clean: the request closes at once.
+    rerender(<SettingsSurface open onClose={onClose} closeRequest={1} />);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // Dirty: the request asks first.
+    fireEvent.change(cap, { target: { value: "12" } });
+    rerender(<SettingsSurface open onClose={onClose} closeRequest={2} />);
+    expect(await screen.findByTestId("settings-confirm-close")).toBeInTheDocument();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // A re-render without a new request does not ask again.
+    fireEvent.click(screen.getByTestId("settings-confirm-keep"));
+    rerender(<SettingsSurface open onClose={onClose} closeRequest={2} />);
+    expect(screen.queryByTestId("settings-confirm-close")).not.toBeInTheDocument();
   });
 
   it("Discard closes and drops the draft", async () => {
@@ -3306,6 +3328,17 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
         initialPosition={{ category: "sandbox", section: "staging-profiles" }}
       />,
     );
+    // The pulse lasts 2.2 s: caught first, before the slower checks, so a loaded
+    // machine does not see it gone already.
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("settings-section-body-staging-profiles"),
+      ).toHaveAttribute("data-landed", "true"),
+    );
+    // Only the requested section is pulsed.
+    expect(
+      screen.getByTestId("settings-section-body-sandbox"),
+    ).not.toHaveAttribute("data-landed");
     await screen.findByTestId("staging-profiles-panel");
     expect(screen.getByTestId("settings-category-sandbox")).toHaveAttribute(
       "aria-selected",
@@ -3316,13 +3349,6 @@ describe("SettingsSurface — Agents and Sandbox & worktrees as inline sections 
         screen.getByTestId("settings-section-staging-profiles"),
       ).toHaveAttribute("aria-current", "true"),
     );
-    expect(
-      screen.getByTestId("settings-section-body-staging-profiles"),
-    ).toHaveAttribute("data-landed", "true");
-    // Only the requested section is pulsed.
-    expect(
-      screen.getByTestId("settings-section-body-sandbox"),
-    ).not.toHaveAttribute("data-landed");
   });
 
   it("a user click on the second column never pulses", async () => {

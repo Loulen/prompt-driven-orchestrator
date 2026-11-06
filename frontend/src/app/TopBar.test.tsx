@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionEntry } from "../shared/generated/ExtensionEntry";
 import { hostReactMajor } from "../shared/extensions/shared";
 import { resetExtensions, setBundleLoader } from "../shared/extensions/store";
-import { resetPages } from "../shared/extensions/deepLink";
+import { resetPages, usePages } from "../shared/extensions/deepLink";
 import { setMode, setTheme } from "../hooks/useTheme";
 import { runCreationRights, UNKNOWN_RIGHTS } from "../run/model/runCreationRights";
 import { useRunCreationRightsStore } from "../run/store/runCreationRightsStore";
@@ -17,8 +17,8 @@ import type { Project } from "../workspace/model/project";
 import { usePalette } from "./palette/paletteStore";
 import TopBar from "./TopBar";
 
-/** An extension with one `topbar/end` page. */
-function withPage(id: string, label: string): ExtensionEntry {
+/** An extension with one page at `location` (`topbar/end` by default). */
+function withPage(id: string, label: string, location: "topbar/end" | "topbar/start" = "topbar/end"): ExtensionEntry {
   return {
     id,
     name: label,
@@ -27,7 +27,7 @@ function withPage(id: string, label: string): ExtensionEntry {
       bundle_url: `/ext/${id}/ui.js`,
       react_major: hostReactMajor(),
       ui_module_major: null,
-      contributions: [{ location: "topbar/end", id: "home", label, type: "page", component: "Home" }],
+      contributions: [{ location, id: "home", label, type: "page", component: "Home" }],
       commands: [],
       locations: [],
     },
@@ -45,9 +45,9 @@ function serve(extensions: ExtensionEntry[]) {
   );
 }
 
-function renderBar(onNewRun = vi.fn()) {
+function renderBar(onNewRun = vi.fn(), open: { settingsOpen?: boolean; statsOpen?: boolean } = {}) {
   const handlers = { onOpenSettings: vi.fn(), onOpenStats: vi.fn(), onNewRun };
-  render(<TopBar {...handlers} />);
+  render(<TopBar {...handlers} {...open} />);
   return handlers;
 }
 
@@ -177,5 +177,58 @@ describe("the command field", () => {
     fireEvent.click(screen.getByTestId("command-field"));
     fireEvent.mouseDown(screen.getByTestId("command-palette-scrim"));
     expect(screen.queryByTestId("command-palette")).toBeNull();
+  });
+});
+
+describe("the entry of the surface open under the bar (CORE-183)", () => {
+  it("selects Settings or Stats while it is open, a toggle for assistive technologies", () => {
+    renderBar(vi.fn(), { settingsOpen: true });
+    expect(screen.getByTestId("open-settings")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("open-stats")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("open-settings")).toHaveClass("sh-tb__surface");
+  });
+
+  it("selects a topbar/end page's icon while its page is open; a second click closes it", async () => {
+    serve([withPage("one", "Docs"), withPage("two", "Reports")]);
+    renderBar();
+    const docs = await screen.findByTestId("extension-topbar-end-one:home");
+    expect(docs).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(docs);
+    expect(usePages.getState().open?.key).toBe("one:home");
+    expect(docs).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("extension-topbar-end-two:home")).toHaveAttribute("aria-pressed", "false");
+    // Another icon replaces the page.
+    fireEvent.click(screen.getByTestId("extension-topbar-end-two:home"));
+    expect(usePages.getState().open?.key).toBe("two:home");
+    expect(docs).toHaveAttribute("aria-pressed", "false");
+    // A second click on the selected one closes its page.
+    fireEvent.click(screen.getByTestId("extension-topbar-end-two:home"));
+    expect(usePages.getState().open).toBeNull();
+  });
+
+  it("selects a topbar/start entry while its page is open; a second click closes it", async () => {
+    serve([withPage("nav", "Events", "topbar/start")]);
+    renderBar();
+    const entry = await screen.findByTestId("extension-nav-nav:home");
+    fireEvent.click(entry);
+    expect(usePages.getState().open?.location).toBe("topbar/start");
+    expect(entry).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(entry);
+    expect(usePages.getState().open).toBeNull();
+    expect(entry).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("keeps the page open while Escape only closes the command palette over it", async () => {
+    serve([withPage("one", "Docs")]);
+    renderBar();
+    fireEvent.click(await screen.findByTestId("extension-topbar-end-one:home"));
+    await screen.findByTestId("extension-page");
+    fireEvent.click(screen.getByTestId("command-field"));
+    fireEvent.keyDown(screen.getByTestId("command-palette-input"), { key: "Escape" });
+    expect(screen.queryByTestId("command-palette")).toBeNull();
+    expect(screen.getByTestId("extension-page")).toBeInTheDocument();
+    // Escape again, outside the palette: the page closes.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(usePages.getState().open).toBeNull();
   });
 });

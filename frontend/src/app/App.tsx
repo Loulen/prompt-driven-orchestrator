@@ -225,7 +225,7 @@ export default function App() {
 
   // CORE-112: what the command field lists and acts on.
   usePaletteHostSync(
-    { runs, triggers, openRun: handleSelectRun, openTrigger: launch.handleSelectTrigger, openNewRunModal, openSettings, openStats },
+    { runs, triggers, openRun: handleSelectRun, openTrigger: launch.handleSelectTrigger, openNewRunModal, openSettings, openStats, closeSurfaces: surfaces.closeSurfaces },
     { selectedTrigger, selectedRun, editTab, canvas: selection, pipelines },
   );
 
@@ -234,11 +234,7 @@ export default function App() {
     {/* ADR-0081 #29: every extension contribution receives the selected Run and its Projet. */}
     <ExtensionContextProvider selectedRun={selectedRun} runs={runs} projects={projects}>
     <div className="flex h-full flex-col bg-surface-0 text-text">
-      <TopBar
-        onOpenSettings={() => openSettings()}
-        onOpenStats={() => openStats()}
-        onNewRun={() => openNewRunModal({ kind: "run" })}
-      />
+      <TopBar {...surfaces.topBar} onNewRun={() => openNewRunModal({ kind: "run" })} />
       <main className="min-h-0 flex-1">
         <ResizablePanelGroup
           orientation="horizontal"

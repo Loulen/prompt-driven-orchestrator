@@ -331,6 +331,26 @@ describe("TmuxTerminal", () => {
     });
   });
 
+  // #1040: a Mosaïque pane's ✕ hides it; the session is not the terminal's to stop.
+  describe("Mosaïque pane (#1040)", () => {
+    it("offers a ✕ that says the session keeps running, last in the toolbar", () => {
+      const onRemove = vi.fn();
+      render(<TmuxTerminal session="pdo-run1-impl-iter-1" title="Run › Implement" onRemove={onRemove} />);
+      const toolbar = screen.getByTestId("term-toolbar");
+      const remove = within(toolbar).getByRole("button", {
+        name: "Remove from view · the session keeps running",
+      });
+      expect(toolbar.lastElementChild).toContainElement(remove);
+      fireEvent.click(remove);
+      expect(onRemove).toHaveBeenCalledTimes(1);
+    });
+
+    it("has no ✕ outside the mosaic", () => {
+      render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
+      expect(screen.queryByTestId("term-remove-pane")).not.toBeInTheDocument();
+    });
+  });
+
   it("keeps the plain toolbar without slots", () => {
     render(<TmuxTerminal session="pdo-run1-impl-iter-1" />);
     const toolbar = screen.getByTestId("term-toolbar");

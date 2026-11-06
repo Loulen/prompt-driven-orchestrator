@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand, RefreshCw, FileUp, Terminal as TerminalIcon } from "lucide-react";
+import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand, RefreshCw, FileUp, Terminal as TerminalIcon, X } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
 import { sessionChipLabel } from "../lib/terminalIdentity";
 import { attachSession, fetchPane } from "../api";
@@ -79,6 +79,9 @@ interface Props {
   /** #971: set when the node cannot receive files right now (no live
    *  session): the Import button is off and says why. */
   importDisabledReason?: string | null;
+  /** #1040: a pane of the Mosaïque — its ✕ takes it out of the view. Nothing
+   *  is stopped: the session runs on. Omit ⇒ no ✕. */
+  onRemove?: () => void;
 }
 
 /** #972: the veil over a live terminal whose socket dropped. */
@@ -96,6 +99,8 @@ export const PTY_SILENCE_TIMEOUT_MS = 30_000;
 /** #968: the exits of the enlarged terminal, named on its collapse button. */
 const COLLAPSE_LABEL = "Collapse terminal · Esc · click outside";
 const EXPAND_LABEL = "Expand terminal";
+/** #1040: the ✕ of a Mosaïque pane — it hides, it does not stop. */
+export const REMOVE_PANE_LABEL = "Remove from view · the session keeps running";
 
 // A node iteration in one of these states has had its tmux session reaped on the
 // terminal transition (#205, the one-live-iteration invariant), so attaching a PTY
@@ -164,6 +169,7 @@ export default function TmuxTerminal({
   toolbarActions,
   onImportFiles,
   importDisabledReason,
+  onRemove,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -910,6 +916,18 @@ export default function TmuxTerminal({
               data-testid="term-detach"
             >
               <ExternalLink size={12} />
+            </button>
+          </Tooltip>
+        )}
+        {onRemove && (
+          <Tooltip content={REMOVE_PANE_LABEL}>
+            <button
+              onClick={onRemove}
+              aria-label={REMOVE_PANE_LABEL}
+              className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+              data-testid="term-remove-pane"
+            >
+              <X size={12} />
             </button>
           </Tooltip>
         )}

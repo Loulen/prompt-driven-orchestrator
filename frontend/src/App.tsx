@@ -554,6 +554,7 @@ export default function App() {
           runId={selectedRun.run_id}
           isArchived={isArchived}
           nodeName={selectedRun.node_defs?.find((d) => d.id === selection.id)?.name}
+          runName={selectedRun.name}
           provisioningRepository={selectedRun.target_repo ?? ""}
           inheritedProvisioning={selectedRun.provisioning_rules}
           provisioningGitRef={`pdo/run-${selectedRun.run_id}`}
@@ -1154,6 +1155,7 @@ export default function App() {
                     runId={selectedRun.run_id}
                     isArchived={isArchived}
                     nodeName={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.name}
+                    runName={selectedRun.name}
                     isOrchestratorNode={selectedRun.node_defs?.find((d) => d.id === selectedNodeId)?.orchestrator ?? false}
                     onOpenChildRun={handleOpenChildRun}
                     initialDetailTab={landOnOrchestration === selectedNode.node_id ? "orchestration" : "io"}

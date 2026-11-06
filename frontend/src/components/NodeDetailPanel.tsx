@@ -11,6 +11,8 @@ import {
   GitCompareArrows,
   LockOpen,
   LoaderCircle,
+  Plus,
+  History,
 } from "lucide-react";
 import type {
   AwaitingInfo,
@@ -42,6 +44,11 @@ import ImageLightbox from "./ImageLightbox";
 import CopyButton from "./CopyButton";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import TmuxTerminal from "./TmuxTerminal";
+import TerminalMosaic from "./TerminalMosaic";
+import TerminalPicker from "./TerminalPicker";
+import { terminalTitle } from "../lib/terminalIdentity";
+import { MAX_PANES, type TerminalRef } from "../lib/terminalMosaic";
+import { useTerminalMosaic } from "../hooks/useTerminalMosaic";
 import { Tooltip, TooltipProvider } from "./ui/tooltip";
 import { STATUS_BG, STATUS_BORDER, STATUS_TEXT } from "../nodeStyles";
 import StatusIcon from "./StatusIcon";
@@ -76,6 +83,8 @@ interface Props {
   runId: string;
   isArchived?: boolean;
   nodeName?: string | null;
+  /** #1038: the Run's name, first in the terminal's identity (« Run › node »). */
+  runName?: string | null;
   initialTerminalExpanded?: boolean;
   provisioningRepository?: string;
   inheritedProvisioning?: ScopedProvisioningRules[];
@@ -494,6 +503,7 @@ export default function NodeDetailPanel({
   runId,
   isArchived,
   nodeName,
+  runName,
   initialTerminalExpanded,
   provisioningRepository = "",
   inheritedProvisioning,
@@ -685,6 +695,45 @@ export default function NodeDetailPanel({
   const popoverRef = useRef<HTMLDivElement>(null);
   if (!expanded && gesturePopover !== null) setGesturePopover(null);
 
+  // #1040 — the Mosaïque: other live terminals beside this one while expanded.
+  // This node's terminal is the primary pane; closing the view forgets the rest.
+  const primaryTerminal = useMemo<TerminalRef>(
+    () => ({
+      session: sessionName,
+      kind: "node",
+      runId,
+      runName: runName?.trim() || null,
+      subject: nodeName ?? node.node_id,
+      paneSource: { runId, nodeId: node.node_id, iter: selectedIter },
+    }),
+    [sessionName, runId, runName, nodeName, node.node_id, selectedIter],
+  );
+  const mosaic = useTerminalMosaic(primaryTerminal, expanded && showTerminal);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+  if (!expanded && pickerOpen) setPickerOpen(false);
+  const mosaicAdd = mosaic.add;
+  const pickTerminal = useCallback(
+    (ref: TerminalRef) => {
+      setPickerOpen(false);
+      mosaicAdd(ref);
+    },
+    [mosaicAdd],
+  );
+
+  // The picker closes on any press outside it (its own button toggles it).
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target instanceof Node)) return;
+      if (pickerRef.current?.contains(e.target)) return;
+      if (e.target instanceof Element && e.target.closest("[data-picker-toggle]")) return;
+      setPickerOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [pickerOpen]);
+
   // The app's panel groups stop resizing while the overlay covers them.
   useEffect(() => {
     if (!expanded) return;
@@ -723,15 +772,28 @@ export default function NodeDetailPanel({
   // While enlarged, the app behind it gets no keystroke: Escape closes the
   // overlay, every other key stops here (canvas shortcuts, the tour's Escape).
   // Capture phase on `window`, so we run before anyone else — but a keystroke
-  // aimed at the terminal's textarea is the agent's (Escape interrupts Claude
-  // Code), and passes untouched, the rule of `RunShellModal`.
+  // aimed at a terminal's textarea is the agent's (Escape interrupts Claude
+  // Code), and passes untouched, the rule of `RunShellModal`. #1040: that holds
+  // for every pane of the Mosaïque, not only this node's terminal.
   useEffect(() => {
     if (!expanded) return;
     const onKey = (e: KeyboardEvent) => {
       // The import modal (#971) stacks above the overlay and owns the keyboard.
       if (importOpen) return;
       const active = document.activeElement;
-      if (active && active.classList.contains("xterm-helper-textarea")) return;
+      const inFrame = active !== null && terminalFrameRef.current?.contains(active) === true;
+      if (inFrame && active.classList.contains("xterm-helper-textarea")) return;
+      // #1040: the « + terminal » picker takes Escape first, and its search
+      // field gets its keys (it keeps them from the app itself).
+      if (pickerOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          setPickerOpen(false);
+          return;
+        }
+        if (active !== null && pickerRef.current?.contains(active)) return;
+      }
       e.stopImmediatePropagation();
       if (e.key === "Escape") {
         e.preventDefault();
@@ -740,7 +802,7 @@ export default function NodeDetailPanel({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [expanded, importOpen]);
+  }, [expanded, importOpen, pickerOpen]);
 
   // The gesture popover closes on any press outside it.
   useEffect(() => {
@@ -758,16 +820,32 @@ export default function NodeDetailPanel({
     !isArchived &&
     (selectedIterStatus === "awaiting_user" || nodeAwaitsOnLatestIter);
 
+  const nodeLabel = nodeName ?? node.node_id;
   const toolbarIdentity = expanded ? (
     <span className="flex items-center gap-1.5" data-testid="term-identity">
       {/* PDO-22: the status badge just after names it — the glyph is decorative. */}
       <StatusIcon status={node.status} reason={node.failure_reason} decorative testId="term-identity-icon" />
+      {/* #1038: the Run first — the session name says neither. */}
+      {runName?.trim() && (
+        <>
+          <span
+            className="min-w-0 truncate text-fg-3"
+            style={{ fontSize: "12px" }}
+            data-testid="term-identity-run"
+          >
+            {runName.trim()}
+          </span>
+          <span className="text-fg-4" aria-hidden>
+            ›
+          </span>
+        </>
+      )}
       <span
         className="text-fg"
         style={{ fontSize: "12px", fontWeight: 500 }}
         data-testid="term-identity-name"
       >
-        {nodeName ?? node.node_id}
+        {nodeLabel}
       </span>
       <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
         iter {selectedIter}
@@ -784,7 +862,7 @@ export default function NodeDetailPanel({
   ) : undefined;
 
   const releaseLabel = completionReleased ? RELEASED_LABEL : RELEASE_LABEL;
-  const toolbarActions = showExpandedGestures ? (
+  const completionGestures = showExpandedGestures ? (
     <>
       {canReleaseCompletion && (
         <Tooltip content={releaseLabel}>
@@ -822,7 +900,52 @@ export default function NodeDetailPanel({
         </button>
       </Tooltip>
     </>
-  ) : undefined;
+  ) : null;
+
+  // #1040: the Mosaïque's gestures, in the enlarged bar only.
+  const mosaicGestures = expanded && showTerminal ? (
+    <>
+      {mosaic.canRestore && (
+        <button
+          onClick={() => void mosaic.restore()}
+          disabled={mosaic.restoring}
+          className="flex h-5 cursor-pointer items-center gap-1 rounded px-1.5 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg disabled:cursor-wait"
+          style={{ fontSize: "11px" }}
+          data-testid="term-restore-mosaic"
+        >
+          {mosaic.restoring ? <LoaderCircle size={12} className="animate-spin" /> : <History size={12} />}
+          Restore last mosaic
+        </button>
+      )}
+      {mosaic.restoreNotice && (
+        <span className="text-fg-4" style={{ fontSize: "10.5px" }} role="status" data-testid="term-restore-notice">
+          {mosaic.restoreNotice}
+        </span>
+      )}
+      <Tooltip content={mosaic.canAdd ? "Add a live terminal beside this one" : `${MAX_PANES} terminals at most`}>
+        <button
+          onClick={() => setPickerOpen((o) => !o)}
+          aria-label="Add a terminal"
+          aria-expanded={pickerOpen}
+          className="flex h-5 cursor-pointer items-center gap-0.5 rounded px-1.5 text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+          style={{ fontSize: "11px" }}
+          data-testid="term-add-terminal"
+          data-picker-toggle
+        >
+          <Plus size={12} />
+          terminal
+        </button>
+      </Tooltip>
+    </>
+  ) : null;
+
+  const toolbarActions =
+    completionGestures || mosaicGestures ? (
+      <>
+        {completionGestures}
+        {mosaicGestures}
+      </>
+    ) : undefined;
 
   const popoverVerdict =
     gesturePopover === "release" ? (
@@ -1248,41 +1371,59 @@ export default function NodeDetailPanel({
               backdropPressed.current = false;
             }}
           >
-            {showTerminal ? (
-              <TmuxTerminal
-                session={sessionName}
-                expanded={expanded}
-                onExpand={() =>
-                  setTerminalView((v) => (v === "expanded" ? "split" : "expanded"))
-                }
-                toolbarIdentity={toolbarIdentity}
-                toolbarActions={toolbarActions}
-                status={selectedIterStatus}
-                // #617: the iteration this panel is showing, so a terminal one can
-                // read back the pane PDO froze when it reaped the session. The
-                // selected iter — not `node.iter` — because the IterSelector can be
-                // sitting on an older, long-reaped iteration.
-                paneSource={{ runId, nodeId: node.node_id, iter: selectedIter }}
-                onLiveSocketChange={setTerminalLive}
-                onSpectatingChange={setTerminalSpectating}
-                onImportFiles={isArchived ? undefined : setImportFiles}
-                importDisabledReason={importBlockedReason}
+            {/* #1040: the primary keeps its place in the mosaic's tree whatever
+                joins or leaves, in split as in expanded — never remounted. */}
+            <TerminalMosaic
+              primarySession={sessionName}
+              extras={mosaic.extras}
+              statuses={mosaic.statuses}
+              onRemove={mosaic.remove}
+              focusRequest={mosaic.focusRequest}
+              primary={showTerminal ? (
+                <TmuxTerminal
+                  session={sessionName}
+                  title={terminalTitle(runName, nodeLabel)}
+                  expanded={expanded}
+                  onExpand={() =>
+                    setTerminalView((v) => (v === "expanded" ? "split" : "expanded"))
+                  }
+                  toolbarIdentity={toolbarIdentity}
+                  toolbarActions={toolbarActions}
+                  status={selectedIterStatus}
+                  // #617: the iteration this panel is showing, so a terminal one can
+                  // read back the pane PDO froze when it reaped the session. The
+                  // selected iter — not `node.iter` — because the IterSelector can be
+                  // sitting on an older, long-reaped iteration.
+                  paneSource={{ runId, nodeId: node.node_id, iter: selectedIter }}
+                  onLiveSocketChange={setTerminalLive}
+                  onSpectatingChange={setTerminalSpectating}
+                  onImportFiles={isArchived ? undefined : setImportFiles}
+                  importDisabledReason={importBlockedReason}
+                />
+              ) : (
+                <div className="flex h-full flex-col" data-testid="pending-placeholder">
+                  <div
+                    className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
+                    style={{ fontSize: "11px" }}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-fg-5" />
+                    Terminal
+                  </div>
+                  <div className="flex flex-1 items-center justify-center bg-bg-0">
+                    <span className="text-fg-4" style={{ fontSize: "11px" }}>
+                      {terminalPlaceholder(node)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            />
+            {expanded && pickerOpen && (
+              <TerminalPicker
+                ref={pickerRef}
+                shown={[sessionName, ...mosaic.extras.map((p) => p.session)]}
+                full={!mosaic.canAdd}
+                onPick={pickTerminal}
               />
-            ) : (
-              <div className="flex h-full flex-col" data-testid="pending-placeholder">
-                <div
-                  className="flex items-center gap-1.5 border-b border-line px-3 py-1.5 text-fg-3"
-                  style={{ fontSize: "11px" }}
-                >
-                  <span className="h-1.5 w-1.5 rounded-full bg-fg-5" />
-                  Terminal
-                </div>
-                <div className="flex flex-1 items-center justify-center bg-bg-0">
-                  <span className="text-fg-4" style={{ fontSize: "11px" }}>
-                    {terminalPlaceholder(node)}
-                  </span>
-                </div>
-              </div>
             )}
             {expanded && popoverVerdict && (
               <div

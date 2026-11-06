@@ -1,10 +1,13 @@
 import { useEffect } from "react";
 import { X } from "lucide-react";
 import TmuxTerminal from "./TmuxTerminal";
+import { terminalTitle } from "../lib/terminalIdentity";
 
 interface Props {
   /** tmux session to attach to (e.g. `pdo-shell-<run-id>`), from `openRunShell`. */
   session: string;
+  /** #1038: the Run's name, so the shell says whose worktree it is in. */
+  runName?: string | null;
   onClose: () => void;
 }
 
@@ -18,7 +21,7 @@ interface Props {
  * this modal detaches (tmux keeps it alive), so a re-open re-attaches the same
  * scrollback.
  */
-export default function RunShellModal({ session, onClose }: Props) {
+export default function RunShellModal({ session, runName, onClose }: Props) {
   // Escape-to-close, but not at the terminal's expense. Unlike a plain
   // confirm/markdown modal, this one wraps a live shell where Escape is a
   // load-bearing key (vim, less, readline all consume it). So:
@@ -60,9 +63,11 @@ export default function RunShellModal({ session, onClose }: Props) {
             <span className="font-medium text-fg" style={{ fontSize: "13px" }}>
               Run shell
             </span>
-            <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
-              {session}
-            </span>
+            {runName?.trim() && (
+              <span className="truncate text-fg-3" style={{ fontSize: "12px" }} data-testid="run-shell-run-name">
+                {runName.trim()}
+              </span>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -76,7 +81,7 @@ export default function RunShellModal({ session, onClose }: Props) {
 
         {/* Body — the inline terminal fills the remaining height. */}
         <div className="flex min-h-0 flex-1 flex-col">
-          <TmuxTerminal session={session} expanded />
+          <TmuxTerminal session={session} title={terminalTitle(runName, "Shell")} expanded />
         </div>
       </div>
     </div>

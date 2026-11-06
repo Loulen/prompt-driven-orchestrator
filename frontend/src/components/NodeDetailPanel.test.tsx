@@ -18,6 +18,12 @@ const fetchNodeIOMock = vi
 // does not remount the terminal subtree when the user toggles fullscreen.
 const tmuxMountCount = { current: 0 };
 const tmuxUnmountCount = { current: 0 };
+// #1040: the same, per session — the Mosaïque mounts one terminal per pane.
+const tmuxMountsBySession = new Map<string, number>();
+const tmuxUnmountsBySession = new Map<string, number>();
+// #1040: what « + terminal » lists (GET /runs, then each live Run's detail).
+const fetchRunsMock = vi.fn().mockResolvedValue([]);
+const fetchRunMock = vi.fn();
 
 const killNodeMock = vi.fn().mockResolvedValue(undefined);
 const restartNodeMock = vi.fn().mockResolvedValue(undefined);
@@ -51,11 +57,14 @@ vi.mock("../api", () => ({
   previewProvisioning: (...args: unknown[]) => previewProvisioningMock(...args),
   startNode: (...args: unknown[]) => startNodeMock(...args),
   attachSession: vi.fn(),
+  fetchRuns: (...args: unknown[]) => fetchRunsMock(...args),
+  fetchRun: (...args: unknown[]) => fetchRunMock(...args),
   artifactUrl: (runId: string, path: string) => `/runs/${runId}/artifact?path=${encodeURIComponent(path)}`,
 }));
 
 function MockTmuxTerminal({
   session,
+  title,
   expanded,
   onExpand,
   status,
@@ -65,10 +74,13 @@ function MockTmuxTerminal({
   toolbarActions,
   onImportFiles,
   importDisabledReason,
+  onRemove,
 }: {
+  onRemove?: () => void;
   onImportFiles?: (files: File[]) => void;
   importDisabledReason?: string | null;
   session: string;
+  title?: string;
   expanded?: boolean;
   onExpand?: () => void;
   status?: string;
@@ -79,14 +91,19 @@ function MockTmuxTerminal({
 }) {
   useEffect(() => {
     tmuxMountCount.current += 1;
+    tmuxMountsBySession.set(session, (tmuxMountsBySession.get(session) ?? 0) + 1);
     return () => {
       tmuxUnmountCount.current += 1;
+      tmuxUnmountsBySession.set(session, (tmuxUnmountsBySession.get(session) ?? 0) + 1);
     };
+    // Mount counting only: a session change is no remount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return (
     <div
       data-testid="tmux-terminal"
       data-session={session}
+      data-title={title}
       data-expanded={expanded}
       data-status={status}
       data-pane-source={paneSource ? JSON.stringify(paneSource) : undefined}
@@ -111,6 +128,8 @@ function MockTmuxTerminal({
       {/* #870: stand-ins for the daemon's role frames. */}
       <button data-testid="mock-become-spectator" onClick={() => onSpectatingChange?.(true)}>spectate</button>
       <button data-testid="mock-become-pilot" onClick={() => onSpectatingChange?.(false)}>pilot</button>
+      {/* #1040: a Mosaïque pane's ✕. */}
+      {onRemove && <button data-testid="term-remove-pane" onClick={onRemove}>remove</button>}
     </div>
   );
 }
@@ -2728,6 +2747,36 @@ describe("NodeDetailPanel", () => {
       expect(frame.style.boxShadow).not.toContain("color-mix");
     });
 
+    // #1038: the Run first — the session name says neither.
+    it("names the Run before the node, in the enlarged identity and the split title", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" nodeName="design" runName="US #5 - Sécurité" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toHaveAttribute("data-title", "US #5 - Sécurité › design");
+      fireEvent.click(screen.getByTestId("term-expand"));
+      const identity = screen.getByTestId("term-identity");
+      expect(within(identity).getByTestId("term-identity-run")).toHaveTextContent("US #5 - Sécurité");
+      expect(
+        within(identity)
+          .getByTestId("term-identity-run")
+          .compareDocumentPosition(within(identity).getByTestId("term-identity-name")) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("names the node alone when the Run has no name", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" nodeName="design" runName={null} />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toHaveAttribute("data-title", "design");
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.queryByTestId("term-identity-run")).not.toBeInTheDocument();
+    });
+
     it("falls back to the node id when the node has no name", () => {
       render(
         <TooltipProvider>
@@ -3550,6 +3599,354 @@ describe("iteration duration modes (#980)", () => {
       fireEvent.click(screen.getByText(/iter 2/));
       expect(await screen.findByTestId("iter-option-1")).toHaveTextContent("11m 0s active");
       expect(screen.getByTestId("iter-option-2")).toHaveTextContent("8m 31s active");
+    });
+  });
+});
+
+describe("Mosaïque (#1040)", () => {
+  // Two live Runs: « US #5 » (its Manager, `grill` running) and « Issue 1040 »
+  // (`implement` and `review` running, `docs` awaiting).
+  const runs = [
+    { run_id: "r5", status: "running", pipeline_name: "p", started_at: null, name: "US #5" },
+    { run_id: "r40", status: "awaiting_user", pipeline_name: "p", started_at: null, name: "Issue 1040" },
+    { run_id: "old", status: "completed", pipeline_name: "p", started_at: null, name: "Old" },
+  ];
+  const liveNode = (node_id: string, status: NodeState["status"] = "running") =>
+    makeNode({ node_id, status, iterations: [{ iter: 1, status, started_at: null, completed_at: null }] });
+  let runStates: Record<string, unknown> = {};
+  const freshRunStates = (): Record<string, unknown> => ({
+    r5: {
+      run_id: "r5",
+      status: "running",
+      name: "US #5",
+      has_manager: true,
+      node_defs: [{ id: "grill", name: "Grill" }],
+      nodes: { grill: liveNode("grill") },
+    },
+    r40: {
+      run_id: "r40",
+      status: "awaiting_user",
+      name: "Issue 1040",
+      has_manager: false,
+      node_defs: [
+        { id: "implement", name: "Implement" },
+        { id: "review", name: "Review" },
+        { id: "docs", name: "Docs" },
+      ],
+      nodes: {
+        implement: liveNode("implement"),
+        review: liveNode("review"),
+        docs: liveNode("docs", "awaiting_user"),
+      },
+    },
+  });
+  const PRIMARY = "pdo-run-1-design-iter-1";
+  const GRILL = "pdo-r5-grill-iter-1";
+  const MGR = "pdo-mgr-r5";
+  const IMPLEMENT = "pdo-r40-implement-iter-1";
+  const REVIEW = "pdo-r40-review-iter-1";
+
+  beforeEach(() => {
+    localStorage.clear();
+    runStates = freshRunStates();
+    tmuxMountsBySession.clear();
+    tmuxUnmountsBySession.clear();
+    killNodeMock.mockClear();
+    stopNodeMock.mockClear();
+    fetchRunsMock.mockReset();
+    fetchRunsMock.mockResolvedValue(runs);
+    fetchRunMock.mockReset();
+    fetchRunMock.mockImplementation(async (id: string) => runStates[id]);
+  });
+
+  function renderPanel() {
+    return render(
+      <TooltipProvider>
+        <NodeDetailPanel
+          node={makeNode({ node_id: "design", status: "running" })}
+          runId="run-1"
+          nodeName="Design"
+          runName="Plan"
+        />
+      </TooltipProvider>,
+    );
+  }
+
+  const paneSessions = () => screen.getAllByTestId("tmux-terminal").map((t) => t.getAttribute("data-session"));
+  const terminalOf = (session: string) =>
+    screen.getAllByTestId("tmux-terminal").find((t) => t.getAttribute("data-session") === session)!;
+
+  async function openPicker() {
+    fireEvent.click(screen.getByTestId("term-add-terminal"));
+    await waitFor(() => expect(screen.getAllByTestId("terminal-picker-option").length).toBeGreaterThan(0));
+  }
+
+  async function addTerminal(session: string) {
+    await openPicker();
+    const option = screen
+      .getAllByTestId("terminal-picker-option")
+      .find((o) => o.getAttribute("data-session") === session)!;
+    await act(async () => {
+      fireEvent.click(option);
+    });
+  }
+
+  it("offers « + terminal » in the enlarged bar only", () => {
+    renderPanel();
+    expect(screen.queryByTestId("term-add-terminal")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    expect(screen.getByTestId("term-add-terminal")).toBeInTheDocument();
+  });
+
+  it("lists the live sessions of every Run, searchable by Run and node name", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    await openPicker();
+    const options = () => screen.getAllByTestId("terminal-picker-option").map((o) => o.getAttribute("data-session"));
+    expect(options()).toEqual([
+      MGR,
+      GRILL,
+      IMPLEMENT,
+      REVIEW,
+      "pdo-r40-docs-iter-1",
+    ]);
+    // Only the live Runs were read.
+    expect(fetchRunMock.mock.calls.map(([id]) => id)).toEqual(["r5", "r40"]);
+    expect(document.activeElement).toBe(screen.getByTestId("terminal-picker-search"));
+
+    fireEvent.change(screen.getByTestId("terminal-picker-search"), { target: { value: "us #5" } });
+    expect(options()).toEqual([MGR, GRILL]);
+    fireEvent.change(screen.getByTestId("terminal-picker-search"), { target: { value: "review" } });
+    expect(options()).toEqual([REVIEW]);
+  });
+
+  it("adds the picked session as a pane named « Run › node », and gives it the keyboard", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    await addTerminal(IMPLEMENT);
+
+    expect(screen.queryByTestId("terminal-picker")).not.toBeInTheDocument();
+    expect(paneSessions()).toEqual([PRIMARY, IMPLEMENT]);
+    const pane = terminalOf(IMPLEMENT);
+    expect(pane).toHaveAttribute("data-title", "Issue 1040 › Implement");
+    expect(pane).toHaveAttribute(
+      "data-pane-source",
+      JSON.stringify({ runId: "r40", nodeId: "implement", iter: 1 }),
+    );
+    expect(document.activeElement).toBe(within(pane).getByTestId("mock-xterm-input"));
+    // The pane sits inside the enlarged frame.
+    expect(screen.getByTestId("terminal-fullsize")).toContainElement(pane);
+    // The node pane follows its iteration's status (frozen snapshot when it ends).
+    await waitFor(() => expect(terminalOf(IMPLEMENT)).toHaveAttribute("data-status", "running"));
+
+    await addTerminal(MGR);
+    expect(terminalOf(MGR)).toHaveAttribute("data-title", "US #5 › Manager");
+    expect(terminalOf(MGR)).not.toHaveAttribute("data-pane-source");
+  });
+
+  it("focuses a session already shown instead of opening it twice", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    await addTerminal(IMPLEMENT);
+    await addTerminal(GRILL);
+    expect(document.activeElement).toBe(within(terminalOf(GRILL)).getByTestId("mock-xterm-input"));
+
+    await openPicker();
+    const implementOption = screen
+      .getAllByTestId("terminal-picker-option")
+      .find((o) => o.getAttribute("data-session") === IMPLEMENT)!;
+    expect(implementOption).toHaveAttribute("data-shown", "true");
+    await act(async () => {
+      fireEvent.click(implementOption);
+    });
+
+    expect(paneSessions()).toEqual([PRIMARY, IMPLEMENT, GRILL]);
+    expect(document.activeElement).toBe(within(terminalOf(IMPLEMENT)).getByTestId("mock-xterm-input"));
+  });
+
+  it("holds four terminals at most, in a 2×2 grid", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    await addTerminal(IMPLEMENT);
+    await addTerminal(REVIEW);
+    await addTerminal(GRILL);
+    expect(screen.getByTestId("terminal-mosaic")).toHaveAttribute("data-panes", "4");
+
+    await openPicker();
+    expect(screen.getByTestId("terminal-picker")).toHaveTextContent("Four terminals at most");
+    const mgr = screen
+      .getAllByTestId("terminal-picker-option")
+      .find((o) => o.getAttribute("data-session") === MGR)!;
+    expect(mgr).toHaveAttribute("aria-disabled", "true");
+    await act(async () => {
+      fireEvent.click(mgr);
+    });
+    expect(paneSessions()).toEqual([PRIMARY, IMPLEMENT, REVIEW, GRILL]);
+  });
+
+  it("removes a pane with its ✕ without stopping anything", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    await addTerminal(IMPLEMENT);
+    await addTerminal(MGR);
+    const callsBefore = fetchRunMock.mock.calls.length;
+
+    fireEvent.click(within(terminalOf(IMPLEMENT)).getByTestId("term-remove-pane"));
+
+    expect(paneSessions()).toEqual([PRIMARY, MGR]);
+    expect(killNodeMock).not.toHaveBeenCalled();
+    expect(stopNodeMock).not.toHaveBeenCalled();
+    // No call at all: the Manager pane left has no status to poll.
+    expect(fetchRunMock).toHaveBeenCalledTimes(callsBefore);
+    // The primary has no ✕, and gets the keyboard back.
+    expect(within(terminalOf(PRIMARY)).queryByTestId("term-remove-pane")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(within(terminalOf(PRIMARY)).getByTestId("mock-xterm-input"));
+  });
+
+  it("never remounts the primary terminal as panes come and go, nor across expand and collapse", async () => {
+    renderPanel();
+    const primary = screen.getByTestId("tmux-terminal");
+    fireEvent.click(screen.getByTestId("term-expand"));
+    await addTerminal(IMPLEMENT);
+    await addTerminal(REVIEW);
+    // Three to four panes: the grid gains its second row.
+    await addTerminal(GRILL);
+    fireEvent.click(within(terminalOf(REVIEW)).getByTestId("term-remove-pane"));
+    fireEvent.click(within(terminalOf(IMPLEMENT)).getByTestId("term-remove-pane"));
+    // Collapsing drops the rest.
+    fireEvent.click(within(terminalOf(PRIMARY)).getByTestId("term-expand"));
+    expect(paneSessions()).toEqual([PRIMARY]);
+    fireEvent.click(screen.getByTestId("term-expand"));
+
+    expect(terminalOf(PRIMARY)).toBe(primary);
+    expect(tmuxMountsBySession.get(PRIMARY)).toBe(1);
+    expect(tmuxUnmountsBySession.get(PRIMARY) ?? 0).toBe(0);
+  });
+
+  it("keeps one overlay open whatever the number of panes", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    await addTerminal(IMPLEMENT);
+    await addTerminal(MGR);
+    expect(useTerminalOverlayStore.getState().openCount).toBe(1);
+    fireEvent.click(within(terminalOf(PRIMARY)).getByTestId("term-expand"));
+    expect(useTerminalOverlayStore.getState().openCount).toBe(0);
+  });
+
+  it("forgets the mosaic on close, and restores it on request — the sessions still live only", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    expect(screen.queryByTestId("term-restore-mosaic")).not.toBeInTheDocument();
+    await addTerminal(IMPLEMENT);
+    await addTerminal(MGR);
+    await addTerminal(REVIEW);
+    expect(screen.queryByTestId("term-restore-mosaic")).not.toBeInTheDocument();
+
+    fireEvent.click(within(terminalOf(PRIMARY)).getByTestId("term-expand"));
+    fireEvent.click(screen.getByTestId("term-expand"));
+    expect(paneSessions()).toEqual([PRIMARY]);
+
+    // `review` ended meanwhile.
+    runStates.r40 = {
+      ...(runStates.r40 as object),
+      nodes: { implement: liveNode("implement"), review: liveNode("review", "completed") },
+    };
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("term-restore-mosaic"));
+    });
+    await waitFor(() => expect(paneSessions()).toEqual([PRIMARY, IMPLEMENT, MGR]));
+    expect(screen.queryByTestId("term-restore-mosaic")).not.toBeInTheDocument();
+  });
+
+  it("restores the last mosaic after a page reload", async () => {
+    const first = renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    await addTerminal(GRILL);
+    first.unmount();
+
+    renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    expect(paneSessions()).toEqual([PRIMARY]);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("term-restore-mosaic"));
+    });
+    await waitFor(() => expect(paneSessions()).toEqual([PRIMARY, GRILL]));
+  });
+
+  it("says so when nothing of the last mosaic is still live", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByTestId("term-expand"));
+    await addTerminal(GRILL);
+    fireEvent.click(within(terminalOf(PRIMARY)).getByTestId("term-expand"));
+    fireEvent.click(screen.getByTestId("term-expand"));
+
+    fetchRunsMock.mockResolvedValue([]);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("term-restore-mosaic"));
+    });
+    expect(await screen.findByTestId("term-restore-notice")).toHaveTextContent(
+      "No terminal of the last mosaic is still live.",
+    );
+    expect(paneSessions()).toEqual([PRIMARY]);
+  });
+
+  describe("keyboard", () => {
+    it("leaves Escape to the agent in any pane's terminal", async () => {
+      const seenByApp = vi.fn();
+      window.addEventListener("keydown", seenByApp);
+      renderPanel();
+      fireEvent.click(screen.getByTestId("term-expand"));
+      await addTerminal(IMPLEMENT);
+      const input = within(terminalOf(IMPLEMENT)).getByTestId("mock-xterm-input");
+      expect(document.activeElement).toBe(input);
+
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+      expect(seenByApp).toHaveBeenCalledTimes(1);
+      window.removeEventListener("keydown", seenByApp);
+    });
+
+    it("collapses on Escape when no pane has the focus", async () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId("term-expand"));
+      await addTerminal(IMPLEMENT);
+      act(() => {
+        (document.activeElement as HTMLElement | null)?.blur();
+      });
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(screen.queryByTestId("terminal-fullsize")).not.toBeInTheDocument();
+      expect(paneSessions()).toEqual([PRIMARY]);
+    });
+
+    it("closes the picker on Escape, leaving the view enlarged, and keeps its keys from the app", async () => {
+      const seenByApp = vi.fn();
+      window.addEventListener("keydown", seenByApp);
+      renderPanel();
+      fireEvent.click(screen.getByTestId("term-expand"));
+      await openPicker();
+      const search = screen.getByTestId("terminal-picker-search");
+
+      fireEvent.keyDown(search, { key: "Delete" });
+      expect(seenByApp).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(search, { key: "Escape" });
+      expect(screen.queryByTestId("terminal-picker")).not.toBeInTheDocument();
+      expect(screen.getByTestId("terminal-fullsize")).toBeInTheDocument();
+      expect(seenByApp).not.toHaveBeenCalled();
+      window.removeEventListener("keydown", seenByApp);
+    });
+
+    it("picks with the arrows and Enter", async () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId("term-expand"));
+      await openPicker();
+      const search = screen.getByTestId("terminal-picker-search");
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.keyDown(search, { key: "Enter" });
+      });
+      expect(paneSessions()).toEqual([PRIMARY, GRILL]);
     });
   });
 });

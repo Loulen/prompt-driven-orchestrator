@@ -3,8 +3,9 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand, RefreshCw, FileUp } from "lucide-react";
+import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand, RefreshCw, FileUp, Terminal as TerminalIcon, X } from "lucide-react";
 import { Tooltip } from "./ui/tooltip";
+import { sessionChipLabel } from "../lib/terminalIdentity";
 import { attachSession, fetchPane } from "../api";
 import {
   clipboardKeyAction,
@@ -45,6 +46,11 @@ export interface PaneSource {
 
 interface Props {
   session: string;
+  /** #1038: the terminal's identity as text — « <Run> › <node | Manager |
+   *  Shell> ». Shown in place of the tmux session name, which moves to a chip
+   *  (tooltip + copy). Ignored when `toolbarIdentity` is given (it already
+   *  carries the identity). Omit ⇒ the session name stays the title. */
+  title?: string;
   expanded?: boolean;
   onExpand?: () => void;
   status?: string;
@@ -73,6 +79,9 @@ interface Props {
   /** #971: set when the node cannot receive files right now (no live
    *  session): the Import button is off and says why. */
   importDisabledReason?: string | null;
+  /** #1040: a pane of the Mosaïque — its ✕ takes it out of the view. Nothing
+   *  is stopped: the session runs on. Omit ⇒ no ✕. */
+  onRemove?: () => void;
 }
 
 /** #972: the veil over a live terminal whose socket dropped. */
@@ -90,6 +99,8 @@ export const PTY_SILENCE_TIMEOUT_MS = 30_000;
 /** #968: the exits of the enlarged terminal, named on its collapse button. */
 const COLLAPSE_LABEL = "Collapse terminal · Esc · click outside";
 const EXPAND_LABEL = "Expand terminal";
+/** #1040: the ✕ of a Mosaïque pane — it hides, it does not stop. */
+export const REMOVE_PANE_LABEL = "Remove from view · the session keeps running";
 
 // A node iteration in one of these states has had its tmux session reaped on the
 // terminal transition (#205, the one-live-iteration invariant), so attaching a PTY
@@ -147,6 +158,7 @@ type PaneMode = "probing" | "live" | "frozen";
 
 export default function TmuxTerminal({
   session,
+  title,
   expanded = false,
   onExpand,
   status,
@@ -157,6 +169,7 @@ export default function TmuxTerminal({
   toolbarActions,
   onImportFiles,
   importDisabledReason,
+  onRemove,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -265,6 +278,16 @@ export default function TmuxTerminal({
     if (ok) term.clearSelection();
     window.setTimeout(() => setCopyFeedback(null), 1500);
   }, []);
+
+  // #1038: the tmux session name is no longer the title; its chip copies it
+  // (for a `tmux attach -t …`), with the same execCommand fallback as Copy.
+  const [sessionCopyFeedback, setSessionCopyFeedback] = useState<"copied" | "failed" | null>(null);
+  const handleCopySession = useCallback(async () => {
+    const ok = await writeClipboardText(session);
+    setSessionCopyFeedback(ok ? "copied" : "failed");
+    window.setTimeout(() => setSessionCopyFeedback(null), 1500);
+  }, [session]);
+  const hasIdentity = toolbarIdentity !== undefined || (title !== undefined && title !== "");
 
   // #870: a spectator takes control. No confirmation, and no optimistic change:
   // the daemon answers with the new role, which is what flips the toolbar.
@@ -734,9 +757,37 @@ export default function TmuxTerminal({
         ) : (
           <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} data-testid="term-connection-dot" />
         )}
-        <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
-          {session}
-        </span>
+        {hasIdentity ? (
+          <>
+            {toolbarIdentity === undefined && (
+              <span
+                className="min-w-0 truncate text-fg-2"
+                style={{ fontSize: "11.5px", fontWeight: 500 }}
+                data-testid="term-title"
+              >
+                {title}
+              </span>
+            )}
+            {/* #1038: the tmux session is a technical id — a chip, not the title. */}
+            <Tooltip content={sessionChipLabel(session, sessionCopyFeedback)}>
+              <button
+                type="button"
+                onClick={handleCopySession}
+                aria-label={`Copy tmux session name ${session}`}
+                className="flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded text-fg-4 transition-colors hover:bg-bg-4 hover:text-fg-2"
+                data-testid="term-session-chip"
+                data-session={session}
+                data-feedback={sessionCopyFeedback ?? undefined}
+              >
+                <TerminalIcon size={11} />
+              </button>
+            </Tooltip>
+          </>
+        ) : (
+          <span className="font-mono text-fg-4" style={{ fontSize: "10px" }} data-testid="term-session-name">
+            {session}
+          </span>
+        )}
         <span
           className={`rounded border px-1 py-px font-mono ${
             connected
@@ -865,6 +916,18 @@ export default function TmuxTerminal({
               data-testid="term-detach"
             >
               <ExternalLink size={12} />
+            </button>
+          </Tooltip>
+        )}
+        {onRemove && (
+          <Tooltip content={REMOVE_PANE_LABEL}>
+            <button
+              onClick={onRemove}
+              aria-label={REMOVE_PANE_LABEL}
+              className="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-fg-3 transition-colors hover:bg-bg-4 hover:text-fg"
+              data-testid="term-remove-pane"
+            >
+              <X size={12} />
             </button>
           </Tooltip>
         )}

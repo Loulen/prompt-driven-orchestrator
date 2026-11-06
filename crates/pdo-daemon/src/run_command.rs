@@ -29,6 +29,11 @@ use crate::{
     CreateRunRequest, TargetRepoInput,
 };
 
+/// Serialises every `rename_run` (#1039), so a conditional rename's placeholder
+/// check and its append form one step. Process-wide rather than per Run: renames
+/// are rare and instantaneous, and one daemon owns the event log.
+static RENAME_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// The wire shape of a command. `pub(crate)` only because axum's extractor puts
 /// this type in the handler's public signature; its fields stay private.
 #[derive(Deserialize)]
@@ -68,6 +73,11 @@ pub(crate) struct RunCommandRequest {
     content: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    /// `rename_run` only (#1039): apply the rename only while the Run still
+    /// carries its placeholder name. Sent by agents; the UI's manual rename omits
+    /// it and stays unconditional.
+    #[serde(default)]
+    if_placeholder: bool,
 }
 
 /// A command from the Pipeline Manager, already validated. The only way to build
@@ -160,8 +170,14 @@ enum RunCommand {
     /// A missing `name` is LEGAL and means the empty string. Do not "fix" it
     /// into a rejection — renaming to `""` clears the name, and the projection
     /// reads it that way.
+    ///
+    /// `if_placeholder` (#1039) is the automatic naming: it applies only while the
+    /// Run still carries its placeholder, so the first agent wins and a name the
+    /// user gave is never overwritten. It requires a non-blank `name` — an
+    /// automatic rename never clears the name.
     RenameRun {
         name: String,
+        if_placeholder: bool,
     },
     CleanupRun,
     RetryAll,
@@ -347,9 +363,18 @@ fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, CommandParseE
             }
             Ok(RunCommand::InjectArtifact { path, content })
         }
-        "rename_run" => Ok(RunCommand::RenameRun {
-            name: req.name.unwrap_or_default(),
-        }),
+        "rename_run" => {
+            let name = req.name.unwrap_or_default();
+            if req.if_placeholder && name.trim().is_empty() {
+                return Err(CommandParseError(
+                    "name required for rename_run with if_placeholder".to_string(),
+                ));
+            }
+            Ok(RunCommand::RenameRun {
+                name,
+                if_placeholder: req.if_placeholder,
+            })
+        }
         "cleanup_run" => Ok(RunCommand::CleanupRun),
         "retry_all" => Ok(RunCommand::RetryAll),
         other => Err(CommandParseError(format!("unknown command: {other}"))),
@@ -1979,7 +2004,37 @@ async fn dispatch(state: Arc<AppState>, run_id: String, cmd: RunCommand) -> Resp
             info!("inject_artifact: {path} in run {run_id}");
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
-        RunCommand::RenameRun { name: new_name } => {
+        RunCommand::RenameRun {
+            name: new_name,
+            if_placeholder,
+        } => {
+            // #1039: one lock for EVERY rename, so the placeholder check and the
+            // append below are atomic against any other rename — two agents racing
+            // cannot both win, and a manual rename cannot slip between a conditional
+            // one's check and its append.
+            let _serialised = RENAME_LOCK.lock().await;
+            if if_placeholder {
+                let run_state = match load_projected(&state, &run_id).await {
+                    Ok((_, run_state)) => run_state,
+                    Err(resp) => return *resp,
+                };
+                if !run_state.carries_placeholder_name() {
+                    let current = run_state.name.unwrap_or_default();
+                    info!("rename_run: run {run_id} already named {current:?}; conditional rename to {new_name:?} skipped");
+                    return (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "ok": true,
+                            "noop": true,
+                            "reason": format!(
+                                "the run is already named \u{201c}{current}\u{201d} — an automatic \
+                                 rename (if_placeholder) only replaces the placeholder name"
+                            ),
+                        })),
+                    )
+                        .into_response();
+                }
+            }
             let rename_event = event_log::Event {
                 id: None,
                 run_id: run_id.clone(),
@@ -2698,7 +2753,7 @@ mod tests {
 
     #[test]
     fn parse_accepts_the_fifteen_kinds() {
-        let cases: [(serde_json::Value, RunCommand); 15] = [
+        let cases: [(serde_json::Value, RunCommand); 16] = [
             (
                 serde_json::json!({ "kind": "mark_node_done", "node_id": "n1", "iter": 3 }),
                 RunCommand::MarkNodeDone {
@@ -2781,6 +2836,14 @@ mod tests {
                 serde_json::json!({ "kind": "rename_run", "name": "hello" }),
                 RunCommand::RenameRun {
                     name: "hello".into(),
+                    if_placeholder: false,
+                },
+            ),
+            (
+                serde_json::json!({ "kind": "rename_run", "name": "US #5", "if_placeholder": true }),
+                RunCommand::RenameRun {
+                    name: "US #5".into(),
+                    if_placeholder: true,
                 },
             ),
             (
@@ -2908,7 +2971,8 @@ mod tests {
         assert_eq!(
             parse(serde_json::json!({ "kind": "rename_run" })),
             Ok(RunCommand::RenameRun {
-                name: String::new()
+                name: String::new(),
+                if_placeholder: false,
             }),
             "an omitted name renames to the empty string"
         );
@@ -3179,6 +3243,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "reviewer");
@@ -3235,6 +3300,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let refs = extract_variable_refs_from_outgoing_edges(&pipeline, "a");

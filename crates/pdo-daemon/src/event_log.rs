@@ -996,6 +996,14 @@ pub struct RunState {
     pub pipeline_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The *Consigne de nommage* (#1039), **frozen** here from the `RunStarted`
+    /// payload: `Some` iff the Run was created with auto-naming on, carrying the
+    /// instruction resolved at creation (Pipeline → instance → built-in). The
+    /// Run's agent nodes are told to name it while it still carries its
+    /// placeholder — see [`RunState::pending_naming_instruction`]. `None` on a Run
+    /// created with auto-naming off, and on every Run created before #1039.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub naming_instruction: Option<String>,
     pub input: Option<String>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
@@ -1291,12 +1299,31 @@ impl RunState {
                     && n.awaiting.as_ref().is_some_and(|a| a.message.is_some())
             })
     }
+    /// Does this Run still carry the deterministic placeholder the daemon posed
+    /// at creation (#1039)? Compared **exactly** against
+    /// [`placeholder_run_name`], so a name the user typed — even one starting
+    /// with « Untitled run » — never reads as a placeholder.
+    pub(crate) fn carries_placeholder_name(&self) -> bool {
+        self.name.as_deref() == Some(placeholder_run_name(&self.run_id).as_str())
+    }
+
+    /// The naming instruction an agent node spawned **now** must receive
+    /// (#1039): the frozen [`RunState::naming_instruction`], but only while the
+    /// Run still carries its placeholder. Once a first agent (or the user) has
+    /// named the Run, later spawns are no longer asked to.
+    pub(crate) fn pending_naming_instruction(&self) -> Option<&str> {
+        self.naming_instruction
+            .as_deref()
+            .filter(|_| self.carries_placeholder_name())
+    }
+
     pub fn new(run_id: String, pipeline_name: String) -> Self {
         Self {
             run_id,
             status: RunStatus::Running,
             pipeline_name,
             name: None,
+            naming_instruction: None,
             input: None,
             started_at: None,
             completed_at: None,
@@ -1887,6 +1914,13 @@ fn apply_run_event(state: &mut RunState, event: &Event) {
                 if let Some(run_name) = payload.get("name").and_then(|v| v.as_str()) {
                     if !run_name.is_empty() {
                         state.name = Some(run_name.to_string());
+                    }
+                }
+                // #1039: present iff auto-naming was on at creation; a blank value
+                // is no instruction at all.
+                if let Some(instr) = payload.get("naming_instruction").and_then(|v| v.as_str()) {
+                    if !instr.trim().is_empty() {
+                        state.naming_instruction = Some(instr.to_string());
                     }
                 }
                 if let Some(input) = payload.get("input").and_then(|v| v.as_str()) {
@@ -3390,6 +3424,15 @@ pub(crate) fn is_stalled(run: &RunState) -> bool {
     }
 
     run.nodes.values().any(|n| n.status == NodeStatus::Stale)
+}
+
+/// Deterministic placeholder display name every Run receives at creation unless
+/// the user named it (#184, always posed since #1039 — a Run always has a name).
+/// Derived from the run-id's own timestamp prefix rather than a fresh clock read,
+/// so it matches the run-id. Real run-ids are `YYYYMMDD-HHMMSS-xxxxxxx`; a shorter
+/// (test) id is used whole rather than panicking on the slice.
+pub(crate) fn placeholder_run_name(run_id: &str) -> String {
+    format!("Untitled run {}", run_id.get(..15).unwrap_or(run_id))
 }
 
 pub(crate) fn now_iso() -> String {

@@ -579,6 +579,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let region = LoopRegion {
             id: "review_loop".into(),
@@ -713,6 +714,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let region = LoopRegion {
             id: "review_loop".into(),
@@ -783,6 +785,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let region = LoopRegion {
             id: "spin".into(),
@@ -847,6 +850,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         // Deleting back-edge A (index 2) still leaves the impl->rev->mid->impl
         // cycle, so the region is kept.
@@ -919,6 +923,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let region = LoopRegion {
             id: "review_loop".into(),
@@ -1057,6 +1062,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let region = LoopRegion {
             id: "per-issue".into(),

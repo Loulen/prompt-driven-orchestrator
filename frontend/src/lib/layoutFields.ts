@@ -42,7 +42,8 @@ export type SerializerScope =
   | "note";
 
 export const SEMANTIC_FIELDS: Record<SerializerScope, readonly string[]> = {
-  pipeline: ["name", "version", "prompt_required", "variables", "nodes", "edges", "loops"] satisfies (keyof PipelineDef)[],
+  // #1039: `naming_instruction` is SEMANTIC — it changes how every Run is named.
+  pipeline: ["name", "version", "prompt_required", "naming_instruction", "variables", "nodes", "edges", "loops"] satisfies (keyof PipelineDef)[],
   // #550/ADR-0046: the harness axis replaces the flat `model`/`effort` (#296/#424)
   // the serializer used to emit. `pin_harness` and the per-harness `harnesses` map
   // are SEMANTIC — they change what runs the node and how — so they belong in the

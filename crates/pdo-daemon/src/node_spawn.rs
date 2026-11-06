@@ -1091,7 +1091,7 @@ pub(crate) async fn spawn_node(
         // #465: the secondary repos come from the SAME fresh projection, resolved to
         // absolute snapshot paths for injection (the sub-worktree does not inherit
         // the snapshot files).
-        let (source_iters, repeated_iters, secondary_repos, run_started_at) =
+        let (source_iters, repeated_iters, secondary_repos, run_started_at, naming_instruction) =
             match reload_run_state_with(deps.db, run_id).await {
                 Some((_, fresh_state)) => (
                     input_resolution::resolved_source_iters(
@@ -1117,8 +1117,11 @@ pub(crate) async fn spawn_node(
                             .ok()
                             .map(|dt| dt.with_timezone(&chrono::Utc))
                     }),
+                    // #1039: read from the SAME fresh projection, so a Run another
+                    // agent named a moment ago no longer asks this one to.
+                    fresh_state.pending_naming_instruction().map(str::to_string),
                 ),
-                None => (HashMap::new(), HashMap::new(), Vec::new(), None),
+                None => (HashMap::new(), HashMap::new(), Vec::new(), None, None),
             };
 
         // Precompute whether the Start prompt carries content so `build_preamble`
@@ -1164,9 +1167,9 @@ pub(crate) async fn spawn_node(
             variables: spawn_ctx.resolved_vars,
             // #447: same single resolver as the manager preamble and
             // `PDO_DAEMON_URL` — `run_sandboxed` is already projected above for the
-            // spawn precondition. Defensive here: no node preamble consumes
-            // `daemon_url` yet (see the note in `node_primitives::start_node`).
+            // spawn precondition. The « Name this run » section prints it (#1039).
             daemon_url: &crate::sandbox_container::daemon_url(deps.port, run_sandboxed),
+            naming_instruction: naming_instruction.as_deref(),
             foreach_context,
             source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
             // #654: the same section, from the other isolation. This site only

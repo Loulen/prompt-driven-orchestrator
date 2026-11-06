@@ -333,6 +333,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let state = state_with(vec![
             node_with_iterations(
@@ -381,6 +382,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let state = state_with(vec![
             node_with_iterations(
@@ -482,6 +484,7 @@ edges:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let state = state_with(vec![node_with_iterations(
             "reviewer",
@@ -540,6 +543,7 @@ edges:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         }
     }
 
@@ -685,6 +689,7 @@ edges:
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         }
     }
 

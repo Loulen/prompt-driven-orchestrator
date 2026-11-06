@@ -86,6 +86,9 @@ export default function PipelineMetaSections({
             <ReadOnlyRow label="Prompt required" testid="pipeline-meta-prompt-required">
               {promptRequired ? "Yes" : "No"}
             </ReadOnlyRow>
+            <ReadOnlyRow label="Naming instruction" testid="pipeline-meta-naming-instruction">
+              {pipeline.naming_instruction || "Instance setting"}
+            </ReadOnlyRow>
           </>
         ) : (
           <>
@@ -118,6 +121,22 @@ export default function PipelineMetaSections({
               />
               Prompt required
             </label>
+            {/* Naming instruction (#1039): how the agent that names each Run should
+                name it. Empty stores nothing — the instance setting decides. */}
+            <Field label="Naming instruction">
+              <textarea
+                value={pipeline.naming_instruction ?? ""}
+                onChange={(e) => updateMeta({ naming_instruction: e.target.value || null })}
+                rows={2}
+                className="w-full resize-y rounded border border-line-strong bg-bg-3 px-2 py-1 text-fg outline-none focus:border-acc"
+                placeholder="Instance setting"
+                data-testid="pipeline-naming-instruction-input"
+              />
+            </Field>
+            <div className="text-fg-4" style={{ fontSize: "10px" }} data-testid="pipeline-naming-instruction-hint">
+              How the first agent of each Run names it, e.g. “US #&lt;number&gt; - &lt;column of
+              the Trello card&gt;”. Applies when the Run is auto-named.
+            </div>
           </>
         )}
       </div>

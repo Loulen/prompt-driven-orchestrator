@@ -91,6 +91,10 @@ struct PipelineProjection<'a> {
     name: &'a str,
     version: Option<&'a str>,
     prompt_required: bool,
+    /// Semantic (#1039): it changes how every Run of the pipeline gets named.
+    /// Skipped when absent, so a pre-#1039 pipeline keeps its content hash.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    naming_instruction: Option<&'a str>,
     variables: BTreeMap<&'a str, VariableProjection<'a>>,
     nodes: Vec<NodeProjection<'a>>,
     edges: Vec<EdgeProjection<'a>>,
@@ -109,12 +113,14 @@ impl<'a> PipelineProjection<'a> {
             notes,
             prompt_required,
             grid_size,
+            naming_instruction,
         } = pipeline;
         let _layout = (notes, grid_size); // LAYOUT_FIELDS["pipeline"] — dropped
         Self {
             name,
             version: version.as_deref(),
             prompt_required: *prompt_required,
+            naming_instruction: naming_instruction.as_deref(),
             variables: variables
                 .iter()
                 .map(|(k, v)| (k.as_str(), VariableProjection::of(v)))
@@ -545,6 +551,17 @@ mod tests {
         // #877 / ADR-0076: the wiring-grid size is canvas presentation.
         let gridded = format!("{}grid_size: S\n", fixture(300.0, ""));
         assert_eq!(canonical(&fixture(300.0, "")), canonical(&gridded));
+    }
+
+    #[test]
+    fn naming_instruction_changes_the_projection() {
+        // #1039: the naming instruction decides how every Run gets named, so two
+        // pipelines differing only by it are NOT the same pipeline.
+        let named = format!(
+            "{}naming_instruction: \"HITL #<issue>\"\n",
+            fixture(300.0, "")
+        );
+        assert_ne!(canonical(&fixture(300.0, "")), canonical(&named));
     }
 
     #[test]

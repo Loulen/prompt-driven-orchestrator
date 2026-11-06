@@ -242,7 +242,7 @@ interface EditState {
 
   /** `grid_size: null` clears the pipeline's own size (it follows the global
    *  default again) — the key is then dropped from the document, not nulled. */
-  updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "prompt_required" | "grid_size">>) => void;
+  updatePipelineMeta: (updates: Partial<Pick<PipelineDef, "name" | "version" | "variables" | "prompt_required" | "grid_size" | "naming_instruction">>) => void;
 
   updatePrompt: (nodeId: string, content: string) => void;
 
@@ -915,6 +915,11 @@ export const useEditStore = create<EditState>((set, get) => ({
       if (updates.grid_size !== undefined) {
         if (updates.grid_size) tab.pipeline.grid_size = updates.grid_size;
         else delete tab.pipeline.grid_size;
+      }
+      // #1039: an emptied field removes the key, so the instance setting decides.
+      if (updates.naming_instruction !== undefined) {
+        if (updates.naming_instruction) tab.pipeline.naming_instruction = updates.naming_instruction;
+        else delete tab.pipeline.naming_instruction;
       }
     }, { coalesceKey: `updatePipelineMeta:${Object.keys(updates).sort().join(",")}` }));
   },

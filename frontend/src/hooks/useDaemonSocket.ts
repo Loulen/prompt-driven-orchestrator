@@ -40,6 +40,10 @@ const FORWARDED = new Set<WsMessage["type"]>([
   // Projet created, renamed or deleted in another tab, nor of the validations
   // a deletion rewrites, until a reload.
   "project_changed",
+  // #1041: an Espace mutation or a Run moved between Espaces. Neither is an
+  // event (ADR-0083), so without this line another browser would only see the
+  // move after a reload.
+  "space_changed",
   // #972: the daemon lost messages for this client — re-read everything.
   "resync",
 ]);

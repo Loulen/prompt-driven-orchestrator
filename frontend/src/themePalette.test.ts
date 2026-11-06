@@ -101,6 +101,15 @@ const NON_TEXT = [
   "chart-runs",
   "chart-errors",
   "chart-fires",
+  // #1041 — the eight Espace colours fill a row stripe and a square swatch.
+  "space-blue",
+  "space-orange",
+  "space-green",
+  "space-pink",
+  "space-sky",
+  "space-vermillion",
+  "space-violet",
+  "space-yellow",
 ];
 
 /**

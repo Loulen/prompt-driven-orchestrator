@@ -3461,3 +3461,123 @@ describe("NewRunModal — a Trigger's source branch warns on a local one (#804)"
     expect(screen.queryByTestId("source-branch-local-warning")).not.toBeInTheDocument();
   });
 });
+
+// #1041 — the Space select: hidden with no Espace, « No space » by default, the
+// chosen Espace posted with the Run or stored on the Trigger.
+describe("NewRunModal — Space select (#1041)", () => {
+  const spaces = [
+    { id: "spc-l", name: "Loïc", color: "blue" },
+    { id: "spc-a", name: "Ana", color: "orange" },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(fetchPipelines).mockResolvedValue([
+      makePipeline({ id: "p1", name: "Auditor", scope: "repo", prompt_required: false }),
+    ]);
+  });
+
+  it("is not shown at all while the instance has no Espace", async () => {
+    renderModal();
+    await enterValidRepo();
+    expect(screen.queryByTestId("space-select")).not.toBeInTheDocument();
+  });
+
+  it("defaults to No space, lists the Espaces by name, and posts the chosen one", async () => {
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} spaces={spaces} />);
+    await enterValidRepo();
+    const select = screen.getByTestId("space-select") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(Array.from(select.options).map((o) => o.textContent)).toEqual([
+      "No space",
+      "Ana",
+      "Loïc",
+    ]);
+
+    await pickPipeline("p1");
+    fireEvent.change(select, { target: { value: "spc-l" } });
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await waitFor(() =>
+      expect(createRun).toHaveBeenCalledWith(expect.objectContaining({ space_id: "spc-l" })),
+    );
+  });
+
+  it("omits space_id when the Run stays in No space", async () => {
+    render(<NewRunModal open={true} onClose={noop} onCreated={noop} spaces={spaces} />);
+    await enterValidRepo();
+    await pickPipeline("p1");
+    vi.useRealTimers();
+    fireEvent.click(screen.getByRole("button", { name: /launch/i }));
+    await waitFor(() => expect(createRun).toHaveBeenCalled());
+    expect(vi.mocked(createRun).mock.calls[0][0].space_id).toBeUndefined();
+  });
+
+  it("pre-fills a Trigger's Espace on edit, and clearing it sends null", async () => {
+    const trigger: Trigger = {
+      id: "trg-s",
+      name: "Nightly",
+      pipeline_id: "p1",
+      pipeline_name: "Auditor",
+      target_repo: "/home/user/project",
+      source_branch: "dev",
+      input_template: "audit",
+      variables: {},
+      cron: "0 * * * *",
+      guard_command: null,
+      overlap_policy: "skip",
+      auto_name: true,
+      space_id: "spc-a",
+      enabled: true,
+      next_fire_at: null,
+      last_fired_at: null,
+      last_outcome: null,
+    };
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        spaces={spaces}
+        openIntent={{ kind: "edit-trigger", trigger }}
+      />,
+    );
+    await waitFor(() =>
+      expect((screen.getByTestId("space-select") as HTMLSelectElement).value).toBe("spc-a"),
+    );
+    await vi.advanceTimersByTimeAsync(500);
+    await waitFor(() => expect(validateRepo).toHaveBeenCalledWith("/home/user/project"));
+
+    fireEvent.change(screen.getByTestId("space-select"), { target: { value: "" } });
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("save-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("save-trigger-button"));
+    await waitFor(() =>
+      expect(updateTrigger).toHaveBeenCalledWith(
+        "trg-s",
+        expect.objectContaining({ space_id: null }),
+      ),
+    );
+  });
+
+  it("stores the chosen Espace on a new Trigger", async () => {
+    render(
+      <NewRunModal
+        open={true}
+        onClose={noop}
+        onCreated={noop}
+        spaces={spaces}
+        openIntent={{ kind: "new-trigger" }}
+      />,
+    );
+    await enterValidRepo();
+    await pickPipeline("p1");
+    fireEvent.change(screen.getByTestId("trigger-name-input"), { target: { value: "T" } });
+    fireEvent.change(screen.getByTestId("space-select"), { target: { value: "spc-a" } });
+    vi.useRealTimers();
+    await waitFor(() => expect(screen.getByTestId("create-trigger-button")).toBeEnabled());
+    fireEvent.click(screen.getByTestId("create-trigger-button"));
+    await waitFor(() =>
+      expect(createTrigger).toHaveBeenCalledWith(expect.objectContaining({ space_id: "spc-a" })),
+    );
+  });
+});

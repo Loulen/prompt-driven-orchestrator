@@ -590,6 +590,13 @@ describe("buildRunPayload", () => {
    * choose", and only an ABSENT `harness` lets the daemon resolve through the instance
    * default and the floor. A concrete choice is sent verbatim.
    */
+  it("files the Run in the chosen Espace, and omits the key for No space (#1041)", () => {
+    expect(buildRunPayload({ ...fields, space: "spc-l" }).space_id).toBe("spc-l");
+    expect("space_id" in buildRunPayload({ ...fields, space: "" })).toBe(true);
+    expect(buildRunPayload({ ...fields, space: "" }).space_id).toBeUndefined();
+    expect(buildRunPayload(fields).space_id).toBeUndefined();
+  });
+
   it("omits the harness key for the inherit sentinel, and sends an explicit choice", () => {
     expect(buildRunPayload({ ...fields, harness: "" }).harness).toBeUndefined();
     expect(buildRunPayload({ ...fields, harness: "opencode" }).harness).toBe("opencode");
@@ -662,6 +669,15 @@ describe("buildTriggerCreatePayload / buildTriggerUpdatePayload", () => {
     autoName: true,
     variables: { max_iter: 5 },
   };
+
+  it("carries the Trigger's Espace: set on create, set or cleared on edit (#1041)", () => {
+    expect(buildTriggerCreatePayload({ ...fields, space: "spc-a" }).space_id).toBe("spc-a");
+    expect("space_id" in buildTriggerCreatePayload({ ...fields, space: "" })).toBe(false);
+    expect(buildTriggerUpdatePayload({ ...fields, space: "spc-a" }).space_id).toBe("spc-a");
+    expect(buildTriggerUpdatePayload({ ...fields, space: "" }).space_id).toBeNull();
+    // A caller with no Space select leaves the Trigger's Espace untouched.
+    expect("space_id" in buildTriggerUpdatePayload(fields)).toBe(false);
+  });
 
   it("creates with the trimmed form values", () => {
     expect(buildTriggerCreatePayload(fields)).toEqual({

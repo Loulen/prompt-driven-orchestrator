@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { ArrowLeft, GitFork, Settings, BarChart3 } from "lucide-react";
 import { useDaemonSocket } from "./hooks/useDaemonSocket";
+import { spaceLookup } from "./lib/groupBySpace";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
 import { useLibrary } from "./hooks/useLibrary";
-import { fetchRuns, fetchRun, fetchTriggers, fetchProjects, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
+import { fetchRuns, fetchRun, fetchTriggers, fetchProjects, fetchSpaces, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
 import { useRightPaneRouter } from "./hooks/useRightPaneRouter";
 import { useLibassistLifecycle } from "./hooks/useLibassistLifecycle";
-import type { RunListEntry, RunState, Trigger, Project, DaemonStatus } from "./types";
+import type { RunListEntry, RunState, Trigger, Project, Space, DaemonStatus } from "./types";
 import { shouldAutoSnapToLiveNode } from "./lib/autoSnap";
 import SessionCounter from "./components/SessionCounter";
 import ServiceHealthIndicator from "./components/ServiceHealthIndicator";
@@ -130,6 +131,23 @@ function useProjects() {
   return { projects, refresh };
 }
 
+// #1041 — Espaces, hydrated on mount and refreshed on a `space_changed` WS push
+// (the daemon broadcasts one on every Espace mutation and every Run move — none
+// of which is an event, ADR-0083). Mirror of useProjects.
+function useSpaces() {
+  const [spaces, setSpaces] = useState<Space[]>([]);
+
+  const refresh = useCallback(async () => {
+    try {
+      setSpaces(await fetchSpaces());
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  return { spaces, refresh };
+}
+
 function useSelectedRun() {
   const [run, setRun] = useState<RunState | null>(null);
   const currentIdRef = useRef<string | null>(null);
@@ -173,6 +191,14 @@ export default function App() {
   const { status: updateStatus, refresh: refreshUpdateStatus } = useUpdateStatus();
   const { triggers, refresh: refreshTriggers } = useTriggers();
   const { projects, refresh: refreshProjects } = useProjects();
+  const { spaces, refresh: refreshSpaces } = useSpaces();
+  // #1041: a Run's tab carries its Espace's swatch — read off the list entry,
+  // which the daemon resolves (a child's is its root's).
+  const spaceOfRun = useMemo(() => {
+    const lookup = spaceLookup(spaces);
+    const byRun = new Map(runs.map((r) => [r.run_id, r.space_id]));
+    return (runId: string) => lookup(byRun.get(runId));
+  }, [runs, spaces]);
   // #348: global Trigger pause. Lifted here (not in a per-panel hook) so the WS
   // dispatcher can flip it live and every consumer stays in sync; hydrated on
   // mount from GET /triggers/health since there is no trigger polling.
@@ -643,6 +669,7 @@ export default function App() {
       refreshSessions();
       refreshTriggers();
       refreshProjects();
+      refreshSpaces();
       // #348: hydrate the global pause flag once — no trigger polling carries it,
       // so without this a page reload would show the banner off while paused.
       fetchTriggersHealth()
@@ -650,7 +677,7 @@ export default function App() {
         .catch(() => {});
       useRecentReposStore.getState().refresh();
     }
-  }, [refreshRuns, refreshSessions, refreshTriggers, refreshProjects]);
+  }, [refreshRuns, refreshSessions, refreshTriggers, refreshProjects, refreshSpaces]);
 
   // A WS reconnect usually means the daemon restarted — possibly as a different
   // binary, so the /sessions payload (version included, #139) may be stale. An
@@ -795,6 +822,7 @@ export default function App() {
         refreshSessions();
         refreshTriggers();
         refreshProjects();
+        refreshSpaces();
         loadPipelines();
         fetchTriggersHealth()
           .then((h) => setTriggersPaused(h.paused))
@@ -822,6 +850,15 @@ export default function App() {
       if (msg.type === "project_changed") {
         refreshProjects();
         loadPipelines();
+        return;
+      }
+      // #1041: an Espace was created / edited / deleted, or a Run moved — none of
+      // it is an event (ADR-0083), so this push is the only way another browser
+      // learns of it. A deletion also clears Triggers that carried the Espace.
+      if (msg.type === "space_changed") {
+        refreshSpaces();
+        refreshRuns();
+        refreshTriggers();
         return;
       }
       // #974: a Pipeline's validation changed (another tab or client) — the
@@ -862,7 +899,7 @@ export default function App() {
       // count (#159) — keep the status-bar counter current.
       refreshSessions();
     });
-  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, refreshProjects, reloadPipeline, loadPipelines]);
+  }, [subscribe, refreshRuns, refreshRun, refreshSessions, refreshTriggers, refreshProjects, refreshSpaces, reloadPipeline, loadPipelines]);
 
   const selectedNode =
     selectedNodeId && selectedRun
@@ -973,6 +1010,11 @@ export default function App() {
               onTogglePause={handleTogglePause}
               projects={projects}
               onProjectsChanged={refreshProjects}
+              spaces={spaces}
+              onSpacesChanged={() => {
+                refreshSpaces();
+                refreshRuns();
+              }}
             />
           </ResizablePanel>
 
@@ -981,7 +1023,7 @@ export default function App() {
           <ResizablePanel defaultSize={layout.defaultLayout.center} id="center">
             {hasEditTab ? (
               <div className="flex h-full min-w-0 flex-col">
-                <TabBar projects={projects} />
+                <TabBar projects={projects} spaceOfRun={spaceOfRun} />
                 {orchestratorReturn && selectedRun?.run_id === orchestratorReturn.childRunId && (
                   <button
                     type="button"
@@ -1215,6 +1257,7 @@ export default function App() {
         }}
         openIntent={openIntent}
         onTriggerSaved={refreshTriggers}
+        spaces={spaces}
         // #691: the one programmatic door into Settings from New Run — lands on the section,
         // pulses it once; New Run stays mounted underneath.
         onManageStagingProfiles={() =>

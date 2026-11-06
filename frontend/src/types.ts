@@ -662,6 +662,23 @@ export interface RunListEntry {
    * optional so existing test fixtures that omit it still typecheck.
    */
   effective_repo?: string;
+  /**
+   * #1041 / ADR-0083: the Espace the Run is listed in — its own, or its root's
+   * for a child Run. Absent ⇒ « Sans espace » ("No space").
+   */
+  space_id?: string | null;
+}
+
+/**
+ * An **Espace** (#1041, CONTEXT.md « Espace », ADR-0083): a named, coloured
+ * grouping of Runs, shared by the whole instance. It carries no configuration.
+ * `color` is a key of the fixed palette (`lib/spacePalette.ts`), resolved per
+ * theme on the client.
+ */
+export interface Space {
+  id: string;
+  name: string;
+  color: string;
 }
 
 /**
@@ -770,6 +787,8 @@ export interface Trigger {
   /** Whether Runs this Trigger fires are auto-named (#338). Frozen at creation from the
    *  instance default; `true` is the pre-#338 behaviour. A flat bool (no inherit state). */
   auto_name: boolean;
+  /** #1041: the Espace every fired Run lands in. Absent ⇒ « Sans espace ». */
+  space_id?: string | null;
   enabled: boolean;
   next_fire_at?: string | null;
   last_fired_at?: string | null;
@@ -1245,6 +1264,9 @@ export interface WsMessage {
     | "trigger_deleted"
     | "triggers_paused"
     | "project_changed"
+    /** #1041: an Espace was created / edited / deleted, or a Run moved between
+     *  Espaces — re-read the Espaces and the Runs. */
+    | "space_changed"
     | "pipeline_validation_changed"
     /** #972: re-read everything — sent by the daemon when this client lagged
      *  behind its broadcast, and emitted by `useDaemonSocket` itself after a
@@ -1262,6 +1284,8 @@ export interface WsMessage {
   paused?: boolean;
   /** Set on `project_changed` messages (#552): the mutated Projet's id. */
   project_id?: string;
+  /** Set on `space_changed` messages (#1041): the Espace concerned, if any. */
+  space_id?: string | null;
 }
 
 export type EditScope = null | "run";

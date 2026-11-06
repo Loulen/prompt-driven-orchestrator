@@ -1,4 +1,4 @@
-import type { PipelineListEntry, PipelineValidation, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
+import type { PipelineListEntry, PipelineValidation, PipelineDetail, PipelineDef, RunListEntry, RunState, PortDef, PortType, FrontmatterFieldDecl, FrontmatterViolation, Trigger, TriggerFire, DaemonStatus, InstanceSettings, UpdateSettingsRequest, StatsOverview, StatsCost, StatsPerformance, StatsAbsorption, StatsAbsorptionList, SandboxProfile, SandboxProfileImage, SandboxProfileReferents, SyncCostPricesReport, UpdateStatus, UpdateChangelog, UpdateApplyResponse, Project, Space, BranchList, FastForwardOutcome, FastForwardRefusal, FastForwardResult, SourceDrift, AgentChoice, AgentProfile, AgentProfileReferents, ProvisioningPlan, ProvisioningRules, Skill, SkillBank, SkillDetail, SkillFile, SkillFileContent, SkillFilesUpload, SkillFolder, SkillReferents, SkillRef, SkillScanResult, SkillImportItem, SkillImportReport, SkillRescanReport, RecentSkillSource, StructuredDiff, RunRefs,
   ReviewCommentsListResponse,
   ReviewDecisionResponse,
   SendReviewCommentInput,
@@ -1081,6 +1081,8 @@ export interface CreateRunRequest {
   /** #779: non-image attachments, sent as the multipart `files` field. */
   files?: File[];
   provisioning?: ProvisioningRules;
+  /** #1041: the Espace the new Run is filed in. Omit for « Sans espace ». */
+  space_id?: string;
 }
 
 export interface CreateRunResponse {
@@ -1111,6 +1113,7 @@ export function createRun(req: CreateRunRequest): Promise<CreateRunResponse> {
     if (req.skills && req.skills.length > 0) form.append("skills", JSON.stringify(req.skills));
     if (req.auto_name !== undefined) form.append("auto_name", String(req.auto_name));
     if (req.provisioning) form.append("provisioning", JSON.stringify(req.provisioning));
+    if (req.space_id) form.append("space_id", req.space_id);
     for (const file of req.images ?? []) {
       form.append("images", file, file.name);
     }
@@ -1243,6 +1246,8 @@ export interface CreateTriggerRequest {
   /** Whether Runs this Trigger fires are auto-named (#338). Seeded from the instance
    *  default in the modal; omit → the server defaults to `true` (pre-#338 behaviour). */
   auto_name?: boolean;
+  /** #1041: the Espace every fired Run lands in; omit/null for « Sans espace ». */
+  space_id?: string | null;
 }
 
 export function fetchTriggers(): Promise<Trigger[]> {
@@ -1291,6 +1296,9 @@ export interface UpdateTriggerRequest {
   /** Auto-naming toggle (#338): a bool sets it, `undefined` leaves it unchanged. A flat
    *  bool (no clear state) — mirror of `enabled`. */
   auto_name?: boolean;
+  /** #1041: an id sets the Espace, `null` clears to « Sans espace », `undefined`
+   *  leaves it unchanged. */
+  space_id?: string | null;
 }
 
 export function updateTrigger(
@@ -1363,6 +1371,50 @@ export function deleteProject(projectId: string): Promise<void> {
   return request<void>("DELETE", `/projects/${encodeURIComponent(projectId)}`, {
     responseMode: "void",
     label: `DELETE /projects/${projectId}`,
+  });
+}
+
+// ── Espaces (#1041, ADR-0083) ─────────────────────────────────────────────
+
+export function fetchSpaces(): Promise<Space[]> {
+  return request<Space[]>("GET", "/spaces");
+}
+
+/** Create an Espace. `color` omitted ⇒ the daemon picks the first free one. */
+export function createSpace(name: string, color?: string): Promise<Space> {
+  return request<Space>("POST", "/spaces", {
+    body: color ? { name, color } : { name },
+    label: "POST /spaces",
+  });
+}
+
+/** Rename and/or recolour an Espace; an omitted field is left unchanged. */
+export function updateSpace(
+  spaceId: string,
+  req: { name?: string; color?: string },
+): Promise<Space> {
+  return request<Space>("PATCH", `/spaces/${encodeURIComponent(spaceId)}`, {
+    body: req,
+    label: `PATCH /spaces/${spaceId}`,
+  });
+}
+
+/** Delete an Espace: its Runs go back to « Sans espace », nothing else is lost. */
+export function deleteSpace(spaceId: string): Promise<void> {
+  return request<void>("DELETE", `/spaces/${encodeURIComponent(spaceId)}`, {
+    responseMode: "void",
+    label: `DELETE /spaces/${spaceId}`,
+  });
+}
+
+/** File a Run in an Espace, or back in « Sans espace » with `null`. Not an event. */
+export function setRunSpace(
+  runId: string,
+  spaceId: string | null,
+): Promise<{ run_id: string; space_id: string | null }> {
+  return request("PUT", `/runs/${encodeURIComponent(runId)}/space`, {
+    body: { space_id: spaceId },
+    label: `PUT /runs/${runId}/space`,
   });
 }
 

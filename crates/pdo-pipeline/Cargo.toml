@@ -22,12 +22,15 @@ pdo-kernel.workspace = true
 # The display of a draft's participants (`ActorDisplay`), sent to the frontend.
 pdo-extension-api = { workspace = true, features = ["ts"] }
 pdo-harness.workspace = true
+# `pdo pipeline`: the shared client of the running daemon.
+pdo-platform.workspace = true
 pdo-skill.workspace = true
 pdo-workspace.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64 = "0.22"
 chrono.workspace = true
+clap.workspace = true
 futures-util = "0.3"
 notify.workspace = true
 notify-debouncer-mini.workspace = true

@@ -44,11 +44,31 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   only offer the bank's skills. A skill already selected and since deleted from the bank stays.
 - These commands print text by default and the daemon's answer with `--json`. They exit 0 on
   success, 1 when the daemon is unreachable or refuses the call (with its reason), 2 for an
-  unreadable command line, 4 when the daemon knows no such Projet, Trigger or session.
+  unreadable command line, 4 when the daemon knows no such Run, node, pipeline, Projet,
+  Trigger or session.
+- **`pdo run`** makes the gestures of the Runs list and the run view: `show`, `cancel`, `pause`,
+  `resume`, `retry` (Retry all), `reopen`, `archive`, `forget`, `rename`, `repos`, `inject`,
+  `force-route`, `region`, `manager start|stop`, and reads a Run's `events`, `costs`, `artifact`,
+  `file`, `refs`, `source-drift`, `search` and the sweep's `stale-health`. **`pdo run pipeline`**
+  shows, exports, saves a Run's own pipeline and copies it over the shared one
+  (`overwrite-default`, `--preview`). `run create`, `wait`, `list` and `status` are unchanged.
+- **Cancel a Run.** `pdo run cancel` gives up on a live Run: nothing more is launched, every node
+  holding a session is stopped, and the Run ends `halted` with the reason `cancelled`, ready to
+  be retried or reopened. The daemon's new `cancel_run` command (an Operation `run` ×
+  `cancel_run`) does it; the UI does not offer it yet.
+- **`pdo node`** makes the gestures of a node: `retry` (and `--preview`), `skip` (with its
+  outputs), `restart`, `start`, `stop`, `kill`, `recover`, `done`, `release`, `extend`, `attach`
+  files, and reads its `prompt`, `io`, `diff` and `transcript`. Without `--iter`, a gesture
+  targets the node's latest iteration, the one the node panel shows.
+- **`pdo pipeline`** makes the gestures of the pipelines and the library: `list`, `show`,
+  `export`, `import` (a round trip, skills sidecar included), `versions`, `version`, `restore`,
+  and the editor's other gestures. `restore` is the daemon's new
+  `POST /pipelines/{id}/versions/{n}/restore`: the version saved as the next one, under the
+  pipeline's current name, as Restore then Save in the editor.
 - Every route of the daemon has its command or an exclusion written with its reason: a
-  structural test fails on a route added without either. The routes of Runs, Nodes, Pipelines,
-  Settings, Stats, the skill bank and the Review are provisional exclusions, until their
-  commands exist.
+  structural test fails on a route added without either. The routes of Settings, Stats, the skill
+  bank and the Review are provisional exclusions, until their commands exist; the shared draft of
+  the pipeline editor, a WebSocket, is excluded for good.
 
 ## 2.71.0
 

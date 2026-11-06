@@ -122,6 +122,12 @@ fn calls(repo: &Path, fixtures: &Fixtures) -> Vec<Call> {
             None,
         ),
         call(
+            "POST",
+            "/pipelines/{pipeline_id}/versions/{number}/restore",
+            format!("/pipelines/{pipeline}/versions/1/restore"),
+            None,
+        ),
+        call(
             "PUT",
             "/pipelines/{pipeline_id}/rename",
             format!("/pipelines/{pipeline}/rename"),

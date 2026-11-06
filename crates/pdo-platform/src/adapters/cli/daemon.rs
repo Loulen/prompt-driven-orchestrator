@@ -114,6 +114,43 @@ impl Daemon {
         self.send(Method::DELETE, path, body)
     }
 
+    /// The bytes a `GET` answers (an artifact, a zip), once it succeeded; a
+    /// refusal reads as [`Answer::ok`] reads it.
+    pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let response = self
+            .identified(self.client.get(format!("{}{path}", self.url)))
+            .send()
+            .context("failed to reach daemon")?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            let refusal = Answer { status, body }.ok();
+            return Err(refusal
+                .err()
+                .unwrap_or_else(|| anyhow::anyhow!("daemon returned {status}")));
+        }
+        Ok(response
+            .bytes()
+            .context("cannot read the daemon's answer")?
+            .to_vec())
+    }
+
+    /// A multipart `POST` (files to import), answered as [`Daemon::post`].
+    pub fn post_multipart(
+        &self,
+        path: &str,
+        form: reqwest::blocking::multipart::Form,
+    ) -> Result<Answer> {
+        let response = self
+            .identified(self.client.post(format!("{}{path}", self.url)))
+            .multipart(form)
+            .send()
+            .context("failed to reach daemon")?;
+        let status = response.status();
+        let body = response.text().unwrap_or_default();
+        Ok(Answer { status, body })
+    }
+
     fn send(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Answer> {
         let mut request = self.identified(
             self.client
@@ -262,6 +299,14 @@ pub fn print_json(value: &Value) {
         "{}",
         serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
     );
+}
+
+/// The text of `path`, `-` for the standard input.
+pub fn read_text(path: &str) -> Result<String> {
+    if path == "-" {
+        return std::io::read_to_string(std::io::stdin()).context("cannot read the standard input");
+    }
+    std::fs::read_to_string(path).with_context(|| format!("cannot read {path}"))
 }
 
 /// The JSON a `--file <path>` names, `-` for the standard input.

@@ -51,6 +51,10 @@ pub fn router(pipelines: Arc<Pipelines>, ws_origin: draft::OriginCheck) -> Route
             "/pipelines/{pipeline_id}/versions/{number}",
             get(pipelines::version),
         )
+        .route(
+            "/pipelines/{pipeline_id}/versions/{number}/restore",
+            post(pipelines::restore),
+        )
         .route("/pipelines/{pipeline_id}/document", get(document::export))
         // #673 / ADR-0062: the skills sidecar of the portable document — a zip of
         // `<pipeline>.skills/<id>/…` to unpack beside the YAML. The import takes it

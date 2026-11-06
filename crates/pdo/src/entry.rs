@@ -10,12 +10,14 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::Extensions;
+use pdo_pipeline::adapters::cli::run_pipeline;
 use pdo_platform::adapters::cli::daemon::exit_code;
 use pdo_platform::adapters::cli::{run_audit, run_page, run_service, ServiceAction};
 use pdo_review::adapters::cli::run_review;
 use pdo_run::adapters::cli::{
-    refused_in_hosted_session, run_complete, run_fail, run_reap, run_run_create, run_run_list,
-    run_run_status, run_run_wait, run_skip, run_wait_user, RunAction,
+    refused_in_hosted_session, run_complete, run_fail, run_node, run_reap, run_run_create,
+    run_run_gesture, run_run_list, run_run_read, run_run_status, run_run_wait, run_skip,
+    run_wait_user, RunAction,
 };
 
 use pdo_session::adapters::cli::run_session;
@@ -47,8 +49,9 @@ use crate::cli::{run_docs, run_ext, run_migrate, run_whoami, Cli, Commands};
 /// - `pdo ext <id> <args…>`: the extension's own code, relayed as is; `1` the
 ///   daemon cannot be reached or the extension failed; `127` no extension
 ///   `<id>`, or one without a command line (#33);
-/// - `pdo run status`, `pdo project`, `pdo trigger`, `pdo session`: `4` the
-///   daemon knows no such Run, Projet, Trigger or session;
+/// - `pdo run status`, the gestures of `pdo run`, `pdo node`, `pdo pipeline`,
+///   `pdo project`, `pdo trigger`, `pdo session`: `4` the daemon knows no such
+///   Run, node, pipeline, Projet, Trigger or session;
 /// - every other subcommand: `0` success, `1` error; `--help` and `--version`
 ///   exit `0`, a command line clap cannot read exits `2`.
 ///
@@ -159,7 +162,10 @@ where
             RunAction::List { json } => exit(run_run_list(json)),
             // `run status` owns the `4` (no such Run).
             RunAction::Status { run_id, json } => run_run_status(&run_id, json),
-            create => exit(run_run_create(create)),
+            // The operator's gestures share the `4` of `run status`.
+            RunAction::Gesture(gesture) => exit_code(run_run_gesture(gesture)),
+            RunAction::Read(read) => exit_code(run_run_read(read)),
+            create @ RunAction::Create { .. } => exit(run_run_create(create)),
         },
         Commands::Page { action } => exit(run_page(action)),
         Commands::Review { action } => exit(run_review(action)),
@@ -169,6 +175,8 @@ where
         // Projet, Trigger or session.
         Commands::Project { action } => exit_code(run_project(action)),
         Commands::Trigger { action } => exit_code(run_trigger(*action)),
+        Commands::Node { action } => exit_code(run_node(action)),
+        Commands::Pipeline { action } => exit_code(run_pipeline(action)),
         Commands::Session { action } => exit_code(run_session(action)),
         Commands::Audit(args) => exit_code(run_audit(args)),
         Commands::Whoami { json } => exit_code(run_whoami(json)),

@@ -98,6 +98,9 @@ pub(super) enum RunCommand {
     },
     PauseRun,
     ResumeRun,
+    /// Give up on a live Run: no more launches, every session stopped, the Run
+    /// `halted` « cancelled » (terminal, so retried or reopened).
+    CancelRun,
     /// The global re-open (ADR-0049): lifts ANY terminal Run — and an
     /// incident-parked `AwaitingUser` — back to `Running` by a re-projection that
     /// freezes the satisfied `(node, iter)` (the scheduler's dedup refuses to
@@ -201,6 +204,7 @@ impl RunCommand {
             RunCommand::SkipNode { .. } => "skip_node",
             RunCommand::PauseRun => "pause_run",
             RunCommand::ResumeRun => "resume_run",
+            RunCommand::CancelRun => "cancel_run",
             RunCommand::ReopenRun => "reopen_run",
             RunCommand::KillNode { .. } => "kill_node",
             RunCommand::RestartNode { .. } => "restart_node",
@@ -306,6 +310,7 @@ pub(super) fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, Co
         }),
         "pause_run" => Ok(RunCommand::PauseRun),
         "resume_run" => Ok(RunCommand::ResumeRun),
+        "cancel_run" => Ok(RunCommand::CancelRun),
         "reopen_run" => Ok(RunCommand::ReopenRun),
         "kill_node" => Ok(RunCommand::KillNode {
             node_id: required(req.node_id, "node_id", "kill_node")?,

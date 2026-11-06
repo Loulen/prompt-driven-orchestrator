@@ -14,7 +14,9 @@ use super::dto::{
     SavePipelineRequest,
 };
 use super::{common_response, error, error_with_message, structured_parse_error};
-use crate::application::{editor_json, Created, PipelineError, Pipelines, RenameOutcome};
+use crate::application::{
+    editor_json, Created, PipelineError, Pipelines, RenameOutcome, SaveOutcome,
+};
 use crate::domain::validation::PipelineValidation;
 use crate::domain::version::SaveAs;
 
@@ -119,6 +121,27 @@ pub(super) async fn save(
             .save(&actor, &pipeline_id, &req.yaml, &req.prompts)
             .await
     };
+    saved_response(saved)
+}
+
+/// `POST /pipelines/{id}/versions/{number}/restore`: the version saved as the
+/// next one, under the pipeline's current name (the editor's Restore, then
+/// Save). Answers as a save does.
+pub(super) async fn restore(
+    State(pipelines): State<Arc<Pipelines>>,
+    Extension(actor): Extension<Actor>,
+    AxumPath((pipeline_id, number)): AxumPath<(String, u32)>,
+) -> Response {
+    saved_response(
+        pipelines
+            .restore_version(&actor, &pipeline_id, number)
+            .await,
+    )
+}
+
+/// The answer of a save: where it landed, its version, the pipeline the
+/// previous version was kept as.
+fn saved_response(saved: Result<SaveOutcome, PipelineError>) -> Response {
     match saved {
         Ok(saved) => {
             let mut body = serde_json::json!({

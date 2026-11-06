@@ -16,6 +16,7 @@ use pdo_kernel::Actor;
 use serde::Deserialize;
 use tracing::{error, info, warn};
 
+mod cancel;
 mod completion;
 mod lifecycle;
 mod loops;
@@ -165,6 +166,7 @@ async fn dispatch(state: Arc<Runs>, run_id: String, cmd: RunCommand) -> Response
         } => skip::skip_node(state, run_id, node_id, iter, overrides).await,
         RunCommand::PauseRun => lifecycle::pause_run(state, run_id).await,
         RunCommand::ResumeRun => lifecycle::resume_run(state, run_id).await,
+        RunCommand::CancelRun => cancel::cancel_run(state, run_id).await,
         RunCommand::ReopenRun => lifecycle::reopen_run(state, run_id).await,
         RunCommand::KillNode { node_id, iter } => {
             nodes::kill_node(state, run_id, node_id, iter).await
@@ -328,7 +330,7 @@ mod tests {
 
     #[test]
     fn parse_accepts_the_fifteen_kinds() {
-        let cases: [(serde_json::Value, RunCommand); 15] = [
+        let cases: [(serde_json::Value, RunCommand); 16] = [
             (
                 serde_json::json!({ "kind": "mark_node_done", "node_id": "n1", "iter": 3 }),
                 RunCommand::MarkNodeDone {
@@ -371,6 +373,10 @@ mod tests {
             (
                 serde_json::json!({ "kind": "resume_run" }),
                 RunCommand::ResumeRun,
+            ),
+            (
+                serde_json::json!({ "kind": "cancel_run" }),
+                RunCommand::CancelRun,
             ),
             (
                 serde_json::json!({ "kind": "kill_node", "node_id": "n1", "iter": 7 }),
@@ -591,6 +597,7 @@ mod tests {
             "end_region",
             "pause_run",
             "resume_run",
+            "cancel_run",
             "kill_node",
             "restart_node",
             "start_node",

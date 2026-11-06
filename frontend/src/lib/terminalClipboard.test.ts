@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  cleanCopiedText,
   clipboardKeyAction,
   forcedSelectionEvent,
   isMacPlatform,
@@ -169,5 +170,31 @@ describe("writeClipboardText (#772)", () => {
     Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
     Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
     expect(await writeClipboardText("x")).toBe(false);
+  });
+});
+
+describe("cleanCopiedText (#1046)", () => {
+  it("drops Claude Code's two-column margin from a copied command", () => {
+    expect(cleanCopiedText("  sudo systemctl restart docker")).toBe("sudo systemctl restart docker");
+  });
+
+  it("removes only the margin all lines share, keeping relative indentation", () => {
+    expect(cleanCopiedText("  services:\n    web:\n      image: nginx")).toBe("services:\n  web:\n    image: nginx");
+  });
+
+  it("ignores blank lines when measuring the margin, and keeps them empty", () => {
+    expect(cleanCopiedText("  a\n\n    b\n   ")).toBe("a\n\n  b\n");
+  });
+
+  it("strips trailing whitespace and normalises CRLF", () => {
+    expect(cleanCopiedText("  echo hi   \r\n  ls\t")).toBe("echo hi\nls");
+  });
+
+  it("leaves unindented text untouched", () => {
+    expect(cleanCopiedText("ubuntu@vps:~$ ls\n  child")).toBe("ubuntu@vps:~$ ls\n  child");
+  });
+
+  it("handles an empty selection", () => {
+    expect(cleanCopiedText("")).toBe("");
   });
 });

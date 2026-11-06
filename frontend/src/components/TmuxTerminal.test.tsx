@@ -840,17 +840,55 @@ describe("TmuxTerminal", () => {
       expect(seen).toEqual([original]);
     });
 
-    it("Ctrl+C with a selection is handed to the browser (copy), without one it stays SIGINT", () => {
+    it("Ctrl+C with a selection copies it, without one it stays SIGINT", () => {
+      const execCommand = vi.fn(() => true);
+      Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
       render(<TmuxTerminal session="test-session" />);
       const term = mockTerminalInstances[0];
       expect(term.keyHandler).not.toBeNull();
-      const ctrlC = new KeyboardEvent("keydown", { key: "c", ctrlKey: true });
 
       term.hasSelection.mockReturnValue(false);
-      expect(term.keyHandler!(ctrlC)).toBe(true);
+      expect(term.keyHandler!(new KeyboardEvent("keydown", { key: "c", ctrlKey: true }))).toBe(true);
+      expect(execCommand).not.toHaveBeenCalled();
 
       term.hasSelection.mockReturnValue(true);
+      term.getSelection.mockReturnValue("  ls -la");
+      const ctrlC = new KeyboardEvent("keydown", { key: "c", ctrlKey: true, cancelable: true });
       expect(term.keyHandler!(ctrlC)).toBe(false);
+      // #1046: written right away and the key consumed — no wait on a native
+      // copy event that macOS delivers after the selection is gone.
+      expect(ctrlC.defaultPrevented).toBe(true);
+      expect(execCommand).toHaveBeenCalledWith("copy");
+      expect(term.clearSelection).toHaveBeenCalled();
+    });
+
+    // #1046: the text written is the cleaned selection, whatever the path.
+    it("the shortcut writes the selection without Claude Code's margin", async () => {
+      const writeText = vi.fn(() => Promise.resolve());
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      try {
+        render(<TmuxTerminal session="test-session" />);
+        const term = mockTerminalInstances[0];
+        term.hasSelection.mockReturnValue(true);
+        term.getSelection.mockReturnValue("  sudo systemctl restart docker  ");
+        term.keyHandler!(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, cancelable: true }));
+        await waitFor(() => expect(writeText).toHaveBeenCalledWith("sudo systemctl restart docker"));
+      } finally {
+        Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+      }
+    });
+
+    it("a native copy event (Ctrl+Shift+C, context menu) carries the cleaned selection", () => {
+      render(<TmuxTerminal session="test-session" />);
+      const term = mockTerminalInstances[0];
+      term.hasSelection.mockReturnValue(true);
+      term.getSelection.mockReturnValue("  services:\n    web: {}");
+      const setData = vi.fn();
+      const ev = new Event("copy", { bubbles: true, cancelable: true }) as ClipboardEvent;
+      Object.defineProperty(ev, "clipboardData", { value: { setData } });
+      screen.getByTestId("xterm-container").dispatchEvent(ev);
+      expect(setData).toHaveBeenCalledWith("text/plain", "services:\n  web: {}");
+      expect(ev.defaultPrevented).toBe(true);
     });
 
     it("Ctrl+V is handed to the browser (paste) instead of sending ^V", () => {

@@ -111,7 +111,7 @@ export default function UnifiedLeftPanel({
   const [confirmRetryAll, setConfirmRetryAll] = useState<string | null>(null);
   // Ad-hoc bash shell opened on a terminal run (#316). Holds the tmux session
   // name to attach the inline terminal to.
-  const [shellRun, setShellRun] = useState<{ runId: string; session: string } | null>(null);
+  const [shellRun, setShellRun] = useState<{ runId: string; session: string; runName?: string | null } | null>(null);
   const [renamingRunId, setRenamingRunId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -533,7 +533,7 @@ export default function UnifiedLeftPanel({
               e.stopPropagation();
               try {
                 const { session } = await openRunShell(run.run_id);
-                setShellRun({ runId: run.run_id, session });
+                setShellRun({ runId: run.run_id, session, runName: run.name });
               } catch {
                 // Silent, like handleCleanup — the server gate may 409 if the
                 // worktree vanished out-of-band; nothing actionable in the row.
@@ -1321,6 +1321,7 @@ export default function UnifiedLeftPanel({
       {shellRun && (
         <RunShellModal
           session={shellRun.session}
+          runName={shellRun.runName}
           onClose={() => setShellRun(null)}
         />
       )}

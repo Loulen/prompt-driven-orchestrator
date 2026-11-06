@@ -288,13 +288,47 @@ describe("TmuxTerminal", () => {
     const toolbar = screen.getByTestId("term-toolbar");
     const identity = within(toolbar).getByTestId("slot-identity");
     const action = within(toolbar).getByTestId("slot-action");
-    const session = within(toolbar).getByText("pdo-run1-impl-iter-1");
+    // #1038: with an identity, the tmux session name is a chip, not the title.
+    expect(within(toolbar).queryByText("pdo-run1-impl-iter-1")).not.toBeInTheDocument();
+    const session = within(toolbar).getByTestId("term-session-chip");
     const copy = within(toolbar).getByTestId("term-copy");
-    // identity → session → … → action → Copy
+    // identity → session chip → … → action → Copy
     expect(identity.compareDocumentPosition(session) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(action.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // The connection dot gives way to the identity's own status dot.
     expect(toolbar.firstElementChild).toBe(identity);
+  });
+
+  // #1038 — the terminal's identity: the Run first, never the tmux session name.
+  describe("terminal identity (#1038)", () => {
+    it("shows the title in place of the session name, which moves to a chip", () => {
+      render(<TmuxTerminal session="pdo-run1-impl-iter-1" title="US #5 - Sécurité › Implement" status="running" />);
+      const toolbar = screen.getByTestId("term-toolbar");
+      expect(within(toolbar).getByTestId("term-title")).toHaveTextContent("US #5 - Sécurité › Implement");
+      expect(within(toolbar).queryByText("pdo-run1-impl-iter-1")).not.toBeInTheDocument();
+      const chip = within(toolbar).getByTestId("term-session-chip");
+      expect(chip).toHaveAttribute("data-session", "pdo-run1-impl-iter-1");
+      expect(chip.parentElement).toHaveAttribute(
+        "data-tooltip",
+        expect.stringContaining("pdo-run1-impl-iter-1"),
+      );
+    });
+
+    it("copies the tmux session name from the chip", async () => {
+      const execCommand = vi.fn(() => true);
+      Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+      render(<TmuxTerminal session="pdo-run1-impl-iter-1" title="Run › Implement" />);
+      const chip = screen.getByTestId("term-session-chip");
+      fireEvent.click(chip);
+      await waitFor(() => expect(chip.dataset.feedback).toBe("copied"));
+      expect(execCommand).toHaveBeenCalledWith("copy");
+    });
+
+    it("keeps the session name as the title when no identity is given", () => {
+      render(<TmuxTerminal session="pdo-assistant" />);
+      expect(screen.getByTestId("term-session-name")).toHaveTextContent("pdo-assistant");
+      expect(screen.queryByTestId("term-session-chip")).not.toBeInTheDocument();
+    });
   });
 
   it("keeps the plain toolbar without slots", () => {

@@ -7,6 +7,7 @@ import { Maximize2, Minimize2, ExternalLink, Copy, Eye, Hand, RefreshCw, FileUp 
 import { Tooltip } from "./ui/tooltip";
 import { attachSession, fetchPane } from "../api";
 import {
+  cleanCopiedText,
   clipboardKeyAction,
   forcedSelectionEvent,
   isMacPlatform,
@@ -35,6 +36,15 @@ import { reconnectDelay } from "../hooks/useDaemonSocket";
 import { useFileDropTarget } from "../hooks/useFileDropTarget";
 import { DropOverlay } from "./SkillFileDropZone";
 import StatusIcon from "./StatusIcon";
+
+// #1046: the cleaned text of the current selection, the same on every copy
+// path. xterm's selection columns are 0-based (its typings say 1-based, its
+// code does not), so `start.x > 0` means the drag began after column 0 and
+// left the first line's margin out of the selection.
+function copiedSelection(term: Terminal): string {
+  const firstLineCut = (term.getSelectionPosition()?.start.x ?? 0) > 0;
+  return cleanCopiedText(term.getSelection(), { firstLineCut });
+}
 
 /** Which node iteration's frozen pane to read when the live session is gone (#617). */
 export interface PaneSource {
@@ -260,7 +270,7 @@ export default function TmuxTerminal({
   const handleCopy = useCallback(async () => {
     const term = terminalRef.current;
     if (!term || !term.hasSelection()) return;
-    const ok = await writeClipboardText(term.getSelection());
+    const ok = await writeClipboardText(copiedSelection(term));
     setCopyFeedback(ok ? "copied" : "failed");
     if (ok) term.clearSelection();
     window.setTimeout(() => setCopyFeedback(null), 1500);
@@ -398,20 +408,35 @@ export default function TmuxTerminal({
     };
     container.addEventListener("mousemove", handleMouseMove, { capture: true });
 
+    // #1046: every other copy (Ctrl+Shift+C, the context menu) goes through the
+    // native copy event. Serve it before xterm does, with the same cleaned text
+    // as the shortcut and the Copy button.
+    const handleNativeCopy = (e: ClipboardEvent) => {
+      if (!term.hasSelection() || !e.clipboardData) return;
+      e.clipboardData.setData("text/plain", copiedSelection(term));
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    container.addEventListener("copy", handleNativeCopy, { capture: true });
+
     // Ctrl+C with a selection copies it (SIGINT otherwise); Ctrl+V pastes like
     // Ctrl+Shift+V instead of sending ^V, which Claude Code reads as "paste
-    // image". Returning `false` hands the key to the browser, whose native
-    // copy/paste events xterm already serves — no navigator.clipboard, so this
-    // works over plain http on a remote daemon.
+    // image". Paste hands the key to the browser, whose native paste event
+    // xterm already serves.
     term.attachCustomKeyEventHandler((ev) => {
       const action = clipboardKeyAction(ev, {
         hasSelection: term.hasSelection(),
         isMac,
       });
       if (action === "copy") {
-        // Let the native copy event read the selection first, then drop it so
-        // the next Ctrl+C is a SIGINT again.
-        window.setTimeout(() => term.clearSelection(), 0);
+        // #1046: write the selection ourselves, then drop it so the next Ctrl+C
+        // is a SIGINT again. Waiting for the native copy event lost it on
+        // macOS: Cmd+C reaches the page through the Edit menu, after the
+        // selection was cleared, and xterm copied an empty string. The key is
+        // consumed so that late native copy cannot overwrite the clipboard.
+        ev.preventDefault();
+        void writeClipboardText(copiedSelection(term));
+        term.clearSelection();
         return false;
       }
       if (action === "paste") return false;
@@ -629,6 +654,7 @@ export default function TmuxTerminal({
       container.removeEventListener("wheel", handleWheel, { capture: true });
       container.removeEventListener("mousedown", handleMouseDown, { capture: true });
       container.removeEventListener("mousemove", handleMouseMove, { capture: true });
+      container.removeEventListener("copy", handleNativeCopy, { capture: true });
       selectionDisposable.dispose();
       setHasSelection(false);
       resizeObserver.disconnect();

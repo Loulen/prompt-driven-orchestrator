@@ -81,20 +81,59 @@ export function swallowsMotionReport(
   return e.buttons === 0;
 }
 
+/** #1046: Claude Code's answer bullet (`● `, `⏺ ` on macOS) at column 0. */
+const ANSWER_BULLET = /^[●⏺] /;
+
+/**
+ * #1046: the text a copy puts on the clipboard. Claude Code draws its answers
+ * with a two-column margin, and the terminal copies the screen as is: a
+ * command copied from an agent's answer pasted into a shell with that margin.
+ * Remove the indentation every non-blank line shares (a single line loses its
+ * leading spaces, a block keeps its relative indentation) and the trailing
+ * whitespace of each line. Blank lines stay, empty.
+ *
+ * The first line needs care, because the selection decides how much of its
+ * margin it carries:
+ * - `firstLineCut`: the selection starts after column 0, typically on the
+ *   command's first character, after the margin. The first line then has no
+ *   margin to measure; the shared margin comes from the following lines, and
+ *   the first line only loses its own leading spaces.
+ * - From column 0, an answer's first line starts with Claude Code's bullet
+ *   instead of spaces: the bullet and its space are that line's margin.
+ */
+export function cleanCopiedText(text: string, opts: { firstLineCut?: boolean } = {}): string {
+  const lines = text.split(/\r?\n/).map((line) => line.replace(/[ \t]+$/, ""));
+  if (opts.firstLineCut) {
+    const [first, ...rest] = lines;
+    return [first.replace(/^ +/, ""), ...withoutSharedMargin(rest)].join("\n");
+  }
+  if (ANSWER_BULLET.test(lines[0])) lines[0] = "  " + lines[0].slice(2);
+  return withoutSharedMargin(lines).join("\n");
+}
+
+function withoutSharedMargin(lines: string[]): string[] {
+  const margins = lines
+    .filter((line) => line.length > 0)
+    .map((line) => line.length - line.replace(/^ +/, "").length);
+  const margin = margins.length > 0 ? Math.min(...margins) : 0;
+  return lines.map((line) => line.slice(margin));
+}
+
 export type ClipboardKeyAction = "copy" | "paste" | "pass";
 
 /**
  * What a keydown in the pane should do before xterm.js sees it.
  *
- * - Ctrl+C / Cmd+C **with a selection** copies it (return `false` to xterm so
- *   the browser fires its native `copy` event, which xterm serialises the
- *   selection into). Without a selection Ctrl+C stays SIGINT.
+ * - Ctrl+C / Cmd+C **with a selection** copies it. The caller writes the
+ *   selection itself (#1046): on macOS, Cmd+C reaches the page's `copy` event
+ *   through the Edit menu, after the selection is already gone. Without a
+ *   selection Ctrl+C stays SIGINT.
  * - Ctrl+V / Cmd+V pastes the same way Ctrl+Shift+V already does. xterm.js
  *   otherwise sends `^V` to the pty, which Claude Code reads as "paste image".
  * - Ctrl+Shift+C/V keep xterm's own handling; everything else passes.
  *
- * Both paths ride the native `copy`/`paste` events, which work over plain http:
- * no `navigator.clipboard`, hence no secure-context requirement.
+ * Paste rides the native `paste` event, which works over plain http; copy goes
+ * through `writeClipboardText`, whose `execCommand` fallback does too.
  */
 export function clipboardKeyAction(
   ev: Pick<KeyboardEvent, "type" | "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">,

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  cleanCopiedText,
   clipboardKeyAction,
   forcedSelectionEvent,
   isMacPlatform,
@@ -169,5 +170,107 @@ describe("writeClipboardText (#772)", () => {
     Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
     Object.defineProperty(document, "execCommand", { value: vi.fn(() => false), configurable: true });
     expect(await writeClipboardText("x")).toBe(false);
+  });
+});
+
+describe("cleanCopiedText (#1046)", () => {
+  it("drops Claude Code's two-column margin from a copied command", () => {
+    expect(cleanCopiedText("  sudo systemctl restart docker")).toBe("sudo systemctl restart docker");
+  });
+
+  it("removes only the margin all lines share, keeping relative indentation", () => {
+    expect(cleanCopiedText("  services:\n    web:\n      image: nginx")).toBe("services:\n  web:\n    image: nginx");
+  });
+
+  it("ignores blank lines when measuring the margin, and keeps them empty", () => {
+    expect(cleanCopiedText("  a\n\n    b\n   ")).toBe("a\n\n  b\n");
+  });
+
+  it("strips trailing whitespace and normalises CRLF", () => {
+    expect(cleanCopiedText("  echo hi   \r\n  ls\t")).toBe("echo hi\nls");
+  });
+
+  it("leaves unindented text untouched", () => {
+    expect(cleanCopiedText("ubuntu@vps:~$ ls\n  child")).toBe("ubuntu@vps:~$ ls\n  child");
+  });
+
+  it("handles an empty selection", () => {
+    expect(cleanCopiedText("")).toBe("");
+    expect(cleanCopiedText("", { firstLineCut: true })).toBe("");
+  });
+
+  it("keeps a real indented block selected from column 0 as is", () => {
+    expect(cleanCopiedText("foo:\n  bar")).toBe("foo:\n  bar");
+    expect(cleanCopiedText("foo:\n  bar", { firstLineCut: false })).toBe("foo:\n  bar");
+  });
+
+  describe("selection starting after the margin (firstLineCut)", () => {
+    // The user's case: the drag starts on the command's first character, so
+    // the first line arrives without its margin and the next ones with it.
+    const cut = "sudo systemctl restart docker \\\n  && docker ps\n  && echo ok";
+
+    it("measures the margin on the following lines and strips it", () => {
+      expect(cleanCopiedText(cut, { firstLineCut: true })).toBe(
+        "sudo systemctl restart docker \\\n&& docker ps\n&& echo ok",
+      );
+    });
+
+    it("without the flag, the same text keeps its margin (the shared minimum is 0)", () => {
+      expect(cleanCopiedText(cut)).toBe(cut);
+    });
+
+    it("strips the margin from the user's real copy, keeping a wrapped item's offset", () => {
+      const copied = [
+        "Le déploiement du staging a encore échoué",
+        "",
+        "  La relance a échoué au même endroit…",
+        "  - Ce n'est pas la pose.",
+        "  1. Une pile complète dans un projet à part…",
+        "     charge. Il construit aussi l'image compute",
+        "",
+        "  Je lance le test ?",
+      ].join("\n");
+      expect(cleanCopiedText(copied, { firstLineCut: true })).toBe(
+        [
+          "Le déploiement du staging a encore échoué",
+          "",
+          "La relance a échoué au même endroit…",
+          "- Ce n'est pas la pose.",
+          "1. Une pile complète dans un projet à part…",
+          "   charge. Il construit aussi l'image compute",
+          "",
+          "Je lance le test ?",
+        ].join("\n"),
+      );
+    });
+
+    it("the first line only loses its own leading spaces", () => {
+      expect(cleanCopiedText(" ls -la\n    a\n    b", { firstLineCut: true })).toBe("ls -la\na\nb");
+    });
+
+    it("a single line loses its leading and trailing spaces", () => {
+      expect(cleanCopiedText("  ls -la  ", { firstLineCut: true })).toBe("ls -la");
+    });
+
+    it("ignores blank lines when measuring, and keeps them empty", () => {
+      expect(cleanCopiedText("cd /srv\n\n  make\n\n    all\n  ", { firstLineCut: true })).toBe(
+        "cd /srv\n\nmake\n\n  all\n",
+      );
+      expect(cleanCopiedText("cd /srv\n\n", { firstLineCut: true })).toBe("cd /srv\n\n");
+    });
+  });
+
+  describe("Claude Code answer selected from column 0", () => {
+    it("treats the bullet and its space as the first line's margin", () => {
+      expect(cleanCopiedText("● Run:\n  npm test \\\n    --watch")).toBe("Run:\nnpm test \\\n  --watch");
+    });
+
+    it("recognises the macOS bullet too, on a single line", () => {
+      expect(cleanCopiedText("⏺ git status")).toBe("git status");
+    });
+
+    it("leaves a bullet not followed by a space alone", () => {
+      expect(cleanCopiedText("●foo\n  bar")).toBe("●foo\n  bar");
+    });
   });
 });

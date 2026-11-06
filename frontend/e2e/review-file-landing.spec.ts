@@ -11,7 +11,9 @@ import type { Route } from "@playwright/test";
 
 const RUN_ID = "20260101-000000-landing";
 const COUNT = 14;
-const TARGET = "proto/index.html";
+// The page lists the files in the order of its tree (folders by name): under
+// `web/`, the target comes after every `src/` file, far below the fold.
+const TARGET = "web/index.html";
 
 const lines = (n: number, prefix: string) =>
   Array.from({ length: n }, (_, i) => ({ kind: "add", content: `${prefix} line ${i + 1}`, old_no: null, new_no: i + 1 }));

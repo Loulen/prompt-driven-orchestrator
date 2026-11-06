@@ -9,8 +9,9 @@ import { cleanupRuns, runMultipart } from "./helpers";
 
 // FP validation — #598 / ADR-0049: an interactive node whose tmux session dies
 // parks `interrupted` (recoverable) and the panel must now offer a way out:
-// Play + Reopen banner + Mark complete + a minimized (no "can't find session")
-// terminal; a Reopen revives the session; and an archived run shows none of it.
+// Play + Reopen banner + a minimized (no "can't find session") terminal, and no
+// Mark complete (the daemon does not complete an interrupted node); a Reopen
+// revives the session; and an archived run shows none of it.
 //
 // This drives the REAL system end to end: a real daemon (webServer), a real
 // tmux session per node, killed for real, and the real stale-detector sweep
@@ -122,10 +123,9 @@ async function createRun(page: Page, baseURL: string): Promise<string> {
 
 // Select a run in the left panel, its worker node, and switch to the Run tab.
 async function openWorker(page: Page, runId: string) {
-  await page
-    .getByText(runId.slice(0, 20))
-    .first()
-    .click({ timeout: 5_000, position: { x: 5, y: 5 } });
+  // The row itself: the run id also shows in the hidden `<title>` of a status
+  // mark (« session_died: tmux session pdo-<run>… »), which a text match finds.
+  await page.locator(`[data-run-row="${runId}"]`).click({ timeout: 5_000, position: { x: 5, y: 5 } });
   await page.waitForTimeout(400);
   const node = page.getByText("worker", { exact: true }).first();
   await expect(node).toBeVisible({ timeout: 5_000 });
@@ -190,7 +190,7 @@ async function annotateAndShoot(
   await page.evaluate(() => document.getElementById("__fp_annot__")?.remove());
 }
 
-test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, and hides all of it when archived", async ({
+test("interrupted node offers Play + Reopen, revives on Reopen, and hides all of it when archived", async ({
   page,
   baseURL,
 }) => {
@@ -221,19 +221,20 @@ test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, 
   await expect(page.getByTestId("interrupted-reopen-btn")).toBeVisible();
   await expect(page.getByTestId("play-retry-btn")).toBeVisible();
   await expect(page.getByTestId("play-retry-btn")).toHaveAccessibleName("Retry");
-  await expect(page.getByTestId("mark-complete-btn")).toBeVisible();
+  // The daemon does not complete an interrupted node (it re-drives on Reopen):
+  // « Mark complete » is not offered on it (`isMarkCompletable`).
+  await expect(page.getByTestId("mark-complete-btn")).toHaveCount(0);
   await expect(page.getByTestId("terminal-minimized")).toBeVisible();
   await expect(page.getByTestId("tmux-terminal")).toHaveCount(0);
   await expect(page.getByText(/can't find session/i)).toHaveCount(0);
 
   await annotateAndShoot(page, "1-interrupted-affordances.png", [
     "Etape 1 — Node Interrupted : session tmux tuee, detectee par la sweep stale-detector (meme etat NodeInterrupted qu'au redemarrage daemon).",
-    "Le volet offre desormais une sortie : banniere Reopen, bouton Play, Mark complete ; terminal minimise (plus de \"can't find session\").",
+    "Le volet offre une sortie : banniere Reopen, bouton Play ; terminal minimise (plus de \"can't find session\").",
   ].join("\n"), [
     { testid: "interrupted-banner", label: "Banniere: Session died - the work is presumed intact" },
     { testid: "interrupted-reopen-btn", label: "Bouton Reopen (geste retry)" },
     { testid: "play-retry-btn", label: "Bouton Play dans node-controls" },
-    { testid: "mark-complete-btn", label: "Mark complete de nouveau atteignable" },
     { testid: "terminal-minimized", label: "Terminal minimise (session definitivement morte)" },
   ]);
 
@@ -265,7 +266,7 @@ test("interrupted node offers Play + Reopen + Mark complete, revives on Reopen, 
   // row isn't already on screen, then select the archived run's worker node.
   const archivedToggle = page.getByTestId("run-archived-chevron");
   await expect(archivedToggle).toBeVisible({ timeout: 8_000 });
-  const archivedRow = page.getByText(archiveRun.slice(0, 20)).first();
+  const archivedRow = page.locator(`[data-run-row="${archiveRun}"]`);
   if (!(await archivedRow.isVisible().catch(() => false))) {
     await archivedToggle.click();
     await expect(archivedRow).toBeVisible({ timeout: 5_000 });

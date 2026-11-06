@@ -68,27 +68,31 @@ test("a legacy pipeline reopens without port side nor rpt, its wire leaving wher
   await expect(writer).toBeVisible({ timeout: 5_000 });
 
   // The wire writer -> End leaves from the middle of the writer's bottom border
-  // and lands on End's top.
-  const departure = await page.evaluate(() => {
-    const edges = Array.from(document.querySelectorAll<SVGPathElement>(".react-flow__edge-path"));
-    const out = edges
-      .map((p) => {
+  // and lands on End's top. The edges are routed after the nodes are measured:
+  // poll until the wire is drawn.
+  type Wire = { sx: number; sy: number; ex: number; ey: number };
+  const findWire = async (): Promise<Wire | undefined> => {
+    const box = (await writer.boundingBox())!;
+    const departure: Wire[] = await page.evaluate(() => {
+      const edges = Array.from(document.querySelectorAll<SVGPathElement>(".react-flow__edge-path"));
+      return edges.map((p) => {
         const start = p.getPointAtLength(0);
         const end = p.getPointAtLength(p.getTotalLength());
         const ctm = p.getScreenCTM()!;
-        const toScreen = (pt: DOMPoint) => new DOMPoint(pt.x, pt.y).matrixTransform(ctm);
-        return { start: toScreen(start), end: toScreen(end) };
+        const s = new DOMPoint(start.x, start.y).matrixTransform(ctm);
+        const e = new DOMPoint(end.x, end.y).matrixTransform(ctm);
+        return { sx: s.x, sy: s.y, ex: e.x, ey: e.y };
       });
-    return out.map(({ start, end }) => ({ sx: start.x, sy: start.y, ex: end.x, ey: end.y }));
-  });
-  const box = (await writer.boundingBox())!;
-  const endBox = (await page.locator('.react-flow__node[data-id="end"]').boundingBox())!;
-  const wire = departure.find(
-    (d) => Math.abs(d.sy - (box.y + box.height)) <= 3 && Math.abs(d.sx - (box.x + box.width / 2)) <= 3,
-  );
-  expect(wire, JSON.stringify({ departure, box })).toBeTruthy();
+    });
+    return departure.find(
+      (d) => Math.abs(d.sy - (box.y + box.height)) <= 3 && Math.abs(d.sx - (box.x + box.width / 2)) <= 3,
+    );
+  };
+  await expect.poll(async () => (await findWire()) != null, { timeout: 5_000 }).toBe(true);
+  const wire = (await findWire())!;
   // It lands on the End's top border.
-  expect(wire!.ey).toBeLessThanOrEqual(endBox.y + 3);
+  const endBox = (await page.locator('.react-flow__node[data-id="end"]').boundingBox())!;
+  expect(wire.ey).toBeLessThanOrEqual(endBox.y + 3);
 
   // The output's card: no side picker, no rpt toggle; the type in the name row.
   await page.getByText("writer", { exact: true }).first().click();
@@ -99,6 +103,6 @@ test("a legacy pipeline reopens without port side nor rpt, its wire leaving wher
   }
   await expect(card.getByRole("switch", { name: /repeated/i })).toHaveCount(0);
   await expect(card.getByText("rpt", { exact: true })).toHaveCount(0);
-  const nameRow = card.locator(".op-head .port-row");
+  const nameRow = card.locator(".ei-port__head .port-row");
   await expect(nameRow.getByTestId("port-type-select")).toHaveValue("markdown");
 });

@@ -216,14 +216,14 @@ test("Review page: fork → tip, one node's delivery, context expansion, node sh
     .sort();
   expect(allFiles).toEqual(["README.md", "alpha-note.md", "beta-note.md"]);
 
-  // ===== Step 1 — Diff tab → « Expand and comment » → Review page, fork → working tree.
+  // ===== Step 1 — Diff tab → its Review page icon → Review page, fork → working tree.
   await page.reload();
   await expect(page.getByLabel("Daemon: connected")).toBeVisible({ timeout: 10_000 });
   await openInfoPanel(page, run_id);
   await page.getByTestId("info-tab-diff").click();
   await expect(page.getByTestId("diff-tab")).toBeVisible({ timeout: 10_000 });
   const expand = page.getByTestId("diff-review-button");
-  await expect(expand).toHaveText(/Expand and comment/);
+  await expect(expand).toHaveAccessibleName("Review page");
   await expand.click();
 
   await expect(page).toHaveURL(new RegExp(`/runs/${run_id}/review$`));

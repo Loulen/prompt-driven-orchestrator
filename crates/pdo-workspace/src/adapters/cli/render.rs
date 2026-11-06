@@ -121,38 +121,10 @@ pub(super) fn skill_lines(project: &Value) -> String {
         .collect()
 }
 
-/// One line per kind of provisioning rule: `copy: .env, data/`, or `none`.
-pub(super) fn rules_lines(rules: &Value) -> String {
-    ["copy", "hardlink", "symlink"]
-        .iter()
-        .map(|kind| {
-            let globs: Vec<&str> = rules[kind]
-                .as_array()
-                .map(|g| g.iter().filter_map(Value::as_str).collect())
-                .unwrap_or_default();
-            let globs = if globs.is_empty() {
-                "none".to_string()
-            } else {
-                globs.join(", ")
-            };
-            format!("{kind}: {globs}\n")
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn provisioning_rules_show_one_line_per_kind() {
-        let rules = json!({ "copy": [".env", "data/"], "hardlink": [], "symlink": [] });
-        assert_eq!(
-            rules_lines(&rules),
-            "copy: .env, data/\nhardlink: none\nsymlink: none\n"
-        );
-    }
 
     #[test]
     fn a_project_shows_as_lines() {

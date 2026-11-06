@@ -11,13 +11,15 @@ use pdo_kernel::extension_host::ExtensionHost;
 use pdo_kernel::{Actor, Operation};
 use pdo_settings::application::ports::{
     AgentProfileStore, AppearanceStore, BoxFuture, CatalogueEvents, Harnesses, InstanceConfigStore,
-    ProfileReferents, SettingsSection, StagingProfiles, Stored, TelemetryReloads, UpdateChecks,
+    ProfileReferents, SettingsSection, SkillBank, StagingProfiles, Stored, TelemetryReloads,
+    UpdateChecks,
 };
 use pdo_settings::domain::agent_profile::{AgentProfile, ProfileDraft, DEFAULT_PROFILE_ID};
 use pdo_settings::domain::appearance::AppearanceDocument;
 use pdo_settings::domain::instance_config::{InstanceConfig, UpdateInstanceConfig};
 use pdo_settings::domain::referents::{PipelineReferent, ProjectReferent, TriggerReferent};
 use pdo_settings::{Settings, SettingsPorts};
+use pdo_skill::domain::selection::{foreign_skill_refusal, SkillRef};
 use serde_json::{json, Map, Value};
 
 /// The stored tier, in memory: an edit applies like the SQLite one (`""`
@@ -457,6 +459,24 @@ impl AppearanceStore for InMemoryAppearances {
     }
 }
 
+/// The bank of skills: the ids it holds.
+pub struct Bank(pub Vec<&'static str>);
+
+impl SkillBank for Bank {
+    fn refusal<'a>(
+        &'a self,
+        current: &'a [SkillRef],
+        next: &'a [SkillRef],
+    ) -> BoxFuture<'a, Result<Option<String>, String>> {
+        let foreign = next.iter().find(|skill| {
+            !current.iter().any(|held| held.id == skill.id) && !self.0.contains(&skill.id.as_str())
+        });
+        Box::pin(ready(Ok(
+            foreign.map(|skill| foreign_skill_refusal(&skill.id))
+        )))
+    }
+}
+
 pub struct World {
     pub settings: Arc<Settings>,
     pub config: Arc<InMemoryConfig>,
@@ -500,6 +520,7 @@ pub fn world_with(sections: Vec<Arc<dyn SettingsSection>>, referents: Referents)
         harnesses: harnesses.clone(),
         catalogue_events: harnesses.clone(),
         staging_profiles: Arc::new(KnownProfiles),
+        skills: Arc::new(Bank(vec!["tdd", "plan"])),
         update_checks: checks.clone(),
         telemetry: checks.clone(),
         referents: Arc::new(referents),

@@ -56,7 +56,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - These commands print text by default and the daemon's answer with `--json`. They exit 0 on
   success, 1 when the daemon is unreachable or refuses the call (with its reason), 2 for an
   unreadable command line, 4 when the daemon knows no such Run, node, pipeline, Projet,
-  Trigger or session.
+  Trigger, session, review comment, profile, skill, folder or update attempt.
 - **`pdo run`** makes the gestures of the Runs list and the run view: `show`, `cancel`, `pause`,
   `resume`, `retry` (Retry all), `reopen`, `archive`, `forget`, `rename`, `repos`, `inject`,
   `force-route`, `region`, `manager start|stop`, and reads a Run's `events`, `costs`, `artifact`,
@@ -83,10 +83,42 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   `POST /pipelines/{id}/versions/{n}/restore`: the version saved as the next one, under the
   pipeline's current name, as Restore then Save in the editor. A version the pipeline does not
   have answers `404 pipeline has no version N`.
+- **`pdo settings`** reads and changes the instance settings as Settings does: `get [<key>…]`
+  (key, effective value, source on every line; the instance's skills and agentic profile as
+  stored, source `stored`) and
+  `set <key>=<value>…`, validated by the daemon as for the UI (a refused change writes nothing,
+  exit 1; an accepted one prints the settings changed); the agentic profiles (`agent-profile`), the staging
+  profiles (`sandbox-profile`), the instance's provisioning rules and their preview
+  (`provisioning`), your Apparence (`appearance`), the telemetry export (`telemetry`, `--test`),
+  a harness's catalogue (`refresh-harness`) and the price table (`sync-prices`).
+- **`pdo stats`** reads the tabs of Stats with the figures they show (`runs`, `sessions`,
+  `triggers`, `cost`, `performance`), over the surface's periods (`--period 7d|30d|90d|all`, or
+  `--from`/`--to`) and filters (`--completed-only`, `--every-run`, `--uncombined`), and manages
+  the absorptions (`absorptions`, `combine`, `uncombine`). Performance prints the Pipeline rows
+  and the Infrastructure row, and reads the duration the tab's toggle picks (`--duration
+  total|active|waiting`, `active` by default as the tab opens). A Performance period with no
+  successful execution says so, as the tab does.
+- **`pdo skill`** manages the Banque de skills as Settings › Skills: `list`, `show`, `add` from a
+  `SKILL.md`, `update` (rename, move, new content), `remove`, `referents`, the reference files
+  (`file add|show|write|remove`), the folders (`folder list|add|update|remove`, and `rescan` /
+  `sync` with their Source), `scan` and `import` from a Source, `cancel-scan`, `sources`,
+  `export` to a zip and `upload` one. A skill an extension or the core provides stays locked:
+  changing or removing it is refused, exit 1. A skill is named by its id or by its name.
+- **`pdo update`** reads the version section (`status`, `changelog`), checks now (`check`),
+  updates (`apply`) and reads an attempt's journal (`log`).
+- **`pdo review`** gains the Review page's gestures: `diff` (the patch, `--stat`, `--json`, all
+  three read from the diff the page shows, work not committed yet included; this patch is for
+  reading, `--git` prints git's own patch of the committed work for `git apply`),
+  `comment <path> <line> --text …` (written and sent to the Pipeline Manager, as the page sends
+  it; a line the page does not let one comment, past the file or in a file outside the diff, is
+  refused, exit 1, nothing sent), `resolve` and `reopen`. `list` and `reply` are unchanged; the
+  new gestures exit 4 for a Run or a comment the daemon does not know.
+- The instance's skills selection only gains skills of the bank: `PUT /settings` refuses another
+  one (400, `not a skill of the bank: <id>`), as for a Projet or a Trigger. A skill already
+  selected and since deleted from the bank stays; emptying the selection is never refused.
 - Every route of the daemon has its command or an exclusion written with its reason: a
-  structural test fails on a route added without either. The routes of Settings, Stats, the skill
-  bank and the Review are provisional exclusions, until their commands exist; the shared draft of
-  the pipeline editor, a WebSocket, is excluded for good.
+  structural test fails on a route added without either. No route is a provisional exclusion any
+  more; the shared draft of the pipeline editor, a WebSocket, is excluded for good.
 
 ## 2.71.0
 

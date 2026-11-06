@@ -2280,6 +2280,7 @@ dependencies = [
  "pdo-harness",
  "pdo-kernel",
  "pdo-pipeline",
+ "pdo-platform",
  "pdo-run",
  "pdo-sandbox",
  "pdo-session",
@@ -2386,8 +2387,10 @@ dependencies = [
 name = "pdo-settings"
 version = "2.71.0"
 dependencies = [
+ "anyhow",
  "axum",
  "chrono",
+ "clap",
  "pdo-extension-api",
  "pdo-harness",
  "pdo-kernel",
@@ -2419,9 +2422,12 @@ version = "2.71.0"
 dependencies = [
  "anyhow",
  "axum",
+ "clap",
  "pdo-extension-api",
  "pdo-kernel",
+ "pdo-platform",
  "pdo-workspace",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2442,6 +2448,7 @@ dependencies = [
  "anyhow",
  "axum",
  "chrono",
+ "clap",
  "filetime",
  "pdo-extension-api",
  "pdo-harness",

@@ -12,7 +12,7 @@ use pdo_extension_api::Extension;
 use pdo_kernel::extension_host::Extensions;
 use pdo_pipeline::adapters::cli::run_pipeline;
 use pdo_platform::adapters::cli::daemon::exit_code;
-use pdo_platform::adapters::cli::{run_audit, run_page, run_service, ServiceAction};
+use pdo_platform::adapters::cli::{run_audit, run_page, run_service, run_update, ServiceAction};
 use pdo_review::adapters::cli::run_review;
 use pdo_run::adapters::cli::{
     refused_in_hosted_session, run_complete, run_fail, run_node, run_reap, run_run_create,
@@ -21,6 +21,9 @@ use pdo_run::adapters::cli::{
 };
 
 use pdo_session::adapters::cli::run_session;
+use pdo_settings::adapters::cli::run_settings;
+use pdo_skill::adapters::cli::run_skill;
+use pdo_stats::adapters::cli::run_stats;
 use pdo_trigger::adapters::cli::run_trigger;
 use pdo_workspace::adapters::cli::run_project;
 
@@ -50,8 +53,10 @@ use crate::cli::{run_docs, run_ext, run_migrate, run_whoami, Cli, Commands};
 ///   daemon cannot be reached or the extension failed; `127` no extension
 ///   `<id>`, or one without a command line (#33);
 /// - `pdo run status`, the gestures of `pdo run`, `pdo node`, `pdo pipeline`,
-///   `pdo project`, `pdo trigger`, `pdo session`: `4` the daemon knows no such
-///   Run, node, pipeline, Projet, Trigger or session;
+///   `pdo project`, `pdo trigger`, `pdo session`, the gestures of `pdo review`,
+///   `pdo settings`, `pdo stats`, `pdo skill`, `pdo update`: `4` the daemon
+///   knows no such subject (Run, node, pipeline, Projet, Trigger, session,
+///   comment, profile, skill, folder, update attempt);
 /// - every other subcommand: `0` success, `1` error; `--help` and `--version`
 ///   exit `0`, a command line clap cannot read exits `2`.
 ///
@@ -168,7 +173,7 @@ where
             create @ RunAction::Create { .. } => exit(run_run_create(create)),
         },
         Commands::Page { action } => exit(run_page(action)),
-        Commands::Review { action } => exit(run_review(action)),
+        Commands::Review { action } => exit_code(run_review(action)),
         // `ext` owns its exit code: the extension's, relayed as is.
         Commands::Ext { args } => run_ext(args),
         // The operator's commands share the `4` of `run status`: no such
@@ -178,6 +183,10 @@ where
         Commands::Node { action } => exit_code(run_node(action)),
         Commands::Pipeline { action } => exit_code(run_pipeline(action)),
         Commands::Session { action } => exit_code(run_session(action)),
+        Commands::Settings { action } => exit_code(run_settings(*action)),
+        Commands::Stats { action } => exit_code(run_stats(*action)),
+        Commands::Skill { action } => exit_code(run_skill(*action)),
+        Commands::Update { action } => exit_code(run_update(action)),
         Commands::Audit(args) => exit_code(run_audit(args)),
         Commands::Whoami { json } => exit_code(run_whoami(json)),
     }

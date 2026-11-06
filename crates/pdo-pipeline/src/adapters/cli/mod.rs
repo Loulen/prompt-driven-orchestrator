@@ -327,7 +327,7 @@ fn export(daemon: &Daemon, id: &str, output: Option<String>, skills: Option<Stri
     let document = daemon
         .get(&format!("/pipelines/{}/document", segment(id)))?
         .ok()?
-        .body;
+        .text();
     if let Some(zip) = skills {
         let bytes = daemon.get_bytes(&format!("/pipelines/{}/document/skills", segment(id)))?;
         if bytes.is_empty() {

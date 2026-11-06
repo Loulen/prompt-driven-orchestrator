@@ -212,6 +212,9 @@ async fn an_unknown_node_exits_4_and_leaves_a_finished_run_untouched() {
     wait_node_status(&daemon, &run_id, "worker", "running").await;
     pdo(&daemon, &["run", "cancel", &run_id]).await.ok();
     wait_run_status(&daemon, &run_id, "halted").await;
+    // The events a gesture could write. `pipeline_modified` is left out: the
+    // pipeline watcher records it on its own schedule once the Run's snapshot
+    // file lands, whatever the gestures do.
     let events = |daemon: &TestDaemon| {
         let path = format!("/runs/{run_id}/events");
         let daemon_url = daemon.url();
@@ -224,7 +227,9 @@ async fn an_unknown_node_exits_4_and_leaves_a_finished_run_untouched() {
                 .unwrap()
                 .as_array()
                 .unwrap()
-                .len()
+                .iter()
+                .filter(|event| event["kind"] != "pipeline_modified")
+                .count()
         }
     };
     let before = events(&daemon).await;

@@ -17,10 +17,13 @@ use std::net::IpAddr;
 
 use clap::{Parser, Subcommand};
 use pdo_pipeline::adapters::cli::PipelineAction;
-use pdo_platform::adapters::cli::{AuditArgs, PageAction, ServiceAction};
+use pdo_platform::adapters::cli::{AuditArgs, PageAction, ServiceAction, UpdateAction};
 use pdo_review::adapters::cli::ReviewAction;
 use pdo_run::adapters::cli::{NodeAction, RunAction};
 use pdo_session::adapters::cli::SessionAction;
+use pdo_settings::adapters::cli::SettingsAction;
+use pdo_skill::adapters::cli::SkillAction;
+use pdo_stats::adapters::cli::StatsAction;
 use pdo_trigger::adapters::cli::TriggerAction;
 use pdo_workspace::adapters::cli::ProjectAction;
 
@@ -163,10 +166,12 @@ pub enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Read and answer the review comments a human left on this Run's diff
-    /// (#751, ADR-0067 §4). Run from a node or manager session: the Run id comes
-    /// from `PDO_RUN_ID` (`--run` overrides it) and the author from the session
-    /// (`manager`, or the node id).
+    /// A Run's Review: read and answer the review comments a human left on its
+    /// diff (#751, ADR-0067 §4), read the diff, write and send a comment,
+    /// resolve or reopen one. The Run id comes from `PDO_RUN_ID` (`--run`
+    /// overrides it) and the author from the session (`manager`, or the node
+    /// id). `diff`, `comment`, `resolve` and `reopen` exit 4 when the daemon
+    /// knows no such Run or comment.
     Review {
         #[command(subcommand)]
         action: ReviewAction,
@@ -205,6 +210,33 @@ pub enum Commands {
     Pipeline {
         #[command(subcommand)]
         action: PipelineAction,
+    },
+    /// The instance settings, as Settings shows them: get and set them, the
+    /// agentic and staging profiles, the provisioning rules, your Apparence,
+    /// the telemetry export, the price table. Exits 4 when the daemon knows no
+    /// such profile.
+    Settings {
+        #[command(subcommand)]
+        action: Box<SettingsAction>,
+    },
+    /// The Stats surface, tab for tab (runs, sessions, triggers, cost,
+    /// performance), its period and filters, and the absorptions.
+    Stats {
+        #[command(subcommand)]
+        action: Box<StatsAction>,
+    },
+    /// The Banque de skills: list, show, add, update, remove, the files and
+    /// folders of the skills, import from a Source, export, upload. Exits 4
+    /// when the daemon knows no such skill or folder.
+    Skill {
+        #[command(subcommand)]
+        action: Box<SkillAction>,
+    },
+    /// The version check and the update: status, check, changelog, apply, an
+    /// attempt's log.
+    Update {
+        #[command(subcommand)]
+        action: UpdateAction,
     },
     /// The journal of the mutations made outside a Run, newest first.
     Audit(AuditArgs),

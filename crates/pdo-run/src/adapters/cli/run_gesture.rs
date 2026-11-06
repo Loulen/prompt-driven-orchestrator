@@ -322,7 +322,7 @@ pub(super) fn value(answer: Answer) -> Result<Value> {
     let answer = answer.ok()?;
     Ok(answer
         .json()
-        .unwrap_or_else(|_| Value::String(answer.body.trim().to_string())))
+        .unwrap_or_else(|_| Value::String(answer.text().trim().to_string())))
 }
 
 /// `--json`: the daemon's answer; else the line.

@@ -60,7 +60,7 @@ pub(super) fn run_node_read(daemon: &Daemon, read: NodeRead) -> Result<()> {
             let prompt = daemon
                 .get(&format!("/runs/{r}/nodes/{n}/prompt?iter={iter}"))?
                 .ok()?;
-            print!("{}", prompt.body);
+            print!("{}", prompt.text());
         }
         NodeRead::Io {
             run_id,
@@ -80,7 +80,10 @@ pub(super) fn run_node_read(daemon: &Daemon, read: NodeRead) -> Result<()> {
             let (r, n) = (segment(&run_id), segment(&node_id));
             print!(
                 "{}",
-                daemon.get(&format!("/runs/{r}/nodes/{n}/diff"))?.ok()?.body
+                daemon
+                    .get(&format!("/runs/{r}/nodes/{n}/diff"))?
+                    .ok()?
+                    .text()
             );
         }
         NodeRead::Transcript {

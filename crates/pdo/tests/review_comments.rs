@@ -47,7 +47,7 @@ edges:
     target: { node: solo, port: in }
 "#;
 
-fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
+pub(crate) fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     let pipelines_dir = repo.join(".pdo").join("pipelines");
     std::fs::create_dir_all(&pipelines_dir)?;
     std::fs::write(
@@ -79,7 +79,7 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn create_run(daemon_url: String, target_repo: String) -> Option<String> {
+pub(crate) async fn create_run(daemon_url: String, target_repo: String) -> Option<String> {
     let resp = reqwest::Client::new()
         .post(format!("{daemon_url}/runs"))
         .json(&serde_json::json!({
@@ -94,7 +94,7 @@ async fn create_run(daemon_url: String, target_repo: String) -> Option<String> {
     json["run_id"].as_str().map(String::from)
 }
 
-fn git(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+pub(crate) fn git(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
     let out = std::process::Command::new("git")
         .args(args)
         .current_dir(dir)

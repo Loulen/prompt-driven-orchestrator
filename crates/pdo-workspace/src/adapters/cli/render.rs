@@ -122,7 +122,7 @@ pub(super) fn skill_lines(project: &Value) -> String {
 }
 
 /// One line per kind of provisioning rule: `copy: .env, data/`, or `none`.
-pub(super) fn rules_lines(rules: &Value) -> String {
+pub fn rules_lines(rules: &Value) -> String {
     ["copy", "hardlink", "symlink"]
         .iter()
         .map(|kind| {

@@ -80,9 +80,26 @@ impl Settings {
 
     /// What names something else must name something that exists: the default
     /// sandbox a staging profile, the manager pin an agentic profile, the
-    /// default harness a harness. A default that resolves to nothing would
-    /// break every Run falling through to it, so it is refused at registration.
+    /// default harness a harness, the skills selection skills of the bank. A
+    /// default that resolves to nothing would break every Run falling through
+    /// to it, so it is refused at registration.
     async fn check_references(&self, edit: &UpdateInstanceConfig) -> Result<(), SettingsError> {
+        if let Some(next) = edit.skills.as_deref().filter(|next| !next.is_empty()) {
+            let current = self
+                .config
+                .get()
+                .await
+                .map_err(|e| SettingsError::Storage(e.0))?
+                .skills;
+            if let Some(refusal) = self
+                .skills
+                .refusal(&current, next)
+                .await
+                .map_err(SettingsError::Storage)?
+            {
+                return Err(SettingsError::Invalid(refusal));
+            }
+        }
         if let Some(sandbox) = edit.default_sandbox.as_deref() {
             // "" = clear sentinel; anything else must be `off` or a staging
             // profile that RESOLVES — the same gate as the Trigger surfaces.

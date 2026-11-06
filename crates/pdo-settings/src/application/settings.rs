@@ -8,7 +8,7 @@ use pdo_kernel::{Actor, Operation};
 
 use super::ports::{
     AgentProfileStore, AppearanceStore, CatalogueEvents, Harnesses, InstanceConfigStore,
-    ProfileReferents, SettingsSection, StagingProfiles, TelemetryReloads, UpdateChecks,
+    ProfileReferents, SettingsSection, SkillBank, StagingProfiles, TelemetryReloads, UpdateChecks,
 };
 
 /// Every port the context needs, as the composition root plugs them in.
@@ -26,6 +26,8 @@ pub struct SettingsPorts {
     /// Told when a harness's catalogue was probed again.
     pub catalogue_events: Arc<dyn CatalogueEvents>,
     pub staging_profiles: Arc<dyn StagingProfiles>,
+    /// The bank the instance's skills selection is checked against.
+    pub skills: Arc<dyn SkillBank>,
     pub update_checks: Arc<dyn UpdateChecks>,
     pub telemetry: Arc<dyn TelemetryReloads>,
     pub referents: Arc<dyn ProfileReferents>,
@@ -42,6 +44,7 @@ pub struct Settings {
     pub(crate) harnesses: Arc<dyn Harnesses>,
     pub(crate) catalogue_events: Arc<dyn CatalogueEvents>,
     pub(crate) staging_profiles: Arc<dyn StagingProfiles>,
+    pub(crate) skills: Arc<dyn SkillBank>,
     pub(crate) update_checks: Arc<dyn UpdateChecks>,
     pub(crate) telemetry: Arc<dyn TelemetryReloads>,
     pub(crate) referents: Arc<dyn ProfileReferents>,
@@ -58,6 +61,7 @@ impl Settings {
             harnesses,
             catalogue_events,
             staging_profiles,
+            skills,
             update_checks,
             telemetry,
             referents,
@@ -71,6 +75,7 @@ impl Settings {
             harnesses,
             catalogue_events,
             staging_profiles,
+            skills,
             update_checks,
             telemetry,
             referents,

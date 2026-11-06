@@ -108,6 +108,51 @@ async fn the_default_sandbox_must_name_a_staging_profile_or_clear() {
 }
 
 #[tokio::test]
+async fn the_skills_selection_only_gains_skills_of_the_bank() {
+    let w = world();
+    let err = w
+        .settings
+        .update(
+            &Actor::LocalOperator,
+            json!({ "skills": [{ "id": "tdd" }, { "id": "no-such-skill" }], "session_cap": 3 }),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        invalid(err).contains("not a skill of the bank: no-such-skill"),
+        "the refusal names the skill"
+    );
+    assert_eq!(*w.config.writes.lock().unwrap(), 0, "a refusal writes nothing");
+
+    w.settings
+        .update(&Actor::LocalOperator, json!({ "skills": [{ "id": "tdd" }] }))
+        .await
+        .unwrap();
+    let ids = |w: &crate::fakes::World| -> Vec<String> {
+        w.row().skills.iter().map(|s| s.id.clone()).collect()
+    };
+    assert_eq!(ids(&w), ["tdd"]);
+
+    // A skill already selected stays, even once the bank no longer holds it;
+    // emptying the selection is never refused.
+    w.config.row.lock().unwrap().skills =
+        serde_json::from_value(json!([{ "id": "gone" }])).unwrap();
+    w.settings
+        .update(
+            &Actor::LocalOperator,
+            json!({ "skills": [{ "id": "gone" }, { "id": "plan" }] }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(&w), ["gone", "plan"]);
+    w.settings
+        .update(&Actor::LocalOperator, json!({ "skills": [] }))
+        .await
+        .unwrap();
+    assert!(ids(&w).is_empty());
+}
+
+#[tokio::test]
 async fn the_manager_pin_must_name_an_agentic_profile() {
     let w = world();
     let err = w

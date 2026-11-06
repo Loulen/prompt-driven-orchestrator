@@ -25,7 +25,10 @@ use pdo_settings::adapters::sections::{
 use pdo_settings::adapters::sqlite::{
     SqliteAgentProfiles, SqliteAppearances, SqliteInstanceConfig,
 };
-use pdo_settings::application::ports::{CatalogueEvents, TelemetryReloads, UpdateChecks};
+use pdo_settings::application::ports::{
+    BoxFuture, CatalogueEvents, SkillBank, TelemetryReloads, UpdateChecks,
+};
+use pdo_skill::domain::selection::SkillRef;
 use pdo_settings::{Settings, SettingsPorts};
 use sqlx::SqlitePool;
 use tower::ServiceExt;
@@ -39,6 +42,19 @@ impl UpdateChecks for NoChecks {
 
 impl TelemetryReloads for NoChecks {
     fn reload(&self) {}
+}
+
+/// A bank holding every skill: the routes' tests are not about it.
+struct EveryoneSkill;
+
+impl SkillBank for EveryoneSkill {
+    fn refusal<'a>(
+        &'a self,
+        _current: &'a [SkillRef],
+        _next: &'a [SkillRef],
+    ) -> BoxFuture<'a, Result<Option<String>, String>> {
+        Box::pin(std::future::ready(Ok(None)))
+    }
 }
 
 struct NoCatalogueEvents;
@@ -98,6 +114,7 @@ pub(super) async fn test_state() -> TestState {
         harnesses,
         catalogue_events: Arc::new(NoCatalogueEvents),
         staging_profiles: Arc::new(SandboxStagingProfiles(profiles)),
+        skills: Arc::new(EveryoneSkill),
         update_checks: Arc::new(NoChecks),
         telemetry: Arc::new(NoChecks),
         referents: Arc::new(ContextReferents {

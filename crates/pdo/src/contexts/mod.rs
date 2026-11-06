@@ -167,7 +167,7 @@ pub(crate) fn wire_over(
     });
     let (telemetry, telemetry_runs) =
         telemetry::telemetry(&r, &run, &session, &stored, host.clone());
-    let settings = settings::settings(&r, stored, &platform, &telemetry, host.clone());
+    let settings = settings::settings(&r, stored, &platform, &telemetry, &skills, host.clone());
     late_runs.set(&run);
     late_platform.set(&platform);
     late_pipelines.set(&pipelines);

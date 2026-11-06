@@ -65,11 +65,12 @@ pub struct Daemon {
     session: Option<(String, String)>,
 }
 
-/// The daemon's answer to one request.
+/// The daemon's answer to one request: its status and its body, as bytes (an
+/// archive) or as text ([`Answer::text`]).
 #[derive(Debug)]
 pub struct Answer {
     pub status: StatusCode,
-    pub body: String,
+    pub bytes: Vec<u8>,
 }
 
 impl Daemon {
@@ -114,18 +115,54 @@ impl Daemon {
         self.send(Method::DELETE, path, body)
     }
 
+    /// A `POST` whose body is not JSON: an archive, under its content type.
+    pub fn post_bytes(&self, path: &str, content_type: &str, body: Vec<u8>) -> Result<Answer> {
+        self.send_raw(Method::POST, path, content_type, body)
+    }
+
+    /// A `POST` of a multipart form: files, as a browser uploads them.
+    pub fn post_multipart(
+        &self,
+        path: &str,
+        form: reqwest::blocking::multipart::Form,
+    ) -> Result<Answer> {
+        answer(self.request(Method::POST, path).multipart(form))
+    }
+
+    /// A `PUT` whose body is plain text: a file's content, as the editor saves it.
+    pub fn put_text(&self, path: &str, text: String) -> Result<Answer> {
+        self.send_raw(
+            Method::PUT,
+            path,
+            "text/plain; charset=utf-8",
+            text.into_bytes(),
+        )
+    }
+
     fn send(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Answer> {
-        let mut request = self.identified(
-            self.client
-                .request(method.clone(), format!("{}{path}", self.url)),
-        );
+        let mut request = self.request(method, path);
         if let Some(body) = body {
             request = request.json(body);
         }
-        let response = request.send().context("failed to reach daemon")?;
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        Ok(Answer { status, body })
+        answer(request)
+    }
+
+    fn send_raw(
+        &self,
+        method: Method,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<Answer> {
+        answer(
+            self.request(method, path)
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .body(body),
+        )
+    }
+
+    fn request(&self, method: Method, path: &str) -> RequestBuilder {
+        self.identified(self.client.request(method, format!("{}{path}", self.url)))
     }
 
     fn identified(&self, request: RequestBuilder) -> RequestBuilder {
@@ -139,14 +176,26 @@ impl Daemon {
     }
 }
 
+fn answer(request: RequestBuilder) -> Result<Answer> {
+    let response = request.send().context("failed to reach daemon")?;
+    let status = response.status();
+    let bytes = response.bytes().map(|b| b.to_vec()).unwrap_or_default();
+    Ok(Answer { status, bytes })
+}
+
 impl Answer {
+    /// The body as text, any invalid UTF-8 replaced.
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.bytes).into_owned()
+    }
+
     /// The answer when it is a success; [`NotFound`] for a `404`; the daemon's
     /// sentence for any other refusal.
     pub fn ok(self) -> Result<Self> {
         if self.status.is_success() {
             return Ok(self);
         }
-        let sentence = refusal_sentence(&self.body);
+        let sentence = refusal_sentence(&self.text());
         if self.status == StatusCode::NOT_FOUND {
             return Err(NotFound(if sentence.is_empty() {
                 "not found".to_string()
@@ -160,10 +209,11 @@ impl Answer {
 
     /// The body as JSON (`null` for an empty body, a `204`).
     pub fn json(&self) -> Result<Value> {
-        if self.body.trim().is_empty() {
+        let text = self.text();
+        if text.trim().is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_str(&self.body).context("the daemon's answer is not JSON")
+        serde_json::from_str(&text).context("the daemon's answer is not JSON")
     }
 }
 
@@ -264,6 +314,68 @@ pub fn print_json(value: &Value) {
     );
 }
 
+/// The bytes a `--file <path>` names, `-` for the standard input.
+pub fn read_file_bytes(path: &str) -> Result<Vec<u8>> {
+    if path == "-" {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::stdin(), &mut bytes)
+            .context("cannot read the standard input")?;
+        return Ok(bytes);
+    }
+    std::fs::read(path).with_context(|| format!("cannot read {path}"))
+}
+
+/// A `<key>=<value>` of a command line. The value is read as JSON when it is
+/// JSON (`5`, `true`, `null`, `"quoted"`, `[…]`, `{…}`), as a string otherwise:
+/// `public_url=https://pdo.example.net` sends a string, `session_cap=5` a
+/// number, `session_cap='"5"'` the string `"5"`.
+pub fn assignment(raw: &str) -> Result<(String, Value)> {
+    let (key, value) = raw
+        .split_once('=')
+        .with_context(|| format!("expected <key>=<value>, got {raw:?}"))?;
+    let key = key.trim();
+    anyhow::ensure!(!key.is_empty(), "expected <key>=<value>, got {raw:?}");
+    let value = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()));
+    Ok((key.to_string(), value))
+}
+
+/// Who still names a subject (a skill, a profile), as a referents answer lists
+/// them: one tab-separated line each, the tier then its id and name (`runs`
+/// name a Run by `run_id`), `instance` when the instance's defaults name it.
+/// `none` when nobody does.
+pub fn referent_lines(referents: &Value) -> String {
+    let mut out = String::new();
+    let Some(tiers) = referents.as_object() else {
+        return "none\n".to_string();
+    };
+    for (tier, value) in tiers {
+        match value {
+            Value::Bool(true) if matches!(tier.as_str(), "instance" | "instance_default") => {
+                out.push_str("instance\n");
+            }
+            Value::Array(items) => {
+                for item in items {
+                    let id = item["id"]
+                        .as_str()
+                        .or_else(|| item["run_id"].as_str())
+                        .unwrap_or("");
+                    let mut line = format!("{tier}\t{id}\t{}", item["name"].as_str().unwrap_or(""));
+                    if let Some(node) = item["node_id"].as_str() {
+                        line.push_str(&format!("\tnode {node}"));
+                    }
+                    out.push_str(&line);
+                    out.push('\n');
+                }
+            }
+            _ => {}
+        }
+    }
+    if out.is_empty() {
+        out.push_str("none\n");
+    }
+    out
+}
+
 /// The JSON a `--file <path>` names, `-` for the standard input.
 pub fn read_json_file(path: &str) -> Result<Value> {
     let text = if path == "-" {
@@ -281,7 +393,7 @@ mod tests {
     fn answer(status: u16, body: &str) -> Answer {
         Answer {
             status: StatusCode::from_u16(status).unwrap(),
-            body: body.to_string(),
+            bytes: body.as_bytes().to_vec(),
         }
     }
 
@@ -347,6 +459,44 @@ mod tests {
         assert_eq!(
             agent_choice(None, Some("claude".into()), None, Some("high".into())),
             Some(serde_json::json!({ "mode": "custom", "harness": "claude", "effort": "high" }))
+        );
+    }
+
+    #[test]
+    fn an_assignment_reads_its_value_as_json_or_as_a_string() {
+        assert_eq!(
+            assignment("session_cap=5").unwrap(),
+            ("session_cap".into(), serde_json::json!(5))
+        );
+        assert_eq!(
+            assignment("public_url=https://pdo.example.net").unwrap(),
+            ("public_url".into(), serde_json::json!("https://pdo.example.net"))
+        );
+        assert_eq!(
+            assignment(r#"session_cap="5""#).unwrap().1,
+            serde_json::json!("5")
+        );
+        assert_eq!(assignment("default_sandbox=").unwrap().1, serde_json::json!(""));
+        assert!(assignment("no-equal-sign").is_err());
+        assert!(assignment("=5").is_err());
+    }
+
+    #[test]
+    fn referents_are_one_line_per_tier_entry() {
+        let referents = serde_json::json!({
+            "skill_id": "s-1",
+            "instance": true,
+            "projects": [{ "id": "prj-1", "name": "Web" }],
+            "pipelines": [{ "id": "p", "name": "Ship", "node_id": "n1", "scope": "instance" }],
+            "runs": [{ "run_id": "r-1", "name": "nightly" }],
+        });
+        assert_eq!(
+            referent_lines(&referents),
+            "instance\npipelines\tp\tShip\tnode n1\nprojects\tprj-1\tWeb\nruns\tr-1\tnightly\n"
+        );
+        assert_eq!(
+            referent_lines(&serde_json::json!({ "instance": false, "projects": [] })),
+            "none\n"
         );
     }
 

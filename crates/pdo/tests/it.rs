@@ -35,11 +35,23 @@ mod cli_operator;
 #[path = "cli_run_create.rs"]
 mod cli_run_create;
 
+#[path = "cli_review.rs"]
+mod cli_review;
+
 #[path = "cli_run_status.rs"]
 mod cli_run_status;
 
 #[path = "cli_session.rs"]
 mod cli_session;
+
+#[path = "cli_settings.rs"]
+mod cli_settings;
+
+#[path = "cli_skill.rs"]
+mod cli_skill;
+
+#[path = "cli_stats.rs"]
+mod cli_stats;
 
 #[path = "cli_trigger.rs"]
 mod cli_trigger;

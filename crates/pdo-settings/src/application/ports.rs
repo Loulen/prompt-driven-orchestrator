@@ -7,6 +7,7 @@ use std::pin::Pin;
 
 use pdo_harness::agent_choice::ResolvedCombo;
 use pdo_kernel::Actor;
+use pdo_skill::domain::selection::SkillRef;
 
 use crate::domain::agent_profile::{AgentProfile, ProfileDraft};
 use crate::domain::appearance::AppearanceDocument;
@@ -113,6 +114,18 @@ pub trait CatalogueEvents: Send + Sync {
 pub trait StagingProfiles: Send + Sync {
     /// The write-time gate of a stored `sandbox` value.
     fn validate<'a>(&'a self, raw: &'a str) -> BoxFuture<'a, Result<(), String>>;
+}
+
+/// The bank of skills (the skill context).
+pub trait SkillBank: Send + Sync {
+    /// Why the instance's selection may not become `next`: it gains a skill
+    /// the bank does not hold (one `current` already selects is kept, as the
+    /// selectors keep it). `None`: it may.
+    fn refusal<'a>(
+        &'a self,
+        current: &'a [SkillRef],
+        next: &'a [SkillRef],
+    ) -> BoxFuture<'a, Result<Option<String>, String>>;
 }
 
 /// The version check (the platform context).

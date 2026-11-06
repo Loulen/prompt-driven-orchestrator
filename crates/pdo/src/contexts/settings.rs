@@ -2,8 +2,8 @@
 //! SQLite, the Apparence of each Actor, the page's sections — each context's instance defaults, the staging
 //! profiles and Docker, the harnesses' catalogues, the price table — under the
 //! daemon's home, the platform's version check, the telemetry export an edit
-//! reloads, and who names a profile (the Projets, the Triggers, the instance
-//! pipelines).
+//! reloads, the bank the instance's skills are checked against, and who names
+//! a profile (the Projets, the Triggers, the instance pipelines).
 
 use std::sync::Arc;
 
@@ -13,7 +13,8 @@ use pdo_platform::Platform;
 use pdo_sandbox::adapters::local_runtime;
 use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_settings::adapters::contexts::{
-    ContextReferents, PlatformUpdateChecks, SandboxStagingProfiles, TelemetryOfSettings,
+    BankSkills, ContextReferents, PlatformUpdateChecks, SandboxStagingProfiles,
+    TelemetryOfSettings,
 };
 use pdo_settings::adapters::sections::{
     HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,
@@ -31,6 +32,7 @@ pub(super) fn settings(
     stored: StoredSettings,
     platform: &Arc<Platform>,
     telemetry: &Arc<pdo_telemetry::Telemetry>,
+    skills: &Arc<pdo_skill::Skills>,
     host: Arc<dyn ExtensionHost>,
 ) -> Arc<Settings> {
     let home = HostHome {
@@ -65,6 +67,7 @@ pub(super) fn settings(
         harnesses,
         catalogue_events: Arc::new(BusCatalogueEvents(r.bus_tx.clone())),
         staging_profiles: Arc::new(SandboxStagingProfiles(profiles)),
+        skills: Arc::new(BankSkills(skills.clone())),
         update_checks: Arc::new(PlatformUpdateChecks(platform.clone())),
         telemetry: Arc::new(TelemetryOfSettings(telemetry.clone())),
         referents: Arc::new(ContextReferents {

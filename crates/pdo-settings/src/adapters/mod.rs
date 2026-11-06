@@ -2,6 +2,7 @@
 //! driven side (SQLite, the sections of the page each context discloses, and
 //! the other contexts, both ways).
 
+pub mod cli;
 pub mod contexts;
 pub mod http;
 pub mod sections;

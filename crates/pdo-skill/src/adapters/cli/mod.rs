@@ -4,6 +4,7 @@
 //! provides) is refused by the daemon, as in the UI, and so is a duplicate
 //! name or an invalid `SKILL.md`.
 
+mod bank;
 mod files;
 mod import;
 mod render;
@@ -17,6 +18,8 @@ use pdo_platform::adapters::cli::daemon::{
 };
 use serde_json::{json, Value};
 
+use bank::read;
+use bank::skill_id;
 pub use files::FileAction;
 pub use import::{Collision, FolderAction};
 use render::{list_lines, show_text};
@@ -30,6 +33,7 @@ pub enum SkillAction {
         json: bool,
     },
     /// Show a skill: name, description, folder, files, then its `SKILL.md`.
+    /// Here and below, a skill is named by its id or its name.
     Show {
         id: String,
         #[arg(long)]
@@ -167,6 +171,7 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
             }
         }
         SkillAction::Show { id, json } => {
+            let id = skill_id(&daemon, &id)?;
             let skill = read(&daemon, &id)?;
             if json {
                 print_json(&skill);
@@ -203,6 +208,7 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
                 name.is_some() || folder.is_some() || root || content.is_some(),
                 "nothing to change: give at least one flag (see --help)"
             );
+            let id = skill_id(&daemon, &id)?;
             let mut body = serde_json::Map::new();
             if let Some(name) = name {
                 body.insert("name".into(), json!(name));
@@ -233,12 +239,14 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
             done(&read(&daemon, &id)?, json, "updated");
         }
         SkillAction::Remove { id, json } => {
+            let id = skill_id(&daemon, &id)?;
             daemon
                 .delete(&format!("/settings/skills/{}", segment(&id)), None)?
                 .ok()?;
             removed(&id, json);
         }
         SkillAction::Referents { id, json } => {
+            let id = skill_id(&daemon, &id)?;
             let referents = daemon
                 .get(&format!("/settings/skills/{}/referents", segment(&id)))?
                 .ok()?
@@ -353,13 +361,6 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn read(daemon: &Daemon, id: &str) -> Result<Value> {
-    daemon
-        .get(&format!("/settings/skills/{}", segment(id)))?
-        .ok()?
-        .json()
 }
 
 pub(super) fn read_text(file: &str) -> Result<String> {

@@ -16,6 +16,10 @@ use serde_json::{json, Value};
 
 use crate::domain::comments::StateFilter;
 
+mod diff;
+
+use diff::{comments_line, patch_text, stat_lines, structured_diff};
+
 #[derive(Subcommand, Debug)]
 pub enum ReviewAction {
     /// List the Run's review comments as JSON, each with its thread of replies.
@@ -46,12 +50,17 @@ pub enum ReviewAction {
         #[arg(long)]
         run: Option<String>,
     },
-    /// The Run's diff: its patch, or with `--stat` one line per file (status,
+    /// The Run's diff, as the Review page shows it (work not committed yet
+    /// included): its patch, or with `--stat` one line per file (status,
     /// additions, deletions, path). `--from`/`--to` compare two Run refs
     /// (fork → tip by default).
     Diff {
-        #[arg(long)]
+        #[arg(long, conflicts_with = "git")]
         stat: bool,
+        /// Git's own patch of the work committed so far (fork → tip), to feed
+        /// `git apply`; without the work not committed yet.
+        #[arg(long, conflicts_with_all = ["from", "to", "json"])]
+        git: bool,
         #[arg(long)]
         from: Option<String>,
         #[arg(long)]
@@ -65,9 +74,11 @@ pub enum ReviewAction {
     },
     /// Write a comment on a line of the Run's diff and send it, as the Review
     /// page does: the Pipeline Manager receives it (started if it is not
-    /// running). Prints the comment's id.
+    /// running). Prints the comment's id. A line the page does not let one
+    /// comment (a hunk's, or one its context expanders reveal) is refused,
+    /// nothing sent.
     Comment {
-        /// The file, as the diff names it.
+        /// The file, as the page names it: its new path, on both sides.
         path: String,
         /// The line, in the file of `--side`.
         line: i64,
@@ -199,27 +210,21 @@ fn run_review_page(action: ReviewAction) -> Result<()> {
     match action {
         ReviewAction::Diff {
             stat,
+            git,
             from,
             to,
             run,
             json,
         } => {
-            let run = segment(&run_of(run)?);
-            if !stat && !json && from.is_none() && to.is_none() {
-                let patch = daemon.get(&format!("/runs/{run}/diff"))?.ok()?;
-                print!("{}", patch.text());
+            if git {
+                let run = segment(&run_of(run)?);
+                print!("{}", daemon.get(&format!("/runs/{run}/diff"))?.ok()?.text());
                 return Ok(());
             }
-            let mut query = Vec::new();
-            for (key, value) in [("from", from), ("to", to)] {
-                if let Some(value) = value {
-                    query.push(format!("{key}={}", segment(&value)));
-                }
-            }
-            let diff = daemon
-                .get(&format!("/runs/{run}/diff/structured?{}", query.join("&")))?
-                .ok()?
-                .json()?;
+            // The structured diff, as the Review page reads it: on a Run in
+            // flight it holds the work not committed yet, so the patch and
+            // `--stat` count the same lines.
+            let diff = structured_diff(&daemon, &run_of(run)?, from, to)?;
             if json {
                 print_json(&diff);
             } else if stat {
@@ -244,6 +249,15 @@ fn run_review_page(action: ReviewAction) -> Result<()> {
                 Side::New => "new",
                 Side::Old => "old",
             };
+            // The Review page comments only a line it shows (a hunk's, or one
+            // its context expanders reveal): another is refused before
+            // anything is sent.
+            let diff = structured_diff(&daemon, &run_id, from.clone(), to.clone())?;
+            anyhow::ensure!(
+                comments_line(&daemon, &run_id, &diff, &path, side, line)?,
+                "{path}:{line} ({side} side) is not a line of the Run's diff \
+                 (see `pdo review diff`)"
+            );
             let sent = daemon
                 .post(
                     &format!("/runs/{}/review/comments/send", segment(&run_id)),
@@ -316,61 +330,6 @@ fn sent_ids(sent: &Value) -> Vec<String> {
         .collect()
 }
 
-fn file_path(file: &Value) -> &str {
-    file["new_path"]
-        .as_str()
-        .or_else(|| file["old_path"].as_str())
-        .unwrap_or("?")
-}
-
-/// One line per file of a structured diff: status, additions, deletions, path.
-fn stat_lines(diff: &Value) -> String {
-    diff["files"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|file| {
-            format!(
-                "{}\t+{}\t-{}\t{}\n",
-                file["status"].as_str().unwrap_or("?"),
-                file["additions"],
-                file["deletions"],
-                file_path(file)
-            )
-        })
-        .collect()
-}
-
-/// A structured diff read as a patch: each file, each hunk's `@@` line, its
-/// lines with their `+`, `-` or ` `.
-fn patch_text(diff: &Value) -> String {
-    let mut out = String::new();
-    for file in diff["files"].as_array().into_iter().flatten() {
-        out.push_str(&format!("--- {}\n", file_path(file)));
-        for hunk in file["hunks"].as_array().into_iter().flatten() {
-            out.push_str(&format!(
-                "@@ -{},{} +{},{} @@ {}\n",
-                hunk["old_start"],
-                hunk["old_lines"],
-                hunk["new_start"],
-                hunk["new_lines"],
-                hunk["header"].as_str().unwrap_or("")
-            ));
-            for line in hunk["lines"].as_array().into_iter().flatten() {
-                let mark = match line["kind"].as_str() {
-                    Some("add") => '+',
-                    Some("del") => '-',
-                    _ => ' ',
-                };
-                out.push(mark);
-                out.push_str(line["content"].as_str().unwrap_or(""));
-                out.push('\n');
-            }
-        }
-    }
-    out
-}
-
 fn daemon_cli_response<T: serde::de::DeserializeOwned>(
     response: reqwest::blocking::Response,
     operation: &str,
@@ -393,38 +352,6 @@ fn daemon_cli_response<T: serde::de::DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn diff() -> Value {
-        json!({ "files": [{
-            "old_path": "src/a.rs", "new_path": "src/a.rs", "status": "modified",
-            "binary": false, "additions": 1, "deletions": 1,
-            "hunks": [{ "old_start": 3, "old_lines": 2, "new_start": 3, "new_lines": 2, "header": "fn a()",
-                "lines": [
-                    { "kind": "context", "content": "let x = 1;" },
-                    { "kind": "del", "content": "x" },
-                    { "kind": "add", "content": "y" },
-                ] }],
-        }, {
-            "old_path": null, "new_path": "b.md", "status": "added",
-            "binary": false, "additions": 4, "deletions": 0, "hunks": [],
-        }]})
-    }
-
-    #[test]
-    fn the_stat_is_one_line_per_file() {
-        assert_eq!(
-            stat_lines(&diff()),
-            "modified\t+1\t-1\tsrc/a.rs\nadded\t+4\t-0\tb.md\n"
-        );
-    }
-
-    #[test]
-    fn a_structured_diff_reads_back_as_a_patch() {
-        assert_eq!(
-            patch_text(&diff()),
-            "--- src/a.rs\n@@ -3,2 +3,2 @@ fn a()\n let x = 1;\n-x\n+y\n--- b.md\n"
-        );
-    }
 
     #[test]
     fn a_send_answers_the_ids_it_recorded() {

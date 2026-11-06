@@ -46,6 +46,11 @@ async fn a_skill_is_added_changed_and_removed_as_settings_skills_does() {
     );
     let shown = pdo(&daemon, &["skill", "show", &id]).await;
     assert!(shown.ok().contains("Be careful."), "{}", shown.stdout);
+    // Its name, as `add` and `list` print it, names it too.
+    let by_name = pdo(&daemon, &["skill", "show", "cli-craft"]).await;
+    assert!(by_name.ok().contains("Be careful."), "{}", by_name.stdout);
+    let no_skill = pdo(&daemon, &["skill", "show", "no-such-skill"]).await;
+    assert_eq!(no_skill.code, Some(4), "{}", no_skill.stderr);
 
     // A duplicate name is refused.
     let duplicate = pdo(&daemon, &["skill", "add", skill_md.to_str().unwrap()]).await;

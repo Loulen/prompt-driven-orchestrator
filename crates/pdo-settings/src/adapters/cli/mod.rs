@@ -173,7 +173,9 @@ pub fn run_settings(action: SettingsAction) -> Result<()> {
             if json {
                 print_json(&changed);
             } else {
-                print!("{}", knob_lines(&changed, false));
+                // Each setting changed, whole: a tier such as `skills` has no
+                // effective value to stand for it.
+                print!("{}", knob_lines(&changed, true));
             }
         }
         SettingsAction::RefreshHarness { name, json } => {

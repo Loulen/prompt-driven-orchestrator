@@ -118,7 +118,10 @@ pub async fn create_run(daemon: &TestDaemon, pipeline: &str) -> String {
     json["run_id"].as_str().unwrap().to_string()
 }
 
-/// Poll `GET /runs/{run_id}` until `check` accepts it (10 s budget).
+/// Poll `GET /runs/{run_id}` until `check` accepts it (30 s budget). The
+/// budget only bounds how long a real failure takes to show: 10 s ran out
+/// under the full gate on a machine shared with other Runs, a spawn there
+/// taking several seconds.
 pub async fn wait_run<F>(
     daemon: &TestDaemon,
     run_id: &str,
@@ -128,7 +131,7 @@ pub async fn wait_run<F>(
 where
     F: Fn(&serde_json::Value) -> bool,
 {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         let run = daemon.get_json(&format!("/runs/{run_id}")).await;
         if check(&run) {

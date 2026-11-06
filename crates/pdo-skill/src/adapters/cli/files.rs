@@ -8,6 +8,7 @@ use clap::Subcommand;
 use pdo_platform::adapters::cli::daemon::{print_json, segment, Daemon};
 use reqwest::blocking::multipart::{Form, Part};
 
+use super::bank::skill_id;
 use super::render::file_text;
 use super::{read_text, removed};
 
@@ -63,6 +64,7 @@ pub(super) fn file(daemon: &Daemon, action: FileAction) -> Result<()> {
                 dest.is_none() || files.len() == 1,
                 "--as names the destination of a single file"
             );
+            let id = skill_id(daemon, &id)?;
             let mut form = Form::new();
             for path in &files {
                 let name = Path::new(path)
@@ -91,6 +93,7 @@ pub(super) fn file(daemon: &Daemon, action: FileAction) -> Result<()> {
             }
         }
         FileAction::Show { id, path, json } => {
+            let id = skill_id(daemon, &id)?;
             let file = daemon
                 .get(&format!(
                     "/settings/skills/{}/files/{}",
@@ -111,6 +114,7 @@ pub(super) fn file(daemon: &Daemon, action: FileAction) -> Result<()> {
             file,
             json,
         } => {
+            let id = skill_id(daemon, &id)?;
             let saved = daemon
                 .put_text(
                     &format!(
@@ -133,6 +137,7 @@ pub(super) fn file(daemon: &Daemon, action: FileAction) -> Result<()> {
             }
         }
         FileAction::Remove { id, path, json } => {
+            let id = skill_id(daemon, &id)?;
             daemon
                 .delete(
                     &format!(

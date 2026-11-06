@@ -213,8 +213,13 @@ fn performance_line(item: &Value) -> String {
 }
 
 /// The Performance tab: by harness, median peak context, median duration and
-/// steered share; then the same per Pipeline.
+/// steered share; then the same per Pipeline. A period with no successful
+/// execution says so, as the tab does.
 pub(super) fn performance(performance: &Value) -> String {
+    let empty = |key: &str| performance[key].as_array().is_none_or(Vec::is_empty);
+    if empty("by_pipeline") && empty("infrastructure") && empty("by_model") {
+        return "No successful executions in this period.\n".to_string();
+    }
     let mut out = String::from("harness\tmedian peak context\tmedian duration\tsteered\n");
     for item in performance["total"]["harnesses"]
         .as_array()
@@ -328,6 +333,19 @@ mod tests {
         assert_eq!(duration(185_000.0), "3m05s");
         assert_eq!(context(850.0), "850");
         assert_eq!(context(42_499.0), "42k");
+    }
+
+    #[test]
+    fn a_period_with_no_successful_execution_says_so() {
+        let none = json!({ "total": { "harnesses": [] }, "by_pipeline": [],
+                           "infrastructure": [], "by_model": [] });
+        assert_eq!(
+            performance(&none),
+            "No successful executions in this period.\n"
+        );
+        let some = json!({ "total": { "harnesses": [] }, "by_pipeline": [],
+                           "infrastructure": [{ "kind": "start" }], "by_model": [] });
+        assert!(performance(&some).starts_with("harness\t"));
     }
 
     #[test]

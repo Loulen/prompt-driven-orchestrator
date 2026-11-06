@@ -101,6 +101,17 @@ async fn an_instance_setting_is_set_as_settings_saves_it_and_refused_as_it_refus
     .await
     .json();
     assert_eq!(skills["skills"][0]["id"], "pdo-interactive", "{skills}");
+    // In text, the change is printed as `get` prints it, and `get` lists
+    // the instance's skills among its settings.
+    let printed = pdo(&daemon, &["settings", "set", "skills=[]"]).await;
+    assert_eq!(printed.ok(), "skills\t[]\n");
+    let listed = pdo(&daemon, &["settings", "get"]).await;
+    assert!(listed.ok().contains("\nskills\t[]\n"), "{}", listed.stdout);
+    assert!(
+        !listed.stdout.contains("harness_descriptors"),
+        "the facts beside the settings stay out: {}",
+        listed.stdout
+    );
 
     let unknown = pdo(&daemon, &["settings", "get", "no_such_setting"]).await;
     assert_eq!(unknown.code, Some(1));

@@ -236,8 +236,13 @@ async fn an_unknown_node_exits_4_and_leaves_a_finished_run_untouched() {
         assert_eq!(out.code, Some(4), "{gesture}: {}{}", out.stdout, out.stderr);
         assert!(out.stderr.contains("ghost"), "{gesture}: {}", out.stderr);
     }
-    let extend = pdo(&daemon, &["node", "extend", &run_id, "ghost", "2"]).await;
-    assert_eq!(extend.code, Some(4), "{}", extend.stderr);
+    for args in [
+        vec!["node", "extend", &run_id, "ghost", "2"],
+        vec!["node", "retry", &run_id, "ghost", "--preview"],
+    ] {
+        let out = pdo(&daemon, &args).await;
+        assert_eq!(out.code, Some(4), "{args:?}: {}", out.stderr);
+    }
 
     let run = daemon.get_json(&format!("/runs/{run_id}")).await;
     assert_eq!(run["status"], "halted", "{run}");

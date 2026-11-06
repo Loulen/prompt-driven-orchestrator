@@ -64,6 +64,7 @@ pub mod release_completion;
 pub mod reopen;
 pub mod retry_all;
 pub mod retry_node;
+pub mod retry_preview;
 pub mod run_id;
 pub mod run_pipeline;
 pub mod run_summary;

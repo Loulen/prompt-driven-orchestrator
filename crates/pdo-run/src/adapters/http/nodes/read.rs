@@ -150,7 +150,7 @@ pub(in crate::adapters::http) async fn retry_preview(
     State(state): State<Arc<Runs>>,
     AxumPath((run_id, node_id)): AxumPath<(String, String)>,
 ) -> Response {
-    crate::application::retry_node::retry_preview(&state, run_id, node_id).await
+    crate::application::retry_preview::retry_preview(&state, run_id, node_id).await
 }
 
 /// `GET /runs/{run_id}/nodes/{node_id}/children/wait` — `pdo run wait`'s

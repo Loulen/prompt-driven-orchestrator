@@ -248,6 +248,7 @@ mod tests {
             notes: vec![],
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         }
     }
 

@@ -90,6 +90,19 @@ describe("serializePipeline round-trip: YAML structural correctness", () => {
     expect(serializePipeline(pipeline)).not.toContain("grid_size");
   });
 
+  it("emits the naming instruction verbatim, and nothing when it is unset or blank (#1039)", () => {
+    const pipeline = makeFullPipeline([]);
+    expect(serializePipeline(pipeline)).not.toContain("naming_instruction");
+    pipeline.naming_instruction = "US #<n> - <Trello column>\nKeep it short.";
+    // Double-quoted with escapes: the daemon's YAML parser reads it back verbatim
+    // (pipeline.rs `naming_instruction_round_trips_and_absent_is_omitted`).
+    expect(serializePipeline(pipeline)).toContain(
+      'naming_instruction: "US #<n> - <Trello column>\\nKeep it short."',
+    );
+    pipeline.naming_instruction = "   ";
+    expect(serializePipeline(pipeline)).not.toContain("naming_instruction");
+  });
+
   it("omits prompt_required when prompt-required (the default, #158)", () => {
     const requiredExplicit = makeFullPipeline([]);
     requiredExplicit.prompt_required = true;

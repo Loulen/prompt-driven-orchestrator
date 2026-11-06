@@ -1523,9 +1523,8 @@ async fn trigger_auto_name_round_trips_and_defaults_on() {
 }
 
 /// #338: a Trigger with `auto_name:false` fires a Run that carries a STABLE
-/// per-id placeholder name — the manager is not instructed to rename it — whereas
-/// the default (`auto_name:true`) leaves the Run unnamed so the manager derives it
-/// from the input. Covers cron fire; the manual path shares the same chokepoint.
+/// per-id placeholder name that no agent is instructed to rename. Covers cron
+/// fire; the manual path shares the same chokepoint.
 #[tokio::test]
 async fn trigger_auto_name_false_fires_a_run_with_a_stable_placeholder() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
@@ -1546,14 +1545,19 @@ async fn trigger_auto_name_false_fires_a_run_with_a_stable_placeholder() {
         Some(format!("Untitled run {}", &run_id[..15]).as_str()),
         "auto_name:false fire must carry a stable placeholder, not a derived/absent name"
     );
+    assert!(
+        get_run(&daemon, run_id).await["naming_instruction"].is_null(),
+        "auto_name:false: no agent is asked to rename the fired Run"
+    );
 
     cleanup_runs(&daemon).await;
 }
 
-/// #338 control: the default (`auto_name:true`) Trigger fires a Run left unnamed,
-/// so the manager derives the name from the input — the pre-#338 behaviour.
+/// #1039: the default (`auto_name:true`) Trigger fires a Run that carries the
+/// placeholder AND the naming instruction its first agent node will follow — the
+/// same behaviour as a manual New Run, with no manager involved.
 #[tokio::test]
-async fn trigger_auto_name_true_fires_an_unnamed_run_for_manager_to_derive() {
+async fn trigger_auto_name_true_fires_a_placeholdered_run_its_agent_will_name() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
 
     let on = create_trigger(&daemon, "loud", "* * * * *").await;
@@ -1566,10 +1570,16 @@ async fn trigger_auto_name_true_fires_an_unnamed_run_for_manager_to_derive() {
         .iter()
         .find(|r| r["triggered_by"].as_str() == Some(on_id.as_str()))
         .expect("the default trigger must have fired a run");
+    let run_id = run["run_id"].as_str().unwrap();
+    assert_eq!(
+        run["name"].as_str(),
+        Some(format!("Untitled run {}", &run_id[..15]).as_str()),
+        "a fired Run always has a name: the placeholder, until its agent renames it"
+    );
+    let frozen = get_run(&daemon, run_id).await["naming_instruction"].clone();
     assert!(
-        run.get("name").is_none() || run["name"].is_null(),
-        "auto_name:true fire (with input) must leave the Run unnamed for the manager, got {:?}",
-        run.get("name")
+        frozen.as_str().is_some_and(|s| s.contains("2–5 words")),
+        "auto_name:true fire must freeze the (built-in) naming instruction, got {frozen}"
     );
 
     cleanup_runs(&daemon).await;

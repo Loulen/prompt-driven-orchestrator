@@ -10286,40 +10286,6 @@ fn validate_run_input(prompt_required: bool, input: &str) -> Result<(), String> 
     Ok(())
 }
 
-/// Deterministic placeholder display name for a run with neither a user-supplied
-/// name nor any input to summarise. Derived from the run-id's own timestamp prefix
-/// rather than a fresh clock read, so it matches the run-id. run-ids are always
-/// `YYYYMMDD-HHMMSS-xxxxxxx` (≥ 23 ASCII chars), so `[..15]` cannot panic on a char
-/// boundary.
-fn placeholder_run_name(run_id: &str) -> String {
-    format!("Untitled run {}", &run_id[..15])
-}
-
-/// Decide how the daemon should treat naming for a run at spawn.
-///
-/// `auto_name == false` ⇒ the manager is never instructed to rename. The `true`
-/// branch is gated on `input`, NOT on the pipeline's `prompt_required` flag: an
-/// empty input means there is nothing to summarise yet, so the daemon sets a
-/// deterministic placeholder and the manager renames best-effort later.
-///
-/// This hint only governs whether the manager is *told to rename* — the display name
-/// itself is chosen by `create_run_inner`. Hence the `false` branch ignoring `name`:
-/// a blank name still yields `UserProvided`, a stable placeholder with no rename
-/// instruction, which is what the Trigger case needs.
-fn run_name_hint(
-    auto_name: bool,
-    _name: Option<&str>,
-    input: &str,
-) -> prompt_augmenter::RunNameHint {
-    if !auto_name {
-        prompt_augmenter::RunNameHint::UserProvided
-    } else if input.trim().is_empty() {
-        prompt_augmenter::RunNameHint::Placeholder
-    } else {
-        prompt_augmenter::RunNameHint::DeriveFromInput
-    }
-}
-
 async fn create_run_core(
     state: &Arc<AppState>,
     req: CreateRunRequest,
@@ -10826,22 +10792,29 @@ async fn create_run_inner(
         }
     };
 
-    // Shared between the payload write here and the manager spawn below, so the two
-    // can never disagree.
-    let name_hint = run_name_hint(auto_name, req.name.as_deref(), &req.input);
-    let display_name: Option<String> = match name_hint {
-        // With no supplied name, fall back to the stable placeholder so a Trigger with
-        // autonomy off does not leave every fire sharing one blank name — WITHOUT
-        // re-arming the rename instruction, which lives in the hint.
-        prompt_augmenter::RunNameHint::UserProvided => Some(match req.name.as_deref() {
-            Some(n) if !n.trim().is_empty() => n.to_string(),
-            _ => placeholder_run_name(&run_id),
-        }),
-        prompt_augmenter::RunNameHint::Placeholder => Some(placeholder_run_name(&run_id)),
-        prompt_augmenter::RunNameHint::DeriveFromInput => None,
+    // #1039: a Run ALWAYS has a name from its creation on. The user's, when auto-
+    // naming is off and they typed one; the placeholder otherwise — including when
+    // auto-naming is on, where the Run's first agent node replaces it (never the
+    // manager, which is off by default). A blank name with auto-naming off keeps a
+    // stable per-id placeholder, which is what a quiet Trigger needs.
+    let display_name = match req.name.as_deref() {
+        Some(n) if !auto_name && !n.trim().is_empty() => n.to_string(),
+        _ => event_log::placeholder_run_name(&run_id),
     };
-    if let Some(name) = &display_name {
-        run_payload["name"] = serde_json::json!(name);
+    run_payload["name"] = serde_json::json!(display_name);
+    // #1039: auto-naming is frozen as the *Consigne de nommage* itself, resolved
+    // once here (Pipeline → instance → built-in) and read fresh like every
+    // instance knob. Its presence is what tells an agent node to name the Run.
+    if auto_name {
+        let stored = instance_config::get(&state.db)
+            .await
+            .ok()
+            .and_then(|c| c.default_naming_instruction);
+        run_payload["naming_instruction"] =
+            serde_json::json!(prompt_augmenter::resolve_naming_instruction(
+                pipeline.naming_instruction.as_deref(),
+                stored.as_deref(),
+            ));
     }
     if let Some(ref trigger_id) = req.triggered_by {
         if !trigger_id.is_empty() {
@@ -11072,7 +11045,7 @@ async fn create_run_inner(
         // Host path — inline, no docker.
         spawn_ready_after_event(state, &run_id).await;
         if manager_enabled {
-            spawn_manager_session(state, &run_id, &worktree_dir, name_hint, false).await;
+            spawn_manager_session(state, &run_id, &worktree_dir, false).await;
         }
     } else {
         // Eager fail-fast prep on a detached task: the 201 must not block on a
@@ -11135,14 +11108,8 @@ async fn create_run_inner(
                     mark_sandbox_prep_ready(&task_state, &task_run_id).await;
                     spawn_ready_after_event(&task_state, &task_run_id).await;
                     if manager_enabled {
-                        spawn_manager_session(
-                            &task_state,
-                            &task_run_id,
-                            &task_worktree,
-                            name_hint,
-                            true,
-                        )
-                        .await;
+                        spawn_manager_session(&task_state, &task_run_id, &task_worktree, true)
+                            .await;
                     }
                 }
                 Ok(Err(e)) => {
@@ -11259,7 +11226,6 @@ async fn spawn_manager_session(
     state: &AppState,
     run_id: &str,
     worktree_dir: &std::path::Path,
-    name_hint: prompt_augmenter::RunNameHint,
     sandboxed: bool,
 ) {
     // The URL must be reachable from the side this manager runs on. A sandboxed
@@ -11277,8 +11243,7 @@ async fn spawn_manager_session(
     )
     .unwrap_or_default();
 
-    let full_prompt =
-        prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt, name_hint);
+    let full_prompt = prompt_augmenter::build_manager_prompt(run_id, &daemon_url, &static_prompt);
 
     let session_name = tmux_session_manager::manager_session_name(run_id);
     // The manager follows the harness OF THE RUN — `Run → instance → floor`, no node
@@ -12132,6 +12097,19 @@ async fn build_settings_view(state: &AppState) -> Result<serde_json::Value, sqlx
             dan_env,
             prompt_augmenter::DEFAULT_AUTO_NAME_DEFAULT,
         ),
+        // #1039: the instance *Consigne de nommage* — the fallback when a Pipeline
+        // states none. No env tier; `default` is the built-in text, so the UI can
+        // show what an empty field means.
+        "default_naming_instruction": {
+            "effective": prompt_augmenter::resolve_naming_instruction(
+                None,
+                cfg.default_naming_instruction.as_deref(),
+            ),
+            "source": if cfg.default_naming_instruction.is_some() { "stored" } else { "default" },
+            "stored": cfg.default_naming_instruction,
+            "env": serde_json::Value::Null,
+            "default": prompt_augmenter::DEFAULT_NAMING_INSTRUCTION,
+        },
         // The global tier of `auto_fail`. Default `false`: an agent `pdo fail` parks
         // the run for a human to confirm.
         "auto_fail": settings_field_bool(af_effective, af_source, af_stored, af_env, false),
@@ -20674,31 +20652,7 @@ async fn ensure_run_manager(
         ));
     }
 
-    // The create path's name_hint discipline, reconstructed from the projected
-    // state: a placeholder name still carries its rename instruction, a named
-    // Run is left alone, and a nameless Run derives from its input. The FIRST
-    // start (manual or automatic) names the Run best-effort, exactly as before.
-    let name_hint = match run_state.name.as_deref() {
-        Some(name) if name.starts_with("Untitled run") => {
-            prompt_augmenter::RunNameHint::Placeholder
-        }
-        Some(_) => prompt_augmenter::RunNameHint::UserProvided,
-        None => match run_state.input.as_deref() {
-            Some(input) if !input.trim().is_empty() => {
-                prompt_augmenter::RunNameHint::DeriveFromInput
-            }
-            _ => prompt_augmenter::RunNameHint::Placeholder,
-        },
-    };
-
-    spawn_manager_session(
-        state,
-        run_id,
-        &worktree_dir,
-        name_hint,
-        !run_state.sandbox.is_off(),
-    )
-    .await;
+    spawn_manager_session(state, run_id, &worktree_dir, !run_state.sandbox.is_off()).await;
 
     // Create-then-verify (the run shell's benign-race rule).
     if !tmux_session_manager::session_exists(&socket, &session_name) {
@@ -35247,6 +35201,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: false,
             grid_size: None,
+            naming_instruction: None,
         }
     }
 
@@ -35369,6 +35324,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: false,
             grid_size: None,
+            naming_instruction: None,
         };
         let mut run_state = event_log::RunState::new("20260613-loop".into(), "cond".into());
         // Entry node `a` completed; nothing else live or schedulable.
@@ -43490,6 +43446,107 @@ edges:
         assert_eq!(payload, serde_json::json!({ "name": "" }));
     }
 
+    /// #1039: `if_placeholder` is the one automatic naming. The first conditional
+    /// rename replaces the placeholder; a second is a truthful noop; a manual
+    /// (unconditional) rename always lands, and no conditional one ever
+    /// overwrites it.
+    #[tokio::test]
+    async fn rename_run_if_placeholder_wins_once_and_never_over_a_manual_name() {
+        let state = test_state().await;
+        let run_id = "20260101-120000-abc1234";
+        let placeholder = event_log::placeholder_run_name(run_id);
+        append_event(
+            &state,
+            &seed_event(
+                run_id,
+                event_log::EventKind::RunStarted,
+                None,
+                None,
+                Some(serde_json::json!({
+                    "pipeline_name": "p",
+                    "name": placeholder,
+                    "naming_instruction": "HITL #<issue>",
+                })),
+            ),
+        )
+        .await
+        .unwrap();
+        let name_now = |state: Arc<AppState>| async move {
+            let events = load_events(&state.db, run_id).await.unwrap();
+            event_log::project(&events).unwrap().name
+        };
+
+        // A conditional rename needs a name: it never clears one.
+        let (status, _, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"rename_run","name":" ","if_placeholder":true}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+        let (status, _, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"rename_run","name":"HITL #1234","if_placeholder":true}"#,
+        )
+        .await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, r#"{"ok":true}"#));
+        assert_eq!(name_now(state.clone()).await.as_deref(), Some("HITL #1234"));
+
+        // A second agent loses, truthfully, and nothing is appended.
+        let renames_before = load_events(&state.db, run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::RunRenamed)
+            .count();
+        let (status, _, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"rename_run","name":"Something else","if_placeholder":true}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["noop"], true, "{body}");
+        assert!(
+            body["reason"].as_str().unwrap().contains("HITL #1234"),
+            "{body}"
+        );
+        let renames_after = load_events(&state.db, run_id)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == event_log::EventKind::RunRenamed)
+            .count();
+        assert_eq!(renames_before, renames_after);
+        assert_eq!(name_now(state.clone()).await.as_deref(), Some("HITL #1234"));
+
+        // The UI's manual rename stays unconditional, and an agent never
+        // overwrites it.
+        let (status, _, _) =
+            command_triplet(&state, run_id, r#"{"kind":"rename_run","name":"Mine"}"#).await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, _, body) = command_triplet(
+            &state,
+            run_id,
+            r#"{"kind":"rename_run","name":"Agent name","if_placeholder":true}"#,
+        )
+        .await;
+        assert!(body.contains(r#""noop":true"#), "{body}");
+        assert_eq!(name_now(state.clone()).await.as_deref(), Some("Mine"));
+
+        // An unknown Run answers 404, not a phantom success.
+        let (status, _, _) = command_triplet(
+            &state,
+            "20260101-120000-nobody0",
+            r#"{"kind":"rename_run","name":"x","if_placeholder":true}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
     // The truthful-response matrix (ADR-0025), without a daemon: 400 unknown target,
     // 409 wrong mechanism, 200 noop, 200 spawned — all reachable from the in-crate
     // router. Case D does attempt a real `tmux` call, but its failure is swallowed, so
@@ -46676,6 +46733,7 @@ edges: []
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let ctx = SpawnContext {
@@ -46797,6 +46855,7 @@ edges: []
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let ctx = SpawnContext {
@@ -47630,6 +47689,7 @@ edges: []
             notes: Vec::new(),
             prompt_required: false,
             grid_size: None,
+            naming_instruction: None,
         };
         let pipeline_path = repo_root.join("spawn-unit.yaml");
         (pipeline, node, pipeline_path)
@@ -49671,48 +49731,11 @@ edges:
     #[test]
     fn placeholder_name_is_deterministic_from_run_id_timestamp() {
         assert_eq!(
-            placeholder_run_name("20260629-150013-4a2f1c0"),
+            event_log::placeholder_run_name("20260629-150013-4a2f1c0"),
             "Untitled run 20260629-150013"
         );
-    }
-
-    #[test]
-    fn run_name_hint_matrix() {
-        use prompt_augmenter::RunNameHint;
-        // The hint is now gated on the RESOLVED `auto_name`, not on the name.
-        // With auto-naming OFF the manager is never told to rename — `UserProvided`
-        // regardless of name or input (the display name is chosen by the caller).
-        assert_eq!(
-            run_name_hint(false, Some("My Run"), ""),
-            RunNameHint::UserProvided
-        );
-        assert_eq!(
-            run_name_hint(false, Some("My Run"), "some input"),
-            RunNameHint::UserProvided
-        );
-        assert_eq!(run_name_hint(false, None, ""), RunNameHint::UserProvided);
-        assert_eq!(
-            run_name_hint(false, None, "do a thing"),
-            RunNameHint::UserProvided
-        );
-
-        // With auto-naming ON the pre-#338 behaviour holds, gated on input only.
-        // No (meaningful) input → deterministic placeholder, renamed best-effort later.
-        assert_eq!(run_name_hint(true, None, ""), RunNameHint::Placeholder);
-        assert_eq!(
-            run_name_hint(true, None, "   \n\t "),
-            RunNameHint::Placeholder
-        );
-        assert_eq!(run_name_hint(true, Some(""), ""), RunNameHint::Placeholder);
-        // Real input → manager derives the name from `_input` immediately.
-        assert_eq!(
-            run_name_hint(true, None, "do a thing"),
-            RunNameHint::DeriveFromInput
-        );
-        assert_eq!(
-            run_name_hint(true, Some("ignored when auto"), "do a thing"),
-            RunNameHint::DeriveFromInput
-        );
+        // A short (test) id is used whole rather than panicking on the slice.
+        assert_eq!(event_log::placeholder_run_name("r1"), "Untitled run r1");
     }
 
     #[tokio::test]
@@ -50364,6 +50387,46 @@ edges:
                 .unwrap()
                 .default_auto_name,
             Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn put_settings_round_trips_the_default_naming_instruction() {
+        // #1039: unset shows the built-in text; a stored instruction wins; "" clears.
+        let state = test_state().await;
+        let (status, view) = put_settings_resp(&state, r#"{}"#).await;
+        assert_eq!(status, StatusCode::OK, "got {view}");
+        let field = &view["default_naming_instruction"];
+        assert_eq!(field["source"], "default");
+        assert!(field["stored"].is_null());
+        assert_eq!(
+            field["effective"],
+            prompt_augmenter::DEFAULT_NAMING_INSTRUCTION
+        );
+        assert_eq!(
+            field["default"],
+            prompt_augmenter::DEFAULT_NAMING_INSTRUCTION
+        );
+
+        let (status, view) =
+            put_settings_resp(&state, r#"{"default_naming_instruction": "HITL #<issue>"}"#).await;
+        assert_eq!(status, StatusCode::OK, "got {view}");
+        assert_eq!(
+            view["default_naming_instruction"]["effective"],
+            "HITL #<issue>"
+        );
+        assert_eq!(view["default_naming_instruction"]["source"], "stored");
+
+        let (status, view) =
+            put_settings_resp(&state, r#"{"default_naming_instruction": ""}"#).await;
+        assert_eq!(status, StatusCode::OK, "got {view}");
+        assert_eq!(view["default_naming_instruction"]["source"], "default");
+        assert_eq!(
+            instance_config::get(&state.db)
+                .await
+                .unwrap()
+                .default_naming_instruction,
+            None
         );
     }
 

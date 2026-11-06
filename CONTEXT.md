@@ -449,7 +449,9 @@ Plusieurs Runs peuvent tourner simultanément sur le même repo. Conventions ant
 
 **Nom placeholder** *(terme)* : nom lisible posé par le daemon au spawn, déterministe et immédiat, garanti présent même pour un Run prompt-less. _Éviter_ : nom temporaire, titre par défaut.
 
-**Nom descriptif** *(terme)* : nom posé best-effort par le Pipeline Manager dans son propre tour, une fois qu'il sait ce que fait le Run ; remplace le placeholder s'il aboutit, sans jamais le supprimer (un Run a toujours un nom). **Désactivable par-Run et par-Trigger** (défaut d'instance `default_auto_name`, résolu `stored → env PDO_DEFAULT_AUTO_NAME → true`, ADR-0015, #338) : désactivé, le Run garde son nom placeholder et le manager n'est pas instruit de renommer. _Éviter_ : nom final, rename automatique.
+**Nom descriptif** *(terme)* : nom posé best-effort par l'**agent du nœud d'entrée**, dès qu'il a lu l'input du Run, en suivant la *Consigne de nommage* ; remplace le placeholder s'il aboutit, sans jamais le supprimer (un Run a toujours un nom). **Un seul nommage automatique** : un agent ne renomme le Run que tant qu'il porte son placeholder — le premier gagne, et un nom donné à la main n'est jamais écrasé. Un nœud d'entrée qui est un script ne nomme rien : c'est le premier nœud agent qui s'en charge. **Désactivable par-Run et par-Trigger** (défaut d'instance `default_auto_name`, résolu `stored → env PDO_DEFAULT_AUTO_NAME → true`, ADR-0015, #338) : désactivé, le Run garde son nom placeholder et aucun agent n'est instruit de renommer. Ne dépend pas du Pipeline Manager, désactivé par défaut. _Éviter_ : nom final, rename automatique, « nommé par le manager ».
+
+**Consigne de nommage** *(terme)* : texte libre, en langage naturel, qui dit à l'agent **comment** nommer un Run (« US <numéro> - <colonne Trello de la carte en entrée> »). Portée par le Pipeline, avec un repli sur l'instance ; à défaut, la consigne intégrée (« 2 à 5 mots qui disent l'intention »). L'agent l'interprète avec ses propres outils : PDO ne connaît aucun gestionnaire de tickets. _Éviter_ : « template », « gabarit » (aucun trou à remplir, c'est une consigne).
 
 ### Statistiques de Run
 
@@ -641,7 +643,7 @@ Agent conversationnel attaché à un Pipeline Run. Permet de **lire l'état** et
 
 - **Un manager par Run**, session tmux dédiée `pdo-mgr-<run-id>`, spawn au démarrage du Run, persiste jusqu'au cleanup (interrogation post-mortem).
 - **Pas de polling actif.** Le manager ne tourne que quand l'utilisateur lui parle.
-- **Nommage descriptif dans son propre tour** : quand un Run porte un nom placeholder, le manager pose un nom descriptif best-effort — jamais réveillé par le daemon (#184).
+- **Ne nomme pas le Run** : le *Nom descriptif* est posé par le premier nœud agent du Run (#1039). Le manager garde `rename_run`, mais ne l'émet qu'à la demande de l'utilisateur.
 
 ### Implémentation
 
@@ -663,7 +665,7 @@ Exposées comme `POST /runs/<id>/commands` :
 | `release_node_completion` | **Libère la complétion** d'un nœud `interactive` : lève la garde qui refuse `pdo complete` ; le nœud repasse `running`. Idempotent ; refus 409 nommé sur un nœud non interactif ou sans session vivante → ADR-0068 |
 | `inject_artifact` | Pose un artefact à la main dans le Blackboard |
 | `cleanup_run` | Supprime branches, worktrees, artefacts (archive d'abord — ADR-0020) |
-| `rename_run` | Donne au Run un nom descriptif |
+| `rename_run` | Renomme le Run ; avec `if_placeholder: true` (envoyé par les agents, #1039), seulement tant qu'il porte son placeholder |
 | `start_node` | Spawne un NodeRun immédiatement, hors ordre de dépendance (force-spawn). Refus `409` sur un Run non vivant / au cap / sandbox non prête → forme ADR-0035 §3 |
 
 > La route UI jumelle `POST /runs/<id>/nodes/<node>/retry` (bouton Retry/Play) n'est **pas** une commande `/commands`, mais partage la même discipline de refus (#487) : sonde de tête « resume the run first » (`409`), puis (re)spawn par `spawn_node` avec un `SpawnOutcome` véridique — cf. § *Contrôles de Run*. Sa résurrection sœur `GET …/pane` d'une session morte passe elle aussi désormais par la porte d'admission et laisse une trace `NodeStarted` (#487 §3) — un clic ne contourne plus le cap de sessions.

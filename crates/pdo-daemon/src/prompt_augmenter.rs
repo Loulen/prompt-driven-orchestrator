@@ -66,13 +66,19 @@ pub(crate) fn secondary_repo_contexts(
 pub(crate) struct AugmentContext<'a> {
     pub pipeline: &'a PipelineDef,
     pub node: &'a NodeDef,
-    #[allow(dead_code)]
     pub run_id: &'a str,
     pub iter: i64,
     pub artifacts_dir: &'a Path,
     pub variables: &'a HashMap<String, serde_yaml::Value>,
-    #[allow(dead_code)]
+    /// Reachable from the side the node runs on (a sandboxed node gets the
+    /// container-side URL). Printed only by the « Name this run » section.
     pub daemon_url: &'a str,
+    /// The *Consigne de nommage* this node must apply (#1039): `Some` iff the Run
+    /// has auto-naming on AND still carries its placeholder at spawn time
+    /// ([`crate::event_log::RunState::pending_naming_instruction`]). Rendered for
+    /// an `agent` node only — a script cannot read the preamble, so the first
+    /// agent node downstream of it names the Run instead.
+    pub naming_instruction: Option<&'a str>,
     pub foreach_context: Option<ForEachContext>,
     /// For isolated / merge nodes: the per-iteration sub-worktree the
     /// agent must edit in. Set to `None` for nodes that run directly in the
@@ -582,6 +588,13 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
         preamble.push('\n');
     }
 
+    if let Some(instruction) = ctx
+        .naming_instruction
+        .filter(|_| ctx.node.node_type == NodeType::Agent)
+    {
+        push_naming_section(&mut preamble, ctx.daemon_url, ctx.run_id, instruction);
+    }
+
     preamble.push_str("## Outputs\n\n");
     if outputs.is_empty() {
         preamble.push_str("No outputs declared.\n\n");
@@ -910,6 +923,35 @@ pub(crate) fn build_preamble(ctx: &AugmentContext<'_>) -> String {
     preamble
 }
 
+/// « Name this run » (#1039): the agent names the Run as soon as it has read the
+/// input, following the *Consigne de nommage*. `if_placeholder` makes the rename
+/// conditional on the daemon side, so the first agent wins and a name the user
+/// gave is never overwritten — however many agents received this section.
+fn push_naming_section(preamble: &mut String, daemon_url: &str, run_id: &str, instruction: &str) {
+    preamble.push_str("## Name this run\n\n");
+    preamble.push_str(
+        "This run still carries its placeholder name. As soon as you have read the \
+         run's input, give the run a name by following this naming instruction:\n\n",
+    );
+    for line in instruction.trim().lines() {
+        match line.trim_end() {
+            "" => preamble.push_str(">\n"),
+            line => preamble.push_str(&format!("> {line}\n")),
+        }
+    }
+    preamble.push_str(&format!(
+        "\nThen set it once, before carrying on with your task:\n\
+         ```bash\n\
+         curl -s -X POST {daemon_url}/runs/{run_id}/commands \\\n\
+         \x20 -H 'Content-Type: application/json' \\\n\
+         \x20 -d '{{\"kind\":\"rename_run\",\"name\":\"<the name>\",\"if_placeholder\":true}}'\n\
+         ```\n\
+         `\"if_placeholder\":true` applies the rename only while the run still has its \
+         placeholder name. An answer with `\"noop\":true` means the run is already \
+         named (by another node or by the user): that is expected — do not retry.\n\n"
+    ));
+}
+
 pub(crate) fn build_full_prompt(ctx: &AugmentContext<'_>, role_prompt: &str) -> String {
     let preamble = build_preamble(ctx);
     match toggle_invocations(ctx.node.interactive, ctx.node.orchestrator) {
@@ -947,7 +989,7 @@ pub(crate) fn toggle_invocations(interactive: bool, orchestrator: bool) -> Optio
 pub(crate) const DEFAULT_AUTO_NAME_ENV: &str = "PDO_DEFAULT_AUTO_NAME";
 
 /// Built-in default for Run auto-naming: **on** — a Run created with no name is
-/// auto-named by the manager.
+/// named by its first agent node (#1039).
 pub(crate) const DEFAULT_AUTO_NAME_DEFAULT: bool = true;
 
 /// Reuses the shared boolean parser so a typo falls through to the next tier
@@ -973,36 +1015,35 @@ pub(crate) fn default_auto_name_with(stored: Option<i64>) -> bool {
     }
 }
 
-/// How the manager should treat run naming, decided by the daemon at spawn.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum RunNameHint {
-    /// The user supplied a display name — do not rename.
-    UserProvided,
-    /// No name, but there is input to summarise — name it now from `_input`.
-    DeriveFromInput,
-    /// No name and no input; a deterministic placeholder was set. Rename best-effort,
-    /// only once enough is known, never by polling.
-    Placeholder,
+/// The built-in *Consigne de nommage* (#1039): the last tier of
+/// [`resolve_naming_instruction`], used when neither the Pipeline nor the
+/// instance states one.
+pub(crate) const DEFAULT_NAMING_INSTRUCTION: &str =
+    "A short descriptive name, 2–5 words, that captures the intent of the run.";
+
+/// Resolve the *Consigne de nommage* (#1039): the Pipeline's `naming_instruction`,
+/// else the instance's `default_naming_instruction`, else
+/// [`DEFAULT_NAMING_INSTRUCTION`]. A blank tier is no statement and falls through.
+/// Free text the agent interprets with its own tools — PDO knows no ticket tracker.
+pub(crate) fn resolve_naming_instruction(pipeline: Option<&str>, instance: Option<&str>) -> String {
+    [pipeline, instance]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_NAMING_INSTRUCTION)
+        .to_string()
 }
 
-pub(crate) fn build_manager_preamble(
-    run_id: &str,
-    daemon_url: &str,
-    name_hint: RunNameHint,
-) -> String {
-    let auto_name_instruction = match name_hint {
-        RunNameHint::UserProvided => String::new(),
-        RunNameHint::DeriveFromInput =>
-            "\n**No display name was provided for this run.** As your first action, read the user input from the `_input` artifact and issue a `rename_run` command with a short, descriptive name (2–5 words) that captures the intent of the run.\n".to_string(),
-        RunNameHint::Placeholder =>
-            "\n**This run has a placeholder display name** (`Untitled run …`) because it started without a prompt — its real purpose only becomes clear once its nodes do work. Do **not** rename it as your first action, and do **not** poll or block waiting for nodes. Instead, *when you have enough context to know what this run is actually doing* (typically once nodes have produced output, e.g. when the user later engages you), give it a short, descriptive name (2–5 words) via the `rename_run` command. This is best-effort: if you never gain enough context, leave the placeholder in place.\n".to_string(),
-    };
-
+/// The Pipeline Manager's preamble. It carries **no** naming instruction (#1039):
+/// a Run is named by its first agent node, so the manager — off by default —
+/// is never the one responsible for it.
+pub(crate) fn build_manager_preamble(run_id: &str, daemon_url: &str) -> String {
     format!(
         r#"# Pipeline Manager Runtime Preamble
 
 You manage **run `{run_id}`**.
-{auto_name_instruction}
+
 - Daemon base URL: `{daemon_url}`
 - Run state: `curl {daemon_url}/runs/{run_id}`
 - Event log: `curl {daemon_url}/runs/{run_id}/events`
@@ -1146,7 +1187,7 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
 
 ### 10. rename_run
 
-Set or update the display name of this run.
+Set or update the display name of this run — only when the user asks you to. The run is named automatically by its first agent node; you are never responsible for naming it.
 
 ```bash
 curl -X POST {daemon_url}/runs/{run_id}/commands \
@@ -1180,13 +1221,8 @@ curl -X POST {daemon_url}/runs/{run_id}/commands \
     )
 }
 
-pub(crate) fn build_manager_prompt(
-    run_id: &str,
-    daemon_url: &str,
-    role_prompt: &str,
-    name_hint: RunNameHint,
-) -> String {
-    let preamble = build_manager_preamble(run_id, daemon_url, name_hint);
+pub(crate) fn build_manager_prompt(run_id: &str, daemon_url: &str, role_prompt: &str) -> String {
+    let preamble = build_manager_preamble(run_id, daemon_url);
     format!("{preamble}{role_prompt}")
 }
 
@@ -1312,6 +1348,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         }
     }
 
@@ -1328,6 +1365,7 @@ mod tests {
             artifacts_dir: Path::new("/repo/.pdo/artifacts"),
             variables,
             daemon_url: "http://localhost:5172",
+            naming_instruction: None,
             foreach_context: None,
             source_worktree_dir: None,
             shared_worktree_dir: None,
@@ -1341,6 +1379,77 @@ mod tests {
             interrupted_git_ops: &[],
             partial_outputs: &[],
         }
+    }
+
+    // --- Consigne de nommage (#1039) ---
+
+    #[test]
+    fn naming_instruction_resolves_pipeline_then_instance_then_builtin() {
+        assert_eq!(
+            resolve_naming_instruction(Some("HITL #<issue>"), Some("instance rule")),
+            "HITL #<issue>"
+        );
+        assert_eq!(
+            resolve_naming_instruction(None, Some("instance rule")),
+            "instance rule"
+        );
+        // A blank tier is no statement: it falls through.
+        assert_eq!(
+            resolve_naming_instruction(Some("  \n "), Some("instance rule")),
+            "instance rule"
+        );
+        assert_eq!(
+            resolve_naming_instruction(None, Some("")),
+            DEFAULT_NAMING_INSTRUCTION
+        );
+        assert_eq!(
+            resolve_naming_instruction(None, None),
+            DEFAULT_NAMING_INSTRUCTION
+        );
+        assert!(DEFAULT_NAMING_INSTRUCTION.contains("2–5 words"));
+    }
+
+    #[test]
+    fn agent_preamble_carries_the_naming_section_only_when_asked() {
+        let pipeline = sample_pipeline();
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+
+        // Auto-name off, or the Run already named: the daemon passes `None`.
+        let silent = build_preamble(&sample_ctx(&pipeline, node, &vars));
+        assert!(!silent.contains("## Name this run"), "{silent}");
+        assert!(!silent.contains("rename_run"), "{silent}");
+
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.naming_instruction = Some("US #<n> - <Trello column>\n\nKeep it short.");
+        let preamble = build_preamble(&ctx);
+        assert!(preamble.contains("## Name this run"), "{preamble}");
+        assert!(
+            preamble.contains("> US #<n> - <Trello column>\n>\n> Keep it short.\n"),
+            "the instruction is quoted verbatim, line by line: {preamble}"
+        );
+        assert!(preamble.contains(
+            "curl -s -X POST http://localhost:5172/runs/20260101-120000-abc1234/commands"
+        ));
+        assert!(
+            preamble.contains(r#"{"kind":"rename_run","name":"<the name>","if_placeholder":true}"#)
+        );
+        // Asked as soon as the input is read: before the outputs, not buried at the end.
+        let naming = preamble.find("## Name this run").unwrap();
+        assert!(naming > preamble.find("## Inputs").unwrap());
+        assert!(naming < preamble.find("## Outputs").unwrap());
+    }
+
+    #[test]
+    fn script_preamble_never_carries_the_naming_section() {
+        // A script cannot read the preamble: the first AGENT node names the Run.
+        let mut pipeline = sample_pipeline();
+        pipeline.nodes[0].node_type = NodeType::Script;
+        let node = &pipeline.nodes[0];
+        let vars = HashMap::new();
+        let mut ctx = sample_ctx(&pipeline, node, &vars);
+        ctx.naming_instruction = Some(DEFAULT_NAMING_INSTRUCTION);
+        assert!(!build_preamble(&ctx).contains("## Name this run"));
     }
 
     /// ADR-0047: the secondary preamble branches per pin. A writable secondary is
@@ -2289,6 +2398,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let node = &pipeline.nodes[2]; // implementer
@@ -2372,6 +2482,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let node = &pipeline.nodes[0];
@@ -2499,19 +2610,14 @@ mod tests {
 
     #[test]
     fn manager_preamble_contains_run_id_and_daemon_url() {
-        let preamble = build_manager_preamble(
-            "20260507-120000-abc1234",
-            "http://localhost:5172",
-            RunNameHint::UserProvided,
-        );
+        let preamble = build_manager_preamble("20260507-120000-abc1234", "http://localhost:5172");
         assert!(preamble.contains("20260507-120000-abc1234"));
         assert!(preamble.contains("http://localhost:5172"));
     }
 
     #[test]
     fn manager_preamble_contains_all_commands() {
-        let preamble =
-            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172");
         for cmd in [
             "bump_region",
             "end_region",
@@ -2535,8 +2641,7 @@ mod tests {
 
     #[test]
     fn manager_preamble_contains_curl_examples() {
-        let preamble =
-            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172");
         assert!(preamble.contains("curl -X POST"));
         assert!(preamble.contains("Content-Type: application/json"));
     }
@@ -2550,7 +2655,7 @@ mod tests {
     #[test]
     fn manager_preamble_sandboxed_carries_the_container_side_url_only() {
         let url = crate::sandbox_container::daemon_url(6193, true);
-        let preamble = build_manager_preamble("run-1", &url, RunNameHint::DeriveFromInput);
+        let preamble = build_manager_preamble("run-1", &url);
         assert!(
             preamble.contains("Daemon base URL: `http://host.docker.internal:6193`"),
             "a sandboxed manager must be told the gateway URL: {preamble}"
@@ -2560,14 +2665,14 @@ mod tests {
             "no `curl` line may keep the host-only URL — inside the container it \
              resolves to the container itself and every command silently fails"
         );
-        // The very command the bug swallowed: the first-action rename.
+        // The very command the bug swallowed.
         assert!(preamble.contains("http://host.docker.internal:6193/runs/run-1/commands"));
     }
 
     #[test]
     fn manager_preamble_host_path_is_unchanged() {
         let url = crate::sandbox_container::daemon_url(6193, false);
-        let preamble = build_manager_preamble("run-1", &url, RunNameHint::DeriveFromInput);
+        let preamble = build_manager_preamble("run-1", &url);
         assert!(preamble.contains("Daemon base URL: `http://localhost:6193`"));
         assert!(
             !preamble.contains("host.docker.internal"),
@@ -2581,47 +2686,30 @@ mod tests {
             "run-1",
             "http://localhost:5172",
             "You are the Pipeline Manager.",
-            RunNameHint::UserProvided,
         );
         assert!(prompt.contains("# Pipeline Manager Runtime Preamble"));
         assert!(prompt.contains("You are the Pipeline Manager."));
     }
 
+    /// #1039: the manager is no longer responsible for naming the Run — its
+    /// preamble keeps `rename_run` as a command, never as an instruction.
     #[test]
-    fn manager_preamble_derive_from_input_keeps_existing_instruction() {
-        let preamble = build_manager_preamble(
-            "run-1",
-            "http://localhost:5172",
-            RunNameHint::DeriveFromInput,
-        );
-        assert!(preamble.contains("No display name was provided"));
-        assert!(preamble.contains("rename_run"));
-    }
-
-    #[test]
-    fn manager_preamble_placeholder_is_best_effort_no_poll() {
-        let preamble =
-            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::Placeholder);
-        assert!(preamble.contains("placeholder display name"));
-        assert!(preamble.contains("rename_run"));
-        assert!(preamble.contains("best-effort"));
-        assert!(preamble.contains("do **not** poll"));
-        // The placeholder rename must NOT be front-loaded as the manager's first action.
-        assert!(!preamble.contains("As your first action"));
-    }
-
-    #[test]
-    fn manager_preamble_user_provided_has_no_naming_instruction() {
-        let preamble =
-            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
-        assert!(!preamble.contains("No display name was provided"));
-        assert!(!preamble.contains("placeholder display name"));
+    fn manager_preamble_carries_no_naming_instruction() {
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172");
+        for gone in [
+            "No display name was provided",
+            "placeholder display name",
+            "As your first action",
+            "if_placeholder",
+        ] {
+            assert!(!preamble.contains(gone), "{gone:?} leaked: {preamble}");
+        }
+        assert!(preamble.contains("only when the user asks you to"));
     }
 
     #[test]
     fn manager_preamble_cleanup_run_has_self_initiative_guardrail() {
-        let preamble =
-            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172");
         let section = preamble
             .split("### 9. cleanup_run")
             .nth(1)
@@ -2645,8 +2733,7 @@ mod tests {
         // (sections 1-2, with the region_id discovery recipe + lap-1 caveat);
         // extend_cycle is demoted to a legacy section with explicit target
         // semantics.
-        let preamble =
-            build_manager_preamble("run-1", "http://localhost:5172", RunNameHint::UserProvided);
+        let preamble = build_manager_preamble("run-1", "http://localhost:5172");
         assert!(preamble.contains("### 1. bump_region"));
         assert!(preamble.contains("### 2. end_region"));
         assert!(preamble.contains("extend_cycle (legacy)"));
@@ -2703,6 +2790,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -2760,6 +2848,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();
@@ -2812,6 +2901,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let node = &pipeline.nodes[0];
         let vars = HashMap::new();

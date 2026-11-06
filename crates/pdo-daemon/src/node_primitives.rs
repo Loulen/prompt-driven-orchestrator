@@ -325,8 +325,8 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
     };
 
     // A sandboxed node's session execs into the container, where `localhost` is
-    // the container — hence the same resolver as the manager preamble. Defensive:
-    // no node preamble prints `AugmentContext.daemon_url` yet.
+    // the container — hence the same resolver as the manager preamble. The
+    // « Name this run » section prints it (#1039).
     let sandboxed = !params.run_state.sandbox.is_off();
 
     let aug_ctx = crate::prompt_augmenter::AugmentContext {
@@ -337,6 +337,7 @@ pub(crate) fn start_node(params: &StartNodeParams<'_>) -> StartNodeResult {
         artifacts_dir: params.artifacts_dir,
         variables: params.resolved_vars,
         daemon_url: &crate::sandbox_container::daemon_url(params.daemon_port, sandboxed),
+        naming_instruction: params.run_state.pending_naming_instruction(),
         foreach_context: None,
         source_worktree_dir: has_sub_worktree.then_some(working_dir.as_path()),
         // #654: the same section, from the other isolation. This site only
@@ -1122,6 +1123,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1174,6 +1176,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let run_state = empty_run_state();
@@ -1219,6 +1222,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1276,6 +1280,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1335,6 +1340,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1391,6 +1397,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1457,6 +1464,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let run_state = empty_run_state();
@@ -1526,6 +1534,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let run_state = empty_run_state();
         let tmp = tempfile::tempdir().unwrap();
@@ -1583,6 +1592,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
@@ -1611,6 +1621,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
         let tmp = tempfile::tempdir().unwrap();
         let artifacts_dir = tmp.path().join("artifacts");
@@ -1637,6 +1648,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let run_state = empty_run_state();
@@ -1701,6 +1713,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1806,6 +1819,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1883,6 +1897,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let mut run_state = empty_run_state();
@@ -1949,6 +1964,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let mut run_state = empty_run_state();
@@ -2212,6 +2228,7 @@ mod tests {
             notes: Vec::new(),
             prompt_required: true,
             grid_size: None,
+            naming_instruction: None,
         };
 
         let mut run_state = empty_run_state();

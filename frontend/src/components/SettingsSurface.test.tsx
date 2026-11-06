@@ -209,6 +209,13 @@ function sample(overrides: Partial<InstanceSettings> = {}): InstanceSettings {
       env: null,
       default: true,
     },
+    default_naming_instruction: {
+      effective: "A short descriptive name, 2–5 words, that captures the intent of the run.",
+      source: "default",
+      stored: null,
+      env: null,
+      default: "A short descriptive name, 2–5 words, that captures the intent of the run.",
+    },
     // Manager on demand: off by default (a Run starts managerless), no pin (« Follow the Run »).
     manager_enabled: {
       effective: false,
@@ -1294,6 +1301,64 @@ describe("SettingsSurface — default Run auto-naming (#338)", () => {
     expect(note).toHaveTextContent(/stored value \(off\)/i);
     expect(note).toHaveTextContent("PDO_DEFAULT_AUTO_NAME=on");
     expect(note).toHaveTextContent(/overridden/i);
+  });
+});
+
+describe("SettingsSurface — instance naming instruction (#1039)", () => {
+  it("shows the built-in instruction as the placeholder of an empty field, next to the auto-name switch", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const field = (await screen.findByTestId(
+      "setting-default-naming-instruction",
+    )) as HTMLTextAreaElement;
+    expect(field.value).toBe("");
+    expect(field.placeholder).toMatch(/2–5 words/);
+    expect(screen.getByLabelText("Naming instruction")).toBe(field);
+    const autoName = screen.getByTestId("setting-default-auto-name");
+    expect(
+      autoName.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByTestId("setting-source-default-naming-instruction")).toHaveTextContent(
+      /built-in/i,
+    );
+    // The switch no longer credits the manager with the naming.
+    expect(screen.queryByText(/Let the manager auto-name/)).not.toBeInTheDocument();
+  });
+
+  it("sends the typed instruction, then \"\" to clear it", async () => {
+    const stored = sample({
+      default_naming_instruction: {
+        effective: "HITL #<issue>",
+        source: "stored",
+        stored: "HITL #<issue>",
+        env: null,
+        default: "A short descriptive name, 2–5 words, that captures the intent of the run.",
+      },
+    });
+    fetchSettingsMock.mockResolvedValue(sample());
+    updateSettingsMock.mockResolvedValue(stored);
+    render(<SettingsSurface open onClose={() => {}} />);
+
+    const field = await screen.findByTestId("setting-default-naming-instruction");
+    fireEvent.change(field, { target: { value: "  HITL #<issue>  " } });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(1));
+    expect(updateSettingsMock).toHaveBeenCalledWith({
+      default_naming_instruction: "HITL #<issue>",
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("setting-source-default-naming-instruction")).toHaveTextContent(
+        /stored value/i,
+      ),
+    );
+
+    updateSettingsMock.mockResolvedValue(sample());
+    fireEvent.change(screen.getByTestId("setting-default-naming-instruction"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByTestId("settings-save"));
+    await waitFor(() => expect(updateSettingsMock).toHaveBeenCalledTimes(2));
+    expect(updateSettingsMock).toHaveBeenLastCalledWith({ default_naming_instruction: "" });
   });
 });
 

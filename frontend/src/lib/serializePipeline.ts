@@ -84,6 +84,9 @@ export function pipelineToYamlObject(p: PipelineDef): Record<string, unknown> {
   // pipeline chose one — absent, it follows the reader's global default, and an
   // untouched pipeline round-trips byte for byte. Layout (`layoutFields.ts`).
   if (p.grid_size) obj.grid_size = p.grid_size;
+  // #1039: the naming instruction, emitted only when the pipeline states one —
+  // absent, the instance setting decides and the file stays untouched.
+  if (p.naming_instruction?.trim()) obj.naming_instruction = p.naming_instruction;
   if (Object.keys(p.variables).length > 0) {
     const vars: Record<string, unknown> = {};
     // Short form (`name: <default>`) when the daemon would infer the declared

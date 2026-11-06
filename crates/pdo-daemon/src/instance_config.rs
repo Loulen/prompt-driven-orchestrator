@@ -83,6 +83,13 @@ pub(crate) struct InstanceConfig {
     /// [`Self::autocomplete_turn_end`]: `NULL` is what makes the `stored → env → default`
     /// fall-through work; a stored `0` is a decision that beats the env.
     pub default_auto_name: Option<i64>,
+    /// Stored instance-wide *Consigne de nommage* (#1039), or `None` when unset:
+    /// free text telling the agent that names a Run how to name it. The middle
+    /// tier of `prompt_augmenter::resolve_naming_instruction` (Pipeline →
+    /// **instance** → built-in), read FRESH at the create chokepoint and frozen
+    /// into the Run. No env tier: it is prose, not a switch. `Some("")` is the
+    /// clear sentinel — [`update`] normalises it to SQL `NULL`.
+    pub default_naming_instruction: Option<String>,
     /// Stored instance-wide default **harness** (`claude`, `opencode`), or `None`
     /// when unset (#550, ADR-0046 amending ADR-0015). `None` falls through to the
     /// env seam ([`crate::tmux_session_manager::DEFAULT_HARNESS_ENV`]) then the
@@ -214,6 +221,9 @@ pub(crate) struct UpdateInstanceConfig {
     /// storing `0` for "off" is what lets unticking the box override a
     /// `PDO_DEFAULT_AUTO_NAME=1`, which a `NULL` fall-through would not.
     pub default_auto_name: Option<bool>,
+    /// Set the instance-wide naming instruction (#1039). `Some("")` clears it back
+    /// to unset (the built-in default decides again); `None` leaves it untouched.
+    pub default_naming_instruction: Option<String>,
     /// Set the instance-wide default harness (#550). `Some("")` clears it back to
     /// unset (same `""`-sentinel as `default_model`); `None` leaves it untouched.
     pub default_harness: Option<String>,
@@ -269,6 +279,7 @@ impl UpdateInstanceConfig {
             && self.default_sandbox.is_none()
             && self.autocomplete_turn_end.is_none()
             && self.default_auto_name.is_none()
+            && self.default_naming_instruction.is_none()
             && self.default_harness.is_none()
             && self.default_harness_model.is_none()
             && self.auto_fail.is_none()
@@ -530,6 +541,20 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
             .await?;
     }
 
+    // Additive migration (#1039): the instance naming instruction, NULLABLE so
+    // unset falls through to the built-in default.
+    let has_naming_instruction = sqlx::query(
+        "SELECT 1 FROM pragma_table_info('instance_config') WHERE name = 'default_naming_instruction'",
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
+    if !has_naming_instruction {
+        sqlx::query("ALTER TABLE instance_config ADD COLUMN default_naming_instruction TEXT")
+            .execute(db)
+            .await?;
+    }
+
     // Additive migration (#779): the per-run attachment budget, NULLABLE so
     // unset falls through to env → default.
     let has_max_attachments = sqlx::query(
@@ -557,6 +582,8 @@ fn row_to_config(row: &sqlx::sqlite::SqliteRow) -> InstanceConfig {
         default_sandbox: row.get("default_sandbox"),
         autocomplete_turn_end: row.get("autocomplete_turn_end"),
         default_auto_name: row.get("default_auto_name"),
+        // #1039: `try_get` so a row read before the column migration still maps.
+        default_naming_instruction: row.try_get("default_naming_instruction").unwrap_or(None),
         default_harness: row.get("default_harness"),
         // Stored as a JSON object in a TEXT column (trigger_store::variables
         // idiom). NULL / empty / unparseable ⇒ an empty map, so a fresh row and a
@@ -635,6 +662,9 @@ pub(crate) async fn update(
     if edit.default_auto_name.is_some() {
         sets.push("default_auto_name = ?");
     }
+    if edit.default_naming_instruction.is_some() {
+        sets.push("default_naming_instruction = ?");
+    }
     if edit.default_harness.is_some() {
         sets.push("default_harness = ?");
     }
@@ -706,6 +736,11 @@ pub(crate) async fn update(
         // 0/1, never NULL: unticking must persist a stored `0` that beats a
         // `PDO_DEFAULT_AUTO_NAME=1`, not fall through to it (#338).
         query = query.bind(if v { 1_i64 } else { 0_i64 });
+    }
+    if let Some(v) = edit.default_naming_instruction {
+        // "" (or blank) = clear sentinel → SQL NULL (#1039): a stored blank would
+        // read as "no instruction" anyway, so it must not pose as a decision.
+        query = query.bind(if v.trim().is_empty() { None } else { Some(v) });
     }
     if let Some(v) = edit.default_harness {
         // "" = clear sentinel → SQL NULL (#550, mirrors default_model): a stored
@@ -1063,6 +1098,44 @@ mod tests {
                 .unwrap()
                 .flatten();
         assert_eq!(raw, None, "clear must persist NULL, never ''");
+    }
+
+    #[tokio::test]
+    async fn update_sets_and_clears_the_default_naming_instruction() {
+        // #1039: free text, multi-line kept verbatim; a blank clears to NULL so the
+        // built-in default decides again.
+        let db = test_db().await;
+        assert_eq!(get(&db).await.unwrap().default_naming_instruction, None);
+        let text = "US #<n> - <Trello column>\nShort.";
+        let updated = update(
+            &db,
+            UpdateInstanceConfig {
+                default_naming_instruction: Some(text.to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.default_naming_instruction.as_deref(), Some(text));
+
+        let cleared = update(
+            &db,
+            UpdateInstanceConfig {
+                default_naming_instruction: Some("  ".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.default_naming_instruction, None);
+        let raw: Option<String> = sqlx::query_scalar(
+            "SELECT default_naming_instruction FROM instance_config WHERE id = 1",
+        )
+        .fetch_optional(&db)
+        .await
+        .unwrap()
+        .flatten();
+        assert_eq!(raw, None, "clear must persist NULL, never a blank");
     }
 
     #[tokio::test]

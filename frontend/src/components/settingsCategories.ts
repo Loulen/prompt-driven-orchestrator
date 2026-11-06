@@ -200,6 +200,7 @@ export type SettingsFieldId =
   | "max-attachments-mb"
   | "autocomplete-turn-end"
   | "default-auto-name"
+  | "default-naming-instruction"
   | "review-agent-can-resolve"
   | "agent-choice"
   | "skills"
@@ -218,6 +219,7 @@ export const FIELD_SECTION: Record<SettingsFieldId, SettingsSectionId> = {
   "max-attachments-mb": "runtime-limits",
   "autocomplete-turn-end": "runs",
   "default-auto-name": "runs",
+  "default-naming-instruction": "runs",
   "review-agent-can-resolve": "runs",
   "agent-choice": "harness-models",
   skills: "skills",

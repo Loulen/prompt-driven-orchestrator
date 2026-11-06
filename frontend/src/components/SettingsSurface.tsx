@@ -130,6 +130,8 @@ interface DraftValues {
   defaultSandbox: string;
   autocompleteTurnEnd: boolean;
   defaultAutoName: boolean;
+  /** #1039: the instance naming instruction, as typed; "" = the built-in one. */
+  namingInstruction: string;
   managerEnabled: boolean;
   managerProfile: string;
   /** #751: may an agent's `--resolved` reply resolve a review comment directly? */
@@ -150,6 +152,7 @@ function seedFrom(settings: InstanceSettings): DraftValues {
     defaultSandbox: settings.default_sandbox.effective ?? "off",
     autocompleteTurnEnd: settings.autocomplete_turn_end.effective,
     defaultAutoName: settings.default_auto_name.effective,
+    namingInstruction: settings.default_naming_instruction?.stored ?? "",
     managerEnabled: settings.manager_enabled.effective,
     // "" = « Follow the Run » (the clear sentinel on the wire too).
     managerProfile: settings.manager_profile.stored ?? "",
@@ -172,6 +175,11 @@ function sameMap(a: Record<string, string>, b: Record<string, string>): boolean 
     Object.keys(a).length === Object.keys(b).length &&
     Object.entries(a).every(([k, v]) => b[k] === v)
   );
+}
+
+/** #1039: blank and unset are the same instruction — the built-in one. */
+function namingInstructionChanged(values: DraftValues, settings: InstanceSettings): boolean {
+  return values.namingInstruction.trim() !== (settings.default_naming_instruction?.stored ?? "");
 }
 
 function numericDirty(str: string, effective: number): boolean {
@@ -200,6 +208,7 @@ function computeDirty(values: DraftValues, settings: InstanceSettings): Set<Sett
   if (values.defaultAutoName !== settings.default_auto_name.effective) {
     dirty.add("default-auto-name");
   }
+  if (namingInstructionChanged(values, settings)) dirty.add("default-naming-instruction");
   if (values.reviewAgentCanResolve !== settings.review_agent_can_resolve.effective) {
     dirty.add("review-agent-can-resolve");
   }
@@ -428,6 +437,10 @@ export default function SettingsSurface({
     }
     if (values.defaultAutoName !== settings.default_auto_name.effective) {
       patch.default_auto_name = values.defaultAutoName;
+    }
+    // #1039: free text; "" (or blank) is the clear sentinel — the built-in one decides.
+    if (namingInstructionChanged(values, settings)) {
+      patch.default_naming_instruction = values.namingInstruction.trim();
     }
     // #751: same plain-bool discipline — `false` persists as a stored `0`.
     if (values.reviewAgentCanResolve !== settings.review_agent_can_resolve.effective) {
@@ -767,21 +780,54 @@ export default function SettingsSurface({
                         checked={values.defaultAutoName}
                         onChange={(v) => setField("defaultAutoName", v)}
                         dirty={rollup.fields.has("default-auto-name")}
-                        label="Let the manager auto-name a Run created without a name"
+                        label="Auto-name a Run created without a name"
                         help={
                           <>
-                            When a Run starts with no name — from the New Run dialog with
-                            "Auto-generated" left on, or from a Trigger — the Pipeline Manager
-                            gives it a short descriptive name. Turn this off and such a Run
-                            keeps a stable <span className="font-mono">Untitled run …</span>{" "}
-                            placeholder instead. This is only the <strong>default</strong>: the
-                            New Run box and each Trigger can override it. Naming is the
-                            manager's job, so a managerless Run stays unnamed until its first
-                            manager start (which passes the same instruction).
+                            A Run starts with a stable{" "}
+                            <span className="font-mono">Untitled run …</span> placeholder. When
+                            it starts with no name — from the New Run dialog with
+                            "Auto-generated" left on, or from a Trigger — its first agent renames
+                            it as soon as it has read the input, following the naming
+                            instruction below. Turn this off and such a Run keeps its
+                            placeholder. This is only the <strong>default</strong>: the New Run
+                            box and each Trigger can override it. A name you set by hand is never
+                            overwritten.
                           </>
                         }
                         source={defaultAutoNameSourceNote(settings.default_auto_name)}
                       />
+                      {/* #1039: the instance fallback of the naming instruction, right
+                          under the switch it serves. A Pipeline's own instruction wins. */}
+                      <FieldBlock
+                        label="Naming instruction"
+                        htmlFor="setting-default-naming-instruction"
+                        dirty={rollup.fields.has("default-naming-instruction")}
+                        help={
+                          <>
+                            How the agent names a Run, in plain words — e.g. « US #&lt;number&gt; -
+                            &lt;column of the Trello card&gt; ». The agent applies it with its own
+                            tools. A Pipeline's own naming instruction wins over this one; leave it
+                            empty to use the built-in one.
+                          </>
+                        }
+                        source={namingInstructionSourceNote(settings.default_naming_instruction)}
+                        sourceTestId="setting-source-default-naming-instruction"
+                      >
+                        <textarea
+                          id="setting-default-naming-instruction"
+                          data-testid="setting-default-naming-instruction"
+                          rows={2}
+                          value={values.namingInstruction}
+                          onChange={(e) => setField("namingInstruction", e.target.value)}
+                          placeholder={settings.default_naming_instruction?.default ?? ""}
+                          className={`w-full max-w-[520px] resize-y rounded-md border bg-bg-3 px-2.5 py-1.5 text-fg placeholder:text-fg-4 focus:outline-none ${
+                            rollup.fields.has("default-naming-instruction")
+                              ? "border-st-await focus:border-st-await"
+                              : "border-line-strong focus:border-acc"
+                          }`}
+                          style={{ fontSize: "12px" }}
+                        />
+                      </FieldBlock>
                       {/* #751 (ADR-0067 §4): right after auto-name — both are about how much
                           the agent may do on its own. Off by default: the human resolves. */}
                       <CheckboxRow
@@ -2514,6 +2560,12 @@ function managerEnabledSourceNote(field: BoolSettingField): string {
 
 /** Which tier the manager profile pin comes from (manager on demand). No env tier
  *  and no stored default value: unset IS « Follow the Run ». */
+/** #1039: the instance naming instruction has no env tier — stored, or the built-in one. */
+function namingInstructionSourceNote(field: InstanceSettings["default_naming_instruction"]): string {
+  if (field?.source === "stored") return "Source: stored value (used when the Pipeline states none).";
+  return "Source: built-in instruction (shown greyed in the field).";
+}
+
 function managerProfileSourceNote(field: StringSettingField): string {
   if (field.source === "stored" && field.stored) {
     return `Source: stored value (pins the manager to « ${field.stored} »).`;

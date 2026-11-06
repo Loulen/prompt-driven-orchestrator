@@ -126,6 +126,7 @@ const PIPELINE: Complete<PipelineDef> = {
   notes: [NOTE],
   prompt_required: false, // must be exactly `false` to emit
   grid_size: "S", // emitted only when the pipeline chose a size (#877)
+  naming_instruction: "HITL #<issue>", // emitted only when stated (#1039)
 };
 
 const sortedKeys = (o: unknown) =>

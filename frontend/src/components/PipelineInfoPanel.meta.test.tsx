@@ -170,6 +170,20 @@ describe("Pipeline info — Info tab on a template (#948)", () => {
     expect(pipelineNow().prompt_required).toBe(true);
   });
 
+  it("edits the naming instruction: written to the pipeline, emptied removes it", () => {
+    render(<StorePanel />);
+    const input = screen.getByTestId("pipeline-naming-instruction-input") as HTMLTextAreaElement;
+    expect(input.value).toBe("");
+    expect(screen.getByText("Naming instruction")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "HITL #<issue>" } });
+    expect(pipelineNow().naming_instruction).toBe("HITL #<issue>");
+    expect(tabNow().dirty).toBe(true);
+    expect(serializePipeline(pipelineNow())).toContain('naming_instruction: "HITL #<issue>"');
+    fireEvent.change(input, { target: { value: "" } });
+    expect(pipelineNow().naming_instruction).toBeUndefined();
+    expect(serializePipeline(pipelineNow())).not.toContain("naming_instruction");
+  });
+
   it("adds, renames, retypes, sets the default of and deletes a variable", () => {
     render(<StorePanel />);
     fireEvent.click(screen.getByTestId("pipeline-variable-add"));

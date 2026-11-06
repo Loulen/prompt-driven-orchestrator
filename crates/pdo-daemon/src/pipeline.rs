@@ -599,6 +599,13 @@ pub(crate) struct PipelineDef {
     /// not semantics — excluded from the semantic pipeline-diff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_size: Option<GridSize>,
+    /// The Pipeline's *Consigne de nommage* (#1039): free text telling the agent
+    /// that names a Run **how** to name it (« US #<n> - <Trello column> »). First
+    /// tier of `prompt_augmenter::resolve_naming_instruction`, frozen into the
+    /// Run at creation. Absent ⇒ the instance setting, then the built-in default;
+    /// omitted from YAML in that case, and ignored by older daemons (ADR-0015).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub naming_instruction: Option<String>,
 }
 
 /// The three wiring-grid sizes (#877 / ADR-0076): `S` = 20px, `M` = 30px,
@@ -706,6 +713,7 @@ const KNOWN_TOP_LEVEL_KEYS: &[&str] = &[
     "notes",
     "prompt_required",
     "grid_size",
+    "naming_instruction",
 ];
 
 /// The node `type` strings the parser accepts verbatim. Anything else is coerced
@@ -5558,6 +5566,55 @@ nodes: []
         assert!(!serde_yaml::to_string(&plain.pipeline)
             .unwrap()
             .contains("grid_size"));
+    }
+
+    #[test]
+    fn naming_instruction_round_trips_and_absent_is_omitted() {
+        // #1039: a known top-level key (no unknown-field warning), multi-line text
+        // survives a parse → serialize → parse, and an unset pipeline serializes
+        // without the key so an untouched file round-trips byte for byte.
+        let yaml = with_start_end(
+            r#"
+name: named
+naming_instruction: |-
+  US #<n> - <Trello column of the card>
+  Never more than 6 words.
+nodes: []
+"#,
+        );
+        let result = parse_pipeline(&yaml).unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let want = "US #<n> - <Trello column of the card>\nNever more than 6 words.";
+        assert_eq!(result.pipeline.naming_instruction.as_deref(), Some(want));
+        let serialized = serde_yaml::to_string(&result.pipeline).unwrap();
+        assert_eq!(
+            parse_pipeline(&serialized)
+                .unwrap()
+                .pipeline
+                .naming_instruction
+                .as_deref(),
+            Some(want),
+            "{serialized}"
+        );
+
+        // The editor's own emit (`serializePipeline.ts`): double-quoted, escaped.
+        let edited = with_start_end(
+            "name: edited\nnaming_instruction: \"US #<n> - <Trello column>\\nShort.\"\nnodes: []\n",
+        );
+        assert_eq!(
+            parse_pipeline(&edited)
+                .unwrap()
+                .pipeline
+                .naming_instruction
+                .as_deref(),
+            Some("US #<n> - <Trello column>\nShort.")
+        );
+
+        let plain = parse_pipeline(&with_start_end("name: plain\nnodes: []\n")).unwrap();
+        assert_eq!(plain.pipeline.naming_instruction, None);
+        assert!(!serde_yaml::to_string(&plain.pipeline)
+            .unwrap()
+            .contains("naming_instruction"));
     }
 
     #[test]

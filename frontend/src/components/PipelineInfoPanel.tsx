@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { Info, Terminal, X, FileText, Code, Box, Loader, Bot, Copy, Download, ChevronDown, ChevronRight, Play, PowerOff, RefreshCw, FileDiff, FolderGit2, CloudOff } from "lucide-react";
 import { SectionHead, SourceDriftChip } from "./InspectorPrimitives";
 import TmuxTerminal from "./TmuxTerminal";
+import { terminalTitle } from "../lib/terminalIdentity";
 import DiffTab from "./DiffTab";
 import RepositoriesSection from "./RepositoriesSection";
 import PipelineMetaSections from "./PipelineMetaSections";
@@ -423,7 +424,7 @@ function ManagerTab({
             {error}
           </div>
         )}
-        <TmuxTerminal session={session} expanded status={run.status} />
+        <TmuxTerminal session={session} title={terminalTitle(run.name, "Manager")} expanded status={run.status} />
       </div>
     );
   }

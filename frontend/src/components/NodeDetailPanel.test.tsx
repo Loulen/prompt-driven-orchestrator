@@ -56,6 +56,7 @@ vi.mock("../api", () => ({
 
 function MockTmuxTerminal({
   session,
+  title,
   expanded,
   onExpand,
   status,
@@ -69,6 +70,7 @@ function MockTmuxTerminal({
   onImportFiles?: (files: File[]) => void;
   importDisabledReason?: string | null;
   session: string;
+  title?: string;
   expanded?: boolean;
   onExpand?: () => void;
   status?: string;
@@ -87,6 +89,7 @@ function MockTmuxTerminal({
     <div
       data-testid="tmux-terminal"
       data-session={session}
+      data-title={title}
       data-expanded={expanded}
       data-status={status}
       data-pane-source={paneSource ? JSON.stringify(paneSource) : undefined}
@@ -2726,6 +2729,36 @@ describe("NodeDetailPanel", () => {
       const frame = screen.getByTestId("terminal-fullsize");
       expect(frame.className).toMatch(/\bborder-st-running\b/);
       expect(frame.style.boxShadow).not.toContain("color-mix");
+    });
+
+    // #1038: the Run first — the session name says neither.
+    it("names the Run before the node, in the enlarged identity and the split title", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" nodeName="design" runName="US #5 - Sécurité" />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toHaveAttribute("data-title", "US #5 - Sécurité › design");
+      fireEvent.click(screen.getByTestId("term-expand"));
+      const identity = screen.getByTestId("term-identity");
+      expect(within(identity).getByTestId("term-identity-run")).toHaveTextContent("US #5 - Sécurité");
+      expect(
+        within(identity)
+          .getByTestId("term-identity-run")
+          .compareDocumentPosition(within(identity).getByTestId("term-identity-name")) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("names the node alone when the Run has no name", () => {
+      render(
+        <TooltipProvider>
+          <NodeDetailPanel node={makeNode({ status: "running" })} runId="run-1" nodeName="design" runName={null} />
+        </TooltipProvider>,
+      );
+      expect(screen.getByTestId("tmux-terminal")).toHaveAttribute("data-title", "design");
+      fireEvent.click(screen.getByTestId("term-expand"));
+      expect(screen.queryByTestId("term-identity-run")).not.toBeInTheDocument();
     });
 
     it("falls back to the node id when the node has no name", () => {

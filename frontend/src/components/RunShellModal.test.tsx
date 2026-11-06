@@ -6,8 +6,8 @@ import RunShellModal from "./RunShellModal";
 // WebSocket in jsdom. It echoes back the `session` prop it received so the test
 // can assert the modal wires the right session through (#316).
 vi.mock("./TmuxTerminal", () => ({
-  default: ({ session, expanded }: { session: string; expanded?: boolean }) => (
-    <div data-testid="tmux-terminal" data-session={session} data-expanded={String(!!expanded)} />
+  default: ({ session, title, expanded }: { session: string; title?: string; expanded?: boolean }) => (
+    <div data-testid="tmux-terminal" data-session={session} data-title={title} data-expanded={String(!!expanded)} />
   ),
 }));
 
@@ -21,6 +21,14 @@ describe("RunShellModal", () => {
     expect(term.getAttribute("data-session")).toBe("pdo-shell-20260704-100029-abc1234");
     // Rendered expanded (full-modal), per the plan.
     expect(term.getAttribute("data-expanded")).toBe("true");
+  });
+
+  // #1038: the shell says whose worktree it is in — the Run, not the session name.
+  it("names the Run in the header and the terminal title", () => {
+    render(<RunShellModal session="pdo-shell-x" runName="US #5 - Sécurité" onClose={vi.fn()} />);
+    expect(screen.getByTestId("run-shell-run-name")).toHaveTextContent("US #5 - Sécurité");
+    expect(screen.queryByText("pdo-shell-x")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tmux-terminal")).toHaveAttribute("data-title", "US #5 - Sécurité › Shell");
   });
 
   it("closes on Escape when focus is outside the terminal", () => {

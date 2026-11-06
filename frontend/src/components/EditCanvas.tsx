@@ -1190,6 +1190,7 @@ function EditCanvasInner({ libraryEntries, onLibraryDelete, infoOpen, onToggleIn
       {shellSession && (
         <RunShellModal
           session={shellSession}
+          runName={activeRunState?.name}
           onClose={() => setShellSession(null)}
         />
       )}

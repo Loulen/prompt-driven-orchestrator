@@ -42,6 +42,7 @@ import ImageLightbox from "./ImageLightbox";
 import CopyButton from "./CopyButton";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import TmuxTerminal from "./TmuxTerminal";
+import { terminalTitle } from "../lib/terminalIdentity";
 import { Tooltip, TooltipProvider } from "./ui/tooltip";
 import { STATUS_BG, STATUS_BORDER, STATUS_TEXT } from "../nodeStyles";
 import StatusIcon from "./StatusIcon";
@@ -76,6 +77,8 @@ interface Props {
   runId: string;
   isArchived?: boolean;
   nodeName?: string | null;
+  /** #1038: the Run's name, first in the terminal's identity (« Run › node »). */
+  runName?: string | null;
   initialTerminalExpanded?: boolean;
   provisioningRepository?: string;
   inheritedProvisioning?: ScopedProvisioningRules[];
@@ -494,6 +497,7 @@ export default function NodeDetailPanel({
   runId,
   isArchived,
   nodeName,
+  runName,
   initialTerminalExpanded,
   provisioningRepository = "",
   inheritedProvisioning,
@@ -758,16 +762,32 @@ export default function NodeDetailPanel({
     !isArchived &&
     (selectedIterStatus === "awaiting_user" || nodeAwaitsOnLatestIter);
 
+  const nodeLabel = nodeName ?? node.node_id;
   const toolbarIdentity = expanded ? (
     <span className="flex items-center gap-1.5" data-testid="term-identity">
       {/* PDO-22: the status badge just after names it — the glyph is decorative. */}
       <StatusIcon status={node.status} reason={node.failure_reason} decorative testId="term-identity-icon" />
+      {/* #1038: the Run first — the session name says neither. */}
+      {runName?.trim() && (
+        <>
+          <span
+            className="min-w-0 truncate text-fg-3"
+            style={{ fontSize: "12px" }}
+            data-testid="term-identity-run"
+          >
+            {runName.trim()}
+          </span>
+          <span className="text-fg-4" aria-hidden>
+            ›
+          </span>
+        </>
+      )}
       <span
         className="text-fg"
         style={{ fontSize: "12px", fontWeight: 500 }}
         data-testid="term-identity-name"
       >
-        {nodeName ?? node.node_id}
+        {nodeLabel}
       </span>
       <span className="font-mono text-fg-4" style={{ fontSize: "10px" }}>
         iter {selectedIter}
@@ -1251,6 +1271,7 @@ export default function NodeDetailPanel({
             {showTerminal ? (
               <TmuxTerminal
                 session={sessionName}
+                title={terminalTitle(runName, nodeLabel)}
                 expanded={expanded}
                 onExpand={() =>
                   setTerminalView((v) => (v === "expanded" ? "split" : "expanded"))

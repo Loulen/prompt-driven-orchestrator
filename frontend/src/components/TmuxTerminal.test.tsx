@@ -83,6 +83,7 @@ interface MockTerminal {
   onSelectionChange: ReturnType<typeof vi.fn>;
   hasSelection: ReturnType<typeof vi.fn>;
   getSelection: ReturnType<typeof vi.fn>;
+  getSelectionPosition: ReturnType<typeof vi.fn>;
   clearSelection: ReturnType<typeof vi.fn>;
   /** What the component registered via attachCustomKeyEventHandler. */
   keyHandler: ((ev: KeyboardEvent) => boolean) | null;
@@ -130,6 +131,7 @@ vi.mock("@xterm/xterm", () => ({
       }),
       hasSelection: vi.fn(() => false),
       getSelection: vi.fn(() => ""),
+      getSelectionPosition: vi.fn((): unknown => undefined),
       clearSelection: vi.fn(),
       keyHandler: null,
       emitSelectionChange: () => selectionListeners.forEach((fn) => fn()),
@@ -889,6 +891,69 @@ describe("TmuxTerminal", () => {
       screen.getByTestId("xterm-container").dispatchEvent(ev);
       expect(setData).toHaveBeenCalledWith("text/plain", "services:\n  web: {}");
       expect(ev.defaultPrevented).toBe(true);
+    });
+
+    // #1046: a drag that starts on the command's first character leaves the
+    // first line's margin out; every path must tell cleanCopiedText so, from
+    // xterm's 0-based selection start.
+    describe("selection starting after the margin", () => {
+      const copied = "ls -la\n  | grep pdo";
+      const select = (term: MockTerminal, startX: number) => {
+        term.hasSelection.mockReturnValue(true);
+        term.getSelection.mockReturnValue(copied);
+        term.getSelectionPosition.mockReturnValue({ start: { x: startX, y: 4 }, end: { x: 11, y: 5 } });
+      };
+
+      it.each([
+        [2, "ls -la\n| grep pdo"],
+        [0, copied],
+      ])("the shortcut passes firstLineCut (start.x = %i)", async (startX, expected) => {
+        const writeText = vi.fn(() => Promise.resolve());
+        Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+        try {
+          render(<TmuxTerminal session="test-session" />);
+          const term = mockTerminalInstances[0];
+          select(term, startX);
+          term.keyHandler!(new KeyboardEvent("keydown", { key: "c", ctrlKey: true, cancelable: true }));
+          await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));
+        } finally {
+          Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+        }
+      });
+
+      it.each([
+        [2, "ls -la\n| grep pdo"],
+        [0, copied],
+      ])("the Copy button passes firstLineCut (start.x = %i)", async (startX, expected) => {
+        const writeText = vi.fn(() => Promise.resolve());
+        Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+        try {
+          render(<TmuxTerminal session="test-session" />);
+          const term = mockTerminalInstances[0];
+          const btn = screen.getByTestId("term-copy") as HTMLButtonElement;
+          select(term, startX);
+          term.emitSelectionChange();
+          await waitFor(() => expect(btn.disabled).toBe(false));
+          fireEvent.click(btn);
+          await waitFor(() => expect(writeText).toHaveBeenCalledWith(expected));
+        } finally {
+          Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+        }
+      });
+
+      it.each([
+        [2, "ls -la\n| grep pdo"],
+        [0, copied],
+      ])("the native copy event passes firstLineCut (start.x = %i)", (startX, expected) => {
+        render(<TmuxTerminal session="test-session" />);
+        const term = mockTerminalInstances[0];
+        select(term, startX);
+        const setData = vi.fn();
+        const ev = new Event("copy", { bubbles: true, cancelable: true }) as ClipboardEvent;
+        Object.defineProperty(ev, "clipboardData", { value: { setData } });
+        screen.getByTestId("xterm-container").dispatchEvent(ev);
+        expect(setData).toHaveBeenCalledWith("text/plain", expected);
+      });
     });
 
     it("Ctrl+V is handed to the browser (paste) instead of sending ^V", () => {

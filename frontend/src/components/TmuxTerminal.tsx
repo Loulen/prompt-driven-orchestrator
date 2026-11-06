@@ -37,6 +37,15 @@ import { useFileDropTarget } from "../hooks/useFileDropTarget";
 import { DropOverlay } from "./SkillFileDropZone";
 import StatusIcon from "./StatusIcon";
 
+// #1046: the cleaned text of the current selection, the same on every copy
+// path. xterm's selection columns are 0-based (its typings say 1-based, its
+// code does not), so `start.x > 0` means the drag began after column 0 and
+// left the first line's margin out of the selection.
+function copiedSelection(term: Terminal): string {
+  const firstLineCut = (term.getSelectionPosition()?.start.x ?? 0) > 0;
+  return cleanCopiedText(term.getSelection(), { firstLineCut });
+}
+
 /** Which node iteration's frozen pane to read when the live session is gone (#617). */
 export interface PaneSource {
   runId: string;
@@ -261,7 +270,7 @@ export default function TmuxTerminal({
   const handleCopy = useCallback(async () => {
     const term = terminalRef.current;
     if (!term || !term.hasSelection()) return;
-    const ok = await writeClipboardText(cleanCopiedText(term.getSelection()));
+    const ok = await writeClipboardText(copiedSelection(term));
     setCopyFeedback(ok ? "copied" : "failed");
     if (ok) term.clearSelection();
     window.setTimeout(() => setCopyFeedback(null), 1500);
@@ -404,7 +413,7 @@ export default function TmuxTerminal({
     // as the shortcut and the Copy button.
     const handleNativeCopy = (e: ClipboardEvent) => {
       if (!term.hasSelection() || !e.clipboardData) return;
-      e.clipboardData.setData("text/plain", cleanCopiedText(term.getSelection()));
+      e.clipboardData.setData("text/plain", copiedSelection(term));
       e.preventDefault();
       e.stopPropagation();
     };
@@ -426,7 +435,7 @@ export default function TmuxTerminal({
         // selection was cleared, and xterm copied an empty string. The key is
         // consumed so that late native copy cannot overwrite the clipboard.
         ev.preventDefault();
-        void writeClipboardText(cleanCopiedText(term.getSelection()));
+        void writeClipboardText(copiedSelection(term));
         term.clearSelection();
         return false;
       }

@@ -30,10 +30,14 @@ pub enum StatsAction {
     /// and model.
     Cost(Filters),
     /// The Performance tab: median peak context, median duration and steered
-    /// share by harness, then by Pipeline.
+    /// share by harness, then by Pipeline and for the Infrastructure.
     Performance {
         #[command(flatten)]
         filters: Filters,
+        /// Which duration: the tab's Total / Active / Waiting toggle (it opens
+        /// on Active).
+        #[arg(long, value_enum, default_value_t = DurationMode::Active)]
+        duration: DurationMode,
         /// Read the transcripts again instead of the memo (the tab's Refresh).
         #[arg(long)]
         refresh: bool,
@@ -101,6 +105,15 @@ pub struct Filters {
     pub uncombined: bool,
     #[arg(long)]
     pub json: bool,
+}
+
+/// The duration the Performance tab reads: total, active (without the
+/// waits), or the waits alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum DurationMode {
+    Total,
+    Active,
+    Waiting,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -187,14 +200,18 @@ pub fn run_stats(action: StatsAction) -> Result<()> {
             let cost = daemon.get(&format!("/stats/cost?{query}"))?.ok()?.json()?;
             out(&cost, f.json, || render::cost(&cost));
         }
-        StatsAction::Performance { filters, refresh } => {
+        StatsAction::Performance {
+            filters,
+            duration,
+            refresh,
+        } => {
             let query = filters.query(true, false)?;
             let performance = daemon
                 .get(&format!("/stats/performance?{query}&refresh={refresh}"))?
                 .ok()?
                 .json()?;
             out(&performance, filters.json, || {
-                render::performance(&performance)
+                render::performance(&performance, duration)
             });
         }
         StatsAction::Absorptions { json } => {

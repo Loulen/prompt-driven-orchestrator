@@ -84,7 +84,8 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   pipeline's current name, as Restore then Save in the editor. A version the pipeline does not
   have answers `404 pipeline has no version N`.
 - **`pdo settings`** reads and changes the instance settings as Settings does: `get [<key>…]`
-  (key, effective value, source; the instance's skills and agentic profile as stored) and
+  (key, effective value, source on every line; the instance's skills and agentic profile as
+  stored, source `stored`) and
   `set <key>=<value>…`, validated by the daemon as for the UI (a refused change writes nothing,
   exit 1; an accepted one prints the settings changed); the agentic profiles (`agent-profile`), the staging
   profiles (`sandbox-profile`), the instance's provisioning rules and their preview
@@ -93,7 +94,9 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - **`pdo stats`** reads the tabs of Stats with the figures they show (`runs`, `sessions`,
   `triggers`, `cost`, `performance`), over the surface's periods (`--period 7d|30d|90d|all`, or
   `--from`/`--to`) and filters (`--completed-only`, `--every-run`, `--uncombined`), and manages
-  the absorptions (`absorptions`, `combine`, `uncombine`). A Performance period with no
+  the absorptions (`absorptions`, `combine`, `uncombine`). Performance prints the Pipeline rows
+  and the Infrastructure row, and reads the duration the tab's toggle picks (`--duration
+  total|active|waiting`, `active` by default as the tab opens). A Performance period with no
   successful execution says so, as the tab does.
 - **`pdo skill`** manages the Banque de skills as Settings › Skills: `list`, `show`, `add` from a
   `SKILL.md`, `update` (rename, move, new content), `remove`, `referents`, the reference files

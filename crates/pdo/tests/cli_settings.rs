@@ -104,9 +104,13 @@ async fn an_instance_setting_is_set_as_settings_saves_it_and_refused_as_it_refus
     // In text, the change is printed as `get` prints it, and `get` lists
     // the instance's skills among its settings.
     let printed = pdo(&daemon, &["settings", "set", "skills=[]"]).await;
-    assert_eq!(printed.ok(), "skills\t[]\n");
+    assert_eq!(printed.ok(), "skills\t[]\tstored\n");
     let listed = pdo(&daemon, &["settings", "get"]).await;
-    assert!(listed.ok().contains("\nskills\t[]\n"), "{}", listed.stdout);
+    assert!(
+        listed.ok().contains("\nskills\t[]\tstored\n"),
+        "{}",
+        listed.stdout
+    );
     assert!(
         !listed.stdout.contains("harness_descriptors"),
         "the facts beside the settings stay out: {}",

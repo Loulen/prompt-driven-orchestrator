@@ -18,11 +18,12 @@ pub(super) fn inline(value: &Value) -> String {
 const TIERS: [&str; 2] = ["agent_choice", "skills"];
 
 /// The settings of a page, one tab-separated line each: key, effective value,
-/// its source. A setting carries `{effective, source, …}`; the instance's
-/// tiers (its agentic profile, its skills) are printed as stored, with no
-/// source. Anything else on the page (a fact shown beside the settings: the
-/// harnesses' catalogues, the price table) is printed whole when `whole` is
-/// set, and left out otherwise.
+/// its source. Every line has the three columns. A setting carries
+/// `{effective, source, …}`; the instance's tiers (its agentic profile, its
+/// skills) are printed as stored, source `stored`. Anything else on the page
+/// (a fact shown beside the settings: the harnesses' catalogues, the price
+/// table) is printed whole, source `-`, when `whole` is set, and left out
+/// otherwise.
 pub(super) fn knob_lines(page: &Value, whole: bool) -> String {
     let Some(entries) = page.as_object() else {
         return String::new();
@@ -35,9 +36,10 @@ pub(super) fn knob_lines(page: &Value, whole: bool) -> String {
                 inline(effective),
                 value["source"].as_str().unwrap_or("-")
             )),
-            _ if whole || TIERS.contains(&key.as_str()) => {
-                out.push_str(&format!("{key}\t{}\n", inline(value)))
+            _ if TIERS.contains(&key.as_str()) => {
+                out.push_str(&format!("{key}\t{}\tstored\n", inline(value)))
             }
+            _ if whole => out.push_str(&format!("{key}\t{}\t-\n", inline(value))),
             _ => {}
         }
     }
@@ -161,11 +163,11 @@ mod tests {
         });
         assert_eq!(
             knob_lines(&page, false),
-            "public_url\t-\tdefault\nsession_cap\t8\tstored\nskills\t[{\"id\":\"tdd\"}]\n"
+            "public_url\t-\tdefault\nsession_cap\t8\tstored\nskills\t[{\"id\":\"tdd\"}]\tstored\n"
         );
         assert_eq!(
             knob_lines(&page, true),
-            "price_table\t{\"rows\":12}\npublic_url\t-\tdefault\nsession_cap\t8\tstored\nskills\t[{\"id\":\"tdd\"}]\n"
+            "price_table\t{\"rows\":12}\t-\npublic_url\t-\tdefault\nsession_cap\t8\tstored\nskills\t[{\"id\":\"tdd\"}]\tstored\n"
         );
     }
 

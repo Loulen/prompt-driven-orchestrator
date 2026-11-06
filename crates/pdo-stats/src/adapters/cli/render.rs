@@ -3,6 +3,8 @@
 
 use serde_json::Value;
 
+use super::DurationMode;
+
 fn sum(rows: &Value, field: &str) -> u64 {
     rows.as_array()
         .into_iter()
@@ -194,8 +196,17 @@ fn median(distribution: &Value) -> Option<f64> {
     distribution["stats"]["median"].as_f64()
 }
 
+/// The field a duration mode reads, and the words the tab gives it.
+fn duration_field(mode: DurationMode) -> (&'static str, &'static str) {
+    match mode {
+        DurationMode::Total => ("duration", "duration"),
+        DurationMode::Active => ("active_duration", "active duration"),
+        DurationMode::Waiting => ("wait_duration", "waiting"),
+    }
+}
+
 /// One harness's three headline figures.
-fn performance_line(item: &Value) -> String {
+fn performance_line(item: &Value, mode: DurationMode) -> String {
     let steered = &item["steered"];
     let steered = match steered["readable"].as_u64() {
         Some(readable) if readable > 0 => format!(
@@ -208,34 +219,46 @@ fn performance_line(item: &Value) -> String {
         "{}\t{}\t{}\t{steered}",
         text(&item["harness"]),
         median(&item["context"]).map_or("—".to_string(), context),
-        median(&item["duration"]).map_or("—".to_string(), duration),
+        median(&item[duration_field(mode).0]).map_or("—".to_string(), duration),
     )
 }
 
-/// The Performance tab: by harness, median peak context, median duration and
-/// steered share; then the same per Pipeline. A period with no successful
-/// execution says so, as the tab does.
-pub(super) fn performance(performance: &Value) -> String {
+/// The Performance tab: by harness, median peak context, median duration (the
+/// mode's) and steered share; then the same per Pipeline and for the
+/// Infrastructure row. A period with no successful execution says so, as the
+/// tab does.
+pub(super) fn performance(performance: &Value, mode: DurationMode) -> String {
     let empty = |key: &str| performance[key].as_array().is_none_or(Vec::is_empty);
     if empty("by_pipeline") && empty("infrastructure") && empty("by_model") {
         return "No successful executions in this period.\n".to_string();
     }
-    let mut out = String::from("harness\tmedian peak context\tmedian duration\tsteered\n");
-    for item in performance["total"]["harnesses"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        out.push_str(&format!("{}\n", performance_line(item)));
+    let harnesses = |aggregate: &Value| {
+        aggregate["harnesses"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut out = format!(
+        "harness\tmedian peak context\tmedian {}\tsteered\n",
+        duration_field(mode).1
+    );
+    for item in harnesses(&performance["total"]) {
+        out.push_str(&format!("{}\n", performance_line(&item, mode)));
     }
     for row in performance["by_pipeline"].as_array().into_iter().flatten() {
-        for item in row["harnesses"].as_array().into_iter().flatten() {
+        for item in harnesses(row) {
             out.push_str(&format!(
                 "pipeline\t{}\t{}\n",
                 text(&row["name"]),
-                performance_line(item)
+                performance_line(&item, mode)
             ));
         }
+    }
+    for item in harnesses(&performance["infrastructure_total"]) {
+        out.push_str(&format!(
+            "infrastructure\t{}\n",
+            performance_line(&item, mode)
+        ));
     }
     out
 }
@@ -340,12 +363,45 @@ mod tests {
         let none = json!({ "total": { "harnesses": [] }, "by_pipeline": [],
                            "infrastructure": [], "by_model": [] });
         assert_eq!(
-            performance(&none),
+            performance(&none, DurationMode::Active),
             "No successful executions in this period.\n"
         );
         let some = json!({ "total": { "harnesses": [] }, "by_pipeline": [],
                            "infrastructure": [{ "kind": "start" }], "by_model": [] });
-        assert!(performance(&some).starts_with("harness\t"));
+        assert!(performance(&some, DurationMode::Active).starts_with("harness\t"));
+    }
+
+    fn harness(name: &str, total_ms: f64, active_ms: f64) -> Value {
+        json!({ "harness": name,
+                "context": { "stats": { "median": 850.0 } },
+                "duration": { "stats": { "median": total_ms } },
+                "active_duration": { "stats": { "median": active_ms } },
+                "wait_duration": { "stats": { "median": total_ms - active_ms } },
+                "steered": { "readable": 0, "steered": 0 } })
+    }
+
+    #[test]
+    fn the_performance_tab_reads_the_duration_of_its_mode_and_the_infrastructure_row() {
+        let tab = json!({
+            "total": { "harnesses": [harness("claude", 60_000.0, 20_000.0)] },
+            "by_pipeline": [{ "name": "stub", "harnesses": [harness("claude", 60_000.0, 20_000.0)] }],
+            "infrastructure": [{ "kind": "start" }],
+            "infrastructure_total": { "harnesses": [harness("claude", 4_000.0, 2_000.0)] },
+            "by_model": [],
+        });
+        assert_eq!(
+            performance(&tab, DurationMode::Active),
+            "harness\tmedian peak context\tmedian active duration\tsteered\n\
+             claude\t850\t20s\t—\n\
+             pipeline\tstub\tclaude\t850\t20s\t—\n\
+             infrastructure\tclaude\t850\t2s\t—\n"
+        );
+        let total = performance(&tab, DurationMode::Total);
+        assert!(total.starts_with("harness\tmedian peak context\tmedian duration\t"));
+        assert!(total.contains("pipeline\tstub\tclaude\t850\t1m00s\t"));
+        let waiting = performance(&tab, DurationMode::Waiting);
+        assert!(waiting.contains("\tmedian waiting\t"));
+        assert!(waiting.contains("infrastructure\tclaude\t850\t2s\t"));
     }
 
     #[test]

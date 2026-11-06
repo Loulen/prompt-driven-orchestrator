@@ -35,6 +35,8 @@
   }
   .sh-tb__nav {
     display: flex;
+    /* the bar's full height: the stroke of a selected entry is not clipped */
+    align-self: stretch;
     flex: 0 1 auto;
     align-items: center;
     gap: var(--g-1);
@@ -42,6 +44,7 @@
     overflow: hidden;
   }
   .sh-tb__navitem {
+    position: relative;
     flex: none;
     max-width: 160px;
     height: var(--h-control);
@@ -56,6 +59,25 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     cursor: pointer;
+  }
+  /* CORE-183: the entry of the surface open under the bar (Settings, Stats, a
+     page of the top bar): the selected fill and, at the bar's bottom edge, a
+     2 px stroke in the primary, like the active tab of a View. The entry is a
+     toggle (`aria-pressed`): a second click closes the surface. */
+  .sh-tb .sh-tb__surface[aria-pressed="true"],
+  .sh-tb .sh-tb__surface[aria-pressed="true"]:hover {
+    background: var(--selected);
+    color: var(--text);
+  }
+  .sh-tb .sh-tb__surface[aria-pressed="true"]::after {
+    position: absolute;
+    right: 3px;
+    bottom: calc((var(--h-control) - var(--h-topbar)) / 2);
+    left: 3px;
+    height: 2px;
+    background: var(--primary);
+    content: "";
+    pointer-events: none;
   }
   .sh-tb__navitem:hover {
     background: var(--hover);
@@ -74,6 +96,8 @@
   }
   .sh-tb__end {
     display: flex;
+    /* the bar's full height, as `.sh-tb__ext` in it */
+    align-self: stretch;
     flex: 0 1 auto;
     align-items: center;
     gap: var(--g-1);
@@ -81,6 +105,8 @@
   }
   .sh-tb__ext {
     display: flex;
+    /* the bar's full height: the stroke of a selected entry is not clipped */
+    align-self: stretch;
     flex: 0 1 auto;
     align-items: center;
     gap: var(--g-1);

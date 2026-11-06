@@ -29,6 +29,11 @@ export interface StatsOpenIntent {
 export interface SettingsSurfaceProps {
   open: boolean;
   onClose: () => void;
+  /** Bumped when Settings is asked to close from outside (its top-bar icon clicked again,
+   *  CORE-183): the surface closes through the same dirty-draft guard as its ✕. */
+  closeRequest?: number;
+  /** The user answered « Keep editing » to a close: what waited for it is undone. */
+  onCloseCancelled?: () => void;
   /**
    * Live NodeRun-session count, so the cap field can preview how the pending cap
    * relates to the sessions running right now (reuses `SessionCounter`).

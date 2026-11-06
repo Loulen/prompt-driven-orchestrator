@@ -220,10 +220,10 @@ describe("StatsModal — price sync (#427, ADR-0034)", () => {
   });
 
   describe("StatsModal — full-screen Stats window (#638)", () => {
-    it("covers the application and exposes Performance as the fifth tab of the strip", async () => {
+    it("covers the application under the top bar and exposes Performance as the fifth tab of the strip", async () => {
       render(<StatsModal open onClose={() => {}} />);
 
-      expect(await screen.findByTestId("stats-modal")).toHaveClass("h-[calc(100dvh/var(--app-zoom,1))]", "w-[calc(100vw/var(--app-zoom,1))]");
+      expect(await screen.findByTestId("stats-modal")).toHaveClass("h-[calc(100dvh/var(--app-zoom,1)_-_var(--h-topbar))]", "w-[calc(100vw/var(--app-zoom,1))]");
       const rail = screen.getByRole("tablist", { name: "Stats sections" });
       // A strip of tabs under the header, not a side rail.
       expect(rail).not.toHaveClass("flex-col");

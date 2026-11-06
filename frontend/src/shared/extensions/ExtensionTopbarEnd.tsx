@@ -4,7 +4,7 @@ import { AnchoredPanel, FOCUSABLE } from "../ui/kit/layer";
 import { useContributions, useLocationContext, type ContributionElement } from "./catalogue";
 import { runCommand } from "./commands";
 import type { LocationContext, PanelProps } from "./contract";
-import { openPage } from "./deepLink";
+import { isPageOpen, togglePage, usePages } from "./deepLink";
 import ExtensionBoundary from "./ExtensionBoundary";
 import ExtensionIcon from "./ExtensionIcon";
 import { usePageCounter } from "./pageCounter";
@@ -12,7 +12,9 @@ import { usePageCounter } from "./pageCounter";
 /**
  * The `topbar/end` location: one icon button per element, in the top bar's
  * right-hand group, before the core's icons, a hairline after them. A page's
- * button opens it full-window; a panel's opens it under the icon (0.20); an
+ * button opens it full-window, under the bar, and stays selected while it is
+ * on screen (`aria-pressed`, CORE-183): a second click closes it. A panel's
+ * opens it under the icon (0.20); an
  * action's calls its command with the location's context. An element that
  * declares a counter (a page 0.19, a panel or an action 0.20) shows it on its
  * icon, for the current Actor, live. Nothing without a contribution.
@@ -20,6 +22,7 @@ import { usePageCounter } from "./pageCounter";
 export default function ExtensionTopbarEnd() {
   const context = useLocationContext("topbar/end");
   const elements = useContributions("topbar/end", context);
+  const open = usePages((s) => s.open);
   if (elements.length === 0) return null;
   return (
     <>
@@ -30,7 +33,13 @@ export default function ExtensionTopbarEnd() {
           {element.contribution.type === "panel" ? (
             <TopbarEndPanel element={element} context={context} />
           ) : (
-            <TopbarEndButton element={element} onClick={() => activate(element, context)} />
+            <TopbarEndButton
+              element={element}
+              pressed={
+                element.contribution.type === "page" ? isPageOpen(open, "topbar/end", element.key) : undefined
+              }
+              onClick={() => activate(element, context)}
+            />
           )}
         </ExtensionBoundary>
       ))}
@@ -43,7 +52,7 @@ export default function ExtensionTopbarEnd() {
 function activate(element: ContributionElement, context: LocationContext) {
   const { contribution, extension } = element;
   if (contribution.type === "page") {
-    openPage({ key: element.key, extension: extension.id, location: "topbar/end", path: "" });
+    togglePage({ key: element.key, extension: extension.id, location: "topbar/end", path: "" });
   } else {
     void runCommand(element, context);
   }
@@ -58,11 +67,14 @@ function TopbarEndButton({
   element,
   onClick,
   open,
+  pressed,
 }: {
   element: ContributionElement;
   onClick: () => void;
   /** A panel's button: whether its panel is open. */
   open?: boolean;
+  /** A page's button: whether its page is on screen. */
+  pressed?: boolean;
 }) {
   const { contribution, extension } = element;
   const label = contribution.label;
@@ -76,8 +88,9 @@ function TopbarEndButton({
         aria-label={count ? `${label}, ${count}` : label}
         aria-expanded={open}
         aria-haspopup={open === undefined ? undefined : "dialog"}
+        aria-pressed={pressed}
         data-testid={`extension-topbar-end-${element.key}`}
-        className="d-icon"
+        className={pressed === undefined ? "d-icon" : "d-icon sh-tb__surface"}
       >
         <ExtensionIcon url={iconOf(element)} label={label} />
         {count && (

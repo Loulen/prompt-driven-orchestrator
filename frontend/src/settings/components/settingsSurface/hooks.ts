@@ -1,4 +1,4 @@
-/** The Settings surface's hooks: what a search finds, and the Save shortcut. */
+/** The Settings surface's hooks: what a search finds, the Save shortcut, a close asked from outside. */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 
@@ -50,4 +50,21 @@ export function useSaveShortcut(open: boolean, save: (() => Promise<boolean>) | 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
+}
+
+/**
+ * A close asked from outside (CORE-183: the gear of the top bar clicked again): each new
+ * `closeRequest` takes the ✕'s path, `requestClose`, behind the dirty-draft guard.
+ */
+export function useCloseRequest(closeRequest: number, open: boolean, requestClose: () => void) {
+  const requestCloseRef = useRef(requestClose);
+  useEffect(() => {
+    requestCloseRef.current = requestClose;
+  });
+  const seen = useRef(closeRequest);
+  useEffect(() => {
+    if (closeRequest === seen.current) return;
+    seen.current = closeRequest;
+    if (open) requestCloseRef.current();
+  }, [closeRequest, open]);
 }

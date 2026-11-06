@@ -18,7 +18,7 @@ interface Props {
   entities: AppearanceEntities;
 }
 
-/** The two full-window surfaces of the shell (#690): Settings and Stats, one open at a time. */
+/** Settings and Stats (#690), opened under the top bar (CORE-183), one open at a time. */
 export default function AppSurfaces({
   surfaces,
   liveSessions,
@@ -39,7 +39,9 @@ export default function AppSurfaces({
         // the surface becomes permanently unclosable.
         key={"settings-" + surfaces.settingsEntry.key}
         open={surfaces.settingsOpen}
-        onClose={() => surfaces.setSettingsOpen(false)}
+        onClose={surfaces.settingsClosed}
+        closeRequest={surfaces.settingsCloseRequest}
+        onCloseCancelled={surfaces.settingsCloseCancelled}
         liveSessions={liveSessions}
         onSaved={onSessionsSaved}
         initialPosition={surfaces.settingsEntry.position}

@@ -51,11 +51,13 @@ export function paletteSelection({ selectedTrigger, selectedRun, editTab, canvas
   return null;
 }
 
-/** What the shell opens: a Run, a Trigger, the New Run form, Settings, Stats. */
+/** What the shell opens: a Run, a Trigger, the New Run form, Settings, Stats; and what it closes. */
 interface ShellGestures extends Pick<PaletteHost, "runs" | "triggers" | "openRun" | "openTrigger"> {
   openNewRunModal: (intent: OpenIntent) => void;
   openSettings: (position?: SettingsPosition) => void;
   openStats: () => void;
+  /** Closes the surface open under the top bar (CORE-183), then runs `then`. */
+  closeSurfaces: (then?: () => void) => void;
 }
 
 /** Hand the command field the shell's lists, selection and gestures. */
@@ -65,7 +67,23 @@ export function usePaletteHostSync(shell: ShellGestures, selection: SelectionInp
     () => paletteSelection({ selectedTrigger, selectedRun, editTab, canvas, pipelines }),
     [selectedTrigger, selectedRun, editTab, canvas, pipelines],
   );
-  const { runs, triggers, openRun, openTrigger, openNewRunModal } = shell;
+  const { runs, triggers, openNewRunModal, closeSurfaces } = shell;
+  // CORE-183: the command field stays usable over a surface; a Run or a Trigger it opens
+  // shows in the Workbench, so the surface on screen gives way first (Settings may ask).
+  const selectRun = shell.openRun;
+  const selectTrigger = shell.openTrigger;
+  const openRun = useCallback(
+    (runId: string) => {
+      closeSurfaces(() => selectRun(runId));
+    },
+    [closeSurfaces, selectRun],
+  );
+  const openTrigger = useCallback(
+    (triggerId: string) => {
+      closeSurfaces(() => selectTrigger(triggerId));
+    },
+    [closeSurfaces, selectTrigger],
+  );
   const newRun = useCallback(() => openNewRunModal({ kind: "run" }), [openNewRunModal]);
   const newTrigger = useCallback(() => openNewRunModal({ kind: "new-trigger" }), [openNewRunModal]);
   const settings = shell.openSettings;

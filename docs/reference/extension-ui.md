@@ -100,7 +100,9 @@ selected Run, or when its repository belongs to no Projet.
 
 - **Accepts**: page.
 - **Renders**: a text entry per page, after the Acogni mark, before the command field. The page
-  opens full-window, with every page of the location on its rail. A long label ends in an ellipsis.
+  opens full-window under the top bar, with every page of the location on its rail. A long label
+  ends in an ellipsis. The entry of the page on screen is selected (`aria-pressed`); a second click
+  on it closes the page.
 - **Context**: `PageContext` (below).
 - **0.1**: the `Navigation` slot.
 
@@ -110,8 +112,9 @@ selected Run, or when its repository belongs to no Projet.
 - **Renders**: a 24 px icon button per element in the top bar's right-hand group, **before the
   core's icons** (New run, Stats, Settings, the Dark mode), a hairline after them, the label as
   tooltip. With many, the group keeps its icons aligned and is clipped before it overlaps the
-  command field. A page's button opens it full-window **without rail**: the page brings its own
-  navigation. A panel's button opens the panel under it (below). An action's button calls its
+  command field. A page's button opens it full-window under the top bar, **without rail**: the
+  page brings its own navigation. The button of the page on screen is selected (`aria-pressed`); a
+  second click on it closes the page. A panel's button opens the panel under it (below). An action's button calls its
   command.
 - **Icon**: a page's or a panel's `icon`, or an action's command `icon`, is an SVG the extension
   serves. It is drawn as a mask in the colour of the text around it (hover and accent states
@@ -811,7 +814,10 @@ interface PageProps { extension: ExtensionRef; context: PageContext; navigate(pa
 
 A page of `topbar/start` or `topbar/end` shows in the full-window shell Settings and Stats use
 (a page of `settings/page` shows inside the Settings, [above](#settingspage)): its header (icon, title, breadcrumb,
-actions, ✕) and its Escape handling. `shell` keeps its identity for the page's lifetime, so it can
+actions, ✕) and its Escape handling. The shell opens **under the top bar**, which stays on screen:
+the core's command field sits above every page, so a page needs no search field of its own in its
+header. One surface is open at a time: opening a page closes Settings or Stats, and the other way
+round. `shell` keeps its identity for the page's lifetime, so it can
 sit in an effect's dependencies.
 
 **Title and icon per route** (since 0.20): a page that serves several screens (a profile and an

@@ -295,6 +295,8 @@ function PaletteBox() {
         pick(active);
         break;
       case "Escape":
+        // Consumed: the surface open under the bar (CORE-183) stays open.
+        e.preventDefault();
         hide();
         break;
       case "Tab": {

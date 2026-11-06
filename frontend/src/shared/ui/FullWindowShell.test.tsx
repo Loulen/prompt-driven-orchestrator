@@ -205,3 +205,16 @@ describe("FullWindowShell — a strip of tabs under the header", () => {
     }
   });
 });
+
+describe("FullWindowShell — under the top bar (CORE-183)", () => {
+  it("lays its layer under the app's top bar, never over it", () => {
+    renderShell(null);
+    const layer = screen.getByTestId("surface-layer");
+    // The layer starts at the top bar's bottom edge: the bar stays on screen and clickable.
+    expect(layer.className).toContain("top-(--h-topbar)");
+    expect(layer.className).not.toContain("inset-0");
+    expect(screen.getByTestId("surface").className).toContain("var(--h-topbar)");
+    // The header keeps its ✕.
+    expect(within(screen.getByTestId("surface-header")).getByRole("button", { name: "Close surface" })).toBeTruthy();
+  });
+});

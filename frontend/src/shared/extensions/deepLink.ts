@@ -151,6 +151,17 @@ export function closePage(): void {
   writeAddress(null);
 }
 
+/** Whether the page of `key` at `location` is the one on screen (`open`, the store's). */
+export function isPageOpen(open: OpenPage | null, location: PageLocation, key: string): boolean {
+  return open?.location === location && open.key === key;
+}
+
+/** A page's entry in the top bar (CORE-183): opens its page, or closes it when it is on screen. */
+export function togglePage(page: OpenPage): void {
+  if (isPageOpen(usePages.getState().open, page.location, page.key)) closePage();
+  else openPage(page);
+}
+
 /** Close the open page if it is one of the Settings (`settings/page`), and leave its deep link. */
 export function leaveSettingsPage(): void {
   if (usePages.getState().open?.location === "settings/page") closePage();

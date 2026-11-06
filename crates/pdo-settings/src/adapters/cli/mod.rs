@@ -12,7 +12,7 @@ mod sandbox_profiles;
 use anyhow::Result;
 use clap::Subcommand;
 use pdo_platform::adapters::cli::daemon::{
-    absolute_path, assignment, print_json, read_json_file, segment, Daemon,
+    absolute_path, assignment, print_json, read_json_file, rules_lines, segment, Daemon,
 };
 use serde_json::{json, Map, Value};
 
@@ -161,6 +161,10 @@ pub fn run_settings(action: SettingsAction) -> Result<()> {
             }
             anyhow::ensure!(!change.is_empty(), "nothing to change");
             let keys: Vec<String> = change.keys().cloned().collect();
+            // The daemon ignores a field it does not know: a mistyped key is
+            // refused here, against the page it serves, before anything is
+            // written.
+            only(&daemon.get("/settings")?.ok()?.json()?, &keys)?;
             let page = daemon
                 .put("/settings", &Value::Object(change))?
                 .ok()?
@@ -306,6 +310,6 @@ fn rules_out(rules: &Value, json: bool) {
     if json {
         print_json(rules);
     } else {
-        print!("{}", pdo_workspace::adapters::cli::rules_lines(rules));
+        print!("{}", rules_lines(rules));
     }
 }

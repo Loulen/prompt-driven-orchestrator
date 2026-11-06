@@ -170,7 +170,8 @@ pub enum Commands {
     /// diff (#751, ADR-0067 §4), read the diff, write and send a comment,
     /// resolve or reopen one. The Run id comes from `PDO_RUN_ID` (`--run`
     /// overrides it) and the author from the session (`manager`, or the node
-    /// id). Exits 4 when the daemon knows no such Run or comment.
+    /// id). `diff`, `comment`, `resolve` and `reopen` exit 4 when the daemon
+    /// knows no such Run or comment.
     Review {
         #[command(subcommand)]
         action: ReviewAction,

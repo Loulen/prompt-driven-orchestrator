@@ -107,6 +107,53 @@ async fn an_instance_setting_is_set_as_settings_saves_it_and_refused_as_it_refus
     assert!(unknown
         .stderr
         .contains("no setting named `no_such_setting`"));
+    let typo = pdo(
+        &daemon,
+        &["settings", "set", "session_cap=5", "sesion_cap=6"],
+    )
+    .await;
+    assert_eq!(typo.code, Some(1), "{}", typo.stderr);
+    assert!(
+        typo.stderr.contains("no setting named `sesion_cap`"),
+        "{}",
+        typo.stderr
+    );
+    let page = daemon.get_json("/settings").await;
+    assert_eq!(
+        page["session_cap"]["stored"], 3,
+        "a mistyped key writes nothing"
+    );
+    // Every field `PUT /settings` takes is a key of the page, so the CLI's
+    // check of the keys refuses none of them.
+    for key in [
+        "agent_choice",
+        "autocomplete_turn_end",
+        "auto_fail",
+        "clones_folder",
+        "default_auto_name",
+        "default_harness",
+        "default_harness_model",
+        "default_model",
+        "default_sandbox",
+        "guard_timeout_secs",
+        "libassist_idle_ttl_secs",
+        "manager_enabled",
+        "manager_profile",
+        "max_attachments_mb",
+        "public_url",
+        "reaper_ttl_secs",
+        "review_agent_can_resolve",
+        "session_cap",
+        "skills",
+        "telemetry_include_actor",
+        "telemetry_otlp",
+        "telemetry_otlp_endpoint",
+        "telemetry_otlp_headers",
+        "telemetry_prometheus",
+        "update_check",
+    ] {
+        assert!(page.get(key).is_some(), "`{key}` is not on the page");
+    }
     let usage = pdo(&daemon, &["settings", "set", "no-equal-sign"]).await;
     assert_eq!(usage.code, Some(1), "{}", usage.stderr);
 }

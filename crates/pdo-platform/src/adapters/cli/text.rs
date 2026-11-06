@@ -1,6 +1,6 @@
 //! What the operator's commands read from a command line and print from an
 //! answer, the same way across contexts: a `<key>=<value>`, who still names a
-//! subject.
+//! subject, provisioning rules (a Projet's, the instance's).
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -56,9 +56,37 @@ pub fn referent_lines(referents: &Value) -> String {
     out
 }
 
+/// One line per kind of provisioning rule: `copy: .env, data/`, or `none`.
+pub fn rules_lines(rules: &Value) -> String {
+    ["copy", "hardlink", "symlink"]
+        .iter()
+        .map(|kind| {
+            let globs: Vec<&str> = rules[kind]
+                .as_array()
+                .map(|g| g.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let globs = if globs.is_empty() {
+                "none".to_string()
+            } else {
+                globs.join(", ")
+            };
+            format!("{kind}: {globs}\n")
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provisioning_rules_show_one_line_per_kind() {
+        let rules = serde_json::json!({ "copy": [".env", "data/"], "hardlink": [], "symlink": [] });
+        assert_eq!(
+            rules_lines(&rules),
+            "copy: .env, data/\nhardlink: none\nsymlink: none\n"
+        );
+    }
 
     #[test]
     fn an_assignment_reads_its_value_as_json_or_as_a_string() {

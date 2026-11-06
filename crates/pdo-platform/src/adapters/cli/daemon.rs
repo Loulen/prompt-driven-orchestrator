@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use crate::domain::service_unit::DEFAULT_DAEMON_URL;
 
-pub use super::text::{assignment, referent_lines};
+pub use super::text::{assignment, referent_lines, rules_lines};
 
 /// Exit code of a command whose subject the daemon does not know (`404`), the
 /// one `pdo run status` gives an unknown Run.

@@ -53,7 +53,7 @@ use crate::cli::{run_docs, run_ext, run_migrate, run_whoami, Cli, Commands};
 ///   daemon cannot be reached or the extension failed; `127` no extension
 ///   `<id>`, or one without a command line (#33);
 /// - `pdo run status`, the gestures of `pdo run`, `pdo node`, `pdo pipeline`,
-///   `pdo project`, `pdo trigger`, `pdo session`, `pdo review`,
+///   `pdo project`, `pdo trigger`, `pdo session`, the gestures of `pdo review`,
 ///   `pdo settings`, `pdo stats`, `pdo skill`, `pdo update`: `4` the daemon
 ///   knows no such subject (Run, node, pipeline, Projet, Trigger, session,
 ///   comment, profile, skill, folder, update attempt);

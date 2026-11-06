@@ -203,14 +203,6 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
                 name.is_some() || folder.is_some() || root || content.is_some(),
                 "nothing to change: give at least one flag (see --help)"
             );
-            if let Some(file) = content {
-                daemon
-                    .put_text(
-                        &format!("/settings/skills/{}/files/SKILL.md", segment(&id)),
-                        read_text(&file)?,
-                    )?
-                    .ok()?;
-            }
             let mut body = serde_json::Map::new();
             if let Some(name) = name {
                 body.insert("name".into(), json!(name));
@@ -220,18 +212,25 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
             } else if root {
                 body.insert("folder_id".into(), Value::Null);
             }
-            let skill = if body.is_empty() {
-                read(&daemon, &id)?
-            } else {
+            // The rename and the move first: one the daemon refuses leaves the
+            // content as it was.
+            if !body.is_empty() {
                 daemon
                     .put(
                         &format!("/settings/skills/{}", segment(&id)),
                         &Value::Object(body),
                     )?
-                    .ok()?
-                    .json()?
-            };
-            done(&skill, json, "updated");
+                    .ok()?;
+            }
+            if let Some(file) = content {
+                daemon
+                    .put_text(
+                        &format!("/settings/skills/{}/files/SKILL.md", segment(&id)),
+                        read_text(&file)?,
+                    )?
+                    .ok()?;
+            }
+            done(&read(&daemon, &id)?, json, "updated");
         }
         SkillAction::Remove { id, json } => {
             daemon

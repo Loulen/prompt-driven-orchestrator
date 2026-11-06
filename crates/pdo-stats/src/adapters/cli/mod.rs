@@ -1,7 +1,9 @@
 //! `pdo stats`: the Stats surface of the running daemon, tab for tab, over
 //! `/stats/*`. The same period presets and cohort defaults as the surface, so
 //! `pdo stats runs --period 7d` reads the figures the Runs tab shows. A thin
-//! client: every fold stays behind the route.
+//! client: the folds stay behind the route; the text sums a tab's headline
+//! figures (totals, failure rate, busiest bucket) as the tab does
+//! (`render.rs`), and `--json` prints the route's answer as it is.
 
 mod period;
 mod render;

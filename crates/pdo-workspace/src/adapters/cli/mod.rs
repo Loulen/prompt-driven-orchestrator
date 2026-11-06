@@ -9,12 +9,11 @@ mod render;
 use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use pdo_platform::adapters::cli::daemon::{
-    absolute_path as member_path, print_json, read_json_file, segment, Daemon,
+    absolute_path as member_path, print_json, read_json_file, rules_lines, segment, Daemon,
 };
 use serde_json::{json, Map, Value};
 
 use body::{selected, selection_of, update_body, with_skill, without_skill, UpdateFlags};
-pub use render::rules_lines;
 use render::{done, list_lines, members_line, show, skill_lines};
 
 #[derive(Subcommand, Debug)]

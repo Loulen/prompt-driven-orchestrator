@@ -103,7 +103,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   updates (`apply`) and reads an attempt's journal (`log`).
 - **`pdo review`** gains the Review page's gestures: `diff` (the patch, `--stat`, `--json`),
   `comment <path> <line> --text …` (written and sent to the Pipeline Manager, as the page sends
-  it), `resolve` and `reopen`. `list` and `reply` are unchanged; `pdo review` now exits 4 for a
+  it), `resolve` and `reopen`. `list` and `reply` are unchanged; the new gestures exit 4 for a
   Run or a comment the daemon does not know.
 - The instance's skills selection only gains skills of the bank: `PUT /settings` refuses another
   one (400, `not a skill of the bank: <id>`), as for a Projet or a Trigger. A skill already

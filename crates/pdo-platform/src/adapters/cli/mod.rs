@@ -8,6 +8,7 @@ mod audit;
 pub mod daemon;
 mod page;
 mod service;
+mod text;
 mod update;
 
 use std::net::IpAddr;

@@ -55,11 +55,62 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   only offer the bank's skills. A skill already selected and since deleted from the bank stays.
 - These commands print text by default and the daemon's answer with `--json`. They exit 0 on
   success, 1 when the daemon is unreachable or refuses the call (with its reason), 2 for an
-  unreadable command line, 4 when the daemon knows no such Projet, Trigger or session.
+  unreadable command line, 4 when the daemon knows no such Run, node, pipeline, Projet,
+  Trigger, session, review comment, profile, skill, folder or update attempt.
+- **`pdo run`** makes the gestures of the Runs list and the run view: `show`, `cancel`, `pause`,
+  `resume`, `retry` (Retry all), `reopen`, `archive`, `forget`, `rename`, `repos`, `inject`,
+  `force-route`, `region`, `manager start|stop`, and reads a Run's `events`, `costs`, `artifact`,
+  `file`, `refs`, `source-drift`, `search` and the sweep's `stale-health`. **`pdo run pipeline`**
+  shows, exports, saves a Run's own pipeline and copies it over the shared one
+  (`overwrite-default`, `--preview`). `run create`, `wait`, `list` and `status` are unchanged.
+- **Cancel a Run.** `pdo run cancel` gives up on a live Run: nothing more is launched, every node
+  holding a session is stopped, and the Run ends `halted` with the reason `cancelled`, ready to
+  be retried or reopened. The daemon's new `cancel_run` command (an Operation `run` ×
+  `cancel_run`) does it; the UI does not offer it yet.
+- **`pdo node`** makes the gestures of a node: `retry` (and `--preview`), `skip` (with its
+  outputs), `restart`, `start`, `stop`, `kill`, `recover`, `done`, `release`, `extend`, `attach`
+  files, and reads its `prompt`, `io`, `diff` and `transcript`. Without `--iter`, a gesture
+  targets the node's latest iteration, the one the node panel shows.
+- **A node the Run does not know is refused.** Every gesture on a node (retry, skip, restart,
+  start, kill, recover, done, release, extend, and the Pipeline Manager's node commands) answers
+  `404 node_not_found` when neither the Run's pipeline nor its state names the node, before
+  anything is written: a mistyped id no longer reopens a finished Run or leaves a ghost node in
+  it. **Breaking**: retry, restart and `extend_cycle` answered `400` for an unknown node; `pdo
+  node` exits 4.
+- **`pdo pipeline`** makes the gestures of the pipelines and the library: `list`, `show`,
+  `export`, `import` (a round trip, skills sidecar included), `versions`, `version`, `restore`,
+  and the editor's other gestures. `restore` is the daemon's new
+  `POST /pipelines/{id}/versions/{n}/restore`: the version saved as the next one, under the
+  pipeline's current name, as Restore then Save in the editor. A version the pipeline does not
+  have answers `404 pipeline has no version N`.
+- **`pdo settings`** reads and changes the instance settings as Settings does: `get [<key>…]`
+  (key, effective value, source) and `set <key>=<value>…`, validated by the daemon as for the UI
+  (a refused change writes nothing, exit 1); the agentic profiles (`agent-profile`), the staging
+  profiles (`sandbox-profile`), the instance's provisioning rules and their preview
+  (`provisioning`), your Apparence (`appearance`), the telemetry export (`telemetry`, `--test`),
+  a harness's catalogue (`refresh-harness`) and the price table (`sync-prices`).
+- **`pdo stats`** reads the tabs of Stats with the figures they show (`runs`, `sessions`,
+  `triggers`, `cost`, `performance`), over the surface's periods (`--period 7d|30d|90d|all`, or
+  `--from`/`--to`) and filters (`--completed-only`, `--every-run`, `--uncombined`), and manages
+  the absorptions (`absorptions`, `combine`, `uncombine`).
+- **`pdo skill`** manages the Banque de skills as Settings › Skills: `list`, `show`, `add` from a
+  `SKILL.md`, `update` (rename, move, new content), `remove`, `referents`, the reference files
+  (`file add|show|write|remove`), the folders (`folder list|add|update|remove`, and `rescan` /
+  `sync` with their Source), `scan` and `import` from a Source, `cancel-scan`, `sources`,
+  `export` to a zip and `upload` one. A skill an extension or the core provides stays locked:
+  changing or removing it is refused, exit 1.
+- **`pdo update`** reads the version section (`status`, `changelog`), checks now (`check`),
+  updates (`apply`) and reads an attempt's journal (`log`).
+- **`pdo review`** gains the Review page's gestures: `diff` (the patch, `--stat`, `--json`),
+  `comment <path> <line> --text …` (written and sent to the Pipeline Manager, as the page sends
+  it), `resolve` and `reopen`. `list` and `reply` are unchanged; `pdo review` now exits 4 for a
+  Run or a comment the daemon does not know.
+- The instance's skills selection only gains skills of the bank: `PUT /settings` refuses another
+  one (400, `not a skill of the bank: <id>`), as for a Projet or a Trigger. A skill already
+  selected and since deleted from the bank stays; emptying the selection is never refused.
 - Every route of the daemon has its command or an exclusion written with its reason: a
-  structural test fails on a route added without either. The routes of Runs, Nodes, Pipelines,
-  Settings, Stats, the skill bank and the Review are provisional exclusions, until their
-  commands exist.
+  structural test fails on a route added without either. No route is a provisional exclusion any
+  more; the shared draft of the pipeline editor, a WebSocket, is excluded for good.
 
 ## 2.71.0
 

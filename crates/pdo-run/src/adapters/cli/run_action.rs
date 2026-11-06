@@ -1,7 +1,11 @@
 //! The `pdo run` subcommands (#721, #588): create a Run, wait for the children
-//! of this node, list the Runs, read the state of one.
+//! of this node, list the Runs, read the state of one, and the gestures of the
+//! Runs list and the run view ([`RunGesture`]).
 
 use clap::Subcommand;
+
+use super::run_gesture::RunGesture;
+use super::run_read::RunRead;
 
 #[derive(Subcommand, Debug)]
 // `Create` carries every creation flag, `Wait` two — a clap enum is parsed once
@@ -133,4 +137,11 @@ pub enum RunAction {
         #[arg(long)]
         json: bool,
     },
+    /// The gestures on a Run (show, cancel, pause, resume, retry, reopen,
+    /// archive, forget, rename, its repositories, its Manager, its pipeline…).
+    #[command(flatten)]
+    Gesture(RunGesture),
+    /// What a Run shows (events, costs, artifacts, files, refs, search…).
+    #[command(flatten)]
+    Read(RunRead),
 }

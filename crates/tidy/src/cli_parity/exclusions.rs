@@ -36,9 +36,14 @@ pub fn names(excluded: &[Excluded], pending: &[Pending], route: &Route) -> bool 
 pub const EXCLUDED: &[Excluded] = &[
     Excluded {
         reason: "a WebSocket for the browser: the UI's live events, a terminal's \
-                 keystrokes. A command reads a state (`pdo run status`) or waits on \
-                 one (`pdo run wait`)",
-        routes: &[("GET", "/ws"), ("GET", "/sessions/{session_id}/pty")],
+                 keystrokes, the shared draft of the pipeline editor. A command reads a \
+                 state (`pdo run status`, `pdo pipeline show`) or waits on one \
+                 (`pdo run wait`)",
+        routes: &[
+            ("GET", "/ws"),
+            ("GET", "/sessions/{session_id}/pty"),
+            ("GET", "/pipelines/{pipeline_id}/draft"),
+        ],
     },
     Excluded {
         reason: "drives a terminal the browser shows: opening one on a session, the \
@@ -122,80 +127,7 @@ pub const EXCLUDED: &[Excluded] = &[
     },
 ];
 
-/// The date the provisional exclusions below were listed.
-const LISTED: &str = "2026-11-05";
-
-pub const PENDING: &[Pending] = &[
-    Pending {
-        family: "Runs",
-        since: LISTED,
-        routes: &[
-            ("DELETE", "/runs/{run_id}"),
-            ("GET", "/runs/costs"),
-            ("GET", "/runs/{run_id}/artifact"),
-            ("GET", "/runs/{run_id}/artifact/zip"),
-            ("GET", "/runs/{run_id}/events"),
-            ("GET", "/runs/{run_id}/file"),
-            ("GET", "/runs/{run_id}/refs"),
-            ("GET", "/runs/{run_id}/source-drift"),
-            ("GET", "/runs/{run_id}/transcripts/search"),
-            ("PATCH", "/runs/{run_id}/repos"),
-            ("POST", "/runs/{run_id}/commands"),
-            ("POST", "/runs/{run_id}/manager/start"),
-            ("POST", "/runs/{run_id}/manager/stop"),
-            ("GET", "/stale/health"),
-        ],
-    },
-    Pending {
-        family: "Nodes",
-        since: LISTED,
-        routes: &[
-            ("GET", "/runs/{run_id}/nodes/{node_id}/diff"),
-            ("GET", "/runs/{run_id}/nodes/{node_id}/io"),
-            ("GET", "/runs/{run_id}/nodes/{node_id}/prompt"),
-            ("GET", "/runs/{run_id}/nodes/{node_id}/retry/preview"),
-            ("GET", "/runs/{run_id}/nodes/{node_id}/transcript"),
-            (
-                "GET",
-                "/runs/{run_id}/nodes/{node_id}/transcript/tools/{index}",
-            ),
-            ("POST", "/runs/{run_id}/nodes/{node_id}/attachments"),
-            ("POST", "/runs/{run_id}/nodes/{node_id}/release"),
-            ("POST", "/runs/{run_id}/nodes/{node_id}/retry"),
-            ("POST", "/runs/{run_id}/nodes/{node_id}/start"),
-            ("POST", "/runs/{run_id}/nodes/{node_id}/stop"),
-        ],
-    },
-    Pending {
-        family: "Pipelines",
-        since: LISTED,
-        routes: &[
-            ("GET", "/library"),
-            ("POST", "/library"),
-            ("POST", "/library/import"),
-            ("DELETE", "/library/{name}"),
-            ("POST", "/library/{name}/instantiate"),
-            ("POST", "/nodes/parse"),
-            ("GET", "/pipelines"),
-            ("POST", "/pipelines"),
-            ("POST", "/pipelines/import"),
-            ("GET", "/pipelines/{pipeline_id}"),
-            ("PUT", "/pipelines/{pipeline_id}"),
-            ("DELETE", "/pipelines/{pipeline_id}"),
-            ("GET", "/pipelines/{pipeline_id}/document"),
-            ("GET", "/pipelines/{pipeline_id}/document/skills"),
-            ("GET", "/pipelines/{pipeline_id}/draft"),
-            ("POST", "/pipelines/{pipeline_id}/duplicate"),
-            ("PUT", "/pipelines/{pipeline_id}/rename"),
-            ("PUT", "/pipelines/{pipeline_id}/validation"),
-            ("GET", "/pipelines/{pipeline_id}/versions"),
-            ("GET", "/pipelines/{pipeline_id}/versions/{number}"),
-            ("GET", "/runs/{run_id}/pipeline"),
-            ("PUT", "/runs/{run_id}/pipeline"),
-            ("GET", "/runs/{run_id}/pipeline/document"),
-            ("GET", "/runs/{run_id}/pipeline/document/skills"),
-            ("GET", "/runs/{run_id}/pipeline/overwrite-preview"),
-            ("POST", "/runs/{run_id}/pipeline/overwrite-default"),
-        ],
-    },
-];
+/// Empty: every route has its command or its reason above. A gesture whose
+/// command is still to write goes here, dated, under the family that will
+/// cover it.
+pub const PENDING: &[Pending] = &[];

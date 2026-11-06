@@ -13,8 +13,7 @@ use pdo_platform::Platform;
 use pdo_sandbox::adapters::local_runtime;
 use pdo_sandbox::adapters::sqlite_profiles::SqliteProfiles;
 use pdo_settings::adapters::contexts::{
-    BankSkills, ContextReferents, PlatformUpdateChecks, SandboxStagingProfiles,
-    TelemetryOfSettings,
+    BankSkills, ContextReferents, PlatformUpdateChecks, SandboxStagingProfiles, TelemetryOfSettings,
 };
 use pdo_settings::adapters::sections::{
     HarnessCatalogue, HostHome, PlatformDefaults, PriceTableSection, ReviewDefaults, RunDefaults,

@@ -40,8 +40,18 @@ d'un geste calculée dans le frontend reste hors de portée de la ligne de comma
 
 - `pdo project`, `pdo trigger`, `pdo session`, `pdo audit` et `pdo whoami` couvrent les routes
   des Projets, des Triggers, des Sessions hébergées, du journal d'audit et de l'Acteur courant.
-- Les routes des Runs, des Nodes, des Pipelines, des Settings, des Stats, de la banque de skills
-  et de la Review sont des exclusions provisoires, à retirer famille par famille.
+- `pdo run` (ses gestes et ses lectures), `pdo node` et `pdo pipeline` couvrent les routes des
+  Runs, des Nodes et des Pipelines. Le brouillon partagé de l'éditeur de pipeline, un WebSocket,
+  est exclu pour de bon. Un geste qui n'existait que comme composition côté client (annuler un
+  Run, restaurer une version de pipeline) devient une commande ou une route du daemon
+  (`cancel_run`, `POST /pipelines/{id}/versions/{n}/restore`), jamais une boucle dans la CLI.
+- `pdo settings`, `pdo stats`, `pdo skill`, `pdo update` et `pdo review` couvrent les routes des
+  Settings (y compris l'Apparence, les règles de provisioning de l'instance, la télémétrie, la
+  table des prix), des Stats, de la banque de skills, de la mise à jour et de la Review. Plus
+  aucune exclusion provisoire : la liste reste, vide, pour un geste dont la commande serait à
+  écrire plus tard.
+- `PUT /settings` refuse un skill hors banque, comme les Projets et les Triggers : la règle vit
+  dans le daemon, la CLI n'en réécrit aucune.
 - Un appel s'écrit pour que le lecteur le voie : le chemin, littéral, en argument du verbe
   (`daemon.post(&format!("/triggers/{id}/fire"), None)`). Un chemin construit ailleurs ne compte
   pas.

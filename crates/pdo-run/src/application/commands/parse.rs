@@ -98,6 +98,9 @@ pub(super) enum RunCommand {
     },
     PauseRun,
     ResumeRun,
+    /// Give up on a live Run: no more launches, every session stopped, the Run
+    /// `halted` « cancelled » (terminal, so retried or reopened).
+    CancelRun,
     /// The global re-open (ADR-0049): lifts ANY terminal Run — and an
     /// incident-parked `AwaitingUser` — back to `Running` by a re-projection that
     /// freezes the satisfied `(node, iter)` (the scheduler's dedup refuses to
@@ -167,6 +170,14 @@ impl RunCommand {
     /// node command targets its node, every other command the Run.
     pub(super) fn operation(&self, run_id: &str) -> pdo_kernel::Operation {
         use crate::application::operations::{on_node, on_run};
+        match self.target_node() {
+            Some(node_id) => on_node(self.kind_str(), run_id, node_id),
+            None => on_run(self.kind_str(), run_id),
+        }
+    }
+
+    /// The node a node command targets; `None` for a command on the Run.
+    pub(super) fn target_node(&self) -> Option<&str> {
         match self {
             RunCommand::MarkNodeDone { node_id, .. }
             | RunCommand::ReleaseNodeCompletion { node_id, .. }
@@ -175,8 +186,8 @@ impl RunCommand {
             | RunCommand::KillNode { node_id, .. }
             | RunCommand::RestartNode { node_id, .. }
             | RunCommand::RecoverNode { node_id, .. }
-            | RunCommand::StartNode { node_id, .. } => on_node(self.kind_str(), run_id, node_id),
-            _ => on_run(self.kind_str(), run_id),
+            | RunCommand::StartNode { node_id, .. } => Some(node_id),
+            _ => None,
         }
     }
 
@@ -201,6 +212,7 @@ impl RunCommand {
             RunCommand::SkipNode { .. } => "skip_node",
             RunCommand::PauseRun => "pause_run",
             RunCommand::ResumeRun => "resume_run",
+            RunCommand::CancelRun => "cancel_run",
             RunCommand::ReopenRun => "reopen_run",
             RunCommand::KillNode { .. } => "kill_node",
             RunCommand::RestartNode { .. } => "restart_node",
@@ -306,6 +318,7 @@ pub(super) fn parse_run_command(req: RunCommandRequest) -> Result<RunCommand, Co
         }),
         "pause_run" => Ok(RunCommand::PauseRun),
         "resume_run" => Ok(RunCommand::ResumeRun),
+        "cancel_run" => Ok(RunCommand::CancelRun),
         "reopen_run" => Ok(RunCommand::ReopenRun),
         "kill_node" => Ok(RunCommand::KillNode {
             node_id: required(req.node_id, "node_id", "kill_node")?,

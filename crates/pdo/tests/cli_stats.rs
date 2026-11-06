@@ -55,11 +55,24 @@ async fn every_tab_reads_the_window_of_the_surface() {
     assert!(performance["by_pipeline"].is_array(), "{performance}");
     let window = pdo(
         &daemon,
-        &["stats", "runs", "--from", "2026-01-01", "--to", "2026-02-01", "--bucket", "week"],
+        &[
+            "stats",
+            "runs",
+            "--from",
+            "2026-01-01",
+            "--to",
+            "2026-02-01",
+            "--bucket",
+            "week",
+        ],
     )
     .await;
     window.ok();
-    let bad = pdo(&daemon, &["stats", "runs", "--from", "yesterday", "--to", "today"]).await;
+    let bad = pdo(
+        &daemon,
+        &["stats", "runs", "--from", "yesterday", "--to", "today"],
+    )
+    .await;
     assert_eq!(bad.code, Some(1), "{}", bad.stderr);
 }
 
@@ -90,13 +103,27 @@ async fn rows_are_combined_and_uncombined() {
     assert_eq!(list["absorptions"][0]["absorbent"]["key"], "ship", "{list}");
     let uncombined = pdo(
         &daemon,
-        &["stats", "uncombine", "--dimension", "pipeline", "--member", "ship-old"],
+        &[
+            "stats",
+            "uncombine",
+            "--dimension",
+            "pipeline",
+            "--member",
+            "ship-old",
+        ],
     )
     .await;
     assert_eq!(uncombined.ok(), "no absorption\n");
     let missing = pdo(
         &daemon,
-        &["stats", "uncombine", "--dimension", "pipeline", "--member", "ship-old"],
+        &[
+            "stats",
+            "uncombine",
+            "--dimension",
+            "pipeline",
+            "--member",
+            "ship-old",
+        ],
     )
     .await;
     assert_eq!(missing.code, Some(4), "{}", missing.stderr);

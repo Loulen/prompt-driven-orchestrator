@@ -23,6 +23,8 @@ use serde_json::Value;
 
 use crate::domain::service_unit::DEFAULT_DAEMON_URL;
 
+pub use super::text::{assignment, referent_lines};
+
 /// Exit code of a command whose subject the daemon does not know (`404`), the
 /// one `pdo run status` gives an unknown Run.
 pub const EXIT_NOT_FOUND: u8 = 4;
@@ -120,7 +122,14 @@ impl Daemon {
         self.send_raw(Method::POST, path, content_type, body)
     }
 
-    /// A `POST` of a multipart form: files, as a browser uploads them.
+    /// The bytes a `GET` answers (an artifact, a zip), once it succeeded; a
+    /// refusal reads as [`Answer::ok`] reads it.
+    pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        Ok(self.get(path)?.ok()?.bytes)
+    }
+
+    /// A multipart `POST` (files, as a browser uploads them), answered as
+    /// [`Daemon::post`].
     pub fn post_multipart(
         &self,
         path: &str,
@@ -325,55 +334,12 @@ pub fn read_file_bytes(path: &str) -> Result<Vec<u8>> {
     std::fs::read(path).with_context(|| format!("cannot read {path}"))
 }
 
-/// A `<key>=<value>` of a command line. The value is read as JSON when it is
-/// JSON (`5`, `true`, `null`, `"quoted"`, `[…]`, `{…}`), as a string otherwise:
-/// `public_url=https://pdo.example.net` sends a string, `session_cap=5` a
-/// number, `session_cap='"5"'` the string `"5"`.
-pub fn assignment(raw: &str) -> Result<(String, Value)> {
-    let (key, value) = raw
-        .split_once('=')
-        .with_context(|| format!("expected <key>=<value>, got {raw:?}"))?;
-    let key = key.trim();
-    anyhow::ensure!(!key.is_empty(), "expected <key>=<value>, got {raw:?}");
-    let value = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()));
-    Ok((key.to_string(), value))
-}
-
-/// Who still names a subject (a skill, a profile), as a referents answer lists
-/// them: one tab-separated line each, the tier then its id and name (`runs`
-/// name a Run by `run_id`), `instance` when the instance's defaults name it.
-/// `none` when nobody does.
-pub fn referent_lines(referents: &Value) -> String {
-    let mut out = String::new();
-    let Some(tiers) = referents.as_object() else {
-        return "none\n".to_string();
-    };
-    for (tier, value) in tiers {
-        match value {
-            Value::Bool(true) if matches!(tier.as_str(), "instance" | "instance_default") => {
-                out.push_str("instance\n");
-            }
-            Value::Array(items) => {
-                for item in items {
-                    let id = item["id"]
-                        .as_str()
-                        .or_else(|| item["run_id"].as_str())
-                        .unwrap_or("");
-                    let mut line = format!("{tier}\t{id}\t{}", item["name"].as_str().unwrap_or(""));
-                    if let Some(node) = item["node_id"].as_str() {
-                        line.push_str(&format!("\tnode {node}"));
-                    }
-                    out.push_str(&line);
-                    out.push('\n');
-                }
-            }
-            _ => {}
-        }
+/// The text of `path`, `-` for the standard input.
+pub fn read_text(path: &str) -> Result<String> {
+    if path == "-" {
+        return std::io::read_to_string(std::io::stdin()).context("cannot read the standard input");
     }
-    if out.is_empty() {
-        out.push_str("none\n");
-    }
-    out
+    std::fs::read_to_string(path).with_context(|| format!("cannot read {path}"))
 }
 
 /// The JSON a `--file <path>` names, `-` for the standard input.
@@ -459,44 +425,6 @@ mod tests {
         assert_eq!(
             agent_choice(None, Some("claude".into()), None, Some("high".into())),
             Some(serde_json::json!({ "mode": "custom", "harness": "claude", "effort": "high" }))
-        );
-    }
-
-    #[test]
-    fn an_assignment_reads_its_value_as_json_or_as_a_string() {
-        assert_eq!(
-            assignment("session_cap=5").unwrap(),
-            ("session_cap".into(), serde_json::json!(5))
-        );
-        assert_eq!(
-            assignment("public_url=https://pdo.example.net").unwrap(),
-            ("public_url".into(), serde_json::json!("https://pdo.example.net"))
-        );
-        assert_eq!(
-            assignment(r#"session_cap="5""#).unwrap().1,
-            serde_json::json!("5")
-        );
-        assert_eq!(assignment("default_sandbox=").unwrap().1, serde_json::json!(""));
-        assert!(assignment("no-equal-sign").is_err());
-        assert!(assignment("=5").is_err());
-    }
-
-    #[test]
-    fn referents_are_one_line_per_tier_entry() {
-        let referents = serde_json::json!({
-            "skill_id": "s-1",
-            "instance": true,
-            "projects": [{ "id": "prj-1", "name": "Web" }],
-            "pipelines": [{ "id": "p", "name": "Ship", "node_id": "n1", "scope": "instance" }],
-            "runs": [{ "run_id": "r-1", "name": "nightly" }],
-        });
-        assert_eq!(
-            referent_lines(&referents),
-            "instance\npipelines\tp\tShip\tnode n1\nprojects\tprj-1\tWeb\nruns\tr-1\tnightly\n"
-        );
-        assert_eq!(
-            referent_lines(&serde_json::json!({ "instance": false, "projects": [] })),
-            "none\n"
         );
     }
 

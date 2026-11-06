@@ -24,13 +24,7 @@ pub(super) async fn extend_cycle(
         .map(|p| p.pipeline)
     {
         if !pipeline.nodes.iter().any(|n| n.id == node_id) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("node '{node_id}' not found in pipeline")
-                })),
-            )
-                .into_response();
+            return crate::application::node_known::node_not_found(&node_id);
         }
         if let Some(region) = loop_region::bounded_region_for_member(&pipeline, &node_id) {
             return (

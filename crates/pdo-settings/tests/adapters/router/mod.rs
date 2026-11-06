@@ -28,8 +28,8 @@ use pdo_settings::adapters::sqlite::{
 use pdo_settings::application::ports::{
     BoxFuture, CatalogueEvents, SkillBank, TelemetryReloads, UpdateChecks,
 };
-use pdo_skill::domain::selection::SkillRef;
 use pdo_settings::{Settings, SettingsPorts};
+use pdo_skill::domain::selection::SkillRef;
 use sqlx::SqlitePool;
 use tower::ServiceExt;
 

@@ -58,8 +58,9 @@ pub(super) fn runs(overview: &Value, completed_only: bool) -> String {
     } else {
         "failed"
     };
-    let mut out =
-        format!("runs {runs} · {failed_label} {failed} · failure rate {rate} · busiest {busiest}\n");
+    let mut out = format!(
+        "runs {runs} · {failed_label} {failed} · failure rate {rate} · busiest {busiest}\n"
+    );
     let count_at = |series: &Value, bucket: &str| {
         series
             .as_array()
@@ -85,7 +86,11 @@ pub(super) fn runs(overview: &Value, completed_only: bool) -> String {
 pub(super) fn sessions(overview: &Value) -> String {
     let pipelines = &overview["sessions_by_pipeline"];
     let mut out = format!("sessions {}\n", sum(pipelines, "executions"));
-    for harness in overview["session_harnesses"].as_array().into_iter().flatten() {
+    for harness in overview["session_harnesses"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
         let executions: u64 = pipelines
             .as_array()
             .into_iter()
@@ -306,8 +311,14 @@ mod tests {
 
     #[test]
     fn a_cost_is_written_as_the_surface_writes_it() {
-        assert_eq!(cost_amount(&json!(0.5), &json!(false), &json!(false)), "$0.5000");
-        assert_eq!(cost_amount(&json!(12.345), &json!(true), &json!(true)), "~$12.35†");
+        assert_eq!(
+            cost_amount(&json!(0.5), &json!(false), &json!(false)),
+            "$0.5000"
+        );
+        assert_eq!(
+            cost_amount(&json!(12.345), &json!(true), &json!(true)),
+            "~$12.35†"
+        );
         assert_eq!(cost_amount(&Value::Null, &json!(false), &json!(false)), "—");
     }
 
@@ -327,6 +338,9 @@ mod tests {
             "members": [{ "key": "build-old", "name": "Build (old)", "origin": "x", "created_at": "t" }],
         }]});
         assert_eq!(absorptions(&list), "node (Ship)\tBuild\t<- Build (old)\n");
-        assert_eq!(absorptions(&json!({ "absorptions": [] })), "no absorption\n");
+        assert_eq!(
+            absorptions(&json!({ "absorptions": [] })),
+            "no absorption\n"
+        );
     }
 }

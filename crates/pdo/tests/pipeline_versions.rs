@@ -1,6 +1,7 @@
 //! Layer 4 (ADR-0080) — the versions of a pipeline (ADR-0088) over HTTP: a
 //! Save of the draft freezes the next version, or replaces the last one, or
-//! keeps it as a pipeline of its own; the history lists them; a Run retains
+//! keeps it as a pipeline of its own; the history lists them; a restore saves
+//! an old version as the next one, under the current name; a Run retains
 //! the version it launched, which the history counts.
 
 use serde_json::{json, Value};
@@ -128,5 +129,61 @@ async fn an_unknown_pipeline_or_version_is_not_found() {
             .unwrap()
             .status();
         assert_eq!(status, 404, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn a_restore_saves_the_version_as_the_next_one_under_the_current_name() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    // v2: the worker is interactive, and the pipeline is renamed.
+    let edited = solo_pipeline_yaml("renamed", true);
+    let saved = save(
+        &daemon,
+        "versioned",
+        &edited,
+        json!({ "new_version": true }),
+    )
+    .await;
+    let id = saved["id"].as_str().unwrap().to_string();
+    assert_eq!(saved["version"]["number"], 2);
+
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "{}/pipelines/{id}/versions/1/restore",
+            daemon.url()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let restored: Value = resp.json().await.unwrap();
+    assert_eq!(
+        restored["id"],
+        id.as_str(),
+        "a restore does not rename back"
+    );
+    assert_eq!(restored["version"]["number"], 3);
+
+    let current = daemon.get_json(&format!("/pipelines/{id}")).await;
+    assert_eq!(current["pipeline"]["name"], "renamed");
+    assert_eq!(current["pipeline"]["nodes"][1]["interactive"], false);
+
+    for (path, says) in [
+        (
+            format!("/pipelines/{id}/versions/9/restore"),
+            "pipeline has no version 9",
+        ),
+        (
+            "/pipelines/nope/versions/1/restore".to_string(),
+            "pipeline not found",
+        ),
+    ] {
+        let resp = reqwest::Client::new()
+            .post(format!("{}{path}", daemon.url()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404, "{path}");
+        assert_eq!(resp.text().await.unwrap(), says, "{path}");
     }
 }

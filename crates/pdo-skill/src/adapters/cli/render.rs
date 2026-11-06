@@ -60,7 +60,11 @@ pub(super) fn show_text(skill: &Value, folders: &Value) -> String {
         out.push_str(&format!("source\t{source}\n"));
     }
     for file in skill["files"].as_array().into_iter().flatten() {
-        out.push_str(&format!("file\t{}\t{} bytes\n", text(&file["path"]), file["size"]));
+        out.push_str(&format!(
+            "file\t{}\t{} bytes\n",
+            text(&file["path"]),
+            file["size"]
+        ));
     }
     if let Some(content) = skill["content"].as_str() {
         out.push('\n');

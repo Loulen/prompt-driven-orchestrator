@@ -122,10 +122,17 @@ async fn the_skills_selection_only_gains_skills_of_the_bank() {
         invalid(err).contains("not a skill of the bank: no-such-skill"),
         "the refusal names the skill"
     );
-    assert_eq!(*w.config.writes.lock().unwrap(), 0, "a refusal writes nothing");
+    assert_eq!(
+        *w.config.writes.lock().unwrap(),
+        0,
+        "a refusal writes nothing"
+    );
 
     w.settings
-        .update(&Actor::LocalOperator, json!({ "skills": [{ "id": "tdd" }] }))
+        .update(
+            &Actor::LocalOperator,
+            json!({ "skills": [{ "id": "tdd" }] }),
+        )
         .await
         .unwrap();
     let ids = |w: &crate::fakes::World| -> Vec<String> {

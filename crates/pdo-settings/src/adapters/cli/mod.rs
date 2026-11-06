@@ -5,8 +5,9 @@
 //! references that must resolve, who may) stays behind the route, so a value
 //! the UI refuses is refused here with the same reason.
 
-mod profiles;
+mod agent_profiles;
 mod render;
+mod sandbox_profiles;
 
 use anyhow::Result;
 use clap::Subcommand;
@@ -15,8 +16,9 @@ use pdo_platform::adapters::cli::daemon::{
 };
 use serde_json::{json, Map, Value};
 
-pub use profiles::{AgentProfileAction, SandboxProfileAction};
+pub use agent_profiles::AgentProfileAction;
 use render::{knob_lines, plan_lines, refreshed_line, sync_line, telemetry_line};
+pub use sandbox_profiles::SandboxProfileAction;
 
 #[derive(Subcommand, Debug)]
 pub enum SettingsAction {
@@ -184,8 +186,10 @@ pub fn run_settings(action: SettingsAction) -> Result<()> {
                 println!("{}", refreshed_line(&name, &entry));
             }
         }
-        SettingsAction::AgentProfile { action } => profiles::agent_profile(&daemon, action)?,
-        SettingsAction::SandboxProfile { action } => profiles::sandbox_profile(&daemon, action)?,
+        SettingsAction::AgentProfile { action } => agent_profiles::agent_profile(&daemon, action)?,
+        SettingsAction::SandboxProfile { action } => {
+            sandbox_profiles::sandbox_profile(&daemon, action)?
+        }
         SettingsAction::Provisioning { action } => provisioning(&daemon, action)?,
         SettingsAction::Appearance { file, json } => {
             let answer = match file {
@@ -270,7 +274,11 @@ fn provisioning(daemon: &Daemon, action: ProvisioningAction) -> Result<()> {
                     .json()?,
                 (None, None) => daemon.get("/settings/provisioning")?.ok()?.json()?,
             };
-            let scope = if project.is_some() { "project" } else { "instance" };
+            let scope = if project.is_some() {
+                "project"
+            } else {
+                "instance"
+            };
             let plan = daemon
                 .post(
                     "/repos/provisioning/preview",

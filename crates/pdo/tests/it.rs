@@ -56,6 +56,12 @@ mod cli_stats;
 #[path = "cli_trigger.rs"]
 mod cli_trigger;
 
+#[path = "cli_run_gestures.rs"]
+mod cli_run_gestures;
+
+#[path = "cli_pipeline.rs"]
+mod cli_pipeline;
+
 #[path = "cli_wait_exit_codes.rs"]
 mod cli_wait_exit_codes;
 

@@ -11,7 +11,8 @@ fn seed(repo: &std::path::Path) -> anyhow::Result<()> {
     flow::seed_solo(repo, &[("solo", false)])
 }
 
-const SKILL_MD: &str = "---\nname: cli-craft\ndescription: Craft from the command line.\n---\n\nBe careful.\n";
+const SKILL_MD: &str =
+    "---\nname: cli-craft\ndescription: Craft from the command line.\n---\n\nBe careful.\n";
 
 #[tokio::test]
 async fn a_skill_is_added_changed_and_removed_as_settings_skills_does() {
@@ -30,11 +31,19 @@ async fn a_skill_is_added_changed_and_removed_as_settings_skills_does() {
     assert_eq!(added["name"], "cli-craft");
     let bank = daemon.get_json("/settings/skills").await;
     assert!(
-        bank["skills"].as_array().unwrap().iter().any(|s| s["id"] == id),
+        bank["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == id),
         "it is in the bank the UI reads: {bank}"
     );
     let list = pdo(&daemon, &["skill", "list"]).await;
-    assert!(list.ok().contains(&format!("{id}\tcli-craft\t-\n")), "{}", list.stdout);
+    assert!(
+        list.ok().contains(&format!("{id}\tcli-craft\t-\n")),
+        "{}",
+        list.stdout
+    );
     let shown = pdo(&daemon, &["skill", "show", &id]).await;
     assert!(shown.ok().contains("Be careful."), "{}", shown.stdout);
 
@@ -49,15 +58,24 @@ async fn a_skill_is_added_changed_and_removed_as_settings_skills_does() {
     let folder_id = folder["id"].as_str().unwrap().to_string();
     let moved = pdo(
         &daemon,
-        &["skill", "update", &id, "--name", "crafty", "--folder", &folder_id],
+        &[
+            "skill", "update", &id, "--name", "crafty", "--folder", &folder_id,
+        ],
     )
     .await;
     assert_eq!(moved.ok(), format!("{id}\tcrafty updated\n"));
     let list = pdo(&daemon, &["skill", "list"]).await;
-    assert!(list.ok().contains(&format!("{id}\tcrafty\tCraft\n")), "{}", list.stdout);
-    pdo(&daemon, &["skill", "folder", "update", &folder_id, "--name", "Crafts"])
-        .await
-        .ok();
+    assert!(
+        list.ok().contains(&format!("{id}\tcrafty\tCraft\n")),
+        "{}",
+        list.stdout
+    );
+    pdo(
+        &daemon,
+        &["skill", "folder", "update", &folder_id, "--name", "Crafts"],
+    )
+    .await
+    .ok();
     assert!(pdo(&daemon, &["skill", "folder", "list"])
         .await
         .ok()
@@ -68,40 +86,75 @@ async fn a_skill_is_added_changed_and_removed_as_settings_skills_does() {
     std::fs::write(&fixture, "- one\n").unwrap();
     let file = pdo(
         &daemon,
-        &["skill", "file", "add", &id, fixture.to_str().unwrap(), "--as", "refs/checklist.md"],
+        &[
+            "skill",
+            "file",
+            "add",
+            &id,
+            fixture.to_str().unwrap(),
+            "--as",
+            "refs/checklist.md",
+        ],
     )
     .await;
     assert_eq!(file.ok(), "refs/checklist.md\t6 bytes added\n");
     assert_eq!(
-        pdo(&daemon, &["skill", "file", "show", &id, "refs/checklist.md"])
-            .await
-            .ok(),
+        pdo(
+            &daemon,
+            &["skill", "file", "show", &id, "refs/checklist.md"]
+        )
+        .await
+        .ok(),
         "- one\n"
     );
     std::fs::write(&fixture, "- two\n").unwrap();
     pdo(
         &daemon,
-        &["skill", "file", "write", &id, "refs/checklist.md", fixture.to_str().unwrap()],
+        &[
+            "skill",
+            "file",
+            "write",
+            &id,
+            "refs/checklist.md",
+            fixture.to_str().unwrap(),
+        ],
     )
     .await
     .ok();
     assert_eq!(
-        pdo(&daemon, &["skill", "file", "show", &id, "refs/checklist.md"])
-            .await
-            .ok(),
+        pdo(
+            &daemon,
+            &["skill", "file", "show", &id, "refs/checklist.md"]
+        )
+        .await
+        .ok(),
         "- two\n"
     );
-    pdo(&daemon, &["skill", "file", "remove", &id, "refs/checklist.md"])
-        .await
-        .ok();
-    let gone = pdo(&daemon, &["skill", "file", "show", &id, "refs/checklist.md"]).await;
+    pdo(
+        &daemon,
+        &["skill", "file", "remove", &id, "refs/checklist.md"],
+    )
+    .await
+    .ok();
+    let gone = pdo(
+        &daemon,
+        &["skill", "file", "show", &id, "refs/checklist.md"],
+    )
+    .await;
     assert_eq!(gone.code, Some(4), "{}", gone.stderr);
 
     // Export, then upload back: the bank keeps the id it already holds.
     let zip = dir.path().join("bank.zip");
     let exported = pdo(
         &daemon,
-        &["skill", "export", "--skill", &id, "-o", zip.to_str().unwrap()],
+        &[
+            "skill",
+            "export",
+            "--skill",
+            &id,
+            "-o",
+            zip.to_str().unwrap(),
+        ],
     )
     .await;
     assert!(exported.ok().contains("written"), "{}", exported.stdout);
@@ -153,14 +206,28 @@ async fn a_local_source_is_scanned_and_imported() {
     for args in [
         &["init", "-q", "-b", "main"][..],
         &["-c", "user.email=t@e", "-c", "user.name=T", "add", "."][..],
-        &["-c", "user.email=t@e", "-c", "user.name=T", "-c", "commit.gpgsign=false", "commit", "-qm", "skills"][..],
+        &[
+            "-c",
+            "user.email=t@e",
+            "-c",
+            "user.name=T",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "skills",
+        ][..],
     ] {
         let out = std::process::Command::new("git")
             .args(args)
             .current_dir(source.path())
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     let path = source.path().to_str().unwrap();
     let scan = pdo(&daemon, &["skill", "scan", path]).await;

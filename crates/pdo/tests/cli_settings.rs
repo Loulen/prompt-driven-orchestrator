@@ -26,7 +26,11 @@ async fn an_instance_setting_is_set_as_settings_saves_it_and_refused_as_it_refus
         "session_cap\t3\tstored\n"
     );
     let all = pdo(&daemon, &["settings", "get"]).await;
-    assert!(all.ok().contains("session_cap\t3\tstored\n"), "{}", all.stdout);
+    assert!(
+        all.ok().contains("session_cap\t3\tstored\n"),
+        "{}",
+        all.stdout
+    );
     let json = pdo(&daemon, &["settings", "get", "session_cap", "--json"])
         .await
         .json();
@@ -36,7 +40,12 @@ async fn an_instance_setting_is_set_as_settings_saves_it_and_refused_as_it_refus
     // valid change.
     let refused = pdo(
         &daemon,
-        &["settings", "set", "session_cap=0", "public_url=https://x.example"],
+        &[
+            "settings",
+            "set",
+            "session_cap=0",
+            "public_url=https://x.example",
+        ],
     )
     .await;
     assert_eq!(refused.code, Some(1), "{}", refused.stderr);
@@ -50,14 +59,21 @@ async fn an_instance_setting_is_set_as_settings_saves_it_and_refused_as_it_refus
     assert_ne!(page["public_url"]["stored"], "https://x.example");
 
     // A string, and a type error named by the daemon.
-    pdo(&daemon, &["settings", "set", "public_url=https://pdo.example.net/"])
-        .await
-        .ok();
+    pdo(
+        &daemon,
+        &["settings", "set", "public_url=https://pdo.example.net/"],
+    )
+    .await
+    .ok();
     let page = daemon.get_json("/settings").await;
     assert_eq!(page["public_url"]["stored"], "https://pdo.example.net");
     let typed = pdo(&daemon, &["settings", "set", "session_cap=many"]).await;
     assert_eq!(typed.code, Some(1), "{}", typed.stderr);
-    assert!(typed.stderr.contains("invalid settings payload"), "{}", typed.stderr);
+    assert!(
+        typed.stderr.contains("invalid settings payload"),
+        "{}",
+        typed.stderr
+    );
 
     // The instance's skills only gain skills of the bank, as a Projet's do.
     let foreign = pdo(
@@ -75,7 +91,12 @@ async fn an_instance_setting_is_set_as_settings_saves_it_and_refused_as_it_refus
     );
     let skills = pdo(
         &daemon,
-        &["settings", "set", r#"skills=[{"id":"pdo-interactive"}]"#, "--json"],
+        &[
+            "settings",
+            "set",
+            r#"skills=[{"id":"pdo-interactive"}]"#,
+            "--json",
+        ],
     )
     .await
     .json();
@@ -83,7 +104,9 @@ async fn an_instance_setting_is_set_as_settings_saves_it_and_refused_as_it_refus
 
     let unknown = pdo(&daemon, &["settings", "get", "no_such_setting"]).await;
     assert_eq!(unknown.code, Some(1));
-    assert!(unknown.stderr.contains("no setting named `no_such_setting`"));
+    assert!(unknown
+        .stderr
+        .contains("no setting named `no_such_setting`"));
     let usage = pdo(&daemon, &["settings", "set", "no-equal-sign"]).await;
     assert_eq!(usage.code, Some(1), "{}", usage.stderr);
 }
@@ -111,13 +134,23 @@ async fn profiles_are_created_changed_and_deleted_by_the_cli() {
     let id = created["id"].as_str().unwrap().to_string();
     let list = pdo(&daemon, &["settings", "agent-profile", "list"]).await;
     assert!(
-        list.ok().contains(&format!("{id}\tReviewer\tclaude\topus\t-\n")),
+        list.ok()
+            .contains(&format!("{id}\tReviewer\tclaude\topus\t-\n")),
         "{}",
         list.stdout
     );
     let updated = pdo(
         &daemon,
-        &["settings", "agent-profile", "update", &id, "--effort", "high", "--model", ""],
+        &[
+            "settings",
+            "agent-profile",
+            "update",
+            &id,
+            "--effort",
+            "high",
+            "--model",
+            "",
+        ],
     )
     .await;
     assert_eq!(
@@ -157,7 +190,15 @@ async fn profiles_are_created_changed_and_deleted_by_the_cli() {
     assert_eq!(saved["image"]["ref"], "node:22", "{saved}");
     pdo(
         &daemon,
-        &["settings", "sandbox-profile", "set", "web", "--unset-env", "NODE_ENV", "--default-image"],
+        &[
+            "settings",
+            "sandbox-profile",
+            "set",
+            "web",
+            "--unset-env",
+            "NODE_ENV",
+            "--default-image",
+        ],
     )
     .await
     .ok();
@@ -213,7 +254,13 @@ async fn provisioning_appearance_telemetry_and_update_are_read_and_written() {
         &["settings", "appearance", "--file", doc.to_str().unwrap()],
     )
     .await;
-    assert!(written.ok().starts_with("theme\tclassic\ndark_mode\ttrue\n"), "{}", written.stdout);
+    assert!(
+        written
+            .ok()
+            .starts_with("theme\tclassic\ndark_mode\ttrue\n"),
+        "{}",
+        written.stdout
+    );
     std::fs::write(&doc, r#"{"version":0}"#).unwrap();
     let refused = pdo(
         &daemon,
@@ -223,7 +270,11 @@ async fn provisioning_appearance_telemetry_and_update_are_read_and_written() {
     assert_eq!(refused.code, Some(1), "{}", refused.stderr);
 
     let telemetry = pdo(&daemon, &["settings", "telemetry"]).await;
-    assert!(telemetry.ok().starts_with("not exporting"), "{}", telemetry.stdout);
+    assert!(
+        telemetry.ok().starts_with("not exporting"),
+        "{}",
+        telemetry.stdout
+    );
     let test = pdo(&daemon, &["settings", "telemetry", "--test"]).await;
     assert_eq!(test.code, Some(1), "no collector: {}", test.stderr);
 

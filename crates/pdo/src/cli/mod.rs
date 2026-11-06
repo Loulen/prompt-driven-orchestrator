@@ -16,9 +16,10 @@ mod whoami;
 use std::net::IpAddr;
 
 use clap::{Parser, Subcommand};
+use pdo_pipeline::adapters::cli::PipelineAction;
 use pdo_platform::adapters::cli::{AuditArgs, PageAction, ServiceAction, UpdateAction};
 use pdo_review::adapters::cli::ReviewAction;
-use pdo_run::adapters::cli::RunAction;
+use pdo_run::adapters::cli::{NodeAction, RunAction};
 use pdo_session::adapters::cli::SessionAction;
 use pdo_settings::adapters::cli::SettingsAction;
 use pdo_skill::adapters::cli::SkillAction;
@@ -141,7 +142,10 @@ pub enum Commands {
         #[command(subcommand)]
         action: DocsAction,
     },
-    /// Talk to a running daemon's Run surface.
+    /// The Runs: create, wait, list, status, and every gesture of the Runs
+    /// list and the run view (show, cancel, pause, resume, retry, reopen,
+    /// archive, forget, rename, events, costs, artifacts, the Run's pipeline…).
+    /// The operator's gestures exit 4 when the daemon knows no such Run.
     Run {
         #[command(subcommand)]
         action: Box<RunAction>,
@@ -191,6 +195,20 @@ pub enum Commands {
     Session {
         #[command(subcommand)]
         action: SessionAction,
+    },
+    /// The nodes of a Run: retry, skip, restart, start, stop, kill, recover,
+    /// done, release, extend, attach files; their prompt, inputs and outputs,
+    /// diff and transcript. Exits 4 when the daemon knows no such Run or node.
+    Node {
+        #[command(subcommand)]
+        action: NodeAction,
+    },
+    /// The pipelines and the library: list, show, export, import, versions,
+    /// restore, and every gesture of the pipeline editor. Exits 4 when the
+    /// daemon knows no such pipeline.
+    Pipeline {
+        #[command(subcommand)]
+        action: PipelineAction,
     },
     /// The instance settings, as Settings shows them: get and set them, the
     /// agentic and staging profiles, the provisioning rules, your Apparence,

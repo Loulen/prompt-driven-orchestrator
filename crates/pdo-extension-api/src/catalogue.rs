@@ -139,6 +139,7 @@ fn core_entry(
                 "force_route",
                 "pause_run",
                 "resume_run",
+                "cancel_run",
                 "reopen_run",
                 "inject_artifact",
                 "rename_run",

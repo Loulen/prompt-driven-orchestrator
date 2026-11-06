@@ -14,8 +14,8 @@ use pdo_platform::adapters::cli::daemon::{
 use serde_json::{json, Map, Value};
 
 use body::{selected, selection_of, update_body, with_skill, without_skill, UpdateFlags};
-use render::{done, list_lines, members_line, show, skill_lines};
 pub use render::rules_lines;
+use render::{done, list_lines, members_line, show, skill_lines};
 
 #[derive(Subcommand, Debug)]
 pub enum ProjectAction {

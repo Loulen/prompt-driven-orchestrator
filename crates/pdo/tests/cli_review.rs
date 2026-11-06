@@ -64,7 +64,9 @@ async fn a_comment_is_written_sent_resolved_and_reopened_by_the_cli() {
 
     let empty = pdo(
         &daemon,
-        &["review", "comment", "lib.rs", "4", "--text", " ", "--run", &run_id],
+        &[
+            "review", "comment", "lib.rs", "4", "--text", " ", "--run", &run_id,
+        ],
     )
     .await;
     assert_eq!(empty.code, Some(1), "{}", empty.stderr);
@@ -88,6 +90,10 @@ async fn a_comment_is_written_sent_resolved_and_reopened_by_the_cli() {
 
     let unknown = pdo(&daemon, &["review", "resolve", "rc-999", "--run", &run_id]).await;
     assert_eq!(unknown.code, Some(4), "{}", unknown.stderr);
-    let no_run = pdo(&daemon, &["review", "diff", "--stat", "--run", "no-such-run"]).await;
+    let no_run = pdo(
+        &daemon,
+        &["review", "diff", "--stat", "--run", "no-such-run"],
+    )
+    .await;
     assert_eq!(no_run.code, Some(4), "{}", no_run.stderr);
 }

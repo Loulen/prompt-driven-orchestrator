@@ -215,7 +215,7 @@ async fn command_events(daemon_url: &str, run_id: &str, command: &str) -> Vec<se
 }
 
 #[tokio::test]
-async fn extend_cycle_unknown_node_is_400_and_leaves_no_trace() {
+async fn extend_cycle_unknown_node_is_404_and_leaves_no_trace() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon, LEGACY_PIPELINE_NAME).await;
 
@@ -226,11 +226,9 @@ async fn extend_cycle_unknown_node_is_400_and_leaves_no_trace() {
     )
     .await;
 
-    assert_eq!(status, 400, "unknown node must be rejected, got {body}");
-    assert_eq!(
-        body["error"], "node 'ghost' not found in pipeline",
-        "message follows the start_node precedent"
-    );
+    assert_eq!(status, 404, "unknown node must be rejected, got {body}");
+    assert_eq!(body["error"], "node_not_found", "{body}");
+    assert_eq!(body["node_id"], "ghost", "{body}");
     // A rejection leaves NO trace: neither the extend_cycle CommandIssued nor
     // a resume_run lift may have been appended.
     assert!(

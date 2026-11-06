@@ -103,7 +103,10 @@ mod tests {
 
     #[test]
     fn longer_presets_bucket_coarser() {
-        assert_eq!(Preset::Days30.window(now()).from, "2026-10-08T00:00:00.000Z");
+        assert_eq!(
+            Preset::Days30.window(now()).from,
+            "2026-10-08T00:00:00.000Z"
+        );
         assert_eq!(Preset::Days90.window(now()).bucket, "week");
         let all = Preset::All.window(now());
         assert_eq!(all.from, "1970-01-01T00:00:00.000Z");

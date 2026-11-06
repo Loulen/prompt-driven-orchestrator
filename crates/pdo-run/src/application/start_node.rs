@@ -131,6 +131,14 @@ pub async fn force_spawn_node(
         }
     };
 
+    // An unknown node is refused before the re-open below: a mistyped id must
+    // not reopen a finished Run.
+    if let Some(refusal) =
+        crate::application::node_known::unknown_node(state, run_id, &run_state, node_id)
+    {
+        return refusal;
+    }
+
     // A Start on a terminal (or incident-parked) Run re-opens it atomically
     // (ADR-0049). Must run before the guards below, so they see a live Run.
     let run_state = match embed_reopen_for_targeted_command(state, run_id, run_state).await {

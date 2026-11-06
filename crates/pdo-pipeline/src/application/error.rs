@@ -12,6 +12,8 @@ pub enum PipelineError {
     Denied(Denied),
     /// No pipeline file under that id.
     NotFound,
+    /// The pipeline exists, but not that version of it.
+    VersionNotFound(u32),
     /// The registry's directory cannot be determined.
     NoRegistry,
     /// The pipeline (on disk or in the request) does not parse.

@@ -4,6 +4,7 @@
 //! provides) is refused by the daemon, as in the UI, and so is a duplicate
 //! name or an invalid `SKILL.md`.
 
+mod files;
 mod import;
 mod render;
 
@@ -14,11 +15,11 @@ use clap::Subcommand;
 use pdo_platform::adapters::cli::daemon::{
     print_json, read_file_bytes, referent_lines, segment, Daemon,
 };
-use reqwest::blocking::multipart::{Form, Part};
 use serde_json::{json, Value};
 
+pub use files::FileAction;
 pub use import::{Collision, FolderAction};
-use render::{file_text, list_lines, show_text};
+use render::{list_lines, show_text};
 
 #[derive(Subcommand, Debug)]
 pub enum SkillAction {
@@ -154,46 +155,6 @@ pub enum SkillAction {
     },
 }
 
-#[derive(Subcommand, Debug)]
-pub enum FileAction {
-    /// Add reference files to a skill (repeatable), under their file name or
-    /// `--as`.
-    Add {
-        id: String,
-        #[arg(required = true)]
-        files: Vec<String>,
-        /// The destination in the skill's folder, for a single file
-        /// (`examples/login.spec.ts`).
-        #[arg(long = "as", value_name = "PATH")]
-        dest: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Print a file of a skill (`SKILL.md` included).
-    Show {
-        id: String,
-        path: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Overwrite a text file of a skill with a file (`-` for the standard
-    /// input). Writing `SKILL.md` validates it as the editor does.
-    Write {
-        id: String,
-        path: String,
-        file: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Delete a reference file.
-    Remove {
-        id: String,
-        path: String,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
 pub fn run_skill(action: SkillAction) -> Result<()> {
     let daemon = Daemon::from_env();
     match action {
@@ -289,7 +250,7 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
                 print!("{}", referent_lines(&referents));
             }
         }
-        SkillAction::File { action } => file(&daemon, action)?,
+        SkillAction::File { action } => files::file(&daemon, action)?,
         SkillAction::Folder { action } => import::folder(&daemon, action)?,
         SkillAction::Scan {
             source,
@@ -334,14 +295,8 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
                 folder_name,
                 parent,
             };
-            let report = import::import(
-                &daemon,
-                &source,
-                scan_id,
-                &only,
-                on_collision,
-                destination,
-            )?;
+            let report =
+                import::import(&daemon, &source, scan_id, &only, on_collision, destination)?;
             if json {
                 print_json(&report);
             } else {
@@ -374,7 +329,8 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
                     Some(&json!({ "skill_ids": skills, "folder_ids": folders })),
                 )?
                 .ok()?;
-            std::fs::write(&output, &zip.bytes).with_context(|| format!("cannot write {output}"))?;
+            std::fs::write(&output, &zip.bytes)
+                .with_context(|| format!("cannot write {output}"))?;
             println!("{output} written ({} bytes)", zip.bytes.len());
         }
         SkillAction::Upload { file, json } => {
@@ -400,113 +356,6 @@ pub fn run_skill(action: SkillAction) -> Result<()> {
     Ok(())
 }
 
-fn file(daemon: &Daemon, action: FileAction) -> Result<()> {
-    match action {
-        FileAction::Add {
-            id,
-            files,
-            dest,
-            json,
-        } => {
-            anyhow::ensure!(
-                dest.is_none() || files.len() == 1,
-                "--as names the destination of a single file"
-            );
-            let mut form = Form::new();
-            for path in &files {
-                let name = Path::new(path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .with_context(|| format!("{path} names no file"))?;
-                let bytes = std::fs::read(path).with_context(|| format!("cannot read {path}"))?;
-                form = form
-                    .text("path", dest.clone().unwrap_or_else(|| name.clone()))
-                    .part("file", Part::bytes(bytes).file_name(name));
-            }
-            let answer = daemon
-                .post_multipart(&format!("/settings/skills/{}/files", segment(&id)), form)?
-                .ok()?
-                .json()?;
-            if json {
-                print_json(&answer);
-            } else {
-                for file in answer["uploaded"].as_array().into_iter().flatten() {
-                    println!(
-                        "{}\t{} bytes added",
-                        file["path"].as_str().unwrap_or(""),
-                        file["size"]
-                    );
-                }
-            }
-        }
-        FileAction::Show { id, path, json } => {
-            let file = daemon
-                .get(&format!(
-                    "/settings/skills/{}/files/{}",
-                    segment(&id),
-                    file_path(&path)
-                ))?
-                .ok()?
-                .json()?;
-            if json {
-                print_json(&file);
-            } else {
-                print!("{}", file_text(&file));
-            }
-        }
-        FileAction::Write {
-            id,
-            path,
-            file,
-            json,
-        } => {
-            let saved = daemon
-                .put_text(
-                    &format!(
-                        "/settings/skills/{}/files/{}",
-                        segment(&id),
-                        file_path(&path)
-                    ),
-                    read_text(&file)?,
-                )?
-                .ok()?
-                .json()?;
-            if json {
-                print_json(&saved);
-            } else {
-                println!(
-                    "{}\t{} bytes written",
-                    saved["path"].as_str().unwrap_or(&path),
-                    saved["size"]
-                );
-            }
-        }
-        FileAction::Remove { id, path, json } => {
-            daemon
-                .delete(
-                    &format!(
-                        "/settings/skills/{}/files/{}",
-                        segment(&id),
-                        file_path(&path)
-                    ),
-                    None,
-                )?
-                .ok()?;
-            removed(&path, json);
-        }
-    }
-    Ok(())
-}
-
-/// A file's path in a URL: each segment encoded, the `/` kept.
-fn file_path(path: &str) -> String {
-    path.split('/')
-        .filter(|part| !part.is_empty())
-        .map(segment)
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 fn read(daemon: &Daemon, id: &str) -> Result<Value> {
     daemon
         .get(&format!("/settings/skills/{}", segment(id)))?
@@ -514,7 +363,7 @@ fn read(daemon: &Daemon, id: &str) -> Result<Value> {
         .json()
 }
 
-fn read_text(file: &str) -> Result<String> {
+pub(super) fn read_text(file: &str) -> Result<String> {
     String::from_utf8(read_file_bytes(file)?).with_context(|| format!("{file} is not UTF-8 text"))
 }
 
@@ -530,21 +379,10 @@ fn done(skill: &Value, json: bool, verb: &str) {
     }
 }
 
-fn removed(id: &str, json: bool) {
+pub(super) fn removed(id: &str, json: bool) {
     if json {
         print_json(&json!({ "id": id, "deleted": true }));
     } else {
         println!("{id} removed");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_file_path_keeps_its_folders() {
-        assert_eq!(file_path("examples/login spec.ts"), "examples/login%20spec.ts");
-        assert_eq!(file_path("/SKILL.md"), "SKILL.md");
     }
 }

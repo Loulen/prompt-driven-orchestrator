@@ -154,6 +154,13 @@ fn common_response(error: &PipelineError) -> Option<Response> {
     match error {
         PipelineError::Denied(denied) => Some(denied.clone().into_response()),
         PipelineError::NotFound => Some(not_found()),
+        PipelineError::VersionNotFound(number) => Some(
+            (
+                StatusCode::NOT_FOUND,
+                format!("pipeline has no version {number}"),
+            )
+                .into_response(),
+        ),
         PipelineError::NoRegistry => Some(no_registry()),
         PipelineError::Skills(skill) => Some(pdo_skill::adapters::http::skill_error_response(
             skill.clone(),

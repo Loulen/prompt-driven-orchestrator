@@ -340,7 +340,7 @@ async fn restarting_a_non_isolated_node_reports_the_spawn_it_really_did() {
 /// happened. Literal violation of ADR-0025 §2, and the negative assertion is the
 /// real content of this test.
 #[tokio::test]
-async fn an_unknown_node_is_a_400_that_touches_nothing() {
+async fn an_unknown_node_is_a_404_that_touches_nothing() {
     let daemon = TestDaemon::spawn(seed).await.unwrap();
     let run_id = create_run(&daemon).await;
     wait_for_node_status(&daemon, &run_id, "planner", "running").await;
@@ -348,11 +348,9 @@ async fn an_unknown_node_is_a_400_that_touches_nothing() {
     let before = events_of(&daemon, &run_id).await;
     let (status, body) = restart(&daemon, &run_id, "ghost", 1).await;
 
-    assert_eq!(status, 400, "{body}");
+    assert_eq!(status, 404, "{body}");
     assert_eq!(body["error"], "node_not_found", "{body}");
     assert_eq!(body["node_id"], "ghost", "{body}");
-    assert_eq!(body["recoverable"], true, "{body}");
-    assert_eq!(body["session_killed"], false, "{body}");
 
     assert_no_trace(&daemon, &run_id, &before).await;
     assert_eq!(node_status(&daemon, &run_id, "planner").await, "running");

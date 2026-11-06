@@ -202,3 +202,45 @@ async fn a_failed_run_is_reopened_and_an_unknown_run_exits_4() {
         assert_eq!(out.code, Some(4), "{args:?}: {}{}", out.stdout, out.stderr);
     }
 }
+
+/// A mistyped node id on a finished Run: every node gesture exits 4, and the
+/// Run is left as it was, not reopened, with no ghost node in its state.
+#[tokio::test]
+async fn an_unknown_node_exits_4_and_leaves_a_finished_run_untouched() {
+    let daemon = TestDaemon::spawn(seed).await.unwrap();
+    let run_id = flow::create_run(&daemon, "solo").await;
+    wait_node_status(&daemon, &run_id, "worker", "running").await;
+    pdo(&daemon, &["run", "cancel", &run_id]).await.ok();
+    wait_run_status(&daemon, &run_id, "halted").await;
+    let events = |daemon: &TestDaemon| {
+        let path = format!("/runs/{run_id}/events");
+        let daemon_url = daemon.url();
+        async move {
+            reqwest::get(format!("{daemon_url}{path}"))
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len()
+        }
+    };
+    let before = events(&daemon).await;
+
+    for gesture in [
+        "skip", "kill", "restart", "recover", "done", "start", "stop", "retry", "release",
+    ] {
+        let out = pdo(&daemon, &["node", gesture, &run_id, "ghost"]).await;
+        assert_eq!(out.code, Some(4), "{gesture}: {}{}", out.stdout, out.stderr);
+        assert!(out.stderr.contains("ghost"), "{gesture}: {}", out.stderr);
+    }
+    let extend = pdo(&daemon, &["node", "extend", &run_id, "ghost", "2"]).await;
+    assert_eq!(extend.code, Some(4), "{}", extend.stderr);
+
+    let run = daemon.get_json(&format!("/runs/{run_id}")).await;
+    assert_eq!(run["status"], "halted", "{run}");
+    assert!(run["nodes"].get("ghost").is_none(), "{run}");
+    assert_eq!(events(&daemon).await, before, "nothing was written");
+}

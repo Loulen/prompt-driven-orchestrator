@@ -43,6 +43,7 @@ use crate::application::events::run_is_forgotten;
 use crate::application::node::output_validation::check_output_validation_with_retry;
 use crate::application::node::reap::reap_node_session;
 use crate::application::node::spawn::{spawn_node, SpawnContext, SpawnDeps, SpawnOutcome};
+use crate::application::node_known::unknown_node;
 use crate::application::paths::effective_repo_root;
 use crate::application::paths::resolve_pipeline_path;
 use crate::application::paths::resolve_run_pipeline_path;
@@ -109,6 +110,14 @@ impl Runs {
         };
         if let Err(denied) = self.authorize(actor, &cmd.operation(&run_id)).await {
             return denied.into_response();
+        }
+
+        if let Some(node_id) = cmd.target_node() {
+            if let Ok((_, run_state)) = load_projected(self, &run_id).await {
+                if let Some(refusal) = unknown_node(self, &run_id, &run_state, node_id) {
+                    return refusal;
+                }
+            }
         }
 
         dispatch(self.clone(), run_id, cmd).await

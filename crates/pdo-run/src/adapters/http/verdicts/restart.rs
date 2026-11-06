@@ -8,9 +8,9 @@ use crate::domain::restart_verdict::*;
 /// pas décidé de son statut.
 fn status(r: &RestartRefusal) -> StatusCode {
     match r {
-        // Une cible qui n'existe pas dans le pipeline est une requête malformée,
-        // pas un conflit d'état.
-        RestartRefusal::NodeNotFound { .. } => StatusCode::BAD_REQUEST,
+        // Une cible que le Run ne connaît pas : `404`, comme sur tous les gestes
+        // d'un node (le client en fait un « introuvable »).
+        RestartRefusal::NodeNotFound { .. } => StatusCode::NOT_FOUND,
         RestartRefusal::RestartRejected { .. }
         | RestartRefusal::SandboxPrepNotReady { .. }
         | RestartRefusal::SubWorktreeOccupied { .. } => StatusCode::CONFLICT,
@@ -215,7 +215,7 @@ mod tests {
                 RestartVerdict::Refused(RestartRefusal::NodeNotFound {
                     node_id: "g".into(),
                 }),
-                StatusCode::BAD_REQUEST,
+                StatusCode::NOT_FOUND,
             ),
             (
                 RestartVerdict::Refused(RestartRefusal::SandboxPrepNotReady {

@@ -249,7 +249,7 @@ async fn a_version_reads_back_as_the_editor_shows_it() {
     assert_eq!(second.pipeline["nodes"].as_array().unwrap().len(), 3);
     assert!(matches!(
         world.pipelines.version("flow", 9).await,
-        Err(PipelineError::NotFound)
+        Err(PipelineError::VersionNotFound(9))
     ));
 }
 

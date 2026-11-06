@@ -1299,7 +1299,7 @@ async fn parse_rejects_are_ordered_and_field_defaults_are_lenient() {
 }
 
 #[tokio::test]
-async fn adr25_case_a_unknown_target_is_400_and_leaves_no_trace() {
+async fn adr25_case_a_unknown_target_is_404_and_leaves_no_trace() {
     let tmp = tempfile::tempdir().unwrap();
     let state = test_state_with_dir(tmp.path()).await;
     let run_id = "adr25-a";
@@ -1322,9 +1322,9 @@ async fn adr25_case_a_unknown_target_is_400_and_leaves_no_trace() {
     assert_eq!(
         (status, ct.as_str(), body.as_str()),
         (
-            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_FOUND,
             JSON_CT,
-            r#"{"error":"node 'ghost' not found in pipeline"}"#
+            r#"{"error":"node_not_found","message":"node 'ghost' not found in the run's pipeline","node_id":"ghost"}"#
         )
     );
 

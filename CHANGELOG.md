@@ -60,11 +60,18 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   outputs), `restart`, `start`, `stop`, `kill`, `recover`, `done`, `release`, `extend`, `attach`
   files, and reads its `prompt`, `io`, `diff` and `transcript`. Without `--iter`, a gesture
   targets the node's latest iteration, the one the node panel shows.
+- **A node the Run does not know is refused.** Every gesture on a node (retry, skip, restart,
+  start, kill, recover, done, release, extend, and the Pipeline Manager's node commands) answers
+  `404 node_not_found` when neither the Run's pipeline nor its state names the node, before
+  anything is written: a mistyped id no longer reopens a finished Run or leaves a ghost node in
+  it. **Breaking**: retry, restart and `extend_cycle` answered `400` for an unknown node; `pdo
+  node` exits 4.
 - **`pdo pipeline`** makes the gestures of the pipelines and the library: `list`, `show`,
   `export`, `import` (a round trip, skills sidecar included), `versions`, `version`, `restore`,
   and the editor's other gestures. `restore` is the daemon's new
   `POST /pipelines/{id}/versions/{n}/restore`: the version saved as the next one, under the
-  pipeline's current name, as Restore then Save in the editor.
+  pipeline's current name, as Restore then Save in the editor. A version the pipeline does not
+  have answers `404 pipeline has no version N`.
 - Every route of the daemon has its command or an exclusion written with its reason: a
   structural test fails on a route added without either. The routes of Settings, Stats, the skill
   bank and the Review are provisional exclusions, until their commands exist; the shared draft of

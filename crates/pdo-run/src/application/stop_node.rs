@@ -66,7 +66,7 @@ impl Runs {
             None => {
                 return (
                     StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({ "error": "node not found in run state" })),
+                    Json(serde_json::json!({ "error": format!("node '{node_id}' not found in run state") })),
                 )
                     .into_response();
             }

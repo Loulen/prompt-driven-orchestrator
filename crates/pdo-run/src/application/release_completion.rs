@@ -52,6 +52,13 @@ pub async fn release_node_completion(
         )
             .into_response();
     };
+    // A node the Run does not know answers `404` before the Run's liveness, as
+    // on every node gesture.
+    if let Some(refusal) =
+        crate::application::node_known::unknown_node(state, run_id, &run_state, node_id)
+    {
+        return refusal;
+    }
     if !run_state.status.is_live() {
         return release_refusal(
             "run_not_live",

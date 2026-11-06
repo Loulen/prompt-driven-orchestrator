@@ -50,6 +50,7 @@ pub mod list;
 pub mod manager;
 pub mod node;
 pub mod node_diff;
+pub mod node_known;
 pub mod operations;
 pub mod paths;
 pub mod pipeline_modified;

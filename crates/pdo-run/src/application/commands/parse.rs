@@ -170,6 +170,14 @@ impl RunCommand {
     /// node command targets its node, every other command the Run.
     pub(super) fn operation(&self, run_id: &str) -> pdo_kernel::Operation {
         use crate::application::operations::{on_node, on_run};
+        match self.target_node() {
+            Some(node_id) => on_node(self.kind_str(), run_id, node_id),
+            None => on_run(self.kind_str(), run_id),
+        }
+    }
+
+    /// The node a node command targets; `None` for a command on the Run.
+    pub(super) fn target_node(&self) -> Option<&str> {
         match self {
             RunCommand::MarkNodeDone { node_id, .. }
             | RunCommand::ReleaseNodeCompletion { node_id, .. }
@@ -178,8 +186,8 @@ impl RunCommand {
             | RunCommand::KillNode { node_id, .. }
             | RunCommand::RestartNode { node_id, .. }
             | RunCommand::RecoverNode { node_id, .. }
-            | RunCommand::StartNode { node_id, .. } => on_node(self.kind_str(), run_id, node_id),
-            _ => on_run(self.kind_str(), run_id),
+            | RunCommand::StartNode { node_id, .. } => Some(node_id),
+            _ => None,
         }
     }
 

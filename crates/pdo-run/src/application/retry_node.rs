@@ -11,6 +11,7 @@ use crate::application::events::append_event;
 use crate::application::events::load_events;
 use crate::application::events::reload_run_state;
 use crate::application::node::{primitives as node_primitives, spawn as node_spawn};
+use crate::application::node_known::unknown_node;
 use crate::application::operations::on_node;
 use crate::application::paths::effective_repo_root;
 use crate::application::paths::resolve_pipeline_path;
@@ -77,6 +78,12 @@ impl Runs {
                     .into_response();
             }
         };
+
+        // An unknown node is refused before the re-open below: a mistyped id must
+        // not reopen a finished Run.
+        if let Some(refusal) = unknown_node(state, &run_id, &run_state, &node_id) {
+            return refusal;
+        }
 
         // Captured BEFORE any invalidation OR re-open: both the self-invalidation below
         // and the re-open's interrupted-node drop remove the node from the projection, so

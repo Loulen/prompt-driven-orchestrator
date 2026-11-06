@@ -168,16 +168,22 @@ async fn a_restore_saves_the_version_as_the_next_one_under_the_current_name() {
     assert_eq!(current["pipeline"]["name"], "renamed");
     assert_eq!(current["pipeline"]["nodes"][1]["interactive"], false);
 
-    for path in [
-        format!("/pipelines/{id}/versions/9/restore"),
-        "/pipelines/nope/versions/1/restore".to_string(),
+    for (path, says) in [
+        (
+            format!("/pipelines/{id}/versions/9/restore"),
+            "pipeline has no version 9",
+        ),
+        (
+            "/pipelines/nope/versions/1/restore".to_string(),
+            "pipeline not found",
+        ),
     ] {
-        let status = reqwest::Client::new()
+        let resp = reqwest::Client::new()
             .post(format!("{}{path}", daemon.url()))
             .send()
             .await
-            .unwrap()
-            .status();
-        assert_eq!(status, 404, "{path}");
+            .unwrap();
+        assert_eq!(resp.status(), 404, "{path}");
+        assert_eq!(resp.text().await.unwrap(), says, "{path}");
     }
 }

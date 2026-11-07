@@ -9,7 +9,7 @@
 //!   message is a `noop`, a new message refreshes the banner).
 //! - a refused `pdo complete` on an unreleased interactive node → the daemon
 //!   declares the wait for the agent, cause `completion_not_released`.
-//! - the orchestrator binding marker (ADR-0064) keeps its own `children_pending`.
+//! - the parent-node binding marker (ADR-0064) keeps its own `children_pending`.
 //! - **Out**: an Enter key that crossed the UI's PTY bridge after at least one
 //!   typed byte since the declaration ([`note_pty_input`]) appends `NodeResumed`;
 //!   the completion release (ADR-0068) keeps its own event. Arrow keys, scroll,
@@ -331,7 +331,7 @@ pub(crate) fn classify_input(bytes: &[u8]) -> InputSignal {
 /// **node** session. Remembers typed bytes per session; on an Enter that follows
 /// at least one typed byte since the last declaration, lifts the wait if the
 /// node is awaiting on a declared / refused-completion cause. Never touches a
-/// `children_pending` marker (the orchestrator gave its turn back, ADR-0064) nor
+/// `children_pending` marker (the parent node gave its turn back, ADR-0064) nor
 /// a derived wait (nothing is written on the parent).
 pub(crate) async fn note_pty_input(state: &Arc<AppState>, session_name: &str, bytes: &[u8]) {
     let Some(tmux_session_manager::ParsedSession::NodeRun {

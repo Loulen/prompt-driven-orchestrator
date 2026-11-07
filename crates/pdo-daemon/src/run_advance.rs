@@ -481,19 +481,27 @@ pub(crate) async fn complete_node(
     }
 }
 
-// ─ Liaison forte orchestrateur ↔ enfants (#724, ADR-0064) ────────────────────
+// ─ Liaison forte nœud parent ↔ enfants (#724, #1018, ADR-0064) ──────────────
 //
-// Le NodeRun d’un nœud « orchestrator » (toggle gelé au démarrage du Run,
-// `NodeDefInfo::orchestrator`) ne se termine pas pendant que ses runs enfants
-// (mêmes `parent_run_id` + `parent_node_id`, ADR-0064) sont non terminaux :
+// Le NodeRun de tout **nœud parent** — agent ou `script`, toggle Orchestrator
+// ou non : un nœud dont la session a créé au moins un run enfant non oublié
+// (mêmes `parent_run_id` + `parent_node_id`, ADR-0064) — ne se termine pas
+// pendant que ses runs enfants sont non terminaux. La liaison suit les enfants
+// RÉELS, jamais le toggle (#1018) : le toggle n’ajoute que le skill
+// `pdo-orchestrate` et sa ligne d’invocation.
 //
-// - la **porte** ([`orchestrator_binding_refusal`]) refuse `pdo complete` tant
-//   que des enfants tournent, avec un message qui compte ; au moins un enfant
-//   `failed` parque le nœud `AwaitingUser` — l’agent a rendu la main, c’est
-//   l’utilisateur qui tranche (retry de l’enfant ou forçage `mark_node_done`,
-//   qui n’est PAS gated : c’est le forçage) — et pose le **pilote**
+// - la **porte** ([`parent_node_binding_refusal`]) refuse `pdo complete` tant
+//   que des enfants tournent, avec un message qui compte et indique
+//   `pdo run wait --all` ; au moins un enfant `failed` parque le nœud
+//   `AwaitingUser` — l’agent a rendu la main, c’est l’utilisateur qui tranche
+//   (retry de l’enfant ou forçage `mark_node_done`, qui n’est PAS gated :
+//   c’est le forçage) — et pose le **pilote**
 //   ([`spawn_children_settled_watcher`]) qui complétera le nœud de lui-même
 //   quand tous les enfants seront terminaux — « le nœud se complète ».
+// - elle vaut pour TOUTES les sources de complétion qui passent par le corps
+//   commun (explicite, Stop hook, TurnEnded, fin de `script`) : un `script`
+//   retenu n’échoue pas, sa queue bash reconnaît le refus `children_pending`
+//   et laisse le watcher compléter le nœud.
 //
 // Aucune propagation de mort vers le bas : la liaison ne fait que RETENIR le
 // parent ; stop du nœud, archive et forget du parent ne touchent aucun enfant,
@@ -501,7 +509,7 @@ pub(crate) async fn complete_node(
 // jamais mis en cache).
 
 /// Le marqueur que la porte pose sur le NodeRun au refus : un `NodeAwaitingUser`
-/// portant cette raison. C’est lui qui distingue « l’orchestrator a rendu la
+/// portant cette raison. C’est lui qui distingue « le nœud parent a rendu la
 /// main et attend ses enfants » d’un agent encore au travail (auquel on ne
 /// arrache jamais la main) et d’un nœud interactif simplement `AwaitingUser`.
 pub(crate) const BINDING_MARKER_REASON: &str = "children_pending";
@@ -517,8 +525,8 @@ pub(crate) struct ChildrenSnapshot {
 /// Le verdict de la liaison sur un [`ChildrenSnapshot`].
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ChildrenVerdict {
-    /// Aucun enfant : la liaison ne dit rien (un toggle sans spawn n’engage
-    /// rien — l’agent peut aussi n’avoir pas encore créé ses enfants).
+    /// Aucun enfant : la liaison ne dit rien — le nœud n’est pas (encore) un
+    /// nœud parent, il se complète comme avant, toggle ou non.
     NoChildren,
     /// Tous les enfants sont terminaux, aucun n’est `failed` : le nœud peut
     /// se compléter.
@@ -554,15 +562,37 @@ impl ChildrenSnapshot {
 /// Lit les runs enfants du nœud `node_id` du Run `run_id` : tout Run dont le
 /// `RunStarted` mécanique porte ces deux valeurs de provenance. Recharge tout
 /// à chaque appel — c’est ce qui rend la ré-adoption au restart gratuite.
+///
+/// Depuis #1018 la porte lit les enfants de TOUT nœud à chaque complétion : la
+/// lecture commence donc par les seuls candidats (les `RunStarted` qui portent
+/// cette provenance, une requête), de sorte qu’un nœud sans enfant — le cas
+/// courant — ne rejoue aucun run. Si la requête échoue, repli sur la liste de
+/// tous les runs : plus lent, jamais faux.
 pub(crate) async fn children_snapshot(
     state: &AppState,
     run_id: &str,
     node_id: &str,
 ) -> ChildrenSnapshot {
     let mut snapshot = ChildrenSnapshot::default();
-    let Ok(run_ids) = load_all_run_ids(&state.db).await else {
-        error!("binding: failed to list runs for children of {node_id} in {run_id}");
-        return snapshot;
+    let candidates = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT run_id FROM events WHERE kind = 'run_started' \
+         AND json_extract(payload, '$.parent_run_id') = ? \
+         AND json_extract(payload, '$.parent_node_id') = ?",
+    )
+    .bind(run_id)
+    .bind(node_id)
+    .fetch_all(&state.db)
+    .await;
+    let run_ids = match candidates {
+        Ok(ids) => ids,
+        Err(e) => {
+            warn!("binding: indexed child lookup failed for {node_id} in {run_id} ({e}); scanning");
+            let Ok(ids) = load_all_run_ids(&state.db).await else {
+                error!("binding: failed to list runs for children of {node_id} in {run_id}");
+                return snapshot;
+            };
+            ids
+        }
     };
     for child_id in run_ids {
         if child_id == run_id {
@@ -596,25 +626,19 @@ pub(crate) async fn children_snapshot(
     snapshot
 }
 
-/// La porte de complétion de la liaison forte. `None` ⇒ la complétion peut
-/// continuer ; `Some(refusal)` ⇒ refus avec compteur, marqueur d’attente posé
-/// (nœud parqué `AwaitingUser`) et pilote détaché (le watcher).
-pub(crate) async fn orchestrator_binding_refusal(
+/// La porte de complétion de la liaison forte, pour tout **nœud parent**
+/// (#1018) : elle ne lit pas le toggle Orchestrator mais les enfants réels du
+/// nœud — un nœud sans enfant (ou dont tous les enfants sont oubliés ou
+/// terminaux sans échec) passe. `None` ⇒ la complétion peut continuer ;
+/// `Some(refusal)` ⇒ refus avec compteur, marqueur d’attente posé (nœud parqué
+/// `AwaitingUser`) et pilote détaché (le watcher).
+pub(crate) async fn parent_node_binding_refusal(
     state: &std::sync::Arc<AppState>,
     events: &[event_log::Event],
-    run_state: &event_log::RunState,
     run_id: &str,
     node_id: &str,
     iter: i64,
 ) -> Option<completion_refusal::CompletionRefusal> {
-    // Nœud sans toggle : aucune retenue — le comportement est inchangé.
-    if !run_state
-        .node_defs
-        .iter()
-        .any(|nd| nd.id == node_id && nd.orchestrator)
-    {
-        return None;
-    }
     let snapshot = children_snapshot(state, run_id, node_id).await;
     let ChildrenVerdict::Pending { active, failed } = snapshot.verdict() else {
         return None;
@@ -685,7 +709,7 @@ pub(crate) fn spawn_children_settled_watcher(
 ) {
     tokio::spawn(async move {
         // Backoff : réactif au début (les tests comme les humains attendent un
-        // enfant qui vient de se terminer), économe ensuite (un orchestrator
+        // enfant qui vient de se terminer), économe ensuite (un nœud parent
         // peut attendre des enfants pendant des heures — c’est le contrat).
         let mut delay = std::time::Duration::from_millis(250);
         loop {
@@ -729,7 +753,7 @@ pub(crate) fn spawn_children_settled_watcher(
             }
 
             info!(
-                "binding: every child run of orchestrator {node_id} iter-{iter} in run \
+                "binding: every child run of parent node {node_id} iter-{iter} in run \
                  {run_id} is terminal — completing the node"
             );
             match crate::complete_node_iteration(
@@ -743,7 +767,7 @@ pub(crate) fn spawn_children_settled_watcher(
             {
                 crate::CompletionAttempt::Completed => {
                     info!(
-                        "binding: orchestrator {node_id} completed in run {run_id} \
+                        "binding: parent node {node_id} completed in run {run_id} \
                          (children settled)"
                     );
                 }

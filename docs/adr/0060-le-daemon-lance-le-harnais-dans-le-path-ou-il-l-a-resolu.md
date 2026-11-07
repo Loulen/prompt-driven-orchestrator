@@ -3,7 +3,7 @@
 > Statut : accepted (bug #661, « faux session_died : la session tmux lance le harnais dans le `PATH`
 > du service »). Vocabulaire : CONTEXT.md § « Harnais agentique ». Prolonge ADR-0055 : la résolution
 > et le lancement partagent désormais le même `PATH`. Touche ADR-0019, ADR-0037.
-> *Amendé* (ADR draft-les-variables-d-une-session-ne-passent-par-aucune-ligne-de-commande) : la
+> *Amendé* (ADR-0098) : la
 > session ne lance plus `exec bash -c '…'` ; `bash` lit son script dans un fichier privé, le
 > `PATH` exporté en tête reste le même.
 

@@ -1,6 +1,6 @@
 ---
 id: HP-03
-covers: [tour, tour-step, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up]
+covers: [tour, tour-step, step-replay, projecteur, training-repository, welcome-modal, run, interactive-node, completion-guard, artifact, script-node, trigger, tidy-up]
 ---
 
 # HP-03 — A newcomer takes the full tour
@@ -43,6 +43,9 @@ Features validated while crossing the tour:
 - **Read-only panels** (#911): the panel a gesture opens (node inspector, edge panel, Start
   inspector) stays lit; its tabs switch, it scrolls and unfolds, but nothing in it can be edited
   while the tour shows it.
+- **Step replay** (PDO-10, #1029 / #1030 — CONTEXT.md « Rejeu d'étape »): `‹ Previous` (or **←**)
+  replays the step before as an ordinary step; **→** presses `Next` when the card shows it live. The
+  arrows belong to a field, the terminal or the canvas while one of them has the focus.
 
 ## Preconditions
 
@@ -75,7 +78,10 @@ Features validated while crossing the tour:
    glyph turns into the grey archive box), open **Triggers** (the example Trigger is listed) and **Pipelines**
    (`tutorial-overview` is listed, without a reload), then Settings and Stats, lit but not opened.
    The gestures advance on the observed state — and stop for `Next` when the card has something new
-   to say; the rest take `Next`.
+   to say; the rest take `Next`. **On *The left panel*, having clicked `Next` with the mouse on
+   the card before, press → instead of clicking `Next`, then ← once** → the card before is shown
+   again, at the step number before; → takes you forward again. (While the focus is still on the Run
+   row you clicked, the arrows belong to the Run list, not to the tour.)
 4. The **intermediate card** recaps *Overview* and offers *Continue · First run*. **Continue** → the
    example Trigger is gone from the Triggers tab, and the *First run* tour opens on its card, which
    names what it is about to do and shows a line per **preparation** (training repository, training
@@ -94,6 +100,9 @@ Features validated while crossing the tour:
 8. Open the **node** on the canvas → the inspector shows its live terminal.
 9. **Talk to the agent**: the card hands over a line to copy; paste it into the terminal and press
    Enter. **Escape inside the terminal belongs to the agent** — it must not end the tour.
+   ← / → inside the terminal belong to the agent too — **don't use them there**: in Claude Code,
+   ← on an empty prompt switches to its background-agents view, and what is typed next starts
+   another session, which cannot `pdo complete` the node.
 10. Click **Mark ready for completion** → the tour advances on the released guard, not on the click.
 11. The **wait** step lights the whole inspector as a soft zone — the terminal stays readable and
    usable — shows a two-item checklist (released / finished) and says it has **no time limit**. It
@@ -107,7 +116,9 @@ Features validated while crossing the tour:
     when it asks you to click it. Every edge is drawn from the **border** of the source card (there is
     no output dot), and the two edges out of the tester carry **`out`**, its first output — if one
     carries another port, the card sends you to the edge's **Outputs** section to tick `out`, and
-    only then advances.
+    only then advances. **Midway (e.g. on *Name it tester*), press `‹ Previous`, then `Next`** → the
+    step before comes back and waits for `Next` (its condition already holds), and the tour carries
+    on to its end card as usual — no « this step could not be completed » card.
 15. Open **Settings › Tutorials** → all three tours are ticked, *Overview* first.
 
 ## Checks
@@ -153,6 +164,11 @@ Features validated while crossing the tour:
   builds: the name is then taken), and the tour stops on its refusal card rather than waiting on a
   button that does nothing.
 - The tutorial Run's canvas shows Start, the agent and End **side by side**, none on top of another.
+- **Previous never stops a tour**: a replayed step is shown again (waiting for `Next` when its
+  condition holds, live on its target otherwise), and `Previous` is greyed out — with a tooltip
+  saying why — when the step's screen is gone. No failure card ever follows a `Previous`.
+- **← and → are left to whatever has the focus**: in a New Run field or the pipeline name field,
+  ← moves the caret and the tour does not move; → does nothing while the card shows no live `Next`.
 
 ### Internals
 

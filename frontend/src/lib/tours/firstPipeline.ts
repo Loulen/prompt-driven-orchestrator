@@ -202,6 +202,27 @@ function pipelineCreated(o: TourObservation): boolean {
   return !o.present(NEW_PIPELINE_DIALOG) && o.app.pipeline != null;
 }
 
+/**
+ * The pipeline this tour built, while the Library still lists it: the name the
+ * tour handed out to paste, or — for a reader who typed a name of their own —
+ * the active tab, as long as it holds the tour's loop (tester → implementer and
+ * tester → End). Deleting the pipeline closes its tab and activates whichever is
+ * left; that one is not the tour's, even when the Library lists it. `null` once
+ * the built pipeline is gone from the Library.
+ */
+function builtPipelineId(o: TourObservation): string | null {
+  const library = o.app.libraryPipelineIds;
+  const mine = tutorialPipelineName();
+  if (library.includes(mine)) return mine;
+  const active = o.app.pipelineId;
+  if (!active || !library.includes(active)) return null;
+  const [implementer, tester] = [agent(o.app, 0), agent(o.app, 1)];
+  const isTheLoop =
+    edgeIndex(o.app.pipeline, tester, implementer) >= 0 &&
+    edgeIndex(o.app.pipeline, tester, endNode(o.app)) >= 0;
+  return isTheLoop ? active : null;
+}
+
 function selected(app: TourAppState, node: NodeDef | null): boolean {
   return !!node && app.selection.kind === "node" && app.selection.id === node.id;
 }
@@ -234,6 +255,13 @@ function whenEquals(edge: EdgeDef | undefined, field: string, value: string): bo
  * edge holds some other condition, the body says what the step is waiting for,
  * so a reader whose clause is off by one field or value is not left staring at
  * a card that never moves (#846, FP iteration 1).
+ *
+ * It lights the When editor only while THIS edge is the selected one; otherwise
+ * it lights the edge itself. Replayed with Previous (PDO-10, #1030), the step
+ * comes back with whatever edge the reader last selected — the tester → End one,
+ * for « Only loop back on a failure » — and a generic When editor would have
+ * pointed at the wrong edge's condition. And once the condition holds, the body
+ * says so instead of « Not there yet » next to a live Next.
  */
 function conditionStep(def: {
   id: string;
@@ -247,19 +275,26 @@ function conditionStep(def: {
     const i = edgeIndex(app.pipeline, agent(app, 1), def.to(app), OUT_PORT);
     return i < 0 ? undefined : app.pipeline?.edges[i];
   };
+  const done = (o: TourObservation) => whenEquals(edge(o.app), "verdict", def.value);
   return {
     id: def.id,
     title: def.title,
     body: (o) => {
+      if (done(o)) return `Already set: the condition reads verdict eq ${def.value}. ${def.why}`;
+      if (!edgeSelected(o.app, def.to(o.app)))
+        return `Click the edge first, then add the condition verdict eq ${def.value} in its inspector. ${def.why}`;
       const when = edge(o.app)?.when;
       return !when || Object.keys(when).length === 0
         ? `Add the condition verdict eq ${def.value}. ${def.why}`
         : `Not there yet: the condition must read verdict eq ${def.value}, on the out output. ${def.why}`;
     },
-    target: () => ['[data-testid="when-editor"]'],
-    waitingFor: "the When editor of the selected edge",
-    failureHint: "The edge was deselected before the condition was saved.",
-    done: (o) => whenEquals(edge(o.app), "verdict", def.value),
+    target: (o) =>
+      edgeSelected(o.app, def.to(o.app))
+        ? ['[data-testid="when-editor"]']
+        : edgeSel(o.app, agent(o.app, 1), def.to(o.app), OUT_PORT),
+    waitingFor: "the edge and its When editor",
+    failureHint: "The edge was deleted before the condition was saved.",
+    done,
   };
 }
 
@@ -301,16 +336,23 @@ const STEPS: TourStep[] = [
     // which is entered satisfied and says so.
     confirm: (o) => o.present(NEW_PIPELINE_DIALOG),
     done: (o) => pipelineCreated(o) || filled(o, NEW_PIPELINE_NAME),
+    // That condition holds for good once the pipeline exists, but the step's
+    // whole point is a field that leaves with the dialog: `Previous` from
+    // `Create it` is greyed out rather than replaying « paste the name » over
+    // a screen where there is nothing to paste into (PDO-10 FP, #1029).
+    replayNeedsTarget: true,
   },
   {
     id: "create-pipeline",
     title: "Create it",
-    // Entered satisfied when Enter already did the work (see the step above):
-    // the card then says what happened rather than instructing a click that
-    // nobody can make — the button is gone.
+    // Entered satisfied when Enter already did the work (see the step above),
+    // or replayed with `Previous` after the click (PDO-10): the card then says
+    // what happened rather than instructing a click that nobody can make — the
+    // button is gone. It does not say HOW it was created: on a replay that was
+    // the click, and « Enter already created it » was false (#1030).
     body: (o) =>
       pipelineCreated(o)
-        ? "Enter already created it: PDO wrote the file and opened it in the editor, with a Start and an End marker already in place."
+        ? "Already created: PDO wrote the file and opened it in the editor, with a Start and an End marker already in place."
         : "Click Create. PDO writes the file and opens it in the editor, with a Start and an End marker already in place.",
     target: () => ['[data-testid="new-pipeline-create"]'],
     waitingFor: "the Create button",
@@ -539,7 +581,7 @@ const STEPS: TourStep[] = [
     title: "Select the edge back to implementer",
     body: (o) =>
       edgeSelected(o.app, agent(o.app, 0))
-        ? "The edge is already selected, since you just fixed its outputs. Its inspector on the right is where a condition is authored."
+        ? "The edge is already selected. Its inspector on the right is where a condition is authored."
         : "Click the edge you just drew. Its inspector opens on the right, where a condition is authored.",
     target: (o) => edgeSel(o.app, agent(o.app, 1), agent(o.app, 0), OUT_PORT),
     waitingFor: "the tester → implementer edge",
@@ -567,7 +609,7 @@ const STEPS: TourStep[] = [
     title: "Select the edge to End",
     body: (o) =>
       edgeSelected(o.app, endNode(o.app))
-        ? "The edge is already selected, since you just fixed its outputs. Same inspector, one more condition to write."
+        ? "The edge is already selected. Same inspector, one more condition to write."
         : "Click that last edge. Same inspector, one more condition to write.",
     target: (o) => edgeSel(o.app, agent(o.app, 1), endNode(o.app), OUT_PORT),
     waitingFor: "the tester → End edge",
@@ -625,13 +667,16 @@ const STEPS: TourStep[] = [
     // back as the projecteur's blocker (FP finding, #825).
     target: (o) => {
       if (o.present(DELETE_CONFIRM)) return [DELETE_CONFIRM];
-      return o.app.pipelineId
-        ? [`[data-testid="library-row-${cssEscape(o.app.pipelineId)}"]`]
-        : [];
+      const id = builtPipelineId(o);
+      return id ? [`[data-testid="library-row-${cssEscape(id)}"]`] : [];
     },
     waitingFor: "the pipeline's row in the Library",
     skippable: true,
-    done: (o) => !!o.app.pipelineId && !o.app.libraryPipelineIds.includes(o.app.pipelineId),
+    // Gone from the Library. Not read off the active tab: deleting the pipeline
+    // closes its tab in the same store update, so a tour whose pipeline was the
+    // only open tab saw `pipelineId` go null and waited five seconds on a row
+    // that was already gone (#1030 FP, F1).
+    done: (o) => builtPipelineId(o) === null,
   },
 ];
 

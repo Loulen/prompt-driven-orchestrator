@@ -7,9 +7,11 @@ import { describe, it, expect } from "vitest";
 import {
   DEFAULT_TARGET_TIMEOUT_MS,
   canAdvance,
+  canGoBack,
   confirmStep,
   currentStep,
   exitOf,
+  goBack,
   markTidiedUp,
   needsConfirm,
   observeTour,
@@ -22,6 +24,7 @@ import {
   type TourAppState,
   type TourDef,
   type TourObservation,
+  type TourRun,
   type TourStep,
   type TourTidyUp,
 } from "./tour";
@@ -418,5 +421,135 @@ describe("read-only areas and side bubbles", () => {
     const s = step("a", { readOnly: (o) => (o.present("#panel") ? ["#panel"] : []) });
     expect(stepReadOnly(s, obs())).toEqual([]);
     expect(stepReadOnly(s, obs(["#panel"]))).toEqual(["#panel"]);
+  });
+});
+
+describe("replaying the previous step (PDO-10, #1029)", () => {
+  /** Run a tour up to step `index`, as if the user had walked it. */
+  function at(tour: TourDef, index: number, o: TourObservation): TourRun {
+    return { ...startTour(tour, o), index, phase: "running" };
+  }
+
+  it("refuses on step 1 — there is nothing before it", () => {
+    const tour = tourOf(opensNext("a", "#opened"), step("b"));
+    const o = obs(["#a", "#opened"]);
+    const run = startTour(tour, o);
+    expect(canGoBack(tour, run, o)).toBe(false);
+    expect(goBack(tour, run, o)).toBe(run);
+  });
+
+  it("refuses on the intro card, the stop card and the end card", () => {
+    const tour = tourOf(opensNext("a", "#opened"), step("b"));
+    const o = obs(["#a", "#opened"]);
+    for (const phase of ["intro", "failed", "finished"] as const) {
+      const run: TourRun = { ...at(tour, 1, o), phase };
+      expect(canGoBack(tour, run, o)).toBe(false);
+      expect(goBack(tour, run, o)).toBe(run);
+    }
+  });
+
+  it("replays a satisfied step: shown again, waits for Next, never fails — even with its target gone", () => {
+    // « Create it » after the dialog closed: the condition holds, the target is gone.
+    const tour = tourOf(step("create", { done: (o) => o.present("#editor") }), step("b"));
+    const o = obs(["#editor", "#b"]);
+    expect(canGoBack(tour, at(tour, 1, o), o)).toBe(true);
+    let run = goBack(tour, at(tour, 1, o), o);
+    expect(run.index).toBe(0);
+    expect(run.satisfiedOnEntry).toBe(true);
+    expect(run.missingSince).toBeNull();
+    expect(run.failure).toBeNull();
+    expect(needsConfirm(tour, run, o)).toBe(true);
+    expect(canAdvance(tour, run, o)).toBe(true);
+    // It neither slides on by itself nor starts a missing-target countdown.
+    for (const now of [1_000, 10_000, 60_000]) run = observeTour(tour, run, o, now);
+    expect(run.index).toBe(0);
+    expect(run.phase).toBe("running");
+    expect(run.missingSince).toBeNull();
+  });
+
+  it("replays an unsatisfied step whose target is on screen as a live step", () => {
+    const tour = tourOf(opensNext("a", "#opened"), step("b"));
+    const o = obs(["#a", "#b"]);
+    expect(canGoBack(tour, at(tour, 1, o), o)).toBe(true);
+    let run = goBack(tour, at(tour, 1, o), o);
+    expect(run.index).toBe(0);
+    expect(run.satisfiedOnEntry).toBe(false);
+    expect(needsConfirm(tour, run, o)).toBe(false);
+    // Its gesture advances the tour as before.
+    run = observeTour(tour, run, obs(["#a", "#opened"]), 100);
+    expect(run.index).toBe(1);
+  });
+
+  it("refuses when the step before is neither satisfied nor on screen", () => {
+    const tour = tourOf(opensNext("a", "#opened"), step("b"));
+    const o = obs(["#b"]);
+    const run = at(tour, 1, o);
+    expect(canGoBack(tour, run, o)).toBe(false);
+    expect(goBack(tour, run, o)).toBe(run);
+  });
+
+  it("a step flagged replayNeedsTarget is replayable only with its target on screen, condition or not", () => {
+    // « Name the pipeline »: its condition holds forever once the pipeline exists,
+    // but its field left with the dialog.
+    const tour = tourOf(
+      step("name", { target: () => ["#field"], done: (o) => o.present("#editor"), replayNeedsTarget: true }),
+      step("b"),
+    );
+    const gone = obs(["#editor", "#b"]);
+    expect(canGoBack(tour, at(tour, 1, gone), gone)).toBe(false);
+    expect(goBack(tour, at(tour, 1, gone), gone)).toEqual(at(tour, 1, gone));
+    const shown = obs(["#editor", "#field", "#b"]);
+    expect(canGoBack(tour, at(tour, 1, shown), shown)).toBe(true);
+    const run = goBack(tour, at(tour, 1, shown), shown);
+    expect(run.index).toBe(0);
+    expect(needsConfirm(tour, run, shown)).toBe(true);
+  });
+
+  it("needs every target of a multi-target step on screen", () => {
+    const tour = tourOf(
+      step("a", { target: () => ["#x", "#y"], done: (o) => o.present("#opened") }),
+      step("b"),
+    );
+    expect(canGoBack(tour, at(tour, 1, obs(["#x"])), obs(["#x"]))).toBe(false);
+    expect(canGoBack(tour, at(tour, 1, obs(["#x", "#y"])), obs(["#x", "#y"]))).toBe(true);
+  });
+
+  it("refuses a step the app is refusing right now — Previous never lands on a stop card", () => {
+    const tour = tourOf(
+      step("launch", { refused: (o) => o.text("#error"), done: (o) => o.present("#run") }),
+      step("b"),
+    );
+    const o = obs(["#launch", "#run"], { "#error": "no harness" });
+    expect(canGoBack(tour, at(tour, 1, o), o)).toBe(false);
+  });
+
+  it("replays a step that was skipped", () => {
+    const tour = tourOf(step("optional", { skippable: true, done: (o) => o.present("#opened") }), step("b"));
+    const o = obs(["#optional", "#b"]);
+    let run = skipStep(tour, startTour(tour, o), o);
+    expect(run.index).toBe(1);
+    expect(canGoBack(tour, run, o)).toBe(true);
+    run = goBack(tour, run, o);
+    expect(run.index).toBe(0);
+    expect(currentStep(tour, run)?.id).toBe("optional");
+  });
+
+  it("Previous then Next comes back to the starting step", () => {
+    const tour = tourOf(
+      step("name", { done: (o) => o.present("#named") }),
+      step("add", { done: (o) => o.present("#node") }),
+      step("c"),
+    );
+    const o = obs(["#named", "#add"]);
+    let run = at(tour, 1, o);
+    run = goBack(tour, run, o);
+    expect(run.index).toBe(0);
+    run = confirmStep(tour, run, o);
+    expect(run.index).toBe(1);
+    expect(currentStep(tour, run)?.id).toBe("add");
+    // Back on a live step: its own gesture moves the tour on, by the normal rules.
+    expect(needsConfirm(tour, run, o)).toBe(false);
+    run = observeTour(tour, run, obs(["#named", "#add", "#node"]), 100);
+    expect(run.index).toBe(2);
   });
 });

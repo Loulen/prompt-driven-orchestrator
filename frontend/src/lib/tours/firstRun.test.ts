@@ -15,9 +15,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canAdvance,
+  canGoBack,
   confirmStep,
   copyBlockOf,
   currentStep,
+  goBack,
   needsConfirm,
   observeTour,
   recapOf,
@@ -43,6 +45,7 @@ import {
   TUTORIAL_TERMINAL_LINE,
 } from "./firstRun";
 import { CARD_HEIGHT, CARD_WIDTH } from "../nodePlacement";
+import { probeReplay, type ReplayOutcome } from "../../test/tourReplay";
 
 const TOUR = FIRST_RUN_TOUR;
 
@@ -342,7 +345,12 @@ function gestures(fake: FakeApp): Record<string, () => void> {
 }
 
 /** Drive the machine the way the host does, one step at a time. */
-function walk(fake: FakeApp, script: Record<string, () => void>) {
+function walk(
+  fake: FakeApp,
+  script: Record<string, () => void>,
+  /** Called on entering each step, before its gesture (PDO-10's replay probe). */
+  onStep?: (run: TourRun, now: number) => void,
+) {
   let run = startTour(TOUR, fake.obs());
   // A tour with an intro opens on its card; the walk is about the steps.
   expect(run.phase).toBe("intro");
@@ -352,7 +360,10 @@ function walk(fake: FakeApp, script: Record<string, () => void>) {
 
   for (let guard = 0; guard < STEPS.length * 3 && run.phase === "running"; guard++) {
     const step = currentStep(TOUR, run)!;
-    if (visited.at(-1) !== step.id) visited.push(step.id);
+    if (visited.at(-1) !== step.id) {
+      visited.push(step.id);
+      onStep?.(run, clock);
+    }
 
     const gesture = script[step.id];
     expect(gesture, `no gesture scripted for step "${step.id}"`).toBeDefined();
@@ -1452,5 +1463,92 @@ describe("the Tutorial project the intro card prepares", () => {
   it("names the pipeline's section in the Pick step", () => {
     const step = STEPS.find((s) => s.id === "pick-pipeline")!;
     expect(typeof step.body === "string" ? step.body : "").toContain("Project pipelines");
+  });
+});
+
+// ---- PDO-10 (#1030) — replaying a step with Previous -----------------------
+
+/**
+ * The replay review of #1030, as a property of the walk: from every step a
+ * reader can press Previous on, the step before is replayed — held, then left
+ * with Next, or live on its own target — and the tour never stops on a failure
+ * card for it (CONTEXT.md « Rejeu d'étape »).
+ */
+describe("replaying a step with Previous (PDO-10, #1030)", () => {
+  function replays() {
+    const fake = new FakeApp();
+    const outcomes: Array<ReplayOutcome & { from: string }> = [];
+    const { run } = walk(fake, gestures(fake), (r, now) => {
+      outcomes.push({ from: currentStep(TOUR, r)!.id, ...probeReplay(TOUR, r, fake.obs(), now) });
+    });
+    return { run, outcomes };
+  }
+
+  it("never stops the tour, from any step of the walk", () => {
+    const { run, outcomes } = replays();
+    expect(run.phase).toBe("finished");
+    expect(outcomes.flatMap((o) => (o.problem ? [o.problem] : []))).toEqual([]);
+    // Offered from every step but the first, which has nothing before it.
+    expect(outcomes.filter((o) => !o.offered).map((o) => o.from)).toEqual([STEPS[0].id]);
+  });
+
+  /** Play the walk's gestures for every step before \`stepId\`, and enter it. */
+  function at(fake: FakeApp, stepId: string): TourRun {
+    const script = gestures(fake);
+    const index = STEPS.findIndex((s) => s.id === stepId);
+    for (const s of STEPS.slice(0, index)) script[s.id]();
+    return { ...startTour(TOUR, fake.obs()), phase: "running", index };
+  }
+
+  /**
+   * FP step 3: back on Launch once the Run is launched. The form is gone, so
+   * the step is held, centred, saying what the click did — and Next walks on
+   * to the Run that was launched, up to the end card.
+   */
+  it("replays Launch after the launch, saying it happened, and goes on with the same Run", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "find-run");
+    run = goBack(TOUR, run, fake.obs());
+    const step = currentStep(TOUR, run)!;
+    expect(step.id).toBe("launch");
+    expect(run.satisfiedOnEntry).toBe(true);
+    expect(fake.obs().present(LAUNCH)).toBe(false);
+    expect(stepBody(step, fake.obs())).toMatch(/^Launched: /);
+
+    run = confirmStep(TOUR, run, fake.obs());
+    expect(currentStep(TOUR, run)?.id).toBe("find-run");
+    expect(fake.app.myRun?.id).toBe("r-new");
+  });
+
+  /**
+   * The accepted side effect (#1030): on the replayed Launch the reader may open
+   * New Run again and launch a second Run. The tour then follows THAT one — the
+   * id this browser's last Launch received (identité de tour, #987).
+   */
+  it("follows a Run launched anew from the replayed Launch step", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "find-run");
+    run = goBack(TOUR, run, fake.obs());
+    fake.openModal();
+    fake.launch("my-second-run", "r-again");
+    run = observeTour(TOUR, run, fake.obs(), 200);
+    expect(currentStep(TOUR, run)?.id).toBe("launch");
+    run = confirmStep(TOUR, run, fake.obs());
+    expect(currentStep(TOUR, run)?.id).toBe("find-run");
+    expect(stepById("find-run").target(fake.obs())).toEqual([runRow("r-again")]);
+    expect(stepBody(stepById("find-run"), fake.obs())).toContain("my-second-run");
+  });
+
+  /** The form closed with the launch: the prompt step before Launch is greyed
+   *  out rather than replayed over a field nobody can see. */
+  it("does not replay the prompt step once the form is gone", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "find-run");
+    // The fake keeps what was typed; the DOM has no value left to read once the
+    // textarea is gone (`useTour`'s `value` answers null).
+    fake.type(PROMPT_INPUT, "");
+    run = goBack(TOUR, run, fake.obs());
+    expect(currentStep(TOUR, run)?.id).toBe("launch");
+    expect(canGoBack(TOUR, run, fake.obs())).toBe(false);
   });
 });

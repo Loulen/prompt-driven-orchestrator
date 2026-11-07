@@ -17,8 +17,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  canGoBack,
   confirmStep,
   currentStep,
+  goBack,
   needsConfirm,
   observeTour,
   recapOf,
@@ -52,6 +54,7 @@ import {
   removeExampleTrigger,
 } from "./overview";
 import { TUTORIAL_REPO_PATH } from "./firstRun";
+import { probeReplay, type ReplayOutcome } from "../../test/tourReplay";
 import { useEditStore } from "../../stores/editStore";
 
 vi.mock("../../api", async () => {
@@ -255,9 +258,10 @@ class FakeApp {
     this.hide(TERMINAL_RESTORE);
     this.show(TERMINAL);
   }
+  /** The edge panel replaces the node's inspector, its Run / Config tabs included. */
   clickEndEdge() {
     this.select("edge", null, 3);
-    this.hide(INSPECTOR_RUN, CODE_ROW, TERMINAL, TERMINAL_RESTORE);
+    this.hide(INSPECTOR_RUN, CODE_ROW, TERMINAL, TERMINAL_RESTORE, TAB_RUN, TAB_CONFIG);
     this.show(EDGE_PANEL);
   }
   clickStart() {
@@ -316,7 +320,11 @@ function gestures(fake: FakeApp): Record<string, () => void> {
 
 /** Play the tour: on each step, check its target is there, do the gesture, then
  *  let the machine observe and press Next when the card asks for it. */
-function walk(fake: FakeApp): { run: TourRun; visited: string[] } {
+function walk(
+  fake: FakeApp,
+  /** Called on entering each step, before its gesture (PDO-10's replay probe). */
+  onStep?: (run: TourRun, now: number) => void,
+): { run: TourRun; visited: string[] } {
   const script = gestures(fake);
   let run = beginSteps(TOUR, startTour(TOUR, fake.obs()), fake.obs());
   const visited: string[] = [];
@@ -324,6 +332,7 @@ function walk(fake: FakeApp): { run: TourRun; visited: string[] } {
   while (run.phase === "running") {
     const step = currentStep(TOUR, run)!;
     visited.push(step.id);
+    onStep?.(run, now);
     const targets = step.target(fake.obs());
     expect(targets.length, `${step.id} has a target`).toBeGreaterThan(0);
     for (const s of targets) expect(fake.obs().present(s), `${step.id} target ${s}`).toBe(true);
@@ -1089,5 +1098,83 @@ describe("the intro card", () => {
     expect(TOUR.intro!.footnote).toBe(
       "Nothing here touches your own repositories. The example Trigger is removed when the tour ends; the pipeline and the Run stay yours.",
     );
+  });
+});
+
+// ---- PDO-10 (#1030) — replaying a step with Previous -----------------------
+
+/**
+ * The replay review of #1030, as a property of the walk: from every step a
+ * reader can press Previous on, the step before is replayed — held, then left
+ * with Next, or live on its own target — and the tour never stops on a failure
+ * card for it (CONTEXT.md « Rejeu d'étape »).
+ */
+describe("replaying a step with Previous (PDO-10, #1030)", () => {
+  function replays() {
+    const fake = new FakeApp();
+    const outcomes: Array<ReplayOutcome & { from: string }> = [];
+    const { run } = walk(fake, (r, now) => {
+      outcomes.push({ from: currentStep(TOUR, r)!.id, ...probeReplay(TOUR, r, fake.obs(), now) });
+    });
+    return { run, outcomes };
+  }
+
+  it("never stops the tour, from any step of the walk", () => {
+    const { run, outcomes } = replays();
+    expect(run.phase).toBe("finished");
+    expect(outcomes.flatMap((o) => (o.problem ? [o.problem] : []))).toEqual([]);
+    // Offered from every step but the first, which has nothing before it.
+    expect(outcomes.filter((o) => !o.offered).map((o) => o.from)).toEqual([STEPS[0].id]);
+  });
+
+  /** Play the walk's gestures for every step before \`stepId\`, and enter it. */
+  function at(fake: FakeApp, stepId: string): TourRun {
+    const script = gestures(fake);
+    const index = STEPS.findIndex((s) => s.id === stepId);
+    for (const s of STEPS.slice(0, index)) script[s.id]();
+    return { ...beginSteps(TOUR, startTour(TOUR, fake.obs()), fake.obs()), index };
+  }
+
+  /** The viewer is closed, which is the step done: replayed, it is held
+   *  centred for Next rather than counted down on a viewer that is gone. */
+  it("replays Close the output once it is closed, held for Next", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "terminal");
+    run = goBack(TOUR, run, fake.obs());
+    expect(currentStep(TOUR, run)?.id).toBe("output-viewer");
+    expect(fake.obs().present(CODE_VIEWER)).toBe(false);
+    for (let now = 0; now <= 30_000; now += 1_000) run = observeTour(TOUR, run, fake.obs(), now);
+    expect(run.phase).toBe("running");
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
+    expect(currentStep(TOUR, confirmStep(TOUR, run, fake.obs()))?.id).toBe("terminal");
+  });
+
+  /** Once Start is selected the edge no longer is: the edge step comes back
+   *  live on the edge, and clicking it again stops for Next as the first time. */
+  it("replays the edge step live from Start, and waits for Next once it is clicked again", () => {
+    const fake = new FakeApp();
+    let run = at(fake, "runs-tab");
+    run = goBack(TOUR, run, fake.obs()); // open-start, satisfied
+    run = goBack(TOUR, run, fake.obs());
+    expect(currentStep(TOUR, run)?.id).toBe("open-end-edge");
+    expect(run.satisfiedOnEntry).toBe(false);
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(false);
+
+    fake.clickEndEdge();
+    run = observeTour(TOUR, run, fake.obs(), 100);
+    expect(currentStep(TOUR, run)?.id).toBe("open-end-edge");
+    expect(needsConfirm(TOUR, run, fake.obs())).toBe(true);
+  });
+
+  /** The edge panel took the terminal's place: the terminal step is greyed out
+   *  from the edge step instead of coming back on a terminal that is not there. */
+  it("does not replay the terminal step once the edge panel replaced it", () => {
+    const fake = new FakeApp();
+    const script = gestures(fake);
+    let run = at(fake, "open-end-edge");
+    script["open-end-edge"]();
+    run = observeTour(TOUR, run, fake.obs(), 100);
+    expect(currentStep(TOUR, run)?.id).toBe("open-end-edge");
+    expect(canGoBack(TOUR, run, fake.obs())).toBe(false);
   });
 });

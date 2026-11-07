@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  Upload,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -53,6 +54,8 @@ import {
 import SkillTree from "./SkillTree";
 import PasteSkillModal from "./PasteSkillModal";
 import ImportSkillsModal from "./ImportSkillsModal";
+import ExportSkillsModal from "./ExportSkillsModal";
+import { exportableInFolder } from "../lib/skillArchive";
 import SkillFilesTab from "./SkillFilesTab";
 import { useSkillFiles } from "../hooks/useSkillFiles";
 import { useFileDropTarget } from "../hooks/useFileDropTarget";
@@ -80,6 +83,8 @@ type Pending =
 
 interface Toast {
   message: string;
+  /** A quieter second half, after the message. */
+  detail?: string;
   undo?: () => Promise<void>;
 }
 
@@ -106,6 +111,8 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
   const [filter, setFilter] = useState("");
   const [pasteOpen, setPasteOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  /** The export modal (pdo-issues#2): `null` closed, else the skill ids pre-checked. */
+  const [exportChecked, setExportChecked] = useState<string[] | null>(null);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [detailTab, setDetailTab] = useState<"skill" | "files">("skill");
@@ -468,6 +475,15 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
                 <>
                   <MenuItem icon={<FolderPlus size={12} />} label="New subfolder" onClick={() => void newFolder(ref.id)} />
                   <MenuItem icon={<Pencil size={12} />} label="Rename" hint="F2" onClick={() => startRename(ref)} />
+                  <MenuItem
+                    icon={<Upload size={12} />}
+                    label="Export folder…"
+                    testid="tree-menu-export-folder"
+                    onClick={() => {
+                      setMenuFor(null);
+                      setExportChecked(exportableInFolder(ref.id, folders, skills));
+                    }}
+                  />
                   <MenuSeparator />
                   <MenuItem icon={<Trash2 size={12} />} label="Delete folder" hint="⌫" danger onClick={() => void askDelete(ref)} />
                 </>
@@ -538,6 +554,20 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             <Folder size={12} />
             <span style={{ fontSize: "12px", lineHeight: 1 }}>+</span>
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAddMenuOpen(false);
+              setMenuFor(null);
+              setExportChecked([]);
+            }}
+            aria-label="Export skills"
+            title="Export skills to a .zip…"
+            data-testid="skill-export"
+            className="flex shrink-0 items-center rounded-md border border-line-strong bg-bg-3 px-2 py-1.5 text-fg-2 hover:border-acc"
+          >
+            <Upload size={12} />
+          </button>
           <span className="relative">
             <button
               type="button"
@@ -575,7 +605,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
                 <MenuItem
                   icon={<Download size={12} />}
                   label="Import from a source…"
-                  hint="repo · folder"
+                  hint="repo · folder · .zip"
                   testid="skill-import"
                   onClick={() => {
                     setAddMenuOpen(false);
@@ -709,6 +739,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             onCopyId={() => void copyId(selectedSkill.id)}
             onRename={() => startRename({ kind: "skill", id: selectedSkill.id })}
             onMove={() => setMovePickerFor(selectedSkill.id)}
+            onExport={() => setExportChecked([selectedSkill.id])}
             onDelete={() => void askDelete({ kind: "skill", id: selectedSkill.id })}
             movePickerOpen={movePickerFor === selectedSkill.id}
             onMoveTo={(folderId) => {
@@ -754,6 +785,7 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
             style={{ fontSize: "11.5px" }}
           >
             <span>{toast.message}</span>
+            {toast.detail && <span className="text-fg-4">· {toast.detail}</span>}
             {toast.undo && (
               <button
                 type="button"
@@ -780,15 +812,38 @@ export default function SkillBankPanel({ bank, loaded, home, onChanged }: Props)
           initialFolderId={selectedFolder?.id ?? selectedSkill?.folder_id ?? null}
           home={home}
           onClose={() => setImportOpen(false)}
-          onImported={async (report, complete) => {
+          onShowFolder={(folderId) => {
+            expandTo(folderId);
+            setSelected({ kind: "folder", id: folderId });
+          }}
+          onImported={async (report, complete, reported) => {
             await onChanged();
-            expandTo(report.folder.id);
-            setSelected({ kind: "folder", id: report.folder.id });
+            if (report.imported.length > 0) {
+              expandTo(report.folder.id);
+              setSelected({ kind: "folder", id: report.folder.id });
+            }
             setPending(null);
-            if (complete) {
+            // An archive ends on its per-line report in the popup (#1028): no toast.
+            if (complete && !reported) {
               const n = report.imported.length;
               showToast({ message: `Imported ${n} skill${n === 1 ? "" : "s"} into ${report.folder.name}` });
             }
+          }}
+        />
+      )}
+
+      {exportChecked !== null && (
+        <ExportSkillsModal
+          folders={folders}
+          skills={skills}
+          initialChecked={exportChecked}
+          onClose={() => setExportChecked(null)}
+          onExported={(download) => {
+            setExportChecked(null);
+            showToast({
+              message: `Exported ${download.count} skill${download.count === 1 ? "" : "s"} to ${download.fileName}`,
+              detail: "saved to your Downloads by the browser",
+            });
           }}
         />
       )}
@@ -1013,6 +1068,7 @@ function SkillDetailView({
   onCopyId,
   onRename,
   onMove,
+  onExport,
   onDelete,
   movePickerOpen,
   onMoveTo,
@@ -1038,6 +1094,7 @@ function SkillDetailView({
   onCopyId: () => void;
   onRename: () => void;
   onMove: () => void;
+  onExport: () => void;
   onDelete: () => void;
   movePickerOpen: boolean;
   onMoveTo: (folderId: string | null) => void;
@@ -1165,7 +1222,7 @@ function SkillDetailView({
       <div className="mt-3 flex items-center gap-2">
         {locked ? (
           <span className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="skill-detail-locked-note">
-            Seeded by PDO at startup — it updates itself; editing and deletion are refused.
+            Seeded by PDO at startup — it updates itself; editing, deletion and export are refused.
           </span>
         ) : (
           <>
@@ -1181,6 +1238,7 @@ function SkillDetailView({
                 />
               )}
             </span>
+            <ActionButton icon={<Upload size={11} />} label="Export…" onClick={onExport} testid="skill-detail-export" />
           </>
         )}
         <span className="flex-1" />
@@ -1291,6 +1349,8 @@ function FolderDetailView({
   const [picker, setPicker] = useState(false);
   const exclude = useMemo(() => descendantFolderIds(folder.id, folders), [folder.id, folders]);
   const source = folder.source ?? null;
+  /** Imported from an archive file (#1027): one-shot, nothing to update from. */
+  const fromFile = source?.kind === "file";
   const importedHere = source
     ? skills.filter((skill) => skill.folder_id === folder.id && skill.source?.url === source.url).length
     : 0;
@@ -1307,7 +1367,7 @@ function FolderDetailView({
             style={{ fontSize: "9.5px" }}
             data-testid="folder-source-badge"
           >
-            Source
+            {fromFile ? "Archive" : "Source"}
           </span>
         )}
       </div>
@@ -1344,18 +1404,43 @@ function FolderDetailView({
               <span className="text-fg-4 uppercase tracking-wide" style={{ fontSize: "9.5px" }}>
                 Provenance
               </span>
-              <button
-                type="button"
-                onClick={onUpdateFromSource}
-                data-testid="folder-update-from-source"
-                className="flex items-center gap-1 text-acc hover:underline"
-                style={{ fontSize: "11px" }}
-              >
-                <RefreshCw size={10} />
-                Update from source…
-              </button>
+              {fromFile ? (
+                <span className="text-fg-4" style={{ fontSize: "10.5px" }} data-testid="folder-no-update">
+                  one-shot import · no update
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onUpdateFromSource}
+                  data-testid="folder-update-from-source"
+                  className="flex items-center gap-1 text-acc hover:underline"
+                  style={{ fontSize: "11px" }}
+                >
+                  <RefreshCw size={10} />
+                  Update from source…
+                </button>
+              )}
             </div>
             <table className="w-full" style={{ fontSize: "11.5px" }}>
+              {fromFile ? (
+              <tbody>
+                <ProvenanceRow label="file">
+                  <span className="font-mono text-fg" data-testid="folder-provenance-file">
+                    {source.url}
+                  </span>
+                  {source.imported_at && (
+                    <span className="ml-2 font-mono text-fg-4" style={{ fontSize: "10.5px" }}>
+                      · imported {timeAgo(source.imported_at)}
+                    </span>
+                  )}
+                </ProvenanceRow>
+                <ProvenanceRow label="imported">
+                  <span className="text-fg">
+                    {importedHere} of {source.found} skill{source.found === 1 ? "" : "s"} found in the archive
+                  </span>
+                </ProvenanceRow>
+              </tbody>
+              ) : (
               <tbody>
                 <ProvenanceRow label="source">
                   <span className="font-mono text-fg" title={source.url}>
@@ -1387,11 +1472,13 @@ function FolderDetailView({
                   )}
                 </ProvenanceRow>
               </tbody>
+              )}
             </table>
           </div>
           <p className="mt-3 rounded-md border border-dashed border-line px-3 py-2 text-fg-4" style={{ fontSize: "10.5px" }}>
-            Renaming or moving this folder keeps its provenance. Deleting it moves its skills to the parent and drops the
-            link to the source; the skills keep their own provenance.
+            {fromFile
+              ? "Imported from an archive file: a file has no update — re-import a newer archive instead. Renaming or moving this folder keeps its provenance; the skills keep their own."
+              : "Renaming or moving this folder keeps its provenance. Deleting it moves its skills to the parent and drops the link to the source; the skills keep their own provenance."}
           </p>
         </>
       )}

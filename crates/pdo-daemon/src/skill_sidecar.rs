@@ -253,7 +253,7 @@ async fn import_folder(
 }
 
 /// Find a label the bank does not use yet: `name`, then `name-2`, `name-3`…
-async fn free_label(db: &SqlitePool, wanted: &str) -> Result<String, SkillError> {
+pub(crate) async fn free_label(db: &SqlitePool, wanted: &str) -> Result<String, SkillError> {
     if skill_bank::find_by_name_ci(db, wanted).await?.is_none() {
         return Ok(wanted.to_string());
     }

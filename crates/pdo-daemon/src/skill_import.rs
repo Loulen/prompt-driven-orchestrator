@@ -13,6 +13,14 @@
 //! The clone lives in a temp directory the scan keeps for a while, keyed by a
 //! client-chosen `scan_id`, so the import that follows copies from it without a
 //! second clone; an expired or unknown id simply re-scans.
+//!
+//! A third Source kind, **file** (pdo-issues#2, #1027, ADR-0084): the browser
+//! uploads a `.zip` — an Archive de skills, a pipeline's skills sidecar, or any
+//! zip of skill folders — which is extracted into the same temp directory under
+//! the same `scan_id` and TTL. Its candidates may carry an **id**: a collision
+//! is then judged by id before the name, and an unknown id is created with that
+//! id. An expired archive scan cannot re-scan (the bytes are gone): drop it
+//! again. The folder it creates is one-shot — no rescan, no update.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
+use crate::skill_archive::{self, ArchiveError, ArchiveFormat, Extracted};
 use crate::skill_bank::{self, FolderProvenance, Provenance, Skill, SkillError, SkillFolder};
 
 /// How long a scan's clone stays on disk for the import that follows.
@@ -52,6 +61,14 @@ pub(crate) enum ImportError {
     UnknownCandidate(String),
     /// A collision row was sent without a resolution.
     UnresolvedCollision(String),
+    /// The uploaded file is not a readable skills archive (#1027).
+    Archive(ArchiveError),
+    /// The upload itself is malformed (bad base64, no file name).
+    InvalidUpload(String),
+    /// A folder imported from an archive file has no update (ADR-0084).
+    ArchiveFolder,
+    /// The client-chosen `scan_id` names a temp folder: plain characters only.
+    InvalidScanId(String),
     Skill(SkillError),
     Io(String),
 }
@@ -74,6 +91,16 @@ impl std::fmt::Display for ImportError {
             Self::UnresolvedCollision(name) => {
                 write!(f, "`{name}` is already taken: choose replace, rename or skip")
             }
+            Self::Archive(error) => write!(f, "{error}"),
+            Self::InvalidUpload(reason) => write!(f, "Invalid upload: {reason}."),
+            Self::InvalidScanId(id) => write!(
+                f,
+                "`{id}` is not a valid scan id (letters, digits, `-`, `_` and `.` only)"
+            ),
+            Self::ArchiveFolder => write!(
+                f,
+                "this folder was imported from an archive file: a file has no update, re-import a newer archive instead"
+            ),
             Self::Skill(error) => write!(f, "{error}"),
             Self::Io(message) => write!(f, "{message}"),
         }
@@ -113,6 +140,17 @@ pub(crate) fn error_code(error: &ImportError) -> &'static str {
         ImportError::NotASourceFolder => "not_a_source_folder",
         ImportError::UnknownCandidate(_) => "unknown_candidate",
         ImportError::UnresolvedCollision(_) => "unresolved_collision",
+        ImportError::Archive(error) => match error {
+            ArchiveError::NotAZip(_) => "not_a_zip",
+            ArchiveError::Corrupt(_) => "corrupt_archive",
+            ArchiveError::UnsafeEntry(_) => "unsafe_entry",
+            ArchiveError::TooLarge(_) => "archive_too_large",
+            ArchiveError::NoSkills(_) => "no_skills",
+            ArchiveError::Io(_) => "io",
+        },
+        ImportError::InvalidUpload(_) => "invalid_upload",
+        ImportError::ArchiveFolder => "archive_folder",
+        ImportError::InvalidScanId(_) => "invalid_scan_id",
         ImportError::Skill(_) => "skill",
         ImportError::Io(_) => "io",
     }
@@ -127,6 +165,8 @@ pub(crate) fn error_code(error: &ImportError) -> &'static str {
 pub(crate) enum SourceKind {
     Git,
     Local,
+    /// An uploaded `.zip` (#1027): `url` is the file name.
+    File,
 }
 
 /// What the daemon understood of the typed source. Mirrored client-side for the
@@ -296,6 +336,11 @@ pub(crate) struct Candidate {
     pub code: Option<String>,
     /// Reference files besides `SKILL.md`.
     pub file_count: usize,
+    /// The id an archive carries for this skill (#1027): kept on creation, and
+    /// the key of the collision before the name. `None` for a git / local
+    /// Source and a manifest-less zip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 fn error_code_of(error: &SkillError) -> &'static str {
@@ -372,6 +417,7 @@ pub(crate) fn scan_dir(root: &Path, sub_path: &str) -> Vec<Candidate> {
                     reason: None,
                     code: None,
                     file_count: count_files(dir),
+                    id: None,
                 },
                 Err(error) => Candidate {
                     path,
@@ -381,6 +427,7 @@ pub(crate) fn scan_dir(root: &Path, sub_path: &str) -> Vec<Candidate> {
                     reason: Some(error.to_string()),
                     code: Some(error_code_of(&error).to_string()),
                     file_count: count_files(dir),
+                    id: None,
                 },
             };
             out.push(candidate);
@@ -413,6 +460,8 @@ struct ScanEntry {
     owned: bool,
     source: ParsedSource,
     commit: Option<String>,
+    /// What the archive reader recognised, for a `file` Source.
+    archive: Option<Extracted>,
     created: Instant,
 }
 
@@ -492,6 +541,17 @@ pub(crate) fn cancel_scan(scan_id: &str) -> bool {
 
 /// Scoped by process: the scan id is chosen by the client, and two daemons on
 /// one machine (or two test daemons) must never share a clone.
+/// The scan id becomes part of a temp folder that is deleted and written to:
+/// refuse anything but plain characters (no separator, no `..`) before any
+/// filesystem call.
+fn check_scan_id(scan_id: &str) -> Result<(), ImportError> {
+    if skill_bank::is_safe_skill_id(scan_id) {
+        Ok(())
+    } else {
+        Err(ImportError::InvalidScanId(scan_id.to_string()))
+    }
+}
+
 fn scan_temp_dir(scan_id: &str) -> PathBuf {
     std::env::temp_dir().join(format!("pdo-skill-scan-{}-{scan_id}", std::process::id()))
 }
@@ -566,6 +626,10 @@ async fn clone_shallow(scan_id: &str, source: &ParsedSource) -> Result<PathBuf, 
 pub(crate) struct ScanOutcome {
     pub source: ParsedSource,
     pub commit: Option<String>,
+    /// Where the clone / folder / extracted archive lives, for the collisions.
+    pub root: PathBuf,
+    /// The layout of an uploaded archive; `None` for a git / local Source.
+    pub archive_format: Option<ArchiveFormat>,
     pub candidates: Vec<Candidate>,
     /// When the sub-path yielded nothing: the folders elsewhere in the
     /// repository that do hold skills (distinct parents), for the empty state.
@@ -575,6 +639,7 @@ pub(crate) struct ScanOutcome {
 
 /// Clone (or open) the source, scan it, and remember the clone under `scan_id`.
 pub(crate) async fn scan(scan_id: &str, source: ParsedSource) -> Result<ScanOutcome, ImportError> {
+    check_scan_id(scan_id)?;
     expire_scans();
     // Drop any previous clone under the same id.
     if let Some(previous) = lock(scans()).remove(scan_id) {
@@ -589,6 +654,8 @@ pub(crate) async fn scan(scan_id: &str, source: ParsedSource) -> Result<ScanOutc
             }
             (path, false)
         }
+        // The bytes of an archive are not kept: an expired one is dropped again.
+        SourceKind::File => return Err(ImportError::ScanExpired),
     };
     let commit = git_head(&root).await;
     let candidates = scan_dir(&root, &source.path);
@@ -612,30 +679,156 @@ pub(crate) async fn scan(scan_id: &str, source: ParsedSource) -> Result<ScanOutc
     lock(scans()).insert(
         scan_id.to_string(),
         ScanEntry {
-            root,
+            root: root.clone(),
             owned,
             source: source.clone(),
             commit: commit.clone(),
+            archive: None,
             created: Instant::now(),
         },
     );
     Ok(ScanOutcome {
         source,
         commit,
+        root,
+        archive_format: None,
         candidates,
         elsewhere,
         elsewhere_count,
     })
 }
 
+/// The `file` Source a kept archive scan was read from (#1027).
+fn archive_source(file_name: &str) -> ParsedSource {
+    let stem = skill_archive::folder_stem(file_name);
+    ParsedSource {
+        kind: SourceKind::File,
+        url: file_name.to_string(),
+        git_ref: None,
+        path: String::new(),
+        repo: stem.clone(),
+        suggested_folder: stem,
+    }
+}
+
+/// Give each candidate of an extracted archive the id the archive carries, and
+/// fail on its row a skill one of whose files is over the per-file limit (the
+/// reader left that file out: importing the rest would be a silent loss).
+fn annotate_archive_candidates(candidates: &mut [Candidate], archive: &Extracted) {
+    for candidate in candidates.iter_mut() {
+        candidate.id = archive.id_of(&candidate.path);
+        if let Some(file) = archive.oversize_in(&candidate.path).first() {
+            let rel = file
+                .path
+                .strip_prefix(&format!("{}/", candidate.path))
+                .unwrap_or(&file.path);
+            let error = SkillError::FileTooLarge {
+                path: rel.to_string(),
+                size: file.size,
+            };
+            candidate.valid = false;
+            candidate.reason = Some(error.to_string());
+            candidate.code = Some("file_too_large".to_string());
+        }
+    }
+}
+
+/// Scan an uploaded archive (#1027): extract `bytes` into the scan's temp
+/// directory (same `scan_id` and TTL as a clone), recognise its layout, and list
+/// its skill folders with the ids it carries. Nothing is written to the bank.
+pub(crate) fn scan_archive(
+    scan_id: &str,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<ScanOutcome, ImportError> {
+    let file_name = file_name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if file_name.is_empty() {
+        return Err(ImportError::InvalidUpload(
+            "the archive has no file name".into(),
+        ));
+    }
+    check_scan_id(scan_id)?;
+    expire_scans();
+    if let Some(previous) = lock(scans()).remove(scan_id) {
+        cleanup_entry(&previous);
+    }
+    let root = scan_temp_dir(scan_id);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root)?;
+    let extracted = match skill_archive::extract(bytes, &file_name, &root) {
+        Ok(extracted) => extracted,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&root);
+            return Err(ImportError::Archive(error));
+        }
+    };
+    let mut candidates = scan_dir(&root, "");
+    annotate_archive_candidates(&mut candidates, &extracted);
+    let source = archive_source(&file_name);
+    let format = extracted.format;
+    lock(scans()).insert(
+        scan_id.to_string(),
+        ScanEntry {
+            root: root.clone(),
+            owned: true,
+            source: source.clone(),
+            commit: None,
+            archive: Some(extracted),
+            created: Instant::now(),
+        },
+    );
+    Ok(ScanOutcome {
+        source,
+        commit: None,
+        root,
+        archive_format: Some(format),
+        candidates,
+        elsewhere: Vec::new(),
+        elsewhere_count: 0,
+    })
+}
+
+/// The Source of a kept **archive** scan, for the import that follows: the
+/// bytes are not re-sent, the scan id names them. An expired scan (or one that
+/// was not an archive named `file_name`) is [`ImportError::ScanExpired`].
+pub(crate) fn kept_archive_source(
+    scan_id: &str,
+    file_name: &str,
+) -> Result<ParsedSource, ImportError> {
+    let kept = scan_root(scan_id).ok_or(ImportError::ScanExpired)?;
+    let name = file_name.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    if kept.source.kind != SourceKind::File || (!name.is_empty() && kept.source.url != name) {
+        return Err(ImportError::ScanExpired);
+    }
+    Ok(kept.source)
+}
+
+/// A scan kept for the import that follows.
+struct KeptScan {
+    root: PathBuf,
+    source: ParsedSource,
+    commit: Option<String>,
+    archive: Option<Extracted>,
+}
+
 /// Look a kept scan up. `None` when unknown or expired.
-fn scan_root(scan_id: &str) -> Option<(PathBuf, ParsedSource, Option<String>)> {
+fn scan_root(scan_id: &str) -> Option<KeptScan> {
     expire_scans();
     let guard = lock(scans());
     guard
         .get(scan_id)
         .filter(|e| e.root.is_dir())
-        .map(|e| (e.root.clone(), e.source.clone(), e.commit.clone()))
+        .map(|e| KeptScan {
+            root: e.root.clone(),
+            source: e.source.clone(),
+            commit: e.commit.clone(),
+            archive: e.archive.clone(),
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +844,15 @@ pub(crate) enum CandidateStatus {
     /// A skill imported from this very source, path and commit already exists.
     SameCommit,
     Invalid,
+    /// The archive's id is in the bank with identical `SKILL.md` and files:
+    /// « already up to date », left as is (#1027).
+    IdUpToDate,
+    /// The archive's id is in the bank with a different content: the row offers
+    /// keep (default) / replace / move / duplicate (#1028, ADR-0084).
+    IdChanged,
+    /// The archive carries the id of a seeded skill: « Managed by PDO », never
+    /// importable.
+    Locked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -675,8 +877,15 @@ fn folder_name_of(folders: &[SkillFolder], id: Option<&str>) -> Option<String> {
         .map(|f| f.name.clone())
 }
 
+/// The status of every candidate against the bank. A candidate carrying an id
+/// (#1027) is judged **by id first**: a seeded id is `locked`, a known id is
+/// `id_up_to_date` or `id_changed` after comparing `SKILL.md` and every file
+/// (`root` is where the scan read the candidates, `repo_root` the bank's);
+/// an unknown id falls through to the name statuses, unchanged.
 pub(crate) async fn with_collisions(
     db: &SqlitePool,
+    repo_root: &Path,
+    root: &Path,
     source: &ParsedSource,
     commit: Option<&str>,
     candidates: Vec<Candidate>,
@@ -684,6 +893,44 @@ pub(crate) async fn with_collisions(
     let folders = skill_bank::list_folders(db).await?;
     let mut out = Vec::with_capacity(candidates.len());
     for candidate in candidates {
+        if let Some(id) = candidate.id.clone() {
+            if skill_bank::is_seeded(&id) {
+                let existing = skill_bank::get(db, &id).await?.map(|skill| ExistingRef {
+                    id: skill.id.clone(),
+                    name: skill.name.clone(),
+                    folder_name: folder_name_of(&folders, skill.folder_id.as_deref()),
+                    folder_id: skill.folder_id.clone(),
+                });
+                out.push(ScannedCandidate {
+                    candidate,
+                    status: CandidateStatus::Locked,
+                    existing,
+                });
+                continue;
+            }
+            if candidate.valid {
+                if let Some(skill) = skill_bank::get(db, &id).await? {
+                    let here = hash_tree(&skill_bank::skill_dir(repo_root, &skill.id));
+                    let there = hash_tree(&root.join(&candidate.path));
+                    let status = if here == there {
+                        CandidateStatus::IdUpToDate
+                    } else {
+                        CandidateStatus::IdChanged
+                    };
+                    out.push(ScannedCandidate {
+                        candidate,
+                        status,
+                        existing: Some(ExistingRef {
+                            id: skill.id.clone(),
+                            name: skill.name.clone(),
+                            folder_name: folder_name_of(&folders, skill.folder_id.as_deref()),
+                            folder_id: skill.folder_id.clone(),
+                        }),
+                    });
+                    continue;
+                }
+            }
+        }
         if !candidate.valid {
             out.push(ScannedCandidate {
                 candidate,
@@ -736,18 +983,29 @@ pub(crate) async fn with_collisions(
 pub(crate) enum ImportAction {
     /// Take it as a new skill (status `new`).
     Import,
-    /// Overwrite the content of the existing skill of that name (id kept).
+    /// Overwrite the content of the existing skill of that name (id kept). On
+    /// an id collision (#1028): overwrite the skill of that **id** — content,
+    /// files and name (when free) — which stays in its folder.
     Replace,
     /// Take it as a new skill under another label.
     Rename,
     Skip,
+    /// Id collision (#1028): leave the bank's skill as is — nothing is written.
+    Keep,
+    /// Id collision (#1028): [`ImportAction::Replace`], then file the skill in
+    /// the import's folder.
+    Move,
+    /// Id collision (#1028): a copy under a **new id** in the import's folder,
+    /// named `name` (or the archive's name, suffixed `-2`, `-3`… when taken);
+    /// the original is untouched.
+    Duplicate,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ImportItem {
     pub path: String,
     pub action: ImportAction,
-    /// The new label for `rename`.
+    /// The new label for `rename`, the copy's label for `duplicate`.
     #[serde(default)]
     pub name: Option<String>,
 }
@@ -756,7 +1014,15 @@ pub(crate) struct ImportItem {
 pub(crate) struct ImportedRow {
     pub path: String,
     pub skill: Skill,
+    /// `imported` / `renamed` / `replaced` / `moved` / `duplicated`.
     pub action: &'static str,
+    /// The folder the skill lived in before a `moved` (#1028); `None` = root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_folder_id: Option<String>,
+    /// Something the row did not do as asked, the import went on (#1028: a
+    /// replaced skill keeps its current name when the archive's is taken).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -774,12 +1040,18 @@ pub(crate) struct ImportReport {
     pub commit: Option<String>,
 }
 
+/// The provenance `kind` of a Source: `file` for an archive, none otherwise.
+fn provenance_kind(source: &ParsedSource) -> Option<String> {
+    (source.kind == SourceKind::File).then(|| skill_bank::FILE_SOURCE_KIND.to_string())
+}
+
 fn provenance_for(source: &ParsedSource, commit: Option<&str>, path: &str) -> Provenance {
     Provenance {
         url: source.url.clone(),
         git_ref: source.git_ref.clone(),
         commit: commit.map(str::to_string),
         path: path.to_string(),
+        kind: provenance_kind(source),
     }
 }
 
@@ -796,23 +1068,25 @@ fn folder_provenance_for(
         imported_at: crate::event_log::now_iso(),
         found: candidates.len() as i64,
         invalid: candidates.iter().filter(|c| !c.valid).count() as i64,
+        kind: provenance_kind(source),
     }
 }
 
 /// Resolve the scan a write refers to: the kept clone, or a fresh scan of the
 /// same source when it expired.
-async fn resolve_scan(
-    scan_id: &str,
-    source: &ParsedSource,
-) -> Result<(PathBuf, Option<String>), ImportError> {
-    if let Some((root, kept, commit)) = scan_root(scan_id) {
-        if kept.url == source.url && kept.git_ref == source.git_ref {
-            return Ok((root, commit));
+async fn resolve_scan(scan_id: &str, source: &ParsedSource) -> Result<KeptScan, ImportError> {
+    check_scan_id(scan_id)?;
+    if let Some(kept) = scan_root(scan_id) {
+        if kept.source.kind == source.kind
+            && kept.source.url == source.url
+            && kept.source.git_ref == source.git_ref
+        {
+            return Ok(kept);
         }
     }
-    let outcome = scan(scan_id, source.clone()).await?;
-    let (root, _, _) = scan_root(scan_id).ok_or(ImportError::ScanExpired)?;
-    Ok((root, outcome.commit))
+    // An archive's bytes are gone with its scan: never re-scanned.
+    scan(scan_id, source.clone()).await?;
+    scan_root(scan_id).ok_or(ImportError::ScanExpired)
 }
 
 fn candidate_dir(root: &Path, path: &str) -> Result<PathBuf, ImportError> {
@@ -856,6 +1130,76 @@ pub(crate) struct ImportFolder {
     pub parent_id: Option<String>,
 }
 
+/// *Replace* (and *Move*) on an id collision (#1028, ADR-0084): the skill of
+/// that id gets the archive's `SKILL.md` and files, and the archive's name when
+/// it is free — otherwise it keeps its current name and the row says so. Its id
+/// and referents never change; `move_to` then files it in the import's folder.
+async fn replace_by_id(
+    db: &SqlitePool,
+    repo_root: &Path,
+    existing: &Skill,
+    dir: &Path,
+    provenance: &Provenance,
+    move_to: Option<&str>,
+) -> Result<(Skill, &'static str, Option<String>), ImportError> {
+    let content = std::fs::read_to_string(dir.join(skill_bank::SKILL_MD))?;
+    let parsed = skill_bank::validate_skill_md(&content)?;
+    let mut skill =
+        skill_bank::replace_content_from_dir(db, repo_root, &existing.id, dir, provenance).await?;
+    let mut warning = None;
+    if parsed.name != skill.name {
+        match skill_bank::update(db, &existing.id, Some(&parsed.name), None).await {
+            Ok(renamed) => skill = renamed,
+            Err(SkillError::DuplicateName { .. }) => {
+                warning = Some(format!(
+                    "the name \u{201c}{}\u{201d} is taken in the bank: kept \u{201c}{}\u{201d}",
+                    parsed.name, skill.name
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let action = match move_to {
+        Some(folder) => {
+            skill = skill_bank::update(db, &existing.id, None, Some(Some(folder))).await?;
+            "moved"
+        }
+        None => "replaced",
+    };
+    Ok((skill, action, warning))
+}
+
+/// *Duplicate* (#1028): a copy of the archive's skill under a **new id** in
+/// the import's folder. A typed `name` must be free; without one, the archive's
+/// name is suffixed `-2`, `-3`… when taken. The original is left untouched.
+async fn duplicate(
+    db: &SqlitePool,
+    repo_root: &Path,
+    dir: &Path,
+    name: Option<&str>,
+    folder_id: &str,
+    provenance: &Provenance,
+) -> Result<Skill, ImportError> {
+    let label = match name.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(name) => name.to_string(),
+        None => {
+            let content = std::fs::read_to_string(dir.join(skill_bank::SKILL_MD))?;
+            let parsed = skill_bank::validate_skill_md(&content)?;
+            crate::skill_sidecar::free_label(db, &parsed.name).await?
+        }
+    };
+    Ok(skill_bank::create_from_dir_with_id(
+        db,
+        repo_root,
+        None,
+        dir,
+        Some(&label),
+        Some(folder_id),
+        provenance,
+    )
+    .await?)
+}
+
 /// Perform an import: every checked candidate with its resolution. Per-row
 /// failures are reported, not fatal (the popup keeps the rows red and the
 /// successes ticked). The folder receives the source's provenance at the end.
@@ -867,11 +1211,19 @@ pub(crate) async fn import(
     folder: ImportFolder,
     items: Vec<ImportItem>,
 ) -> Result<ImportReport, ImportError> {
-    let (root, commit) = resolve_scan(scan_id, &source).await?;
-    let candidates = scan_dir(&root, &source.path);
+    let KeptScan {
+        root,
+        commit,
+        archive,
+        ..
+    } = resolve_scan(scan_id, &source).await?;
+    let mut candidates = scan_dir(&root, &source.path);
+    if let Some(archive) = &archive {
+        annotate_archive_candidates(&mut candidates, archive);
+    }
     // Refuse before any write: every non-skip row must be resolvable.
     for item in &items {
-        if item.action == ImportAction::Skip {
+        if matches!(item.action, ImportAction::Skip | ImportAction::Keep) {
             continue;
         }
         candidate_dir(&root, &item.path)?;
@@ -904,7 +1256,7 @@ pub(crate) async fn import(
     let mut imported = Vec::new();
     let mut failures = Vec::new();
     for item in items {
-        if item.action == ImportAction::Skip {
+        if matches!(item.action, ImportAction::Skip | ImportAction::Keep) {
             continue;
         }
         let dir = match candidate_dir(&root, &item.path) {
@@ -915,10 +1267,86 @@ pub(crate) async fn import(
             }
         };
         let provenance = provenance_for(&source, commit.as_deref(), &item.path);
+        let candidate = candidates.iter().find(|c| c.path == item.path);
+        // A skill one of whose files is over the per-file limit fails on its row.
+        if let Some(candidate) = candidate.filter(|c| c.code.as_deref() == Some("file_too_large")) {
+            failures.push(FailedRow {
+                path: item.path.clone(),
+                error: candidate.reason.clone().unwrap_or_default(),
+                code: "file_too_large".to_string(),
+            });
+            continue;
+        }
+        let carried_id = candidate.and_then(|c| c.id.clone());
+        // A seeded id is never written over, whatever the action.
+        if let Some(id) = carried_id.as_deref().filter(|id| skill_bank::is_seeded(id)) {
+            failures.push(FailedRow {
+                path: item.path.clone(),
+                error: SkillError::Locked { id: id.to_string() }.to_string(),
+                code: "locked".to_string(),
+            });
+            continue;
+        }
+        let known = match carried_id.as_deref() {
+            Some(id) => skill_bank::get(db, id).await?,
+            None => None,
+        };
+        // An id the bank already has (#1028): the row's keep / replace / move /
+        // duplicate decides; it is never created over.
+        if let Some(existing) = known {
+            let row = match item.action {
+                ImportAction::Replace | ImportAction::Move => {
+                    replace_by_id(
+                        db,
+                        repo_root,
+                        &existing,
+                        &dir,
+                        &provenance,
+                        (item.action == ImportAction::Move).then_some(target.id.as_str()),
+                    )
+                    .await
+                }
+                ImportAction::Duplicate => duplicate(
+                    db,
+                    repo_root,
+                    &dir,
+                    item.name.as_deref(),
+                    &target.id,
+                    &provenance,
+                )
+                .await
+                .map(|skill| (skill, "duplicated", None)),
+                _ => {
+                    failures.push(FailedRow {
+                        path: item.path.clone(),
+                        error: format!(
+                            "the bank already has this skill (id `{}`): it is left as is",
+                            existing.id
+                        ),
+                        code: "id_known".to_string(),
+                    });
+                    continue;
+                }
+            };
+            match row {
+                Ok((skill, action, warning)) => imported.push(ImportedRow {
+                    path: item.path,
+                    previous_folder_id: (action == "moved")
+                        .then(|| existing.folder_id.clone())
+                        .flatten(),
+                    skill,
+                    action,
+                    warning,
+                }),
+                Err(error) => failures.push(failed(&item.path, error)),
+            }
+            continue;
+        }
         let result: Result<(Skill, &'static str), ImportError> = match item.action {
-            ImportAction::Import => skill_bank::create_from_dir(
+            ImportAction::Import => skill_bank::create_from_dir_with_id(
                 db,
                 repo_root,
+                carried_id.as_deref(),
                 &dir,
                 None,
                 Some(&target.id),
@@ -927,9 +1355,10 @@ pub(crate) async fn import(
             .await
             .map(|s| (s, "imported"))
             .map_err(Into::into),
-            ImportAction::Rename => skill_bank::create_from_dir(
+            ImportAction::Rename => skill_bank::create_from_dir_with_id(
                 db,
                 repo_root,
+                carried_id.as_deref(),
                 &dir,
                 item.name.as_deref().map(str::trim),
                 Some(&target.id),
@@ -944,9 +1373,12 @@ pub(crate) async fn import(
                 match content.and_then(|c| skill_bank::validate_skill_md(&c).map_err(Into::into)) {
                     Err(error) => Err(error),
                     Ok(parsed) => match skill_bank::find_by_name_ci(db, &parsed.name).await? {
-                        None => skill_bank::create_from_dir(
+                        None => skill_bank::create_from_dir_with_id(
                             db,
                             repo_root,
+                            carried_id
+                                .as_deref()
+                                .filter(|id| !skill_bank::is_seeded(id)),
                             &dir,
                             None,
                             Some(&target.id),
@@ -968,13 +1400,31 @@ pub(crate) async fn import(
                     },
                 }
             }
-            ImportAction::Skip => unreachable!(),
+            // Not an id collision: a copy is simply a new skill, suffixed when
+            // its name is taken.
+            ImportAction::Duplicate => duplicate(
+                db,
+                repo_root,
+                &dir,
+                item.name.as_deref(),
+                &target.id,
+                &provenance,
+            )
+            .await
+            .map(|s| (s, "duplicated")),
+            ImportAction::Move => Err(ImportError::UnknownCandidate(format!(
+                "{}: no skill of this id in the bank to move",
+                item.path
+            ))),
+            ImportAction::Skip | ImportAction::Keep => unreachable!(),
         };
         match result {
             Ok((skill, action)) => imported.push(ImportedRow {
                 path: item.path,
                 skill,
                 action,
+                previous_folder_id: None,
+                warning: None,
             }),
             Err(error) => failures.push(failed(&item.path, error)),
         }
@@ -987,6 +1437,26 @@ pub(crate) async fn import(
             imported,
             failed: failures,
             commit,
+        });
+    }
+    if source.kind == SourceKind::File {
+        // An archive is one-shot: the folder it created is tagged « imported from
+        // <file> »; an existing folder it merged into keeps its own provenance.
+        let folder = if created {
+            skill_bank::set_folder_provenance(
+                db,
+                &target.id,
+                &folder_provenance_for(&source, None, &candidates),
+            )
+            .await?
+        } else {
+            target
+        };
+        return Ok(ImportReport {
+            folder,
+            imported,
+            failed: failures,
+            commit: None,
         });
     }
     let folder = skill_bank::set_folder_provenance(
@@ -1088,6 +1558,9 @@ fn source_of_folder(folder: &SkillFolder) -> Result<ParsedSource, ImportError> {
         .source
         .as_ref()
         .ok_or(ImportError::NotASourceFolder)?;
+    if provenance.is_file() {
+        return Err(ImportError::ArchiveFolder);
+    }
     let mut parsed = parse_source(&provenance.url, None)?;
     parsed.git_ref = provenance.git_ref.clone();
     parsed.path = provenance.path.clone();
@@ -1108,7 +1581,7 @@ pub(crate) async fn rescan(
     let source = source_of_folder(&folder)?;
     let previous_commit = folder.source.as_ref().and_then(|s| s.commit.clone());
     let outcome = scan(scan_id, source.clone()).await?;
-    let (root, _, _) = scan_root(scan_id).ok_or(ImportError::ScanExpired)?;
+    let root = outcome.root.clone();
     let skills = skill_bank::list(db).await?;
     let folders = skill_bank::list_folders(db).await?;
     let from_source: Vec<&Skill> = skills
@@ -1298,7 +1771,7 @@ pub(crate) async fn update(
         .await?
         .ok_or(SkillError::FolderNotFound)?;
     let source = source_of_folder(&folder)?;
-    let (root, commit) = resolve_scan(scan_id, &source).await?;
+    let KeptScan { root, commit, .. } = resolve_scan(scan_id, &source).await?;
     let candidates = scan_dir(&root, &source.path);
     let skills = skill_bank::list(db).await?;
     // Only this folder's skills are ever written to: a sibling folder imported
@@ -1354,6 +1827,8 @@ pub(crate) async fn update(
                 path: item.path,
                 skill,
                 action,
+                previous_folder_id: None,
+                warning: None,
             }),
             Err(error) => failures.push(failed(&item.path, error)),
         }

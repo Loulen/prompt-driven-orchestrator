@@ -24,13 +24,19 @@ export function DropOverlay({ count, hint, title }: { count: number; hint: strin
 interface Props {
   /** The bar's text after the leading label (`Files · 2 · drop more anywhere, or`). */
   label: React.ReactNode;
-  /** Browse… : open the explorer. */
-  onBrowse: () => void;
+  /** Browse… : open the explorer. Absent: Browse… opens the native picker too. */
+  onBrowse?: () => void;
   /** Files chosen in the native picker (`<input type=file multiple>`). */
   onPickFiles: (files: FileList) => void;
   disabled?: boolean;
   compact?: boolean;
   testId?: string;
+  /** The native picker's filter (`.zip` for an archive, #1027). */
+  accept?: string;
+  /** One file or several (default: several). */
+  multiple?: boolean;
+  /** The bar's accessible name (default: « Add reference files »). */
+  ariaLabel?: string;
 }
 
 /**
@@ -39,7 +45,17 @@ interface Props {
  * native file picker (multi-select, files only); Browse… opens the daemon-side
  * explorer. The surface that accepts the drop is the parent (`useFileDropTarget`).
  */
-export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabled, compact, testId = "skill-drop-zone" }: Props) {
+export default function SkillFileDropZone({
+  label,
+  onBrowse,
+  onPickFiles,
+  disabled,
+  compact,
+  testId = "skill-drop-zone",
+  accept,
+  multiple = true,
+  ariaLabel = "Add reference files",
+}: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const openPicker = () => {
     if (disabled) return;
@@ -50,7 +66,7 @@ export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabl
       role="button"
       tabIndex={disabled ? -1 : 0}
       aria-disabled={disabled || undefined}
-      aria-label="Add reference files"
+      aria-label={ariaLabel}
       data-testid={testId}
       onClick={openPicker}
       onKeyDown={(event) => {
@@ -72,7 +88,8 @@ export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabl
         data-testid={`${testId}-browse`}
         onClick={(event) => {
           event.stopPropagation();
-          onBrowse();
+          if (onBrowse) onBrowse();
+          else openPicker();
         }}
         className="flex shrink-0 items-center gap-1 rounded-md border border-line-strong bg-bg-4 px-2 py-1 text-fg-2 hover:border-acc disabled:opacity-50"
         style={{ fontSize: "10.5px" }}
@@ -83,7 +100,8 @@ export default function SkillFileDropZone({ label, onBrowse, onPickFiles, disabl
       <input
         ref={inputRef}
         type="file"
-        multiple
+        multiple={multiple}
+        accept={accept}
         hidden
         data-testid={`${testId}-input`}
         // The programmatic `click()` bubbles back to the bar's onClick: stop it here.

@@ -28,6 +28,8 @@ export interface SkillTreeProps {
   emptyState?: ReactNode;
   /** Optional row decoration (e.g. checkboxes for the future selector). */
   renderLeading?: (row: TreeRow) => ReactNode;
+  /** Always-visible decoration at the right of a row (e.g. « Managed by PDO »). */
+  renderTrailing?: (row: TreeRow) => ReactNode;
   draggable?: boolean;
   className?: string;
 }
@@ -60,6 +62,7 @@ export default function SkillTree({
   onOpen,
   emptyState,
   renderLeading,
+  renderTrailing,
   draggable = true,
   className = "",
 }: SkillTreeProps) {
@@ -175,6 +178,7 @@ export default function SkillTree({
             }}
             actions={renderActions?.(row)}
             leading={renderLeading?.(row)}
+            trailing={renderTrailing?.(row)}
             draggable={draggable && row.ref.kind === "skill"}
             isDragging={dragging === row.ref.id}
             isDropTarget={row.ref.kind === "folder" && dropTarget === row.ref.id}
@@ -221,6 +225,7 @@ function TreeRowView({
   onDoubleClick,
   actions,
   leading,
+  trailing,
   draggable,
   isDragging,
   isDropTarget,
@@ -241,6 +246,7 @@ function TreeRowView({
   onDoubleClick: () => void;
   actions?: ReactNode;
   leading?: ReactNode;
+  trailing?: ReactNode;
   draggable: boolean;
   isDragging: boolean;
   isDropTarget: boolean;
@@ -339,6 +345,7 @@ function TreeRowView({
             </span>
           </span>
         )}
+        {!renaming && trailing}
         {!renaming && actions && (
           <span
             className={`shrink-0 items-center gap-0.5 ${selected ? "flex" : "hidden group-hover:flex group-focus-within:flex"}`}

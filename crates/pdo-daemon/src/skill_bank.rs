@@ -64,7 +64,16 @@ pub(crate) struct Provenance {
     /// `/`-separated path of the skill's folder inside the source (`""` = root).
     #[serde(default)]
     pub path: String,
+    /// [`FILE_SOURCE_KIND`] for an **Import d'archive** (pdo-issues#2): `url` is
+    /// then the archive's file name, with neither ref nor commit. `None` for a
+    /// git or local-folder Source (told apart by the URL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
+
+/// The provenance `kind` of a skill or folder imported from an uploaded
+/// archive file: one-shot, no rescan nor update (ADR-0084).
+pub(crate) const FILE_SOURCE_KIND: &str = "file";
 
 /// A Source folder's provenance: the scan root (`path` is the sub-folder the
 /// scan was pointed at), plus what the last import / update saw there.
@@ -83,6 +92,17 @@ pub(crate) struct FolderProvenance {
     pub found: i64,
     /// Of which not importable (invalid frontmatter).
     pub invalid: i64,
+    /// [`FILE_SOURCE_KIND`] for a folder created by an Import d'archive: it
+    /// offers no "Update from source".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+impl FolderProvenance {
+    /// Imported from an archive file: one-shot, never rescanned.
+    pub(crate) fn is_file(&self) -> bool {
+        self.kind.as_deref() == Some(FILE_SOURCE_KIND)
+    }
 }
 
 /// One row of the bank's index. `folder_id` is `None` at the root.
@@ -310,6 +330,9 @@ pub(crate) async fn init(db: &SqlitePool) -> Result<(), sqlx::Error> {
         ("skill_folders", "source_imported_at", "TEXT"),
         ("skill_folders", "source_found", "INTEGER"),
         ("skill_folders", "source_invalid", "INTEGER"),
+        // pdo-issues#2: `file` for an Import d'archive (no ref, no commit, no update).
+        ("skills", "source_kind", "TEXT"),
+        ("skill_folders", "source_kind", "TEXT"),
     ] {
         add_column_if_missing(db, table, column, ty).await?;
     }
@@ -363,6 +386,7 @@ fn row_to_skill(row: &sqlx::sqlite::SqliteRow) -> Skill {
             path: row
                 .get::<Option<String>, _>("source_path")
                 .unwrap_or_default(),
+            kind: row.get("source_kind"),
         }),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
@@ -387,6 +411,7 @@ fn row_to_folder(row: &sqlx::sqlite::SqliteRow) -> SkillFolder {
                 .unwrap_or_default(),
             found: row.get::<Option<i64>, _>("source_found").unwrap_or(0),
             invalid: row.get::<Option<i64>, _>("source_invalid").unwrap_or(0),
+            kind: row.get("source_kind"),
         }),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
@@ -961,6 +986,34 @@ pub(crate) async fn create_from_dir(
     folder_id: Option<&str>,
     provenance: &Provenance,
 ) -> Result<Skill, SkillError> {
+    create_from_dir_with_id(db, repo_root, None, src_dir, label, folder_id, provenance).await
+}
+
+/// [`create_from_dir`] with the id chosen by the caller — the **Import
+/// d'archive** (pdo-issues#2, ADR-0084) keeps the id the archive carries so a
+/// pipeline imported later resolves it. Same gates as [`create_with_id`]: an
+/// unsafe id is an [`SkillError::InvalidPath`], an id already indexed a
+/// [`SkillError::Storage`] (the importer checks first and never overwrites).
+pub(crate) async fn create_from_dir_with_id(
+    db: &SqlitePool,
+    repo_root: &Path,
+    id: Option<&str>,
+    src_dir: &Path,
+    label: Option<&str>,
+    folder_id: Option<&str>,
+    provenance: &Provenance,
+) -> Result<Skill, SkillError> {
+    if let Some(id) = id {
+        if !is_safe_skill_id(id) {
+            return Err(SkillError::InvalidPath(id.to_string()));
+        }
+        refuse_locked(id)?;
+        if get(db, id).await?.is_some() {
+            return Err(SkillError::Storage(format!(
+                "a skill with id `{id}` already exists"
+            )));
+        }
+    }
     let content = std::fs::read_to_string(src_dir.join(SKILL_MD))?;
     let parsed = validate_skill_md(&content)?;
     let name = check_label_unique(db, label.unwrap_or(&parsed.name), None).await?;
@@ -973,11 +1026,11 @@ pub(crate) async fn create_from_dir(
         }
         None => None,
     };
-    let id = generate_skill_id();
+    let id = id.map(str::to_string).unwrap_or_else(generate_skill_id);
     let now = crate::event_log::now_iso();
     sqlx::query(
-        "INSERT INTO skills (id, name, description, folder_id, source, source_ref, source_commit, source_path, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO skills (id, name, description, folder_id, source, source_ref, source_commit, source_path, source_kind, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&name)
@@ -987,6 +1040,7 @@ pub(crate) async fn create_from_dir(
     .bind(&provenance.git_ref)
     .bind(&provenance.commit)
     .bind(&provenance.path)
+    .bind(&provenance.kind)
     .bind(&now)
     .bind(&now)
     .execute(db)
@@ -1029,6 +1083,7 @@ pub(crate) async fn replace_content_from_dir(
     src_dir: &Path,
     provenance: &Provenance,
 ) -> Result<Skill, SkillError> {
+    refuse_locked(id)?;
     get(db, id).await?.ok_or(SkillError::NotFound)?;
     let content = std::fs::read_to_string(src_dir.join(SKILL_MD))?;
     let parsed = validate_skill_md(&content)?;
@@ -1052,13 +1107,14 @@ pub(crate) async fn replace_content_from_dir(
     let _ = std::fs::remove_dir_all(&backup);
     let now = crate::event_log::now_iso();
     sqlx::query(
-        "UPDATE skills SET description = ?, source = ?, source_ref = ?, source_commit = ?, source_path = ?, updated_at = ? WHERE id = ?",
+        "UPDATE skills SET description = ?, source = ?, source_ref = ?, source_commit = ?, source_path = ?, source_kind = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&parsed.description)
     .bind(&provenance.url)
     .bind(&provenance.git_ref)
     .bind(&provenance.commit)
     .bind(&provenance.path)
+    .bind(&provenance.kind)
     .bind(&now)
     .bind(id)
     .execute(db)
@@ -1074,12 +1130,13 @@ pub(crate) async fn touch_provenance(
     provenance: &Provenance,
 ) -> Result<(), SkillError> {
     sqlx::query(
-        "UPDATE skills SET source = ?, source_ref = ?, source_commit = ?, source_path = ? WHERE id = ?",
+        "UPDATE skills SET source = ?, source_ref = ?, source_commit = ?, source_path = ?, source_kind = ? WHERE id = ?",
     )
     .bind(&provenance.url)
     .bind(&provenance.git_ref)
     .bind(&provenance.commit)
     .bind(&provenance.path)
+    .bind(&provenance.kind)
     .bind(id)
     .execute(db)
     .await?;
@@ -1623,7 +1680,7 @@ pub(crate) async fn set_folder_provenance(
     let now = crate::event_log::now_iso();
     sqlx::query(
         "UPDATE skill_folders SET source = ?, source_ref = ?, source_commit = ?, source_path = ?, \
-         source_imported_at = ?, source_found = ?, source_invalid = ?, updated_at = ? WHERE id = ?",
+         source_imported_at = ?, source_found = ?, source_invalid = ?, source_kind = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&provenance.url)
     .bind(&provenance.git_ref)
@@ -1632,6 +1689,7 @@ pub(crate) async fn set_folder_provenance(
     .bind(&provenance.imported_at)
     .bind(provenance.found)
     .bind(provenance.invalid)
+    .bind(&provenance.kind)
     .bind(&now)
     .bind(id)
     .execute(db)

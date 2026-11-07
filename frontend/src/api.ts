@@ -2567,13 +2567,93 @@ export function cancelSkillScan(scanId: string): Promise<{ cancelled: boolean }>
   return request("POST", `/settings/skills/scan/${encodeURIComponent(scanId)}/cancel`);
 }
 
+/**
+ * Scan an uploaded `.zip` (#1027, the **file** Source): an Archive de skills,
+ * a pipeline's skills sidecar, or any zip of `SKILL.md` folders. The bytes go
+ * to the daemon (which may run on another machine) as base64 — the bank's file
+ * convention for the pipeline sidecar — and are read in the scan's temp folder.
+ */
+export async function scanSkillArchive(scanId: string, file: Blob, fileName: string): Promise<SkillScanResult> {
+  const data = await blobToBase64(file);
+  return request("POST", "/settings/skills/scan", {
+    body: { scan_id: scanId, archive: { file_name: fileName, data } },
+  });
+}
+
+/** The base64 of a blob, without the `data:` prefix. */
+export async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < buffer.length; i += chunk) {
+    binary += String.fromCharCode(...buffer.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 export function importSkills(body: {
   scan_id: string;
+  /** The typed source, or the archive's file name with `kind: "file"`. */
   source: string;
+  kind?: "file";
   folder?: { id?: string | null; name?: string | null; parent_id?: string | null };
   items: SkillImportItem[];
 }): Promise<SkillImportReport> {
   return request("POST", "/settings/skills/import", { body });
+}
+
+// ---- Archive de skills (pdo-issues#2, #1026, ADR-0084) ---------------------
+
+/** A downloaded archive: the zip, the name the daemon resolved, the skill count. */
+export interface SkillArchiveDownload {
+  blob: Blob;
+  fileName: string;
+  count: number;
+}
+
+/** The file name of a `Content-Disposition` header (`filename*` wins), or `null`. */
+export function dispositionFileName(header: string | null): string | null {
+  if (!header) return null;
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(header);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].trim());
+    } catch {
+      // fall through to the ASCII form
+    }
+  }
+  const plain = /filename="([^"]*)"/i.exec(header);
+  return plain ? plain[1] : null;
+}
+
+/**
+ * Export the checked skills as an **Archive de skills**: a flat zip (one folder
+ * per skill) with the `pdo-skills.json` manifest of ids. The daemon defaults and
+ * `.zip`-completes `fileName`; an unknown id (404) or a seeded one (403) is an
+ * `ApiError` naming it. The bank is not modified.
+ */
+export async function exportSkillArchive(ids: string[], fileName?: string): Promise<SkillArchiveDownload> {
+  const label = "POST /settings/skills/export";
+  const resp = await request<Response>("POST", "/settings/skills/export", {
+    body: { ids, file_name: fileName },
+    responseMode: "raw",
+    label,
+  });
+  if (!resp.ok) {
+    const errBody = await resp.json().catch(() => null);
+    throw new ApiError(apiErrorMessage(errBody, `${label} failed: ${resp.status}`), {
+      status: resp.status,
+      body: errBody,
+    });
+  }
+  const blob = await resp.blob();
+  const resolved = dispositionFileName(resp.headers.get("content-disposition"));
+  const count = Number(resp.headers.get("x-pdo-skills") ?? ids.length);
+  return {
+    blob,
+    fileName: resolved ?? fileName ?? "pdo-skills.zip",
+    count: Number.isFinite(count) ? count : ids.length,
+  };
 }
 
 export function fetchRecentSkillSources(): Promise<{ sources: RecentSkillSource[] }> {

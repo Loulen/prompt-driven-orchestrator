@@ -81,6 +81,7 @@ mod scheduler_dispatcher;
 mod scheduler_interpreter;
 mod service_unit;
 mod shared_terminal;
+mod skill_archive;
 mod skill_bank;
 mod skill_delivery;
 mod skill_import;
@@ -5486,12 +5487,22 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Import from a Source (#670): scan (clone + walk + collisions), import,
         // and the per-folder rescan / update. Fixed segments sit under
         // `/settings/skills/` but never collide with a skill id (UUIDs).
-        .route("/settings/skills/scan", post(scan_skill_source))
+        // #1027: the scan also takes an uploaded archive (base64 in the body, the
+        // convention of the pipeline import's sidecar), hence its own body limit.
+        .route(
+            "/settings/skills/scan",
+            post(scan_skill_source).route_layer(axum::extract::DefaultBodyLimit::max(
+                SKILL_ARCHIVE_SCAN_BODY_LIMIT,
+            )),
+        )
         .route(
             "/settings/skills/scan/{scan_id}/cancel",
             post(cancel_skill_scan),
         )
         .route("/settings/skills/import", post(import_skills))
+        // Archive de skills (pdo-issues#2, ADR-0084): a flat zip of the checked
+        // skills plus the `pdo-skills.json` manifest carrying their ids.
+        .route("/settings/skills/export", post(export_skills))
         .route("/settings/skills/sources/recent", get(recent_skill_sources))
         .route(
             "/settings/skill-folders/{id}/rescan",
@@ -13922,6 +13933,13 @@ async fn get_skill_referents(
 /// request. The per-file rule (`skill_bank::MAX_FILE_BYTES`) does the naming.
 const SKILL_UPLOAD_BODY_LIMIT: usize = 64 * 1024 * 1024;
 
+/// Body ceiling of a scan carrying an archive (#1027): the archive limit
+/// (`skill_archive::MAX_ARCHIVE_BYTES`, the same 64 MB as the uploads above),
+/// base64-inflated by 4/3, plus room for the JSON around it. The archive limit
+/// itself is checked on the decoded bytes and named in the refusal.
+const SKILL_ARCHIVE_SCAN_BODY_LIMIT: usize =
+    (skill_archive::MAX_ARCHIVE_BYTES as usize).div_ceil(3) * 4 + 1024 * 1024;
+
 #[derive(Deserialize)]
 struct UploadFromPathRequest {
     /// Absolute path on the daemon's host, picked in the explorer.
@@ -14228,17 +14246,91 @@ async fn delete_skill_folder(
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
+struct ExportSkillsRequest {
+    ids: Vec<String>,
+    /// Optional; defaulted and `.zip`-completed by the daemon (pdo-issues#2).
+    #[serde(default)]
+    file_name: Option<String>,
+}
+
+/// `POST /settings/skills/export` — the **Archive de skills** (pdo-issues#2,
+/// ADR-0084): `{ ids, file_name? }` → a zip download named by
+/// `Content-Disposition`. An unknown id is a 404 naming it, a seeded one a 403;
+/// the whole export is refused, never a partial archive. The bank is read only.
+async fn export_skills(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ExportSkillsRequest>,
+) -> Response {
+    use skill_archive::ExportError as E;
+    match skill_archive::export(
+        &state.db,
+        &state.repo_root,
+        &req.ids,
+        req.file_name.as_deref(),
+        chrono::Utc::now(),
+    )
+    .await
+    {
+        Ok(export) => (
+            [
+                (header::CONTENT_TYPE, "application/zip".to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    skill_archive::content_disposition(&export.file_name),
+                ),
+                (
+                    header::HeaderName::from_static("x-pdo-skills"),
+                    export.manifest.skills.len().to_string(),
+                ),
+            ],
+            export.bytes,
+        )
+            .into_response(),
+        Err(error) => {
+            let (status, code, id) = match &error {
+                E::EmptySelection => (StatusCode::BAD_REQUEST, "empty_selection", None),
+                E::UnknownSkill(id) => (StatusCode::NOT_FOUND, "unknown_skill", Some(id.clone())),
+                E::Locked(id) => (StatusCode::FORBIDDEN, "locked", Some(id.clone())),
+                E::Storage(_) => (StatusCode::INTERNAL_SERVER_ERROR, "storage", None),
+            };
+            let mut body = serde_json::json!({ "error": error.to_string(), "code": code });
+            if let Some(id) = id {
+                body["id"] = serde_json::Value::String(id);
+            }
+            (status, Json(body)).into_response()
+        }
+    }
+}
+
+#[derive(Deserialize)]
 struct ScanSkillSourceRequest {
     /// Client-chosen id; the clone is kept under it for the import that follows
     /// and `POST …/scan/{id}/cancel` kills it.
     scan_id: String,
+    /// The typed source (git URL or local folder). Ignored with `archive`.
+    #[serde(default)]
     source: String,
+    /// #1027: an uploaded `.zip` — the **file** Source kind.
+    #[serde(default)]
+    archive: Option<ScanArchiveUpload>,
+}
+
+#[derive(Deserialize)]
+struct ScanArchiveUpload {
+    /// The file name as the browser saw it: names the folder the skills land in.
+    file_name: String,
+    /// The zip's bytes, base64.
+    data: String,
 }
 
 #[derive(Deserialize)]
 struct ImportSkillsRequest {
     scan_id: String,
+    /// The typed source, or the archive's file name with `kind: "file"`.
     source: String,
+    /// `file` for an archive scan (#1027): its bytes are read from the kept scan.
+    #[serde(default)]
+    kind: Option<skill_import::SourceKind>,
     #[serde(default)]
     folder: Option<skill_import::ImportFolder>,
     items: Vec<skill_import::ImportItem>,
@@ -14269,6 +14361,11 @@ fn import_error_response(error: skill_import::ImportError) -> Response {
         }
         E::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         E::EmptySource | E::InvalidSource(_) | E::LocalNotFound(_) => StatusCode::BAD_REQUEST,
+        E::Archive(skill_archive::ArchiveError::TooLarge(_)) => StatusCode::PAYLOAD_TOO_LARGE,
+        E::Archive(skill_archive::ArchiveError::Io(_)) => StatusCode::INTERNAL_SERVER_ERROR,
+        E::Archive(_) | E::InvalidUpload(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        E::InvalidScanId(_) => StatusCode::BAD_REQUEST,
+        E::ArchiveFolder => StatusCode::CONFLICT,
         E::Skill(_) => unreachable!("handled above"),
     };
     (
@@ -14292,16 +14389,44 @@ async fn scan_skill_source(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ScanSkillSourceRequest>,
 ) -> Response {
-    let source = match skill_import::parse_source(&req.source, daemon_home().as_deref()) {
-        Ok(source) => source,
-        Err(error) => return import_error_response(error),
-    };
-    let outcome = match skill_import::scan(&req.scan_id, source).await {
-        Ok(outcome) => outcome,
-        Err(error) => return import_error_response(error),
+    let outcome = if let Some(upload) = &req.archive {
+        // #1027: the **file** Source — an uploaded archive, read where a clone lands.
+        use base64::Engine as _;
+        let bytes = match base64::engine::general_purpose::STANDARD.decode(upload.data.trim()) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return import_error_response(skill_import::ImportError::InvalidUpload(format!(
+                    "the archive is not valid base64: {error}"
+                )))
+            }
+        };
+        let scan_id = req.scan_id.clone();
+        let file_name = upload.file_name.clone();
+        match tokio::task::spawn_blocking(move || {
+            skill_import::scan_archive(&scan_id, &file_name, &bytes)
+        })
+        .await
+        {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(error)) => return import_error_response(error),
+            Err(error) => {
+                return import_error_response(skill_import::ImportError::Io(error.to_string()))
+            }
+        }
+    } else {
+        let source = match skill_import::parse_source(&req.source, daemon_home().as_deref()) {
+            Ok(source) => source,
+            Err(error) => return import_error_response(error),
+        };
+        match skill_import::scan(&req.scan_id, source).await {
+            Ok(outcome) => outcome,
+            Err(error) => return import_error_response(error),
+        }
     };
     let candidates = match skill_import::with_collisions(
         &state.db,
+        &state.repo_root,
+        &outcome.root,
         &outcome.source,
         outcome.commit.as_deref(),
         outcome.candidates,
@@ -14311,22 +14436,48 @@ async fn scan_skill_source(
         Ok(candidates) => candidates,
         Err(error) => return import_error_response(error),
     };
-    let _ = skill_bank::remember_source(
-        &state.db,
-        &outcome.source.url,
-        outcome.source.git_ref.as_deref(),
-        &outcome.source.path,
-    )
-    .await;
-    Json(serde_json::json!({
+    let mut body = serde_json::json!({
         "scan_id": req.scan_id,
         "source": outcome.source,
         "commit": outcome.commit,
         "candidates": candidates,
         "elsewhere": outcome.elsewhere,
         "elsewhere_count": outcome.elsewhere_count,
-    }))
-    .into_response()
+    });
+    if let Some(format) = outcome.archive_format {
+        // Where the created skills land: a root folder named after the file. When
+        // one exists the UI offers merge into it, or a new folder (the default,
+        // pre-filled with the first free suffixed name).
+        let folders = match skill_bank::list_folders(&state.db).await {
+            Ok(folders) => folders,
+            Err(error) => return storage_error_response(error),
+        };
+        let stem = outcome.source.suggested_folder.clone();
+        let roots = folders
+            .iter()
+            .filter(|f| f.parent_id.is_none())
+            .collect::<Vec<_>>();
+        let existing = roots
+            .iter()
+            .find(|f| f.name.trim().eq_ignore_ascii_case(&stem))
+            .map(|f| serde_json::json!({ "id": f.id, "name": f.name }));
+        let taken = roots.iter().map(|f| f.name.as_str()).collect::<Vec<_>>();
+        body["archive"] = serde_json::json!({
+            "file_name": outcome.source.url,
+            "format": format,
+            "existing_folder": existing,
+            "new_folder_name": skill_archive::free_folder_name(&stem, &taken),
+        });
+    } else {
+        let _ = skill_bank::remember_source(
+            &state.db,
+            &outcome.source.url,
+            outcome.source.git_ref.as_deref(),
+            &outcome.source.path,
+        )
+        .await;
+    }
+    Json(body).into_response()
 }
 
 async fn cancel_skill_scan(AxumPath(scan_id): AxumPath<String>) -> Response {
@@ -14340,7 +14491,12 @@ async fn import_skills(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ImportSkillsRequest>,
 ) -> Response {
-    let source = match skill_import::parse_source(&req.source, daemon_home().as_deref()) {
+    let source = if req.kind == Some(skill_import::SourceKind::File) {
+        skill_import::kept_archive_source(&req.scan_id, &req.source)
+    } else {
+        skill_import::parse_source(&req.source, daemon_home().as_deref())
+    };
+    let source = match source {
         Ok(source) => source,
         Err(error) => return import_error_response(error),
     };

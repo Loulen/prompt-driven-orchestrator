@@ -10,6 +10,7 @@ export type SettingsCategoryId = "general" | "agents" | "sandbox" | "diagnostics
 export type SettingsSectionId =
   | "interface"
   | "accessibility"
+  | "notifications"
   | "runtime-limits"
   | "runs"
   | "version-update"
@@ -66,6 +67,15 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
         id: "accessibility",
         label: "Accessibility",
         description: "How PDO is shown in this browser. Saved on this device only.",
+        deviceLocal: true,
+      },
+      {
+        // #1011 (ADR-0082): waiting alerts — this browser's switches and its
+        // notification permission, never the instance's settings.
+        id: "notifications",
+        label: "Notifications",
+        description:
+          "Alert this browser when a node is waiting for you and no PDO tab is in view. Saved on this device only.",
         deviceLocal: true,
       },
       {

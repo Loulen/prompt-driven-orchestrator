@@ -4,6 +4,8 @@ import { ArrowLeft, GitFork, Settings, BarChart3 } from "lucide-react";
 import { useDaemonSocket } from "./hooks/useDaemonSocket";
 import type { ConnectionStatus } from "./hooks/useDaemonSocket";
 import { useResizableLayout } from "./hooks/useResizableLayout";
+import { useWaitingAlerts } from "./hooks/useWaitingAlerts";
+import type { NotificationTarget } from "./lib/waitingAlert";
 import { useLibrary } from "./hooks/useLibrary";
 import { fetchRuns, fetchRun, fetchTriggers, fetchProjects, fetchSessions, fetchTriggersHealth, pauseTriggers } from "./api";
 import { pickLatestLiveNode } from "./lib/pickLatestLiveNode";
@@ -711,6 +713,21 @@ export default function App() {
     },
     [selectRun, openRunPipeline, setOrchestratorReturn, setLandOnOrchestration],
   );
+
+  // #1011 — waiting alerts: a node of any Run starts waiting for its user while
+  // no PDO tab is in view → a browser notification. Its click lands here, on the
+  // same path as opening a Run from the list, then selects the waiting node —
+  // the user arrives on the node's awaiting banner.
+  const openWaitingAlertTarget = useCallback(
+    async (target: NotificationTarget) => {
+      setSettingsOpen(false);
+      setStatsOpen(false);
+      await handleSelectRun(target.runId);
+      if (target.nodeId) setSelection({ kind: "node", id: target.nodeId });
+    },
+    [handleSelectRun, setSelection],
+  );
+  useWaitingAlerts({ subscribe, runs, openRun: selectedRun, onOpen: openWaitingAlertTarget });
 
   const handleRunCreated = useCallback(
     (runId: string) => {

@@ -916,9 +916,9 @@ Le bouton « Cleanup » sur un Run terminé supprime la branche et les worktrees
 
 Le `forget` (`DELETE /runs/<id>`, autorisé sur un Run `archived`) est **durable** (ADR-0024) : tombstone + purge des events en une transaction. Un écrivain tardif ne peut plus ressusciter le run ; les commandes sur un run oublié répondent **410 Gone** ; un run_id oublié n'est jamais réutilisable.
 
-### Notifications
+### Alertes d'attente (pdo-issues#1, ADR-0082)
 
-Pas de notifications système v1. Le status icon suffit. Si ça manque, opt-in plus tard.
+**Alerte d'attente** *(terme — waiting alert)* : signal du navigateur, une notification et/ou un son, émis à chaque transition **live** d'un nœud ou d'un Run vers une attente humaine, quel que soit le Run de l'instance (enfants compris). Une attente humaine, ici, c'est une attente déclarée, une complétion non libérée ou un parking sur incident. L'alerte n'est émise que si **aucun onglet PDO n'est visible** : sous les yeux, la pastille suffit. Elle est **opt-in par navigateur**, avec deux bascules indépendantes (notification, son) désactivées par défaut, et **un seul onglet** l'émet. N'alertent pas : `children_pending` (l'orchestrateur travaille), l'attente dérivée d'un parent (l'enfant alerte pour lui-même), une attente déjà en cours au chargement ou rattrapée après une reconnexion. Le clic sur la notification ramène à l'onglet sur le Run et son nœud. _Éviter_ : « notification » tout court (la bannière d'attente déclarée est déjà « une notification »), « push », « notification système » (ce n'est pas le daemon qui l'émet).
 
 ### Tours guidés — onboarding (#816, #909, ADR-0071)
 

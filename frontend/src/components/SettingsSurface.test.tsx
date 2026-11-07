@@ -1579,6 +1579,34 @@ describe("SettingsSurface — Interface / single-tab toggle (#342)", () => {
   });
 });
 
+describe("SettingsSurface — Notifications (#1011)", () => {
+  beforeEach(() => {
+    fetchSettingsMock.mockReset();
+    updateSettingsMock.mockReset();
+    localStorage.clear();
+  });
+
+  it("sits between Accessibility and Runtime limits, device-local, with its switch and test", async () => {
+    fetchSettingsMock.mockResolvedValue(sample());
+    render(<SettingsSurface open onClose={() => {}} />);
+    const body = await screen.findByTestId("settings-section-body-notifications");
+    expect(screen.getByTestId("settings-section-body-accessibility").nextElementSibling).toBe(body);
+    await waitFor(() =>
+      expect(body.nextElementSibling).toBe(screen.getByTestId("settings-section-body-runtime-limits")),
+    );
+    expect(screen.getByTestId("settings-section-notifications-device-local")).toHaveTextContent(
+      "Device-local · saved immediately",
+    );
+    expect(body).toHaveTextContent(
+      "Alert this browser when a node is waiting for you and no PDO tab is in view. Saved on this device only.",
+    );
+    expect(within(body).getByTestId("setting-browser-notification")).toHaveAttribute("aria-checked", "false");
+    expect(within(body).getByTestId("setting-waiting-alert-test")).toBeDisabled();
+    // Device-local: nothing of it reaches the form's dirty set.
+    expect(screen.queryByTestId("settings-section-notifications-dirty")).toBeNull();
+  });
+});
+
 describe("SettingsSurface — Accessibility / colour-blind status colours (#1005)", () => {
   beforeEach(() => {
     fetchSettingsMock.mockReset();
@@ -2304,10 +2332,11 @@ describe("SettingsSurface — full-window shell, categories, sections (#690)", (
         .getAllByRole("button")
         .map((button) => button.textContent);
     // #823 added Tutorials as General's fifth section, #891 Stats absorptions,
-    // #1005 Accessibility right after Interface.
+    // #1005 Accessibility right after Interface, #1011 Notifications after it.
     expect(entries()).toEqual([
       "Interface",
       "Accessibility",
+      "Notifications",
       "Runtime limits",
       "Runs",
       "Version & update",

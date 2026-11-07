@@ -36,6 +36,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 - **Breaking for extensions** (`pdo-extension-api` 0.23, Rust API): `Authorization::Deny` and
   `Denied` gain the field `sentence`. Match
   `Authorization::Deny { reason, .. }`, build `Denied::new(reason)` and `Authorization::deny(reason)`.
+
 ### A session's variables out of the process list
 
 - The variables of a session (a Node's, those an extension adds through `node_env` or

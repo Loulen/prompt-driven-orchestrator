@@ -22,7 +22,9 @@
  * the marks), and `useActorDisplays` names a list of Actors at once. Since
  * 0.22 it opens the core's New Run form prefilled (`openNewRun`, the
  * `NewRunPrefill` of `contract.ts`): the caller names itself in `extension`
- * for its `run/new` sections to receive `data`.
+ * for its `run/new` sections to receive `data`. Since 0.23 it writes the
+ * deep links toward a Run and a Node (`runLink`, `nodeLink`), as the daemon
+ * writes them (`run_link`, `node_link` of the extension API).
  */
 
 import { useActorDisplay, useActorDisplays, useCurrentActor } from "../actors/store";
@@ -44,6 +46,7 @@ import * as kit from "../ui/kit";
 import { HostedContribution, HostedContributions } from "./HostedContributions";
 import { runHostedCommand, useHostedContributions } from "./hosted";
 import { openNewRun } from "./newRun";
+import { formatNodeLink, formatRunLink } from "./deepLink";
 import { UI_MODULE_MAJOR, UI_MODULE_VERSION } from "./uiModuleVersion";
 
 export const extensionUiModule = {
@@ -59,6 +62,8 @@ export const extensionUiModule = {
   openProbedSocket,
   copyToClipboard,
   openNewRun,
+  runLink: formatRunLink,
+  nodeLink: formatNodeLink,
   Avatar: kit.Avatar,
   AvatarStack: kit.AvatarStack,
   personColor: kit.personColor,

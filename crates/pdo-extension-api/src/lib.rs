@@ -11,7 +11,9 @@
 //! observe who starts a session, takes control of its terminal and when it
 //! ends ([`SessionEvent`]), suspend a Trigger, see a Run as people do: who
 //! has it open ([`Presence`]) and what it cost ([`RunCost`]), and have the core
-//! hold agents and shells outside any Run ([`HostedSession`]).
+//! hold agents and shells outside any Run ([`HostedSession`]), answer a Node
+//! that waits for a person on behalf of an Actor ([`NodeWrite`]) and lead a
+//! person to a Node ([`node_link`]).
 //!
 //! An extension runs its **own** mutations through the same mechanisms, by the
 //! [`Host`] its [`ExtensionContext`] carries: its entities are a
@@ -53,6 +55,7 @@ mod hosted;
 mod hosted_event;
 mod launch;
 mod manifest;
+mod node_write;
 mod operation;
 mod run_creation;
 mod run_view;
@@ -81,6 +84,11 @@ pub use hosted_event::{
 };
 pub use launch::{NodeEnv, NodeKind, NodeLaunch, TriggerProvenance, TriggerRef};
 pub use manifest::Manifest;
+pub use node_write::{
+    node_link, run_link, NodeNotWritten, NodeWrite, NodeWriting, NodeWritten, NODE_NOT_WAITING,
+    NODE_NOT_WAITING_MESSAGE, NODE_WRITE_FAILED, NODE_WRITE_INVALID, NODE_WRITE_MAX_BYTES,
+    NODE_WRITE_REFUSED, NODE_WRITE_UNAVAILABLE,
+};
 pub use operation::{Operation, ResourceKind, Verb};
 pub use run_creation::{ExtensionData, NewRun, RunCreation, RunNotCreated, RunRepo};
 pub use run_view::{Presence, RunCost, RunCostRead, PRESENCE_ARRIVED, PRESENCE_LEFT};

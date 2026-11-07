@@ -1,5 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { useEditStore } from "../pipeline/store/editStore";
+import { useNodeLinkFocus } from "../run/store/nodeLinkFocus";
 import { fetchRun } from "../run/api/runs";
+import type { RunState } from "../shared/generated/RunState";
 import { dismissTransientOverlays } from "../lib/overlays";
 import { formatDeepLink, parseRunLink, parseRunTarget, usePages } from "../shared/extensions/deepLink";
 import { ApiError } from "../shared/http/client";
@@ -13,11 +16,12 @@ import { toast } from "../shared/ui/toast";
  * click in the list would; an unknown one says so in an error toast and changes
  * nothing. Either way the link leaves the address bar: the app keeps no Run in
  * its URL, and a stale one would outlive the next selection. A link toward a
- * node (`#/runs/<id>/nodes/<node>`) selects it once its Run is shown.
+ * node (`#/runs/<id>/nodes/<node>[/iter/<n>]`) selects it, at that iteration,
+ * once its Run is shown; a node the Run does not hold leaves the Run alone.
  */
 export function useRunLink(
   onSelectRun: (runId: string) => void | Promise<void>,
-  onSelectNode?: (nodeId: string) => void,
+  onSelectNode?: (nodeId: string, iter: number | null, runId: string) => void,
 ): void {
   const selectRef = useRef(onSelectRun);
   const nodeRef = useRef(onSelectNode);
@@ -32,11 +36,12 @@ export function useRunLink(
     const follow = async () => {
       const target = parseRunTarget(window.location.hash);
       if (!target) return;
-      const { runId, nodeId } = target;
+      const { runId, nodeId, iter } = target;
       const attempt = ++latest;
       let failure: string | null = null;
+      let run: RunState | null = null;
       try {
-        await fetchRun(runId);
+        run = await fetchRun(runId);
       } catch (cause) {
         failure =
           cause instanceof ApiError && cause.status === 404
@@ -50,7 +55,9 @@ export function useRunLink(
         usePages.setState({ open: null, requested: null });
         dismissTransientOverlays();
         const selected = selectRef.current(runId);
-        if (nodeId) void Promise.resolve(selected).then(() => nodeRef.current?.(nodeId));
+        if (nodeId && run && runHoldsNode(run, nodeId)) {
+          void Promise.resolve(selected).then(() => nodeRef.current?.(nodeId, iter, runId));
+        }
       } else {
         toast(failure, "error");
       }
@@ -66,4 +73,29 @@ export function useRunLink(
       window.removeEventListener("popstate", follow);
     };
   }, []);
+}
+
+/** Whether `run` holds the node `nodeId`: started, or defined by its pipeline. */
+function runHoldsNode(run: RunState, nodeId: string): boolean {
+  return nodeId in (run.nodes ?? {}) || (run.node_defs ?? []).some((def) => def.id === nodeId);
+}
+
+/**
+ * What a link toward a node does once its Run is shown (CORE-203): select the
+ * node on the canvas, so its detail and its terminal show, Pipeline info
+ * giving way (`closeInfo`), and ask its panel for the iteration the link names.
+ */
+export function useLinkedNodeSelection(
+  closeInfo: (open: false) => void,
+): (nodeId: string, iter: number | null, runId: string) => void {
+  const setSelection = useEditStore((s) => s.setSelection);
+  const openNodeLink = useNodeLinkFocus((s) => s.open);
+  return useCallback(
+    (nodeId, iter, runId) => {
+      closeInfo(false);
+      setSelection({ kind: "node", id: nodeId });
+      openNodeLink(runId, nodeId, iter);
+    },
+    [closeInfo, setSelection, openNodeLink],
+  );
 }

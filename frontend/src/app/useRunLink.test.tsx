@@ -54,7 +54,14 @@ function serve() {
     "fetch",
     vi.fn(async (url: string) => {
       if (url === "/ext") return Response.json([demo]);
-      if (url === "/runs/r1") return Response.json({ run_id: "r1", pipeline_name: "demo", status: "running" });
+      if (url === "/runs/r1")
+        return Response.json({
+          run_id: "r1",
+          pipeline_name: "demo",
+          status: "running",
+          nodes: { designer: { node_id: "designer", status: "awaiting_user", iter: 2 } },
+          node_defs: [{ id: "designer" }, { id: "reviewer" }],
+        });
       if (url === "/runs/ghost") return Response.json({ error: "run not found" }, { status: 404 });
       return new Response("not found", { status: 404 });
     }),
@@ -147,6 +154,57 @@ describe("#/runs/<id>", () => {
     }
     render(<NodeShell />);
     await waitFor(() => expect(order).toEqual(["run:r1", "node:designer"]));
+    expect(window.location.hash).toBe("");
+  });
+
+  it("toward a node at an iteration selects the node at that iteration", async () => {
+    window.history.replaceState(null, "", "/#/runs/r1/nodes/designer/iter/1");
+    const order: string[] = [];
+    function NodeShell() {
+      useRunLink(
+        async (runId) => {
+          order.push(`run:${runId}`);
+        },
+        (nodeId, iter) => order.push(`node:${nodeId}@${iter}`),
+      );
+      return null;
+    }
+    render(<NodeShell />);
+    await waitFor(() => expect(order).toEqual(["run:r1", "node:designer@1"]));
+  });
+
+  it("toward a node the pipeline defines but that never started selects it", async () => {
+    window.history.replaceState(null, "", "/#/runs/r1/nodes/reviewer");
+    const order: string[] = [];
+    function NodeShell() {
+      useRunLink(
+        async (runId) => {
+          order.push(`run:${runId}`);
+        },
+        (nodeId, iter) => order.push(`node:${nodeId}@${iter}`),
+      );
+      return null;
+    }
+    render(<NodeShell />);
+    await waitFor(() => expect(order).toEqual(["run:r1", "node:reviewer@null"]));
+  });
+
+  it("toward a node the Run does not hold opens the Run alone", async () => {
+    window.history.replaceState(null, "", "/#/runs/r1/nodes/ghost");
+    const order: string[] = [];
+    function NodeShell() {
+      useRunLink(
+        async (runId) => {
+          order.push(`run:${runId}`);
+        },
+        (nodeId) => order.push(`node:${nodeId}`),
+      );
+      return null;
+    }
+    render(<NodeShell />);
+    await waitFor(() => expect(order).toEqual(["run:r1"]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual(["run:r1"]);
     expect(window.location.hash).toBe("");
   });
 

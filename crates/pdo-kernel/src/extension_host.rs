@@ -28,6 +28,7 @@ mod hosted;
 mod identity;
 mod launch;
 mod neutral;
+mod node_write;
 mod port;
 mod run_view;
 mod skills;
@@ -37,6 +38,7 @@ pub use hosted::HostedSessions;
 pub use identity::Identification;
 pub use launch::{is_env_name, NodeContribution, TriggerSuspension};
 pub use neutral::NoExtensions;
+pub use node_write::NodeWrites;
 pub use port::ExtensionHost;
 pub use run_view::RunViews;
 pub use skills::ProvidedSkills;
@@ -77,6 +79,9 @@ struct Registry {
     /// What holds the Sessions hébergées for [`Host::open_session`] and the
     /// other gestures of API 0.19, once the daemon wired its contexts.
     hosted: OnceLock<Arc<dyn HostedSessions>>,
+    /// What writes into the sessions of the Nodes for
+    /// [`Host::write_to_node`] (API 0.23), once the daemon wired its contexts.
+    node_writes: OnceLock<Arc<dyn NodeWrites>>,
 }
 
 /// The host of the extensions registered at startup, in registration order.

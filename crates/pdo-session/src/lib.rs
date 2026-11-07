@@ -9,6 +9,8 @@
 //! - **Declared wait**: `pdo wait-user`, lifted by the user's Enter.
 //! - **Terminal text**: a text written into a node's input on the user's
 //!   gesture, without Enter.
+//! - **Write to a Node**: a text an extension has typed and submitted into a
+//!   Node that waits for a person, on behalf of an Actor (API 0.23).
 //! - **Library assistant**: one authoring session per Actor, told which
 //!   template its Actor has open through its focus.
 //! - **Session ledger**: who started each session, who takes control of its
@@ -53,6 +55,7 @@ use application::status::ReadStatus;
 use application::sweep::{ReaperGauge, SweepOrphans};
 use application::terminal::Terminals;
 use application::terminal_text::SendTerminalText;
+use application::write_to_node::WriteToNode;
 
 pub use adapters::http::router;
 
@@ -100,6 +103,7 @@ pub struct Session {
     options: SessionOptions,
     declare_wait: DeclareWait,
     send_terminal_text: SendTerminalText,
+    write_to_node: Arc<WriteToNode>,
     terminals: Terminals,
     sweep: SweepOrphans,
     read_status: ReadStatus,
@@ -175,6 +179,15 @@ impl Session {
             )
             .with_projects(projects.clone())
             .with_terminals(shared_terminals.clone()),
+            write_to_node: Arc::new(
+                WriteToNode::new(
+                    waits.clone(),
+                    tmux.clone(),
+                    extensions.clone(),
+                    ledger.clone(),
+                )
+                .with_projects(projects.clone()),
+            ),
             terminals: Terminals::new(
                 tmux.clone(),
                 LiftWait::new(waits, typed, extensions.clone()).with_hosted(hosted.clone()),
@@ -254,6 +267,12 @@ impl Session {
     /// « Copy & send to terminal »: a text into a node's input, no Enter.
     pub fn send_terminal_text(&self) -> &SendTerminalText {
         &self.send_terminal_text
+    }
+
+    /// Write into a Node that waits for a person, on behalf of an Actor (API
+    /// 0.23): what the extensions' `Host::write_to_node` reaches.
+    pub fn write_to_node(&self) -> &Arc<WriteToNode> {
+        &self.write_to_node
     }
 
     /// The orphan sweep, at boot and on the reaper interval.

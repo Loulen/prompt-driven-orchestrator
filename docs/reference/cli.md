@@ -207,7 +207,8 @@ A link leads into PDO or into the page:
 | Link | Opens |
 | --- | --- |
 | `#/runs/<run>` | The Run |
-| `#/runs/<run>/nodes/<node>` | The node, selected on the Run's canvas |
+| `#/runs/<run>/nodes/<node>` | The node, selected on the Run's canvas, its detail shown |
+| `#/runs/<run>/nodes/<node>/iter/<n>` | The same, at its iteration `n` |
 | `#/runs/<run>/nodes/<node>/artifacts/<port>` | The node's I/O, where its artifact is |
 | `/runs/<run>/review?file=<path>` | The Run's Review, on that file (or the first file under that folder) |
 | `#/ext/<extension>/…` | An extension's page |

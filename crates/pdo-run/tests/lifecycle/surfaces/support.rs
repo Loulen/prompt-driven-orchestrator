@@ -269,6 +269,9 @@ impl Tmux for AliveTmux {
     fn paste_without_enter(&self, _name: &str, _text: &str) -> bool {
         false
     }
+    fn press_enter(&self, _name: &str) -> bool {
+        false
+    }
     fn attach_argv(&self, _name: &str, _ignore_size: bool) -> Vec<String> {
         Vec::new()
     }

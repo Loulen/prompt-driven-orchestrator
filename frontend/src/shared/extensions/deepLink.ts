@@ -24,7 +24,9 @@ export const DEEP_LINK_PREFIX = "#/ext/";
  * The core's own deep link toward a Run (CORE-1): `#/runs/<run_id>` closes the
  * open page, selects the Run in the list and shows its detail. The app shell
  * follows it (`useRunLink`); a Run the daemon does not know says so in a toast.
- * `#/runs/<run_id>/nodes/<node_id>` also selects the node, and
+ * `#/runs/<run_id>/nodes/<node_id>` also selects the node and shows its
+ * detail with its terminal (a node the Run does not hold opens the Run
+ * alone), `…/nodes/<node_id>/iter/<n>` at its iteration `n`, and
  * `…/nodes/<node_id>/artifacts/<port>` lands on that node's I/O.
  */
 export const RUN_LINK_PREFIX = "#/runs/";
@@ -47,10 +49,12 @@ export function isRunLink(href: string | null | undefined): href is string {
   return typeof href === "string" && (href.startsWith(RUN_LINK_PREFIX) || href.startsWith(`/${RUN_LINK_PREFIX}`));
 }
 
-/** The Run, and the node in it, a Run link points at. */
+/** The Run, and the node in it (at an iteration), a Run link points at. */
 export interface RunTarget {
   runId: string;
   nodeId: string | null;
+  /** The node's iteration the link names; `null`: its current one. */
+  iter: number | null;
 }
 
 /** The Run (and node) `href` (or a hash, or a URL ending with one) points at; `null` if none. */
@@ -68,11 +72,13 @@ export function parseRunTarget(href: string): RunTarget | null {
     return null;
   }
   if (segments.some((segment) => !segment || segment.includes("/"))) return null;
-  const [runId, nodes, nodeId, artifacts, port] = segments;
-  if (segments.length === 1) return { runId, nodeId: null };
+  const [runId, nodes, nodeId, what, value] = segments;
+  if (segments.length === 1) return { runId, nodeId: null, iter: null };
   if (nodes !== "nodes") return null;
-  if (segments.length === 3) return { runId, nodeId };
-  if (segments.length === 5 && artifacts === "artifacts" && port) return { runId, nodeId };
+  if (segments.length === 3) return { runId, nodeId, iter: null };
+  if (segments.length !== 5) return null;
+  if (what === "artifacts") return { runId, nodeId, iter: null };
+  if (what === "iter" && /^[1-9][0-9]*$/.test(value)) return { runId, nodeId, iter: Number(value) };
   return null;
 }
 
@@ -84,6 +90,16 @@ export function parseRunLink(href: string): string | null {
 /** The deep link toward the Run `runId`. */
 export function formatRunLink(runId: string): string {
   return `${RUN_LINK_PREFIX}${encodeURIComponent(runId)}`;
+}
+
+/**
+ * The deep link toward the node `nodeId` of the Run `runId`, at its iteration
+ * `iter` when given; the daemon writes it the same way (`node_link` of the
+ * extension API).
+ */
+export function formatNodeLink(runId: string, nodeId: string, iter?: number | null): string {
+  const node = `${formatRunLink(runId)}/nodes/${encodeURIComponent(nodeId)}`;
+  return iter == null ? node : `${node}/iter/${iter}`;
 }
 
 /** The deep link `href` (or a hash, or a URL ending with one) stands for; `null` if none. */

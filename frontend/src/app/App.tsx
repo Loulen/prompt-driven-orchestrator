@@ -26,7 +26,7 @@ import { useProjects, useRuns } from "./useAppData";
 import { useSurfaces } from "./useSurfaces";
 import { useAppTour } from "./useAppTour";
 import { useRunNavigation } from "./useRunNavigation";
-import { useRunLink } from "./useRunLink";
+import { useLinkedNodeSelection, useRunLink } from "./useRunLink";
 import { useMountedPageShell } from "./usePageLink";
 import { useGuideNavigation } from "./useGuideNavigation";
 import { formatRunLink } from "../shared/extensions/deepLink";
@@ -184,10 +184,9 @@ export default function App() {
   });
 
   // CORE-1: `#/runs/<id>` selects the Run, from the address bar or an extension;
-  // `#/runs/<id>/nodes/<node>` its node too.
-  const setSelection = useEditStore((s) => s.setSelection);
-  const selectNode = useCallback((id: string) => setSelection({ kind: "node", id }), [setSelection]);
-  useRunLink(handleSelectRun, selectNode);
+  // `#/runs/<id>/nodes/<node>[/iter/<n>]` its node too, its detail shown (the
+  // Pipeline info gives way), at that iteration (CORE-203).
+  useRunLink(handleSelectRun, useLinkedNodeSelection(setInfoPanelOpen));
   const guideNavigation = useGuideNavigation(runs, handleSelectRun);
   // API 0.12: the daemon knows which Run this tab shows (the Presences).
   usePresences(selectedRunId);

@@ -34,6 +34,8 @@ describe("a guide entry's link", () => {
     expect(run).toEqual({ kind: "run", runId: "r1" });
     expect(guideLinkLabel(run, runName)).toEqual({ kind: "Run", where: "Add search filter" });
     const node = guideTarget("#/runs/r1/nodes/designer");
+    expect(node).toEqual({ kind: "node", runId: "r1", nodeId: "designer", iter: null });
+    expect(guideTarget("#/runs/r1/nodes/designer/iter/2")).toEqual({ kind: "node", runId: "r1", nodeId: "designer", iter: 2 });
     expect(guideLinkLabel(node, runName)).toEqual({ kind: "Run", where: "Add search filter › designer" });
     const artifact = guideTarget("#/runs/r2/nodes/designer/artifacts/before");
     expect(artifact).toEqual({ kind: "artifact", runId: "r2", nodeId: "designer", port: "before" });

@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, act, within, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { useEffect } from "react";
+import { useNodeLinkFocus } from "../store/nodeLinkFocus";
 
 globalThis.ResizeObserver = class {
   observe() {}
@@ -663,6 +664,22 @@ describe("NodeDetailPanel", () => {
       fireEvent.click(option);
 
       await act(async () => {});
+    });
+
+    it("shows the iteration a deep link names, when the node ran it (CORE-203)", async () => {
+      const iterations = [
+        { iter: 1, status: "completed", started_at: null, completed_at: null },
+        { iter: 2, status: "awaiting_user", started_at: null, completed_at: null },
+      ] as NodeState["iterations"];
+      renderPanel({ iter: 2, iterations });
+      expect(screen.getByRole("button", { name: /^Iteration 2 of 2/ })).toBeInTheDocument();
+
+      act(() => useNodeLinkFocus.getState().open("run-1", "test-node", 1));
+      expect(await screen.findByRole("button", { name: /^Iteration 1 of 2/ })).toBeInTheDocument();
+
+      // An iteration the node never ran changes nothing.
+      act(() => useNodeLinkFocus.getState().open("run-1", "test-node", 7));
+      expect(screen.getByRole("button", { name: /^Iteration 1 of 2/ })).toBeInTheDocument();
     });
   });
 

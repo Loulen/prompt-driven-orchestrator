@@ -2,6 +2,7 @@
 //! the daemon's private socket. Nothing else in PDO shells out to `tmux`.
 
 mod clients;
+mod launch_file;
 mod lifecycle;
 mod text;
 

@@ -96,7 +96,7 @@ pub fn build_hosted_script(
         .collect();
     // Never a Run's identity, even one the daemon inherited (a daemon started
     // from a Node's session): `pdo complete` must not reach that Node.
-    let inner = format!(
+    format!(
         "{path_export}unset PDO_RUN_ID PDO_NODE_ID PDO_NODE_ITER && \
          export PDO_SESSION_ID={session_q} && \
          export PDO_DAEMON_URL={daemon_url_q} && \
@@ -105,8 +105,7 @@ pub fn build_hosted_script(
         session_q = sh_single_quote(session),
         daemon_url_q = sh_single_quote(&host_daemon_url(daemon_port)),
         live_dir_q = sh_single_quote(&live_dir),
-    );
-    format!("exec bash -c {}", sh_single_quote(&inner))
+    )
 }
 
 #[cfg(test)]

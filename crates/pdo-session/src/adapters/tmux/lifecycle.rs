@@ -5,11 +5,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use super::launch_file::LaunchFile;
 use super::tmux;
 
-/// `new-session -d -s <name> -c <working_dir> <script>`, then mouse mode on so
-/// that wheel events are forwarded as mouse-report escape sequences instead of
-/// being silently dropped. `what` names the session kind in the error.
+/// `new-session -d -s <name> -c <working_dir> exec bash <file>`, where the file
+/// holds `script` ([`LaunchFile`]): the values the script exports never reach
+/// an argv. Then mouse mode on so that wheel events are forwarded as
+/// mouse-report escape sequences instead of being silently dropped. `what`
+/// names the session kind in the error. The file is gone when this returns.
 pub(super) fn new_session(
     socket: &str,
     name: &str,
@@ -18,16 +21,23 @@ pub(super) fn new_session(
     what: Option<&str>,
 ) -> Result<()> {
     let label = what.map(|w| format!(" ({w})")).unwrap_or_default();
+    let launch = LaunchFile::write(script)
+        .with_context(|| format!("failed to write the launch file{label}"))?;
     let output = tmux(socket)
         .args(["new-session", "-d", "-s", name, "-c"])
         .arg(working_dir)
-        .arg(script)
+        .arg(launch.command())
         .output()
         .with_context(|| format!("failed to run tmux new-session{label}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("tmux new-session{label} failed: {stderr}");
+    }
+    if !launch.await_read() {
+        // The session never ran its script: nothing of it may stay up.
+        let _ = tmux(socket).args(["kill-session", "-t", name]).output();
+        anyhow::bail!("tmux new-session{label}: the session never read its launch file");
     }
 
     let _ = tmux(socket)

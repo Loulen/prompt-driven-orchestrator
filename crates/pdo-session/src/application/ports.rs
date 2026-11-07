@@ -35,8 +35,10 @@ pub trait Tmux: Send + Sync {
     /// the harness preflight resolved the binary on (#661, ADR-0055).
     fn session_path(&self) -> String;
 
-    /// `new-session -d -s <name> -c <working_dir> <script>`, then mouse mode on.
-    /// `what` names the session kind in the error (`shell`, `resume`…).
+    /// A new session running the bash `script`, then mouse mode on. The script
+    /// never reaches an argv (it may export secrets): the adapter hands it to
+    /// `bash` through a private file. `what` names the session kind in the
+    /// error (`shell`, `resume`…).
     fn new_session(
         &self,
         name: &str,

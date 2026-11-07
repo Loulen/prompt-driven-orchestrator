@@ -1579,20 +1579,21 @@ async fn a_profiles_env_is_posed_at_create_and_only_for_that_profile() {
     );
     let env = env_specs(&log);
     assert!(
-        !env.iter().any(|e| e.starts_with("FOO=")),
+        !env.iter().any(|e| e == "FOO" || e.starts_with("FOO=")),
         "a Run on a profile WITHOUT env must not carry another profile's env; env={env:?}"
     );
-    // The only `-e` left are the ones PDO owns.
+    // The only `-e` left are the ones PDO owns. A session's variables are forwarded by name
+    // (`-e NAME`, the value exported on the host), never as `NAME=value` in an argv.
     for spec in &env {
         assert!(
             RUN_CONSTANT_ENV_PREFIXES
                 .iter()
                 .any(|p| spec.starts_with(p))
                 || spec.starts_with("PDO_SBX_SESSION=")
-                || spec.starts_with("PDO_ARTIFACTS_DIR=")
-                || spec.starts_with("PDO_INPUT_")
-                || spec.starts_with("PDO_OUTPUT_")
-                || spec.starts_with("PDO_VAR_")
+                || spec == "PDO_ARTIFACTS_DIR"
+                || (spec.starts_with("PDO_INPUT_") && !spec.contains('='))
+                || (spec.starts_with("PDO_OUTPUT_") && !spec.contains('='))
+                || (spec.starts_with("PDO_VAR_") && !spec.contains('='))
                 || spec == "PDO_NODE_ID"
                 || spec == "PDO_NODE_ITER",
             "unexpected `-e {spec}` for a profile with no env; env={env:?}"

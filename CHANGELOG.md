@@ -15,6 +15,16 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
 
 ## Unreleased
 
+### A session's variables out of the process list
+
+- The variables of a session (a Node's, those an extension adds through `node_env` or
+  `session_env`, the core's) no longer sit in the argv of any process, where any local user read
+  them with `ps` while the session lived. The session's script reaches `bash` through a `0600`
+  file in the user's private folder, deleted before the harness starts; `tmux` only sees its path.
+  In a sandbox, the `docker exec` forwards the variables by name (`-e NAME`), their values
+  exported on the host just before. Every launch is covered: a Node, its Retry and its resume, a
+  hosted session, the Pipeline Manager, the library assistant.
+
 ### A Presence falls within seconds, behind a proxy too
 
 - A person who leaves a Run, closes a tab or loses the network no longer stays on the Run's row:
@@ -24,6 +34,7 @@ data stays readable**. An archived Run opens and is costed whatever version wrot
   daemon pings every connection of `/ws` and drops one that answered nothing for 10 s.
 - Extension API: the life of a `/ws` connection (`tab`, the close code `4000` of a replaced
   connection, Ping and the 10 s delay), see the reference's Presences.
+
 ### Who made each gesture on a Run
 
 - The events of a gesture on a Run name the Actor who made it, as `payload.actor` (the shape

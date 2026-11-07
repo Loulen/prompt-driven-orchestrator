@@ -91,6 +91,7 @@ The core fills `projects` for its own Operations:
 | `project` (targeted) | that Projet |
 | `repository` (`fetch`, `fast_forward`) | every Projet the repository is a member of |
 | `trigger` (0.11) | the Projet the Trigger launches its Runs in (`project_id`); none without one. An edit moving it to another Projet is asked, and announced applied, in each |
+| `page_mount` | a mount asked from a node session: the Projet of that session's Run; an unmount (targeted by the page's name): the Projet of the Run the mount belongs to, whoever asks. A mount outside any Run, or its unmount, is in none |
 | everything else | none |
 
 A Run, its nodes, sessions and review comments are in one Projet at most: the one recorded at
@@ -154,7 +155,9 @@ POST /authorize
 
 Whether the caller may run each Operation, in order, **without running any**: nothing changes,
 nothing is announced. An Operation that names no Projet is placed where the core places its own: a
-targeted `run` or `node` in the Projet of its Run, a targeted `project` in itself. At most 500
+targeted `run` or `node` in the Projet of its Run, a targeted `project` in itself, a `page_mount`
+creation asked from a node session in the Projet of its Run and a targeted `page_mount` deletion in
+the Projet of the mount's Run. At most 500
 Operations per question; an unreadable one answers `400` `invalid_question`. Without extension,
 every decision is `allow`. The core's UI asks it to hide the loupe and the Projets a Run may not be
 created in (`extension-ui.md`, `run/new`); an extension's UI may ask it too.
